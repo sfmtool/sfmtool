@@ -1805,6 +1805,8 @@ fn test_select_clusters_default_round_trip() {
         prov["accepted_statuses"],
         serde_json::json!(["reference", "kept"])
     );
+    // Selecting an ordinary file records no source selection at all.
+    assert!(prov.get("source_selection").is_none());
 
     // Round trip: write -> read -> verify -> arrays equal.
     let dir = std::env::temp_dir().join("matches_test_select_round_trip");
@@ -1853,6 +1855,213 @@ fn test_select_clusters_min_span() {
     assert_members_gathered(&sel, &data, &[0, 1, 2, 9, 10, 11]);
     let cp = sel.cluster_patches.as_ref().unwrap();
     assert_eq!(cp.reference_members, Array1::from_vec(vec![0, 3]));
+}
+
+#[test]
+fn test_select_clusters_without_id_restriction_is_byte_identical() {
+    // The axis is opt-in at the byte level: a selection that does not request
+    // it writes exactly the file it wrote before the option existed — no
+    // provenance key, no array difference. The only observable of a
+    // no-op-but-requested restriction (every source id) is that key.
+    let data = make_select_test_data();
+    let plain = data.select_clusters(&ClusterSelect::default()).unwrap();
+    let explicit_none = data
+        .select_clusters(&ClusterSelect {
+            restrict_cluster_ids: None,
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    let all_ids = data
+        .select_clusters(&ClusterSelect {
+            restrict_cluster_ids: Some(vec![0, 1, 2, 3]),
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+
+    let prov = &plain.metadata.matching_options["cluster_selection"];
+    assert!(
+        prov.get("restrict_cluster_ids").is_none(),
+        "an unrestricted selection must not record the key: {prov}"
+    );
+
+    // Requesting every id selects the same clusters and members (cluster 1 is
+    // dropped as source-unrefinable either way).
+    let p_cl = plain.clusters.as_ref().unwrap();
+    let a_cl = all_ids.clusters.as_ref().unwrap();
+    assert_eq!(a_cl.cluster_starts, p_cl.cluster_starts);
+    assert_eq!(a_cl.member_images, p_cl.member_images);
+    assert_eq!(a_cl.member_features, p_cl.member_features);
+    // ... and the metadata differs in exactly the one key.
+    let mut a_prov = all_ids.metadata.matching_options["cluster_selection"].clone();
+    assert_eq!(
+        a_prov["restrict_cluster_ids"],
+        serde_json::json!([0, 1, 2, 3])
+    );
+    a_prov
+        .as_object_mut()
+        .unwrap()
+        .remove("restrict_cluster_ids");
+    assert_eq!(&a_prov, prov);
+
+    // Byte identity on disk for the unrestricted case.
+    let dir = std::env::temp_dir().join("matches_test_select_ids_byte_identity");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p1 = dir.join("plain.matches");
+    let p2 = dir.join("explicit_none.matches");
+    write_matches(&p1, &plain, 3).unwrap();
+    write_matches(&p2, &explicit_none, 3).unwrap();
+    assert_eq!(std::fs::read(&p1).unwrap(), std::fs::read(&p2).unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_select_clusters_restrict_cluster_ids() {
+    let data = make_select_test_data();
+    // Source ids 0 and 3 (2 is dropped by the restriction, 1 by the
+    // source-unrefinable rule).
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            restrict_cluster_ids: Some(vec![3, 0, 3]),
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 3, 6]));
+    assert_members_gathered(&sel, &data, &[0, 1, 2, 9, 10, 11]);
+    assert_eq!(
+        clusters.member_images,
+        Array1::from_vec(vec![0, 1, 2, 2, 3, 0])
+    );
+    // Dense renumbering: cluster 3's reference (source member 9) becomes
+    // global member 3 of the derived file.
+    let cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(cp.reference_members, Array1::from_vec(vec![0, 3]));
+
+    // An id restriction alone leaves the image table untouched.
+    assert_eq!(sel.image_names, data.image_names);
+    assert_eq!(sel.feature_counts, data.feature_counts);
+    assert_eq!(sel.image_dims, data.image_dims);
+    assert_eq!(sel.metadata.image_count, 5);
+    assert_eq!(sel.metadata.cluster_count, Some(2));
+    assert_eq!(sel.metadata.cluster_member_count, Some(6));
+
+    // Provenance: the requested SOURCE ids, sorted and deduplicated.
+    let prov = &sel.metadata.matching_options["cluster_selection"];
+    assert_eq!(prov["restrict_cluster_ids"], serde_json::json!([0, 3]));
+    assert_eq!(prov["restrict_images"], serde_json::Value::Null);
+
+    // The derived file writes, verifies and re-reads.
+    let dir = std::env::temp_dir().join("matches_test_select_restrict_ids");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("selected.matches");
+    write_matches(&path, &sel, 3).unwrap();
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "verification failed: {errors:?}");
+    let loaded = read_matches(&path).unwrap();
+    assert_eq!(
+        loaded.clusters.as_ref().unwrap().cluster_starts,
+        clusters.cluster_starts
+    );
+    assert_eq!(
+        loaded.metadata.matching_options["cluster_selection"]["restrict_cluster_ids"],
+        serde_json::json!([0, 3])
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_select_clusters_restrict_ids_composes_with_images() {
+    let data = make_select_test_data();
+    // Ids {0, 2} on images {img0, img1}: cluster 0 keeps members 0, 1
+    // (member 2 is on img2), cluster 2 keeps members 6, 7; cluster 3 is
+    // dropped by the id axis even though it spans the selected images.
+    let sel = data
+        .select_clusters(&ClusterSelect {
+            restrict_cluster_ids: Some(vec![0, 2]),
+            restrict_images: Some(vec!["frames/img0.jpg".into(), "frames/img1.jpg".into()]),
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+    let clusters = sel.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 2, 4]));
+    assert_members_gathered(&sel, &data, &[0, 1, 6, 7]);
+    assert_eq!(clusters.member_images, Array1::from_vec(vec![0, 1, 0, 1]));
+    let cp = sel.cluster_patches.as_ref().unwrap();
+    assert_eq!(cp.reference_members, Array1::from_vec(vec![0, 3]));
+    // The image axis still shapes the image table; the id axis does not.
+    assert_eq!(
+        sel.image_names,
+        vec!["frames/img0.jpg".to_string(), "frames/img1.jpg".to_string()]
+    );
+    let prov = &sel.metadata.matching_options["cluster_selection"];
+    assert_eq!(prov["restrict_cluster_ids"], serde_json::json!([0, 2]));
+    assert_eq!(
+        prov["restrict_images"],
+        serde_json::json!(["frames/img0.jpg", "frames/img1.jpg"])
+    );
+}
+
+#[test]
+fn test_select_clusters_restrict_ids_out_of_range() {
+    let data = make_select_test_data();
+    // The source has 4 clusters; id 4 names none of them.
+    let err = data
+        .select_clusters(&ClusterSelect {
+            restrict_cluster_ids: Some(vec![0, 4]),
+            ..ClusterSelect::default()
+        })
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("restrict_cluster_ids id 4"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_select_clusters_of_a_selection_nests_the_provenance() {
+    // Narrowing a working set the caller already holds: the source is an
+    // unwritten derivation, so its own record has to be carried rather than
+    // overwritten — otherwise nothing in the file names the archive.
+    let data = make_select_test_data();
+    let first = data.select_clusters(&ClusterSelect::default()).unwrap();
+    let second = first
+        .select_clusters(&ClusterSelect {
+            min_span: 3,
+            ..ClusterSelect::default()
+        })
+        .unwrap();
+
+    // The narrowing is an ordinary selection of `first`: its clusters 0 and 2
+    // span three images, cluster 1 spans two.
+    let clusters = second.clusters.as_ref().unwrap();
+    assert_eq!(clusters.cluster_starts, Array1::from_vec(vec![0, 3, 6]));
+    assert_eq!(
+        clusters.member_images,
+        Array1::from_vec(vec![0, 1, 2, 2, 3, 0])
+    );
+
+    let prov = &second.metadata.matching_options["cluster_selection"];
+    assert_eq!(prov["min_span"], serde_json::json!(3));
+    // The immediate source was never written, so it has no content hash — the
+    // nested record is what still names the archive.
+    assert_eq!(prov["source_content_xxh128"], serde_json::json!(""));
+    assert_eq!(
+        prov["source_selection"],
+        first.metadata.matching_options["cluster_selection"]
+    );
+    assert_eq!(
+        prov["source_selection"]["source_content_xxh128"],
+        serde_json::json!(data.content_hash.content_xxh128)
+    );
+
+    // Nesting repeats to any depth.
+    let third = second
+        .select_clusters(&ClusterSelect::default())
+        .unwrap()
+        .metadata
+        .matching_options["cluster_selection"]
+        .clone();
+    assert_eq!(third["source_selection"], *prov);
 }
 
 #[test]

@@ -11,7 +11,7 @@ binding in `crates/sfmtool-py/src/geometry/bundle_adjust.rs`
 
 The staged robust bundle adjustment used by the cluster pinhole bootstrap
 (`specs/core/geometry/cluster-pinhole-bootstrap.md`,
-`scripts/exp_fast_pinhole.py` / `scripts/exp_pinhole_bootstrap.py`): given
+`scripts/exp_fast_seed.py` / `scripts/exp_pinhole_bootstrap.py`): given
 images sharing one camera model, camera poses, world points, and pixel
 observations tying them together, jointly refine the poses and points (and
 optionally the shared focal length and the shared distortion release — a
@@ -74,12 +74,16 @@ pub fn bundle_adjust(
 Per schedule round, mirroring the experiment scripts exactly:
 
 1. **Retriangulate (rounds after the first).** Rebuild *every* point from
-   *all* supplied observations at the current poses: world rays
-   `R_iᵀ · pixel_to_ray(uv)` and centers `−R_iᵀ t_i` per observation,
-   grouped by point, through
-   [`reconstruction::triangulation::triangulate_batch`]. A track with fewer
-   than 2 observations becomes `NaN`; a point with no observations at all
-   becomes `NaN` too (the callers refill from their full observation set —
+   *all* supplied observations at the current poses, through the point
+   estimation operation
+   ([point-estimation.md](../reconstruction/point-estimation.md)) with `marks`
+   on for the round's direction mask, `few = absent`, and the floor, cheirality
+   and bar rules off: world rays `R_iᵀ · pixel_to_ray(uv)` and centers
+   `−R_iᵀ t_i` per observation, grouped by point with a STABLE sort so a track
+   accumulates its own observations in the order the caller listed them, and
+   solved through [`reconstruction::triangulation::triangulate_batch`]. A track
+   with fewer than 2 usable observations becomes `NaN`; a point with no
+   observations at all becomes `NaN` too (the callers refill from their full observation set —
    the "refill after BA" rule of the bootstrap spec). Re-admission is the
    point: observations a bad init lost re-enter once the refined cameras
    explain them.
@@ -426,7 +430,10 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
   retriangulate, a direction re-estimates in closed form as the
   normalized mean of its observations' back-rotated rays
   `R_iᵀ · pixel_to_ray(uv)` at the current rotations. A direction track
-  with fewer than 2 observations becomes `NaN`, mirroring finite tracks.
+  with fewer than 2 observations becomes `NaN`, mirroring finite tracks. Both
+  families are one call of the point estimation operation with the
+  adjustment's settings (marks on, few absent, every other rule off), see
+  [point-estimation.md](../reconstruction/point-estimation.md).
 
 ### Binding
 

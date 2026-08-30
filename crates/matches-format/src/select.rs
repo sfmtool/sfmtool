@@ -34,6 +34,12 @@ pub struct ClusterSelect {
     /// end up with zero members. Every requested name must exist in the
     /// source file.
     pub restrict_images: Option<Vec<String>>,
+    /// Optional cluster restriction, by **source** cluster id. When set, a
+    /// cluster survives only when its source id is requested; the axis
+    /// composes with `restrict_images` (each applies its own) and leaves the
+    /// image table untouched on its own. Every requested id must be a valid
+    /// cluster index of the source.
+    pub restrict_cluster_ids: Option<Vec<u32>>,
     /// Member statuses that survive selection when the source carries a
     /// `cluster_patches/` section. Ignored (every member is a candidate)
     /// when the source has no `cluster_patches/`.
@@ -45,6 +51,7 @@ impl Default for ClusterSelect {
         Self {
             min_span: 2,
             restrict_images: None,
+            restrict_cluster_ids: None,
             accepted_statuses: vec![ClusterMemberStatus::Reference, ClusterMemberStatus::Kept],
         }
     }
@@ -54,8 +61,23 @@ impl ClusterSelect {
     /// The selection options as the JSON provenance object recorded in the
     /// derived file's `matching_options["cluster_selection"]` (together with
     /// the source file's content hash, added by `select_clusters`).
-    fn provenance(&self, source_content_xxh128: &str) -> serde_json::Value {
-        serde_json::json!({
+    ///
+    /// `source_selection` is the source's own `cluster_selection` record when
+    /// the source was itself a selection. An unwritten derivation has no
+    /// `content_xxh128`, so nesting the source's record is what keeps the
+    /// chain naming the archive it started from; the key is omitted entirely
+    /// when the source is an ordinary file.
+    ///
+    /// `restrict_cluster_ids` is likewise recorded only when a cluster-id
+    /// restriction was requested (as the sorted, deduplicated source ids), so
+    /// a selection that does not use the axis writes exactly the record it
+    /// wrote before the axis existed.
+    fn provenance(
+        &self,
+        source_content_xxh128: &str,
+        source_selection: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut record = serde_json::json!({
             "source_content_xxh128": source_content_xxh128,
             "min_span": self.min_span,
             "restrict_images": self.restrict_images,
@@ -64,7 +86,23 @@ impl ClusterSelect {
                 .iter()
                 .map(|s| s.as_str())
                 .collect::<Vec<_>>(),
-        })
+        });
+        if let Some(ids) = &self.restrict_cluster_ids {
+            let mut sorted = ids.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            record
+                .as_object_mut()
+                .expect("json! built an object")
+                .insert("restrict_cluster_ids".into(), serde_json::json!(sorted));
+        }
+        if let Some(prior) = source_selection {
+            record
+                .as_object_mut()
+                .expect("json! built an object")
+                .insert("source_selection".into(), prior);
+        }
+        record
     }
 }
 
@@ -78,12 +116,15 @@ impl MatchesData {
     /// 1. Clusters whose `reference_members` entry is
     ///    [`CLUSTER_REFERENCE_UNREFINABLE`] in the **source** are dropped
     ///    (only when the source carries `cluster_patches/`).
-    /// 2. Per cluster, a member is kept iff its status is in
+    /// 2. When `restrict_cluster_ids` is set, clusters whose **source** id is
+    ///    not requested are dropped. The axis composes with
+    ///    `restrict_images`; each applies its own.
+    /// 3. Per cluster, a member is kept iff its status is in
     ///    `accepted_statuses` (when `cluster_patches/` is present) **and**,
     ///    when `restrict_images` is set, its image is in the restriction.
-    /// 3. The cluster survives iff its kept members span at least
+    /// 4. The cluster survives iff its kept members span at least
     ///    `min_span` distinct (selected) images.
-    /// 4. Surviving clusters and members are densely renumbered in source
+    /// 5. Surviving clusters and members are densely renumbered in source
     ///    order; `reference_members` global indexes are remapped. When a
     ///    surviving cluster's reference member was itself dropped (its image
     ///    outside the restriction), the derived entry is
@@ -92,19 +133,24 @@ impl MatchesData {
     ///    kept members still carry their absolute positions and absolute
     ///    shapes, which stay valid without the reference — only the
     ///    reference-relative warp (`S·S_ref⁻¹`) becomes unrecoverable.
-    /// 5. When restricted, the image table shrinks to exactly the requested
-    ///    images (file order preserved, images with zero members included)
-    ///    and all parallel image arrays plus `member_images` are renumbered.
+    /// 6. When image-restricted, the image table shrinks to exactly the
+    ///    requested images (file order preserved, images with zero members
+    ///    included) and all parallel image arrays plus `member_images` are
+    ///    renumbered. A cluster-id restriction alone leaves the image table
+    ///    untouched.
     ///
     /// The output metadata carries the derivation provenance in
     /// `matching_options["cluster_selection"]` (source `content_xxh128` +
-    /// the selection options); all other metadata — including the timestamp
-    /// — is inherited from the source. The output's `content_hash` is
-    /// cleared (recomputed by [`crate::write_matches`]).
+    /// the selection options, plus the source's own record under
+    /// `source_selection` when the source was itself a selection); all other
+    /// metadata — including the timestamp — is inherited from the source. The
+    /// output's `content_hash` is cleared (recomputed by
+    /// [`crate::write_matches`]).
     ///
     /// Errors when the source stores the pairwise backbone, when
-    /// `min_span < 2`, or when a restriction name is not in the source
-    /// image table.
+    /// `min_span < 2`, when a restriction name is not in the source image
+    /// table, or when a requested cluster id is outside the source's cluster
+    /// range.
     pub fn select_clusters(&self, opts: &ClusterSelect) -> Result<MatchesData, MatchesError> {
         let clusters = self.clusters.as_ref().ok_or_else(|| {
             MatchesError::InvalidFormat(
@@ -168,6 +214,25 @@ impl MatchesData {
         let member_features = clusters.member_features.as_slice().expect("contiguous");
         let n_clusters = starts.len() - 1;
 
+        // Cluster-id restriction: a per-source-cluster keep mask. Requests are
+        // a set (duplicates collapse); every id must name a source cluster.
+        let cluster_keep: Option<Vec<bool>> = match &opts.restrict_cluster_ids {
+            None => None,
+            Some(ids) => {
+                let mut keep = vec![false; n_clusters];
+                for &id in ids {
+                    let Some(slot) = keep.get_mut(id as usize) else {
+                        return Err(MatchesError::InvalidFormat(format!(
+                            "restrict_cluster_ids id {id} is outside the source's \
+                             cluster range (0..{n_clusters})"
+                        )));
+                    };
+                    *slot = true;
+                }
+                Some(keep)
+            }
+        };
+
         // Pass 1: member selection and cluster survival.
         let mut out_starts: Vec<u32> = Vec::with_capacity(n_clusters + 1);
         out_starts.push(0);
@@ -178,6 +243,11 @@ impl MatchesData {
             let source_ref = cp.map(|cp| cp.reference_members[c]);
             if source_ref == Some(CLUSTER_REFERENCE_UNREFINABLE) {
                 continue;
+            }
+            if let Some(keep) = &cluster_keep {
+                if !keep[c] {
+                    continue;
+                }
             }
             let (lo, hi) = (starts[c] as usize, starts[c + 1] as usize);
             let sel_start = kept_members.len();
@@ -313,6 +383,13 @@ impl MatchesData {
 
         // Metadata: inherited, with updated counts/flags and the derivation
         // provenance recorded under matching_options["cluster_selection"].
+        // Selecting a selection nests the source's record rather than
+        // overwriting it, so the chain still names the archive it came from.
+        let source_selection = self
+            .metadata
+            .matching_options
+            .get("cluster_selection")
+            .cloned();
         let mut metadata = self.metadata.clone();
         metadata.version = MATCHES_FORMAT_VERSION;
         metadata.image_count = n_out_images as u32;
@@ -325,7 +402,7 @@ impl MatchesData {
         metadata.has_cluster_patches = out_cluster_patches.is_some();
         metadata.matching_options.insert(
             "cluster_selection".into(),
-            opts.provenance(&self.content_hash.content_xxh128),
+            opts.provenance(&self.content_hash.content_xxh128, source_selection),
         );
 
         Ok(MatchesData {

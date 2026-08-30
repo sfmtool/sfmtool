@@ -7,6 +7,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 |----------|-------------|
 | [absolute-pose.md](absolute-pose.md) | Camera pose from 2D-3D correspondences: P3P plus RANSAC. |
 | [relative-pose.md](relative-pose.md) | Relative pose between two cameras from ray correspondences. |
+| [baseline-direction.md](baseline-direction.md) | The direction between two centres from ray coplanarity, with the rotations held, batched over a graph. |
 | [rotation-locked-resection.md](rotation-locked-resection.md) | Translation-only resection with the rotation held fixed. |
 | [epipolar-estimation.md](epipolar-estimation.md) | Fundamental matrix from 2D-2D correspondences: 7-point with RANSAC, and Bougnoux focal recovery. |
 | [focal-vote.md](focal-vote.md) | Structure-free shared-focal estimation, where image pairs vote independently through per-pair estimators. |
@@ -16,3 +17,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 | [reprojection-residuals.md](reprojection-residuals.md) | Batched reprojection residuals and inlier fractions. |
 | [affine-factorization.md](affine-factorization.md) | Joint weak-perspective factorization over sparse, partly-junk cluster observations. |
 | [pose-verification.md](pose-verification.md) | Displacement-neighbourhood check that flags — and repairs — poses the structure disagrees with. |
+| [cluster-pinhole-bootstrap.md](cluster-pinhole-bootstrap.md) | Bootstrapping a coarse reconstruction from cluster patches alone, with no prior intrinsics and no two-view geometry. |
+| [seed-hypothesis-loop.md](seed-hypothesis-loop.md) | Committing one seed hypothesis per rigid world a capture's cluster evidence describes, and arbitrating between them. |
+| [seed-candidate-evaluation.md](seed-candidate-evaluation.md) | The gauge-free battery every committed seed candidate is measured by before release. |
+| [seed-relaxation.md](seed-relaxation.md) | Relaxing a rotation-only member into finite geometry: baselines from its refused rows, fill-in from its source clusters, a lens read on the result. |

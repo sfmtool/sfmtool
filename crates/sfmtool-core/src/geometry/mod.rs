@@ -5,6 +5,7 @@
 
 pub mod absolute_pose;
 pub mod affine_factorization;
+pub mod baseline_direction;
 pub mod batch_resection;
 pub mod bundle_adjust;
 pub mod convention;

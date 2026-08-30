@@ -184,6 +184,27 @@ fn test_camera_nn_scale_with_colocated() {
 }
 
 #[test]
+fn test_camera_nn_scale_all_coincident() {
+    // A rotation-only reconstruction stores every camera at the origin.
+    // More than 32 identical centers used to overflow kiddo's fixed leaf
+    // bucket and panic on insert; now they collapse to one entry and the
+    // scale is None (no positive NN distance exists).
+    let images: Vec<SfmrImage> = (0..148).map(|_| make_image_at(0.0, 0.0, 0.0)).collect();
+    assert_eq!(compute_camera_nn_scale(&images), None);
+}
+
+#[test]
+fn test_camera_nn_scale_many_colocated_plus_spread() {
+    // 40 cameras on one spot (past the kiddo bucket size) plus a spaced line:
+    // insertion must not panic and the spaced cameras still set the scale.
+    let mut images: Vec<SfmrImage> = (0..40).map(|_| make_image_at(0.0, 0.0, 0.0)).collect();
+    images.extend((1..=10).map(|i| make_image_at(i as f64, 0.0, 0.0)));
+    let scale = compute_camera_nn_scale(&images).unwrap();
+    assert!(scale > 0.5, "scale={}", scale);
+    assert!(scale < 1.5, "scale={}", scale);
+}
+
+#[test]
 fn test_grid_step_power_of_10() {
     // Verify the power-of-10 snapping logic used by the adaptive grid
     for &(length_scale, expected_step) in &[

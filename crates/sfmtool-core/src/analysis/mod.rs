@@ -5,7 +5,8 @@
 //! discovery, covisibility / frustum-intersection image-pair graphs, image-space
 //! observation adjacency between points and the surfel normals fitted over it,
 //! per-image occupancy grids over the observations' footprints, per-point
-//! triangulation inspection, and the cluster match census.
+//! triangulation inspection, the cluster match census, and the join that names
+//! the selection clusters a member left behind.
 
 pub mod adjacency_surfel_normals;
 pub mod alignment;
@@ -15,3 +16,4 @@ pub mod infinity;
 pub mod observation_adjacency;
 pub mod observation_coverage;
 pub mod point_inspect;
+pub mod source_clusters;

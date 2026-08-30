@@ -30,7 +30,6 @@ EXPECTED_KEYS = {
     "translations",
     "points",
     "inlier_fractions",
-    "far_cluster_indexes",
 }
 
 
@@ -142,7 +141,6 @@ def test_dict_layout_and_rotations():
     n_cl = int(sc["cluster"].max()) + 1
     assert res["points"].shape == (n_cl, 3)
     assert res["inlier_fractions"].shape == (n_posed,)
-    assert res["far_cluster_indexes"].dtype == np.uint32
 
     # Sub-degree rotations after averaging: canonical GT is S @ R_optical.
     gt = [S @ sc["rots"][i] for i in res["image_indexes"]]
@@ -174,15 +172,14 @@ def test_translations_match_up_to_similarity():
     spread = np.sqrt((yc**2).sum(1).mean())
     assert resid.max() < 0.05 * spread, f"residuals {resid} vs spread {spread}"
 
-    # Far cluster ids are dominated by the far cloud, and their point rows are
-    # unit directions (the finishing adjustment models them at infinity).
-    far = res["far_cluster_indexes"]
-    assert far.size > 0
-    assert (far >= sc["far_start"]).mean() > 0.8
-    far_rows = res["points"][far]
-    finite = np.isfinite(far_rows[:, 0])
-    norms = np.linalg.norm(far_rows[finite], axis=1)
-    npt.assert_allclose(norms, 1.0, atol=1e-9)
+    # The rows the finishing adjustment modelled at infinity come back as unit
+    # directions, and they are dominated by the far cloud.
+    pts = res["points"]
+    finite = np.isfinite(pts[:, 0])
+    unit = np.zeros(len(pts), bool)
+    unit[finite] = np.abs(np.linalg.norm(pts[finite], axis=1) - 1.0) < 1e-9
+    assert unit.sum() > 0
+    assert (np.nonzero(unit)[0] >= sc["far_start"]).mean() > 0.8
 
 
 # ── Failure modes and budgets ──────────────────────────────────────────────
@@ -266,7 +263,6 @@ def test_determinism_same_seed():
     npt.assert_array_equal(a["translations"], b["translations"])
     npt.assert_array_equal(a["points"], b["points"])
     npt.assert_array_equal(a["inlier_fractions"], b["inlier_fractions"])
-    npt.assert_array_equal(a["far_cluster_indexes"], b["far_cluster_indexes"])
 
 
 def test_fortran_order_positions_match_c_order():

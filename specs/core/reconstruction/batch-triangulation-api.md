@@ -16,7 +16,10 @@ with many observations were misclassified as finite. The conditioning of the
 triangulation answers the finite-vs-infinity question directly; previously it
 was computed and thrown away.
 
-Related: [finding points at infinity in an existing solve](../../cli/reconstruction/xform/find-points-at-infinity.md),
+Related: [the decision layer over this API](point-estimation.md), which judges a
+cluster against an angular floor, cheirality and a reprojection bar and returns
+a position or a bearing;
+[finding points at infinity in an existing solve](../../cli/reconstruction/xform/find-points-at-infinity.md),
 [the v2 points-at-infinity format model](../../formats/sfmr-file-format.md) (§7), and
 [rendering points at infinity in the GUI](../../gui/point-cloud-rendering.md).
 

@@ -93,10 +93,19 @@ pub(super) fn compute_camera_nn_scale(images: &[sfmtool_core::SfmrImage]) -> Opt
         return None;
     }
 
+    // Exact-duplicate centers collapse to a single tree entry: kiddo v5's
+    // fixed-size leaf buckets panic once more than 32 items share identical
+    // coordinates (a rotation-only reconstruction stores every camera at the
+    // origin), and duplicates could only contribute the zero distances the
+    // `dist > 0.0` filter below discards.
     let mut tree: KdTree<f32, 3> = KdTree::with_capacity(images.len());
+    let mut seen = std::collections::HashSet::with_capacity(images.len());
     for (i, img) in images.iter().enumerate() {
         let c = img.camera_center();
-        tree.add(&[c.x as f32, c.y as f32, c.z as f32], i as u64);
+        let p = [c.x as f32, c.y as f32, c.z as f32];
+        if seen.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]) {
+            tree.add(&p, i as u64);
+        }
     }
 
     let mut nn_distances: Vec<f32> = Vec::with_capacity(images.len());
