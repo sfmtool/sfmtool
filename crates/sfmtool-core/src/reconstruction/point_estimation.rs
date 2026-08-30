@@ -7,7 +7,8 @@
 //! [`super::triangulation::triangulate_batch`] answers where a track's rays
 //! come closest and how well the depth was observed. It does not say whether
 //! that answer should be used. Whether a track with parallel rays is a bearing,
-//! whether a point behind a camera is demoted now or left for a later trim,
+//! whether a point behind a camera is demoted now or left for a later trim and
+//! whether that demotion reads the track or the one observation that failed,
 //! whether a single observation still carries a direction, and whether a fresh
 //! estimate has to reproject inside a bound before it counts are the caller's
 //! rules. This module holds them once, as options with an off position, so a
@@ -51,6 +52,13 @@ pub struct PointRules {
     /// Demote a solved point that lands behind any camera observing it. Off,
     /// the point is kept and the in-front flag is reported.
     pub cheirality: bool,
+    /// Read a cheirality failure per observation rather than per track: where
+    /// the observations that see the solved point behind them are a strict
+    /// minority of the track's usable observations, drop them, solve again on
+    /// the survivors, and read the rules over the reduced track. Off, one
+    /// observation behind the point demotes the whole track. Needs
+    /// [`Self::cheirality`] on, which is the rule this one reads.
+    pub prune_behind: bool,
     /// The pixel bound a fresh estimate has to reproject inside of. `None` is
     /// off. Reading it needs the observation form.
     pub bar_px: Option<f64>,
@@ -74,6 +82,9 @@ pub enum PointVerdict {
     OverBar = 4,
     /// Fewer than two usable observations.
     Few = 5,
+    /// A minority of the track's observations saw the solved point behind them
+    /// and were dropped; the solve over the survivors was admitted.
+    FinitePruned = 6,
 }
 
 impl PointVerdict {
@@ -100,6 +111,13 @@ pub struct PointCensus {
     pub over_bar: usize,
     /// Tracks with fewer than two usable observations.
     pub few: usize,
+    /// Tracks the cheirality prune rescued: a minority of their observations
+    /// was dropped and the reduced solve was admitted. Disjoint from
+    /// [`Self::finite`], so the finite population is the two together and
+    /// [`Self::seen`] stays the sum of every bucket.
+    pub finite_pruned: usize,
+    /// Observations the cheirality prune dropped, summed over those tracks.
+    pub pruned_obs: usize,
     /// Median widest-pair angle of the finite tracks, in degrees; `None` where
     /// nothing came back finite or the floor was off.
     pub triangulation_angle_median_deg: Option<f64>,
@@ -113,9 +131,15 @@ pub struct PointEstimates {
     pub xyzw: Vec<[f64; 4]>,
     /// One verdict per track.
     pub verdicts: Vec<PointVerdict>,
-    /// Whether the solved point lay in front of every observing camera. False
-    /// for a track that was never solved.
+    /// Whether the solved point lay in front of every observing camera the
+    /// estimate was kept on. False for a track that was never solved; for a
+    /// pruned track it reads the survivors.
     pub in_front: Vec<bool>,
+    /// One flag per observation the caller gave, true where the cheirality
+    /// prune dropped that observation from its track. All false with
+    /// [`PointRules::prune_behind`] off. An observation whose ray was not
+    /// usable is not flagged: it was dropped before any rule was read.
+    pub pruned: Vec<bool>,
     /// The counts behind those verdicts.
     pub census: PointCensus,
 }
@@ -208,7 +232,7 @@ pub fn estimate_points_from_rays(
             }
         })
         .collect();
-    decide(&tracks, n_tracks, None, rules)
+    decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules)
 }
 
 /// Re-estimate every track of an observation set, building the world rays
@@ -297,7 +321,7 @@ pub fn estimate_points_from_observations(
             });
         }
     }
-    decide(&tracks, obs.n_tracks, Some((cam, obs)), rules)
+    decide(&tracks, obs.n_tracks, n_obs, Some((cam, obs)), rules)
 }
 
 /// A rule that decides a track without solving it.
@@ -311,16 +335,37 @@ enum Early {
     Thin,
 }
 
+/// What the solve, and the rules read after it, made of one open track.
+struct Solved {
+    /// The rule that decided the track.
+    verdict: PointVerdict,
+    /// The estimate: `w = 1` a position, `w = 0` a bearing.
+    value: [f64; 4],
+    /// Whether every observation the estimate was kept on sees it in front.
+    front: bool,
+    /// Observation rows the cheirality prune dropped, in the caller's own
+    /// observation indexing and in increasing order.
+    pruned: Vec<usize>,
+    /// The widest-pair cosine of the surviving rays, where a prune re-read the
+    /// floor over them. `None` leaves the full track's own cosine standing.
+    cos_widest: Option<f64>,
+}
+
 /// The shared decision pass over prepared tracks.
+///
+/// `n_obs` is how many observations the caller handed in, which is the length
+/// of the per-observation prune mask.
 fn decide(
     tracks: &[Track],
     n_tracks: usize,
+    n_obs: usize,
     reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
     rules: PointRules,
 ) -> PointEstimates {
     let mut xyzw = vec![[f64::NAN; 4]; n_tracks];
     let mut verdicts = vec![PointVerdict::Few; n_tracks];
     let mut in_front = vec![false; n_tracks];
+    let mut pruned = vec![false; n_obs];
 
     // The widest pair is read once, here, and only where the floor asks for it:
     // it costs O(K²) in the track's observation count, and a caller with the
@@ -359,7 +404,7 @@ fn decide(
     offsets.push(dirs.len());
     let tris = triangulate_batch(&dirs, &centres, &offsets);
 
-    let solved: Vec<(PointVerdict, [f64; 4], bool)> = open
+    let solved: Vec<Solved> = open
         .par_iter()
         .zip(tris.par_iter())
         .map(|(&k, tri)| {
@@ -367,16 +412,27 @@ fn decide(
             let p = tri.point.coords;
             let front = tri.in_front_of_all_cameras;
             if rules.cheirality && !front {
-                return (PointVerdict::Behind, bearing(&t.dirs), false);
+                if rules.prune_behind {
+                    if let Some(s) = prune_behind(t, p, reproject, rules) {
+                        return s;
+                    }
+                }
+                return refused(PointVerdict::Behind, &t.dirs, false);
             }
             if let Some(bar) = rules.bar_px {
                 if let Some((cam, obs)) = reproject {
-                    if !clears_bar(cam, obs, t, p, bar) {
-                        return (PointVerdict::OverBar, bearing(&t.dirs), front);
+                    if !clears_bar(cam, obs, &t.rows, &t.centres, p, bar) {
+                        return refused(PointVerdict::OverBar, &t.dirs, front);
                     }
                 }
             }
-            (PointVerdict::Finite, [p.x, p.y, p.z, 1.0], front)
+            Solved {
+                verdict: PointVerdict::Finite,
+                value: [p.x, p.y, p.z, 1.0],
+                front,
+                pruned: Vec::new(),
+                cos_widest: None,
+            }
         })
         .collect();
 
@@ -411,15 +467,27 @@ fn decide(
         }
     }
     let mut angles: Vec<f64> = Vec::new();
-    for (&k, (verdict, value, front)) in open.iter().zip(&solved) {
+    for (&k, s) in open.iter().zip(&solved) {
         let slot = tracks[k].slot;
-        verdicts[slot] = *verdict;
-        xyzw[slot] = *value;
-        in_front[slot] = *front;
-        match verdict {
+        verdicts[slot] = s.verdict;
+        xyzw[slot] = s.value;
+        in_front[slot] = s.front;
+        match s.verdict {
             PointVerdict::Finite => {
                 census.finite += 1;
                 if let Some(m) = early[k].1 {
+                    angles.push(m.clamp(-1.0, 1.0).acos().to_degrees());
+                }
+            }
+            PointVerdict::FinitePruned => {
+                census.finite_pruned += 1;
+                census.pruned_obs += s.pruned.len();
+                for &r in &s.pruned {
+                    pruned[r] = true;
+                }
+                // The surviving rays are what the estimate rests on, so the
+                // angle it reports is theirs.
+                if let Some(m) = s.cos_widest.or(early[k].1) {
                     angles.push(m.clamp(-1.0, 1.0).acos().to_degrees());
                 }
             }
@@ -438,8 +506,86 @@ fn decide(
         xyzw,
         verdicts,
         in_front,
+        pruned,
         census,
     }
+}
+
+/// A track a rule refused: the mean of its own rays, nothing pruned.
+fn refused(verdict: PointVerdict, dirs: &[Vector3<f64>], front: bool) -> Solved {
+    Solved {
+        verdict,
+        value: bearing(dirs),
+        front,
+        pruned: Vec::new(),
+        cos_widest: None,
+    }
+}
+
+/// Read the cheirality failure of `p` per observation and, where the failing
+/// observations are a strict minority, solve again without them.
+///
+/// The failing set is the observations whose depth along their own ray is
+/// non-positive, which is the same test the batch solve reports as the track's
+/// in-front flag. A minority of them is a track whose observations still name a
+/// majority; at a tie there is no majority to solve on, so a tie is not a
+/// minority and the track keeps the whole-track verdict. A minority of a track
+/// of two is impossible, so a rescue never leaves fewer than two rays.
+///
+/// The reduced track is then re-read by the rules the full one would have been:
+/// the floor over the surviving pair angles, cheirality again over the new
+/// solve, and the bar over the surviving observations. `None` where any of them
+/// refuses, which leaves the track the bearing it would have been anyway, with
+/// nothing pruned.
+fn prune_behind(
+    track: &Track,
+    p: Vector3<f64>,
+    reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
+    rules: PointRules,
+) -> Option<Solved> {
+    let n = track.dirs.len();
+    let behind: Vec<usize> = (0..n)
+        .filter(|&i| (p - track.centres[i].coords).dot(&track.dirs[i]) <= 0.0)
+        .collect();
+    if behind.is_empty() || 2 * behind.len() >= n {
+        return None;
+    }
+    let mut drop = vec![false; n];
+    for &i in &behind {
+        drop[i] = true;
+    }
+    let keep: Vec<usize> = (0..n).filter(|&i| !drop[i]).collect();
+    let dirs: Vec<Vector3<f64>> = keep.iter().map(|&i| track.dirs[i]).collect();
+    let centres: Vec<Point3<f64>> = keep.iter().map(|&i| track.centres[i]).collect();
+    let rows: Vec<usize> = keep.iter().map(|&i| track.rows[i]).collect();
+
+    let mut cos_widest = None;
+    if let Some(c) = rules.floor_rad.map(f64::cos) {
+        let m = smallest_pairwise_cosine(&dirs);
+        if m > c {
+            return None;
+        }
+        cos_widest = Some(m);
+    }
+    let tri = triangulate_batch(&dirs, &centres, &[0, dirs.len()]);
+    let q = tri[0].point.coords;
+    if !tri[0].in_front_of_all_cameras {
+        return None;
+    }
+    if let Some(bar) = rules.bar_px {
+        if let Some((cam, obs)) = reproject {
+            if !clears_bar(cam, obs, &rows, &centres, q, bar) {
+                return None;
+            }
+        }
+    }
+    Some(Solved {
+        verdict: PointVerdict::FinitePruned,
+        value: [q.x, q.y, q.z, 1.0],
+        front: true,
+        pruned: behind.iter().map(|&i| track.rows[i]).collect(),
+        cos_widest,
+    })
 }
 
 /// One image's world-to-camera rotation, taken as given.
@@ -502,21 +648,26 @@ fn smallest_pairwise_cosine(dirs: &[Vector3<f64>]) -> f64 {
     m
 }
 
-/// Whether the track's median finite reprojection residual sits inside the bar.
+/// Whether the median finite reprojection residual over `rows` sits inside the
+/// bar.
 ///
-/// Observations the camera model refuses to project carry no residual and do not
-/// vote; a track where none of them projects fails the bar.
+/// `rows` are observation indices and `centres` the matching camera centres, so
+/// the caller states which of a track's observations vote: the whole track, or
+/// the survivors of a cheirality prune. Observations the camera model refuses to
+/// project carry no residual and do not vote; a set where none of them projects
+/// fails the bar.
 fn clears_bar(
     cam: &CameraIntrinsics,
     obs: ObservationSet<'_>,
-    track: &Track,
+    rows: &[usize],
+    centres: &[Point3<f64>],
     p: Vector3<f64>,
     bar: f64,
 ) -> bool {
-    let mut res: Vec<f64> = Vec::with_capacity(track.rows.len());
-    for (n, &k) in track.rows.iter().enumerate() {
+    let mut res: Vec<f64> = Vec::with_capacity(rows.len());
+    for (n, &k) in rows.iter().enumerate() {
         let i = obs.obs_image[k] as usize;
-        let d = p - track.centres[n].coords;
+        let d = p - centres[n].coords;
         let xc = pose_rotation(obs, i) * d;
         if let Some((u, v)) = cam.ray_to_pixel([xc.x, xc.y, xc.z]) {
             let du = obs.uv[2 * k] - u;

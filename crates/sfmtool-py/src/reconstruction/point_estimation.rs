@@ -25,6 +25,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     d.set_item("behind", PointVerdict::Behind.code())?;
     d.set_item("over_bar", PointVerdict::OverBar.code())?;
     d.set_item("few", PointVerdict::Few.code())?;
+    d.set_item("finite_pruned", PointVerdict::FinitePruned.code())?;
     Ok(d)
 }
 
@@ -55,14 +56,21 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///         off. A marked track is not solved.
 ///     floor_rad: Angular floor in radians, or None for the rule off.
 ///     cheirality: Demote a point behind any observing camera (default False).
+///     prune_behind: Read that demotion per observation (default False). Where
+///         the observations seeing the point behind them are a strict minority,
+///         they are dropped, the survivors are solved again and the rules are
+///         re-read over the reduced track; the verdict is then
+///         ``finite_pruned`` and the dropped rows come back in ``pruned``.
+///         Needs ``cheirality``.
 ///     bar_px: Reprojection bound in pixels, or None for the rule off.
 ///     few: ``"absent"`` (default) or ``"bearing"``.
 ///
 /// Returns:
 ///     A dict with ``xyzw`` (n_track, 4) float64 (w = 1 position, w = 0
 ///     bearing, all NaN for absent), ``verdicts`` (n_track,) uint8 (see
-///     ``VERDICT_CODES``), ``in_front`` (n_track,) bool, and ``census``, a dict
-///     of the counts per verdict plus ``seen`` and
+///     ``VERDICT_CODES``), ``in_front`` (n_track,) bool, ``pruned`` (n_obs,)
+///     bool over the observations given, and ``census``, a dict of the counts
+///     per verdict plus ``seen``, ``pruned_obs`` and
 ///     ``triangulation_angle_median_deg``.
 #[pyfunction]
 #[pyo3(signature = (
@@ -80,6 +88,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     marks=None,
     floor_rad=None,
     cheirality=false,
+    prune_behind=false,
     bar_px=None,
     few="absent",
 ))]
@@ -99,12 +108,14 @@ pub fn estimate_points<'py>(
     marks: Option<PyReadonlyArray1<'py, bool>>,
     floor_rad: Option<f64>,
     cheirality: bool,
+    prune_behind: bool,
     bar_px: Option<f64>,
     few: &str,
 ) -> PyResult<Py<PyAny>> {
     let rules = PointRules {
         floor_rad,
         cheirality,
+        prune_behind,
         bar_px,
         few: match few {
             "absent" => FewObservations::Absent,
@@ -116,6 +127,13 @@ pub fn estimate_points<'py>(
             }
         },
     };
+    // The prune is a reading of the cheirality rule, so asking for it with that
+    // rule off is a request nothing would carry out.
+    if prune_behind && !cheirality {
+        return Err(PyValueError::new_err(
+            "prune_behind reads the cheirality rule and needs cheirality=True",
+        ));
+    }
     let mask = marks.as_ref().map(|m| to_contiguous!(m));
 
     let ray_form = dirs.is_some() || centres.is_some() || offsets.is_some();
@@ -274,6 +292,7 @@ pub fn estimate_points<'py>(
         ),
     )?;
     dict.set_item("in_front", PyArray1::from_vec(py, out.in_front))?;
+    dict.set_item("pruned", PyArray1::from_vec(py, out.pruned))?;
     let c = out.census;
     let census = PyDict::new(py);
     census.set_item("seen", c.seen)?;
@@ -283,6 +302,8 @@ pub fn estimate_points<'py>(
     census.set_item("behind", c.behind)?;
     census.set_item("over_bar", c.over_bar)?;
     census.set_item("few", c.few)?;
+    census.set_item("finite_pruned", c.finite_pruned)?;
+    census.set_item("pruned_obs", c.pruned_obs)?;
     census.set_item(
         "triangulation_angle_median_deg",
         c.triangulation_angle_median_deg,

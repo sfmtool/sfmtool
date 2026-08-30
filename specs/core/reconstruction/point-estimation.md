@@ -52,6 +52,7 @@ nothing else.
 | **marks** | incoming direction flags | a track flagged as a direction is not solved: its estimate is the normalized mean of its rays. Off, every track is solved. |
 | **floor** | an angle | a track whose widest ray pair subtends less than the floor is THIN and becomes a bearing (the normalized mean ray). The pair angle is the minimum cosine over every ray pair of the track, read as a pairwise statistic and not from the solve's spectrum, so that a track's verdict depends on its rays alone and not on the count of them. Off, no track is thin. |
 | **cheirality** | on / off | a solved point that lands behind any camera that observes it (non-positive depth along that camera's ray) is BEHIND and becomes a bearing. Off, the point is kept and the flag is reported. |
+| **prune** | on / off | how the cheirality failure is read: per observation rather than per track. See below. Off, one observation behind the point decides the whole track. |
 | **bar** | a pixel bound | a solved point that survives the rules above is reprojected through the camera at the same geometry; when the median finite residual over its observations exceeds the bound the track is OVER THE BAR and becomes a bearing. Requires the observation form. Off, no reprojection is read. |
 
 Bearings are unit vectors with the point flagged as a direction. The
@@ -69,13 +70,66 @@ The one case where the order is visible is a MARKED track with one observation:
 under `few = absent` it is absent, not a bearing, which is what an adjustment's
 own re-estimation does with it.
 
+## A cheirality failure read per observation
+
+The cheirality rule as written is a statement about the track: one observation
+that sees the solved point behind it demotes every observation with it. The
+prune reads the same failure as a statement about observations.
+
+After the solve, the FAILING SET is the observations whose depth along their own
+ray is non-positive, which is the test the solve already reports as the track's
+in-front flag, taken one observation at a time. Where that set is a strict
+minority of the track's usable observations, the failing observations are
+dropped, the survivors are solved again, and the rules are read once more over
+the reduced track: the floor over the surviving pair angles, cheirality over the
+new solve, and the bar over the surviving observations. A reduced track that
+clears all three is FINITE PRUNED, and the observations that were dropped are
+reported. Where any of them refuses, the track is the bearing the whole-track
+rule would have made it, with nothing dropped and nothing recorded, so a refused
+rescue leaves the same bytes as the prune off.
+
+A minority is what makes the drop readable: the observations that survive are
+the ones that agree on a point, and the ones dropped are the ones that do not.
+At a tie there is no majority to solve on, so a tie is not a minority. A track
+of two therefore never prunes, since half of two is not fewer than half, and a
+rescue never leaves fewer than two rays behind.
+
+The failing set is read once. The reduced solve's own cheirality is a rule the
+reduced track has to clear, not a second round of dropping: an estimate that
+still lands behind one of its survivors is refused rather than trimmed again.
+
+The prune is a reading of the cheirality rule and does nothing with that rule
+off. It is stated as its own option so that the whole-track reading stays the
+default and a caller asks for the other one.
+
+The floor is not read this way. A minority of rays that sit far off the track's
+own angle while still in front of every camera is not a cheirality failure, and
+nothing here decides it; the
+[member-coherence](../patch/member-coherence-validation.md) primitive decides
+membership from a pairwise agreement matrix rather than from rays, so it does
+not decide it either. That case is open.
+
 ## Verdict and census
 
 Per track the operation returns the estimate, the direction flag, and one
-verdict: `finite`, `marked`, `thin`, `behind`, `over_bar`, `few`. Alongside,
-a census of the counts per verdict, the number of tracks seen, and the median
-triangulation angle (the widest pair angle) over the tracks that came out
-finite. The census is what a caller records; the verdicts are what it filters
+verdict: `finite`, `marked`, `thin`, `behind`, `over_bar`, `few`,
+`finite_pruned`. Alongside, a census of the counts per verdict, the number of
+tracks seen, and the median triangulation angle (the widest pair angle) over the
+tracks that came out finite. The census is what a caller records; the verdicts
+are what it filters on. Every track carries exactly one verdict, so the counts
+sum to the tracks seen; `finite` and `finite_pruned` are disjoint and the finite
+population is the two together.
+
+Per observation the operation returns one prune flag, in the caller's own
+observation order, true where the prune dropped that observation from its
+track, and the census carries their total as `pruned_obs`. A caller that removes
+those observations from its own arrays holds a track set whose every remaining
+observation the estimate was solved on. An observation whose ray was not usable
+at all is not flagged: it was dropped before any rule was read, and the flags
+report this rule's drops.
+
+The angle a rescued track contributes to the median is its SURVIVORS' widest
+pair, not the full track's, so the statistic reads the rays the estimate rests
 on.
 
 The median angle is reported only where the `floor` is on. It is that rule's
@@ -103,6 +157,10 @@ one.
 - **Re-estimating every point after an adjustment.** As the previous setting
   with `bar` off: the adjustment has already trimmed the observations the
   bound would cut.
+- **Admitting and re-estimating into a released file.** As the two settings
+  above with `prune` on. The caller writes what it estimates, and it removes
+  the pruned observations from the arrays it writes, so the file carries no
+  observation the estimate refused.
 - **Demoting unconstrained points in a stored reconstruction.** `floor` on,
   everything else off: finite points whose rays do not cross become
   bearings, nothing else moves.
@@ -123,8 +181,12 @@ poses) as NumPy arrays, the incoming state as optional arrays, and the rules
 as keyword arguments with the off position as each default. It returns the
 positions as an `(n, 4)` xyzw array (w = 1 finite, w = 0 bearing, NaN rows
 for `absent`), the verdict codes as an integer array with the code table
-exposed as a constant, and the census as a dict. Arrays are accepted in
+exposed as a constant, the per-observation prune flags as a bool array over the
+observations given, and the census as a dict. Arrays are accepted in
 either memory order and returned C-contiguous.
+
+`prune_behind` with `cheirality` off is refused rather than accepted and
+ignored: it names a reading of a rule the call has turned off.
 
 The observation form takes the poses as world-to-camera quaternions and
 translations, and the track count, since the observation indices alone do not
@@ -156,5 +218,12 @@ The in-front flag comes back beside the verdicts, which is what makes
   or twenty at that angle.
 - **Bar.** The median is over finite residuals only; a track whose
   reprojections are all non-finite is over the bar.
+- **Prune.** A minority behind the point is dropped and the reduced solve is
+  admitted, with the dropped rows named in the caller's own observation order; a
+  majority behind is the bearing the whole-track rule gives, byte for byte; half
+  the track behind is not a minority and nothing is dropped. A rescue whose
+  survivors fall inside the floor, or whose reduced solve lands past the bar, is
+  refused and leaves the whole-track verdict. The prune with `cheirality` off is
+  the same result as the prune off.
 - **Determinism.** Two runs on the same arrays are byte-identical, with and
   without parallelism.

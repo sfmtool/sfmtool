@@ -528,6 +528,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
     let rules = PointRules {
         floor_rad: Some(1e-4),
         cheirality: true,
+        prune_behind: false,
         bar_px: Some(1.0),
         few: FewObservations::Bearing,
     };
@@ -567,4 +568,355 @@ fn verdict_codes_are_the_wire_contract() {
     assert_eq!(PointVerdict::Behind.code(), 3);
     assert_eq!(PointVerdict::OverBar.code(), 4);
     assert_eq!(PointVerdict::Few.code(), 5);
+    assert_eq!(PointVerdict::FinitePruned.code(), 6);
+}
+
+// ── The cheirality prune, read per observation ────────────────────────────
+
+/// A unit ray from `centre` through `p`. `away` reverses it, so `p` sits behind
+/// the camera while still lying on the ray's own line: the midpoint solve is
+/// unmoved and only the depth's sign changes.
+fn ray_through(centre: [f64; 3], p: [f64; 3], away: bool) -> [f64; 3] {
+    let d = Vector3::new(p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]).normalize();
+    let s = if away { -1.0 } else { 1.0 };
+    [s * d.x, s * d.y, s * d.z]
+}
+
+/// One track's rays and centres, flattened, from `(centre, away)` views that all
+/// look along `p`.
+fn lines_at(p: [f64; 3], views: &[([f64; 3], bool)]) -> (Vec<f64>, Vec<f64>) {
+    let mut dirs = Vec::new();
+    let mut centres = Vec::new();
+    for (c, away) in views {
+        dirs.extend_from_slice(&ray_through(*c, p, *away));
+        centres.extend_from_slice(c);
+    }
+    (dirs, centres)
+}
+
+/// The rules the prune is read under: cheirality on, the prune on top of it.
+fn prune_rules() -> PointRules {
+    PointRules {
+        cheirality: true,
+        prune_behind: true,
+        ..Default::default()
+    }
+}
+
+/// Four views that see the point and one the point sits behind.
+const FIVE: [([f64; 3], bool); 5] = [
+    ([0.0, 0.0, 0.0], false),
+    ([1.0, 0.0, 0.0], false),
+    ([-1.0, 0.0, 0.0], false),
+    ([0.0, 1.0, 0.0], false),
+    ([0.0, 0.0, -10.0], true),
+];
+
+#[test]
+fn a_minority_behind_is_dropped_and_the_track_is_rescued() {
+    let p = [0.0, 0.0, -5.0];
+    let (dirs, centres) = lines_at(p, &FIVE);
+    let out = estimate_points_from_rays(
+        RaySet {
+            dirs: &dirs,
+            centres: &centres,
+            offsets: &[0, 5],
+        },
+        None,
+        prune_rules(),
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::FinitePruned]);
+    assert_eq!(out.xyzw[0][3], 1.0);
+    for (c, want) in p.iter().enumerate() {
+        assert!((out.xyzw[0][c] - want).abs() < 1e-9, "{:?}", out.xyzw[0]);
+    }
+    assert_eq!(out.pruned, vec![false, false, false, false, true]);
+    assert_eq!(out.in_front, vec![true]);
+    assert_eq!(out.census.finite_pruned, 1);
+    assert_eq!(out.census.pruned_obs, 1);
+    assert_eq!(out.census.finite, 0);
+    assert_eq!(out.census.behind, 0);
+    // Every bucket still adds up to the tracks seen.
+    let c = out.census;
+    assert_eq!(
+        c.seen,
+        c.finite + c.finite_pruned + c.marked + c.thin + c.behind + c.over_bar + c.few
+    );
+}
+
+#[test]
+fn the_prune_off_leaves_the_same_track_a_bearing() {
+    let p = [0.0, 0.0, -5.0];
+    let (dirs, centres) = lines_at(p, &FIVE);
+    let rays = RaySet {
+        dirs: &dirs,
+        centres: &centres,
+        offsets: &[0, 5],
+    };
+    let off = estimate_points_from_rays(
+        rays,
+        None,
+        PointRules {
+            cheirality: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(off.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(off.xyzw[0][3], 0.0);
+    assert_eq!(off.pruned, vec![false; 5]);
+    assert_eq!(off.census.behind, 1);
+    assert_eq!(off.census.pruned_obs, 0);
+    // The prune with cheirality off is inert: the rule it reads never fires.
+    let no_rule = estimate_points_from_rays(
+        rays,
+        None,
+        PointRules {
+            prune_behind: true,
+            ..Default::default()
+        },
+    );
+    let plain = estimate_points_from_rays(rays, None, PointRules::default());
+    assert_eq!(no_rule, plain);
+    assert_eq!(no_rule.verdicts, vec![PointVerdict::Finite]);
+}
+
+#[test]
+fn a_majority_behind_is_a_bearing_as_it_always_was() {
+    let p = [0.0, 0.0, -5.0];
+    let views = [
+        ([0.0, 0.0, 0.0], false),
+        ([1.0, 0.0, 0.0], false),
+        ([0.0, 0.0, -10.0], true),
+        ([1.0, 0.0, -10.0], true),
+        ([-1.0, 0.0, -10.0], true),
+    ];
+    let (dirs, centres) = lines_at(p, &views);
+    let rays = RaySet {
+        dirs: &dirs,
+        centres: &centres,
+        offsets: &[0, 5],
+    };
+    let on = estimate_points_from_rays(rays, None, prune_rules());
+    let off = estimate_points_from_rays(
+        rays,
+        None,
+        PointRules {
+            cheirality: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(on.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(on.xyzw, off.xyzw);
+    assert_eq!(on.pruned, vec![false; 5]);
+    assert_eq!(on.census.pruned_obs, 0);
+}
+
+#[test]
+fn half_the_track_behind_is_not_a_minority() {
+    // The tie: with half the observations behind the point, the track's own
+    // observations name no majority to solve on, so nothing is dropped.
+    let p = [0.0, 0.0, -5.0];
+    let views = [
+        ([0.0, 0.0, 0.0], false),
+        ([1.0, 0.0, 0.0], false),
+        ([0.0, 0.0, -10.0], true),
+        ([1.0, 0.0, -10.0], true),
+    ];
+    let (dirs, centres) = lines_at(p, &views);
+    let on = estimate_points_from_rays(
+        RaySet {
+            dirs: &dirs,
+            centres: &centres,
+            offsets: &[0, 4],
+        },
+        None,
+        prune_rules(),
+    );
+    assert_eq!(on.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(on.pruned, vec![false; 4]);
+    // A track of two can never show a minority, so the rescue never leaves a
+    // single survivor behind.
+    let (d2, c2) = lines_at(p, &[views[0], views[2]]);
+    let pair = estimate_points_from_rays(
+        RaySet {
+            dirs: &d2,
+            centres: &c2,
+            offsets: &[0, 2],
+        },
+        None,
+        prune_rules(),
+    );
+    assert_eq!(pair.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(pair.pruned, vec![false; 2]);
+}
+
+#[test]
+fn a_rescue_re_reads_the_floor_over_the_survivors() {
+    // Two nearly parallel rays plus one the point sits behind. The full track
+    // clears the floor only because the odd ray widens it; the survivors do
+    // not, so the rescue is refused and the track is the bearing it was.
+    let p = [0.0, 0.0, -5.0];
+    let views = [
+        ([0.0, 0.0, 0.0], false),
+        ([0.001, 0.0, 0.0], false),
+        ([0.0, -10.0, -5.0], true),
+    ];
+    let (dirs, centres) = lines_at(p, &views);
+    let rays = RaySet {
+        dirs: &dirs,
+        centres: &centres,
+        offsets: &[0, 3],
+    };
+    let floored = estimate_points_from_rays(
+        rays,
+        None,
+        PointRules {
+            floor_rad: Some(0.01),
+            ..prune_rules()
+        },
+    );
+    assert_eq!(floored.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(floored.pruned, vec![false; 3]);
+    // With the floor off the same track is rescued: the floor is the only rule
+    // that refused it.
+    let open = estimate_points_from_rays(rays, None, prune_rules());
+    assert_eq!(open.verdicts, vec![PointVerdict::FinitePruned]);
+    assert_eq!(open.pruned, vec![false, false, true]);
+}
+
+#[test]
+fn a_rescue_re_reads_the_bar_over_the_survivors() {
+    // Four views of a point plus a fifth camera the point sits behind. The four
+    // pixels are pushed off their projections, so the reduced solve reprojects
+    // badly and the bar decides whether the rescue stands.
+    let cam = camera();
+    let centres = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, -10.0],
+    ];
+    let (q, t) = views(&centres);
+    let mut uv = Vec::new();
+    for (k, c) in centres[..4].iter().enumerate() {
+        let p = project(&cam, *c, WORLD);
+        uv.extend_from_slice(&[p[0] + if k == 1 { -20.0 } else { 20.0 }, p[1]]);
+    }
+    // The fifth camera sees nothing of the point: its ray is the optical axis
+    // and the point is behind it.
+    uv.extend_from_slice(&[320.0, 240.0]);
+    let img: Vec<u32> = (0..5).collect();
+    let pt = [0u32; 5];
+    let loose = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            bar_px: Some(1e6),
+            ..prune_rules()
+        },
+    );
+    assert_eq!(loose.verdicts, vec![PointVerdict::FinitePruned]);
+    assert_eq!(loose.pruned, vec![false, false, false, false, true]);
+    let tight = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            bar_px: Some(0.5),
+            ..prune_rules()
+        },
+    );
+    assert_eq!(tight.verdicts, vec![PointVerdict::Behind]);
+    assert_eq!(tight.pruned, vec![false; 5]);
+    assert_eq!(tight.census.over_bar, 0, "the bar decided a behind track");
+}
+
+#[test]
+fn the_prune_mask_indexes_the_caller_s_own_observations() {
+    // Two tracks with their observations interleaved: the mask names the rows
+    // the caller listed, not a position within a track.
+    let cam = camera();
+    let centres = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 0.0, -10.0],
+    ];
+    let (q, t) = views(&centres);
+    let worlds = [[0.2, -0.1, -5.0], [-0.4, 0.3, -8.0]];
+    let mut uv = Vec::new();
+    let mut img = Vec::new();
+    let mut pt = Vec::new();
+    for (i, c) in centres.iter().enumerate() {
+        for (k, w) in worlds.iter().enumerate() {
+            if i == 3 {
+                uv.extend_from_slice(&[320.0, 240.0]);
+            } else {
+                uv.extend_from_slice(&project(&cam, *c, *w));
+            }
+            img.push(i as u32);
+            pt.push(k as u32);
+        }
+    }
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 2),
+        None,
+        prune_rules(),
+    );
+    assert_eq!(
+        out.verdicts,
+        vec![PointVerdict::FinitePruned, PointVerdict::FinitePruned]
+    );
+    // Rows 6 and 7 are the fourth camera's two observations.
+    assert_eq!(
+        out.pruned,
+        vec![false, false, false, false, false, false, true, true]
+    );
+    assert_eq!(out.census.pruned_obs, 2);
+    assert_eq!(out.census.finite_pruned, 2);
+    for (k, w) in worlds.iter().enumerate() {
+        for (c, want) in w.iter().enumerate() {
+            assert!((out.xyzw[k][c] - want).abs() < 1e-9);
+        }
+    }
+    let again = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 2),
+        None,
+        prune_rules(),
+    );
+    assert_eq!(out, again);
+}
+
+#[test]
+fn the_rescued_angle_is_the_survivors_own_widest_pair() {
+    // The dropped ray is the widest pair of the full track, so an angle read
+    // over that track would report one the estimate never rested on.
+    let p = [0.0, 0.0, -5.0];
+    let views = [
+        ([0.0, 0.0, 0.0], false),
+        ([1.0, 0.0, 0.0], false),
+        ([0.0, -10.0, -5.0], true),
+    ];
+    let (dirs, centres) = lines_at(p, &views);
+    let out = estimate_points_from_rays(
+        RaySet {
+            dirs: &dirs,
+            centres: &centres,
+            offsets: &[0, 3],
+        },
+        None,
+        PointRules {
+            floor_rad: Some(1e-4),
+            ..prune_rules()
+        },
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::FinitePruned]);
+    // The two survivors are 5 units deep and 1 apart.
+    let want = (5.0_f64 / 26.0_f64.sqrt()).acos().to_degrees();
+    let got = out.census.triangulation_angle_median_deg.unwrap();
+    assert!((got - want).abs() < 1e-9, "{got} vs {want}");
 }

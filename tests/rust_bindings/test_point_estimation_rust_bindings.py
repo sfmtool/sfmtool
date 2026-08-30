@@ -26,6 +26,7 @@ THIN = VERDICT_CODES["thin"]
 BEHIND = VERDICT_CODES["behind"]
 OVER_BAR = VERDICT_CODES["over_bar"]
 FEW = VERDICT_CODES["few"]
+FINITE_PRUNED = VERDICT_CODES["finite_pruned"]
 
 #: Identity world-to-camera rotation, WXYZ.
 IDENTITY_Q = np.array([1.0, 0.0, 0.0, 0.0])
@@ -284,7 +285,193 @@ def test_the_verdict_code_table_is_exposed():
         "behind": 3,
         "over_bar": 4,
         "few": 5,
+        "finite_pruned": 6,
     }
+
+
+# ── The cheirality prune, read per observation ────────────────────────────
+
+#: The revisit view of the specimen tracks: a camera off to one side, turned
+#: away, whose observation is a ray far off the track's own and which the point
+#: sits behind.
+REVISIT_YAW_DEG = 80.0
+REVISIT_CENTRE = np.array([5.0, 0.0, -5.0])
+#: The point the agreeing views triangulate.
+SPECIMEN = np.array([[0.0, 0.0, -5.0]])
+
+
+def _yaw(deg):
+    """``(quaternion_wxyz, rotation)`` of a world-to-camera yaw about +Y."""
+    h = np.deg2rad(deg) / 2.0
+    q = np.array([np.cos(h), 0.0, np.sin(h), 0.0])
+    c, s = np.cos(np.deg2rad(deg)), np.sin(np.deg2rad(deg))
+    return q, np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
+
+
+def _specimen(cam, n_agreeing, baseline=0.05):
+    """A track of ``n_agreeing`` agreeing views plus the revisit view.
+
+    The agreeing views sit on a short baseline and see :data:`SPECIMEN` where
+    they say it is; the last row is the revisit camera's own observation, whose
+    ray is ``REVISIT_YAW_DEG`` off theirs and which the point is behind.
+    Returns the keyword arguments of one ``estimate_points`` call."""
+    centres = np.array(
+        [[baseline * k, 0.0, 0.0] for k in range(n_agreeing)] + [REVISIT_CENTRE]
+    )
+    quats = np.tile(IDENTITY_Q, (len(centres), 1))
+    q_rev, rot_rev = _yaw(REVISIT_YAW_DEG)
+    quats[-1] = q_rev
+    trans = -centres.copy()
+    trans[-1] = -(rot_rev @ REVISIT_CENTRE)
+    xc = SPECIMEN[0] - centres[:n_agreeing]
+    uv = np.asarray(cam.ray_to_pixel_batch(np.ascontiguousarray(xc)), float)
+    # The revisit observation sits at the principal point, so its ray is that
+    # camera's optical axis: a full REVISIT_YAW_DEG off the agreeing ones.
+    uv = np.vstack([uv, [[cam.width / 2.0, cam.height / 2.0]]])
+    return dict(
+        uv=uv,
+        obs_image=np.arange(len(centres), dtype=np.uint32),
+        obs_point=np.zeros(len(centres), np.uint32),
+        camera=cam,
+        quaternions_wxyz=quats,
+        translations=trans,
+        n_points=1,
+    )
+
+
+@pytest.mark.parametrize("n_agreeing", [4, 2])
+def test_one_wrong_observation_no_longer_hides_a_finite_point(n_agreeing):
+    """The two specimen tracks: five observations and three, one wrong each."""
+    cam = _cam()
+    kw = _specimen(cam, n_agreeing)
+    floor = dict(floor_rad=np.deg2rad(0.05), few="bearing")
+
+    # The agreeing rays are within a couple of degrees of each other and the
+    # revisit ray is tens of degrees away, which is the shape of the defect.
+    dirs = np.asarray(cam.pixel_to_ray_batch(np.ascontiguousarray(kw["uv"])), float)
+    _q, rot_rev = _yaw(REVISIT_YAW_DEG)
+    world = dirs.copy()
+    world[-1] = rot_rev.T @ dirs[-1]
+    cosines = world @ world.T
+    agree = np.degrees(np.arccos(np.clip(cosines[:n_agreeing, :n_agreeing], -1, 1)))
+    assert agree.max() < 2.0
+    off = np.degrees(np.arccos(np.clip(cosines[-1, :n_agreeing], -1, 1)))
+    assert off.min() > 45.0
+
+    # As it stands, the whole track is a bearing.
+    whole = estimate_points(cheirality=True, **floor, **kw)
+    npt.assert_array_equal(whole["verdicts"], [BEHIND])
+    assert whole["xyzw"][0][3] == 0.0
+    assert not whole["pruned"].any()
+
+    # Read per observation, the wrong one is dropped and the point stands.
+    pruned = estimate_points(cheirality=True, prune_behind=True, **floor, **kw)
+    npt.assert_array_equal(pruned["verdicts"], [FINITE_PRUNED])
+    assert pruned["xyzw"][0][3] == 1.0
+    npt.assert_allclose(pruned["xyzw"][0][:3], SPECIMEN[0], atol=1e-9)
+    npt.assert_array_equal(pruned["pruned"], [False] * n_agreeing + [True])
+    npt.assert_array_equal(pruned["in_front"], [True])
+    assert pruned["census"]["finite_pruned"] == 1
+    assert pruned["census"]["pruned_obs"] == 1
+    assert pruned["census"]["behind"] == 0
+    assert pruned["census"]["finite"] == 0
+
+
+def test_a_majority_behind_is_still_a_bearing():
+    dirs = np.array(
+        [
+            [0.0, 0.0, -1.0],
+            [-0.2, 0.0, -1.0],
+            [0.0, 0.0, 1.0],
+            [0.1, 0.0, 1.0],
+            [-0.1, 0.0, 1.0],
+        ]
+    )
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    centres = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, -10.0],
+            [1.0, 0.0, -10.0],
+            [-1.0, 0.0, -10.0],
+        ]
+    )
+    offsets = np.array([0, 5], np.int64)
+    common = dict(dirs=dirs, centres=centres, offsets=offsets, cheirality=True)
+    whole = estimate_points(**common)
+    pruned = estimate_points(prune_behind=True, **common)
+    npt.assert_array_equal(pruned["verdicts"], [BEHIND])
+    npt.assert_array_equal(pruned["xyzw"], whole["xyzw"])
+    assert not pruned["pruned"].any()
+    assert pruned["census"]["pruned_obs"] == 0
+
+
+def test_half_the_track_behind_is_not_a_minority():
+    # Two rays that see the point and two the point sits behind: no majority.
+    dirs = np.array(
+        [[0.0, 0.0, -1.0], [-0.2, 0.0, -1.0], [0.0, 0.0, 1.0], [0.2, 0.0, 1.0]]
+    )
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    centres = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, -10.0],
+            [1.0, 0.0, -10.0],
+        ]
+    )
+    out = estimate_points(
+        dirs=dirs,
+        centres=centres,
+        offsets=np.array([0, 4], np.int64),
+        cheirality=True,
+        prune_behind=True,
+    )
+    npt.assert_array_equal(out["verdicts"], [BEHIND])
+    assert not out["pruned"].any()
+
+
+def test_the_prune_flags_are_over_the_observations_given():
+    cam = _cam()
+    kw = _specimen(cam, 4)
+    out = estimate_points(cheirality=True, prune_behind=True, few="bearing", **kw)
+    assert out["pruned"].shape == (len(kw["obs_image"]),)
+    assert out["pruned"].dtype == np.bool_
+    # The rows the caller keeps are the rows the estimate was solved on.
+    keep = ~out["pruned"]
+    again = estimate_points(
+        uv=np.ascontiguousarray(kw["uv"][keep]),
+        obs_image=np.ascontiguousarray(kw["obs_image"][keep]),
+        obs_point=np.ascontiguousarray(kw["obs_point"][keep]),
+        camera=cam,
+        quaternions_wxyz=kw["quaternions_wxyz"],
+        translations=kw["translations"],
+        n_points=1,
+        cheirality=True,
+        few="bearing",
+    )
+    npt.assert_array_equal(again["verdicts"], [FINITE])
+    npt.assert_array_equal(again["xyzw"], out["xyzw"])
+
+
+def test_the_prune_off_is_the_reading_it_always_was():
+    cam = _cam()
+    kw = _specimen(cam, 4)
+    a = estimate_points(cheirality=True, few="bearing", **kw)
+    b = estimate_points(cheirality=True, prune_behind=False, few="bearing", **kw)
+    npt.assert_array_equal(a["xyzw"], b["xyzw"])
+    npt.assert_array_equal(a["verdicts"], b["verdicts"])
+    npt.assert_array_equal(a["pruned"], b["pruned"])
+    assert a["census"] == b["census"]
+    assert a["census"]["finite_pruned"] == 0
+    assert a["census"]["pruned_obs"] == 0
+
+
+def test_the_prune_needs_the_rule_it_reads():
+    cam = _cam()
+    with pytest.raises(ValueError, match="needs cheirality"):
+        estimate_points(prune_behind=True, **_specimen(cam, 4))
 
 
 def test_the_inputs_are_checked():
