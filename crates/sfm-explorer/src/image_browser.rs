@@ -146,11 +146,6 @@ impl ImageBrowser {
         }
     }
 
-    /// Whether animation playback is currently active.
-    pub fn is_playing(&self) -> bool {
-        self.animation.playing
-    }
-
     /// Drop everything cached for a reconstruction that has left the scene.
     ///
     /// The strip only ever shows one reconstruction, so this is normally

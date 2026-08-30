@@ -14,6 +14,8 @@
 mod input;
 mod intrinsics;
 mod overlay;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
 
@@ -65,8 +67,11 @@ pub struct ImageDetail {
     pan: egui::Vec2,
     /// Zoom level. 1.0 = fit image to panel. >1.0 = zoomed in.
     zoom: f32,
-    /// Previously displayed image, for detecting changes and resetting view.
-    prev_selected_image: Option<ImageRef>,
+    /// Displayed image extent that the current [`ImageDetail::pan`] was
+    /// measured against, from the last frame that drew one. `None` until a
+    /// frame has drawn, and again after a view reset. See
+    /// [`ImageDetail::rescale_view`].
+    last_display_size: Option<egui::Vec2>,
 }
 
 /// A feature to draw on the image detail panel.
@@ -119,7 +124,7 @@ impl ImageDetail {
             intrinsics: HashMap::new(),
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
-            prev_selected_image: None,
+            last_display_size: None,
         }
     }
 
@@ -142,12 +147,6 @@ impl ImageDetail {
             .is_some_and(|overlay| overlay.image.recon == id)
         {
             self.feature_overlay = None;
-        }
-        if self
-            .prev_selected_image
-            .is_some_and(|image| image.recon == id)
-        {
-            self.prev_selected_image = None;
         }
         self.intrinsics.retain(|camera, _| camera.recon != id);
     }
@@ -181,6 +180,36 @@ impl ImageDetail {
     fn reset_view(&mut self) {
         self.pan = egui::Vec2::ZERO;
         self.zoom = 1.0;
+        // Nothing left to carry, so skip the next frame's rescale rather than
+        // measure a zero pan against a stale extent.
+        self.last_display_size = None;
+    }
+
+    /// Hold the framed region of the image fixed when the displayed extent
+    /// changes.
+    ///
+    /// The view deliberately outlives the image it was set on: switching
+    /// images, switching reconstructions and resizing the panel all keep
+    /// whatever region was being inspected, so two images can be compared by
+    /// flipping between them while zoomed in. `pan` alone cannot do that — it
+    /// is in panel pixels, so the same value frames a different part of an
+    /// image of another resolution. What does survive is `pan / display_size`:
+    /// the offset of the image centre from the panel centre as a fraction of
+    /// the displayed image, which is exactly the normalized image coordinate
+    /// `0.5 - pan / display_size` sitting at the panel centre. Rescaling `pan`
+    /// by the extent ratio holds that coordinate fixed, per axis so a change of
+    /// aspect ratio is handled too. In the common case — two images of equal
+    /// size in an unchanged panel — the ratio is 1 and the view carries over
+    /// untouched.
+    fn rescale_view(&mut self, display_size: egui::Vec2) {
+        let Some(previous) = self.last_display_size else {
+            return;
+        };
+        if previous.x <= 0.0 || previous.y <= 0.0 {
+            return;
+        }
+        self.pan.x *= display_size.x / previous.x;
+        self.pan.y *= display_size.y / previous.y;
     }
 
     /// Apply zoom centered at a cursor position (in panel coordinates relative to panel center).
@@ -210,7 +239,6 @@ impl ImageDetail {
         selected_image: Option<usize>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
-        preserve_view: bool,
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
@@ -233,20 +261,10 @@ impl ImageDetail {
                 self.loaded_image = None;
                 self.feature_overlay = None;
             }
-            self.prev_selected_image = None;
             return response;
         };
 
         let image_ref = ImageRef::new(recon_id, img_idx);
-
-        // Reset view when selected image changes, unless the caller requests
-        // preserving pan/zoom (e.g. during animation playback).
-        if self.prev_selected_image != Some(image_ref) {
-            if !preserve_view {
-                self.reset_view();
-            }
-            self.prev_selected_image = Some(image_ref);
-        }
 
         // Load the full-resolution image if it changed. The CPU pixels come
         // from the shared `full_res_cache` (decoded once, in dock.rs); this
@@ -281,15 +299,20 @@ impl ImageDetail {
             }
         }
 
-        // Display the image fitted to the panel
-        let Some((_, ref texture)) = self.loaded_image else {
+        // Display the image fitted to the panel. Read the texture's size and id
+        // out here rather than holding the handle: the view bookkeeping below
+        // needs `&mut self`.
+        let Some((tex_size, texture_id)) = self
+            .loaded_image
+            .as_ref()
+            .map(|(_, texture)| (texture.size_vec2(), texture.id()))
+        else {
             ui.centered_and_justified(|ui| {
                 ui.label("Failed to load image");
             });
             return response;
         };
 
-        let tex_size = texture.size_vec2();
         let panel_rect = ui.available_rect_before_wrap();
         let panel_size = panel_rect.size();
         let panel_center = panel_rect.center();
@@ -298,6 +321,11 @@ impl ImageDetail {
         let base_scale = (panel_size.x / tex_size.x).min(panel_size.y / tex_size.y);
         let effective_scale = base_scale * self.zoom;
         let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
+
+        // Carry the framed region across an image or reconstruction switch and
+        // across a panel resize — all of which reach here as a change of extent.
+        self.rescale_view(display_size);
+        self.clamp_pan(display_size, panel_size);
 
         // Image rect with pan offset
         let image_center = panel_center + self.pan;
@@ -314,7 +342,7 @@ impl ImageDetail {
         // Draw the image (clipped to panel)
         let painter = ui.painter_at(panel_rect);
         painter.image(
-            texture.id(),
+            texture_id,
             image_rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
@@ -337,6 +365,8 @@ impl ImageDetail {
         // Recompute image rect after pan/zoom changes from input
         let effective_scale = base_scale * self.zoom;
         let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
+        // The extent `pan` is now measured against, for the next frame's rescale.
+        self.last_display_size = Some(display_size);
         let image_center = panel_center + self.pan;
         let image_rect = egui::Rect::from_center_size(image_center, display_size);
 
@@ -657,7 +687,6 @@ impl ImageDetail {
         self.feature_overlay = None;
         self.intrinsics.clear();
         self.reset_view();
-        self.prev_selected_image = None;
     }
 }
 

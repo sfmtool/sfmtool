@@ -306,7 +306,6 @@ impl TabViewer for TabContext<'_> {
                         selected_image,
                         selected_point,
                         hovered_point,
-                        self.image_browser.is_playing(),
                         self.gesture_events,
                         self.scroll_input,
                         sift,
