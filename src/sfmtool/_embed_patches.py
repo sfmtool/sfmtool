@@ -550,15 +550,21 @@ def embed_patches(
     # 0. The single `.sift`-consuming step: baseline embedded conversion. It sizes
     #    each point's mean-viewing frame by SIFT feature scale, copies the SIFT
     #    detection keypoints inline, and reads the image hashes from `.sift`
-    #    metadata. Its frame, keypoints, and hashes are all consumed below.
-    with _timed_step(
-        log,
-        f"  round 1/{rounds}: converting sift→patches "
-        f"({recon.point_count} pts, {len(images)} imgs)...",
-    ):
-        embedded = recon.to_embedded_patches(
-            normal="mean_viewing", extent="feature_size", extent_value=half_extent
-        )
+    #    metadata. Its frame, keypoints, and hashes are all consumed below. When
+    #    the input is ALREADY embedded_patches (e.g. a cluster-bootstrap output
+    #    with warp-derived surfel frames), there is no .sift to consume — its
+    #    existing frames and keypoints are the baseline the refinement adapts.
+    if recon.feature_source == "embedded_patches":
+        embedded = recon
+    else:
+        with _timed_step(
+            log,
+            f"  round 1/{rounds}: converting sift→patches "
+            f"({recon.point_count} pts, {len(images)} imgs)...",
+        ):
+            embedded = recon.to_embedded_patches(
+                normal="mean_viewing", extent="feature_size", extent_value=half_extent
+            )
 
     # 1. Refine each normal over the embedded recon, anchoring every view on its
     #    stored SIFT keypoint (use_stored_keypoints) instead of the reprojected

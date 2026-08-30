@@ -111,6 +111,10 @@ coverage-html = "cargo llvm-cov --workspace --html --open"
 maturin = "maturin"
 bench-sift = "python scripts/benchmark_sift.py"
 
+[feature.dev.dependencies]
+scipy = ">=1.14"
+matplotlib-base = ">=3.9"
+
 [feature.dev.tasks]
 ipython = "ipython"
 
