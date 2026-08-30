@@ -66,7 +66,8 @@ static MOUSE_BUTTON_STATE: AtomicU8 = AtomicU8::new(0);
 /// recovered from the pointer messages at all.
 static LAST_MOUSE_DOWN_BUTTON: AtomicU8 = AtomicU8::new(0);
 
-/// Latest pointer position in physical client coordinates, updated from WM_POINTER messages.
+/// Latest cursor position in physical client coordinates, updated from *mouse*
+/// `WM_POINTER` messages — see [`mouse_buttons_from`] for why only those.
 /// These are always up-to-date even when egui's hover state goes stale after clicks.
 static POINTER_CLIENT_X: AtomicI32 = AtomicI32::new(0);
 static POINTER_CLIENT_Y: AtomicI32 = AtomicI32::new(0);
@@ -74,6 +75,39 @@ static POINTER_CLIENT_Y: AtomicI32 = AtomicI32::new(0);
 /// Returns the current mouse button state as a bitmask.
 pub fn mouse_button_state() -> u8 {
     MOUSE_BUTTON_STATE.load(Ordering::Relaxed)
+}
+
+/// The mouse-button bitmask one `WM_POINTER*` message carries, or `None` when
+/// the message is not about the mouse at all.
+///
+/// `EnableMouseInPointer(true)` (see [`restore_mouse_button_from`]) routes the
+/// mouse through `WM_POINTER*` — but so does every touch, pen and
+/// precision-touchpad contact, and only a mouse has anything to say about mouse
+/// buttons or about where the cursor is.
+///
+/// The position is the one that bites. A touchpad contact carries its own
+/// `ptPixelLocation`: the finger on the pad, mapped onto the screen, which has
+/// nothing to do with where the cursor is and which walks across the window as
+/// the fingers move. Stored into [`pointer_client_pos`] it becomes a phantom
+/// cursor, and [`super::pointer_in_rect`] is exactly how every DM-driven panel
+/// decides whether a gesture is addressed to it — so a two-finger scroll aimed
+/// at one panel would be taken by whichever panel the phantom was over, e.g.
+/// scrolling the Intrinsics panel panning the Image Detail image beside it.
+fn mouse_buttons_from(pointer_type: i32, flags: u32) -> Option<u8> {
+    if pointer_type != PT_MOUSE {
+        return None;
+    }
+    let mut state = 0u8;
+    if flags & POINTER_FLAG_FIRSTBUTTON != 0 {
+        state |= BUTTON_LEFT;
+    }
+    if flags & POINTER_FLAG_SECONDBUTTON != 0 {
+        state |= BUTTON_RIGHT;
+    }
+    if flags & POINTER_FLAG_THIRDBUTTON != 0 {
+        state |= BUTTON_MIDDLE;
+    }
+    Some(state)
 }
 
 /// Recover the real mouse button behind the `Touch` event winit hands us for a
@@ -133,7 +167,10 @@ pub fn restore_mouse_button(event: &WindowEvent) -> Option<[WindowEvent; 2]> {
     restore_mouse_button_from(event, LAST_MOUSE_DOWN_BUTTON.load(Ordering::Relaxed))
 }
 
-/// Returns the latest pointer position in physical client coordinates.
+/// Returns the latest cursor position in physical client coordinates.
+///
+/// Only mouse movement moves it; a touch or touchpad contact leaves it where
+/// the cursor really is. See [`mouse_buttons_from`].
 pub fn pointer_client_pos() -> (i32, i32) {
     (
         POINTER_CLIENT_X.load(Ordering::Relaxed),
@@ -661,31 +698,32 @@ unsafe extern "system" fn subclass_wndproc(
         return LRESULT(0);
     }
 
-    // Track mouse button state and pointer position from WM_POINTER messages.
+    // Track mouse button state and cursor position from WM_POINTER messages.
     // EnableMouseInPointer(true) converts all mouse input to WM_POINTER*,
     // but winit/egui_winit only reports Primary. We extract the real button
     // from the pointer flags and store it in an atomic for the viewer to read.
-    // We also track the client-area pointer position so gesture dispatch can
+    // We also track the client-area cursor position so gesture dispatch can
     // determine which panel the pointer is over, even when egui's hover state
     // goes stale (e.g. after a double-click with no subsequent mouse movement).
+    // Both are about the mouse, so a contact that is not one updates neither —
+    // see `mouse_buttons_from`.
     if msg == WM_POINTERDOWN || msg == WM_POINTERUP || msg == WM_POINTERUPDATE {
         let pointer_id = get_pointer_id(wparam);
         let mut pointer_info =
             std::mem::zeroed::<windows::Win32::UI::Input::Pointer::POINTER_INFO>();
         let ok = windows::Win32::UI::Input::Pointer::GetPointerInfo(pointer_id, &mut pointer_info);
         if ok.is_ok() {
-            let flags = pointer_info.pointerFlags.0;
-            let mut state = 0u8;
-            if flags & POINTER_FLAG_FIRSTBUTTON != 0 {
-                state |= BUTTON_LEFT;
+            let buttons =
+                mouse_buttons_from(pointer_info.pointerType.0, pointer_info.pointerFlags.0);
+            if let Some(state) = buttons {
+                MOUSE_BUTTON_STATE.store(state, Ordering::Relaxed);
+
+                // Store client-area cursor position.
+                let mut pt = pointer_info.ptPixelLocation;
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                POINTER_CLIENT_X.store(pt.x, Ordering::Relaxed);
+                POINTER_CLIENT_Y.store(pt.y, Ordering::Relaxed);
             }
-            if flags & POINTER_FLAG_SECONDBUTTON != 0 {
-                state |= BUTTON_RIGHT;
-            }
-            if flags & POINTER_FLAG_THIRDBUTTON != 0 {
-                state |= BUTTON_MIDDLE;
-            }
-            MOUSE_BUTTON_STATE.store(state, Ordering::Relaxed);
 
             // Remember which button a *mouse* press carried, so the `Touch`
             // event winit is about to synthesize from this message can be
@@ -693,16 +731,11 @@ unsafe extern "system" fn subclass_wndproc(
             // [`restore_mouse_button`]. Only the down message names the button
             // (`WM_POINTERUP` arrives with the button flags already cleared),
             // so the press is what the release that follows it is read against.
+            // A non-mouse press clears it, so a touch never inherits the button
+            // of the last real click.
             if msg == WM_POINTERDOWN {
-                let is_mouse = pointer_info.pointerType.0 == PT_MOUSE;
-                LAST_MOUSE_DOWN_BUTTON.store(if is_mouse { state } else { 0 }, Ordering::Relaxed);
+                LAST_MOUSE_DOWN_BUTTON.store(buttons.unwrap_or(0), Ordering::Relaxed);
             }
-
-            // Store client-area pointer position.
-            let mut pt = pointer_info.ptPixelLocation;
-            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
-            POINTER_CLIENT_X.store(pt.x, Ordering::Relaxed);
-            POINTER_CLIENT_Y.store(pt.y, Ordering::Relaxed);
         }
     }
 
@@ -828,5 +861,43 @@ mod tests {
     #[test]
     fn events_that_are_not_touches_pass_through() {
         assert!(restore_mouse_button_from(&WindowEvent::CloseRequested, BUTTON_RIGHT).is_none());
+    }
+
+    /// `PT_TOUCH` and `PT_TOUCHPAD` — the two non-mouse types that reach this
+    /// window on this hardware.
+    const PT_TOUCH: i32 = 2;
+    const PT_TOUCHPAD: i32 = 5;
+
+    #[test]
+    fn a_mouse_message_names_every_button_it_carries() {
+        assert_eq!(mouse_buttons_from(PT_MOUSE, 0), Some(0));
+        assert_eq!(
+            mouse_buttons_from(PT_MOUSE, POINTER_FLAG_SECONDBUTTON),
+            Some(BUTTON_RIGHT),
+        );
+        assert_eq!(
+            mouse_buttons_from(
+                PT_MOUSE,
+                POINTER_FLAG_FIRSTBUTTON | POINTER_FLAG_THIRDBUTTON,
+            ),
+            Some(BUTTON_LEFT | BUTTON_MIDDLE),
+        );
+    }
+
+    /// The bug this exists for: a precision-touchpad contact is in contact with
+    /// the pad, so it sets `POINTER_FLAG_FIRSTBUTTON` and carries a
+    /// `ptPixelLocation` of its own. Read as a mouse, a two-finger scroll
+    /// becomes a phantom cursor walking across the window — and every DM-driven
+    /// panel decides whether a gesture is for it by asking where the cursor is,
+    /// so the gesture lands on whatever panel the phantom is over rather than
+    /// the one under the real cursor.
+    #[test]
+    fn a_touch_or_touchpad_contact_is_not_the_mouse() {
+        for pointer_type in [PT_TOUCH, PT_TOUCHPAD] {
+            assert_eq!(
+                mouse_buttons_from(pointer_type, POINTER_FLAG_FIRSTBUTTON),
+                None
+            );
+        }
     }
 }

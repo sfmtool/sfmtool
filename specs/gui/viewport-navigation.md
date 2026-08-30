@@ -767,6 +767,37 @@ See `winit_directmanipulation.rs` for the full implementation.)
 uses `SendMessage` precisely because it expects an immediate response. Deferring the call
 (e.g., posting a message) causes DM to assume the app declined to track that contact.
 
+#### Which panel a gesture is addressed to
+
+DM gesture events are polled once per frame in `app.rs` and handed to every
+panel at once; each decides whether a gesture is for it by asking
+`platform::pointer_in_rect(ctx, panel_rect)`. That is a raw geometric
+containment test against the OS cursor position rather than egui's hover state,
+which goes stale after a click with no movement and which knows nothing about
+layers (the HUD has to correct for the latter — see
+[viewport-hud.md](viewport-hud.md)).
+
+On Windows the cursor position comes from the `WM_POINTERDOWN` /
+`WM_POINTERUP` / `WM_POINTERUPDATE` messages the subclass procedure already
+decodes for the button state, and **only from mouse ones**
+(`POINTER_INFO.pointerType == PT_MOUSE`). `EnableMouseInPointer(true)` routes
+the mouse through `WM_POINTER*`, but so does every touch, pen and
+precision-touchpad contact — and a touchpad contact carries a `ptPixelLocation`
+of its own: the finger on the pad, mapped onto the screen. It has nothing to do
+with where the cursor is, and it walks across the window as the fingers move.
+Admitted, it turns the tracked cursor into a phantom that follows the gesture
+around, and the gesture lands on whichever panel the phantom is over rather than
+the one under the real cursor — a two-finger scroll aimed at the Intrinsics
+panel panning the Image Detail image beside it. The same rule covers the button
+state: a contact resting on the pad sets `POINTER_FLAG_FIRSTBUTTON`, which is
+not a mouse button being held.
+
+`platform::windows::mouse_buttons_from` is the single decision point. It returns
+`None` for a non-mouse pointer, and both statics — the button mask and the
+cursor position — are written only when it returns `Some`. The one thing a
+non-mouse press still updates is `LAST_MOUSE_DOWN_BUTTON`, which it *clears*, so
+that a touch never inherits the button of the last real click.
+
 #### Why Early DM Manager Creation Matters
 
 When `CoCreateInstance(DirectManipulationManager)` is called **before** winit's `EventLoop`
