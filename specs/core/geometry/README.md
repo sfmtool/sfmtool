@@ -8,6 +8,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 | [absolute-pose.md](absolute-pose.md) | Camera pose from 2D-3D correspondences: P3P plus RANSAC. |
 | [relative-pose.md](relative-pose.md) | Relative pose between two cameras from ray correspondences. |
 | [baseline-direction.md](baseline-direction.md) | The direction between two centres from ray coplanarity, with the rotations held, batched over a graph. |
+| [translation-averaging.md](translation-averaging.md) | Camera centres from pairwise baseline directions and relative lengths, read off the null space of the angular form; the orientation bit from cheirality. |
 | [rotation-locked-resection.md](rotation-locked-resection.md) | Translation-only resection with the rotation held fixed. |
 | [epipolar-estimation.md](epipolar-estimation.md) | Fundamental matrix from 2D-2D correspondences: 7-point with RANSAC, and Bougnoux focal recovery. |
 | [focal-vote.md](focal-vote.md) | Structure-free shared-focal estimation, where image pairs vote independently through per-pair estimators. |
