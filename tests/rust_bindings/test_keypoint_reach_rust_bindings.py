@@ -45,7 +45,8 @@ def _brute(image, xy, reach):
             for j in run:
                 if j == i:
                     continue
-                d = float(np.hypot(*(xy[j] - xy[i])))
+                dx, dy = xy[j] - xy[i]
+                d = float(np.sqrt(dx * dx + dy * dy))
                 if d <= reach[i]:
                     out.append((int(i), int(j), d))
     return out
