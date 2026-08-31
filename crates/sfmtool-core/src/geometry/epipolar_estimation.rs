@@ -31,10 +31,14 @@ use crate::geometry::numeric::splitmix64;
 use crate::geometry::polynomial::{polish_cubic_root, solve_cubic};
 use crate::geometry::rotation::skew_symmetric;
 
-/// Null space of the 7-point design is required to be exactly 2-D: the
-/// third-smallest eigenvalue of `AᵀA` must exceed this fraction of the largest,
-/// else the constraints are rank-deficient (repeated points, degenerate
-/// configuration) and no candidate is returned.
+/// Relative floor on the eigenvalue of `AᵀA` that must stay clear of the null
+/// space: the third-smallest for the 7-point design (whose null space is
+/// required to be exactly 2-D) and the second-smallest for the 8-point design
+/// (exactly 1-D). Below it the constraints are rank-deficient — repeated or
+/// collinear points, coplanar structure, zero baseline — and no candidate is
+/// returned. Eigenvalues of `AᵀA` are squared singular values, so `1e-9` here
+/// is a `3e-5` relative floor on the singular values: measured healthy designs
+/// sit near `1e-3` and every degenerate one measured sits below `1e-15`.
 const NULLSPACE_RANK_EPS: f64 = 1e-9;
 
 /// Below this Frobenius norm the fundamental matrix is treated as numerically
@@ -215,18 +219,19 @@ pub fn fundamental_8pt(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>>
     let (n2, t2) = hartley_normalize(x2)?;
 
     let eig = design_normal_matrix(&n1, &n2).symmetric_eigen();
-    let mut best = 0usize;
-    for j in 1..9 {
-        if eig.eigenvalues[j] < eig.eigenvalues[best] {
-            best = j;
-        }
+    let mut idx = [0usize, 1, 2, 3, 4, 5, 6, 7, 8];
+    idx.sort_by(|&i, &j| eig.eigenvalues[i].total_cmp(&eig.eigenvalues[j]));
+    let lmax = eig.eigenvalues[idx[8]];
+    // The null space must be exactly 1-D. A second near-null direction means
+    // fewer than eight independent constraints (coplanar structure, zero
+    // baseline, repeated or collinear points), and the smallest eigenvector is
+    // then an arbitrary member of that space rather than the fundamental
+    // matrix — one that rank-2 enforcement would still hand back looking well
+    // formed.
+    if lmax <= 0.0 || eig.eigenvalues[idx[1]] <= NULLSPACE_RANK_EPS * lmax {
+        return None; // null space exceeds one dimension — degenerate
     }
-    // A rank-deficient design (fewer than 8 independent constraints) leaves the
-    // null direction ambiguous — reject when the largest eigenvalue is ~0.
-    if eig.eigenvalues.iter().cloned().fold(0.0, f64::max) <= 0.0 {
-        return None;
-    }
-    let f_hat = vec_to_mat3(&eig.eigenvectors.column(best).into_owned());
+    let f_hat = vec_to_mat3(&eig.eigenvectors.column(idx[0]).into_owned());
     let f_rank2 = enforce_rank2(&f_hat)?;
     let f = t2.transpose() * f_rank2 * t1;
     let norm = f.norm();

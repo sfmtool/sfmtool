@@ -283,6 +283,136 @@ fn eight_point_degenerate_returns_none() {
     assert!(fundamental_8pt(&same, &same).is_none());
 }
 
+/// Correspondences from 3D points drawn in a slab of thickness `slab` about a
+/// fronto-parallel plane at depth 5, with the second camera displaced by
+/// `baseline`. `slab = 0` is exactly coplanar structure; `baseline = 0` is pure
+/// rotation. Both make the 8-point design rank-deficient: a homography then
+/// relates the views, so every `F = [e]ₓ·H` fits, for any epipole `e`.
+fn slab_pair(seed: u64, n: usize, slab: f64, baseline: f64) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
+    let mut rng = Lcg(seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(1));
+    let k1 = k_of(700.0, 320.0, 240.0);
+    let k2 = k_of(640.0, 300.0, 260.0);
+    let r1 = rng.rotation_matrix(0.4);
+    let r2 = rng.rotation_matrix(0.4);
+    let t2 = Vector3::new(baseline, 0.0, 0.0);
+    let r1t = r1.transpose();
+    let (mut x1, mut x2) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    while x1.len() < n {
+        let cam1 = Vector3::new(
+            rng.uniform(-2.0, 2.0),
+            rng.uniform(-2.0, 2.0),
+            5.0 + slab * rng.uniform(-1.0, 1.0),
+        );
+        let cam2 = r2 * (r1t * cam1) + t2;
+        if cam2.z <= 0.2 {
+            continue;
+        }
+        let p1 = k1 * cam1;
+        let p2 = k2 * cam2;
+        x1.push([p1.x / p1.z, p1.y / p1.z]);
+        x2.push([p2.x / p2.z, p2.y / p2.z]);
+    }
+    (x1, x2)
+}
+
+/// A rank-deficient design carries fewer than eight independent constraints, so
+/// its null space is more than one dimensional and the smallest eigenvector is
+/// an arbitrary member of it. Rank-2 enforcement still yields a well-formed
+/// matrix that scores a *full* consensus on the degenerate points, so nothing
+/// downstream can catch it — the guard is the only line of defence.
+#[test]
+fn eight_point_rejects_rank_deficient_designs() {
+    // Coplanar structure, from exactly planar to a slab thin against its depth.
+    for slab in [0.0, 1e-6, 1e-4] {
+        let (x1, x2) = slab_pair(7, 40, slab, 1.0);
+        assert!(
+            fundamental_8pt(&x1, &x2).is_none(),
+            "coplanar structure (slab {slab}) must be rejected"
+        );
+    }
+
+    // Zero and near-zero baseline: a homography relates the views.
+    for baseline in [0.0, 1e-6, 1e-4] {
+        let (x1, x2) = slab_pair(7, 40, 2.0, baseline);
+        assert!(
+            fundamental_8pt(&x1, &x2).is_none(),
+            "baseline {baseline} must be rejected"
+        );
+    }
+
+    // Fewer than eight *distinct* correspondences, padded out to a length that
+    // passes the `n < 8` check.
+    let pair = make_pair(3, 24, 700.0, 640.0, 0.0, 0.0);
+    for k in [4usize, 6, 7] {
+        let a: Vec<_> = (0..24).map(|i| pair.x1[i % k]).collect();
+        let b: Vec<_> = (0..24).map(|i| pair.x2[i % k]).collect();
+        assert!(
+            fundamental_8pt(&a, &b).is_none(),
+            "{k} distinct correspondences must be rejected"
+        );
+    }
+
+    // Collinear image points in both views.
+    let a: Vec<[f64; 2]> = (0..20)
+        .map(|i| [20.0 * i as f64, 10.0 * i as f64])
+        .collect();
+    let b: Vec<[f64; 2]> = (0..20)
+        .map(|i| [15.0 * i as f64 + 3.0, 9.0 * i as f64 - 1.0])
+        .collect();
+    assert!(
+        fundamental_8pt(&a, &b).is_none(),
+        "collinear points must be rejected"
+    );
+}
+
+/// The guard is a rank test, not a conditioning test: over-determined designs
+/// in general position survive it even under noise far past anything the
+/// estimator would call an inlier. Their rank margin sits near `1e-3`, twelve
+/// orders above every rejection above.
+#[test]
+fn eight_point_accepts_healthy_designs() {
+    for seed in 0..100u64 {
+        let exact = make_pair(seed, 12, 700.0, 640.0, 0.0, 0.0);
+        let f = fundamental_8pt(&exact.x1, &exact.x2)
+            .unwrap_or_else(|| panic!("seed {seed}: general-position design rejected"));
+        assert!(scale_diff(&f, &exact.f_true) < 1e-6);
+
+        let noisy = make_pair(seed, 40, 700.0, 640.0, 5.0, 0.0);
+        assert!(
+            fundamental_8pt(&noisy.x1, &noisy.x2).is_some(),
+            "seed {seed}: 5px noise must not read as rank deficiency"
+        );
+    }
+}
+
+/// At exactly eight correspondences there is one constraint per unknown, so an
+/// unlucky general-position draw is genuinely near-degenerate: measured over
+/// 400 seeds, three land at a margin of `1e-10`-`1e-13` and are rejected, and
+/// the answer the unguarded solver gives for those is itself only good to
+/// `~1e-7` against the `1e-15` its accepted siblings reach. Rejecting them is
+/// the intended trade — [`local_optimize_f`] simply keeps the minimal solution
+/// it already had — but the rate belongs in a test, since a threshold change
+/// that pushed it up would quietly disable local optimization at the floor.
+#[test]
+fn eight_point_minimal_designs_are_almost_always_accepted() {
+    let mut accepted = 0;
+    for seed in 0..400u64 {
+        let pair = make_pair(seed, 8, 700.0, 640.0, 0.0, 0.0);
+        if let Some(f) = fundamental_8pt(&pair.x1, &pair.x2) {
+            accepted += 1;
+            assert!(
+                scale_diff(&f, &pair.f_true) < 1e-6,
+                "seed {seed}: accepted minimal design off by {}",
+                scale_diff(&f, &pair.f_true)
+            );
+        }
+    }
+    assert!(
+        accepted >= 390,
+        "only {accepted}/400 minimal designs accepted"
+    );
+}
+
 // ── Robust estimator ─────────────────────────────────────────────────────────
 
 fn base_opts() -> FundamentalOptions {
@@ -376,6 +506,94 @@ fn determinism_same_seed_bit_identical() {
     assert_eq!(a.iterations, b.iterations);
 }
 
+/// Correspondences with `plane_frac` of the points on a common plane and the
+/// rest in general position, plus the true `F`.
+fn dominant_plane_pair(
+    seed: u64,
+    n: usize,
+    plane_frac: f64,
+) -> (Vec<[f64; 2]>, Vec<[f64; 2]>, Matrix3<f64>) {
+    let mut rng = Lcg(seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(7));
+    let k1 = k_of(700.0, 320.0, 240.0);
+    let k2 = k_of(640.0, 300.0, 260.0);
+    let r1 = rng.rotation_matrix(0.3);
+    let t1 = Vector3::zeros();
+    let r2 = rng.rotation_matrix(0.3);
+    let t2 = Vector3::new(1.0, 0.1, 0.05);
+    let f_true =
+        compute_fundamental_matrix(&k1, &r1, &t1, &k2, &r2, &t2).expect("non-singular intrinsics");
+    let n_plane = (n as f64 * plane_frac).round() as usize;
+    let r1t = r1.transpose();
+    let (mut x1, mut x2) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    while x1.len() < n {
+        let z = if x1.len() < n_plane {
+            5.0
+        } else {
+            rng.uniform(2.0, 9.0)
+        };
+        let cam1 = Vector3::new(rng.uniform(-2.0, 2.0), rng.uniform(-2.0, 2.0), z);
+        let cam2 = r2 * (r1t * (cam1 - t1)) + t2;
+        if cam2.z <= 0.2 {
+            continue;
+        }
+        let p1 = k1 * cam1;
+        let p2 = k2 * cam2;
+        x1.push([p1.x / p1.z, p1.y / p1.z]);
+        x2.push([p2.x / p2.z, p2.y / p2.z]);
+    }
+    (x1, x2, f_true)
+}
+
+/// A scene dominated by one plane is how a coplanar inlier set reaches the
+/// 8-point refit: the minimal sample is drawn in general position, but its
+/// consensus can collapse onto the plane. Run in isolation on such a set, the
+/// unguarded refit returns a matrix that fits the plane perfectly — up to 76 of
+/// 80 inliers — while sitting 2-4% from the true `F` and voting focals between
+/// 215 and 1274 against a true 700.
+///
+/// Through the estimator the rank guard is a backstop rather than the active
+/// defence, because [`fundamental_7pt`]'s own guard already rejects the
+/// all-coplanar minimal samples: measured across these scenes, output is
+/// bit-identical either side of the fix. What this test holds is the healthy
+/// half of that claim — up to a `0.7` plane fraction the geometry is recovered
+/// exactly, so a future change to either guard cannot quietly start rejecting
+/// the refits that matter.
+///
+/// It stops at `0.7` deliberately. From about `0.85` the estimator's adaptive
+/// termination will settle on a plane-only consensus and stop early (worst
+/// measured: `7e-4` in `F`, `411px` in focal), which is a limitation of the
+/// stopping rule, not of this guard — it predates the fix and is unchanged by
+/// it.
+#[test]
+fn estimator_survives_a_dominant_plane() {
+    for plane_frac in [0.5, 0.7] {
+        for scene in 0..12u64 {
+            let (x1, x2, f_true) = dominant_plane_pair(scene, 80, plane_frac);
+            for seed in [7u64, 11, 23, 101] {
+                let opts = FundamentalOptions {
+                    seed,
+                    ..base_opts()
+                };
+                let est = estimate_fundamental(&x1, &x2, &opts).unwrap_or_else(|| {
+                    panic!("plane_frac {plane_frac}, scene {scene}, seed {seed}: no consensus")
+                });
+                let diff = scale_diff(&est.f_matrix, &f_true);
+                assert!(
+                    diff < 1e-8,
+                    "plane_frac {plane_frac}, scene {scene}, seed {seed}: F off by {diff:.3e}"
+                );
+                let focal = focal_from_fundamental(&est.f_matrix, [320.0, 240.0], [300.0, 260.0])
+                    .unwrap_or_else(|| {
+                        panic!("plane_frac {plane_frac}, scene {scene}, seed {seed}: no focal")
+                    });
+                assert!(
+                    (focal - 700.0).abs() < 0.5,
+                    "plane_frac {plane_frac}, scene {scene}, seed {seed}: focal {focal}"
+                );
+            }
+        }
+    }
+}
 // ── Focal length (Bougnoux) ──────────────────────────────────────────────────
 
 #[test]

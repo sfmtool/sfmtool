@@ -312,6 +312,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Implementing code:** `geometry/epipolar_estimation.rs` (`fundamental_7pt :165`, `fundamental_8pt :226`, `estimate_fundamental :427`, `local_optimize_f :354`, `focal_from_fundamental :467`, `NULLSPACE_RANK_EPS :38`); consumer `geometry/focal_vote.rs:753,774`.
 **Inconsistencies:**
   - **Spec:115 says `fundamental_8pt` returns `None` for "a rank-deficient design matrix". It does not.** The guard tests the **largest** eigenvalue against zero — `eig.eigenvalues.iter().fold(0.0, f64::max) <= 0.0` (`:226`) — which only rejects an all-zero design. A design with fewer than 8 independent constraints passes and returns an arbitrary null direction. `fundamental_7pt:165` does it correctly: `eig.eigenvalues[idx[2]] <= NULLSPACE_RANK_EPS * lmax`. A code defect against a documented contract, not a doc nit.
+    > _Status (2026-08-30): Done — guard fixed to require a 1-D null space, with regression tests for the coplanar / zero-baseline / repeated-point / collinear configurations, and the spec's refit section expanded to name them. Details and two follow-on findings in the Top priorities annotation._
   - Spec:33 "`compute_epipole`'s null-space extraction is shared." It is not — `focal_from_fundamental` runs its own SVD (`:467-469`), and `compute_epipole` (`camera/epipolar.rs:71`) has no caller in this module (only `camera/rectification.rs` and tests).
   - Non-goals (`:279-283`) list essential-matrix/relative-pose decomposition and homography + F-vs-H model selection as out of scope. Both exist: `geometry/relative_pose.rs`, `geometry/homography_estimation.rs`, and `focal_vote.rs:52,758` performs exactly the H-domination selection the spec defers.
   - Spec:163-164's "best refit matrix, not a raw 7-point solution" has the same defect as its sibling: `local_optimize_f` keeps the 7-point `F` when the refit does not grow the count (`:354-362`).
@@ -494,6 +495,36 @@ a new document.
    `fundamental_7pt:165` already has the correct relative test
    (`eigenvalues[idx[2]] <= NULLSPACE_RANK_EPS * lmax`) — mirror it. The
    misleading comment at `:224-225` goes with it.
+
+> _Status (2026-08-30): Done — the guard now requires a 1-D null space
+> (`eigenvalues[idx[1]] > NULLSPACE_RANK_EPS * lmax`), mirroring the 7-point
+> solver and sharing its constant; the misleading comment is replaced.
+> `NULLSPACE_RANK_EPS`'s doc and the spec's refit section now name the
+> degenerate configurations and the measured margins. Three tests added:
+> `eight_point_rejects_rank_deficient_designs` (coplanar structure, zero
+> baseline, <8 distinct points, collinear points),
+> `eight_point_minimal_designs_are_almost_always_accepted`, and
+> `estimator_survives_a_dominant_plane`._
+>
+> _Two things the exploration established that the finding did not. First, the
+> impact is on the **public function**, not on `estimate_fundamental`: measured
+> across dominant-plane sweeps, estimator output is bit-identical either side of
+> the fix, because `fundamental_7pt`'s guard already rejects the all-coplanar
+> minimal samples before a coplanar consensus can form. The severity is that a
+> rank-deficient refit is undetectable downstream — run in isolation on a
+> coplanar inlier set it scored 76 of 80 inliers at machine precision while
+> sitting 2-4% from the true `F` and voting focals of 215-1274 against a true
+> 700. Second, the shared `1e-9` threshold is conservative at exactly `N = 8`,
+> rejecting ~3 in 400 general-position minimal designs whose margin lands at
+> `1e-10`-`1e-13`; that is the intended trade (local optimization keeps the
+> minimal solution) and is now pinned by a test._
+>
+> _Separate pre-existing issue found while probing this one, **not** caused or
+> cured by the fix: from about a 0.85 plane fraction, `estimate_fundamental`'s
+> adaptive termination settles on a plane-only consensus and stops early —
+> worst measured `7e-4` in `F` and `411px` in focal, identical before and after.
+> The stopping rule does not account for the drawn sample's spread. Carried
+> forward as an open item; see the note in `estimator_survives_a_dominant_plane`._
 
 2. **Correct the three wrong published defaults and the three wrong published
    signatures**, all of which mislead a user at the point of use:

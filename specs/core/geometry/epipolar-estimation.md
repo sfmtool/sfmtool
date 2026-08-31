@@ -114,6 +114,27 @@ smallest singular value). Used for local optimization inside the
 estimator and available to callers polishing an inlier set. Returns
 `None` for `N < 8`, non-finite input, or a rank-deficient design matrix.
 
+Rank deficiency here means the null space of `A` exceeds one dimension, so
+the smallest singular vector is an arbitrary member of it rather than the
+fundamental matrix. This is not a rare numerical edge: coplanar structure,
+a zero or near-zero baseline, fewer than eight *distinct* correspondences,
+and collinear image points all produce it, and rank-2 enforcement still
+returns a well-formed matrix from such a design — one that fits the
+degenerate points to machine precision and so scores a full consensus.
+Nothing downstream can distinguish it, which is why the check lives here.
+
+Both solvers share one relative threshold, `NULLSPACE_RANK_EPS = 1e-9`,
+applied to the eigenvalues of `AᵀA` — the third-smallest against the
+largest for the 7-point design, the second-smallest for the 8-point one.
+Because those eigenvalues are squared singular values, `1e-9` is a `3e-5`
+floor in singular-value terms. Measured margins: general-position designs
+sit near `1e-3` and every degenerate configuration above sits below
+`1e-15`, so the threshold has twelve orders of separation to work in. It
+bites only at `N = 8` exactly, where one constraint per unknown leaves an
+unlucky draw genuinely ill-conditioned; about three in four hundred are
+rejected, and the estimator's local optimization simply keeps the minimal
+solution it already had.
+
 ## The robust estimator
 
 ```rust
