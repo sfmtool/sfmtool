@@ -37,7 +37,7 @@ use rayon::prelude::*;
 /// A work bound and not a threshold: the pairs are the same pairs in the same
 /// order at any value of it, so it trades scheduling grain against per-unit
 /// overhead and nothing else.
-pub const CHUNK_ROWS: usize = 256;
+pub const BATCH_ROWS: usize = 256;
 
 /// One row per keypoint over a whole track set.
 #[derive(Debug, Clone, Copy)]
@@ -127,20 +127,20 @@ impl ReachPairs {
 /// radius below zero. A NaN reach is the documented "asks nothing" value and
 /// is not an error.
 pub fn pairs_within_reach(rows: KeypointRows<'_>) -> Result<ReachPairs, KeypointReachError> {
-    pairs_within_reach_chunked(rows, CHUNK_ROWS, true)
+    pairs_within_reach_batch(rows, BATCH_ROWS, true)
 }
 
 /// [`pairs_within_reach`] with the work grain and the parallelism named.
 ///
-/// The output is identical at every `chunk_rows` and with `parallel` either
+/// The output is identical at every `batch_rows` and with `parallel` either
 /// way; both exist so a test can say so.
 ///
 /// # Errors
 ///
 /// The same refusals as [`pairs_within_reach`].
-pub fn pairs_within_reach_chunked(
+pub fn pairs_within_reach_batch(
     rows: KeypointRows<'_>,
-    chunk_rows: usize,
+    batch_rows: usize,
     parallel: bool,
 ) -> Result<ReachPairs, KeypointReachError> {
     let n = rows.image_of_row.len();
@@ -159,7 +159,7 @@ pub fn pairs_within_reach_chunked(
     }
 
     let groups = group_by_image(rows);
-    let grain = chunk_rows.max(1);
+    let grain = batch_rows.max(1);
     let units: Vec<(usize, usize, usize)> = groups
         .iter()
         .enumerate()

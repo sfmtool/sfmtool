@@ -217,14 +217,13 @@ fn the_pair_stream_is_the_same_at_every_batch_size_and_without_parallelism() {
     assert!(!reference.is_empty());
     for grain in [1usize, 2, 7, 64, 499, 500, 100_000] {
         for parallel in [true, false] {
-            let got =
-                pairs_within_reach_chunked(rows(&image, &xy, &reach), grain, parallel).unwrap();
+            let got = pairs_within_reach_batch(rows(&image, &xy, &reach), grain, parallel).unwrap();
             assert_eq!(got, reference, "grain {grain}, parallel {parallel}");
         }
     }
     // A grain of zero is a grain of one, not a division by zero.
     assert_eq!(
-        pairs_within_reach_chunked(rows(&image, &xy, &reach), 0, true).unwrap(),
+        pairs_within_reach_batch(rows(&image, &xy, &reach), 0, true).unwrap(),
         reference
     );
 }
