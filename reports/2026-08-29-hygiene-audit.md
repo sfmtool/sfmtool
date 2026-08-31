@@ -371,6 +371,43 @@ appeared behind it**
 
 **The G-buffer contract is declared six times, once per pipeline plus once where the
 textures are actually allocated**
+> _Status (2026-08-30): **Done.** The formats, the reversed-Z depth state and the
+> slot-0 quad layout now live in `scene_renderer/gpu_types.rs` beside `THUMBNAIL_SIZE`,
+> as `GBUFFER_{COLOR,LINEAR_DEPTH,PICK}_FORMAT`, `HW_DEPTH_FORMAT`,
+> `GBUFFER_DEPTH_STATE`, `QUAD_VERTEX_LAYOUT` and a `gbuffer_targets(color_blend)`
+> helper. `sizing.rs` allocates from them and all five pass-1 pipelines declare from
+> them; the quad layout also absorbed the sixth and seventh copies in `target.rs` and
+> `track_ray.rs`, which the finding did not count._
+>
+> _**Two things the finding did not separate.** The colour attachment is the one
+> thing the five pipelines legitimately disagree about — points, frustums and patches
+> composite with premultiplied alpha, image quads and distorted quads overwrite — so
+> blending is `gbuffer_targets`' parameter rather than part of the constant. And the
+> `@location(1)` comments the five carried were not restatements of the format: each
+> said what that pipeline writes there (real view-space depth for splats, `0.0` for
+> the three that opt out of EDL). Those are kept at the call sites; only the format
+> triple was shared._
+>
+> _The pass-2 colour target was folded in as the same hazard: `edl.rs`, `target.rs`,
+> `track_ray.rs` and `bg_distorted.rs` each spelled the EDL output format out, four
+> more independent declarations of a format `sizing.rs` also owns. One
+> `EDL_OUTPUT_FORMAT`, defined as `GBUFFER_COLOR_FORMAT` because the EDL resolve
+> samples the first and writes the second and a mismatched pair shifts the whole
+> viewport's gamma without failing validation._
+>
+> _**The structural tie the finding asked for is a test, not the constants.** Sharing
+> a constant makes the six declarations one; it does not make the producers provably
+> match the consumer, because nothing forces a new pipeline to use it.
+> `the_gbuffer_pipelines_match_the_textures_sizing_allocates` builds the four
+> textures from the constants and binds all five pass-1 pipelines inside a pass
+> assembled the way `ensure_size` + `render` assemble the real one. Verified to fail
+> both ways it can: a format changed only in `gbuffer_targets` fails at
+> `create_render_pipeline` (shader/target mismatch), and a texture that disagrees
+> with the pipelines fails at `set_pipeline` (`IncompatibleColorAttachment`). It runs
+> on the `noop` backend, so it fails on any machine._
+>
+> _163 net lines out of the pipeline descriptors (-191/+28). `pixi run ui-test` (11 windowed
+> tests on a real GPU) and the 386 headless lib tests pass._
 - Location: `crates/sfm-explorer/src/scene_renderer/pipelines/{points,frustum,
   image_quad,patch,distorted_quad}.rs` and `scene_renderer/sizing.rs`
 - Problem: The render target is a three-attachment G-buffer — `Rgba8UnormSrgb`

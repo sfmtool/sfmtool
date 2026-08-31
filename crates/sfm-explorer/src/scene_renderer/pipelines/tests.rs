@@ -8,7 +8,10 @@
 //! that the shaders parse and type-check — the one thing an edit to a `.wgsl`
 //! file cannot otherwise fail on until the GUI is launched on a real GPU.
 
-use super::super::gpu_types::{PointUniforms, ReconUniforms};
+use super::super::gpu_types::{
+    PointUniforms, ReconUniforms, GBUFFER_COLOR_FORMAT, GBUFFER_LINEAR_DEPTH_FORMAT,
+    GBUFFER_PICK_FORMAT, HW_DEPTH_FORMAT,
+};
 
 fn device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -108,4 +111,88 @@ fn the_recon_uniforms_struct_matches_its_wgsl_layout() {
     // sized to satisfy *its* alignment; the trailing pad satisfies the struct's.
     assert_eq!(std::mem::size_of::<ReconUniforms>(), 112);
     device.poll(wgpu::PollType::Poll).expect("device poll");
+}
+
+#[test]
+fn the_gbuffer_pipelines_match_the_textures_sizing_allocates() {
+    // The structural tie between `gpu_types`' render-target constants, the
+    // textures `scene_renderer::sizing` builds from them, and the pipelines
+    // that declare their targets from them. wgpu checks a pipeline's target
+    // formats and depth state against the pass it is set on, so binding all
+    // five pass-1 pipelines inside a pass assembled the way `ensure_size` +
+    // `render` assemble the real one is the whole contract, checked. Without
+    // it, a format changed in one place and missed in another is a validation
+    // error at the first frame on a real GPU — which no test here has.
+    let (device, queue) = device();
+    let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+    let attachment = |label, format, usage| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: 64,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+            .create_view(&Default::default())
+    };
+    let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
+    let color = attachment("splat color", GBUFFER_COLOR_FORMAT, target);
+    let linear_depth = attachment("linear depth", GBUFFER_LINEAR_DEPTH_FORMAT, target);
+    let pick = attachment("pick buffer", GBUFFER_PICK_FORMAT, target);
+    let hw_depth = attachment("hw depth", HW_DEPTH_FORMAT, target);
+
+    let points = super::points::create(&device);
+    let frustum = super::frustum::create(&device);
+    let image_quad = super::image_quad::create(&device);
+    let patch = super::patch::create(&device);
+    let distorted_quad = super::distorted_quad::create(&device, &image_quad.bind_group_layout);
+
+    let attach = |view| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })
+    };
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("gbuffer contract"),
+            color_attachments: &[attach(&color), attach(&linear_depth), attach(&pick)],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &hw_depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0), // reversed-Z: 0 = far
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&points.pipeline);
+        pass.set_pipeline(&frustum.pipeline);
+        pass.set_pipeline(&image_quad.pipeline);
+        pass.set_pipeline(&patch.pipeline);
+        pass.set_pipeline(&distorted_quad);
+    }
+    queue.submit([encoder.finish()]);
+
+    let error = pollster::block_on(errors.pop());
+    assert!(
+        error.is_none(),
+        "a pass-1 pipeline disagrees with the G-buffer `sizing` allocates: {error:?}"
+    );
 }

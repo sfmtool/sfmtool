@@ -77,7 +77,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
     });
 
     let color_target = [Some(wgpu::ColorTargetState {
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: EDL_OUTPUT_FORMAT,
         blend: Some(ADDITIVE_BLEND),
         write_mask: wgpu::ColorWrites::ALL,
     })];
@@ -92,15 +92,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> TargetPipeline
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad corners (per-vertex), reuses point quad buffer
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<QuadVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x2,
-                        offset: 0,
-                        shader_location: 0,
-                    }],
-                }),
+                Some(QUAD_VERTEX_LAYOUT),
                 // Slot 1: compass edge instances (per-instance, with width factors)
                 Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<CompassEdgeInstance>() as u64,

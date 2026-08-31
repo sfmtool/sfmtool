@@ -90,7 +90,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> EdlPipelineRes
             module: &shader,
             entry_point: Some("fs_edl"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: EDL_OUTPUT_FORMAT,
                 blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],

@@ -57,34 +57,12 @@ pub(in crate::scene_renderer) fn create(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Greater),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
+        depth_stencil: Some(GBUFFER_DEPTH_STATE),
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R32Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R32Uint,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
+            targets: &gbuffer_targets(None),
             compilation_options: Default::default(),
         }),
         multiview_mask: None,

@@ -57,7 +57,7 @@ pub(in crate::scene_renderer) fn create(
             module: &shader,
             entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: EDL_OUTPUT_FORMAT,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],

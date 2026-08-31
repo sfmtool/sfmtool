@@ -205,6 +205,16 @@ correct mutual occlusion.
 | Pick ID | R32Uint | Entity identification (hover + click) |
 | HW depth | Depth32Float | Z-test during rendering |
 
+These four formats are declared once, in `scene_renderer/gpu_types.rs`, as
+`GBUFFER_COLOR_FORMAT` / `GBUFFER_LINEAR_DEPTH_FORMAT` / `GBUFFER_PICK_FORMAT` /
+`HW_DEPTH_FORMAT`, alongside the reversed-Z `GBUFFER_DEPTH_STATE` and the
+`gbuffer_targets(color_blend)` helper that builds the three-target array. Both
+sides of the contract read them: `scene_renderer/sizing.rs` allocates the
+textures and every pass-1 pipeline in `scene_renderer/pipelines/` declares its
+targets. `pipelines/tests.rs` binds all five pass-1 pipelines inside a pass
+built from the same constants, so a producer that drifts from the consumer
+fails headlessly rather than at the first frame on a real GPU.
+
 ### Pass Order
 
 ```

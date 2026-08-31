@@ -1,6 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::gpu_types::{
+    EDL_OUTPUT_FORMAT, GBUFFER_COLOR_FORMAT, GBUFFER_LINEAR_DEPTH_FORMAT, GBUFFER_PICK_FORMAT,
+    HW_DEPTH_FORMAT,
+};
 use super::SceneRenderer;
 
 impl SceneRenderer {
@@ -36,7 +40,7 @@ impl SceneRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: GBUFFER_COLOR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -53,7 +57,7 @@ impl SceneRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Float,
+            format: GBUFFER_LINEAR_DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
@@ -87,7 +91,7 @@ impl SceneRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
+            format: HW_DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -104,7 +108,7 @@ impl SceneRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R32Uint,
+            format: GBUFFER_PICK_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -114,11 +118,11 @@ impl SceneRenderer {
 
         // EDL output (final — registered with egui)
         //
-        // The texture uses Rgba8UnormSrgb so the scene renderer's passes get
-        // correct hardware sRGB conversion. A separate Rgba8Unorm view is
-        // created for egui registration, because egui_wgpu expects non-sRGB
-        // textures (it treats sampled values as gamma-space and does its own
-        // color management in the shader).
+        // The texture is `EDL_OUTPUT_FORMAT` — sRGB, so the scene renderer's
+        // passes get correct hardware sRGB conversion. A separate Rgba8Unorm
+        // view of the same bytes is created for egui registration, because
+        // egui_wgpu expects non-sRGB textures (it treats sampled values as
+        // gamma-space and does its own color management in the shader).
         let edl_output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("edl output"),
             size: wgpu::Extent3d {
@@ -129,7 +133,7 @@ impl SceneRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: EDL_OUTPUT_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });

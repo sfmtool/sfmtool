@@ -66,15 +66,7 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
             entry_point: Some("vs_main"),
             buffers: &[
                 // Slot 0: quad vertices (per-vertex)
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<QuadVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32x2,
-                        offset: 0,
-                        shader_location: 0,
-                    }],
-                }),
+                Some(QUAD_VERTEX_LAYOUT),
                 // Slot 1: point instances (per-instance)
                 Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<PointInstance>() as u64,
@@ -102,37 +94,14 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
             cull_mode: None, // billboards face the camera, don't cull
             ..Default::default()
         },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Greater),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
+        depth_stencil: Some(GBUFFER_DEPTH_STATE),
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
-            targets: &[
-                // @location(0): color
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                // @location(1): linear depth (no blending, just overwrite)
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R32Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                // @location(2): pick ID (entity tag + index)
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::R32Uint,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
+            // Splats are the geometry EDL actually shades, so @location(1)
+            // carries their real positive view-space depth.
+            targets: &gbuffer_targets(Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)),
             compilation_options: Default::default(),
         }),
         multiview_mask: None,

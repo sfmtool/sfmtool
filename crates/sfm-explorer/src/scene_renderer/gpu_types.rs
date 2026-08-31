@@ -322,6 +322,116 @@ pub(super) const BG_DISTORTION_SUBDIVISIONS: usize = 32;
 /// Higher than perspective cameras due to the highly non-linear re-projection.
 pub(super) const BG_FISHEYE_SUBDIVISIONS: usize = 64;
 
+// ── The scene render-target contract ─────────────────────────────────────
+//
+// Pass 1 draws every piece of scene geometry into a three-attachment G-buffer
+// under a reversed-Z hardware depth buffer; pass 2 resolves that into the EDL
+// output texture egui displays. The formats below are the single declaration of
+// that contract: `super::sizing` allocates the textures from them and every
+// pipeline in `super::pipelines` declares its targets from them, so a change
+// here moves the producers and the consumer together. Spelling a format out at
+// a `create_render_pipeline` call site instead is how one pipeline ends up
+// disagreeing with the pass it is drawn in — which wgpu reports as a validation
+// error at `set_pipeline`, i.e. at the first frame, on whatever machine happens
+// to run it. `the_gbuffer_pipelines_match_the_textures_sizing_allocates` in
+// `super::pipelines::tests` is the mechanical version of that statement.
+
+/// `@location(0)` of the scene G-buffer — the visible colour, sRGB-encoded by
+/// the hardware on write, sampled by the pass-2 EDL resolve.
+pub(super) const GBUFFER_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// The pass-2 output texture: what EDL resolves into, what the pass-2 overlays
+/// (target indicator, track rays, background mesh) draw on top of, and what
+/// egui displays. Deliberately the same encoding as [`GBUFFER_COLOR_FORMAT`] —
+/// EDL samples that texture and writes this one, and a pair that disagreed
+/// would shift the whole viewport's gamma rather than fail validation. The
+/// second, `Rgba8Unorm` view `super::sizing` hands egui is a re-interpretation
+/// of these same bytes, not a different texture; the comment there says why.
+pub(super) const EDL_OUTPUT_FORMAT: wgpu::TextureFormat = GBUFFER_COLOR_FORMAT;
+
+/// `@location(1)` — positive view-space depth, read by the EDL pass for its
+/// edge term and copied back to the CPU for Alt+click depth queries. Geometry
+/// that should not take EDL shading (frustums, image quads, patches) writes
+/// `0.0` here rather than its real depth; see `specs/gui/camera-views.md`.
+pub(super) const GBUFFER_LINEAR_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+
+/// `@location(2)` — the pick id, an entity tag packed with an index. Integer,
+/// so it is never blended or filtered; see `specs/gui/scene-graph.md`.
+pub(super) const GBUFFER_PICK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
+
+/// The hardware depth buffer every pass-1 pipeline shares, so that points,
+/// frustums, image quads and patches occlude each other correctly.
+pub(super) const HW_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// The reversed-Z depth state shared by every pipeline that draws into the
+/// G-buffer: `Greater` against a buffer cleared to `0.0`, which is the far
+/// plane under the infinite reversed-Z projection
+/// (`specs/gui/adaptive-clip-and-grid.md`). Both sides have to agree — a
+/// pipeline left on the `Less` default draws nothing and reports nothing.
+///
+/// `stencil` and `bias` are the `Default::default()` the pipelines used before
+/// they shared this, written out because a `const` cannot call `default()`.
+pub(super) const GBUFFER_DEPTH_STATE: wgpu::DepthStencilState = wgpu::DepthStencilState {
+    format: HW_DEPTH_FORMAT,
+    depth_write_enabled: Some(true),
+    depth_compare: Some(wgpu::CompareFunction::Greater),
+    stencil: wgpu::StencilState {
+        front: wgpu::StencilFaceState::IGNORE,
+        back: wgpu::StencilFaceState::IGNORE,
+        read_mask: 0,
+        write_mask: 0,
+    },
+    bias: wgpu::DepthBiasState {
+        constant: 0,
+        slope_scale: 0.0,
+        clamp: 0.0,
+    },
+};
+
+/// The three colour targets of the G-buffer, in attachment order.
+///
+/// How the colour attachment blends is the one thing the pass-1 pipelines
+/// legitimately disagree about — splats and frustum lines composite with
+/// premultiplied alpha, opaque image quads overwrite — so it is the parameter.
+/// The depth-readback and pick attachments never blend: both carry values that
+/// are meaningless when mixed, a view-space distance and a packed integer id.
+pub(super) const fn gbuffer_targets(
+    color_blend: Option<wgpu::BlendState>,
+) -> [Option<wgpu::ColorTargetState>; 3] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: GBUFFER_COLOR_FORMAT,
+            blend: color_blend,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: GBUFFER_LINEAR_DEPTH_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: GBUFFER_PICK_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ]
+}
+
+/// Slot 0 of every instanced scene pipeline: the static unit quad in
+/// `PointPipelineResources::quad_vertex_buffer`, which points, frustum edges,
+/// image quads, patches, the target indicator and track rays all expand their
+/// instances from. One buffer, so one layout — the stride is
+/// [`QuadVertex`]'s and the pipelines do not get a say in it.
+pub(super) const QUAD_VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    array_stride: size_of::<QuadVertex>() as u64,
+    step_mode: wgpu::VertexStepMode::Vertex,
+    attributes: &[wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 0,
+    }],
+};
+
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 pub(super) fn mat4_to_cols(m: &Matrix4<f64>) -> [[f32; 4]; 4] {
