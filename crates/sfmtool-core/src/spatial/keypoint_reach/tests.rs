@@ -54,7 +54,7 @@ fn brute_force(image: &[i64], xy: &[f64], reach: &[f64]) -> ReachPairs {
                 let dx = xy[2 * j] - xy[2 * i];
                 let dy = xy[2 * j + 1] - xy[2 * i + 1];
                 let d = (dx * dx + dy * dy).sqrt();
-                if d <= reach[i] {
+                if d <= reach[i] && j != i {
                     out.row.push(i as i64);
                     out.candidate.push(j as i64);
                     out.distance_px.push(d);
@@ -114,7 +114,6 @@ fn only_the_reach_that_spans_the_separation_pairs() {
         .iter()
         .zip(&got.candidate)
         .map(|(&i, &j)| (i, j))
-        .filter(|(i, j)| i != j)
         .collect();
     assert_eq!(directed, vec![(0, 1)]);
 }
@@ -122,23 +121,11 @@ fn only_the_reach_that_spans_the_separation_pairs() {
 // ── Self pair and NaN ──────────────────────────────────────────────────────
 
 #[test]
-fn every_finite_reach_row_is_its_own_candidate_at_zero() {
+fn no_row_is_its_own_candidate() {
     let (image, xy, reach) = random_rows(200, 3, 31);
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
-    for (k, &r) in reach.iter().enumerate() {
-        let self_pair = got
-            .row
-            .iter()
-            .zip(&got.candidate)
-            .zip(&got.distance_px)
-            .find(|((&i, &j), _)| i == k as i64 && j == k as i64);
-        if r.is_finite() {
-            let ((_, _), &d) = self_pair.expect("a finite reach holds its own centre");
-            assert_eq!(d, 0.0);
-        } else {
-            assert!(self_pair.is_none(), "row {k} asks with a NaN reach");
-        }
-    }
+    assert!(!got.is_empty());
+    assert!(got.row.iter().zip(&got.candidate).all(|(&i, &j)| i != j));
 }
 
 #[test]
@@ -153,7 +140,7 @@ fn a_nan_reach_asks_nothing_and_still_answers() {
         .zip(&got.candidate)
         .map(|(&i, &j)| (i, j))
         .collect();
-    assert_eq!(pairs, vec![(1, 0), (1, 1)]);
+    assert_eq!(pairs, vec![(1, 0)]);
 }
 
 #[test]
@@ -166,13 +153,13 @@ fn an_infinite_reach_asks_nothing_too() {
 }
 
 #[test]
-fn a_zero_reach_holds_only_its_own_centre() {
-    let image = [0i64, 0];
-    let xy = [0.0, 0.0, 0.5, 0.0];
-    let reach = [0.0, 0.0];
+fn a_zero_reach_holds_only_a_coincident_centre() {
+    let image = [0i64, 0, 0];
+    let xy = [0.0, 0.0, 0.0, 0.0, 0.5, 0.0];
+    let reach = [0.0, 0.0, 0.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
     assert_eq!(got.row, vec![0, 1]);
-    assert_eq!(got.candidate, vec![0, 1]);
+    assert_eq!(got.candidate, vec![1, 0]);
     assert_eq!(got.distance_px, vec![0.0, 0.0]);
 }
 
@@ -184,8 +171,7 @@ fn identical_positions_in_different_images_never_pair() {
     let xy = [4.0, 4.0, 4.0, 4.0, 4.0, 4.0];
     let reach = [100.0, 100.0, 100.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
-    assert_eq!(got.row, vec![0, 1, 2]);
-    assert_eq!(got.candidate, vec![0, 1, 2]);
+    assert!(got.is_empty());
 }
 
 #[test]
@@ -195,8 +181,8 @@ fn images_come_out_in_ascending_index_whatever_order_the_rows_arrive_in() {
     let reach = [3.0, 3.0, 3.0, 3.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
     // Image 2 first (rows 1 and 3), then image 7 (rows 0 and 2).
-    assert_eq!(got.row, vec![1, 1, 3, 3, 0, 0, 2, 2]);
-    assert_eq!(got.candidate, vec![1, 3, 1, 3, 0, 2, 0, 2]);
+    assert_eq!(got.row, vec![1, 3, 0, 2]);
+    assert_eq!(got.candidate, vec![3, 1, 2, 0]);
 }
 
 #[test]
@@ -205,7 +191,8 @@ fn a_negative_image_index_is_an_image_like_any_other() {
     let xy = [0.0, 0.0, 1.0, 0.0, 0.5, 0.0];
     let reach = [3.0, 3.0, 3.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
-    assert_eq!(got.row, vec![0, 0, 1, 1, 2]);
+    assert_eq!(got.row, vec![0, 1]);
+    assert_eq!(got.candidate, vec![1, 0]);
 }
 
 // ── Order and batching ─────────────────────────────────────────────────────
@@ -234,8 +221,9 @@ fn ties_in_column_are_broken_by_row_order() {
     let xy = [1.0, 0.0, 1.0, 3.0, 1.0, 1.0, 1.0, 2.0];
     let reach = [10.0, 10.0, 10.0, 10.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
-    // Every column is 1.0, so the run is the rows in their given order.
-    assert_eq!(got.candidate[..4], [0, 1, 2, 3]);
+    // Every column is 1.0, so row 0's run is the rows in their given
+    // order, less itself.
+    assert_eq!(got.candidate[..3], [1, 2, 3]);
 }
 
 // ── Refusals ───────────────────────────────────────────────────────────────
@@ -296,9 +284,9 @@ fn a_nan_column_sorts_last_and_is_never_found() {
     let reach = [2.0, 2.0, 2.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
     // Row 0 asks at a NaN column, so its own search window is empty; rows 1
-    // and 2 hold each other and themselves, and neither holds row 0.
-    assert_eq!(got.row, vec![1, 1, 2, 2]);
-    assert_eq!(got.candidate, vec![1, 2, 1, 2]);
+    // and 2 hold each other, and neither holds row 0.
+    assert_eq!(got.row, vec![1, 2]);
+    assert_eq!(got.candidate, vec![2, 1]);
     assert_eq!(cmp_nan_last(f64::NAN, 1.0), Ordering::Greater);
     assert_eq!(cmp_nan_last(1.0, f64::NAN), Ordering::Less);
     assert_eq!(cmp_nan_last(f64::NAN, f64::NAN), Ordering::Equal);
@@ -312,6 +300,5 @@ fn the_run_bounds_are_a_superset_the_distance_test_trims() {
     let xy = [0.0, 0.0, 2.0, 2.0];
     let reach = [2.0, 2.0];
     let got = pairs_within_reach(rows(&image, &xy, &reach)).unwrap();
-    assert_eq!(got.row, vec![0, 1]);
-    assert_eq!(got.candidate, vec![0, 1]);
+    assert!(got.is_empty());
 }

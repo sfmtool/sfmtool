@@ -25,10 +25,8 @@ type PyReachPairs<'py> = (
 /// ``(j, i)``. A caller wanting a symmetric relation reads both directions,
 /// which this already emits.
 ///
-/// A row is always its own candidate at ``d_px == 0``: a caller drops the self
-/// pair with the same test it uses for everything else it does not want. A row
-/// whose reach is not finite asks nothing, and still appears as a candidate of
-/// other rows.
+/// A row is never its own candidate. A row whose reach is not finite asks
+/// nothing, and still appears as a candidate of other rows.
 ///
 /// One distance is reported per pair, so a caller testing against
 /// ``reach_px[i]``, against a bound of its own, or against a function of both

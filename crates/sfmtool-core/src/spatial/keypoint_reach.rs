@@ -14,9 +14,8 @@
 //! 2D keypoints in pixels, per image, each keypoint carrying its own radius.
 //!
 //! The relation is DIRECTED: the disk is row `i`'s, so `(i, j)` says nothing
-//! about `(j, i)`. A row is always its own candidate at distance zero, and a
-//! row whose reach is not finite asks nothing while still appearing as a
-//! candidate of others.
+//! about `(j, i)`. A row is never its own candidate, and a row whose reach is not
+//! finite asks nothing while still appearing as a candidate of others.
 //!
 //! Within an image the rows are ordered by column. A disk of radius `reach`
 //! cannot contain a centre whose column is further than `reach` away, so a
@@ -269,6 +268,9 @@ fn expand(grp: &ImageRows, lo: usize, hi: usize) -> ReachPairs {
         let last = upper_bound(&grp.columns, xi + reach);
         for k in first..last {
             let j = grp.by_column[k] as usize;
+            if j == i {
+                continue;
+            }
             let dx = grp.x[j] - xi;
             let dy = grp.y[j] - yi;
             // Written out rather than fused: the callers' masks are compared

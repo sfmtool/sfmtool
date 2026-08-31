@@ -6,7 +6,7 @@
 
 The enumeration answers, per image of a track set, which other keypoints lie
 inside this keypoint's own disk.  It is directed (the disk is the asking row's),
-a row is always its own candidate, and a row whose reach is not finite asks
+a row is never its own candidate, and a row whose reach is not finite asks
 nothing while still answering for others.
 """
 
@@ -43,6 +43,8 @@ def _brute(image, xy, reach):
             if not np.isfinite(reach[i]):
                 continue
             for j in run:
+                if j == i:
+                    continue
                 d = float(np.hypot(*(xy[j] - xy[i])))
                 if d <= reach[i]:
                     out.append((int(i), int(j), d))
@@ -82,15 +84,15 @@ def test_only_the_reach_that_spans_the_separation_pairs():
 # ------------------------------------------------------------ self pair, NaN
 
 
-def test_every_finite_reach_row_is_its_own_candidate_at_zero_distance():
-    i, j, d = _call([0, 0, 0], [[0.0, 0.0], [9.0, 9.0], [1.0, 0.0]], [1.0, 0.0, 1.0])
-    self_rows = {int(a): float(c) for a, b, c in zip(i, j, d) if a == b}
-    assert self_rows == {0: 0.0, 1: 0.0, 2: 0.0}
+def test_no_row_is_its_own_candidate():
+    i, j, _d = _call([0, 0, 0], [[0.0, 0.0], [9.0, 9.0], [1.0, 0.0]], [1.0, 0.0, 1.0])
+    assert len(i) > 0
+    assert np.all(i != j)
 
 
 def test_a_nan_reach_asks_nothing_and_still_answers_for_others():
     got = _pairs([0, 0], [[0.0, 0.0], [1.0, 0.0]], [np.nan, 4.0])
-    assert got == [(1, 0), (1, 1)]
+    assert got == [(1, 0)]
 
 
 def test_a_nan_reach_is_not_an_error():
@@ -103,7 +105,7 @@ def test_a_nan_reach_is_not_an_error():
 
 def test_identical_positions_in_different_images_never_pair():
     got = _pairs([0, 1, 2], [[4.0, 4.0]] * 3, [100.0] * 3)
-    assert got == [(0, 0), (1, 1), (2, 2)]
+    assert got == []
 
 
 def test_images_come_out_in_ascending_index():
@@ -112,7 +114,7 @@ def test_images_come_out_in_ascending_index():
         [[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
         [3.0] * 4,
     )
-    assert got == [(1, 1), (1, 3), (3, 1), (3, 3), (0, 0), (0, 2), (2, 0), (2, 2)]
+    assert got == [(1, 3), (3, 1), (0, 2), (2, 0)]
 
 
 # ------------------------------------------------------------- memory order

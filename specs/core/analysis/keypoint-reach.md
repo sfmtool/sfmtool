@@ -30,9 +30,9 @@ the pair's separation in pixels.
 - The reach is row `i`'s own: the relation is directed, and `(i, j)` says
   nothing about `(j, i)`. A caller wanting a symmetric relation reads both
   directions, which the enumeration already emits.
-- A row is always its own candidate (`d = 0`). A caller drops the self pair
-  with the same test it uses for everything else it does not want; the
-  enumeration does not guess which pairs a caller means to keep.
+- A row is never its own candidate. The self pair answers no rule's
+  question, so the enumeration leaves it out rather than hand every caller a
+  pair to discard.
 - A row whose reach is not finite asks nothing, and still appears as a
   candidate of other rows. Not finite means what the word says: NaN and a
   positive infinity both ask nothing. A negative reach names no disk at all
@@ -97,8 +97,8 @@ the documented "asks nothing" value, not an error.
 - **Directedness.** A large-reach row paired with a small-reach row appears as
   `(large, small)` and not `(small, large)` when only the large reach spans
   the separation.
-- **Self pair.** Present for every finite-reach row, absent for a NaN reach;
-  a NaN-reach row still appears on the other side.
+- **Self pair.** Never present; a NaN-reach row appears only on the
+  candidate side.
 - **Image isolation.** Identical pixel positions in different images produce
   no pair.
 - **Order and batching.** The pair stream is identical at any batch size, and
