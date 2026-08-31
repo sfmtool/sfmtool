@@ -6,6 +6,11 @@ making a non-trivial change, and update it when behaviour diverges.
 Each directory mirrors the code it describes, so the path to a spec is
 predictable from the path to its implementation.
 
+New specs start from [TEMPLATE.md](TEMPLATE.md), which fixes the section order —
+purpose, the public Rust interface and why it is shaped that way, the theory,
+then implementation notes. A spec describes what the code *is*; write a change
+proposal in `drafts/` and convert it before filing.
+
 | Directory | Describes | Organized by |
 |-----------|-----------|--------------|
 | [cli/](cli/README.md) | Every `sfm` subcommand — flags, behaviour, output | the `--help` category the command is registered under in `cli.py` |

@@ -92,7 +92,20 @@ deleting the lines.
   before making non-trivial changes and update it when behavior diverges. Each
   area carries a `README.md` index — `cli/` (all commands, by category), each
   `core/` module subdir, `formats/`, `gui/`, `workspace/`. Add a row there when
-  you add a spec. Subdirs mirror the code they describe:
+  you add a spec. **Start a new spec from `specs/TEMPLATE.md`**, whose default
+  order is: purpose, then the public Rust interface *with why it is shaped that
+  way and an example call*, then the theory, then implementation notes — and
+  those notes carry what the code cannot (a cross-function invariant, why this
+  loop order, a numerical hazard), never a transcription of the body. It is a
+  starting point, not a form: drop, merge or reorder sections where the subject
+  is served better. What holds regardless is that the opening paragraph reads for
+  someone who has read no other spec, that a caller can find out what to call
+  without wading through a derivation, and that a spec describes what the code
+  **is**, in the present tense — write a change proposal in `specs/drafts/` and
+  convert it before filing, so no standing spec says "new module X" or "prior
+  state (before this change)". The `audit-specs` skill audits a sample of specs
+  against the template on each run, for those invariants rather than for
+  conformance. Subdirs mirror the code they describe:
   - `cli/` — one file per command, grouped by the `--help` category the command
     is registered under in `cli.py` (`workspace/`, `image-feature/`,
     `reconstruction/`, `visualization/`, `image-processing/`,
