@@ -20,6 +20,7 @@ _EXPECTED_FUNCTIONS = (
     "build_observation_adjacency",
     "estimate_adjacency_surfel_normals",
     "cluster_census",
+    "keypoint_pairs_within_reach",
 )
 
 _EXPECTED_CLASSES = ("ObservationCoverage",)

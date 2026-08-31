@@ -1,10 +1,13 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Spatial analysis utilities using KD-trees.
+//! Spatial proximity queries, in world units and in image pixels.
 //!
-//! The primary types are [`PointCloud2`] and [`PointCloud3`], generic over the
-//! scalar type (`f32` or `f64`).
+//! The primary types are [`PointCloud2`] and [`PointCloud3`], KD-tree indexes
+//! generic over the scalar type (`f32` or `f64`), which answer proximity
+//! between points in world units at a shared radius. Alongside them
+//! [`keypoint_reach`] answers proximity between the keypoints of a track set in
+//! image pixels, per image, each keypoint carrying its own radius.
 //!
 //! ```ignore
 //! use sfmtool_core::spatial::PointCloud3;
@@ -13,6 +16,8 @@
 //! let cloud = PointCloud3::<f32>::new(&positions, 2);
 //! let nearest = cloud.nearest(&[0.5, 0.0, 0.0], 1);
 //! ```
+
+pub mod keypoint_reach;
 
 use kiddo::float::kdtree::Axis;
 use kiddo::float_leaf_slice::leaf_slice::{LeafSliceFloat, LeafSliceFloatChunk};

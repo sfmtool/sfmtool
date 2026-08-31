@@ -16,7 +16,8 @@
 //!   consistency census
 //! - [`spherical`] — spherical-tile rigs, consensus atlases, photometric RANSAC
 //! - [`patch`] — patch clouds and patch-normal refinement
-//! - [`spatial`] — generic KD-tree point-cloud utility used across groups
+//! - [`spatial`] — generic KD-tree point-cloud utility used across groups, and
+//!   the per-image keypoint reach enumeration in the pixel domain
 //!
 //! File-format I/O is provided by the sibling crates `sift-format`,
 //! `sfmr-format`, `matches-format`, and `camrig-format`.
