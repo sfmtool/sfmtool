@@ -41,6 +41,12 @@ mod tests;
 // `crate::point_track_detail::<name>`.
 pub(crate) use metrics::{compute_max_pairwise_angle, compute_point_diagnostics};
 
+/// The per-observation reprojection error this panel tabulates, re-exported so
+/// the MCP surface reports the same number rather than a second derivation of
+/// it.
+#[cfg(feature = "mcp")]
+pub(crate) use metrics::compute_observation_metrics;
+
 /// Precomputed data for one observation in the track.
 struct TrackObservationData {
     /// Index into `recon.images`.

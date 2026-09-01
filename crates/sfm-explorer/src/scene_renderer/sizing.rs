@@ -134,7 +134,13 @@ impl SceneRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: EDL_OUTPUT_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // `COPY_SRC` is what the MCP `screenshot` tool reads back. Declared
+            // unconditionally, rather than under the `mcp` feature: a usage flag
+            // has to be set when the texture is created, which is hours before
+            // any request arrives, and an unused one costs nothing.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
         });
         let edl_output_view = edl_output.create_view(&Default::default());
@@ -250,6 +256,11 @@ impl SceneRenderer {
         self.pick_texture = Some(pick_texture);
         self.pick_texture_view = Some(pick_texture_view);
         self.edl_output_view = Some(edl_output_view);
+        // The texture itself, not only its view: a copy source is a texture.
+        #[cfg(feature = "mcp")]
+        {
+            self.edl_output_texture = Some(edl_output);
+        }
         self.current_size = (width, height);
 
         log::debug!("Scene textures resized to {}x{}", width, height);

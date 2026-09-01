@@ -19,6 +19,8 @@
 //! existing instanced draw. See `specs/gui/scene-graph.md`.
 
 mod auto_point_size;
+#[cfg(feature = "mcp")]
+mod capture;
 mod compass;
 mod distorted_mesh;
 mod gpu_types;
@@ -65,6 +67,11 @@ pub struct SceneRenderer {
 
     // ── Pass 2 render targets (recreated on resize) ──
     edl_output_view: Option<wgpu::TextureView>,
+    /// The texture behind [`SceneRenderer::edl_output_view`], kept so it can be
+    /// copied out of. A view can be rendered into and sampled; only the texture
+    /// can be a `copy_texture_to_buffer` source, which is what `capture` needs.
+    #[cfg(feature = "mcp")]
+    edl_output_texture: Option<wgpu::Texture>,
 
     // ── egui integration ──
     egui_texture_id: Option<egui::TextureId>,
@@ -168,6 +175,8 @@ impl SceneRenderer {
             pick_texture: None,
             pick_texture_view: None,
             edl_output_view: None,
+            #[cfg(feature = "mcp")]
+            edl_output_texture: None,
             egui_texture_id: None,
             current_size: (0, 0),
             point_pipeline: None,

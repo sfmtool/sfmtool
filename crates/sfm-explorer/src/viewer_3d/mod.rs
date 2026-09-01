@@ -98,6 +98,20 @@ struct SwitchCameraViewState {
     camera_view: CameraViewMode,
 }
 
+/// Where entering camera view mode on one image lands the viewport camera.
+///
+/// [`SwitchCameraViewState`] plus a field of view: *switching* between two
+/// camera views preserves the current FOV so the free-look framing survives the
+/// step, while *entering* one fits the image's own intrinsics into the viewport.
+struct EnterCameraViewState {
+    position: Point3<f64>,
+    orientation: UnitQuaternion<f64>,
+    distance: f64,
+    world_up: Vector3<f64>,
+    fov: f64,
+    camera_view: CameraViewMode,
+}
+
 /// Camera view mode state: active when viewing through a selected camera.
 ///
 /// Stores the SfM camera's world-from-camera rotation so the background mesh
@@ -562,6 +576,48 @@ impl Viewer3D {
     /// transformed scene from the transformed camera: an aligned node's cameras
     /// are drawn where its points are, so the viewpoint has to move with them.
     pub fn enter_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode, current_time: f64) {
+        let end = self.compute_camera_view(image_ref, node);
+
+        // Deactivate current camera view during transition
+        self.camera_view = None;
+
+        self.start_transition(
+            end.position,
+            end.orientation,
+            end.distance,
+            end.fov,
+            end.world_up,
+            Some(end.camera_view),
+            false,
+            current_time,
+        );
+    }
+
+    /// Enter camera view mode **immediately**, with no animated transition.
+    ///
+    /// Same end state as [`Self::enter_camera_view`], assigned rather than eased
+    /// toward. What the MCP surface's `set_view` uses: an agent that sets the
+    /// view and screenshots straight afterward would otherwise photograph the
+    /// middle of the ease.
+    #[cfg(feature = "mcp")]
+    pub fn jump_to_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode) {
+        let end = self.compute_camera_view(image_ref, node);
+        self.cancel_transition();
+        self.camera.camera.position = end.position;
+        self.camera.camera.orientation = end.orientation;
+        self.camera.camera.target_distance = end.distance;
+        self.camera.world_up = end.world_up;
+        self.camera.fov = end.fov;
+        self.camera_view = Some(end.camera_view);
+    }
+
+    /// The camera state that looking through `image_ref` lands on.
+    ///
+    /// Split out of [`Self::enter_camera_view`] so the animated and immediate
+    /// entries share one derivation: the two differ only in whether the state
+    /// is eased toward or assigned, and a second copy of this arithmetic would
+    /// be a second answer to "where does this camera look from".
+    fn compute_camera_view(&self, image_ref: ImageRef, node: &SceneNode) -> EnterCameraViewState {
         let reconstruction = &node.recon;
         let img_idx = image_ref.index();
         let image = &reconstruction.images[img_idx];
@@ -602,24 +658,17 @@ impl Viewer3D {
             self.camera.fov
         };
 
-        let pending = CameraViewMode {
-            image: image_ref,
-            r_world_from_cam,
-        };
-
-        // Deactivate current camera view during transition
-        self.camera_view = None;
-
-        self.start_transition(
-            end_position,
-            end_orientation,
-            end_distance,
-            end_fov,
-            end_world_up,
-            Some(pending),
-            false,
-            current_time,
-        );
+        EnterCameraViewState {
+            position: end_position,
+            orientation: end_orientation,
+            distance: end_distance,
+            world_up: end_world_up,
+            fov: end_fov,
+            camera_view: CameraViewMode {
+                image: image_ref,
+                r_world_from_cam,
+            },
+        }
     }
 
     /// Computes the end state for switching camera view, preserving relative orientation.

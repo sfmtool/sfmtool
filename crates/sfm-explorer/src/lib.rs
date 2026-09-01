@@ -14,12 +14,15 @@
 
 mod align;
 mod app;
+mod cli;
 mod colormap;
 mod dock;
 mod goto_point;
 mod image_browser;
 mod image_detail;
 mod intrinsics_detail;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod platform;
 mod point_track_detail;
 mod resect;
@@ -67,6 +70,14 @@ const DM_UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 #[derive(Debug)]
 pub(crate) enum UserEvent {
     AccessKit(egui_winit::accesskit_winit::Event),
+    /// An MCP tool call is waiting on the command channel.
+    ///
+    /// Carries nothing: the request itself travels over the channel, and this
+    /// is only the wake. `App::user_event` requests a redraw for any user
+    /// event, and `run_ui_and_paint` drains the whole queue, so one wake covers
+    /// however many requests arrived alongside it.
+    #[cfg(feature = "mcp")]
+    McpRequest,
 }
 
 impl From<egui_winit::accesskit_winit::Event> for UserEvent {
@@ -98,11 +109,22 @@ pub fn run() {
 
     env_logger::init();
 
-    // Parse CLI args: sfm-explorer [path.sfmr ...]. Every trailing argument is
-    // loaded as its own scene node, in the order given.
+    let args = match cli::parse(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+    if args.help {
+        print!("{}", cli::USAGE);
+        return;
+    }
+
+    // Every path is loaded as its own scene node, in the order given.
     let mut state = AppState::new();
-    for arg in std::env::args().skip(1) {
-        state.load_file(std::path::Path::new(&arg));
+    for path in &args.paths {
+        state.load_file(path);
     }
 
     // Create DirectManipulation manager BEFORE the winit EventLoop so that
@@ -120,6 +142,15 @@ pub fn run() {
         .build()
         .expect("Failed to create event loop");
     let proxy = event_loop.create_proxy();
+
+    // The MCP endpoint, if it was asked for. Started after the event loop
+    // exists, because the server's only way to reach the viewer is the proxy
+    // this hands it; started before the window, so a port collision is reported
+    // on a terminal rather than behind a window that came up looking fine.
+    #[cfg(feature = "mcp")]
+    let mcp_rx = start_mcp(&mut state, args.mcp_port, &proxy);
+    #[cfg(not(feature = "mcp"))]
+    start_mcp(&mut state, args.mcp_port, &proxy);
 
     let dock_state = default_dock_state();
 
@@ -153,6 +184,10 @@ pub fn run() {
         prev_transform_epoch: 0,
         quit_requested: false,
         applied_title: String::new(),
+        #[cfg(feature = "mcp")]
+        mcp_rx,
+        #[cfg(feature = "mcp")]
+        mcp_deferred: Vec::new(),
         #[cfg(target_os = "windows")]
         early_dm,
         #[cfg(target_os = "windows")]
@@ -162,6 +197,54 @@ pub fn run() {
     };
 
     event_loop.run_app(&mut app).expect("Event loop failed");
+}
+
+/// Bring the MCP endpoint up, or return `None` because it was not asked for.
+///
+/// **A bind failure is fatal and loud.** Two viewers on one port is the common
+/// mistake, and a viewer that silently came up without the endpoint the agent
+/// was told to use is worse than one that refused to start.
+///
+/// The endpoint line goes to stdout, because that is what a human pastes into
+/// a client config; the error goes to stderr and takes the process with it.
+#[cfg(feature = "mcp")]
+fn start_mcp(
+    state: &mut AppState,
+    port: Option<u16>,
+    proxy: &EventLoopProxy<UserEvent>,
+) -> Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>> {
+    let port = port?;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    // The server's whole access to the viewer: this channel, and a wake. A
+    // closure rather than the proxy itself, so `mcp::server` depends on no
+    // winit type and can be driven by a test with no event loop at all.
+    let proxy = proxy.clone();
+    match mcp::serve(port, tx, move || {
+        let _ = proxy.send_event(UserEvent::McpRequest);
+    }) {
+        Ok(address) => {
+            println!("SfM Explorer MCP endpoint: http://{address}/mcp");
+            state.mcp = Some(state::McpStatus::new(address.port()));
+            Some(rx)
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Reject `--mcp` in a build compiled without it, rather than ignoring the flag
+/// and coming up with no endpoint.
+#[cfg(not(feature = "mcp"))]
+fn start_mcp(_state: &mut AppState, port: Option<u16>, _proxy: &EventLoopProxy<UserEvent>) {
+    if port.is_some() {
+        eprintln!(
+            "This sfm-explorer was built without the \"mcp\" feature, so --mcp has nothing to \
+             start. Rebuild with it (it is on by default) to use the MCP endpoint."
+        );
+        std::process::exit(2);
+    }
 }
 
 /// The dock layout the app opens with:
@@ -239,6 +322,18 @@ pub(crate) struct App {
     /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
     /// Starts empty so the first frame always applies the real title.
     pub(crate) applied_title: String,
+    /// Tool calls waiting to be applied, or `None` when no endpoint is running.
+    ///
+    /// Drained at the top of every frame ([`App::drain_mcp`]) and nowhere else:
+    /// that one point is what makes a reply a snapshot taken with exclusive
+    /// access rather than a read that could straddle a load.
+    #[cfg(feature = "mcp")]
+    pub(crate) mcp_rx: Option<tokio::sync::mpsc::UnboundedReceiver<mcp::Request>>,
+    /// Tool calls whose answer needs this frame to have been rendered —
+    /// `screenshot`, and only `screenshot`. Resolved in the readback phase,
+    /// where the `wgpu::Device` already is.
+    #[cfg(feature = "mcp")]
+    pub(crate) mcp_deferred: Vec<(mcp::Deferred, tokio::sync::oneshot::Sender<mcp::Reply>)>,
     #[cfg(target_os = "windows")]
     pub(crate) early_dm: Option<EarlyDmState>,
     #[cfg(target_os = "windows")]
@@ -440,6 +535,17 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 self.run_ui_and_paint();
+                // A frame that bailed early — GPU state not up yet, or a
+                // surface that could not be presented — leaves any deferred
+                // screenshot unanswered. Ask for another frame rather than let
+                // it sit until the caller's timeout: an idle viewer requests no
+                // redraws of its own, so nothing else would come along.
+                #[cfg(feature = "mcp")]
+                if !self.mcp_deferred.is_empty() {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                }
                 if self.quit_requested {
                     event_loop.exit();
                 }
@@ -466,15 +572,20 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
-        let UserEvent::AccessKit(ak_event) = event;
-        match ak_event.window_event {
-            egui_winit::accesskit_winit::WindowEvent::ActionRequested(request) => {
-                if let Some(state) = self.egui_winit_state.as_mut() {
-                    state.on_accesskit_action_request(request);
+        match event {
+            UserEvent::AccessKit(ak_event) => match ak_event.window_event {
+                egui_winit::accesskit_winit::WindowEvent::ActionRequested(request) => {
+                    if let Some(state) = self.egui_winit_state.as_mut() {
+                        state.on_accesskit_action_request(request);
+                    }
                 }
-            }
-            egui_winit::accesskit_winit::WindowEvent::InitialTreeRequested => {}
-            egui_winit::accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
+                egui_winit::accesskit_winit::WindowEvent::InitialTreeRequested => {}
+                egui_winit::accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
+            },
+            // Nothing to do here: the redraw below is the whole handling. The
+            // request is drained and applied at the top of the frame it wakes.
+            #[cfg(feature = "mcp")]
+            UserEvent::McpRequest => {}
         }
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();

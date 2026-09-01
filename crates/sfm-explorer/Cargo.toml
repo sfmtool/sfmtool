@@ -33,8 +33,22 @@ path = "examples/winit_wgpu_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
 [features]
-default = []
+default = ["mcp"]
 directmanipulation = []
+
+# The MCP control surface, and everything hosting an HTTP server in-process
+# drags in: an async runtime, an HTTP stack, and the protocol SDK. Default-on so
+# `--mcp` works in a stock build; `--no-default-features` drops the whole `mcp`
+# module and its dependency tree, for anyone compiling the PyPI sdist on their
+# own rustc who would rather not pay for it.
+mcp = [
+    "dep:rmcp",
+    "dep:tokio",
+    "dep:axum",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:base64",
+]
 
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
@@ -57,6 +71,33 @@ kiddo = "5"
 rand = "0.10"
 image = "0.25"
 ndarray = "0.17"
+
+# ── The `mcp` feature's dependency tree (see [features] above) ──
+#
+# `rmcp` is pinned to an exact minor: it is here to absorb the protocol's
+# revision history (2024-11-05 through 2026-07-28), so which revisions a given
+# version negotiates is the reason it is a dependency at all, and a silent
+# minor bump could change it.
+rmcp = { version = "~3.2", optional = true, default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
+# `rt` + `net` + `time` is a current-thread runtime with a TCP listener and the
+# apply timeout; `sync` is the command channel and its per-request oneshot.
+tokio = { version = "1", optional = true, default-features = false, features = [
+    "rt",
+    "net",
+    "sync",
+    "time",
+] }
+axum = { version = "0.8", optional = true, default-features = false, features = [
+    "http1",
+    "tokio",
+] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
+# Screenshots cross the wire as base64 in an MCP `ImageContent` block.
+base64 = { version = "0.22", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

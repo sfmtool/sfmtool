@@ -25,6 +25,7 @@ pixi run cargo {fmt,clippy,test,check} --workspace
 pixi run doc                        # Rustdoc gate (warnings are errors)
 pixi run maturin develop --release  # Rebuild PyO3 bindings after Rust edits
 pixi run gui [-- path.sfmr]         # Build and run the SfM Explorer (release)
+pixi run gui-mcp [path.sfmr]        # …with its MCP endpoint, for an agent to drive
 pixi run docs-{build,serve}         # Zensical docs
 pixi run sfm …                      # Run the CLI
 ```
@@ -205,6 +206,36 @@ backlog and keep them honest as findings get addressed:
   Rust changes.
 - `sfm explorer` launches the same binary as `pixi run gui`, just via the
   Python CLI through the bindings.
+- **The viewer can be driven over MCP, and an agent may own its lifecycle.**
+  `pixi run gui-mcp <file>.sfmr` hosts a Model Context Protocol endpoint on
+  `127.0.0.1:8787` for reading the scene graph, moving the selection and the 3D
+  camera, and **screenshotting the viewport** — usually the fastest way to find
+  out whether a solve is wrong and *where*. Off unless asked for; see
+  `specs/gui/mcp-server.md`.
+
+  Setup is a human's job, exactly once, because Claude Code binds its MCP
+  servers when a session starts:
+
+  ```bash
+  claude mcp add --transport http sfm-explorer http://127.0.0.1:8787/mcp
+  ```
+
+  A viewer must be listening on that port at the moment a session starts, or
+  the server registers as failed and its tools are absent for the whole
+  session — `/mcp` says which. **After that the agent can restart the viewer
+  freely**: the transport is stateless HTTP, so killing it, rebuilding, and
+  relaunching on the same port leaves the registered tools working, since the
+  next call is just a new POST into the new process. Launch it *detached* when
+  doing that (on Windows, `cmd /c start "" target/release/sfm-explorer.exe
+  --mcp 8787 <file>.sfmr`) so it outlives the session that spawned it and is
+  still there for the next one. Kill it **before** rebuilding: a running
+  `.exe` is locked on Windows and `cargo build` fails with `Access is denied
+  (os error 5)`.
+
+  Keep the registration at the default `local` scope. A `.mcp.json` committed
+  with `--scope project` would point every contributor's session at a loopback
+  port that is usually not listening, and hand them a failed server on every
+  start.
 - Not every CLI command has a spec yet. The `xform` sub-commands are specced
   under `specs/cli/reconstruction/xform/` rather than as top-level commands.
 - Python 3.14 and Rust 1.97 are pinned in `pixi.toml`. That is the *development*

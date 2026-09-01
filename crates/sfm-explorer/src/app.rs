@@ -95,6 +95,14 @@ impl App {
         // lets `run_egui_pass` take a non-`Option` `&Window`.
         let window = self.window.clone().unwrap();
 
+        // Phase 0: apply every MCP tool call that has arrived since the last
+        // frame. First, ahead of everything else, so a command's effect is in
+        // the very frame the agent's request woke: an agent can `set_view` then
+        // `screenshot` and get the new view, and the title sync below already
+        // reflects a file the agent just opened.
+        #[cfg(feature = "mcp")]
+        self.drain_mcp();
+
         // Keep the window title in step with the loaded file. Compared against
         // the last applied title rather than set unconditionally: `set_title`
         // is a window-manager round-trip, and this runs every frame.
@@ -243,6 +251,12 @@ impl App {
 
         // Phase 4: apply hover/selection from the 5x5 depth + pick readback.
         self.process_pick_readback(&device);
+
+        // Phase 5: answer the MCP calls that were waiting on this frame having
+        // happened. After the present, so what is read back is the image the
+        // human is looking at right now.
+        #[cfg(feature = "mcp")]
+        self.resolve_mcp_deferred(&device, &queue);
 
         // Free textures released by egui this frame.
         let renderer = self.egui_renderer.as_mut().unwrap();

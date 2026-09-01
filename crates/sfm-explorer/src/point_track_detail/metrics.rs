@@ -36,7 +36,12 @@ pub(super) fn error_color(error: f32) -> egui::Color32 {
 ///
 /// Returns `(reproj_error_px, ray_angle_deg)`. If the point is behind the
 /// camera, returns `(NaN, NaN)`.
-pub(super) fn compute_observation_metrics(
+///
+/// Crate-visible because the MCP surface reports the same number in a point
+/// track (`mcp::read::get_point`), and an agent told one figure while the human
+/// beside it reads another off this panel is the failure that boundary exists
+/// to avoid.
+pub(crate) fn compute_observation_metrics(
     point_pos: &nalgebra::Point3<f64>,
     image: &sfmtool_core::SfmrImage,
     camera: &sfmtool_core::CameraIntrinsics,

@@ -333,6 +333,40 @@ pub struct AppState {
     /// same file pay for the read once. One entry, not a map: a reviewer works
     /// through one capture at a time, and these files are large.
     resect_matches_cache: Option<(std::path::PathBuf, matches_format::MatchesData)>,
+
+    /// The live MCP endpoint, or `None` when the viewer was started without
+    /// `--mcp`. See [`crate::mcp`].
+    #[cfg(feature = "mcp")]
+    pub mcp: Option<McpStatus>,
+}
+
+/// What the viewer says about a live MCP endpoint.
+///
+/// A window that something else can drive should never look like one that
+/// nothing can, so this is announced in two places at once: a window-title
+/// suffix ([`AppState::window_title`]) and a header line on the Scene panel.
+/// It lives on `AppState` rather than beside the server so both of those can
+/// read it without knowing the transport exists.
+#[cfg(feature = "mcp")]
+pub struct McpStatus {
+    /// The port actually bound, which is not necessarily the one asked for:
+    /// `--mcp 0` takes an ephemeral one.
+    pub port: u16,
+    /// How many tool calls have been applied. Shown live, so a human can see
+    /// the agent working.
+    pub requests: u64,
+}
+
+#[cfg(feature = "mcp")]
+impl McpStatus {
+    pub fn new(port: u16) -> Self {
+        Self { port, requests: 0 }
+    }
+
+    /// The URL a human pastes into a client config.
+    pub fn endpoint(&self) -> String {
+        format!("http://127.0.0.1:{}/mcp", self.port)
+    }
 }
 
 /// Cached SIFT positions and affine shapes for one image (no descriptors).
@@ -384,6 +418,8 @@ impl AppState {
             goto_point: GotoPointDialog::default(),
             resect_matches: HashMap::new(),
             resect_matches_cache: None,
+            #[cfg(feature = "mcp")]
+            mcp: None,
         }
     }
 
@@ -880,11 +916,20 @@ impl AppState {
     /// Windows attach path.
     pub fn window_title(&self) -> String {
         let extra = self.scene.len().saturating_sub(1);
-        match self.scene.first().and_then(|node| node.file_name()) {
+        #[allow(unused_mut)]
+        let mut title = match self.scene.first().and_then(|node| node.file_name()) {
             Some(name) if extra > 0 => format!("{WINDOW_TITLE_BASE} - {name} (+{extra})"),
             Some(name) => format!("{WINDOW_TITLE_BASE} - {name}"),
             None => WINDOW_TITLE_BASE.to_string(),
+        };
+        // A window something else can drive should never look like one nothing
+        // can. Appended rather than prefixed so `ui_basic`'s Windows attach
+        // path, which matches on the leading base title, is unaffected.
+        #[cfg(feature = "mcp")]
+        if let Some(mcp) = &self.mcp {
+            title.push_str(&format!(" [MCP :{}]", mcp.port));
         }
+        title
     }
 }
 

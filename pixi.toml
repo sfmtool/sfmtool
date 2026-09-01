@@ -44,6 +44,12 @@ sfmtool = { path = ".", editable = true }
 
 [tasks]
 gui = "cargo run --release -p sfm-explorer --bin sfm-explorer"
+# The viewer with its MCP endpoint on the default port, so an agent can drive
+# it: `pixi run gui-mcp scene.sfmr`. The `--` is spent here rather than by the
+# caller because `cargo run` consumes the first one, and `pixi run gui -- --mcp`
+# would hand `--mcp` to cargo instead of to the viewer.
+# See `specs/gui/mcp-server.md`.
+gui-mcp = "cargo run --release -p sfm-explorer --bin sfm-explorer -- --mcp"
 ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
 # Rustdoc gate. `--document-private-items` is deliberate: it is a strict superset
 # of the plain build's diagnostics (it adds the links written inside private

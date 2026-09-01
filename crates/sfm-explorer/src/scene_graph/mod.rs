@@ -209,6 +209,11 @@ impl SceneGraphPanel {
             out.response.has_pointer = panel_rect.contains(pos);
         }
 
+        // Before the empty-scene bail: an agent may be about to open the first
+        // file, and the endpoint is exactly what a human wants to read off the
+        // window at that moment.
+        show_mcp_header(ui, state);
+
         if state.scene.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");
@@ -256,6 +261,35 @@ impl SceneGraphPanel {
         out.response
     }
 }
+
+/// The header line naming the live MCP endpoint, and how many tool calls it
+/// has served.
+///
+/// Draws nothing when no endpoint is running, which is the usual case. The
+/// counter is live so a human can see the agent working, and the endpoint is
+/// selectable text because pasting it into a client config is the thing people
+/// want to do with it.
+#[cfg(feature = "mcp")]
+fn show_mcp_header(ui: &mut egui::Ui, state: &AppState) {
+    let Some(mcp) = &state.mcp else {
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new("MCP").strong());
+        ui.add(egui::Label::new(egui::RichText::new(mcp.endpoint()).monospace()).selectable(true))
+            .on_hover_text(
+                "An agent can drive this window through this endpoint. Started with --mcp.",
+            );
+        ui.weak(match mcp.requests {
+            1 => "· 1 call".to_string(),
+            n => format!("· {n} calls"),
+        });
+    });
+    ui.separator();
+}
+
+#[cfg(not(feature = "mcp"))]
+fn show_mcp_header(_ui: &mut egui::Ui, _state: &AppState) {}
 
 /// One loaded node as an `Align to ▸` menu entry.
 struct AlignTarget {
