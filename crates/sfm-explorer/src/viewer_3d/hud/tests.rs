@@ -169,6 +169,7 @@ fn run_frame(viewer: &mut Viewer3D, ctx: &egui::Context, state: &mut AppState, f
                 None,
                 None,
                 None,
+                &mut state.action_log,
             );
         });
     });

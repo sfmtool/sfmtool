@@ -13,6 +13,7 @@ use eframe::egui::{self, Sense};
 use ndarray::Axis;
 use sfmtool_core::SfmrReconstruction;
 
+use crate::action_log::{ActionLog, Actor, Kind};
 use crate::platform::GestureEvent;
 use crate::scene::ReconId;
 use crate::texture::thumbnail_color_image;
@@ -35,6 +36,15 @@ pub struct ImageBrowserResponse {
     pub hovered_image: Option<usize>,
     /// Whether the pointer is currently inside the browser panel.
     pub has_pointer: bool,
+}
+
+/// The `.sfmr` name of one image, for an Action Log entry, or `no image` where
+/// the sequence has none selected.
+fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
+    index
+        .and_then(|index| recon.images.get(index))
+        .map(|image| image.name.clone())
+        .unwrap_or_else(|| "no image".to_string())
 }
 
 /// Playback direction for image animation.
@@ -182,6 +192,10 @@ impl ImageBrowser {
         camera_view_image: Option<usize>,
         gesture_events: &[GestureEvent],
         scroll_input: &crate::platform::ScrollInput,
+        // Playback is a discrete command with a state of its own, so it
+        // records; the per-frame selection advances it produces go through the
+        // ordinary selection path and coalesce into one line under it.
+        log: &mut ActionLog,
     ) -> ImageBrowserResponse {
         let mut response = ImageBrowserResponse {
             selection_changed: None,
@@ -318,9 +332,24 @@ impl ImageBrowser {
                         };
                         response.selection_changed = Some(Some(start));
                     }
+                    log.record(
+                        Kind::Animation,
+                        format!("Animation playing at {} fps", self.animation.fps),
+                    );
+                } else {
+                    log.record(
+                        Kind::Animation,
+                        format!("Animation paused at {}", image_name(recon, selected_image)),
+                    );
                 }
             }
             if left {
+                if self.animation.playing {
+                    log.record(
+                        Kind::Animation,
+                        format!("Animation paused at {}", image_name(recon, selected_image)),
+                    );
+                }
                 self.animation.playing = false;
                 let current = selected_image.unwrap_or(0);
                 let prev = if current == 0 {
@@ -332,6 +361,12 @@ impl ImageBrowser {
                 response.request_camera_switch = Some(prev);
             }
             if right {
+                if self.animation.playing {
+                    log.record(
+                        Kind::Animation,
+                        format!("Animation paused at {}", image_name(recon, selected_image)),
+                    );
+                }
                 self.animation.playing = false;
                 let current = selected_image.unwrap_or(0);
                 let next = if current + 1 >= num_images {
@@ -348,6 +383,12 @@ impl ImageBrowser {
             if bracket_right {
                 self.animation.fps = (self.animation.fps * 2.0).min(60.0);
             }
+            if bracket_left || bracket_right {
+                log.record(
+                    Kind::Animation,
+                    format!("Animation rate {} fps", self.animation.fps),
+                );
+            }
         }
 
         // ── Animation frame advance ──────────────────────────────────
@@ -359,6 +400,7 @@ impl ImageBrowser {
             if dt >= frame_interval {
                 self.animation.last_time = now;
                 let current = selected_image.unwrap_or(0);
+                let mut ended = false;
                 let next = match self.animation.direction {
                     PlayDirection::Forward => {
                         if current + 1 >= num_images {
@@ -366,6 +408,7 @@ impl ImageBrowser {
                                 0
                             } else {
                                 self.animation.playing = false;
+                                ended = true;
                                 current
                             }
                         } else {
@@ -378,6 +421,7 @@ impl ImageBrowser {
                                 num_images - 1
                             } else {
                                 self.animation.playing = false;
+                                ended = true;
                                 current
                             }
                         } else {
@@ -385,6 +429,18 @@ impl ImageBrowser {
                         }
                     }
                 };
+                if ended {
+                    // The viewer's own doing, not the user's: nobody asked for
+                    // this frame, the sequence simply ran out.
+                    log.record_as(
+                        Actor::Viewer,
+                        Kind::Animation,
+                        format!(
+                            "Animation reached the end at {}",
+                            image_name(recon, Some(current))
+                        ),
+                    );
+                }
                 if next != current {
                     response.selection_changed = Some(Some(next));
                     response.request_camera_switch = Some(next);
@@ -395,6 +451,12 @@ impl ImageBrowser {
 
         // Pause animation on manual interaction (minibar click/drag).
         if minibar_select {
+            if self.animation.playing {
+                log.record(
+                    Kind::Animation,
+                    format!("Animation paused at {}", image_name(recon, selected_image)),
+                );
+            }
             self.animation.playing = false;
         }
 

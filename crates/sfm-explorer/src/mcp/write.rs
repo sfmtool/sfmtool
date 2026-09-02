@@ -14,10 +14,11 @@
 use serde_json::json;
 
 use super::{
-    announce, render, resolve_camera_image, resolve_camera_intrinsics, resolve_point,
-    resolve_reconstruction, selection_reply, CameraImageSel, CloseTarget, DisplayChange, JsonReply,
-    SelectionScope, ToolError,
+    render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, resolve_reconstruction,
+    selection_reply, CameraImageSel, CloseTarget, DisplayChange, JsonReply, SelectionScope,
+    ToolError,
 };
+use crate::action_log::{interactive_text, tint_text, visibility_text, Kind, Layer};
 use crate::scene::{NodeTint, TINT_PALETTE};
 use crate::state::AppState;
 
@@ -30,13 +31,10 @@ pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) 
 
     // `load_file` is used unchanged, including its already-loaded rule: opening
     // a path that is open reloads that node in place, keeping its label,
-    // display state and transform. A failure lands in `status_message` rather
-    // than being returned, so that is where the message is read back from.
-    state.load_file(path);
-
-    if let Some(message) = state.status_message.clone() {
-        return Err(ToolError::new(message));
-    }
+    // display state and transform. Its failure is *returned*, and becomes this
+    // tool's refusal — which the drain then records once, as
+    // `open_reconstruction failed: …`.
+    state.load_file(path).map_err(ToolError::new)?;
 
     // Whichever node is not in `before` is the one that arrived. A reload
     // replaces the node in place with a fresh `ReconId`, so this finds it in
@@ -51,19 +49,11 @@ pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) 
                 path.display()
             ))
         })?;
-    let label = node.label.clone();
     let mut entry = render::reconstruction(node, state.solo);
     entry
         .as_object_mut()
         .expect("a reconstruction entry is an object")
         .insert("reloaded".into(), json!(already_open));
-    announce(
-        state,
-        format!(
-            "{} {label}",
-            if already_open { "reloaded" } else { "opened" }
-        ),
-    );
     Ok(entry)
 }
 
@@ -80,14 +70,6 @@ pub(super) fn close_reconstruction(state: &mut AppState, target: CloseTarget) ->
             vec![label]
         }
     };
-    announce(
-        state,
-        if closed.is_empty() {
-            "closed nothing".to_string()
-        } else {
-            format!("closed {}", closed.join(", "))
-        },
-    );
     Ok(json!({ "closed": closed }))
 }
 
@@ -130,16 +112,13 @@ pub(super) fn select_point(
 
 pub(super) fn clear_selection(state: &mut AppState, scope: SelectionScope) -> JsonReply {
     match scope {
-        // `select_image(None)` keeps the intrinsics and `select_camera(None)`
-        // clears the image with it, so "everything" is the camera clear
-        // followed by the point.
-        SelectionScope::All => {
-            state.select_camera(None);
-            state.selected_point = None;
-        }
+        // One `AppState` method per scope, and `clear_selection` exists so that
+        // "everything" is one Action Log entry rather than the three deselects
+        // it is made of.
+        SelectionScope::All => state.clear_selection(),
         SelectionScope::CameraImage => state.select_image(None),
         SelectionScope::CameraIntrinsics => state.select_camera(None),
-        SelectionScope::Point => state.selected_point = None,
+        SelectionScope::Point => state.deselect_point(),
     }
     selection_reply(state)
 }
@@ -160,35 +139,55 @@ pub(super) fn set_reconstruction_display(
     };
 
     let solo = state.solo;
-    let node = state
-        .scene
+    // One entry per field the call *changed*, in the same words the Scene
+    // panel's own eyes and tint use: a `set_reconstruction_display` naming four
+    // fields is four things to the person watching the window, and the
+    // catalogue has a text for each of them rather than one for the call.
+    let (scene, log) = state.scene_and_log();
+    let node = scene
         .iter_mut()
         .find(|node| node.id == id)
         .expect("just resolved");
-    if let Some(visible) = change.visible {
-        node.visible = visible;
-    }
-    if let Some(interactive) = change.interactive {
+    let mut toggle = |current: &mut bool, asked: Option<bool>, layer: Layer, label: &str| {
+        if let Some(value) = asked.filter(|value| *value != *current) {
+            *current = value;
+            log.record(Kind::Scene, visibility_text(label, layer, value));
+        }
+    };
+    toggle(&mut node.visible, change.visible, Layer::Node, label);
+    toggle(
+        &mut node.show_points,
+        change.show_points,
+        Layer::Points,
+        label,
+    );
+    toggle(
+        &mut node.show_camera_images,
+        change.show_camera_images,
+        Layer::CameraImages,
+        label,
+    );
+    toggle(
+        &mut node.show_patches,
+        change.show_patches,
+        Layer::Patches,
+        label,
+    );
+    toggle(
+        &mut node.show_points_at_infinity,
+        change.show_points_at_infinity,
+        Layer::PointsAtInfinity,
+        label,
+    );
+    if let Some(interactive) = change.interactive.filter(|v| *v != node.interactive) {
         node.interactive = interactive;
+        log.record(Kind::Scene, interactive_text(label, interactive));
     }
-    if let Some(show) = change.show_points {
-        node.show_points = show;
-    }
-    if let Some(show) = change.show_camera_images {
-        node.show_camera_images = show;
-    }
-    if let Some(show) = change.show_patches {
-        node.show_patches = show;
-    }
-    if let Some(show) = change.show_points_at_infinity {
-        node.show_points_at_infinity = show;
-    }
-    if let Some(tint) = tint {
+    if let Some(tint) = tint.filter(|tint| *tint != node.tint) {
         node.tint = tint;
+        log.record(Kind::Scene, tint_text(label, tint));
     }
-    let entry = render::reconstruction(node, solo);
-    announce(state, format!("display of {label}"));
-    Ok(entry)
+    Ok(render::reconstruction(node, solo))
 }
 
 /// The palette entry a name asks for.
@@ -217,21 +216,18 @@ fn resolve_tint(name: &str) -> Result<&'static crate::scene::TintColor, ToolErro
 
 /// Draw only one reconstruction, or end the solo.
 ///
-/// Sets rather than toggles, unlike the GUI's `AppState::toggle_solo`. A toggle
-/// is right for a click, where the user can see the current state; an agent
+/// Goes through `AppState::set_solo` rather than `toggle_solo`. A toggle is
+/// right for a click, where the user can see the current state; an agent
 /// issuing one cannot know the outcome without reading the scene first, and a
-/// retried call would undo itself.
+/// retried call would undo itself — and a retry that changes nothing writes no
+/// Action Log entry either.
 pub(super) fn set_solo(state: &mut AppState, label: Option<&str>) -> JsonReply {
     match label {
         Some(label) => {
             let id = resolve_reconstruction(state, Some(label))?;
-            state.solo = Some(id);
-            announce(state, format!("soloed {label}"));
+            state.set_solo(Some(id));
         }
-        None => {
-            state.solo = None;
-            announce(state, "ended the solo");
-        }
+        None => state.set_solo(None),
     }
     Ok(json!({
         "solo": state.solo.and_then(|id| render::label_of(state, id)),

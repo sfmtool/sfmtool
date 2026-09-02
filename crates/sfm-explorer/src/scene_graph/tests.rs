@@ -1504,7 +1504,7 @@ fn the_status_message_reports_the_fit() {
 
     state.align_node(b, a, AlignOptions::default());
 
-    let status = state.status_message.as_deref().expect("a status message");
+    let status = state.status_message().expect("a status message");
     assert!(
         status.starts_with("Aligned run_b → run_a: ") && status.contains(" cameras, RMS "),
         "unexpected status line: {status}"
@@ -1525,7 +1525,7 @@ fn a_failed_align_leaves_the_transform_alone_and_says_why() {
         !state.scene[1].has_transform(),
         "a failed fit still moved the node"
     );
-    let status = state.status_message.as_deref().expect("a status message");
+    let status = state.status_message().expect("a status message");
     assert!(
         status.starts_with("Align run_b → run_a failed: "),
         "unexpected status line: {status}"
@@ -2688,7 +2688,7 @@ fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
     assert_eq!(state.selected_recon, Some(derived.id));
     assert_eq!(state.selected_image, Some(ImageRef::new(derived.id, 3)));
     assert!(state
-        .status_message
+        .status_message()
         .as_ref()
         .is_some_and(|m| m.contains("Resected") && m.contains(&image)));
 
@@ -2730,7 +2730,7 @@ fn a_resection_that_cannot_be_attempted_reports_itself_and_adds_nothing() {
     state.resect_image(source, 0, ResectFrom::Observations);
     assert_eq!(state.scene.len(), 1, "a refused resection made a node");
     assert!(state
-        .status_message
+        .status_message()
         .as_ref()
         .is_some_and(|m| m.starts_with("Resect ") && m.contains("refused")));
 }
@@ -2742,7 +2742,7 @@ fn the_matches_variant_without_a_chosen_file_reports_itself() {
     state.resect_image(source, 0, ResectFrom::Matches);
     assert_eq!(state.scene.len(), 1);
     assert!(state
-        .status_message
+        .status_message()
         .as_ref()
         .is_some_and(|m| m.contains(".matches")));
 }

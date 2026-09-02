@@ -38,6 +38,7 @@
 use eframe::egui;
 use sfmtool_core::CameraIntrinsics;
 
+use crate::action_log::{interactive_text, tint_text, visibility_text, ActionLog, Kind, Layer};
 use crate::align::{AlignOptions, AlignSource};
 use crate::resect::ResectFrom;
 use crate::scene::{
@@ -198,15 +199,10 @@ impl SceneGraphPanel {
                 feature_indexed: n.recon.feature_indexes().is_some(),
             })
             .collect();
-        let mut out = TreeOutput {
-            response: SceneGraphResponse::default(),
-            hits: &mut self.hits,
-            align_options: &mut self.align_options,
-            targets: &targets,
-        };
-        out.hits.clear();
+        self.hits.clear();
+        let mut response = SceneGraphResponse::default();
         if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-            out.response.has_pointer = panel_rect.contains(pos);
+            response.has_pointer = panel_rect.contains(pos);
         }
 
         // Before the empty-scene bail: an agent may be about to open the first
@@ -219,7 +215,7 @@ impl SceneGraphPanel {
                 ui.label("No reconstruction loaded");
             });
             self.prev_selected_image = None;
-            return out.response;
+            return response;
         }
 
         // Read the selection out before the mutable walk over `scene` below:
@@ -237,12 +233,26 @@ impl SceneGraphPanel {
         let selection_moved = self.prev_selected_image != selected_image;
         self.prev_selected_image = selected_image;
 
+        // The eyes, the interaction cursor and the tint are written straight
+        // into the node — they *are* per-node display state, with nothing for
+        // `dock.rs` to arbitrate — so the log has to travel alongside the nodes
+        // rather than being reached through `state`, which is borrowed for the
+        // walk. See `AppState::scene_and_log`.
+        let (scene, log) = state.scene_and_log();
+        let mut out = TreeOutput {
+            response,
+            hits: &mut self.hits,
+            align_options: &mut self.align_options,
+            targets: &targets,
+            log,
+        };
+
         egui::ScrollArea::vertical()
             .id_salt("scene_graph_tree")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
-                for node in state.scene.iter_mut() {
+                for node in scene.iter_mut() {
                     let ctx = NodeContext {
                         selected: selected_recon == Some(node.id),
                         soloed: solo == Some(node.id),
@@ -308,6 +318,8 @@ struct TreeOutput<'a> {
     /// Every loaded node, including the one being drawn (filtered out where the
     /// menu is built).
     targets: &'a [AlignTarget],
+    /// Where the toggles that write straight into a node record what they did.
+    log: &'a mut ActionLog,
 }
 
 impl TreeOutput<'_> {
@@ -322,6 +334,23 @@ impl TreeOutput<'_> {
     /// drawn is exactly what a test asking "is this row marked selected?" wants.
     fn mark(&mut self, id: egui::Id, rect: egui::Rect) {
         self.hits.insert(id, rect);
+    }
+
+    /// Record a toggle in the tree, and hand its response back through, so a
+    /// row stays one statement: draw it, note where it landed, log what it did.
+    fn logged(
+        &mut self,
+        id: egui::Id,
+        response: egui::Response,
+        text: impl FnOnce() -> String,
+    ) -> egui::Response {
+        let response = self.hit(id, response);
+        // `clicked()` rather than `changed()`: a glyph toggle flips the flag
+        // itself and reports no change, being an `egui::Button`.
+        if response.clicked() {
+            self.log.record(Kind::Scene, text());
+        }
+        response
     }
 }
 
@@ -373,7 +402,10 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
                     None,
                     "Show this node's patches",
                 );
-                out.hit(row_id(node.id, "patches_eye"), eye);
+                let shown = node.show_patches;
+                out.logged(row_id(node.id, "patches_eye"), eye, || {
+                    visibility_text(&node.label, Layer::Patches, shown)
+                });
                 ui.label("Patches");
             });
         }
@@ -401,7 +433,10 @@ fn show_node_header(
         Some(ctx.visible),
         "Show this reconstruction",
     );
-    out.hit(row_id(id, "node_eye"), eye);
+    let visible = node.visible;
+    out.logged(row_id(id, "node_eye"), eye, || {
+        visibility_text(&node.label, Layer::Node, visible)
+    });
 
     // Solo lives on the row rather than in the context menu (the spec left that
     // open): it is a *transient* view mode used over and over while comparing —
@@ -435,7 +470,10 @@ fn show_node_header(
         CURSOR_GLYPH,
         "Let hover and clicks in the 3D viewport reach this reconstruction",
     );
-    out.hit(row_id(id, "node_cursor"), cursor);
+    let interactive = node.interactive;
+    out.logged(row_id(id, "node_cursor"), cursor, || {
+        interactive_text(&node.label, interactive)
+    });
 
     // Everything from here to the right edge is one target, claimed *before*
     // its contents are drawn: a tree row should answer a click anywhere along
@@ -570,7 +608,13 @@ fn show_tint_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &mut TreeOutput)
     let id = node.id;
     let menu = ui.menu_button("Tint", |ui| {
         let original = ui.radio_value(&mut node.tint, NodeTint::Original, "Original");
-        out.hit(row_id(id, "tint_original"), original);
+        let original = out.hit(row_id(id, "tint_original"), original);
+        // `changed()`, not `clicked()`: these are radios, so re-choosing the
+        // colour a node already wears is not a change and writes no entry.
+        if original.changed() {
+            out.log
+                .record(Kind::Scene, tint_text(&node.label, node.tint));
+        }
         ui.separator();
         for color in TINT_PALETTE.iter() {
             let [r, g, b] = color.rgb;
@@ -579,7 +623,11 @@ fn show_tint_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &mut TreeOutput)
             // glyph that egui's bundled fonts might not have.
             let label = egui::RichText::new(color.name).color(egui::Color32::from_rgb(r, g, b));
             let entry = ui.radio_value(&mut node.tint, NodeTint::Tint(color), label);
-            out.hit(row_id(id, &format!("tint_{}", color.name)), entry);
+            let entry = out.hit(row_id(id, &format!("tint_{}", color.name)), entry);
+            if entry.changed() {
+                out.log
+                    .record(Kind::Scene, tint_text(&node.label, node.tint));
+            }
         }
     });
     out.hit(row_id(id, "tint_menu"), menu.response);
@@ -858,7 +906,10 @@ fn show_camera_images_group(
             None,
             "Show this node's camera frustums and image quads",
         );
-        out.hit(row_id(id, "camera_images_eye"), eye);
+        let shown = node.show_camera_images;
+        out.logged(row_id(id, "camera_images_eye"), eye, || {
+            visibility_text(&node.label, Layer::CameraImages, shown)
+        });
         ui.label(format!("Camera Images ({})", node.recon.images.len()));
     });
     header.body(|ui| show_camera_image_rows(ui, node, ctx, out));
@@ -1075,7 +1126,10 @@ fn show_points_group(
             None,
             "Show this node's 3D points",
         );
-        out.hit(row_id(id, "points_eye"), eye);
+        let shown = node.show_points;
+        out.logged(row_id(id, "points_eye"), eye, || {
+            visibility_text(&node.label, Layer::Points, shown)
+        });
         let count = with_thousands(node.recon.points.len());
         let label = if at_infinity > 0 {
             format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))
@@ -1092,7 +1146,10 @@ fn show_points_group(
                 INFINITY_GLYPH,
                 "Draw this node's w = 0 points — directions with no parallax",
             );
-            out.hit(row_id(id, "points_infinity"), infinity);
+            let shown = node.show_points_at_infinity;
+            out.logged(row_id(id, "points_infinity"), infinity, || {
+                visibility_text(&node.label, Layer::PointsAtInfinity, shown)
+            });
         }
     });
     header.body(|ui| {

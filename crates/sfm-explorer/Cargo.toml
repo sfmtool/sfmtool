@@ -71,6 +71,11 @@ kiddo = "5"
 rand = "0.10"
 image = "0.25"
 ndarray = "0.17"
+# The Action Log's timestamps and their local-time formatting. Over `chrono`
+# for a smaller dependency graph, and over `time` because `time`'s local-offset
+# lookup is unsound on Unix without an opt-in flag. Needs rustc 1.70, well
+# under the workspace MSRV.
+jiff = "0.2"
 
 # ── The `mcp` feature's dependency tree (see [features] above) ──
 #

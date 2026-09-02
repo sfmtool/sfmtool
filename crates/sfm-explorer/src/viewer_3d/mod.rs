@@ -19,6 +19,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Sense};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use sfmtool_core::{Camera, Se3Transform};
 
+use crate::action_log::{ActionLog, Kind};
 use crate::platform::GestureEvent;
 use crate::scene::{ImageRef, ReconId, SceneNode};
 
@@ -87,6 +88,19 @@ pub(crate) fn transformed_pose(
     let centre = transform.apply_to_point(&image.camera_center());
     let rotation = image.quaternion_wxyz * transform.rotation.as_nalgebra().inverse();
     (rotation, centre)
+}
+
+/// `Looking through IMG_0007.jpg` — the entry a deliberate camera-view entry
+/// writes, wherever it came from (a double-click, `Z`, the Scene tree, the
+/// track panel).
+fn record_camera_view(log: &mut ActionLog, image: ImageRef, node: &SceneNode) {
+    let name = node
+        .recon
+        .images
+        .get(image.index())
+        .map(|i| i.name.as_str())
+        .unwrap_or("?");
+    log.record(Kind::View, format!("Looking through {name}"));
 }
 
 /// Computed end state for a camera view switch.
@@ -261,6 +275,11 @@ impl Viewer3D {
         scene_texture_id: Option<egui::TextureId>,
         hover_depth: Option<f32>,
         hover_pick: Option<crate::scene_renderer::PickTarget>,
+        // The viewport's own keyboard bindings — `Z`, `Home`, `,` / `.` — are
+        // discrete commands, so they record what they did. Taken as a separate
+        // `&mut` rather than through `AppState` because `node` and `scene`
+        // above are borrowed out of the same state for the whole call.
+        log: &mut ActionLog,
     ) {
         let reconstruction = &node.recon;
         // Allocate the entire available space for the 3D view.
@@ -352,7 +371,7 @@ impl Viewer3D {
         self.handle_gestures(ui, gesture_events, rect, fly_keys_held);
         self.handle_fly_keys(ui, fly_keys_held);
         if keyboard_free {
-            self.handle_keyboard(ui, rect, node, selected_image);
+            self.handle_keyboard(ui, rect, node, selected_image, log);
         }
         self.handle_click(ui, &response, rect);
 
@@ -575,8 +594,15 @@ impl Viewer3D {
     /// Composing the transform is what makes "look through this camera" show the
     /// transformed scene from the transformed camera: an aligned node's cameras
     /// are drawn where its points are, so the viewpoint has to move with them.
-    pub fn enter_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode, current_time: f64) {
+    pub fn enter_camera_view(
+        &mut self,
+        image_ref: ImageRef,
+        node: &SceneNode,
+        current_time: f64,
+        log: &mut ActionLog,
+    ) {
         let end = self.compute_camera_view(image_ref, node);
+        record_camera_view(log, image_ref, node);
 
         // Deactivate current camera view during transition
         self.camera_view = None;
@@ -717,7 +743,11 @@ impl Viewer3D {
 
     /// Switch from one camera view to another instantly, preserving relative orientation.
     ///
-    /// Used by `,`/`.` keys for rapid camera switching.
+    /// Used by `,`/`.` keys and by animation playback for rapid camera
+    /// switching. **Records nothing**, unlike the two deliberate entries above:
+    /// this one follows a selection step, whose own `Selected image …` entry
+    /// already says which image — and a `Looking through …` between every two
+    /// of those would break the coalescing that keeps a scrub to one line.
     pub fn switch_camera_view(&mut self, new_image: ImageRef, node: &SceneNode) {
         let Some(state) = self.compute_switch_camera_view(new_image, node) else {
             return;
@@ -737,11 +767,13 @@ impl Viewer3D {
         new_image: ImageRef,
         node: &SceneNode,
         current_time: f64,
+        log: &mut ActionLog,
     ) {
         let Some(state) = self.compute_switch_camera_view(new_image, node) else {
-            self.enter_camera_view(new_image, node, current_time);
+            self.enter_camera_view(new_image, node, current_time, log);
             return;
         };
+        record_camera_view(log, new_image, node);
         self.camera_view = None;
         self.start_transition(
             state.position,

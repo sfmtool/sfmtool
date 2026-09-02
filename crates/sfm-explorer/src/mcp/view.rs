@@ -18,9 +18,10 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde_json::json;
 
 use super::{
-    announce, render, resolve_camera_image, resolve_reconstruction, JsonReply, Placement,
-    ToolError, ViewCommand,
+    render, resolve_camera_image, resolve_reconstruction, JsonReply, Placement, ToolError,
+    ViewCommand,
 };
+use crate::action_log::Kind;
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
@@ -60,20 +61,23 @@ pub(super) fn set_view(
             let node = state.node(id).expect("just resolved");
             let name = node.recon.images[image.index()].name.clone();
             viewer.jump_to_camera_view(image, node);
-            format!("looking through {name}")
+            format!("Looking through {name}")
         }
         ViewCommand::ExitCameraView => {
             viewer.camera_view = None;
-            "left camera view".to_string()
+            "Left camera view".to_string()
         }
         ViewCommand::Place(placement) => place(viewer, placement)?,
         ViewCommand::Fov { fov_short_axis_deg } => {
             set_fov(viewer, Some(fov_short_axis_deg))?;
-            format!("field of view {fov_short_axis_deg:.1}°")
+            format!("Field of view {fov_short_axis_deg:.1}°")
         }
     };
 
-    announce(state, format!("view — {what}"));
+    // The one entry `set_view` writes, in the catalogue's own words: the five
+    // forms all end here, and `jump_to_camera_view` records nothing of its own
+    // so that a look-through is one line and not two.
+    state.action_log.record(Kind::View, what);
     Ok(json!({ "view": render::view(state, viewer) }))
 }
 
@@ -187,9 +191,9 @@ fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolErro
     set_fov(viewer, placement.fov_short_axis_deg)?;
 
     Ok(if placement.orientation_wxyz.is_some() {
-        "camera restored".to_string()
+        "Camera restored".to_string()
     } else {
-        "camera placed".to_string()
+        "Camera placed".to_string()
     })
 }
 
@@ -220,7 +224,7 @@ fn fit(state: &AppState, viewer: &mut Viewer3D, label: Option<&str>) -> Result<S
         Some(label) => {
             let id = resolve_reconstruction(state, Some(label))?;
             let node = state.node(id).expect("just resolved");
-            (crate::scene::world_points(node), format!("framed {label}"))
+            (crate::scene::world_points(node), format!("Framed {label}"))
         }
         None => {
             let points: Vec<Point3<f64>> = state
@@ -229,7 +233,7 @@ fn fit(state: &AppState, viewer: &mut Viewer3D, label: Option<&str>) -> Result<S
                 .filter(|node| crate::scene::is_visible(node, state.solo))
                 .flat_map(crate::scene::world_points)
                 .collect();
-            (points, "framed the scene".to_string())
+            (points, "Framed the scene".to_string())
         }
     };
     if points.is_empty() {

@@ -24,7 +24,8 @@ use serde_json::{json, Map, Value};
 use sfmtool_core::SfmrReconstruction;
 
 use super::tools::{self, ToolKind};
-use super::{apply, Command, Outcome, ToolError, ToolOutput};
+use super::{apply, apply_as_agent, Command, Outcome, ToolError, ToolOutput};
+use crate::action_log::{Actor, Kind};
 use crate::scene::{PointRef, SceneNode};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
@@ -85,10 +86,22 @@ fn two_reconstructions() -> (AppState, Viewer3D) {
     (state, viewer)
 }
 
+/// Apply one command the way the frame does — as the agent, with the Action Log
+/// entries that go with it.
+///
+/// [`apply_as_agent`] rather than bare [`apply`] throughout: attribution is
+/// part of what an MCP call *is*, and a test that skipped it would be
+/// exercising a path the viewer never takes.
+fn agent(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome {
+    apply_as_agent(state, viewer, vec![command])
+        .pop()
+        .expect("one command, one outcome")
+}
+
 /// Run one command and unwrap the JSON it produced.
 #[track_caller]
 fn ok(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Value {
-    match apply(state, viewer, command) {
+    match agent(state, viewer, command) {
         Outcome::Done(Ok(ToolOutput::Json(value))) => value,
         Outcome::Done(Ok(ToolOutput::Png { .. })) => panic!("expected JSON, got an image"),
         Outcome::Done(Err(e)) => panic!("expected success, got refusal: {e}"),
@@ -99,7 +112,7 @@ fn ok(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Value {
 /// Run one command and unwrap the refusal it produced.
 #[track_caller]
 fn refused(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> ToolError {
-    match apply(state, viewer, command) {
+    match agent(state, viewer, command) {
         Outcome::Done(Err(e)) => e,
         Outcome::Done(Ok(_)) => panic!("expected a refusal, got success"),
         Outcome::Deferred(_) => panic!("expected a refusal, got a deferral"),
@@ -1054,7 +1067,7 @@ fn get_scene_survives_a_selection_that_has_gone_stale() {
     assert_eq!(scene["selection"]["point"]["index"], 9999);
 }
 
-// ── Status, and the announcement ────────────────────────────────────────
+// ── Status, and the Action Log ──────────────────────────────────────────
 
 /// Every mutating command says so in the place the viewer already reports what
 /// it did, prefixed so a human can tell it from something they did themselves.
@@ -1067,9 +1080,206 @@ fn a_mutating_call_announces_itself_in_the_status_line() {
         "set_solo",
         json!({ "reconstruction_label": "beta" }),
     );
-    let message = state.status_message.clone().expect("a status message");
+    let message = state.status_message().expect("a status message");
     assert!(message.starts_with("MCP: "), "{message}");
     assert!(message.contains("beta"), "{message}");
+}
+
+/// The scene the attribution tests start from: `alpha` selected with one of its
+/// images picked, so that every command below is a *change* — only a change is
+/// logged — and the log emptied of everything setting that up put in it.
+fn quiet_scene() -> (AppState, Viewer3D) {
+    let (mut state, viewer) = two_reconstructions();
+    let alpha = state.scene[0].id;
+    state.select_image(Some(crate::scene::ImageRef::new(alpha, 1)));
+    state.action_log.clear();
+    (state, viewer)
+}
+
+/// One entry per mutating command, attributed to the agent — and the ambient
+/// actor back where it was, so the user's next click is not filed as the
+/// agent's.
+#[test]
+fn each_mutating_command_records_one_entry_as_the_agent() {
+    let commands: Vec<Command> = vec![
+        Command::SelectReconstruction {
+            reconstruction_label: "beta".into(),
+        },
+        Command::SelectCameraImage {
+            reconstruction_label: Some("beta".into()),
+            camera_image: super::CameraImageSel::Index(2),
+        },
+        Command::SelectCameraIntrinsics {
+            reconstruction_label: Some("beta".into()),
+            camera_intrinsics_index: 0,
+        },
+        Command::SelectPoint {
+            point: crate::goto_point::PointQuery::Index(3),
+        },
+        Command::ClearSelection {
+            scope: super::SelectionScope::All,
+        },
+        Command::SetSolo {
+            reconstruction_label: Some("beta".into()),
+        },
+        Command::SetReconstructionDisplay {
+            reconstruction_label: "beta".into(),
+            change: super::DisplayChange {
+                visible: Some(false),
+                ..Default::default()
+            },
+        },
+        Command::SetView {
+            view: super::ViewCommand::Fit {
+                reconstruction_label: None,
+            },
+        },
+        Command::CloseReconstruction {
+            target: super::CloseTarget::One("beta".into()),
+        },
+    ];
+    for command in commands {
+        let (mut state, mut viewer) = quiet_scene();
+        let name = command.tool_name();
+        ok(&mut state, &mut viewer, command);
+        let entries: Vec<_> = state.action_log.entries().collect();
+        assert_eq!(entries.len(), 1, "{name} recorded {entries:?}");
+        assert_eq!(entries[0].actor, Actor::Mcp, "{name}: {entries:?}");
+        assert!(!entries[0].failed, "{name}: {entries:?}");
+        assert!(
+            !matches!(entries[0].kind, Kind::Query(_)),
+            "{name} was filed as a query: {entries:?}"
+        );
+        assert_eq!(
+            state.action_log.actor(),
+            Actor::User,
+            "{name} left the actor moved"
+        );
+    }
+}
+
+/// A read is logged too — from the command, since it changes no state and has
+/// no state method to log through — but it never reaches the status line, so an
+/// agent polling `get_scene` does not read its own polling back as the viewer's
+/// status.
+#[test]
+fn each_read_only_command_records_a_query_the_status_line_ignores() {
+    let commands: Vec<Command> = vec![
+        Command::GetScene,
+        Command::ListCameraImages {
+            reconstruction_label: None,
+            offset: 0,
+            limit: 5,
+        },
+        Command::GetCameraImage {
+            reconstruction_label: None,
+            camera_image: super::CameraImageSel::Index(0),
+        },
+        Command::GetCameraIntrinsics {
+            reconstruction_label: None,
+            camera_intrinsics_index: 0,
+        },
+        Command::GetPoint {
+            point: crate::goto_point::PointQuery::Index(1),
+        },
+    ];
+    for command in commands {
+        let (mut state, mut viewer) = quiet_scene();
+        let name = command.tool_name();
+        ok(&mut state, &mut viewer, command);
+        let entries: Vec<_> = state.action_log.entries().collect();
+        assert_eq!(entries.len(), 1, "{name} recorded {entries:?}");
+        assert_eq!(entries[0].kind, Kind::Query(name), "{name}: {entries:?}");
+        assert_eq!(entries[0].actor, Actor::Mcp, "{name}: {entries:?}");
+        assert_eq!(
+            state.status_message(),
+            None,
+            "{name} reached the status line"
+        );
+    }
+}
+
+/// A `screenshot` is logged in the frame it was *applied*, not when the pixels
+/// come back, so its line sits in order with the commands around it.
+#[test]
+fn a_deferred_screenshot_is_logged_when_it_is_drained() {
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    let outcome = agent(
+        &mut state,
+        &mut viewer,
+        Command::Screenshot {
+            max_dimension: None,
+        },
+    );
+    assert!(matches!(outcome, Outcome::Deferred(_)), "not deferred");
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].text, "screenshot 1280×720", "{entries:?}");
+    // …and `max_dimension` is reported at the size the picture comes back at.
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    agent(
+        &mut state,
+        &mut viewer,
+        Command::Screenshot {
+            max_dimension: Some(640),
+        },
+    );
+    assert_eq!(
+        state.action_log.entries().next().expect("an entry").text,
+        "screenshot 640×360"
+    );
+}
+
+/// A refusal is one failed entry, in the words the agent was given — not two,
+/// one from the method and one from the drain.
+#[test]
+fn a_refused_command_records_one_failed_entry_carrying_the_refusal() {
+    let (mut state, mut viewer) = quiet_scene();
+    let error = refused(
+        &mut state,
+        &mut viewer,
+        Command::SelectReconstruction {
+            reconstruction_label: "globl".into(),
+        },
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(entries[0].failed, "{entries:?}");
+    assert_eq!(entries[0].actor, Actor::Mcp);
+    assert_eq!(
+        entries[0].text,
+        format!("select_reconstruction failed: {error}")
+    );
+    // The status line shows it too, where before only a success reached it.
+    assert_eq!(
+        state.status_message(),
+        Some(format!("MCP: select_reconstruction failed: {error}"))
+    );
+}
+
+/// `load_file` returns its failure rather than writing it anywhere, so an
+/// unreadable path is one entry and not two.
+#[test]
+fn open_reconstruction_on_an_unreadable_path_records_one_failed_entry() {
+    let (mut state, mut viewer) = quiet_scene();
+    refused(
+        &mut state,
+        &mut viewer,
+        Command::OpenReconstruction {
+            path: std::path::PathBuf::from("/runs/there-is-no-such-file.sfmr"),
+        },
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert!(entries[0].failed, "{entries:?}");
+    assert!(
+        entries[0]
+            .text
+            .starts_with("open_reconstruction failed: Failed to load "),
+        "{entries:?}"
+    );
 }
 
 // ── The schema and its parser ───────────────────────────────────────────

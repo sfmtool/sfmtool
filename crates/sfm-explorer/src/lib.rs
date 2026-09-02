@@ -12,6 +12,7 @@
 //! and window management layers, but works when we own the event loop
 //! and window creation directly.
 
+mod action_log;
 mod align;
 mod app;
 mod cli;
@@ -121,11 +122,15 @@ pub fn run() {
         return;
     }
 
-    // Every path is loaded as its own scene node, in the order given.
+    // The first log entry, before anything is loaded: a session read back later
+    // — next to an agent's transcript, or in a bug report — should say what it
+    // was and when it started.
     let mut state = AppState::new();
-    for path in &args.paths {
-        state.load_file(path);
-    }
+    state.action_log.record_as(
+        action_log::Actor::Viewer,
+        action_log::Kind::Session,
+        format!("SfM Explorer {} started", env!("CARGO_PKG_VERSION")),
+    );
 
     // Create DirectManipulation manager BEFORE the winit EventLoop so that
     // DM_POINTERHITTEST messages are generated for precision touchpad contacts.
@@ -151,6 +156,16 @@ pub fn run() {
     let mcp_rx = start_mcp(&mut state, args.mcp_port, &proxy);
     #[cfg(not(feature = "mcp"))]
     start_mcp(&mut state, args.mcp_port, &proxy);
+
+    // Every path is loaded as its own scene node, in the order given — after
+    // the endpoint has been brought up, so the Action Log reads in the order
+    // the session happened and a file named on the command line sits under the
+    // session lines that explain where it came from.
+    for path in &args.paths {
+        if let Err(message) = state.load_file(path) {
+            state.action_log.fail(action_log::Kind::File, message);
+        }
+    }
 
     let dock_state = default_dock_state();
 
@@ -225,6 +240,12 @@ fn start_mcp(
         Ok(address) => {
             println!("SfM Explorer MCP endpoint: http://{address}/mcp");
             state.mcp = Some(state::McpStatus::new(address.port()));
+            let endpoint = state.mcp.as_ref().expect("just set").endpoint();
+            state.action_log.record_as(
+                action_log::Actor::Viewer,
+                action_log::Kind::Session,
+                format!("MCP endpoint listening on {endpoint}"),
+            );
             Some(rx)
         }
         Err(e) => {
@@ -253,13 +274,17 @@ fn start_mcp(_state: &mut AppState, port: Option<u16>, _proxy: &EventLoopProxy<U
 /// ┌────────┬──────────────────┬───────────────┐
 /// │        │    3D Viewer     │ Image Detail  │
 /// │ Scene  ├──────────────────┴───────────────┤
-/// │        │          Image Browser           │
+/// │        │ Image Browser │ Action Log       │
 /// └────────┴──────────────────────────────────┘
 /// ```
 ///
 /// The Scene tab takes a narrow left split of the root — narrow because the
 /// tree is a list of short labels and everything else in the window wants the
 /// width. Like every other tab it is not closeable and can be re-docked freely.
+///
+/// Two nodes hold more than one tab, and in both the first is the active one:
+/// the bottom node opens on the Image Browser with the Action Log behind it,
+/// and the right-hand node on Image Detail.
 pub(crate) fn default_dock_state() -> DockState<Tab> {
     let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
     let surface = dock_state.main_surface_mut();
@@ -269,7 +294,10 @@ pub(crate) fn default_dock_state() -> DockState<Tab> {
     // true of Right/Below; 0.82 here gave the Scene panel four fifths of the
     // window.) So: Scene 18%, then the old 80/20 and 67/33 splits of the rest.
     let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
-    let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser]);
+    // The Action Log joins the bottom node as a second tab rather than taking a
+    // split of its own: it is a record to consult, not a panel to watch, and the
+    // image strip is what the viewer should open on.
+    let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser, Tab::ActionLog]);
     let [_viewer, _detail] = surface.split_right(
         top,
         0.67,

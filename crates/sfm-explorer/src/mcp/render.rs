@@ -33,7 +33,7 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         "selection": selection(state),
         "solo": state.solo.and_then(|id| label_of(state, id)),
         "view": view(state, viewer),
-        "status_message": state.status_message,
+        "status_message": state.status_message(),
         "window_title": state.window_title(),
     })
 }

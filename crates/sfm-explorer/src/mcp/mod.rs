@@ -35,6 +35,7 @@ use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
+use crate::action_log::Kind;
 use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
@@ -527,13 +528,200 @@ fn loaded_list(state: &AppState) -> String {
     format!(" — loaded: {}.", labels.join(", "))
 }
 
-/// Note in the status line that the agent did something, in the place the
-/// viewer already reports what it did.
+/// Apply a frame's worth of commands **as the agent**, recording what they did.
 ///
-/// Prefixed `MCP:` without exception. The human watching the window has to be
-/// able to tell a change they made from one that arrived over the socket.
-pub(super) fn announce(state: &mut AppState, message: impl std::fmt::Display) {
-    state.status_message = Some(format!("MCP: {message}"));
+/// The drain's application phase, with the channel left out so it is reachable
+/// from a headless test. Three things happen here that [`apply`] cannot do for
+/// itself:
+///
+/// - the Action Log's ambient actor is moved to
+///   [`Mcp`](crate::action_log::Actor::Mcp) for the whole batch and restored
+///   afterwards — one move per frame rather than an `Actor` argument on every
+///   `AppState` method;
+/// - a **read** is recorded, because it changes no state and so has no state
+///   method to log through — and it is recorded from the command *before* the
+///   command is applied, so a deferred `screenshot` lines up in order with the
+///   commands around it rather than at readback;
+/// - a **refusal** is recorded, in the same words the agent receives, because
+///   the methods below return their failures rather than logging them.
+///
+/// A mutating tool that succeeds writes nothing here: the `AppState` and
+/// `Viewer3D` methods it called already did, in the same words the GUI's own
+/// path produces.
+pub(crate) fn apply_as_agent(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    commands: Vec<Command>,
+) -> Vec<Outcome> {
+    debug_assert_eq!(
+        state.action_log.actor(),
+        crate::action_log::Actor::User,
+        "the agent's commands were applied with the actor already moved",
+    );
+    state.action_log.set_actor(crate::action_log::Actor::Mcp);
+    let outcomes = commands
+        .into_iter()
+        .map(|command| {
+            log::debug!("MCP: applying {command:?}");
+            let tool = command.tool_name();
+            let kind = command.kind();
+            let query = query_text(state, viewer, &command);
+            let outcome = apply(state, viewer, command);
+            match (&outcome, query) {
+                (Outcome::Done(Err(error)), _) => state
+                    .action_log
+                    .fail(kind, format!("{tool} failed: {error}")),
+                (_, Some(text)) => state.action_log.query(tool, text),
+                (_, None) => {}
+            }
+            outcome
+        })
+        .collect();
+    state.action_log.set_actor(crate::action_log::Actor::User);
+    outcomes
+}
+
+// ── The Action Log's view of a command ───────────────────────────────────
+//
+// A mutating tool writes no entry of its own: it calls the same `AppState` and
+// `Viewer3D` methods the GUI calls, and those record — which is what makes the
+// actor column trustworthy, since two rows reading the same did the same thing.
+// What is left for the drain is the two things no state method can know: the
+// name of the tool, for a refusal, and the fact that a read happened at all.
+
+impl Command {
+    /// The tool this command came from, as the wire names it.
+    pub(crate) fn tool_name(&self) -> &'static str {
+        match self {
+            Command::GetScene => "get_scene",
+            Command::ListCameraImages { .. } => "list_camera_images",
+            Command::GetCameraImage { .. } => "get_camera_image",
+            Command::GetCameraIntrinsics { .. } => "get_camera_intrinsics",
+            Command::GetPoint { .. } => "get_point",
+            Command::OpenReconstruction { .. } => "open_reconstruction",
+            Command::CloseReconstruction { .. } => "close_reconstruction",
+            Command::SelectReconstruction { .. } => "select_reconstruction",
+            Command::SelectCameraImage { .. } => "select_camera_image",
+            Command::SelectCameraIntrinsics { .. } => "select_camera_intrinsics",
+            Command::SelectPoint { .. } => "select_point",
+            Command::ClearSelection { .. } => "clear_selection",
+            Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
+            Command::SetSolo { .. } => "set_solo",
+            Command::SetView { .. } => "set_view",
+            Command::Screenshot { .. } => "screenshot",
+        }
+    }
+
+    /// The Action Log kind a refusal of this command is filed under.
+    ///
+    /// A failed entry never coalesces, so this is about where the row belongs
+    /// rather than about folding — but it should still be the kind the tool's
+    /// success would have been.
+    pub(crate) fn kind(&self) -> Kind {
+        match self {
+            Command::GetScene
+            | Command::ListCameraImages { .. }
+            | Command::GetCameraImage { .. }
+            | Command::GetCameraIntrinsics { .. }
+            | Command::GetPoint { .. }
+            | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
+            Command::OpenReconstruction { .. } | Command::CloseReconstruction { .. } => Kind::File,
+            Command::SelectReconstruction { .. }
+            | Command::SelectCameraImage { .. }
+            | Command::SelectCameraIntrinsics { .. }
+            | Command::SelectPoint { .. }
+            | Command::ClearSelection { .. } => Kind::Selection,
+            Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
+            Command::SetView { .. } => Kind::View,
+        }
+    }
+}
+
+/// The Action Log text for a **read-only** tool, or `None` for a mutating one.
+///
+/// Written by the drain from the command rather than by the tool, because a
+/// read changes no state and so has no state method to log through. Built
+/// *before* the command is applied, so a deferred `screenshot` lines up in
+/// order with the commands around it rather than at readback.
+pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command) -> Option<String> {
+    // A call that named no reconstruction read the selected one, and the log
+    // should say which that was rather than leaving the row ambiguous.
+    let named = |label: &Option<String>| match label {
+        Some(label) => label.clone(),
+        None => state
+            .selected_recon
+            .and_then(|id| render::label_of(state, id))
+            .unwrap_or_else(|| "(none selected)".to_string()),
+    };
+    Some(match command {
+        Command::GetScene => "get_scene".to_string(),
+        Command::ListCameraImages {
+            reconstruction_label,
+            offset,
+            limit,
+        } => format!(
+            "list_camera_images {} {offset}..{}",
+            named(reconstruction_label),
+            offset + limit
+        ),
+        Command::GetCameraImage {
+            reconstruction_label,
+            camera_image,
+        } => format!(
+            "get_camera_image {} {}",
+            named(reconstruction_label),
+            camera_image_text(camera_image)
+        ),
+        Command::GetCameraIntrinsics {
+            reconstruction_label,
+            camera_intrinsics_index,
+        } => format!(
+            "get_camera_intrinsics {} #{camera_intrinsics_index}",
+            named(reconstruction_label)
+        ),
+        Command::GetPoint { point } => format!("get_point {}", point_text(point)),
+        Command::Screenshot { max_dimension } => {
+            let [width, height] = screenshot_size(viewer, *max_dimension);
+            format!("screenshot {width}×{height}")
+        }
+        _ => return None,
+    })
+}
+
+/// `images/IMG_0007.jpg`, or `#7` where the call named an index.
+fn camera_image_text(selector: &CameraImageSel) -> String {
+    match selector {
+        CameraImageSel::Index(index) => format!("#{index}"),
+        CameraImageSel::Name(name) => name.clone(),
+    }
+}
+
+/// A point query as the user would have typed it.
+fn point_text(query: &crate::goto_point::PointQuery) -> String {
+    match query {
+        crate::goto_point::PointQuery::Index(index) => format!("#{index}"),
+        crate::goto_point::PointQuery::Qualified { hash, index } => format!("pt3d_{hash}_{index}"),
+    }
+}
+
+/// The size a screenshot taken this frame would come back at.
+///
+/// The viewport as last laid out, shrunk by `max_dimension` exactly as
+/// `App::screenshot` shrinks the pixels — so the log line and the image agree.
+fn screenshot_size(viewer: &Viewer3D, max_dimension: Option<u32>) -> [u32; 2] {
+    let [width, height] = viewer.panel_size;
+    let Some(limit) = max_dimension else {
+        return [width, height];
+    };
+    let longest = width.max(height);
+    if longest <= limit || longest == 0 {
+        return [width, height];
+    }
+    let scale = f64::from(limit) / f64::from(longest);
+    [
+        ((f64::from(width) * scale).round() as u32).max(1),
+        ((f64::from(height) * scale).round() as u32).max(1),
+    ]
 }
 
 /// The reply every selection tool returns: the resulting `selection` block.

@@ -3,12 +3,13 @@
 
 //! Dock layout types and tab rendering.
 //!
-//! Defines the six-panel dock layout (Scene, 3D Viewer, Image Browser, Image
-//! Detail, Point Track Detail, Intrinsics) and the `TabViewer` implementation
-//! that renders each panel's content.
+//! Defines the seven-panel dock layout (Scene, 3D Viewer, Image Browser, Image
+//! Detail, Point Track Detail, Intrinsics, Action Log) and the `TabViewer`
+//! implementation that renders each panel's content.
 
 use egui_dock::TabViewer;
 
+use crate::action_log::Kind;
 use crate::image_browser::ImageBrowser;
 use crate::image_detail::ImageDetail;
 use crate::intrinsics_detail::IntrinsicsDetail;
@@ -31,6 +32,7 @@ pub(crate) enum Tab {
     ImageDetail,
     PointTrackDetail,
     IntrinsicsDetail,
+    ActionLog,
 }
 
 impl Tab {
@@ -42,6 +44,7 @@ impl Tab {
             Tab::ImageDetail => "Image Detail",
             Tab::PointTrackDetail => "Point Track",
             Tab::IntrinsicsDetail => "Intrinsics",
+            Tab::ActionLog => "Action Log",
         }
     }
 }
@@ -101,6 +104,10 @@ impl TabViewer for TabContext<'_> {
                     self.viewer_3d
                         .show_hud(ui, self.state, self.diagnostics, self.handler_ok);
                 }
+                // Read before the node is borrowed out of the scene: the status
+                // line is derived from the whole log, and the viewport call
+                // below holds the log mutably for the keyboard bindings.
+                let status = self.state.status_message();
                 // Fetched only after `show_hud` has handed back its `&mut
                 // AppState`: the node borrows `state.scene`, and the two cannot
                 // overlap.
@@ -120,7 +127,7 @@ impl TabViewer for TabContext<'_> {
                         &mut selection,
                         self.state.show_grid,
                         self.state.length_scale,
-                        self.state.status_message.as_deref(),
+                        status.as_deref(),
                         self.gesture_events,
                         self.scroll_input,
                         self.state.show_controls_help,
@@ -128,6 +135,7 @@ impl TabViewer for TabContext<'_> {
                         self.scene_texture_id,
                         self.hover_depth,
                         self.hover_pick,
+                        &mut self.state.action_log,
                     );
                     if selection != self.state.selected_image {
                         self.state.select_image(selection);
@@ -136,7 +144,7 @@ impl TabViewer for TabContext<'_> {
                     ui.centered_and_justified(|ui| {
                         ui.vertical_centered(|ui| {
                             ui.add_space(100.0);
-                            if let Some(ref msg) = self.state.status_message {
+                            if let Some(msg) = &status {
                                 ui.colored_label(egui::Color32::RED, msg);
                                 ui.add_space(20.0);
                             }
@@ -190,6 +198,7 @@ impl TabViewer for TabContext<'_> {
                         camera_view_image,
                         self.gesture_events,
                         self.scroll_input,
+                        &mut self.state.action_log,
                     );
                     // Held back rather than applied here: `select_image`
                     // wants `&mut AppState`, and `node` is borrowed out of the
@@ -209,13 +218,26 @@ impl TabViewer for TabContext<'_> {
                         let current_time = ui.input(|i| i.time);
                         let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d
-                                .animated_switch_camera_view(image, node, current_time);
+                            self.viewer_3d.animated_switch_camera_view(
+                                image,
+                                node,
+                                current_time,
+                                &mut self.state.action_log,
+                            );
                         } else {
-                            self.viewer_3d.enter_camera_view(image, node, current_time);
+                            self.viewer_3d.enter_camera_view(
+                                image,
+                                node,
+                                current_time,
+                                &mut self.state.action_log,
+                            );
                         }
                     }
-                    // Instant camera switch during animation playback.
+                    // Instant camera switch during animation playback. Logs
+                    // nothing: it follows the selection step that produced it,
+                    // and a `Looking through …` between every two
+                    // `Selected image …` would break the coalescing that keeps
+                    // a scrub to one line.
                     if let Some(img_idx) = response.request_camera_switch {
                         if self.viewer_3d.camera_view.is_some() {
                             self.viewer_3d
@@ -317,7 +339,11 @@ impl TabViewer for TabContext<'_> {
                         &mut self.state.intrinsics_display,
                     );
                     if let Some(point_idx) = detail_response.select_point {
-                        self.state.selected_point = Some(PointRef::new(id, point_idx));
+                        // Through the setter rather than the field: the point
+                        // is inside the selected reconstruction already, so the
+                        // coupling rules are a no-op here — but the setter is
+                        // also what records the selection.
+                        self.state.select_point(PointRef::new(id, point_idx));
                     }
                     if detail_response.has_pointer {
                         // Detail owns hover state when it has the pointer.
@@ -395,10 +421,19 @@ impl TabViewer for TabContext<'_> {
                         let current_time = ui.input(|i| i.time);
                         let image = ImageRef::new(id, img_idx);
                         if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d
-                                .animated_switch_camera_view(image, node, current_time);
+                            self.viewer_3d.animated_switch_camera_view(
+                                image,
+                                node,
+                                current_time,
+                                &mut self.state.action_log,
+                            );
                         } else {
-                            self.viewer_3d.enter_camera_view(image, node, current_time);
+                            self.viewer_3d.enter_camera_view(
+                                image,
+                                node,
+                                current_time,
+                                &mut self.state.action_log,
+                            );
                         }
                     }
                     if track_response.has_pointer {
@@ -452,6 +487,9 @@ impl TabViewer for TabContext<'_> {
                     });
                 }
             }
+            // The one tab with no empty state: an empty scene still has a
+            // session, and the log is exactly what says so.
+            Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
         }
     }
 
@@ -487,10 +525,19 @@ impl TabContext<'_> {
             if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon) {
                 let current_time = ui.input(|i| i.time);
                 if self.viewer_3d.camera_view.is_some() {
-                    self.viewer_3d
-                        .animated_switch_camera_view(image, node, current_time);
+                    self.viewer_3d.animated_switch_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
                 } else {
-                    self.viewer_3d.enter_camera_view(image, node, current_time);
+                    self.viewer_3d.enter_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
                 }
             }
         }
@@ -509,7 +556,8 @@ impl TabContext<'_> {
                 // Framed where the node is *drawn*, so zoom-to-fit on an aligned
                 // node lands on it rather than on its native coordinates.
                 let points = crate::scene::world_points(node);
-                self.zoom_to_fit(ui, &points);
+                let what = format!("Framed {}", node.label);
+                self.zoom_to_fit(ui, &points, what);
             }
         }
         // The same framing, over the images that share one lens instead of the
@@ -518,7 +566,8 @@ impl TabContext<'_> {
         if let Some(camera) = response.zoom_to_camera {
             if let Some(node) = crate::scene::node_by_id(&self.state.scene, camera.recon) {
                 let centres = crate::scene::camera_world_centres(node, camera.index());
-                self.zoom_to_fit(ui, &centres);
+                let what = format!("Framed camera #{} of {}", camera.index(), node.label);
+                self.zoom_to_fit(ui, &centres, what);
             }
         }
         // Alignment before the node lifecycle below: both take a `ReconId`, and
@@ -533,7 +582,13 @@ impl TabContext<'_> {
             self.state.reset_node_transform(id);
         }
         if let Some(id) = response.reload_node {
-            self.state.reload_node(id);
+            // The reload's own outcome is the caller's to report: `reload_node`
+            // returns its failure rather than logging it, so that an
+            // `open_reconstruction` of an already-open path can word the same
+            // failure the way an agent asked for it.
+            if let Err(message) = self.state.reload_node(id) {
+                self.state.action_log.fail(Kind::File, message);
+            }
             // The old id is gone for good, so its panel-local textures are
             // unreachable rather than merely stale — drop them anyway.
             self.forget_recon(id);
@@ -576,11 +631,18 @@ impl TabContext<'_> {
     /// Shared by the two zoom-to-fit requests the Scene panel makes — a whole
     /// node, and the images of one camera — so that "the same framing" is
     /// literally the same call rather than two that have to be kept in step.
-    fn zoom_to_fit(&mut self, ui: &egui::Ui, points: &[nalgebra::Point3<f64>]) {
+    ///
+    /// `what` is the Action Log text, recorded only when the framing actually
+    /// happened: before the viewport has been laid out once there is no aspect
+    /// ratio to fit against, and nothing moved.
+    fn zoom_to_fit(&mut self, ui: &egui::Ui, points: &[nalgebra::Point3<f64>], what: String) {
         if let Some(aspect) = self.viewer_3d.panel_aspect() {
             let current_time = ui.input(|i| i.time);
             self.viewer_3d
                 .zoom_to_fit_points(points, aspect, current_time);
+            if !points.is_empty() {
+                self.state.action_log.record(Kind::View, what);
+            }
         }
     }
 

@@ -647,7 +647,15 @@ impl App {
                                 .pick_files()
                             {
                                 for path in paths {
-                                    app_state.load_file(&path);
+                                    // `load_file` returns its failure rather
+                                    // than logging it, so the menu writes the
+                                    // line in the vocabulary of the person who
+                                    // asked. See `AppState::load_file`.
+                                    if let Err(message) = app_state.load_file(&path) {
+                                        app_state
+                                            .action_log
+                                            .fail(crate::action_log::Kind::File, message);
+                                    }
                                 }
                             }
                             ui.close();
@@ -869,9 +877,15 @@ impl App {
                                     image,
                                     node,
                                     current_time,
+                                    &mut self.state.action_log,
                                 );
                             } else {
-                                self.viewer_3d.enter_camera_view(image, node, current_time);
+                                self.viewer_3d.enter_camera_view(
+                                    image,
+                                    node,
+                                    current_time,
+                                    &mut self.state.action_log,
+                                );
                             }
                         }
                     }
@@ -883,8 +897,27 @@ impl App {
                     // Clicked on background (non-Alt) — deselect. The image
                     // goes; the camera it named stays, per the coupling rule
                     // in `AppState::select_image`.
+                    //
+                    // One entry for the click rather than one per field it
+                    // dropped: the two inner calls are muted and what they
+                    // between them achieved is recorded once.
+                    let had_image = self.state.selected_image.is_some();
+                    let had_point = self.state.selected_point.is_some();
+                    self.state.action_log.mute();
                     self.state.select_image(None);
                     self.state.selected_point = None;
+                    self.state.action_log.unmute();
+                    let text = match (had_image, had_point) {
+                        (true, true) => Some("Cleared selection"),
+                        (true, false) => Some("Deselected image"),
+                        (false, true) => Some("Deselected point"),
+                        (false, false) => None,
+                    };
+                    if let Some(text) = text {
+                        self.state
+                            .action_log
+                            .record(crate::action_log::Kind::Selection, text);
+                    }
                 }
                 None => {}
             }

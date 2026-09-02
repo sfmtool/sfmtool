@@ -485,7 +485,10 @@ impl Viewer3D {
         rect: Rect,
         node: &SceneNode,
         selected_image: &mut Option<ImageRef>,
+        log: &mut crate::action_log::ActionLog,
     ) {
+        use crate::action_log::Kind;
+
         let reconstruction = &node.recon;
         let recon_id = node.id;
         ui.input(|i| {
@@ -493,16 +496,17 @@ impl Viewer3D {
             if i.key_pressed(egui::Key::Z) {
                 if let Some(image) = selected_image.filter(|s| s.recon == recon_id) {
                     // Z with frustum selected = view through camera
-                    self.enter_camera_view(image, node, current_time);
+                    self.enter_camera_view(image, node, current_time, log);
                 } else {
                     // Z with no selection = zoom to fit, on where the node is
                     // drawn rather than on its native coordinates.
                     let aspect = rect.width() as f64 / rect.height() as f64;
-                    self.zoom_to_fit_points(
-                        &crate::scene::world_points(node),
-                        aspect,
-                        current_time,
-                    );
+                    let points = crate::scene::world_points(node);
+                    let framed = !points.is_empty() && aspect > 0.0 && !aspect.is_nan();
+                    self.zoom_to_fit_points(&points, aspect, current_time);
+                    if framed {
+                        log.record(Kind::View, format!("Framed {}", node.label));
+                    }
                 }
             }
             // ,/. navigate to previous/next image. In camera view mode this
@@ -552,7 +556,9 @@ impl Viewer3D {
                     // Shift+Home = full view reset
                     self.camera = ViewportCamera::default();
                     self.view_initialized = false;
+                    log.record(Kind::View, "Reset the view");
                 } else {
+                    log.record(Kind::View, "Levelled the horizon");
                     // Home = level horizon: reset world_up to Z-up,
                     // re-orient camera to align with new up without moving
                     self.camera.world_up = Vector3::z();

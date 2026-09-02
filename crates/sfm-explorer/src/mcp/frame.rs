@@ -14,7 +14,7 @@
 
 use image::{ImageEncoder, ImageFormat};
 
-use super::{apply, Deferred, Outcome, Reply, Request, ToolError, ToolOutput};
+use super::{apply_as_agent, Deferred, Outcome, Reply, Request, ToolError, ToolOutput};
 use crate::App;
 
 impl App {
@@ -37,12 +37,21 @@ impl App {
         if requests.is_empty() {
             return;
         }
+        // Split so the application phase can be a plain function over
+        // `(&mut AppState, &mut Viewer3D)` — which is what puts the whole of
+        // it, the Action Log's actor switch included, under headless test.
+        let mut commands = Vec::with_capacity(requests.len());
+        let mut replies = Vec::with_capacity(requests.len());
         for Request { command, reply } in requests {
-            log::debug!("MCP: applying {command:?}");
-            match apply(&mut self.state, &mut self.viewer_3d, command) {
+            commands.push(command);
+            replies.push(reply);
+        }
+        let outcomes = apply_as_agent(&mut self.state, &mut self.viewer_3d, commands);
+        for (outcome, reply) in outcomes.into_iter().zip(replies) {
+            match outcome {
+                // A dropped receiver means the client hung up mid-call, which
+                // is normal and not worth a log line.
                 Outcome::Done(answer) => {
-                    // A dropped receiver means the client hung up mid-call,
-                    // which is normal and not worth a log line.
                     let _ = reply.send(answer);
                 }
                 Outcome::Deferred(deferred) => self.mcp_deferred.push((deferred, reply)),

@@ -15,6 +15,7 @@
 
 use eframe::egui;
 
+use crate::action_log::Kind;
 use crate::state::AppState;
 
 use super::Viewer3D;
@@ -95,6 +96,50 @@ fn section(
         ui.label(egui::RichText::new(title).strong());
     });
     let _ = header.body(body);
+}
+
+/// `on` / `off`, for a checkbox's Action Log entry.
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+/// One HUD checkbox, recorded as `Grid off` when the click changed it.
+///
+/// A helper rather than an open-coded pair per control: there are seven of
+/// them, they all write straight into the state they govern, and
+/// `response.changed()` is the only signal that this frame's value is a new
+/// one.
+fn checkbox(ui: &mut egui::Ui, log: &mut crate::action_log::ActionLog, on: &mut bool, label: &str) {
+    let response = ui.checkbox(on, label);
+    let value = *on;
+    log.changed(&response, Kind::Display, || {
+        format!("{label} {}", on_off(value))
+    });
+}
+
+/// One HUD slider, recorded as `Point size 3.0` when the drag changed it.
+///
+/// `build` rather than a ready-made [`egui::Slider`], because the widget holds
+/// `value` mutably for as long as it exists and the entry needs to read the
+/// value it *left behind*: building inside ends that borrow at the `add`.
+///
+/// A drag records once a frame while it is moving; those entries coalesce into
+/// a single line carrying the value it was let go at, which is the granularity
+/// wanted and needs no `drag_stopped` plumbing.
+fn slider(
+    ui: &mut egui::Ui,
+    log: &mut crate::action_log::ActionLog,
+    value: &mut f32,
+    text: impl FnOnce(f32) -> String,
+    build: impl for<'a> FnOnce(&'a mut f32) -> egui::Slider<'a>,
+) {
+    let response = ui.add(build(&mut *value));
+    let now = *value;
+    log.changed(&response, Kind::Display, || text(now));
 }
 
 impl Viewer3D {
@@ -189,40 +234,74 @@ impl Viewer3D {
         let has_patches = has_patch_data(state);
 
         section(ui, "layers", "Layers", true, |ui| {
-            ui.checkbox(&mut state.show_points, "Points");
-            ui.checkbox(&mut state.show_camera_images, "Camera Images");
-            ui.checkbox(&mut state.show_grid, "Grid");
+            checkbox(ui, &mut state.action_log, &mut state.show_points, "Points");
+            checkbox(
+                ui,
+                &mut state.action_log,
+                &mut state.show_camera_images,
+                "Camera Images",
+            );
+            checkbox(ui, &mut state.action_log, &mut state.show_grid, "Grid");
             // Greyed rather than hidden: unlike the Patches *section*, the
             // toggle stays visible so the capability remains discoverable on a
             // reconstruction that happens not to carry patches.
-            ui.add_enabled(
-                has_patches,
-                egui::Checkbox::new(&mut state.show_patches, "Patches"),
-            )
-            .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
-            ui.checkbox(&mut state.show_points_at_infinity, "Points at ∞")
+            let patches = ui
+                .add_enabled(
+                    has_patches,
+                    egui::Checkbox::new(&mut state.show_patches, "Patches"),
+                )
+                .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
+            let on = state.show_patches;
+            state.action_log.changed(&patches, Kind::Display, || {
+                format!("Patches {}", on_off(on))
+            });
+            let infinity = ui
+                .checkbox(&mut state.show_points_at_infinity, "Points at ∞")
                 .on_hover_text("Draw w = 0 points — directions with no parallax");
+            let on = state.show_points_at_infinity;
+            state.action_log.changed(&infinity, Kind::Display, || {
+                format!("Points at ∞ {}", on_off(on))
+            });
         });
 
         section(ui, "size", "Size", true, |ui| {
-            ui.add(
-                egui::Slider::new(&mut state.point_size_log2, -3.0..=3.0)
-                    .text("Points")
-                    .fixed_decimals(1),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.point_size_log2,
+                |v| format!("Point size {v:.1}"),
+                |v| {
+                    egui::Slider::new(v, -3.0..=3.0)
+                        .text("Points")
+                        .fixed_decimals(1)
+                },
             );
             if ui.button("Reset point size").clicked() {
                 state.point_size_log2 = 0.0;
+                state.action_log.record(Kind::Display, "Point size 0.0");
             }
-            ui.add(
-                egui::Slider::new(&mut state.infinity_point_px, 1.0..=16.0)
-                    .text("∞ (px)")
-                    .fixed_decimals(1),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.infinity_point_px,
+                |v| format!("∞ point size {v:.1} px"),
+                |v| {
+                    egui::Slider::new(v, 1.0..=16.0)
+                        .text("∞ (px)")
+                        .fixed_decimals(1)
+                },
             );
-            ui.add(
-                egui::Slider::new(&mut state.length_scale, 0.001..=100.0)
-                    .logarithmic(true)
-                    .text("Scene")
-                    .fixed_decimals(3),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.length_scale,
+                |v| format!("Scene scale {v:.3}"),
+                |v| {
+                    egui::Slider::new(v, 0.001..=100.0)
+                        .logarithmic(true)
+                        .text("Scene")
+                        .fixed_decimals(3)
+                },
             );
         });
 
@@ -230,20 +309,38 @@ impl Viewer3D {
         // common reconstruction that carries no patch bitmaps.
         if has_patches {
             section(ui, "patches", "Patches", false, |ui| {
-                ui.add(
-                    egui::Slider::new(&mut state.patch_opacity, 0.0..=1.0)
-                        .text("Opacity")
-                        .fixed_decimals(2),
+                slider(
+                    ui,
+                    &mut state.action_log,
+                    &mut state.patch_opacity,
+                    |v| format!("Patch opacity {v:.2}"),
+                    |v| {
+                        egui::Slider::new(v, 0.0..=1.0)
+                            .text("Opacity")
+                            .fixed_decimals(2)
+                    },
                 );
-                ui.add(
-                    egui::Slider::new(&mut state.patch_size_log2, -3.0..=3.0)
-                        .text("Size")
-                        .fixed_decimals(1),
+                slider(
+                    ui,
+                    &mut state.action_log,
+                    &mut state.patch_size_log2,
+                    |v| format!("Patch size {v:.1}"),
+                    |v| {
+                        egui::Slider::new(v, -3.0..=3.0)
+                            .text("Size")
+                            .fixed_decimals(1)
+                    },
                 );
-                ui.add(
-                    egui::Slider::new(&mut state.patch_alpha_cutoff, 0.0..=1.0)
-                        .text("Edge cutoff")
-                        .fixed_decimals(2),
+                slider(
+                    ui,
+                    &mut state.action_log,
+                    &mut state.patch_alpha_cutoff,
+                    |v| format!("Patch edge cutoff {v:.2}"),
+                    |v| {
+                        egui::Slider::new(v, 0.0..=1.0)
+                            .text("Edge cutoff")
+                            .fixed_decimals(2)
+                    },
                 );
             });
         }
@@ -258,42 +355,80 @@ impl Viewer3D {
             if response.changed() {
                 self.camera.fov = fov_degrees.to_radians();
             }
+            // The same text the MCP `set_view` fov form records, so the two
+            // ways to change one number read as one action.
+            state.action_log.changed(&response, Kind::Display, || {
+                format!("Field of view {fov_degrees:.1}°")
+            });
             if ui.button("Reset FOV").clicked() {
                 self.camera.fov = std::f64::consts::FRAC_PI_4;
+                state.action_log.record(
+                    Kind::Display,
+                    format!("Field of view {:.1}°", self.camera.fov.to_degrees()),
+                );
             }
         });
 
         // Four parameters that were plumbed to the GPU but had no widget at
         // all — they could only be changed by editing the defaults in state.rs.
         section(ui, "advanced", "Advanced", false, |ui| {
-            ui.add(
-                egui::Slider::new(&mut state.edl_line_thickness, 0.5..=8.0)
-                    .text("EDL width")
-                    .fixed_decimals(1),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.edl_line_thickness,
+                |v| format!("EDL width {v:.1}"),
+                |v| {
+                    egui::Slider::new(v, 0.5..=8.0)
+                        .text("EDL width")
+                        .fixed_decimals(1)
+                },
             );
-            ui.add(
-                egui::Slider::new(&mut state.frustum_size_multiplier, 0.05..=5.0)
-                    .logarithmic(true)
-                    .text("Frustum")
-                    .fixed_decimals(2),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.frustum_size_multiplier,
+                |v| format!("Frustum size {v:.2}"),
+                |v| {
+                    egui::Slider::new(v, 0.05..=5.0)
+                        .logarithmic(true)
+                        .text("Frustum")
+                        .fixed_decimals(2)
+                },
             );
-            ui.add(
-                egui::Slider::new(&mut state.target_size_multiplier, 0.05..=5.0)
-                    .logarithmic(true)
-                    .text("Target")
-                    .fixed_decimals(2),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.target_size_multiplier,
+                |v| format!("Target size {v:.2}"),
+                |v| {
+                    egui::Slider::new(v, 0.05..=5.0)
+                        .logarithmic(true)
+                        .text("Target")
+                        .fixed_decimals(2)
+                },
             );
-            ui.add(
-                egui::Slider::new(&mut state.target_fog_multiplier, 0.5..=100.0)
-                    .logarithmic(true)
-                    .text("Target fog")
-                    .fixed_decimals(1),
+            slider(
+                ui,
+                &mut state.action_log,
+                &mut state.target_fog_multiplier,
+                |v| format!("Target fog {v:.1}"),
+                |v| {
+                    egui::Slider::new(v, 0.5..=100.0)
+                        .logarithmic(true)
+                        .text("Target fog")
+                        .fixed_decimals(1)
+                },
             );
         });
 
         section(ui, "debug", "Debug", false, |ui| {
-            ui.checkbox(&mut state.show_controls_help, "Controls help");
-            ui.checkbox(&mut state.show_fps, "Frame rate");
+            checkbox(
+                ui,
+                &mut state.action_log,
+                &mut state.show_controls_help,
+                "Controls help",
+            );
+            checkbox(ui, &mut state.action_log, &mut state.show_fps, "Frame rate");
             // The touchpad counters used to be burned into the top-right corner
             // of every frame. They are developer instrumentation, so they live
             // here now and are off unless this section is open.

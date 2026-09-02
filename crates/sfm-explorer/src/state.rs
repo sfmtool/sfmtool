@@ -3,6 +3,7 @@
 
 //! Shared application state.
 
+use crate::action_log::{ActionLog, Kind};
 use crate::align::{self, AlignOptions};
 use crate::goto_point::{self, GotoPointDialog};
 use crate::resect::{self, ResectFrom};
@@ -251,8 +252,14 @@ pub struct AppState {
     /// carve ragged edges away.
     pub patch_alpha_cutoff: f32,
 
-    /// Status message shown in the UI (e.g. loading errors).
-    pub status_message: Option<String>,
+    /// Every action taken in this session, by whoever took it.
+    ///
+    /// A field of the state rather than a panel's own, so that every method
+    /// here which owns a change also owns the record of it — and so the
+    /// viewport status line can be a one-row window onto the log
+    /// ([`AppState::status_message`]) instead of a second piece of state that
+    /// can disagree with it. See [`crate::action_log`].
+    pub action_log: ActionLog,
 
     /// Log2 multiplier on the auto-computed point size.
     /// 0.0 = use auto size, positive = larger, negative = smaller.
@@ -399,7 +406,7 @@ impl AppState {
             patch_opacity: 1.0,
             patch_size_log2: 0.0,
             patch_alpha_cutoff: 0.0,
-            status_message: None,
+            action_log: ActionLog::new(),
             point_size_log2: 0.0,
             show_points_at_infinity: true,
             infinity_point_px: 3.0,
@@ -433,9 +440,13 @@ impl AppState {
     pub fn append_node(&mut self, mut node: SceneNode) -> ReconId {
         node.label = unique_label(&self.scene, &node.label);
         let id = node.id;
-        self.status_message = None;
         self.scene.push(node);
+        // Muted: arriving *is* a selection change, but the caller's own entry
+        // ("Opened x from …", "Loaded demo data", "Resected …") is the action,
+        // and a `Selected reconstruction x` beneath it would say nothing more.
+        self.action_log.mute();
         self.select_recon(id);
+        self.action_log.unmute();
         self.hovered_image = None;
         self.hovered_point = None;
         // Arriving also ends any solo: you opened this file to look at it, and
@@ -449,15 +460,20 @@ impl AppState {
     /// Opening a path that is already loaded reloads that node in place instead
     /// — the predictable interpretation of "open this again", and it doubles as
     /// a refresh.
-    pub fn load_file(&mut self, path: &std::path::Path) {
+    ///
+    /// A failure is **returned, not logged**: the File menu records it as
+    /// `Failed to load …`, the MCP drain as `open_reconstruction failed: …`,
+    /// and one failure that logged itself as well would appear twice, in two
+    /// vocabularies. Success is logged here, because there the text is the same
+    /// whoever asked.
+    pub fn load_file(&mut self, path: &std::path::Path) -> Result<ReconId, String> {
         if let Some(id) = self
             .scene
             .iter()
             .find(|n| n.path.as_deref() == Some(path))
             .map(|n| n.id)
         {
-            self.reload_node(id);
-            return;
+            return self.reload_node(id);
         }
         match SfmrReconstruction::load(path) {
             Ok(recon) => {
@@ -467,12 +483,21 @@ impl AppState {
                     recon.image_count(),
                     path.display()
                 );
-                self.append_node(SceneNode::from_path(path, recon));
+                // Recorded after the append, which is what deduplicates the
+                // label: the entry should name the node as the tree does
+                // (`global (2)`), not the file stem the node arrived with.
+                let id = self.append_node(SceneNode::from_path(path, recon));
+                let label = self.label_of(id);
+                self.action_log.record(
+                    Kind::File,
+                    format!("Opened {label} from {}", path.display()),
+                );
+                Ok(id)
             }
             Err(e) => {
                 let msg = format!("Failed to load {}: {}", path.display(), e);
                 log::error!("{}", msg);
-                self.status_message = Some(msg);
+                Err(msg)
             }
         }
     }
@@ -480,6 +505,14 @@ impl AppState {
     /// Append a node of generated demo data.
     pub fn load_demo(&mut self, num_points: usize) {
         self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
+        self.action_log.record(Kind::File, "Loaded demo data");
+    }
+
+    /// A node's label, or a placeholder if it has already left the scene.
+    fn label_of(&self, id: ReconId) -> String {
+        self.node(id)
+            .map(|node| node.label.clone())
+            .unwrap_or_default()
     }
 
     /// Re-read a node's file from disk, keeping its place in tree order, its
@@ -489,17 +522,29 @@ impl AppState {
     /// entity count, so every index-keyed cache entry for the old id is wrong;
     /// a new id makes all of them unreachable rather than merely stale, which
     /// is the same guarantee that makes closing a node safe. Returns the new id,
-    /// or `None` for a demo node (no file to re-read) or a failed read.
-    pub fn reload_node(&mut self, id: ReconId) -> Option<ReconId> {
-        let index = self.scene.iter().position(|n| n.id == id)?;
-        let path = self.scene[index].path.clone()?;
+    /// or the message for a demo node (no file to re-read) or a failed read.
+    ///
+    /// Like [`AppState::load_file`], a failure is returned rather than logged:
+    /// the caller is the one that knows whether it was asked for as a reload or
+    /// as an `open_reconstruction` of a path that happened to be loaded.
+    pub fn reload_node(&mut self, id: ReconId) -> Result<ReconId, String> {
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == id)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let path = self.scene[index].path.clone().ok_or_else(|| {
+            format!(
+                "{} was generated, not loaded from a file, so there is nothing to re-read.",
+                self.scene[index].label
+            )
+        })?;
         let recon = match SfmrReconstruction::load(&path) {
             Ok(recon) => recon,
             Err(e) => {
                 let msg = format!("Failed to reload {}: {}", path.display(), e);
                 log::error!("{}", msg);
-                self.status_message = Some(msg);
-                return None;
+                return Err(msg);
             }
         };
         let mut node = SceneNode::from_path(&path, recon);
@@ -519,8 +564,10 @@ impl AppState {
         if was_solo {
             self.solo = Some(new_id);
         }
-        self.status_message = None;
-        Some(new_id)
+        let label = self.label_of(new_id);
+        self.action_log
+            .record(Kind::File, format!("Reloaded {label}"));
+        Ok(new_id)
     }
 
     /// Remove a node from the scene and unwind everything that pointed into it.
@@ -529,6 +576,9 @@ impl AppState {
     /// next frame; the camera view is dropped by the same frame's check in
     /// `app.rs`, which covers *every* way a node can leave the scene.
     pub fn close_node(&mut self, id: ReconId) {
+        let Some(label) = self.node(id).map(|node| node.label.clone()) else {
+            return;
+        };
         self.scene.retain(|n| n.id != id);
         self.forget_recon(id);
         if self.selected_recon == Some(id) {
@@ -543,10 +593,16 @@ impl AppState {
             self.solo = None;
         }
         self.resect_matches.remove(&id);
+        self.action_log
+            .record(Kind::File, format!("Closed {label}"));
     }
 
     /// Clear the whole scene.
+    ///
+    /// One entry, not one per node: `Close All` is a single action, and a
+    /// twelve-node scene should not push twelve lines through the log for it.
     pub fn close_all(&mut self) {
+        let closed = self.scene.len();
         self.scene.clear();
         self.selected_recon = None;
         self.solo = None;
@@ -559,7 +615,10 @@ impl AppState {
         self.full_res_cache.clear();
         self.resect_matches.clear();
         self.resect_matches_cache = None;
-        self.status_message = None;
+        if closed > 0 {
+            self.action_log
+                .record(Kind::File, format!("Closed all ({closed})"));
+        }
     }
 
     /// Drop every cache entry and every selection/hover ref belonging to `id`.
@@ -583,10 +642,16 @@ impl AppState {
     /// reconstruction, so no two panels ever show different files' selections.
     /// Hover is exempt — it is transient and may touch any visible node.
     pub fn select_recon(&mut self, id: ReconId) {
+        let moved = self.selected_recon != Some(id);
         self.selected_recon = Some(id);
         self.selected_image = self.selected_image.filter(|i| i.recon == id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon == id);
         self.selected_point = self.selected_point.filter(|p| p.recon == id);
+        if moved {
+            let label = self.label_of(id);
+            self.action_log
+                .record(Kind::Selection, format!("Selected reconstruction {label}"));
+        }
     }
 
     /// Solo `id`, or end the solo if it is already the soloed node.
@@ -596,7 +661,26 @@ impl AppState {
     /// were. Soloing a second node moves the solo rather than adding to it —
     /// "show only this one" has one answer.
     pub fn toggle_solo(&mut self, id: ReconId) {
-        self.solo = (self.solo != Some(id)).then_some(id);
+        self.set_solo((self.solo != Some(id)).then_some(id));
+    }
+
+    /// Solo one node, or end the solo — the *set* form, which the MCP `set_solo`
+    /// tool needs because an agent issuing a toggle cannot know the outcome
+    /// without reading the scene first, and a retried call would undo itself.
+    ///
+    /// [`AppState::toggle_solo`] resolves the click into a request and comes
+    /// through here, so the two cannot disagree about what soloing does or
+    /// about what the log says it did.
+    pub fn set_solo(&mut self, solo: Option<ReconId>) {
+        if self.solo == solo {
+            return;
+        }
+        self.solo = solo;
+        let text = match solo {
+            Some(id) => format!("Soloed {}", self.label_of(id)),
+            None => "Ended the solo".to_string(),
+        };
+        self.action_log.record(Kind::Scene, text);
     }
 
     /// The camera an image uses, when the image ref still resolves.
@@ -618,13 +702,35 @@ impl AppState {
     /// would be a surprise. A second `Esc`, finding no image, clears the
     /// camera through [`AppState::select_camera`].
     pub fn select_image(&mut self, image: Option<ImageRef>) {
+        let moved = self.selected_image != image;
+        let had_one = self.selected_image.is_some();
         self.selected_image = image;
         let Some(image) = image else {
+            if moved && had_one {
+                self.action_log.record(Kind::Selection, "Deselected image");
+            }
             return;
         };
         self.selected_recon = Some(image.recon);
         self.selected_camera = self.camera_of(image);
         self.selected_point = self.selected_point.filter(|p| p.recon == image.recon);
+        if moved {
+            let text = format!(
+                "Selected image {} in {}",
+                self.image_name(image),
+                self.label_of(image.recon)
+            );
+            self.action_log.record(Kind::Selection, text);
+        }
+    }
+
+    /// An image's `.sfmr` name, or a placeholder when the ref no longer
+    /// resolves. Only ever used to build a log entry.
+    fn image_name(&self, image: ImageRef) -> String {
+        self.node(image.recon)
+            .and_then(|node| node.recon.images.get(image.index()))
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| format!("#{}", image.index()))
     }
 
     /// Select a camera, and with it the reconstruction that owns it.
@@ -640,6 +746,8 @@ impl AppState {
     /// recon-scoped filters, [`AppState::select_image`] — either clears it or
     /// derives it from an image, so the invariant has one door.
     pub fn select_camera(&mut self, camera: Option<CameraRef>) {
+        let moved = self.selected_camera != camera;
+        let had_one = self.selected_camera.is_some() || self.selected_image.is_some();
         self.selected_camera = camera;
         let Some(camera) = camera else {
             // Clearing the camera clears the image with it. An image implies
@@ -647,6 +755,10 @@ impl AppState {
             // the state the invariant forbids — and the guarantee is that no
             // caller *can* reach it, not that no caller currently tries.
             self.selected_image = None;
+            if had_one {
+                self.action_log
+                    .record(Kind::Selection, "Deselected camera intrinsics");
+            }
             return;
         };
         self.selected_recon = Some(camera.recon);
@@ -657,6 +769,42 @@ impl AppState {
             self.selected_image = None;
         }
         self.selected_point = self.selected_point.filter(|p| p.recon == camera.recon);
+        if moved {
+            let text = format!(
+                "Selected camera intrinsics #{} in {}",
+                camera.index(),
+                self.label_of(camera.recon)
+            );
+            self.action_log.record(Kind::Selection, text);
+        }
+    }
+
+    /// Drop every selection at once, as one action.
+    ///
+    /// One entry rather than three: `clear_selection` is a single request, and
+    /// the image, the intrinsics and the point going together is what it means
+    /// rather than three things that happened to coincide.
+    pub fn clear_selection(&mut self) {
+        if self.selected_image.is_none()
+            && self.selected_camera.is_none()
+            && self.selected_point.is_none()
+        {
+            return;
+        }
+        self.action_log.mute();
+        // `select_camera(None)` clears the image with it, so "everything" is
+        // that followed by the point.
+        self.select_camera(None);
+        self.selected_point = None;
+        self.action_log.unmute();
+        self.action_log.record(Kind::Selection, "Cleared selection");
+    }
+
+    /// Drop the point selection alone.
+    pub fn deselect_point(&mut self) {
+        if self.selected_point.take().is_some() {
+            self.action_log.record(Kind::Selection, "Deselected point");
+        }
     }
 
     /// Open the Go to Point dialog, prefilled with the selected point's ID.
@@ -672,10 +820,19 @@ impl AppState {
 
     /// Select a 3D point, and with it the reconstruction that owns it.
     pub fn select_point(&mut self, point: PointRef) {
+        let moved = self.selected_point != Some(point);
         self.selected_point = Some(point);
         self.selected_recon = Some(point.recon);
         self.selected_image = self.selected_image.filter(|i| i.recon == point.recon);
         self.selected_camera = self.selected_camera.filter(|c| c.recon == point.recon);
+        if moved {
+            let id = self
+                .node(point.recon)
+                .map(|node| crate::scene::point_id(&node.recon, point.index()))
+                .unwrap_or_else(|| format!("#{}", point.index()));
+            self.action_log
+                .record(Kind::Selection, format!("Selected point {id}"));
+        }
     }
 
     /// Fit `source`'s transform so it lands on top of `target`, and report the
@@ -704,17 +861,21 @@ impl AppState {
             (self.scene[si].label.clone(), self.scene[ti].label.clone());
         let fit =
             align::align_reconstructions(&self.scene[si].recon, &self.scene[ti].recon, options);
-        self.status_message = Some(match fit {
+        match fit {
             Ok(fit) => {
                 // `compose` applies the receiver first: the fit takes the source
                 // into the target's own coordinates, then the target's transform
                 // takes those into world space.
                 self.scene[si].transform = fit.transform.compose(&self.scene[ti].transform);
                 self.transform_epoch += 1;
-                align::success_message(&source_label, &target_label, &fit)
+                let message = align::success_message(&source_label, &target_label, &fit);
+                self.action_log.record(Kind::Scene, message);
             }
-            Err(reason) => align::failure_message(&source_label, &target_label, &reason),
-        });
+            Err(reason) => {
+                let message = align::failure_message(&source_label, &target_label, &reason);
+                self.action_log.fail(Kind::Scene, message);
+            }
+        }
     }
 
     /// Re-estimate one image's pose against the rest of its reconstruction, and
@@ -734,24 +895,41 @@ impl AppState {
     /// at all produces no node and only a status line.
     ///
     /// Runs synchronously; see `specs/gui/resect-image.md`, "Performance".
+    ///
+    /// The outcome is one Action Log entry, and the node arrival and selection
+    /// change inside are muted: a resection is one action, and its result — not
+    /// its mechanics — is what the log and the status line should carry.
     pub fn resect_image(&mut self, source: ReconId, image: usize, from: ResectFrom) {
-        let Some(index) = self.scene.iter().position(|n| n.id == source) else {
-            return;
-        };
+        self.action_log.mute();
+        let outcome = self.resect_image_inner(source, image, from);
+        self.action_log.unmute();
+        match outcome {
+            Some(Ok(message)) => self.action_log.record(Kind::Scene, message),
+            Some(Err(message)) => self.action_log.fail(Kind::Scene, message),
+            None => {}
+        }
+    }
+
+    /// The resection itself. `None` when it could not be attempted at all
+    /// (no such node, no such image); otherwise the message the outer method
+    /// records, as success or refusal.
+    fn resect_image_inner(
+        &mut self,
+        source: ReconId,
+        image: usize,
+        from: ResectFrom,
+    ) -> Option<Result<String, String>> {
+        let index = self.scene.iter().position(|n| n.id == source)?;
         let label = self.scene[index].label.clone();
-        let Some(name) = self.scene[index]
+        let name = self.scene[index]
             .recon
             .images
             .get(image)
-            .map(|i| i.name.clone())
-        else {
-            return;
-        };
+            .map(|i| i.name.clone())?;
         let basename = resect::basename(&name).to_string();
         if from == ResectFrom::Matches {
             if let Err(reason) = self.load_resect_matches(source) {
-                self.status_message = Some(resect::failure_message(&basename, &label, &reason));
-                return;
+                return Some(Err(resect::failure_message(&basename, &label, &reason)));
             }
         }
 
@@ -778,18 +956,19 @@ impl AppState {
         let mut resected = match outcome {
             Ok(resected) => resected,
             Err(error) => {
-                self.status_message = Some(resect::failure_message(
+                return Some(Err(resect::failure_message(
                     &basename,
                     &label,
                     &error.to_string(),
-                ));
-                return;
+                )));
             }
         };
         let report = resected.reports.pop().expect("one target, one report");
+        // A refused *estimate* still produces the node, so the message is
+        // decided here and carried out past the scene edit below.
         let message = match &report.refusal {
-            Some(reason) => resect::failure_message(&basename, &label, reason),
-            None => resect::success_message(&basename, &label, &report),
+            Some(reason) => Err(resect::failure_message(&basename, &label, reason)),
+            None => Ok(resect::success_message(&basename, &label, &report)),
         };
 
         let derived_label = format!("{label} (resected {basename})");
@@ -835,9 +1014,7 @@ impl AppState {
         // The point of the action is to look at the image that moved, so the
         // point track detail opens on it immediately.
         self.select_image(Some(ImageRef::new(new_id, image)));
-        // Last: `append_node` clears the status line, and what happened here is
-        // exactly what the line should say.
-        self.status_message = Some(message);
+        Some(message)
     }
 
     /// Make sure [`AppState::resect_matches_cache`] holds the `.matches` file
@@ -877,13 +1054,35 @@ impl AppState {
             return;
         };
         node.transform = sfmtool_core::Se3Transform::identity();
+        let label = node.label.clone();
         self.transform_epoch += 1;
-        self.status_message = None;
+        self.action_log
+            .record(Kind::Scene, format!("Reset transform of {label}"));
     }
 
     /// Look up a loaded node by id.
     pub fn node(&self, id: ReconId) -> Option<&SceneNode> {
         node_by_id(&self.scene, id)
+    }
+
+    /// The scene and the log at once.
+    ///
+    /// A split borrow, for the two callers that write a node's display state
+    /// and record what they wrote in the same breath — the Scene panel's eyes
+    /// and tint, and the MCP `set_reconstruction_display` tool. Going through
+    /// `&mut self` twice would borrow the whole state twice.
+    pub fn scene_and_log(&mut self) -> (&mut [SceneNode], &mut ActionLog) {
+        (&mut self.scene, &mut self.action_log)
+    }
+
+    /// What the viewport status line shows: the text of the most recent
+    /// non-query Action Log entry, prefixed `MCP: ` when an agent took it.
+    ///
+    /// Derived rather than stored, so a successful action cannot leave a stale
+    /// error on screen and a refusal cannot go unreported. See
+    /// [`crate::action_log::ActionLog::status_line`].
+    pub fn status_message(&self) -> Option<String> {
+        self.action_log.status_line()
     }
 
     /// The selected image's local index, when it belongs to `recon`.
