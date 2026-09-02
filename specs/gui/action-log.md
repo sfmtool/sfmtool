@@ -45,11 +45,10 @@ second, non-active tab, so the viewer still opens on the image strip:
 └────────┴──────────────────────────────────┘
 ```
 
-The user can drag it anywhere `egui_dock` allows, as with every other tab. It
-is not closeable, like every other tab, and there is no menu item for it: the
-layout is not persisted and no View menu exists (see
-[viewport-hud.md](../gui/viewport-hud.md) for why), so a closeable tab would be
-lost until the next launch.
+The user can drag it anywhere `egui_dock` allows, and close it, as with every
+other tab. **Panels ▸ Action Log** ticks it while it is open and re-opens it
+behind the Image Browser when it is not
+([panel-layout.md](panel-layout.md) § "Home positions").
 
 ### The list
 
@@ -70,9 +69,13 @@ monospace font, oldest at the top, newest at the bottom:
 ```
 
 Three columns: the local time of day to the second, the actor, and the text.
-Hovering a row shows the full timestamp with date and UTC offset. A text longer
-than the row is truncated with an ellipsis and shown whole in the same tooltip;
-rows never wrap, because the list is virtualized on a uniform row height.
+Hovering a row shows the full timestamp with date and UTC offset, the entry's
+kind (`Kind::label`, which for a query is the tool's name), and the text. A
+text longer than the row is truncated with an ellipsis and shown whole in that
+same tooltip; rows never wrap, because the list is virtualized on a uniform row
+height. The kind rides on the tooltip rather than in a column of its own: it is
+what a row is *about*, which the text usually says already, and the one time it
+is worth asking is the one time a hover costs nothing.
 
 Colour carries the rest of the entry's shape, so the columns stay clean:
 
@@ -174,6 +177,10 @@ strings, with `{…}` for the values that vary.
 | Animation | no | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
 | Animation | no | Viewer | `Animation reached the end at {name}` |
 | Animation | no | User | `Animation rate {fps} fps` |
+| Layout | no | User | `Opened {Panel} panel` / `Closed {Panel} panel` / `Raised {Panel} panel` |
+| Layout | no | User | `Reset layout` |
+| Layout | no | User | `Saved layout to {path}` / `Loaded layout from {path}` |
+| Layout | no | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
 | Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `screenshot {w}×{h}` |
 | any | never | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
 
@@ -215,8 +222,11 @@ Not logged, by design:
   the ordinary selection path, so they *are* entries — but they coalesce into
   a single `Selected image …` line that keeps updating under the
   `Animation playing` entry, which is the granularity wanted.
-- Dock layout changes (dragging a tab, resizing a split). `egui_dock` owns
-  these and the app never observes them.
+- Dock rearrangements the user makes with the mouse: dragging a tab, resizing a
+  split, floating a node. `egui_dock` owns these and reports none of them. What
+  the menu *asks for* is logged (the `Layout` rows above); the arrangement
+  itself is read back from the dock at any moment. See
+  [panel-layout.md](panel-layout.md) § "In the Action Log".
 - MCP requests the viewer never sees: a call whose arguments fail the schema is
   refused on the HTTP thread as a protocol error, and a request that times out
   or is dropped is reported to the client only. The log records what the
@@ -298,12 +308,16 @@ pub(crate) enum Kind {
     View,
     Display,
     Animation,
+    /// Which panels are docked where. See `specs/gui/panel-layout.md`.
+    Layout,
     /// A read-only MCP tool, by name. Coalesces per tool.
     Query(&'static str),
 }
 
 impl Kind {
     pub(crate) fn coalesces(self) -> bool;
+    /// The word the row tooltip shows; for a query, the tool's name.
+    pub(crate) fn label(self) -> &'static str;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -587,7 +601,7 @@ spec already promises.
 |-----------|---------|---------|
 | `ActionLog::CAPACITY` | `10_000` | Entries kept; the oldest is dropped past this and the toolbar reports the count dropped |
 | `ActionLog::COALESCE_WINDOW` | `1 s` | Maximum gap between like entries for the newer to replace the older |
-| bottom split fraction (`default_dock_state`) | `0.8` | Unchanged; the log shares the Image Browser node rather than taking its own |
+| bottom split fraction (`Layout::default`) | `0.8` | Unchanged; the log shares the Image Browser node rather than taking its own |
 | time format, list | `%H:%M:%S` | Local time, `jiff::tz::TimeZone::system()` resolved once |
 | time format, tooltip and clipboard | `%Y-%m-%d %H:%M:%S` | Tooltip adds the offset, `%:z` |
 
@@ -646,7 +660,7 @@ already in would record nothing and the test would be asserting the fixture.
 
 Layout, in `dock/tests.rs`:
 
-- `default_dock_state()` has a bottom node holding `[ImageBrowser, ActionLog]`
+- `Layout::default()` has a bottom node holding `[ImageBrowser, ActionLog]`
   with `ImageBrowser` active.
 
 Scene-graph and resection tests that read `state.status_message` moved to

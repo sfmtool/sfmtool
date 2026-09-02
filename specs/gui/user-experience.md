@@ -180,9 +180,14 @@ no patch frames and bitmaps; the Layers "Patches" toggle stays, greyed, so the
 capability remains discoverable. See
 [patch-rendering.md](patch-rendering.md#ui-controls).
 
-There is no longer a **View** menu — with the display controls in the HUD and
-the dock panels permanent, nothing app-global was left for it to hold. **File**
+There is no **View** menu — with the display controls in the HUD, nothing
+app-global about the *viewport* is left for it to hold. **File**
 (Open / Load Demo Data / Quit) is unchanged.
+
+**Panels** lists the seven docked panels with a tick beside each open one, and
+holds Reset Layout and Save / Load Layout. It is the way back from a closed
+panel, which is what makes every panel closeable in the first place. See
+[panel-layout.md](panel-layout.md).
 
 **Go** (Go to Point…, Ctrl/Cmd+G) is the one other menu, and the one thing that
 did turn out to be app-global: it takes a typed or pasted point index — or a

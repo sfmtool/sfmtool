@@ -255,7 +255,8 @@ reconstructions.
 A fifth dock tab, `Tab::SceneGraph`, title **"Scene"**. Default layout: a new
 left split of the root (~18% width), with the existing 3D Viewer / Image
 Detail / Point Track / Image Browser arrangement to its right. Like the other
-tabs it is not closeable, and can be re-docked freely.
+tabs it can be re-docked freely and closed, and **Panels ▸ Scene** brings it
+back ([panel-layout.md](panel-layout.md)).
 
 ### Tree rows
 

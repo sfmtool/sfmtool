@@ -49,7 +49,9 @@ root, and everything below describes the arrangement to its right.
   member, so the viewer opens on the strip.
 
 Since we use `egui_dock`, the user can re-dock any panel anywhere (float, reorder tabs,
-resize splits, etc.).
+resize splits, etc.), and close any of them — the **Panels** menu is what
+re-opens one and what puts this grid back
+([panel-layout.md](panel-layout.md)).
 
 ## Panel Interaction Model
 
@@ -272,44 +274,47 @@ impl egui_dock::TabViewer for TabContext<'_> {
 
 ### DockState Initialization
 
-`crate::default_dock_state`, in `crates/sfm-explorer/src/lib.rs`:
+The default grid is `Layout::default()`, in
+`crates/sfm-explorer/src/layout.rs`, and the viewer starts on
+`Layout::default().to_dock()` — the same value Panels ▸ Reset Layout restores.
+Written as a tree of panel names rather than as a sequence of splits, it is:
 
 ```rust
-let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
-let surface = dock_state.main_surface_mut();
-// Scene takes a narrow left split of the root.
-let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
-// The bottom strip: the image browser, with the Action Log behind it.
-let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser, Tab::ActionLog]);
-// The right-hand column: Image Detail, with Point Track and Intrinsics behind it.
-let [_viewer, _detail] = surface.split_right(
-    top,
-    0.67,
-    vec![Tab::ImageDetail, Tab::PointTrackDetail, Tab::IntrinsicsDetail],
-);
+Split { split: LeftRight, fraction: 0.18,
+    first:  Leaf { tabs: [SceneGraph] },
+    second: Split { split: TopBottom, fraction: 0.8,
+        first:  Split { split: LeftRight, fraction: 0.67,
+            first:  Leaf { tabs: [Viewer3D] },
+            second: Leaf { tabs: [ImageDetail, PointTrackDetail, IntrinsicsDetail] } },
+        second: Leaf { tabs: [ImageBrowser, ActionLog] } } }
 ```
 
-`fraction` is the share of the **first** child in layout order — the new
-left-hand node for `split_left`, but the old top node for `split_below`.
-(`egui_dock` 0.19's doc comment says "the old node" for both, which is true only
-of Right and Below; 0.21 gave the Scene panel four fifths of the window when it
-was read the other way.) A leaf built from a `Vec` opens on its **first** tab —
-`LeafNode::new` sets `active: TabIndex(0)` — which is what puts Image Detail and
-the Image Browser in front of the tabs they share a node with.
+`fraction` is the share of the **first** child in layout order.
+(`egui_dock` 0.19's doc comment says "the old node" for both directions of a
+split, which is true only of Right and Below; 0.21 gave the Scene panel four
+fifths of the window when it was read the other way. `Layout::to_dock` only
+ever splits Right and Below for exactly that reason.) A leaf opens on its
+**first** tab, which is what puts Image Detail and the Image Browser in front
+of the tabs they share a node with.
+
+> _Changed (2026-09-01): the panels are **closeable**, and the grid above is
+> the layout they start in rather than the only one they have. See
+> [panel-layout.md](panel-layout.md) for the Panels menu, the home position a
+> re-opened panel lands at, and the layout file._
 
 ### Integration in app.rs
 
-Replace the current `egui::CentralPanel` block with:
+The dock fills the central panel, under the menu bar:
 
 ```rust
 egui::CentralPanel::default().show(ctx, |ui| {
-    DockArea::new(&mut dock_state)
-        .style(egui_dock::Style::from_egui(ui.style().as_ref()))
-        .show_inside(ui, &mut tab_context);
+    DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
 });
 ```
 
-The menu bar (`TopBottomPanel::top`) remains unchanged above the dock area.
+`dock` is taken out of `AppState` for the duration of the call and put back
+straight after, because `TabContext` holds the state mutably at the same time —
+see [panel-layout.md](panel-layout.md) § "Implementation notes".
 
 ## Panel Specifications
 

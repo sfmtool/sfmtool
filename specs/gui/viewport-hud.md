@@ -37,10 +37,12 @@ parameters that were plumbed to the GPU but had no widget at all
 readout](point-cloud-rendering.md#ui--shipped)).
 
 **Stays in the menu bar** — File (Open / Load Demo Data / Quit), and nothing
-else. With the display controls gone there is no app-global viewport state left
-for a **View** menu to hold, and the dock panels are permanent
-(`TabViewer::closeable` is false), so it is deleted rather than repurposed. A
-menu kept alive for one synthetic entry is worse than no menu.
+else. With the display controls gone there is no app-global *viewport* state
+left for a **View** menu to hold, so it is deleted rather than repurposed. A
+menu kept alive for one synthetic entry is worse than no menu. (What later
+turned out to be app-global about the window is which panels are in it, and
+that is a **Panels** menu of its own — [panel-layout.md](panel-layout.md) — not
+a View menu revived.)
 
 **Out of scope** — the Image Detail and Image Browser toolbars. They already
 follow the panel-owns-its-controls rule and are not touched.
@@ -232,8 +234,9 @@ move and the overlay toggles) and delete the View menu outright, leaving File
 as the only menu.
 
 Phase 2 first repurposed View to dock-panel visibility rather than deleting it.
-That was dropped after live use: the panels are permanent, so the menu existed
-only to justify itself.
+That was dropped after live use: the panels could not be closed at the time, so
+the menu existed only to justify itself. Panel visibility came back later, on
+its own terms and under its own name — [panel-layout.md](panel-layout.md).
 
 ---
 

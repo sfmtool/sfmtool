@@ -10,18 +10,17 @@ an arrangement to a JSON file so it can be loaded again, in this session or
 another. The file's schema is the viewer's own, written to be read and written
 by hand, and it is the one description of a layout the viewer has: the same
 schema an agent driving the viewer over MCP reads and writes
-([mcp-server.md](../gui/mcp-server.md) holds the tools; this spec holds the
+([mcp-server.md](mcp-server.md) holds the tools; this spec holds the
 shape).
 
 The reason a panel can be closed at all is that the window is increasingly
 shared. A human and an agent looking at the same viewer want different things
 from it at different moments — the agent wants the 3D viewport as large as
 possible before a screenshot, the human wants the Action Log in front to see
-what the agent just did — and a fixed seven-panel grid serves neither. The
-panels were permanent until now, on the principle that a panel with no way back
-is a trap. A **Panels** menu that lists all seven, ticks the open ones, and
-re-opens a closed one with a click is the way back, and is what makes closing
-safe to allow.
+what the agent just did — and a fixed seven-panel grid serves neither. What
+makes closing safe to allow is that there is a way back: a panel with no way
+back is a trap. The **Panels** menu is that way back — it lists all seven,
+ticks the open ones, and re-opens a closed one with a click.
 
 ## What the user sees
 
@@ -57,8 +56,8 @@ Panels
   ─────────────
     Reset Layout
   ─────────────
-    Save Layout…
-    Load Layout…
+    Save Layout...
+    Load Layout...
 ```
 
 The seven entries are in default-layout order, each a checkbox reading the
@@ -70,12 +69,12 @@ panel is one the user can see the tab of.
 
 **Reset Layout** replaces the whole arrangement — main surface and any floating
 windows — with `Layout::default()`, the seven-panel grid
-[multi-panel-image-browser.md](../gui/multi-panel-image-browser.md) § "Default
+[multi-panel-image-browser.md](multi-panel-image-browser.md) § "Default
 Layout" describes. Panel state survives, as it does for a close.
 
-**Save Layout…** opens a save dialog (filter `*.json`, default name
+**Save Layout...** opens a save dialog (filter `*.json`, default name
 `layout.json`) and writes the current arrangement as § "The layout file".
-**Load Layout…** opens an open dialog with the same filter, parses the file, and
+**Load Layout...** opens an open dialog with the same filter, parses the file, and
 replaces the arrangement with it. A file that does not parse or does not
 validate is refused as a whole — the layout on screen is untouched — and the
 reason is recorded in the Action Log as a failed `Layout` entry, which puts it
@@ -124,8 +123,8 @@ numbers in the code (§ "Parameters").
 
 ### In the Action Log
 
-Every menu action records an entry of a new kind, `Kind::Layout`, non-coalescing
-— two panels closed in a row are two events:
+Every menu action records an entry of its own kind, `Kind::Layout`,
+non-coalescing — two panels closed in a row are two events:
 
 | Action | Entry |
 |--------|-------|
@@ -133,8 +132,8 @@ Every menu action records an entry of a new kind, `Kind::Layout`, non-coalescing
 | open (menu) | `Opened Action Log panel` |
 | raise | `Raised Point Track panel` |
 | Reset Layout | `Reset layout` |
-| Save Layout… | `Saved layout to C:/work/layout.json` |
-| Load Layout… | `Loaded layout from C:/work/layout.json` |
+| Save Layout... | `Saved layout to C:/work/layout.json` |
+| Load Layout... | `Loaded layout from C:/work/layout.json` |
 | a load refused | *failed:* `Load layout from …: <reason>` |
 
 Drag rearrangements the user makes with the mouse — moving a tab, resizing a
@@ -149,27 +148,45 @@ by menu or, later, by tool call; the arrangement itself is what
 One JSON document, version-tagged, describing the main surface's split tree and
 any floating windows. The default layout, as the viewer writes it:
 
-```jsonc
+```json
 {
   "sfm_explorer_layout": 1,
   "main": {
-    "split": "left_right", "fraction": 0.18,
-    "first":  { "tabs": ["scene"], "active": "scene" },
+    "split": "left_right",
+    "fraction": 0.18,
+    "first": {
+      "tabs": ["scene"],
+      "active": "scene"
+    },
     "second": {
-      "split": "top_bottom", "fraction": 0.8,
+      "split": "top_bottom",
+      "fraction": 0.8,
       "first": {
-        "split": "left_right", "fraction": 0.67,
-        "first":  { "tabs": ["viewer_3d"], "active": "viewer_3d" },
-        "second": { "tabs": ["image_detail", "point_track", "intrinsics"],
-                    "active": "image_detail" }
+        "split": "left_right",
+        "fraction": 0.67,
+        "first": {
+          "tabs": ["viewer_3d"],
+          "active": "viewer_3d"
+        },
+        "second": {
+          "tabs": ["image_detail", "point_track", "intrinsics"],
+          "active": "image_detail"
+        }
       },
-      "second": { "tabs": ["image_browser", "action_log"],
-                  "active": "image_browser" }
+      "second": {
+        "tabs": ["image_browser", "action_log"],
+        "active": "image_browser"
+      }
     }
   },
   "windows": []
 }
 ```
+
+That is the file byte for byte: two-space indentation, one key to a line, a
+leaf's `tabs` kept on one line because a list of panel names reads as a list,
+and a trailing newline. `layout::tests` compares `Layout::default().to_json()`
+against exactly this document, so the two cannot drift.
 
 ### Vocabulary
 
@@ -213,21 +230,33 @@ window constraint, which drags it into view.
 ### Validation
 
 The file is validated as a whole before any of it is applied, and a refusal
-names what was wrong. The rules, each with its error:
+names what was wrong and **where**: every message below a node carries the path
+to it, so a refusal reads `main.second.first: unknown key "fracton"`. The rules,
+each with its message:
 
-- `sfm_explorer_layout` is present and equal to `1`. Anything else: *"Not a
-  layout file"* or *"Layout version 2 is newer than this viewer reads (1)"*.
-- Every panel name is one of the seven, else the message lists the seven.
-- **Every panel appears at most once** across `main` and every window. A
-  `Tab` is a singleton — one struct draws it — and two tabs with one identity
-  would draw one panel twice and confuse egui's widget ids. A panel that
-  appears nowhere is simply closed.
-- Every leaf has at least one tab; `active`, if present, is one of them.
-- Every `fraction` is strictly between 0 and 1.
-- **No unknown keys**, at any level. A typo in
-  `"fracton"` silently applying a default would leave the author believing the
-  file says something it does not — the same rule the MCP surface applies to
-  its arguments.
+- `sfm_explorer_layout` is present and a number. Otherwise `Not a layout file`
+  — checked before anything else, so a JSON file that is not a layout at all
+  says so rather than complaining about its own perfectly good keys.
+- It equals `1`: `Layout version 2 is newer than this viewer reads (1)`, or
+  `Layout version 0 is not one this viewer reads (1)`.
+- Every panel name is one of the seven: `unknown panel "viewer3d"; the panels
+  are scene, viewer_3d, image_browser, image_detail, point_track, intrinsics,
+  action_log`.
+- **Every panel appears at most once** across `main` and every window:
+  `panel "scene" appears more than once`. A `Tab` is a singleton — one struct
+  draws it — and two tabs with one identity would draw one panel twice and
+  confuse egui's widget ids. A panel that appears nowhere is simply closed.
+- Every leaf has at least one tab (`a leaf must have at least one tab`);
+  `active`, if present, is one of them (`active "intrinsics" is not one of this
+  leaf's tabs`).
+- Every `fraction` is strictly between 0 and 1: `fraction must be strictly
+  between 0 and 1, not 1.5`.
+- **No unknown keys**, at any level: `unknown key "fracton"`. A typo silently
+  applying a default would leave the author believing the file says something
+  it does not — the same rule the MCP surface applies to its arguments.
+- A node carries `tabs` or `split` and is read as a leaf or a split
+  accordingly; one that carries neither is `a node must have either "tabs" (a
+  leaf) or "split" (a split)`.
 - `main` may be absent or `null`, meaning no panel is docked in the main
   surface. Together with an empty `windows` that is the all-closed state, which
   is valid.
@@ -238,9 +267,9 @@ panel a sliver is legal; `egui_dock` enforces its own minimum sizes on draw.
 ## Rust API
 
 `crates/sfm-explorer/src/layout.rs`, with the schema types, the conversions,
-and the panel operations. The dock state itself moves from `App` to
-`AppState`, so the operations that log are `AppState` methods and the MCP layer
-can later call the same ones the menu does.
+and the panel operations. The dock state lives on `AppState` rather than on
+`App`, so the operations that log are `AppState` methods and the MCP layer can
+later call the same ones the menu does.
 
 ```rust
 /// A dock arrangement, as the layout file spells it. Serializable, buildable
@@ -262,6 +291,10 @@ pub(crate) enum SplitDirection { LeftRight, TopBottom }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct LayoutWindow { pub tree: LayoutNode, pub rect: Option<LayoutRect> }
+
+/// Logical points, screen-anchored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LayoutRect { pub x: f32, pub y: f32, pub width: f32, pub height: f32 }
 
 pub(crate) const LAYOUT_VERSION: u64 = 1;
 
@@ -288,18 +321,24 @@ impl Layout {
     pub(crate) fn to_json(&self) -> String;
 }
 
-/// One violation, with the path to it. `Display` is the message the Action Log
-/// records and, later, the MCP tool returns.
+/// One violation, with the path to it. `Display` writes `<path>: <message>`,
+/// or just the message for a violation of the document itself — the text the
+/// Action Log records and, later, the MCP tool returns.
 pub(crate) struct LayoutError { pub path: String, pub message: String }
 
-/// `Tab`'s wire spelling, both ways. `Tab` gains `serde` derives with
-/// `rename_all = "snake_case"` and explicit renames where the title and the
-/// variant disagree (`SceneGraph` → `scene`, `PointTrackDetail` →
-/// `point_track`, `IntrinsicsDetail` → `intrinsics`).
+/// Where a panel goes when nothing of its default group is open.
+pub(crate) enum Home { Root, Edge { edge: egui_dock::Split, share: f32 } }
+
+/// `Tab`'s wire spelling, both ways, and its home. Hand-written rather than
+/// `serde`-derived: the file never passes through a `Deserialize`, and these
+/// two functions are also what the MCP tools will spell panels with.
 impl Tab {
     pub(crate) const ALL: [Tab; 7];           // default-layout order, the menu's order
     pub(crate) fn wire_name(self) -> &'static str;
     pub(crate) fn from_wire_name(name: &str) -> Option<Tab>;
+    /// All seven, comma-joined, as the unknown-panel message lists them.
+    pub(crate) fn all_wire_names() -> String;
+    pub(crate) fn home(self) -> Home;
 }
 
 impl AppState {
@@ -316,6 +355,10 @@ impl AppState {
     pub(crate) fn apply_layout(&mut self, layout: &Layout) -> Result<(), LayoutError>;
     pub(crate) fn layout(&self) -> Layout;
 }
+
+/// The body of the Panels menu, drawn into an open `ui.menu_button("Panels", …)`.
+/// A function rather than inline in `app.rs` so a headless frame can draw it.
+pub(crate) fn panels_menu(ui: &mut egui::Ui, state: &mut AppState);
 ```
 
 **Why a schema of its own rather than `egui_dock`'s `serde` feature.** The
@@ -338,23 +381,23 @@ differently — the menu says where the file came from, an MCP tool says which
 tool — and a method that logged would have to be told. `show_panel` and
 `hide_panel` log themselves because they have one wording each.
 
-**Why the dock moves into `AppState`.** So that a layout operation is an
+**Why the dock lives on `AppState`.** So that a layout operation is an
 `AppState` method with the Action Log in reach, and so that the MCP `apply`
 seam — `(&mut AppState, &mut Viewer3D)`, deliberately without `App` — can drive
 the layout headlessly when the tools land. `DockState<Tab>` is plain data with
-no GPU or window behind it; `default_dock_state` already builds one in a unit
-test.
+no GPU or window behind it, which is why `layout::tests` can build and read
+whole arrangements with no window at all.
 
 ### Example
 
 ```rust
 use crate::layout::Layout;
 
-// Save Layout…
+// Save Layout...
 let text = state.layout().to_json();
 std::fs::write(&path, text)?;
 
-// Load Layout…
+// Load Layout...
 let layout = Layout::from_json(&std::fs::read_to_string(&path)?)?;
 state.apply_layout(&layout)?;
 state.action_log.record(Kind::Layout, format!("Loaded layout from {}", path.display()));
@@ -388,6 +431,16 @@ then recurses into both children, each of which overwrites its own index.
 `right`, `parent`); `from_dock` walks from `NodeIndex::root`, mapping
 `Node::Horizontal` to `left_right` and `Node::Vertical` to `top_bottom`, and
 must tolerate `Node::Empty` under a leaf (the heap is padded to a full level).
+The all-closed dock is the other edge: removing the root leaf's last tab
+*clears* the node vector, so `from_dock` reads no root at all and writes
+`main: null`. `to_dock` spells the same state the same way, with
+`remove_leaf(NodeIndex::root())` on a one-placeholder tree, rather than leaving
+behind a tabless leaf `egui_dock` would then have to remove itself.
+
+**A split with one readable child collapses to that child.** It cannot arise
+from a dock `egui_dock` is maintaining; tolerating it costs one match arm and
+means a layout describes the panel that is there rather than a split around
+nothing.
 
 **Floating windows.** `DockState::add_window(tabs)` creates a surface with a
 one-leaf tree; a window whose tree is a split is built by splitting that
@@ -396,16 +449,27 @@ surface's tree the same way as the main one. `WindowState::set_position` /
 until the window has been laid out, which is the case `LayoutWindow::rect` is
 `None` for.
 
-**`serde_json` stops being optional.** It was behind the `mcp` feature; the
-layout file needs it in every build, so it moves to a plain dependency and the
-feature list shrinks by one. `serde` itself is not needed: the file is read
-and written through `serde_json::Value`, and `Tab`'s wire spelling is
-`wire_name` / `from_wire_name`, which the MCP tools will use as well.
+**Writing the file.** `to_json` is a hand-written pretty-printer rather than
+`serde_json::to_string_pretty`, for two reasons: JSON objects have no key order
+a `Map` would preserve without `serde_json`'s `preserve_order` feature, and a
+leaf's `tabs` reads far better on one line than as seven. It is thirty lines,
+and the default's output is asserted verbatim against the document in § "The
+layout file".
 
-**`TabViewer::closeable` returns `true`, and `on_close` records the entry.**
-The close button is `egui_dock`'s; what the viewer adds is the log line. The
-comment in `app.rs` explaining why there is no View menu — "the dock panels
-are all permanent" — is retired with the premise.
+**`serde_json` is not optional.** It was behind the `mcp` feature; the layout
+file needs it in every build, so it is a plain dependency and the feature list
+is one shorter. `serde` itself is not needed: the file is read and written
+through `serde_json::Value`, and `Tab`'s wire spelling is `wire_name` /
+`from_wire_name`, which the MCP tools will use as well.
+
+**Closing is `egui_dock`'s, and `on_close` records the entry.** `TabViewer`
+has two hooks here and only one of them is live in 0.21.1: `closeable` is
+deprecated and never called by `DockArea`, while `is_closeable` decides, and
+defaults to `true`. So the viewer overrides neither — the close button and the
+removal are the crate's — and implements `on_close`, which logs `Closed …` and
+returns `OnCloseResponse::Close`. Anyone reaching for `closeable` to make one
+tab un-closeable (§ "Open questions") will find it has no effect; the hook that
+works is `is_closeable`.
 
 **`Go ▸ Go to Point` raises the Point Track panel through `show_panel`**, so
 a jump to a point with that panel closed opens it rather than silently finding
@@ -419,12 +483,12 @@ nothing to raise.
 | Scene home | left, `0.18` | § "Home positions" rule 3 (`layout::home`). |
 | Image Browser / Action Log home | below, `0.20` | Same. |
 | Image Detail / Point Track / Intrinsics home | right, `0.33` | Same. |
-| Save dialog default name | `layout.json` | `app.rs`, Panels ▸ Save Layout… |
+| Save dialog default name | `layout.json` | `app.rs`, Panels ▸ Save Layout... |
 
 ## Testing
 
 `crates/sfm-explorer/src/layout/tests.rs`, headless — a `DockState<Tab>` needs
-no window. The existing default-layout test in `dock/tests.rs` moves here.
+no window. The default-layout test lives here too, beside the layout it checks.
 
 - **The default round-trips:** `Layout::default().to_dock()` read back with
   `from_dock` equals `Layout::default()`; and through `to_json` / `from_json`
@@ -441,9 +505,10 @@ no window. The existing default-layout test in `dock/tests.rs` moves here.
   active tab (rule 1); any panel into an empty dock becomes the root.
 - **Hide then show keeps the others where they were.**
 - **Each validation rule refuses, with its message:** version missing, version
-  `2`, unknown panel name (listing the seven), a panel in two leaves, a panel
-  in `main` and in a window, an empty leaf, `active` not in `tabs`, `fraction`
-  of `0`, `1` and `1.5`, an unknown key at top level and inside a leaf.
+  `2` and version `0`, unknown panel name (listing the seven), a panel in two
+  leaves, a panel in `main` and in a window, an empty leaf, `active` not in
+  `tabs`, `fraction` of `0`, `1` and `1.5`, an unknown key at top level, inside
+  a leaf and inside a split, and a node that is neither.
 - **A refused load leaves the dock untouched.**
 - **All-closed is valid**, loads to an empty main surface, and `layout()` of
   an empty dock writes `main` absent and no `windows`.
@@ -452,9 +517,13 @@ no window. The existing default-layout test in `dock/tests.rs` moves here.
   and a failed entry for a refused load, each under `Kind::Layout`, and none
   of them coalesce.
 
-The menu itself is exercised by the existing `run_frame_headless` harness in
-`test_support`: a frame with the Panels menu open paints all seven titles,
-and clicking an entry toggles the panel — assert on `is_panel_open`.
+The menu itself is exercised through `test_support::painted_texts`, which is
+why `panels_menu` is a function taking a `Ui`: a headless frame draws the body
+and the test asserts it painted all seven panel titles and the three
+layout-wide items, and that drawing it changed nothing. What the *click* does
+is `show_panel` / `hide_panel`, tested directly against `is_panel_open` and the
+resulting `Layout` — synthesizing a pointer press at a widget rect would test
+egui's checkbox rather than anything this spec decides.
 
 ## Non-goals
 
@@ -469,7 +538,7 @@ and clicking an entry toggles the panel — assert on `is_panel_open`.
   struct each. A second Image Detail panel is a different design.
 - **Logging drag rearrangements** (§ "In the Action Log").
 - **The MCP tools.** `get_layout`, `set_layout`, `show_panel`, `hide_panel`
-  are specified in [mcp-server.md](../gui/mcp-server.md) once they exist; this
+  are specified in [mcp-server.md](mcp-server.md) once they exist; this
   spec is what they carry.
 
 ## Open questions
@@ -477,8 +546,8 @@ and clicking an entry toggles the panel — assert on `is_panel_open`.
 - **Should closing the 3D Viewer be confirmed, or its tab be un-closeable?**
   It is the panel the user is least likely to close on purpose and the one
   whose absence looks most like a broken viewer. The menu makes it a one-click
-  recovery; if that proves not enough, `closeable` can say no for that one tab
-  while the others keep the button.
+  recovery; if that proves not enough, `is_closeable` can say no for that one
+  tab while the others keep the button.
 - **Where the layout file lives by default.** The save dialog opens wherever
   the platform opens it. A workspace-relative default (`.sfmtool/layout.json`
   beside the reconstructions) would suit the CLI's workspace model, but the
