@@ -480,10 +480,10 @@ nothing to raise.
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `layout::LAYOUT_VERSION` | `1` | The `sfm_explorer_layout` value written and the only one read. |
-| Scene home | left, `0.18` | § "Home positions" rule 3 (`layout::home`). |
+| Scene home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
 | Image Browser / Action Log home | below, `0.20` | Same. |
 | Image Detail / Point Track / Intrinsics home | right, `0.33` | Same. |
-| Save dialog default name | `layout.json` | `app.rs`, Panels ▸ Save Layout... |
+| Save dialog default name | `layout.json` | `layout::DEFAULT_LAYOUT_FILE_NAME`, Panels ▸ Save Layout... |
 
 ## Testing
 
