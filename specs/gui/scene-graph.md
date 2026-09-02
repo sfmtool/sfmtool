@@ -763,15 +763,18 @@ The fit runs synchronously — by-cameras is trivially small, and by-points
 RANSAC over ~10⁵ correspondences is tens of milliseconds; if datasets outgrow
 that it moves to a background thread without UI change.
 
-Outcome feedback lands in the status message with correspondence count,
-inliers, and post-fit RMS residual:
+Outcome feedback is recorded in the Action Log and shown in the status line,
+with correspondence count, inliers, and post-fit RMS residual:
 `Aligned run_b → run_a: 214/243 cameras, RMS 0.031`. On failure (no shared
 images, too few correspondences, degenerate geometry, SVD failure) the
-transform is left untouched and the reason reported:
-`Align run_b → run_a failed: <reason>`. The status message is painted in the
-viewport overlay under the scene stats — `dock.rs`'s empty-state text only
-shows it when *nothing* is loaded, and an alignment by definition happens with
-two files open.
+transform is left untouched and the reason recorded as a **failed** entry:
+`Align run_b → run_a failed: <reason>`. The status line is the most recent
+non-query entry (see [action-log.md](action-log.md)), painted in the viewport
+overlay under the scene stats — `dock.rs`'s empty-state text only shows it when
+*nothing* is loaded, and an alignment by definition happens with two files open.
+Unlike a fit's outcome, the per-node eyes, the interaction cursor, the tint and
+the solo record entries of their own too, so a comparison session reads back as
+a list of what was toggled and when.
 
 "Inliers" means the RANSAC inlier count in point mode and the trimmed-refit's
 kept count in camera mode (which runs no RANSAC); the RMS is over that same

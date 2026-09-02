@@ -1,10 +1,5 @@
 # Action Log
 
-*Draft — describes the panel as it will be once implemented. The implementing
-PR moves this file to `specs/gui/action-log.md`, adds its row to
-`specs/gui/README.md`, and makes the sibling-spec edits listed under
-"Edits to standing specs" at the end.*
-
 ## Purpose
 
 A viewer that a human and an agent both drive needs a record of who did what,
@@ -168,13 +163,13 @@ strings, with `{…}` for the values that vary.
 | Selection | yes | User / MCP | `Selected image {name} in {label}` |
 | Selection | yes | User / MCP | `Selected camera intrinsics #{k} in {label}` |
 | Selection | yes | User / MCP | `Selected point {pt3d_id}` |
-| Selection | yes | User / MCP | `Cleared selection` / `Deselected image` / `Deselected point` |
+| Selection | yes | User / MCP | `Cleared selection` / `Deselected image` / `Deselected camera intrinsics` / `Deselected point` |
 | View | yes | User / MCP | `Framed the scene` / `Framed {label}` / `Framed camera #{k} of {label}` |
 | View | yes | User / MCP | `Looking through {name}` / `Left camera view` |
 | View | yes | User | `Levelled the horizon` / `Reset the view` |
 | View | yes | MCP | `Camera placed` / `Camera restored` / `Field of view {fov:.1}°` |
 | Display | yes | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
-| Display | yes | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0` |
+| Display | yes | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031` |
 | Animation | no | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
 | Animation | no | Viewer | `Animation reached the end at {name}` |
 | Animation | no | User | `Animation rate {fps} fps` |
@@ -191,7 +186,18 @@ Rules that the table implies:
   `Cleared selection` is one entry even though it deselects the image, the
   point and the intrinsics; a resection logs its result, not the internal node
   append it ends with. Inner calls are muted while the outer method runs
-  (§ "Rust API").
+  (§ "Rust API"). The one exception is deliberate: a
+  `set_reconstruction_display` naming several fields records **one entry per
+  field it changed**, because each of those fields has its own row above and is
+  its own thing to the person watching the window — the call is a batch, not an
+  action.
+- **`Looking through {name}` marks a deliberate entry into camera view** — a
+  double-click, `Z`, a Scene-tree or track-panel double-click, MCP
+  `set_view {look_through}`. The *instant* switch that `,` / `.` and animation
+  playback make while already in camera view records nothing: it follows a
+  selection step whose own `Selected image …` entry already names the image, and
+  a `Looking through …` between every two of those would break the coalescing
+  that keeps a scrub to one line.
 - **The go-to-point dialog, the viewport click, the browser strip, the scene
   tree and the `,` / `.` keys all log the same `Selected image …` text**,
   because all of them end in `AppState::select_image`. Which control was used
@@ -314,14 +320,22 @@ impl ActionLog {
     pub(crate) const CAPACITY: usize = 10_000;
     pub(crate) const COALESCE_WINDOW: jiff::SignedDuration = jiff::SignedDuration::from_secs(1);
 
+    /// A log formatting in the system's local time zone.
     pub(crate) fn new() -> Self;
+    /// A log formatting in `zone`. The tests use a fixed one.
+    pub(crate) fn with_zone(zone: jiff::tz::TimeZone) -> Self;
 
     /// Record a successful action as the current actor, now.
     pub(crate) fn record(&mut self, kind: Kind, text: impl Into<String>);
     /// Record a failed action as the current actor, now. Never coalesces.
     pub(crate) fn fail(&mut self, kind: Kind, text: impl Into<String>);
+    /// Record one entry as `actor`, restoring the standing one afterwards.
+    pub(crate) fn record_as(&mut self, actor: Actor, kind: Kind, text: impl Into<String>);
     /// Record a read-only MCP tool call: `Kind::Query(tool)`, coalescing per tool.
     pub(crate) fn query(&mut self, tool: &'static str, text: impl Into<String>);
+    /// Record `response.changed()` as one entry, building the text only then.
+    pub(crate) fn changed(&mut self, response: &egui::Response, kind: Kind,
+                          text: impl FnOnce() -> String);
     /// The `record` / `fail` primitives with an explicit instant, for tests.
     pub(crate) fn record_at(&mut self, at: jiff::Timestamp, kind: Kind, failed: bool, text: impl Into<String>);
 
@@ -333,7 +347,12 @@ impl ActionLog {
     pub(crate) fn mute(&mut self);
     pub(crate) fn unmute(&mut self);
 
-    pub(crate) fn entries(&self) -> impl ExactSizeIterator<Item = &Entry>;
+    /// Every entry, oldest first. Reversible, for `status_line`.
+    pub(crate) fn entries(&self) -> impl ExactSizeIterator<Item = &Entry> + DoubleEndedIterator;
+    /// One entry by position — what the virtualized list asks for, since it
+    /// lays out a slice of the rows rather than all of them.
+    pub(crate) fn get(&self, index: usize) -> Option<&Entry>;
+    pub(crate) fn len(&self) -> usize;
     pub(crate) fn dropped(&self) -> usize;
     pub(crate) fn clear(&mut self);
 
@@ -343,10 +362,27 @@ impl ActionLog {
 
     /// The whole log as clipboard text, one line per entry.
     pub(crate) fn to_clipboard_text(&self) -> String;
+    /// One entry in that same form — also the `log::info!` mirror's line.
+    pub(crate) fn line(&self, entry: &Entry) -> String;
+    /// `at` in this log's zone, through `jiff`'s `strftime`.
+    pub(crate) fn format(&self, at: jiff::Timestamp, fmt: &str) -> String;
 }
 
 /// The panel body. Draws the toolbar and the virtualized list into `ui`.
 pub(crate) fn show(ui: &mut egui::Ui, log: &mut ActionLog);
+```
+
+The module also owns the **texts a scene-graph change produces**, because the
+Scene panel and the MCP `set_reconstruction_display` tool both produce them and
+two rows that read the same must have done the same thing:
+
+```rust
+/// Which of a node's layers a visibility toggle governs.
+pub(crate) enum Layer { Node, Points, CameraImages, Patches, PointsAtInfinity }
+
+pub(crate) fn visibility_text(label: &str, layer: Layer, shown: bool) -> String;
+pub(crate) fn interactive_text(label: &str, interactive: bool) -> String;
+pub(crate) fn tint_text(label: &str, tint: crate::scene::NodeTint) -> String;
 ```
 
 And on `AppState`, replacing the `status_message: Option<String>` field:
@@ -355,8 +391,23 @@ And on `AppState`, replacing the `status_message: Option<String>` field:
 impl AppState {
     /// What the viewport status line shows. See `ActionLog::status_line`.
     pub fn status_message(&self) -> Option<String>;
+
+    /// The scene and the log at once — a split borrow, for the two callers
+    /// that write a node's display state and record what they wrote in the
+    /// same breath (the Scene panel's toggles, and the MCP display tool).
+    pub fn scene_and_log(&mut self) -> (&mut [SceneNode], &mut ActionLog);
 }
 ```
+
+Four `AppState` methods are new or changed shape, all so that an action has one
+owner that knows it happened:
+
+| Method | Why |
+|--------|-----|
+| `load_file(&Path) -> Result<ReconId, String>` | The failure is returned, not written, so the caller words it (§ "Threading and the MCP seam") |
+| `reload_node(ReconId) -> Result<ReconId, String>` | The same, in place of the old `Option` |
+| `set_solo(Option<ReconId>)` | The set form the MCP tool needs, with `toggle_solo` resolving a click into it — so one method owns the entry |
+| `clear_selection()` / `deselect_point()` | So that "drop everything" is one entry rather than the three deselects it is made of |
 
 ### Why it is shaped this way
 
@@ -367,9 +418,10 @@ MCP drain is the only place an agent's action enters the viewer, and it is one
 function called once per frame, so it sets the actor to `Mcp` before applying
 the frame's commands and restores `User` after (§ "Threading and the MCP
 seam"). Nothing else ever changes it except the viewer's own startup and
-animation-end entries, which set `Viewer` around a single `record`. A
-`debug_assert!` that the actor is `User` at the top of the drain catches an
-unbalanced set.
+animation-end entries, which use `record_as(Actor::Viewer, …)` — one entry with
+the standing actor restored, rather than a set the caller has to remember to
+undo. A `debug_assert!` that the actor is `User` at the top of the batch catches
+an unbalanced set.
 
 **Mute as a depth counter, not a flag.** Composite actions nest — `close_all`
 over `close_node`, `resect_image` over `append_node`, `clear_selection` over
@@ -406,11 +458,11 @@ let text = match self.solo {
 };
 self.action_log.record(Kind::Scene, text);
 
-// In the MCP drain, once per frame:
+// In `mcp::apply_as_agent`, once per frame:
 state.action_log.set_actor(Actor::Mcp);
-for Request { command, reply } in requests {
+for command in commands {
     let outcome = mcp::apply(state, viewer_3d, command);
-    // … refusals are logged here, see below …
+    // … reads and refusals are logged here, see below …
 }
 state.action_log.set_actor(Actor::User);
 ```
@@ -424,8 +476,17 @@ an entry for an agent's action is written in the same call that applies it,
 with no channel and no lock. The HTTP thread never logs; the events it alone
 sees (schema refusals, timeouts) are deliberately outside the log's scope.
 
-Within the drain, each applied command yields exactly one entry before
-coalescing:
+The drain splits into two: `mcp::apply_as_agent`, a plain function over
+`(&mut AppState, &mut Viewer3D, Vec<Command>)` that moves the actor, applies
+each command and writes the entries; and `App::drain_mcp`, which adds the
+channel — collecting the requests, calling it, and handing each answer back
+down its `oneshot`. The split is what puts the *attribution* under the same
+headless test as the command vocabulary, since `App` needs a GPU and a window
+and `apply_as_agent` needs neither.
+
+Within that batch, each applied command yields exactly one entry before
+coalescing, with the one exception named above (a multi-field
+`set_reconstruction_display` records one per field it changed):
 
 - A mutating tool's entry is written by the `AppState` / `Viewer3D` method it
   calls, with the text from the catalogue and actor `Mcp` because the drain
@@ -440,7 +501,7 @@ coalescing:
   receives. So that a failure is not logged twice, once by the method in its
   own words and once by the drain, **a method returns its failure rather than
   logging it, and the caller logs**: every `AppState` method the MCP layer
-  calls returns a `Result`. `load_file` therefore returns
+  calls that can fail returns a `Result`. `load_file` therefore returns
   `Result<ReconId, String>` and writes no entry on `Err`; the File menu logs
   `Failed to load …` from that `Err`, and the drain logs
   `open_reconstruction failed: …` from the same `Err`. One failure, one entry,
@@ -457,18 +518,35 @@ spec already promises.
 
 ## Implementation notes
 
-- **Where the `record` calls go** is the whole of the implementation risk, and
-  the seams are these. `AppState` mutating methods: `load_file`, `reload_node`,
+- **Where the `record` calls go** is the whole of the implementation, and the
+  seams are these. `AppState` mutating methods: `load_file`, `reload_node`,
   `close_node`, `close_all`, `select_recon`, `select_camera`, `select_image`,
-  `select_point`, `toggle_solo`, `align_node`, `resect_image`,
-  `reset_node_transform`, plus the demo loader. `Viewer3D` framing and
-  camera-view methods, which the `Z`, `Home`, scene-tree zoom and MCP `set_view`
-  paths all reach. The scene tree's eyes and tint radios and the HUD's
-  checkboxes and sliders, which write straight into the node or state today and
-  need a `record` on `response.changed()` — a small `changed(response, kind,
-  || text)` helper on `ActionLog` keeps those to one line each. The image
-  browser's play/pause/rate handling. Startup in `lib.rs` after the state is
-  built and before the CLI paths load, and the MCP server's listen report.
+  `select_point`, `clear_selection`, `deselect_point`, `set_solo`, `align_node`,
+  `resect_image`, `reset_node_transform`, plus the demo loader. `Viewer3D`'s
+  two camera-view *entries*, `enter_camera_view` and
+  `animated_switch_camera_view`, which take the log as an argument — the node
+  and the scene are borrowed out of the same `AppState` for the whole call, so
+  a `&mut AppState` alongside them would not typecheck; framing is recorded by
+  the caller instead (`dock.rs::zoom_to_fit`, the `Z` key, MCP `set_view`),
+  because only the caller knows whether it framed a node, a camera or the
+  scene. The scene tree's eyes, cursor and tint radios and the HUD's checkboxes
+  and sliders, which write straight into the node or state and record on
+  `clicked()` / `changed()` — `ActionLog::changed` and the panel's own `logged`
+  helper keep those to one line each. The image browser's play/pause/rate
+  handling. Startup in `lib.rs` before the CLI paths load — which is why the
+  CLI loads moved below `start_mcp`, so the log reads in the order the session
+  happened — and the MCP server's listen report.
+- **`response.changed()` alone does not mean somebody did something.** An
+  `egui::Slider` clamps and rounds the value it was handed and reports *that*
+  as a change, so the Scene slider — first drawn over a `length_scale` the
+  upload phase had only just derived from the point cloud — announced
+  `Scene scale 0.655` before the window had been touched. `ActionLog::changed`
+  therefore also requires the pointer to be down on the widget, a click, a
+  finished drag, or keyboard focus: an action needs an actor.
+- **The viewport's background click** clears the image and the point together.
+  Both inner calls are muted and one entry is recorded for the click:
+  `Cleared selection` when it dropped both, `Deselected image` or
+  `Deselected point` when it dropped one.
 - **Ordering with `append_node`.** `resect_image` writes its status last
   because `append_node` used to clear the field. With the log, `append_node`
   writes nothing and the clear is gone; `resect_image` records once at the end
@@ -485,7 +563,14 @@ spec already promises.
 - **Virtualized rows** use `ScrollArea::show_rows` with the monospace row
   height, as the scene tree's image list does. The uniform height is what
   forbids wrapping and what makes 10 000 entries free to scroll. Truncation is
-  `Label::truncate()`, and the tooltip carries the full text.
+  `Label::truncate()`, and the tooltip carries the full text. The time and
+  actor columns are **painted** into fixed-width allocated boxes rather than
+  laid out as labels, so the three columns line up down the list however wide
+  their contents are. **Latest** is a one-frame `vertical_scroll_offset` past
+  the end, which the scroll area clamps — the panel keeps no follow state.
+  A `Label` keeps its whole job text however few glyphs it drew, so a test
+  asking whether a row was truncated has to read the galley's *width*, not its
+  string.
 - **`stick_to_bottom` and `show_rows` compose** as long as the total row count
   passed is the current count; the log grows monotonically between clears, so
   the scroll offset stays valid.
@@ -532,27 +617,39 @@ Buffer rules, with `record_at` and fixed instants:
 Panel, headless:
 
 - The rows paint in order, oldest first, each as time, actor and text.
-- A text wider than the panel is elided and the frame does not panic.
+- A text wider than the panel is laid out no wider than the panel — read from
+  the galley's width, since the string survives truncation — and the frame does
+  not panic.
 - **Clear** empties the buffer and the next frame paints no rows.
 
-Attribution, in `mcp/tests.rs` beside the existing status-line test:
+Attribution, in `mcp/tests.rs` beside the existing status-line test. Every
+helper there routes through `apply_as_agent` rather than bare `apply`, because
+attribution is part of what an MCP call *is* and a test that skipped it would
+exercise a path the viewer never takes:
 
 - Applying each mutating `Command` records exactly one entry with actor `Mcp`,
-  and the actor is `User` again after the drain.
+  and the actor is `User` again afterwards.
 - Applying each read-only `Command` records one `Query` entry that
   `status_line()` does not report.
-- A refused command records one failed entry whose text is the refusal.
+- A deferred `screenshot` is logged when it is *applied*, at the size the
+  picture will come back at.
+- A refused command records one failed entry whose text is the refusal, and it
+  reaches the status line.
 - `open_reconstruction` on an unreadable path records exactly one failed entry.
 - The existing `a_mutating_call_announces_itself_in_the_status_line` passes
   unchanged against `status_message()`.
+
+The fixture those start from selects an image first and then clears the log:
+only a change is logged, so a command that asked for the state the scene was
+already in would record nothing and the test would be asserting the fixture.
 
 Layout, in `dock/tests.rs`:
 
 - `default_dock_state()` has a bottom node holding `[ImageBrowser, ActionLog]`
   with `ImageBrowser` active.
 
-Scene-graph and resection tests that read `state.status_message` today move
-to `status_message()` with no change in the strings they assert.
+Scene-graph and resection tests that read `state.status_message` moved to
+`status_message()` with no change in the strings they assert.
 
 ## Non-goals
 
@@ -574,31 +671,14 @@ to `status_message()` with no change in the strings they assert.
 ## Open questions
 
 - Whether CLI-argument loads should be marked, e.g. `Opened x from … (command
-  line)`. They are logged as `User` today, which is true, and the session
-  start entry immediately above them makes the origin obvious; left unmarked
-  until someone misses it.
+  line)`. They are logged as `User`, which is true, and the session start entry
+  immediately above them makes the origin obvious; left unmarked until someone
+  misses it.
 - Whether a `Display` entry for a slider should record the value at the end of
   the drag only (`drag_stopped`) rather than coalescing every intermediate
   value. Coalescing gives the same final line and needs no extra widget
-  plumbing, so it is the draft's choice.
-
-## Edits to standing specs
-
-For the implementing PR, so the standing specs keep describing the code:
-
-- `specs/gui/mcp-server.md` § "Threading": replace "Every mutating command
-  writes `AppState::status_message`, prefixed `MCP: opened global.sfmr`" with
-  the log contract — every applied command records an Action Log entry as
-  actor `Mcp`, and the status line shows the newest non-query entry prefixed
-  `MCP: `. § "`open_reconstruction`": the failure is returned by `load_file`,
-  not scraped from the status field. § "The Rust seam": `announce` is gone.
-  § "Errors": refusals are logged as failed entries.
-- `specs/gui/multi-panel-image-browser.md` § "Tab Model": the seventh variant.
-  § "Default Layout" and § "DockState Initialization": the bottom node is a
-  two-tab group, and the code block there is stale against `lib.rs` already
-  (it omits the Scene split) — rewrite it from `default_dock_state()`.
-- `specs/gui/scene-graph.md` § alignment feedback: "lands in the status
-  message" becomes "is recorded in the Action Log and shown in the status
-  line".
-- `specs/gui/resect-image.md`: same substitution for the resection outcome.
-- `specs/gui/README.md`: the new row.
+  plumbing, so it is what the implementation does.
+- Whether a multi-field `set_reconstruction_display` should collapse to one
+  entry after all. Per-field is right while the fields read as separate things
+  in the tree; an agent that habitually sets four at once would make the case
+  for a single `Display of {label} changed` line.

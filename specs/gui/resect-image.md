@@ -190,8 +190,9 @@ and refused, the summed correspondences and inliers with their ratio, and the
 held-out, re-triangulated and removed point counts with each point counted
 once however many targets observe it.
 
-The status line (viewport overlay, as `Align to…` reports) shows the panel's
-single target's report:
+The outcome is recorded in the Action Log and shown in the status line
+(viewport overlay, as `Align to…` reports), carrying the panel's single
+target's report:
 
 `Resected <image> in <node>: <n> pts, inliers <k>/<n> (<f>), rotation
 <deg>°, translation <d> (scene-scale), <m> re-triangulated`
@@ -201,8 +202,12 @@ world-to-camera rotations and the translation delta is the distance the camera
 **centre** moved, in units of the source's median-over-images of that image's
 median camera-to-structure distance (the same unit the evaluation channels
 use). A rotation-only reconstruction has no such distance, so it reports the
-displacement in its own units and no ratio. On refusal:
+displacement in its own units and no ratio. On refusal, a **failed** entry:
 `Resect <image> in <node> refused: <reason>`.
+
+One entry either way. The node arrival and the selection change a resection ends
+with are muted while it runs (see [action-log.md](action-log.md) § "Rust API"),
+so the log carries the result of the action and not its mechanics.
 
 ---
 

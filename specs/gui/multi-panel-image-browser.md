@@ -33,17 +33,20 @@ root, and everything below describes the arrangement to its right.
 │       │                          │              │
 │       │                          │              │
 │       ├──────────────────────────┴──────────────┤
+│       │ [Image Browser] [Action Log]            │
 │       │ ◀ [img01] [img02] [img03] [img04] ... ▶ │
-│       │            Image Browser (~160px)       │
 └───────┴─────────────────────────────────────────┘
 ```
 
 - **Scene**: left, ~18% width. The tree of loaded reconstructions.
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
   frustums, navigation.
-- **Image Detail**: top-right, ~1/3 width. Full-resolution image of the selected camera.
-- **Image Browser**: bottom strip, full width, ~160px. Horizontally-scrollable strip
-  of 128×128 thumbnails.
+- **Image Detail**: top-right, ~1/3 width, sharing a tab group with Point Track
+  and Intrinsics. Full-resolution image of the selected camera.
+- **Image Browser**: bottom strip, full width, ~20% of the height.
+  Horizontally-scrollable strip of 128×128 thumbnails. It shares its tab group
+  with the **Action Log** ([action-log.md](action-log.md)) and is the active
+  member, so the viewer opens on the strip.
 
 Since we use `egui_dock`, the user can re-dock any panel anywhere (float, reorder tabs,
 resize splits, etc.).
@@ -244,6 +247,10 @@ was added by `specs/gui/scene-graph.md`.
 > joins the Image Detail / Point Track tab group as the third and non-active
 > member — see [camera-intrinsics.md](camera-intrinsics.md) § "The
 > Intrinsics panel"._
+>
+> _Added (2026-09-01): a seventh, `ActionLog` (title "Action Log"), joins the
+> Image Browser's tab group as the second and non-active member — see
+> [action-log.md](action-log.md)._
 
 ### TabContext and TabViewer
 
@@ -265,16 +272,30 @@ impl egui_dock::TabViewer for TabContext<'_> {
 
 ### DockState Initialization
 
+`crate::default_dock_state`, in `crates/sfm-explorer/src/lib.rs`:
+
 ```rust
 let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
 let surface = dock_state.main_surface_mut();
-// Split bottom strip for image browser (80/20 vertical)
-let [top, _browser] = surface.split_below(NodeIndex::root(), 0.8, vec![Tab::ImageBrowser]);
-// Split top area for detail panel: ImageDetail and PointTrackDetail share
-// a tabbed region (67/33 horizontal). See `crates/sfm-explorer/src/lib.rs`.
-let [_viewer, _detail] =
-    surface.split_right(top, 0.67, vec![Tab::ImageDetail, Tab::PointTrackDetail]);
+// Scene takes a narrow left split of the root.
+let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
+// The bottom strip: the image browser, with the Action Log behind it.
+let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser, Tab::ActionLog]);
+// The right-hand column: Image Detail, with Point Track and Intrinsics behind it.
+let [_viewer, _detail] = surface.split_right(
+    top,
+    0.67,
+    vec![Tab::ImageDetail, Tab::PointTrackDetail, Tab::IntrinsicsDetail],
+);
 ```
+
+`fraction` is the share of the **first** child in layout order — the new
+left-hand node for `split_left`, but the old top node for `split_below`.
+(`egui_dock` 0.19's doc comment says "the old node" for both, which is true only
+of Right and Below; 0.21 gave the Scene panel four fifths of the window when it
+was read the other way.) A leaf built from a `Vec` opens on its **first** tab —
+`LeafNode::new` sets `active: TabIndex(0)` — which is what puts Image Detail and
+the Image Browser in front of the tabs they share a node with.
 
 ### Integration in app.rs
 

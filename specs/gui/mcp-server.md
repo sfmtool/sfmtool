@@ -404,8 +404,10 @@ which happened. The returned `label` may differ from the file stem —
 read the label back rather than assume it.
 
 A load failure is a tool error, not a silent status line (§ "Errors").
-`load_file` reports failure by writing `AppState::status_message`, so that is
-where the message is read back from and turned into a refusal.
+`load_file` returns `Result<ReconId, String>` and writes no Action Log entry on
+`Err`, so the failure is simply propagated as the refusal. The caller is what
+words it: the File menu records `Failed to load …`, the drain records
+`open_reconstruction failed: …`, and either way one failure produces one entry.
 
 `close_reconstruction` takes `reconstruction_label` or `all: true`, and refuses
 both at once: "close this one" and "close everything" are different requests,
@@ -760,10 +762,25 @@ legitimately stop pumping (a modal `rfd` file dialog is open, the user is
 dragging the window on Windows), and an agent must get "the viewer is busy"
 rather than a hung connection.
 
-**Every mutating command writes `AppState::status_message`**, prefixed:
-`MCP: opened global.sfmr`. The human watching the window sees what the agent
-did, in the place the viewer already reports what it did, and can tell it from
-something they did themselves.
+**Every applied command records an Action Log entry as actor `MCP`**, and the
+viewport status line shows the most recent non-query entry, prefixed `MCP: `
+when an agent took it. The human watching the window sees what the agent did, in
+the place the viewer already reports what it did, and can tell it from something
+they did themselves — and can scroll back through the rest of the session in the
+Action Log panel. See [action-log.md](action-log.md).
+
+The entries are not composed here. A mutating tool calls the same `AppState` and
+`Viewer3D` methods the GUI calls, and *those* record, so two rows with the same
+text did the same thing whoever asked for it. What the drain adds is the two
+things no state method can know: a **read** is recorded from the command (a
+`Query` entry, which never reaches the status line — an agent polling
+`get_scene` must not read its own polling back as the viewer's status), and a
+**refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
+same words the agent receives.
+
+The actor is ambient rather than an argument: `mcp::apply_as_agent` moves the
+Action Log's actor to `Mcp` for the frame's batch and restores `User` after, so
+not one `AppState` method signature carries an `Actor`.
 
 ## The Rust seam
 
@@ -775,6 +792,7 @@ testable without a window:
 | `tools` | The tool table and the wire parse: names, descriptions, `inputSchema`, and JSON arguments to a `Command` |
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `frame` | The two phases `run_ui_and_paint` calls: the drain, and the deferred screenshot |
+| `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
 ```rust
@@ -820,6 +838,13 @@ pub(crate) enum Outcome {
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
 /// makes fifteen of the sixteen tools testable in a headless `cargo test`.
 pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome;
+
+/// Apply a frame's worth of commands **as the agent**: the Action Log's actor
+/// moved to `Mcp` for the batch, a `Query` entry per read, a failed entry per
+/// refusal. The drain is this plus the channel, which is what puts the
+/// attribution under the same headless test as the vocabulary.
+pub(crate) fn apply_as_agent(state: &mut AppState, viewer: &mut Viewer3D, commands: Vec<Command>)
+    -> Vec<Outcome>;
 
 /// Start the server. Returns once it is bound and listening, or with the bind
 /// error; the runtime lives on its own thread from here.
@@ -974,6 +999,15 @@ viewer's.
 Domain errors get a message an agent can act on, in the style the viewer already
 uses for its status line: what was asked, what is actually there. *"No loaded
 reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`."*
+
+**A domain error is also recorded in the Action Log**, as a failed entry reading
+`{tool} failed: {message}` — so the human at the window sees the refusal in the
+status line and in the panel, where before only a success reached them. It is
+recorded by the drain rather than by the method that produced it, which is why
+every `AppState` method the MCP layer calls returns its failure instead of
+logging it: one failure, one entry. Protocol errors are **not** logged — they
+never reach the viewer, and a request the GUI thread never saw belongs in the
+agent's own transcript.
 
 **An unknown argument is refused by name rather than ignored.** The schemas say
 `additionalProperties: false`, but a schema binds only the clients that enforce
