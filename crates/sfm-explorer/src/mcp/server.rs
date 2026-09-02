@@ -225,7 +225,7 @@ impl ServerHandler for Viewer {
         // cannot change while a viewer runs — but it changes across a *rebuild*,
         // which is the normal state of affairs for a tool whose whole purpose is
         // being iterated on, and a client holding a cached list across a
-        // relaunch would call tools the new binary no longer has. Sixteen tools
+        // relaunch would call tools the new binary no longer has. Twenty-two tools
         // are cheap to re-fetch; a stale list is not cheap to debug.
         Ok(
             ListToolsResult::with_all_items(tools::catalog().iter().map(advertise).collect())

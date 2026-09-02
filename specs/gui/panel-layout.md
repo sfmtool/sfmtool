@@ -316,6 +316,11 @@ impl Layout {
     /// a typo. Walking by hand is also what lets an error carry its path —
     /// `main.second.first: unknown key "fracton"`.
     pub(crate) fn from_json(text: &str) -> Result<Self, LayoutError>;
+    /// The same, on an already-parsed document — which is how a layout arrives
+    /// over MCP, as a `set_layout` argument object. `from_json` is the JSON
+    /// parse and then this, so a document off the wire meets exactly the rules,
+    /// and exactly the messages, a file on disk meets.
+    pub(crate) fn from_value(value: &serde_json::Value) -> Result<Self, LayoutError>;
     /// Pretty-printed, keys in the order § "The layout file" shows them,
     /// trailing newline.
     pub(crate) fn to_json(&self) -> String;
@@ -537,9 +542,12 @@ egui's checkbox rather than anything this spec decides.
 - **Naming, duplicating, or parameterizing panels.** Seven singletons, one
   struct each. A second Image Detail panel is a different design.
 - **Logging drag rearrangements** (§ "In the Action Log").
-- **The MCP tools.** `get_layout`, `set_layout`, `show_panel`, `hide_panel`
-  are specified in [mcp-server.md](mcp-server.md) once they exist; this
-  spec is what they carry.
+- **The MCP tools.** `get_layout`, `set_layout`, `show_panel` and `hide_panel`
+  are specified in [mcp-server.md](mcp-server.md) § "`get_layout`" and the
+  sections after it; this spec is what they carry. They call the `AppState`
+  methods above and send the document this spec defines, so the wire adds no
+  schema of its own — which is why "the panel names" and "the validation rules"
+  have one home and not two.
 
 ## Open questions
 

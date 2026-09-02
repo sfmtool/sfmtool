@@ -177,11 +177,13 @@ strings, with `{…}` for the values that vary.
 | Animation | no | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
 | Animation | no | Viewer | `Animation reached the end at {name}` |
 | Animation | no | User | `Animation rate {fps} fps` |
-| Layout | no | User | `Opened {Panel} panel` / `Closed {Panel} panel` / `Raised {Panel} panel` |
-| Layout | no | User | `Reset layout` |
+| Layout | no | User / MCP | `Opened {Panel} panel` / `Closed {Panel} panel` / `Raised {Panel} panel` |
+| Layout | no | User / MCP | `Reset layout` |
 | Layout | no | User | `Saved layout to {path}` / `Loaded layout from {path}` |
 | Layout | no | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
-| Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `screenshot {w}×{h}` |
+| Layout | no | MCP | `Set layout` — a `set_layout` carrying a document, which `apply_layout` leaves to its caller to word |
+| Window | no | MCP | `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Focused window` |
+| Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_layout` / `get_window` / `screenshot {w}×{h}` |
 | any | never | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
 
 Rules that the table implies:
@@ -310,6 +312,9 @@ pub(crate) enum Kind {
     Animation,
     /// Which panels are docked where. See `specs/gui/panel-layout.md`.
     Layout,
+    /// The window itself: the state, size, position and focus one `set_window`
+    /// call changed. See `specs/gui/mcp-server.md`.
+    Window,
     /// A read-only MCP tool, by name. Coalesces per tool.
     Query(&'static str),
 }
