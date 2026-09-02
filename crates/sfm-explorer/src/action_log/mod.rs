@@ -74,20 +74,39 @@ pub(crate) enum Kind {
     Display,
     /// Image-strip playback.
     Animation,
+    /// Which panels are docked where: a panel opened, closed or raised, and
+    /// the layout reset, saved or loaded. See [`crate::layout`].
+    Layout,
     /// A read-only MCP tool, by name. Coalesces per tool.
     Query(&'static str),
 }
 
 impl Kind {
+    /// The word the row tooltip shows, which for a query is the tool's name.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Kind::Session => "Session",
+            Kind::File => "File",
+            Kind::Selection => "Selection",
+            Kind::Scene => "Scene",
+            Kind::View => "View",
+            Kind::Display => "Display",
+            Kind::Animation => "Animation",
+            Kind::Layout => "Layout",
+            Kind::Query(tool) => tool,
+        }
+    }
+
     /// Whether a run of entries of this kind folds into one.
     ///
     /// The continuous kinds do: a selection scrub, a camera framing, a slider
     /// drag and an agent's polling are all things that happen many times a
     /// second and mean one thing. The discrete kinds do not — two files opened
-    /// in a row are two events, not one.
+    /// in a row are two events, not one, and neither are two panels closed in
+    /// a row.
     pub(crate) fn coalesces(self) -> bool {
         match self {
-            Kind::Session | Kind::File | Kind::Scene | Kind::Animation => false,
+            Kind::Session | Kind::File | Kind::Scene | Kind::Animation | Kind::Layout => false,
             Kind::Selection | Kind::View | Kind::Display | Kind::Query(_) => true,
         }
     }

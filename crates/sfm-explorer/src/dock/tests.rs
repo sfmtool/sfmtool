@@ -1,29 +1,9 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the default layout and the tab bodies' own.
+//! Headless tests for the tab bodies' own drawing.
 
 use super::*;
-
-/// The Action Log opens docked beside the image strip, and *behind* it: the
-/// viewer should come up on the strip, with the record one click away rather
-/// than in front of what the user came to look at.
-#[test]
-fn the_action_log_shares_the_bottom_node_with_the_image_browser() {
-    let dock_state = crate::default_dock_state();
-    let leaf = dock_state
-        .main_surface()
-        .iter()
-        .filter_map(|node| node.get_leaf())
-        .find(|leaf| leaf.tabs.contains(&Tab::ActionLog))
-        .expect("no leaf holds the Action Log");
-    assert_eq!(leaf.tabs, vec![Tab::ImageBrowser, Tab::ActionLog]);
-    assert_eq!(
-        leaf.tabs[leaf.active.0],
-        Tab::ImageBrowser,
-        "the bottom node does not open on the image strip"
-    );
-}
 
 /// A camera to hand the toolbar, so the intrinsics half of the row is drawn too.
 fn demo_node() -> SceneNode {

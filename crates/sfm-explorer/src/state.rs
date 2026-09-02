@@ -3,9 +3,13 @@
 
 //! Shared application state.
 
+use egui_dock::DockState;
+
 use crate::action_log::{ActionLog, Kind};
 use crate::align::{self, AlignOptions};
+use crate::dock::Tab;
 use crate::goto_point::{self, GotoPointDialog};
+use crate::layout::Layout;
 use crate::resect::{self, ResectFrom};
 use crate::scene::{node_by_id, unique_label, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
@@ -345,6 +349,15 @@ pub struct AppState {
     /// `--mcp`. See [`crate::mcp`].
     #[cfg(feature = "mcp")]
     pub mcp: Option<McpStatus>,
+
+    /// Which panels are docked where.
+    ///
+    /// State rather than a field of `App`, so that a layout operation is an
+    /// `AppState` method with the Action Log in reach — and so the MCP `apply`
+    /// seam, which is handed `(&mut AppState, &mut Viewer3D)` and no `App`,
+    /// can drive the layout headlessly. `DockState<Tab>` is plain data, with no
+    /// GPU or window behind it. See [`crate::layout`].
+    pub(crate) dock: DockState<Tab>,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -427,6 +440,7 @@ impl AppState {
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]
             mcp: None,
+            dock: Layout::default().to_dock(),
         }
     }
 

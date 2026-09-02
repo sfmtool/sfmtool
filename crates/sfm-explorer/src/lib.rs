@@ -22,6 +22,7 @@ mod goto_point;
 mod image_browser;
 mod image_detail;
 mod intrinsics_detail;
+mod layout;
 #[cfg(feature = "mcp")]
 mod mcp;
 mod platform;
@@ -41,7 +42,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::ViewportId;
-use egui_dock::{DockState, NodeIndex};
+
 use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use intrinsics_detail::IntrinsicsDetail;
@@ -57,8 +58,6 @@ use winit::event::WindowEvent;
 use winit::event_loop::ControlFlow;
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes};
-
-use dock::Tab;
 
 #[cfg(target_os = "windows")]
 use platform::windows::{EarlyDmState, WinGestureHandler};
@@ -167,8 +166,6 @@ pub fn run() {
         }
     }
 
-    let dock_state = default_dock_state();
-
     let mut app = App {
         proxy,
         egui_ctx: egui::Context::default(),
@@ -189,7 +186,6 @@ pub fn run() {
         point_track_detail: PointTrackDetail::new(),
         intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
-        dock_state,
         prev_frustum_length_scale: 0.0,
         prev_frustum_size_multiplier: 0.0,
         prev_selected_image: None,
@@ -268,48 +264,6 @@ fn start_mcp(_state: &mut AppState, port: Option<u16>, _proxy: &EventLoopProxy<U
     }
 }
 
-/// The dock layout the app opens with:
-///
-/// ```text
-/// ┌────────┬──────────────────┬───────────────┐
-/// │        │    3D Viewer     │ Image Detail  │
-/// │ Scene  ├──────────────────┴───────────────┤
-/// │        │ Image Browser │ Action Log       │
-/// └────────┴──────────────────────────────────┘
-/// ```
-///
-/// The Scene tab takes a narrow left split of the root — narrow because the
-/// tree is a list of short labels and everything else in the window wants the
-/// width. Like every other tab it is not closeable and can be re-docked freely.
-///
-/// Two nodes hold more than one tab, and in both the first is the active one:
-/// the bottom node opens on the Image Browser with the Action Log behind it,
-/// and the right-hand node on Image Detail.
-pub(crate) fn default_dock_state() -> DockState<Tab> {
-    let mut dock_state = DockState::new(vec![Tab::Viewer3D]);
-    let surface = dock_state.main_surface_mut();
-    // `fraction` is the share of the *first* child in layout order — the new
-    // left-hand node for `split_left`, but the old top node for `split_below`.
-    // (egui_dock 0.19's doc comment says "the old node" for both, which is only
-    // true of Right/Below; 0.82 here gave the Scene panel four fifths of the
-    // window.) So: Scene 18%, then the old 80/20 and 67/33 splits of the rest.
-    let [rest, _scene] = surface.split_left(NodeIndex::root(), 0.18, vec![Tab::SceneGraph]);
-    // The Action Log joins the bottom node as a second tab rather than taking a
-    // split of its own: it is a record to consult, not a panel to watch, and the
-    // image strip is what the viewer should open on.
-    let [top, _browser] = surface.split_below(rest, 0.8, vec![Tab::ImageBrowser, Tab::ActionLog]);
-    let [_viewer, _detail] = surface.split_right(
-        top,
-        0.67,
-        vec![
-            Tab::ImageDetail,
-            Tab::PointTrackDetail,
-            Tab::IntrinsicsDetail,
-        ],
-    );
-    dock_state
-}
-
 pub(crate) struct App {
     pub(crate) proxy: EventLoopProxy<UserEvent>,
     pub(crate) egui_ctx: egui::Context,
@@ -330,7 +284,6 @@ pub(crate) struct App {
     pub(crate) point_track_detail: PointTrackDetail,
     pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
-    pub(crate) dock_state: DockState<Tab>,
     pub(crate) prev_frustum_length_scale: f32,
     pub(crate) prev_frustum_size_multiplier: f32,
     pub(crate) prev_selected_image: Option<ImageRef>,

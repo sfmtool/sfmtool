@@ -46,7 +46,6 @@ mcp = [
     "dep:tokio",
     "dep:axum",
     "dep:serde",
-    "dep:serde_json",
     "dep:base64",
 ]
 
@@ -76,6 +75,11 @@ ndarray = "0.17"
 # lookup is unsound on Unix without an opt-in flag. Needs rustc 1.70, well
 # under the workspace MSRV.
 jiff = "0.2"
+# The layout file. Read and written through `serde_json::Value` rather than a
+# derive, because a `Deserialize` could not refuse an unknown key on an untagged
+# node (see `specs/gui/panel-layout.md`). Not behind the `mcp` feature: Panels >
+# Save/Load Layout is in every build.
+serde_json = "1"
 
 # ── The `mcp` feature's dependency tree (see [features] above) ──
 #
@@ -100,7 +104,6 @@ axum = { version = "0.8", optional = true, default-features = false, features = 
     "tokio",
 ] }
 serde = { version = "1", optional = true, features = ["derive"] }
-serde_json = { version = "1", optional = true }
 # Screenshots cross the wire as base64 in an MCP `ImageContent` block.
 base64 = { version = "0.22", optional = true }
 

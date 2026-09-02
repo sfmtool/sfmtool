@@ -1,11 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Dock layout types and tab rendering.
+//! Dock tab identity and tab rendering.
 //!
-//! Defines the seven-panel dock layout (Scene, 3D Viewer, Image Browser, Image
-//! Detail, Point Track Detail, Intrinsics, Action Log) and the `TabViewer`
-//! implementation that renders each panel's content.
+//! Names the seven panels (Scene, 3D Viewer, Image Browser, Image Detail,
+//! Point Track Detail, Intrinsics, Action Log) and holds the `TabViewer`
+//! implementation that renders each panel's content. How they are *arranged* —
+//! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
 use egui_dock::TabViewer;
 
@@ -493,8 +494,17 @@ impl TabViewer for TabContext<'_> {
         }
     }
 
-    fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
-        false
+    /// Every panel closes, the 3D Viewer included — a window showing only the
+    /// Image Detail panel is a legitimate way to study a feature overlay, and
+    /// the Panels menu is the way back from any of it.
+    ///
+    /// The close button and the removal are `egui_dock`'s (`is_closeable`
+    /// defaults to `true`); what the viewer adds is the log line, because the
+    /// tab bar's button and the menu's tick are the same action and should
+    /// read the same in the record.
+    fn on_close(&mut self, tab: &mut Self::Tab) -> egui_dock::tab_viewer::OnCloseResponse {
+        self.state.record_closed(*tab);
+        egui_dock::tab_viewer::OnCloseResponse::Close
     }
 }
 

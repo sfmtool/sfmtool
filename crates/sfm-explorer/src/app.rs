@@ -15,7 +15,7 @@
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
-use egui_dock::DockArea;
+use egui_dock::{DockArea, DockState};
 use egui_winit::State as EguiWinitState;
 use winit::window::Window;
 
@@ -624,7 +624,6 @@ impl App {
         let image_detail = &mut self.image_detail;
         let point_track_detail = &mut self.point_track_detail;
         let intrinsics_detail = &mut self.intrinsics_detail;
-        let dock_state = &mut self.dock_state;
 
         let mut quit_requested = false;
 
@@ -708,9 +707,12 @@ impl App {
                     });
                     // No View menu: the display controls it used to hold belong
                     // to the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
-                    // principle that a panel owns its controls, and the dock
-                    // panels are all permanent (`TabViewer::closeable` is
-                    // false), so there is nothing app-global left for it.
+                    // principle that a panel owns its controls. What *is*
+                    // app-global about the window is which panels are in it,
+                    // and that is the Panels menu below rather than a View one.
+                    ui.menu_button("Panels", |ui| {
+                        crate::layout::panels_menu(ui, app_state);
+                    });
                 });
             });
 
@@ -774,13 +776,21 @@ impl App {
                 app_state.select_point(point);
                 // Raise the panel that answers "what is this point?", so the
                 // jump has something to show for itself even when Point Track
-                // is tabbed behind Image Detail (which is the default layout).
-                if let Some(path) = dock_state.find_tab(&Tab::PointTrackDetail) {
-                    let _ = dock_state.set_active_tab(path);
-                }
+                // is tabbed behind Image Detail (which is the default layout)
+                // — or closed, which `show_panel` re-opens at its home rather
+                // than silently finding nothing to raise.
+                app_state.show_panel(Tab::PointTrackDetail);
             }
 
             egui::CentralPanel::default().show(root_ui, |ui| {
+                // `TabContext` holds `&mut AppState` while `DockArea` needs the
+                // dock mutably, and `AppState::dock` would make those one
+                // borrow. So the frame takes the dock *out* of the state for
+                // the duration of the call and puts it straight back — two
+                // pointer swaps. Nothing inside a tab body reads `state.dock`,
+                // and nothing may: a tab that needs a layout operation reports
+                // it in its response struct and the frame applies it after.
+                let mut dock = std::mem::replace(&mut app_state.dock, DockState::new(Vec::new()));
                 let mut tab_context = TabContext {
                     state: app_state,
                     viewer_3d,
@@ -797,7 +807,8 @@ impl App {
                     diagnostics,
                     handler_ok,
                 };
-                DockArea::new(dock_state).show_inside(ui, &mut tab_context);
+                DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
+                app_state.dock = dock;
             });
         });
 

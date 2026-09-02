@@ -114,9 +114,13 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
         ui.visuals().text_color()
     };
 
+    // The kind rides on the tooltip rather than in a column of its own: it is
+    // what a row is *about*, which the text usually says already, and the one
+    // time it is worth asking is the one time a hover costs nothing.
     let tooltip = format!(
-        "{}\n{}",
+        "{}  {}\n{}",
         log.format(entry.at, "%Y-%m-%d %H:%M:%S %:z"),
+        entry.kind.label(),
         entry.text
     );
     ui.horizontal(|ui| {
