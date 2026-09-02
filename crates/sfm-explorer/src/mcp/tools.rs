@@ -418,9 +418,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                     (
                         "inner_size",
                         int_pair_schema(
-                            "The drawable area to resize to, in physical pixels. Clamped by the \
-                             window's own minimum and by the platform; the reply says what it \
-                             became. Needs a normal window.",
+                            "The drawable area to resize to, in physical pixels. The platform \
+                             has the last word on it, so read the reply rather than assuming \
+                             the request. Needs a normal window.",
                             Some(1),
                         ),
                     ),

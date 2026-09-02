@@ -108,8 +108,9 @@ struct FakeWindow {
     /// `None` stands in for a platform that will not say where a window is.
     position: Option<[i32; 2]>,
     inner_size: [u32; 2],
-    /// The smallest inner size it honours, as a real window's
-    /// `with_min_inner_size` does. A request below it is clamped, not refused.
+    /// A size it will not go below, standing in for whatever a real platform
+    /// does to a request it will not honour: clamped, not refused, so that the
+    /// read-back has something to differ from the request about.
     minimum: [u32; 2],
     /// Whether it lets an application take focus.
     focusable: bool,

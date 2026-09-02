@@ -878,6 +878,11 @@ axis, with the area under it; both are `null` when there is no current monitor
 to compute against. A window straddling two monitors reports the one winit calls
 current.
 
+**Read `state` before believing the geometry.** A minimized window on Windows
+reports an inner size of `0 × 0` and a position of `(-32000, -32000)`, because
+that is what Win32 says about it; the block passes both through rather than
+inventing plausible numbers, and `state` is the field that explains them.
+
 **The block a tool returns is a snapshot, `AppState::window`** (§ "Threading"),
 which is why `get_scene` can carry it without a window handle and why the
 minimized check in `screenshot` is headless. `monitors` is the exception: it is
@@ -920,13 +925,18 @@ the same call to move or resize it."*
 maximized, because restoring a minimized window can bring a maximized one back
 and the agent asked for normal, not for whatever was underneath.
 
-**`inner_size` is clamped by the window's own minimum** (`800 × 600` logical,
-`WindowAttributes::with_min_inner_size`) and by the platform; the reply reports
-what the window actually became, which is why the reply is a read-back and not
-an echo. `focus` may be declined by a platform that does not let applications
-steal focus; `focused` in the reply says whether it was. `focus: false` is
-refused rather than read as "leave it" — a field that can only ask for one thing
-has not asked for it, which is how `set_view` reads `exit_camera_view: false`.
+**What the platform does with a requested size is not knowable in advance,
+which is why the reply is a read-back and not an echo.** It may clamp, and it
+may not: the window's `with_min_inner_size` of `800 × 600` logical is the
+minimum the *user's drag* respects, and on Windows a programmatic resize goes
+straight past it — `set_window { "inner_size": [200, 150] }` gives a 200 × 150
+window and the reply says so. Other platforms and other window managers answer
+differently, and an agent that needs to know what it got reads the reply rather
+than assuming its request. `focus` may likewise be declined by a platform that
+does not let applications steal focus; `focused` in the reply says whether it
+was. `focus: false` is refused rather than read as "leave it" — a field that can
+only ask for one thing has not asked for it, which is how `set_view` reads
+`exit_camera_view: false`.
 
 **The change is applied at the top of the frame**, in the drain, before egui
 reads the window size for that frame's layout — so the frame the request woke is
