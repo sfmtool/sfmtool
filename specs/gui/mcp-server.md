@@ -552,6 +552,13 @@ The tool an agent calls immediately before `screenshot`.
 // look-at form: intuitive, and enough to determine the camera
 { "position": [2, -3, 1], "target": [0, 0, 0], "up": [0, 0, 1] }
 
+// partial forms: what a call does not carry is preserved
+{ "target": [0, 0, 0] }                          // re-centre on a point, orientation kept
+{ "target": [0, 0, 0], "forward": [0, 0, -1] }   // view a point from a direction
+{ "forward": [0, 0, -1] }                        // view the standing target from a direction
+{ "position": [2, -3, 1] }                       // move the camera, orientation kept
+{ "target_distance": 12.0 }                      // dolly: same target, new distance
+
 // exact form: the stored state, so a view read from get_scene round-trips
 { "position": [2, -3, 1], "orientation_wxyz": [0.92, 0.39, 0, 0],
   "target_distance": 4.0, "world_up": [0, 0, 1] }
@@ -569,6 +576,28 @@ not ask for. The look-at form takes `up` as the roll, defaulting to the current
 `world_up`; a different one re-rolls the view exactly as `tilt` does. The exact
 form restores a view verbatim, which is what `orientation_wxyz` and
 `target_distance` are reported for.
+
+The explicit camera is a position, an orientation and a target distance, and
+the explicit family also takes them **a piece at a time**: what a call does not
+carry is preserved. The orientation comes from `forward` (a view direction,
+named for the derived field the view block reports, with the roll taken from
+`up` defaulting to the current `world_up`), from `position` and `target`
+together (the look-at form), from `orientation_wxyz` (the exact form), or it
+stands. The distance comes from `target_distance`, from the separation of
+`position` and `target` when both are given, or it stands. The view is then
+anchored: at `target` where the call names one, else at `position` where the
+call names one, else at the standing orbit target -- so `forward` alone orbits
+the camera around what it is looking at rather than turning it in place, and
+`target_distance` alone is a dolly. The remaining end of the view follows from
+the anchor, the orientation and the distance.
+
+A call that over- or under-determines the camera is refused rather than
+guessed at: `orientation_wxyz` accepts only its exact-form companions,
+`position` with `target` fixes the distance so `target_distance` may not ride
+along, `forward` may not accompany the pair, and `up` steers a roll only where
+the orientation is being derived (`forward`, or the look-at pair). Every form
+refuses the arguments it does not read -- an argument silently ignored leaves
+the agent believing it asked for something it did not.
 
 `fit` and `look_through` go through the same paths the keyboard and
 double-click use (`ViewportCamera::zoom_to_fit` over `scene::world_points`,

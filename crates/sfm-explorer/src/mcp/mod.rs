@@ -185,24 +185,34 @@ pub(crate) enum ViewCommand {
     },
     /// Leave camera-view mode, keeping the camera where it is.
     ExitCameraView,
-    /// The look-at form: a position, what it points at, and the roll.
-    LookAt {
-        position: [f64; 3],
-        target: [f64; 3],
-        up: Option<[f64; 3]>,
-        fov_short_axis_deg: Option<f64>,
-    },
-    /// The exact form: the stored state, so a view read from `get_scene`
-    /// round-trips.
-    Exact {
-        position: [f64; 3],
-        orientation_wxyz: [f64; 4],
-        target_distance: f64,
-        world_up: Option<[f64; 3]>,
-        fov_short_axis_deg: Option<f64>,
-    },
+    /// The explicit camera, in whatever pieces the call carried.
+    Place(Placement),
     /// The field of view alone.
     Fov { fov_short_axis_deg: f64 },
+}
+
+/// The explicit camera -- a position, an orientation and a target distance --
+/// as the pieces one call carried.
+///
+/// Every field is optional and every absent one is preserved from the standing
+/// view, which is what makes the look-at form (`position` with `target`), the
+/// exact form (`orientation_wxyz` with its companions) and a single piece on
+/// its own the same command with different fields filled in, rather than three
+/// commands that would each need their own placement arithmetic.
+///
+/// Which combinations determine a camera at all is settled in
+/// [`tools::parse`], which sees what the call named; what a combination means
+/// is settled in `view::set_view`, which sees the view it is changing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Placement {
+    pub(crate) position: Option<[f64; 3]>,
+    pub(crate) target: Option<[f64; 3]>,
+    pub(crate) forward: Option<[f64; 3]>,
+    pub(crate) orientation_wxyz: Option<[f64; 4]>,
+    pub(crate) target_distance: Option<f64>,
+    pub(crate) up: Option<[f64; 3]>,
+    pub(crate) world_up: Option<[f64; 3]>,
+    pub(crate) fov_short_axis_deg: Option<f64>,
 }
 
 /// A tool's refusal: everything the viewer can say no to, in the style its own

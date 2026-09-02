@@ -18,8 +18,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde_json::json;
 
 use super::{
-    announce, render, resolve_camera_image, resolve_reconstruction, JsonReply, ToolError,
-    ViewCommand,
+    announce, render, resolve_camera_image, resolve_reconstruction, JsonReply, Placement,
+    ToolError, ViewCommand,
 };
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
@@ -66,78 +66,7 @@ pub(super) fn set_view(
             viewer.camera_view = None;
             "left camera view".to_string()
         }
-        ViewCommand::LookAt {
-            position,
-            target,
-            up,
-            fov_short_axis_deg,
-        } => {
-            let position = Point3::new(position[0], position[1], position[2]);
-            let target = Point3::new(target[0], target[1], target[2]);
-            let distance = (target - position).norm();
-            if !distance.is_finite() || distance <= 0.0 {
-                return Err(ToolError::new(
-                    "position and target are the same point — the view has no direction.",
-                ));
-            }
-            // `up` is the roll, and defaults to the roll the view already has.
-            // Supplying a different one re-rolls the view exactly as
-            // `ViewportCamera::tilt` does, which is why it is written to
-            // `world_up` and not merely used to build the orientation.
-            let world_up = match up {
-                Some(up) => normalized(up, "up")?,
-                None => viewer.camera.world_up,
-            };
-            let forward = (target - position).normalize();
-            if forward.cross(&world_up).norm() < 1e-9 {
-                return Err(ToolError::new(
-                    "up is parallel to the view direction — the roll is undefined.",
-                ));
-            }
-            // Leaving camera view: this is a free camera placement, and the
-            // background image belongs to a viewpoint that has just been left.
-            viewer.camera_view = None;
-            viewer.camera.world_up = world_up;
-            viewer.camera.camera.position = position;
-            viewer.camera.camera.target_distance = distance;
-            viewer.camera.set_orientation_from_forward(forward);
-            set_fov(viewer, fov_short_axis_deg)?;
-            "camera placed".to_string()
-        }
-        ViewCommand::Exact {
-            position,
-            orientation_wxyz,
-            target_distance,
-            world_up,
-            fov_short_axis_deg,
-        } => {
-            let orientation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
-                orientation_wxyz[0],
-                orientation_wxyz[1],
-                orientation_wxyz[2],
-                orientation_wxyz[3],
-            ));
-            if !orientation_wxyz.iter().all(|c| c.is_finite())
-                || nalgebra::Vector4::from(orientation_wxyz).norm() < 1e-9
-            {
-                return Err(ToolError::new(
-                    "orientation_wxyz is not a rotation — expected four finite numbers that are \
-                     not all zero.",
-                ));
-            }
-            if !target_distance.is_finite() || target_distance <= 0.0 {
-                return Err(ToolError::new("target_distance must be greater than zero."));
-            }
-            viewer.camera_view = None;
-            viewer.camera.camera.position = Point3::new(position[0], position[1], position[2]);
-            viewer.camera.camera.orientation = orientation;
-            viewer.camera.camera.target_distance = target_distance;
-            if let Some(world_up) = world_up {
-                viewer.camera.world_up = normalized(world_up, "world_up")?;
-            }
-            set_fov(viewer, fov_short_axis_deg)?;
-            "camera restored".to_string()
-        }
+        ViewCommand::Place(placement) => place(viewer, placement)?,
         ViewCommand::Fov { fov_short_axis_deg } => {
             set_fov(viewer, Some(fov_short_axis_deg))?;
             format!("field of view {fov_short_axis_deg:.1}°")
@@ -146,6 +75,133 @@ pub(super) fn set_view(
 
     announce(state, format!("view — {what}"));
     Ok(json!({ "view": render::view(state, viewer) }))
+}
+
+/// Place the explicit camera from the pieces one call carried, preserving
+/// every piece it did not.
+///
+/// One path for the whole explicit family, because the look-at form, the exact
+/// form and a lone `forward` differ only in where the three unknowns come
+/// from. They are resolved in turn:
+///
+/// - the **orientation**, from `orientation_wxyz`, from `forward`, from the
+///   direction `position` to `target`, or standing;
+/// - the **distance**, from `target_distance`, from the separation of
+///   `position` and `target`, or standing;
+/// - the **anchor** the view is hung from -- `target` where the call named
+///   one, else `position` where it named one, else the standing orbit target,
+///   which is the same `Camera::target()` the view block reports as
+///   `derived.target`. The other end of the view follows from the anchor, the
+///   orientation and the distance.
+///
+/// So `forward` alone swings the camera around what it is looking at rather
+/// than turning it in place, `target_distance` alone dollies toward a fixed
+/// target, and `target` alone re-centres the view without re-aiming it.
+fn place(viewer: &mut Viewer3D, placement: Placement) -> Result<String, ToolError> {
+    // Both ends given: their difference is the one thing that is degenerate if
+    // they coincide, so it is checked once here and then serves as both the
+    // direction and the distance.
+    let separation = match (placement.position, placement.target) {
+        (Some(position), Some(target)) => {
+            let separation = point(target) - point(position);
+            let distance = separation.norm();
+            if !distance.is_finite() || distance <= 0.0 {
+                return Err(ToolError::new(
+                    "position and target are the same point — the view has no direction.",
+                ));
+            }
+            Some((separation / distance, distance))
+        }
+        _ => None,
+    };
+
+    // The roll. `up` and `world_up` are the same quantity named for the two
+    // forms that carry it, and a supplied one re-rolls the view exactly as
+    // `ViewportCamera::tilt` does, which is why it is written to `world_up`
+    // and not merely used to build the orientation.
+    let mut world_up = viewer.camera.world_up;
+    if let Some(up) = placement.up {
+        world_up = normalized(up, "up")?;
+    } else if let Some(up) = placement.world_up {
+        world_up = normalized(up, "world_up")?;
+    }
+
+    let facing = match (placement.orientation_wxyz, placement.forward, separation) {
+        (Some(wxyz), _, _) => {
+            if !wxyz.iter().all(|c| c.is_finite()) || nalgebra::Vector4::from(wxyz).norm() < 1e-9 {
+                return Err(ToolError::new(
+                    "orientation_wxyz is not a rotation — expected four finite numbers that are \
+                     not all zero.",
+                ));
+            }
+            Facing::Stated(UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+                wxyz[0], wxyz[1], wxyz[2], wxyz[3],
+            )))
+        }
+        (None, Some(forward), _) => Facing::Derived(normalized(forward, "forward")?),
+        (None, None, Some((forward, _))) => Facing::Derived(forward),
+        (None, None, None) => Facing::Stated(viewer.camera.camera.orientation),
+    };
+    if let Facing::Derived(forward) = facing {
+        if forward.cross(&world_up).norm() < 1e-9 {
+            return Err(ToolError::new(
+                "up is parallel to the view direction — the roll is undefined.",
+            ));
+        }
+    }
+
+    let distance = match (placement.target_distance, separation) {
+        (Some(distance), _) => {
+            if !distance.is_finite() || distance <= 0.0 {
+                return Err(ToolError::new("target_distance must be greater than zero."));
+            }
+            distance
+        }
+        (None, Some((_, distance))) => distance,
+        (None, None) => viewer.camera.camera.target_distance,
+    };
+
+    // Read before anything moves: the anchor of a call that named neither end
+    // is where the camera is looking *now*.
+    let standing_target = viewer.camera.camera.target();
+    // Leaving camera view: this is a free camera placement, and the background
+    // image belongs to a viewpoint that has just been left.
+    viewer.camera_view = None;
+    viewer.camera.world_up = world_up;
+    match facing {
+        Facing::Stated(orientation) => viewer.camera.camera.orientation = orientation,
+        // Goes through the camera's own derivation, which reads the `world_up`
+        // just written, so a derived view rolls the way the mouse rolls it.
+        Facing::Derived(forward) => viewer.camera.set_orientation_from_forward(forward),
+    }
+    viewer.camera.camera.target_distance = distance;
+    viewer.camera.camera.position = match (placement.position, placement.target) {
+        // A stated position is taken verbatim rather than reconstructed from
+        // the anchor, so a view read out of `get_scene` comes back bit for bit.
+        (Some(position), _) => point(position),
+        (None, target) => {
+            let anchor = target.map_or(standing_target, point);
+            anchor - viewer.camera.camera.forward() * distance
+        }
+    };
+    set_fov(viewer, placement.fov_short_axis_deg)?;
+
+    Ok(if placement.orientation_wxyz.is_some() {
+        "camera restored".to_string()
+    } else {
+        "camera placed".to_string()
+    })
+}
+
+/// Which way the camera ends up facing, and how that was arrived at.
+///
+/// The two are not interchangeable at the moment of assignment: a stated
+/// rotation is written straight to the camera, while a direction has to go
+/// through `ViewportCamera::set_orientation_from_forward` so that the roll in
+/// `world_up` completes it.
+enum Facing {
+    Stated(UnitQuaternion<f64>),
+    Derived(Vector3<f64>),
 }
 
 /// Frame everything drawn, or one named reconstruction.
@@ -198,6 +254,11 @@ fn set_fov(viewer: &mut Viewer3D, degrees: Option<f64>) -> Result<(), ToolError>
     }
     viewer.camera.fov = degrees.to_radians();
     Ok(())
+}
+
+/// A point argument as a point.
+fn point(v: [f64; 3]) -> Point3<f64> {
+    Point3::new(v[0], v[1], v[2])
 }
 
 /// A direction argument as a unit vector, or a refusal naming the field.

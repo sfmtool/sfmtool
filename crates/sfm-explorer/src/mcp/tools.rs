@@ -19,7 +19,8 @@
 use serde_json::{json, Map, Value};
 
 use super::{
-    CameraImageSel, CloseTarget, Command, DisplayChange, SelectionScope, ToolError, ViewCommand,
+    CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
+    ViewCommand,
 };
 use crate::goto_point::{parse_point_query, PointQuery};
 
@@ -315,11 +316,15 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             description: "Move the 3D viewport camera — the tool to call immediately before \
                           screenshot. Five forms, exactly one per call: frame everything or one \
                           reconstruction (fit), look through a camera image (look_through), leave \
-                          camera view (exit_camera_view), place the camera by position and target \
-                          (the look-at form), or restore a view read from get_scene (the exact \
-                          form). fov_short_axis_deg may ride along with the last two or be sent \
-                          alone. View changes jump rather than animating, so a screenshot taken \
-                          straight afterward shows the new view.",
+                          camera view (exit_camera_view), place the explicit camera, or set \
+                          fov_short_axis_deg alone. The explicit camera takes its pieces one at a \
+                          time and preserves what a call does not carry: position with target is \
+                          the look-at form and orientation_wxyz with target_distance restores a \
+                          view read from get_scene, while target alone re-centres the view, \
+                          forward alone orbits the camera around what it is looking at, and \
+                          target_distance alone dollies. fov_short_axis_deg may ride along with \
+                          any of them. View changes jump rather than animating, so a screenshot \
+                          taken straight afterward shows the new view.",
             kind: Write,
             schema: set_view_schema(),
         },
@@ -453,12 +458,22 @@ fn set_view_schema() -> Value {
                 "type": "boolean",
                 "description": "Leave camera view, keeping the camera where it is.",
             },
-            "position": vec3_schema("Camera position in world coordinates."),
+            "position": vec3_schema(
+                "Camera position in world coordinates. On its own it moves the camera and \
+                 carries the target along, keeping the orientation.",
+            ),
             "target": vec3_schema(
-                "The point the camera looks at. Present makes this the look-at form.",
+                "The point the camera looks at. With position, the look-at form; on its own it \
+                 re-centres the view on that point, keeping the orientation and the distance.",
+            ),
+            "forward": vec3_schema(
+                "The direction the camera looks, the derived.forward the view block reports. \
+                 Need not be a unit vector. On its own it swings the camera around what it is \
+                 looking at rather than turning it in place.",
             ),
             "up": vec3_schema(
-                "The roll, for the look-at form. Defaults to the view's current world_up.",
+                "The roll, where the orientation is being derived -- with forward, or with \
+                 position and target. Defaults to the view's current world_up.",
             ),
             "orientation_wxyz": {
                 "type": "array",
@@ -472,17 +487,23 @@ fn set_view_schema() -> Value {
             "target_distance": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "description": "Distance to the orbit target along the camera's forward axis.",
+                "description":
+                    "Distance to the orbit target along the camera's forward axis. On its own it \
+                     dollies: the target stays put and the camera moves. Not accepted alongside \
+                     position and target, whose separation is already the distance.",
             },
-            "world_up": vec3_schema("Navigation up, which carries the roll, for the exact form."),
+            "world_up": vec3_schema(
+                "Navigation up, which carries the roll, for the exact form. Elsewhere the roll \
+                 is up.",
+            ),
             "fov_short_axis_deg": {
                 "type": "number",
                 "minimum": 5,
                 "maximum": 160,
                 "description":
                     "Field of view of the shorter viewport dimension — vertical in a landscape \
-                     window, horizontal in a portrait one. May accompany either explicit form, \
-                     or be sent alone.",
+                     window, horizontal in a portrait one. May accompany an explicit camera \
+                     placement, or be sent alone.",
             },
         },
         "additionalProperties": false,
@@ -675,7 +696,8 @@ pub(crate) fn parse(
 /// The forms are exclusive and the check is up front, because they are
 /// *intents* rather than representations: a call carrying both `fit` and
 /// `position` has no answer, and guessing one would move the camera somewhere
-/// the agent did not ask for.
+/// the agent did not ask for. The explicit camera is one form however many of
+/// its pieces a call carries, so any of them puts the call in it.
 fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
     args.reject_unknown(&[
         "fit",
@@ -683,6 +705,7 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
         "exit_camera_view",
         "position",
         "target",
+        "forward",
         "up",
         "orientation_wxyz",
         "target_distance",
@@ -691,14 +714,19 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
     ])?;
 
     let present = |key: &str| args.map.contains_key(key);
-    let forms: Vec<&str> = ["fit", "look_through", "exit_camera_view", "position"]
+    let explicit: Vec<&str> = PLACEMENT_KEYS
         .into_iter()
         .filter(|key| present(key))
         .collect();
+    let forms: Vec<&str> = ["fit", "look_through", "exit_camera_view"]
+        .into_iter()
+        .filter(|key| present(key))
+        .chain(explicit.first().copied())
+        .collect();
     if forms.len() > 1 {
         return Err(args.error(format!(
-            "was given {} at once — fit, look_through, exit_camera_view and the two explicit \
-             camera forms are exclusive, one per call.",
+            "was given {} at once — fit, look_through, exit_camera_view and the explicit camera \
+             are exclusive, one per call.",
             forms.join(" and ")
         )));
     }
@@ -738,33 +766,9 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
             view: ViewCommand::ExitCameraView,
         });
     }
-    if present("position") {
-        let position = args.required_vec3("position")?;
-        let exact = present("orientation_wxyz");
-        if exact && present("target") {
-            return Err(args.error(
-                "was given both target and orientation_wxyz — the look-at form and the exact \
-                 form are exclusive.",
-            ));
-        }
-        if exact {
-            return Ok(Command::SetView {
-                view: ViewCommand::Exact {
-                    position,
-                    orientation_wxyz: args.required_vec4("orientation_wxyz")?,
-                    target_distance: args.required_f64("target_distance")?,
-                    world_up: args.optional_vec3("world_up")?,
-                    fov_short_axis_deg: fov,
-                },
-            });
-        }
+    if !explicit.is_empty() {
         return Ok(Command::SetView {
-            view: ViewCommand::LookAt {
-                position,
-                target: args.required_vec3("target")?,
-                up: args.optional_vec3("up")?,
-                fov_short_axis_deg: fov,
-            },
+            view: ViewCommand::Place(parse_placement(args, fov)?),
         });
     }
     match fov {
@@ -772,10 +776,103 @@ fn parse_set_view(args: &Args) -> Result<Command, ToolError> {
             view: ViewCommand::Fov { fov_short_axis_deg },
         }),
         None => Err(args.error(
-            "was given nothing to do — pass fit, look_through, exit_camera_view, a position with \
-             a target or an orientation_wxyz, or fov_short_axis_deg alone.",
+            "was given nothing to do — pass fit, look_through, exit_camera_view, a piece of the \
+             explicit camera (position, target, forward, target_distance or orientation_wxyz), \
+             or fov_short_axis_deg alone.",
         )),
     }
+}
+
+/// Every argument that puts a `set_view` call in the explicit camera form.
+///
+/// `up` and `world_up` are in the list even though neither determines a
+/// camera: a call carrying one of them alone has asked for a roll and nothing
+/// to roll, and the refusal that says so belongs with the rest of the family
+/// rather than in the catch-all at the end of [`parse_set_view`].
+const PLACEMENT_KEYS: [&str; 7] = [
+    "position",
+    "target",
+    "forward",
+    "orientation_wxyz",
+    "target_distance",
+    "up",
+    "world_up",
+];
+
+/// The pieces of the explicit camera one call carried.
+///
+/// What a call does not carry is preserved, so this parse is not about which
+/// pieces are missing but about which combinations *cannot* be honoured: a
+/// piece that would over-determine the camera, and a piece the resolved form
+/// would never read. Both are refused. An argument silently ignored leaves the
+/// agent believing it asked for something it did not, which is the same reason
+/// the schemas are closed.
+fn parse_placement(args: &Args, fov: Option<f64>) -> Result<Placement, ToolError> {
+    let present = |key: &str| args.map.contains_key(key);
+    if present("orientation_wxyz") {
+        // The exact form states the orientation outright, so nothing that
+        // would derive one may ride along, and its roll travels in world_up.
+        if present("target") {
+            return Err(args.error(
+                "was given both target and orientation_wxyz — the look-at form and the exact \
+                 form are exclusive.",
+            ));
+        }
+        if present("forward") {
+            return Err(args.error(
+                "was given both forward and orientation_wxyz -- the exact form states the \
+                 orientation, so there is no direction to derive one from.",
+            ));
+        }
+        if present("up") {
+            return Err(args.error(
+                "was given up with orientation_wxyz -- the exact form carries its roll in \
+                 world_up.",
+            ));
+        }
+        return Ok(Placement {
+            position: Some(args.required_vec3("position")?),
+            orientation_wxyz: Some(args.required_vec4("orientation_wxyz")?),
+            target_distance: Some(args.required_f64("target_distance")?),
+            world_up: args.optional_vec3("world_up")?,
+            fov_short_axis_deg: fov,
+            ..Placement::default()
+        });
+    }
+    let pair = present("position") && present("target");
+    if pair && present("target_distance") {
+        return Err(args.error(
+            "was given position, target and target_distance -- the separation of position and \
+             target is the distance.",
+        ));
+    }
+    if pair && present("forward") {
+        return Err(args.error(
+            "was given position, target and forward -- the pair already fixes the view \
+             direction.",
+        ));
+    }
+    if present("world_up") {
+        return Err(args.error(
+            "was given world_up outside the exact form -- pass up to roll a view whose \
+             direction is being derived.",
+        ));
+    }
+    if present("up") && !pair && !present("forward") {
+        return Err(args.error(
+            "was given up with nothing to roll -- up steers the roll only where the orientation \
+             is being derived, from forward or from position with target.",
+        ));
+    }
+    Ok(Placement {
+        position: args.optional_vec3("position")?,
+        target: args.optional_vec3("target")?,
+        forward: args.optional_vec3("forward")?,
+        target_distance: args.optional_f64("target_distance")?,
+        up: args.optional_vec3("up")?,
+        fov_short_axis_deg: fov,
+        ..Placement::default()
+    })
 }
 
 /// One tool call's argument object, with the accessors that turn a JSON value
