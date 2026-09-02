@@ -40,7 +40,17 @@ pub(super) fn set_view(
     let what = match view {
         ViewCommand::Fit {
             reconstruction_label,
-        } => fit(state, viewer, reconstruction_label.as_deref())?,
+        } => {
+            let what = fit(state, viewer, reconstruction_label.as_deref())?;
+            // Leaving camera view: framing is a statement about the free
+            // camera, and the Z key's own fit ends its animated transition
+            // with the camera view dropped. The MCP form jumps past that
+            // transition, so it lands the same state directly (a fit that
+            // left the render inside a camera view would frame nothing the
+            // caller can see).
+            viewer.camera_view = None;
+            what
+        }
         ViewCommand::LookThrough {
             reconstruction_label,
             camera_image,

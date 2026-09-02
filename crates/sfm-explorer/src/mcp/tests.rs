@@ -578,6 +578,22 @@ fn looking_through_a_camera_image_reports_which_one() {
     assert_eq!(out["view"]["looking_through"], Value::Null);
 }
 
+/// `fit` is a statement about the free camera. The Z key's own fit ends its
+/// animated transition with the camera view dropped; the MCP form jumps past
+/// that transition, so it must land the same state directly.
+#[test]
+fn a_fit_leaves_camera_view() {
+    let (mut state, mut viewer) = two_reconstructions();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "look_through": { "camera_image": "images/A_003.jpg" } }),
+    );
+    let out = call(&mut state, &mut viewer, "set_view", json!({ "fit": null }));
+    assert_eq!(out["view"]["looking_through"], Value::Null);
+}
+
 /// The camera must not still be easing when the reply comes back, or an agent
 /// that screenshots next photographs the middle of the transition.
 #[test]

@@ -575,7 +575,10 @@ double-click use (`ViewportCamera::zoom_to_fit` over `scene::world_points`,
 `Viewer3D::jump_to_camera_view`), so the agent's framing is the framing a human
 gets. Fitting is over *world* points — the reconstruction's own positions put
 through its transform — so an aligned reconstruction is framed where it is
-drawn.
+drawn. A fit also leaves camera view, exactly as the Z key's fit does at
+the end of its animated transition: framing is a statement about the free
+camera, and a fit that left the render looking through a camera image would
+frame nothing the caller can see.
 
 **The animated transition is skipped for MCP-driven view changes.** `Viewer3D`
 eases the camera over roughly 200 ms; an agent that sets the view and screenshots
