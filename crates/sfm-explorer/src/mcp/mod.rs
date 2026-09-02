@@ -23,7 +23,7 @@
 //!
 //! - [`tools`] — the tool table and the wire parse. Names, descriptions,
 //!   `inputSchema`, and JSON arguments to [`Command`].
-//! - [`apply`] and [`render`] — the whole command vocabulary, applied to
+//! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`window::WindowHost`]. **No
 //!   `App`, no GPU handle**, which is what keeps twenty-one of the twenty-two
 //!   tools under headless test.
@@ -60,7 +60,7 @@ pub(crate) use server::serve;
 /// Everything the MCP surface can ask the viewer to do. One variant per tool.
 ///
 /// A reconstruction is named by its **label**, so these carry a `String` that
-/// [`apply`] resolves against `AppState::scene`. `Option<String>` means "the
+/// [`apply_with_window`] resolves against `AppState::scene`. `Option<String>` means "the
 /// selected reconstruction if omitted". The `ReconId` never crosses the wire:
 /// a label is unique across the scene and survives `Reload from Disk`, which
 /// mints a fresh id (see "Addressing" in `specs/gui/mcp-server.md`).
@@ -238,7 +238,7 @@ pub(crate) struct Placement {
 ///
 /// Distinct from a protocol error. This becomes a `CallToolResult` with
 /// `isError: true`, which tells the client the request was well-formed and the
-/// *viewer* declined; a malformed request never reaches [`apply`] at all.
+/// *viewer* declined; a malformed request never reaches [`apply_with_window`] at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolError(pub(crate) String);
 
@@ -276,11 +276,11 @@ pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
 /// The answer of the fifteen tools that speak only JSON.
 ///
-/// Widened to a [`Reply`] at the [`apply`] dispatch, so nothing below it has to
+/// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
 pub(super) type JsonReply = Result<Value, ToolError>;
 
-/// Whether [`apply`] finished the job, or needs the frame to complete first.
+/// Whether [`apply_with_window`] finished the job, or needs the frame to complete first.
 pub(crate) enum Outcome {
     Done(Reply),
     Deferred(Deferred),
@@ -291,7 +291,7 @@ pub(crate) enum Outcome {
 ///
 /// Exactly one tool is in here. `App` holds these until the readback phase and
 /// answers them there, where the `wgpu::Device` already is — which is what
-/// keeps [`apply`] free of a GPU handle.
+/// keeps [`apply_with_window`] free of a GPU handle.
 pub(crate) enum Deferred {
     Screenshot {
         max_dimension: Option<u32>,
@@ -310,7 +310,7 @@ pub(crate) struct Request {
 
 /// Apply one command to the viewer, with no window behind it.
 ///
-/// [`apply_with_window`] against a [`window::NoWindow`] host, which is the
+/// [`apply_with_window`] against a `window::NoWindow` host, which is the
 /// windowless case: `get_window` and `set_window` refuse with "no window", and
 /// every other tool behaves exactly as it does in the viewer. Kept as its own
 /// function for the callers that have no window to offer and should not have to
@@ -593,7 +593,7 @@ fn loaded_list(state: &AppState) -> String {
 /// Apply a frame's worth of commands **as the agent**, recording what they did.
 ///
 /// The drain's application phase, with the channel left out so it is reachable
-/// from a headless test. Three things happen here that [`apply`] cannot do for
+/// from a headless test. Three things happen here that [`apply_with_window`] cannot do for
 /// itself:
 ///
 /// - the Action Log's ambient actor is moved to

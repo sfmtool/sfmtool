@@ -1464,6 +1464,595 @@ fn open_reconstruction_on_an_unreadable_path_records_one_failed_entry() {
     );
 }
 
+// ── The layout tools ────────────────────────────────────────────────────
+
+/// A panel by its wire name, for a reply's `panels` map.
+#[track_caller]
+fn panel(reply: &Value, name: &str) -> Value {
+    reply["panels"][name].clone()
+}
+
+#[test]
+fn get_layout_returns_the_layout_file_and_the_panels_it_holds() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = ok(&mut state, &mut viewer, Command::GetLayout);
+
+    // `layout` is the file itself, not a rendering of it: read back through
+    // the file's own parser it is the arrangement the viewer is in.
+    let document = serde_json::to_string(&reply["layout"]).expect("a document");
+    assert_eq!(
+        Layout::from_json(&document).expect("the reply parses as a layout file"),
+        state.layout()
+    );
+
+    let panels = reply["panels"].as_object().expect("a panels map");
+    assert_eq!(panels.len(), Tab::ALL.len(), "all seven, always");
+    for tab in Tab::ALL {
+        assert_eq!(
+            panel(&reply, tab.wire_name())["open"],
+            json!(true),
+            "{} is open in the default layout",
+            tab.wire_name()
+        );
+    }
+    // The default layout has two multi-tab nodes, so three of the seven sit
+    // behind a sibling rather than in front of it.
+    let active: Vec<&str> = Tab::ALL
+        .iter()
+        .filter(|tab| panel(&reply, tab.wire_name())["active"] == json!(true))
+        .map(|tab| tab.wire_name())
+        .collect();
+    assert_eq!(
+        active,
+        ["scene", "viewer_3d", "image_browser", "image_detail"]
+    );
+}
+
+#[test]
+fn hide_panel_closes_and_show_panel_takes_it_home() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let hidden = call(
+        &mut state,
+        &mut viewer,
+        "hide_panel",
+        json!({ "panel_name": "action_log" }),
+    );
+    assert_eq!(
+        panel(&hidden, "action_log"),
+        json!({ "open": false, "active": false })
+    );
+    assert!(!state.is_panel_open(Tab::ActionLog));
+
+    // Idempotent, as the method is: hiding a closed panel succeeds and
+    // changes nothing. Both tools *set* rather than toggle, for the reason
+    // `set_solo` does.
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "hide_panel",
+        json!({ "panel_name": "action_log" }),
+    );
+    assert_eq!(again, hidden);
+
+    // Shown again it goes home to its default group-mate's node — behind the
+    // Image Browser — and comes to the front of it.
+    let shown = call(
+        &mut state,
+        &mut viewer,
+        "show_panel",
+        json!({ "panel_name": "action_log" }),
+    );
+    assert_eq!(
+        panel(&shown, "action_log"),
+        json!({ "open": true, "active": true })
+    );
+    assert_eq!(
+        panel(&shown, "image_browser"),
+        json!({ "open": true, "active": false })
+    );
+}
+
+#[test]
+fn show_panel_on_an_open_panel_raises_it_and_moves_nothing_else() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = ok(&mut state, &mut viewer, Command::GetLayout);
+    let raised = call(
+        &mut state,
+        &mut viewer,
+        "show_panel",
+        json!({ "panel_name": "point_track" }),
+    );
+    assert_eq!(panel(&raised, "point_track")["active"], json!(true));
+    assert_eq!(panel(&raised, "image_detail")["active"], json!(false));
+    for tab in Tab::ALL {
+        assert_eq!(
+            panel(&raised, tab.wire_name())["open"],
+            panel(&before, tab.wire_name())["open"],
+            "{} moved",
+            tab.wire_name()
+        );
+    }
+}
+
+#[test]
+fn an_unknown_panel_name_lists_the_seven() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "show_panel",
+        json!({ "panel_name": "viewer3d" }),
+    );
+    assert!(error.0.contains("viewer3d"), "{error}");
+    assert!(
+        error.0.contains("viewer_3d") && error.0.contains("action_log"),
+        "the refusal lists the panels: {error}"
+    );
+}
+
+/// The document `get_layout` hands out is a document `set_layout` takes back —
+/// one schema, one parser, and a file an agent saved is a file the menu loads.
+#[test]
+fn set_layout_takes_back_the_document_get_layout_returned() {
+    let (mut state, mut viewer) = two_reconstructions();
+    call(
+        &mut state,
+        &mut viewer,
+        "hide_panel",
+        json!({ "panel_name": "intrinsics" }),
+    );
+    let saved = ok(&mut state, &mut viewer, Command::GetLayout)["layout"].clone();
+
+    let reset = call(
+        &mut state,
+        &mut viewer,
+        "set_layout",
+        json!({ "layout": "default" }),
+    );
+    assert!(state.is_panel_open(Tab::IntrinsicsDetail));
+    assert_eq!(panel(&reset, "intrinsics")["open"], json!(true));
+
+    let restored = call(
+        &mut state,
+        &mut viewer,
+        "set_layout",
+        json!({ "layout": saved.clone() }),
+    );
+    assert_eq!(restored["layout"], saved);
+    assert!(!state.is_panel_open(Tab::IntrinsicsDetail));
+}
+
+#[test]
+fn a_layout_document_that_does_not_validate_is_refused_whole() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let before = state.layout();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_layout",
+        json!({
+            "layout": {
+                "sfm_explorer_layout": 1,
+                "main": {
+                    "split": "left_right",
+                    "fracton": 0.5,
+                    "first": { "tabs": ["scene"] },
+                    "second": { "tabs": ["viewer_3d"] },
+                },
+                "windows": [],
+            }
+        }),
+    );
+    // The layout parser's own message, path and all.
+    assert_eq!(error.0, "main: unknown key \"fracton\"", "{error}");
+    assert_eq!(
+        state.layout(),
+        before,
+        "a refusal leaves the dock untouched"
+    );
+}
+
+#[test]
+fn the_only_named_layout_is_the_default() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_layout",
+        json!({ "layout": "tidy" }),
+    );
+    assert!(
+        error.0.contains("tidy") && error.0.contains("default"),
+        "{error}"
+    );
+}
+
+/// The three layout writes go through the same `AppState` methods the Panels
+/// menu does, so the rows are the menu's rows with the agent in the actor
+/// column.
+#[test]
+fn the_layout_writes_record_the_menus_own_entries_as_the_agent() {
+    let cases: Vec<(Command, &str)> = vec![
+        (
+            Command::HidePanel {
+                panel: Tab::ActionLog,
+            },
+            "Closed Action Log panel",
+        ),
+        (
+            Command::ShowPanel {
+                panel: Tab::PointTrackDetail,
+            },
+            "Raised Point Track panel",
+        ),
+        (
+            Command::SetLayout {
+                layout: super::layout::LayoutTarget::Default,
+            },
+            "Reset layout",
+        ),
+    ];
+    for (command, text) in cases {
+        let (mut state, mut viewer) = quiet_scene();
+        ok(&mut state, &mut viewer, command);
+        let entries: Vec<_> = state.action_log.entries().collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].text, text, "{entries:?}");
+        assert_eq!(entries[0].kind, Kind::Layout, "{entries:?}");
+        assert_eq!(entries[0].actor, Actor::Mcp, "{entries:?}");
+    }
+
+    // A panel that was closed is *opened*, not raised…
+    let (mut state, mut viewer) = quiet_scene();
+    state.hide_panel(Tab::ActionLog);
+    state.action_log.clear();
+    ok(
+        &mut state,
+        &mut viewer,
+        Command::ShowPanel {
+            panel: Tab::ActionLog,
+        },
+    );
+    assert_eq!(
+        state.action_log.entries().next().expect("an entry").text,
+        "Opened Action Log panel"
+    );
+
+    // …and a document says which tool set it, since `apply_layout` records
+    // nothing itself.
+    let (mut state, mut viewer) = quiet_scene();
+    let document = ok(&mut state, &mut viewer, Command::GetLayout)["layout"].clone();
+    state.action_log.clear();
+    ok(
+        &mut state,
+        &mut viewer,
+        Command::SetLayout {
+            layout: super::layout::LayoutTarget::Document(document),
+        },
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].text, "Set layout");
+    assert_eq!(entries[0].kind, Kind::Layout);
+}
+
+#[test]
+fn the_two_new_reads_are_query_entries() {
+    let (mut state, mut viewer) = quiet_scene();
+    ok(&mut state, &mut viewer, Command::GetLayout);
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_layout"));
+    assert_eq!(entries[0].text, "get_layout");
+    // A query never reaches the status line: an agent polling must not read
+    // its own polling back as the viewer's status.
+    assert_eq!(state.status_message(), None);
+
+    let (mut state, mut viewer) = quiet_scene();
+    let mut host = FakeWindow::default();
+    ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow);
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_window"));
+    assert_eq!(state.status_message(), None);
+}
+
+// ── The window tools ────────────────────────────────────────────────────
+
+/// A fake in one of the four states, with the snapshot to match.
+fn windowed(state: WindowState) -> (AppState, Viewer3D, FakeWindow) {
+    let host = FakeWindow {
+        minimized: state == WindowState::Minimized,
+        maximized: state == WindowState::Maximized,
+        fullscreen: state == WindowState::Fullscreen,
+        ..FakeWindow::default()
+    };
+    let (mut app_state, viewer) = two_reconstructions();
+    app_state.window = Some(host.info());
+    (app_state, viewer, host)
+}
+
+#[test]
+fn get_scene_embeds_the_window_and_get_window_adds_the_monitors() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let window = ok(&mut state, &mut viewer, Command::GetScene)["window"].clone();
+    assert_eq!(window["state"], "normal");
+    assert_eq!(window["focused"], json!(true));
+    assert_eq!(window["scale_factor"], json!(1.5));
+    assert_eq!(window["inner_size"], json!([1920, 1080]));
+    assert_eq!(window["outer_size"], json!([1936, 1119]));
+    assert_eq!(window["outer_position"], json!([120, 64]));
+    // Physical pixels throughout, with the logical size under `derived` next
+    // to the scale factor it comes from.
+    assert_eq!(
+        window["derived"]["inner_size_logical"],
+        json!([1280.0, 720.0])
+    );
+    assert_eq!(window["monitor"]["name"], "DISPLAY1");
+    assert!(
+        window["monitors"].is_null(),
+        "get_scene does not list every monitor: {window}"
+    );
+    let fraction = window["derived"]["monitor_fraction"][0]
+        .as_f64()
+        .expect("a fraction");
+    assert!((fraction - 1936.0 / 3840.0).abs() < 1e-9, "{fraction}");
+
+    let reply = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow);
+    let names: Vec<&str> = reply["window"]["monitors"]
+        .as_array()
+        .expect("a monitor list")
+        .iter()
+        .map(|monitor| monitor["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, ["DISPLAY1", "DISPLAY2"], "the current monitor first");
+}
+
+#[test]
+fn set_window_moves_between_the_four_states() {
+    for from in WindowState::ALL {
+        for to in WindowState::ALL {
+            let (mut state, mut viewer, mut host) = windowed(from);
+            let reply = call_with(
+                &mut state,
+                &mut viewer,
+                &mut host,
+                "set_window",
+                json!({ "state": to.wire_name() }),
+            );
+            assert_eq!(
+                reply["window"]["state"],
+                json!(to.wire_name()),
+                "{} -> {}",
+                from.wire_name(),
+                to.wire_name()
+            );
+        }
+    }
+}
+
+/// `normal` means all three flags off. Restoring a minimized window can bring
+/// a maximized one back, and the agent asked for normal.
+#[test]
+fn normal_clears_a_minimized_and_maximized_window() {
+    let mut host = FakeWindow {
+        minimized: true,
+        maximized: true,
+        ..FakeWindow::default()
+    };
+    let (mut state, mut viewer) = two_reconstructions();
+    state.window = Some(host.info());
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "state": "normal" }),
+    );
+    assert_eq!(reply["window"]["state"], "normal");
+    assert!(!host.minimized && !host.maximized, "{host:?}");
+}
+
+#[test]
+fn geometry_needs_a_normal_window() {
+    // Refused in the parse, where the call's own fields are visible.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "state": "minimized", "inner_size": [1600, 900] }),
+    );
+    assert!(error.0.contains("minimized"), "{error}");
+    assert!(
+        host.applied.is_empty(),
+        "nothing was applied: {:?}",
+        host.applied
+    );
+
+    // Refused by the viewer, which is where the state the window is *already*
+    // in is known.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "inner_size": [1600, 900] }),
+    );
+    assert!(
+        error.0.contains("maximized") && error.0.contains("normal"),
+        "{error}"
+    );
+    assert!(host.applied.is_empty(), "{:?}", host.applied);
+
+    // …and accepted with `state: "normal"` in the same call, the pieces
+    // applied in the one order that reads as a sentence.
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({
+            "state": "normal",
+            "outer_position": [100, 50],
+            "inner_size": [1700, 1300],
+            "focus": true,
+        }),
+    );
+    assert_eq!(
+        host.applied,
+        ["state normal", "position 100,50", "size 1700x1300", "focus"]
+    );
+    assert_eq!(reply["window"]["state"], "normal");
+    assert_eq!(reply["window"]["outer_position"], json!([100, 50]));
+    assert_eq!(reply["window"]["inner_size"], json!([1700, 1300]));
+}
+
+/// The reply is read back from the window rather than echoed, so a size the
+/// window clamped comes back clamped — and the Action Log says what was asked
+/// for, which is the thing the person watching can act on.
+#[test]
+fn the_reply_is_a_read_back_and_the_log_is_what_was_asked() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "inner_size": [640, 480] }),
+    );
+    assert_eq!(reply["window"]["inner_size"], json!([1600, 1200]));
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .next_back()
+            .expect("an entry")
+            .text,
+        "Resized window to 640×480"
+    );
+}
+
+#[test]
+fn a_piece_a_set_window_call_does_not_carry_is_preserved() {
+    let mut host = FakeWindow {
+        focused: false,
+        ..FakeWindow::default()
+    };
+    let (mut state, mut viewer) = two_reconstructions();
+    state.window = Some(host.info());
+    let before = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow)["window"].clone();
+    let after = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "focus": true }),
+    )["window"]
+        .clone();
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["inner_size"], before["inner_size"]);
+    assert_eq!(after["outer_position"], before["outer_position"]);
+    assert_eq!(after["focused"], json!(true));
+    assert_eq!(host.applied, ["focus"]);
+}
+
+#[test]
+fn one_set_window_call_is_one_action_log_row() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
+    state.action_log.clear();
+    call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "state": "normal", "inner_size": [1600, 1200] }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0].text,
+        "Restored window; resized window to 1600×1200"
+    );
+    assert_eq!(entries[0].kind, Kind::Window);
+    assert_eq!(entries[0].actor, Actor::Mcp);
+}
+
+/// A picture of a window the human cannot see answers nothing an agent asked
+/// of a shared viewer, and whether a minimized window's swapchain still
+/// presents is platform-dependent.
+#[test]
+fn a_screenshot_of_a_minimized_window_is_refused() {
+    let (mut state, mut viewer, _) = windowed(WindowState::Minimized);
+    let error = refused(
+        &mut state,
+        &mut viewer,
+        Command::Screenshot {
+            max_dimension: None,
+        },
+    );
+    assert!(
+        error.0.contains("minimized") && error.0.contains("set_window"),
+        "{error}"
+    );
+
+    // Not minimized, it defers as it always did.
+    state.window = Some(FakeWindow::default().info());
+    assert!(
+        matches!(
+            agent(
+                &mut state,
+                &mut viewer,
+                Command::Screenshot {
+                    max_dimension: None
+                }
+            ),
+            Outcome::Deferred(_)
+        ),
+        "a screenshot must defer once there is something to photograph"
+    );
+}
+
+/// `apply` is the windowless entry point, so a caller that forgets the host
+/// fails loudly rather than silently exercising nothing.
+#[test]
+fn the_window_tools_refuse_where_there_is_no_window() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let error = refused(
+        &mut state,
+        &mut viewer,
+        Command::SetWindow {
+            change: WindowChange {
+                state: Some(WindowState::Maximized),
+                ..WindowChange::default()
+            },
+        },
+    );
+    assert!(error.0.contains("no window"), "{error}");
+    let error = refused(&mut state, &mut viewer, Command::GetWindow);
+    assert!(error.0.contains("no window"), "{error}");
+}
+
+#[test]
+fn set_window_refuses_a_call_that_asks_for_nothing() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let error = refused_call_with(&mut state, &mut viewer, &mut host, "set_window", json!({}));
+    assert!(error.0.contains("nothing to do"), "{error}");
+    // …and `focus: false` is not a request either, as `exit_camera_view:
+    // false` is not one.
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window",
+        json!({ "focus": false }),
+    );
+    assert!(error.0.contains("focus"), "{error}");
+    assert!(host.applied.is_empty(), "{:?}", host.applied);
+}
+
 // ── The schema and its parser ───────────────────────────────────────────
 
 /// Every property a tool advertises is one its parser accepts.

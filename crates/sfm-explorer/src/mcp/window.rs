@@ -16,7 +16,7 @@
 //! read-back a fake can produce as well as a real window. Deferring it would
 //! apply it after the present — a frame late — and would leave a `set_window`
 //! followed by a `get_window` in one batch answering with the old window. A
-//! trait with two methods keeps [`super::apply`] free of `winit` exactly as it
+//! trait with two methods keeps [`super::apply_with_window`] free of `winit` exactly as it
 //! is free of `wgpu`, and puts the refusals, the application order and the
 //! Action Log line under headless test against a fake.
 
@@ -169,7 +169,7 @@ impl WindowChange {
 ///
 /// Two methods, so the one command that must reach `winit` goes through a seam
 /// a test can stand in for. Implemented for `Arc<winit::window::Window>` in
-/// `super::frame`, by [`NoWindow`] for the windowless case, and by a fake in
+/// `super::frame`, by `NoWindow` for the windowless case, and by a fake in
 /// the tests.
 pub(crate) trait WindowHost {
     /// Apply the pieces in the fixed order the spec states: state, position,
