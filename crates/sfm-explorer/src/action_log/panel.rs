@@ -15,8 +15,8 @@ use super::{ActionLog, Actor, Entry, Kind};
 /// before the actor column, at any reasonable text size.
 const TIME_WIDTH: f32 = 76.0;
 
-/// Width of the actor column, wide enough for `Viewer`.
-const ACTOR_WIDTH: f32 = 48.0;
+/// Width of the actor column: `Viewer` plus the same clear gap before the text.
+const ACTOR_WIDTH: f32 = 62.0;
 
 /// The panel body. Draws the toolbar and the virtualized list into `ui`.
 pub(crate) fn show(ui: &mut egui::Ui, log: &mut ActionLog) {
