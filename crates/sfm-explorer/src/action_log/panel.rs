@@ -11,9 +11,9 @@
 
 use super::{ActionLog, Actor, Entry, Kind};
 
-/// Width of the time column, wide enough for `00:00:00` in the monospace font
-/// at any reasonable text size.
-const TIME_WIDTH: f32 = 62.0;
+/// Width of the time column: `00:00:00` in the monospace font plus a clear gap
+/// before the actor column, at any reasonable text size.
+const TIME_WIDTH: f32 = 76.0;
 
 /// Width of the actor column, wide enough for `Viewer`.
 const ACTOR_WIDTH: f32 = 48.0;
