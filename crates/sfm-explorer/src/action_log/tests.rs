@@ -143,6 +143,25 @@ fn the_status_line_skips_queries_and_prefixes_the_agent() {
     assert_eq!(log.status_line().as_deref(), Some("Soloed alpha"));
 }
 
+/// A refusal reaches the status line whichever tool it came from: only a
+/// *successful* read is kept off it.
+#[test]
+fn the_status_line_shows_a_failed_query() {
+    let mut log = log();
+    log.set_actor(Actor::Mcp);
+    log.record_at(at(0.0), Kind::Scene, false, "Soloed beta");
+    log.record_at(
+        at(1.0),
+        Kind::Query("get_camera_image"),
+        true,
+        "get_camera_image failed: no such image",
+    );
+    assert_eq!(
+        log.status_line().as_deref(),
+        Some("MCP: get_camera_image failed: no such image")
+    );
+}
+
 // ── Muting ──────────────────────────────────────────────────────────────
 
 #[test]

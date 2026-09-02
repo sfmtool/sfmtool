@@ -116,7 +116,7 @@ A single row above the list:
 
 The status message painted under the scene stats in the 3D viewport, and in
 red in the empty-state panel when nothing is loaded, is **the text of the
-most recent non-query entry**, prefixed `MCP: ` when that entry's actor is the
+most recent entry that is not a successful query**, prefixed `MCP: ` when that entry's actor is the
 agent. That is the whole contract: the status line is a one-row window onto
 the log and has no state of its own. Consequences that differ from before:
 
@@ -128,9 +128,10 @@ the log and has no state of its own. Consequences that differ from before:
 - A successful action no longer leaves a stale error on screen, because the
   new entry replaces it; the four sites that cleared the field to achieve that
   go away.
-- MCP queries — `get_scene`, `screenshot`, and the rest — are logged but never
-  reach the status line, so an agent polling `get_scene` does not read its own
-  polling back as the viewer's status.
+- MCP queries — `get_scene`, `screenshot`, and the rest — are logged but, when
+  they succeed, never reach the status line, so an agent polling `get_scene`
+  does not read its own polling back as the viewer's status. A refused query
+  does reach it, like any other failure.
 
 ## What gets logged
 
@@ -356,7 +357,7 @@ impl ActionLog {
     pub(crate) fn dropped(&self) -> usize;
     pub(crate) fn clear(&mut self);
 
-    /// The most recent non-query entry, as the viewport status line shows it:
+    /// The most recent entry that is not a successful query, as the status line shows it:
     /// prefixed `MCP: ` when its actor is `Mcp`.
     pub(crate) fn status_line(&self) -> Option<String>;
 
@@ -512,7 +513,7 @@ coalescing, with the one exception named above (a multi-field
   themselves because no MCP tool calls them.
 
 `get_scene` continues to report `status_message`, now from
-`AppState::status_message()`. Its value is the newest non-query entry, so an
+`AppState::status_message()`. Its value is the newest entry that is not a successful query, so an
 agent reading it back after its own mutating call sees that call, as the
 spec already promises.
 

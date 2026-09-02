@@ -763,7 +763,8 @@ dragging the window on Windows), and an agent must get "the viewer is busy"
 rather than a hung connection.
 
 **Every applied command records an Action Log entry as actor `MCP`**, and the
-viewport status line shows the most recent non-query entry, prefixed `MCP: `
+viewport status line shows the most recent entry that is not a successful
+query, prefixed `MCP: `
 when an agent took it. The human watching the window sees what the agent did, in
 the place the viewer already reports what it did, and can tell it from something
 they did themselves — and can scroll back through the rest of the session in the

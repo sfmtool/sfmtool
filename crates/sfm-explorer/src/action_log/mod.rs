@@ -309,8 +309,13 @@ impl ActionLog {
         self.dropped = 0;
     }
 
-    /// The most recent non-query entry, as the viewport status line shows it:
-    /// prefixed `MCP: ` when its actor is [`Actor::Mcp`].
+    /// The most recent entry that is not a successful query, as the viewport
+    /// status line shows it: prefixed `MCP: ` when its actor is [`Actor::Mcp`].
+    ///
+    /// A successful read is skipped so that an agent polling `get_scene` does
+    /// not read its own polling back as the viewer's status; a *failed* read is
+    /// not, because a refusal is something the person at the window should see
+    /// whichever tool it came from.
     ///
     /// A fresh `String` rather than a stored one: it is built once a frame and
     /// prefixes at most five bytes, where keeping the prefixed form would mean
@@ -319,7 +324,7 @@ impl ActionLog {
         let entry = self
             .entries()
             .rev()
-            .find(|entry| !matches!(entry.kind, Kind::Query(_)))?;
+            .find(|entry| entry.failed || !matches!(entry.kind, Kind::Query(_)))?;
         Some(match entry.actor {
             Actor::Mcp => format!("MCP: {}", entry.text),
             _ => entry.text.clone(),
