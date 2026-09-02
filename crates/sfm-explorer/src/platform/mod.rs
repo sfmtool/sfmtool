@@ -32,8 +32,8 @@ pub enum GestureEvent {
 /// DM claims precision-touchpad contacts for the whole window (`SetContact` on
 /// `DM_POINTERHITTEST`, in the `windows` submodule), so Windows never synthesises a
 /// `WM_MOUSEWHEEL` for a two-finger scroll and egui's own `egui::ScrollArea`s
-/// — the scene graph tree and its inner lists, the intrinsics panel, the point
-/// track table — receive nothing at all. Feeding the pan back in as a
+/// — the scene graph tree and its inner lists, the camera intrinsics panel,
+/// the point track table — receive nothing at all. Feeding the pan back in as a
 /// `Point`-unit `MouseWheel` event is what makes them scroll. The panels that
 /// read [`GestureEvent`]s themselves do not double-handle it: they take their
 /// wheel input through [`ScrollInput`], which suppresses `Point` scroll for
@@ -240,8 +240,8 @@ mod tests {
 
     /// The bug this exists for: DirectManipulation takes the touchpad contacts
     /// for the whole window, so no wheel event ever reaches egui and every
-    /// `ScrollArea` in the app — the scene graph, the intrinsics panel, the
-    /// point track table — sat still under a two-finger scroll.
+    /// `ScrollArea` in the app — the scene graph, the camera intrinsics
+    /// panel, the point track table — sat still under a two-finger scroll.
     #[test]
     fn a_pan_gesture_becomes_a_trackpad_scroll_event() {
         let events = gesture_scroll_events(

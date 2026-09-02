@@ -194,7 +194,7 @@ impl Tab {
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
             Tab::PointTrackDetail => "point_track",
-            Tab::IntrinsicsDetail => "intrinsics",
+            Tab::IntrinsicsDetail => "camera_intrinsics",
             Tab::ActionLog => "action_log",
         }
     }

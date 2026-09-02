@@ -92,7 +92,8 @@ pub fn mouse_button_state() -> u8 {
 /// cursor, and [`super::pointer_in_rect`] is exactly how every DM-driven panel
 /// decides whether a gesture is addressed to it — so a two-finger scroll aimed
 /// at one panel would be taken by whichever panel the phantom was over, e.g.
-/// scrolling the Intrinsics panel panning the Image Detail image beside it.
+/// scrolling the Camera Intrinsics panel panning the Image Detail image beside
+/// it.
 fn mouse_buttons_from(pointer_type: i32, flags: u32) -> Option<u8> {
     if pointer_type != PT_MOUSE {
         return None;

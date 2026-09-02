@@ -1600,7 +1600,7 @@ fn set_layout_takes_back_the_document_get_layout_returned() {
         &mut state,
         &mut viewer,
         "hide_panel",
-        json!({ "panel_name": "intrinsics" }),
+        json!({ "panel_name": "camera_intrinsics" }),
     );
     let saved = ok(&mut state, &mut viewer, Command::GetLayout)["layout"].clone();
 
@@ -1611,7 +1611,7 @@ fn set_layout_takes_back_the_document_get_layout_returned() {
         json!({ "layout": "default" }),
     );
     assert!(state.is_panel_open(Tab::IntrinsicsDetail));
-    assert_eq!(panel(&reset, "intrinsics")["open"], json!(true));
+    assert_eq!(panel(&reset, "camera_intrinsics")["open"], json!(true));
 
     let restored = call(
         &mut state,

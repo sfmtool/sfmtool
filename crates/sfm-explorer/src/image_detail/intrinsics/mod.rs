@@ -228,8 +228,8 @@ pub(crate) struct Arrow {
 }
 
 /// Grid rows that keep the sampled cells square at `cols` across — the same
-/// rule the Intrinsics panel's own field uses, so the panel's number and this
-/// layer's legend describe one field at the default density.
+/// rule the Camera Intrinsics panel's own field uses, so the panel's number and
+/// this layer's legend describe one field at the default density.
 fn grid_rows(camera: &CameraIntrinsics, cols: usize) -> usize {
     if camera.width == 0 {
         return cols;

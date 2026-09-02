@@ -199,10 +199,10 @@ argument `reconstruction_label`.
 
 The seven names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `viewer_3d`, `image_browser`, `image_detail`, `point_track`,
-`intrinsics`, `action_log` (`Tab::wire_name`). An unknown name is refused with
-a message listing all seven (`Tab::all_wire_names`). `Tab` stays the Rust name
-— it is `egui_dock`'s word for the thing in a node, and the code is not the
-wire.
+`camera_intrinsics`, `action_log` (`Tab::wire_name`). An unknown name is
+refused with a message listing all seven (`Tab::all_wire_names`). `Tab` stays
+the Rust name — it is `egui_dock`'s word for the thing in a node, and the code
+is not the wire.
 
 **`layout`** is the whole arrangement as a document, so the field holding one
 is `layout` and not `layout_something`: it carries the entity, not a handle to
@@ -421,8 +421,8 @@ whose workspace has moved cannot find. A track observation's `reproj_error` is
 vector, because a positional vector is unreadable without also shipping the
 model's parameter order and an agent will get it wrong. The order is
 `CameraIntrinsics::parameters`' declaration order — the order `sfm inspect`
-prints and the Intrinsics panel shows, so the three can be diffed against each
-other.
+prints and the Camera Intrinsics panel shows, so the three can be diffed
+against each other.
 
 `get_point` accepts either shape `goto_point::parse_point_query` accepts — a
 bare index against the selected reconstruction, or a full `pt3d_<hash>_<index>`
@@ -726,13 +726,13 @@ The panel arrangement, and which panels are where. No arguments.
     "windows": []
   },
   "panels": {                       // derived from `layout`: one entry per panel, always all seven
-    "scene":         { "open": true,  "active": true },
-    "viewer_3d":     { "open": true,  "active": true },
-    "image_browser": { "open": true,  "active": true },
-    "image_detail":  { "open": true,  "active": true },
-    "point_track":   { "open": true,  "active": false },
-    "intrinsics":    { "open": true,  "active": false },
-    "action_log":    { "open": true,  "active": false }
+    "scene":             { "open": true,  "active": true },
+    "viewer_3d":         { "open": true,  "active": true },
+    "image_browser":     { "open": true,  "active": true },
+    "image_detail":      { "open": true,  "active": true },
+    "point_track":       { "open": true,  "active": false },
+    "camera_intrinsics": { "open": true,  "active": false },
+    "action_log":        { "open": true,  "active": false }
   }
 }
 ```

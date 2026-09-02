@@ -34,7 +34,7 @@ const DEFAULT_JSON: &str = r#"{
           "active": "viewer_3d"
         },
         "second": {
-          "tabs": ["image_detail", "point_track", "intrinsics"],
+          "tabs": ["image_detail", "point_track", "camera_intrinsics"],
           "active": "image_detail"
         }
       },
@@ -365,7 +365,7 @@ fn an_unknown_panel_name_lists_the_seven() {
     assert_eq!(
         message,
         "main: unknown panel \"viewer3d\"; the panels are scene, viewer_3d, image_browser, \
-         image_detail, point_track, intrinsics, action_log"
+         image_detail, point_track, camera_intrinsics, action_log"
     );
 }
 
@@ -396,9 +396,9 @@ fn a_leaf_needs_a_tab_and_an_active_that_is_one_of_them() {
     );
     assert_eq!(
         refusal(
-            r#"{"sfm_explorer_layout": 1, "main": {"tabs": ["scene"], "active": "intrinsics"}}"#
+            r#"{"sfm_explorer_layout": 1, "main": {"tabs": ["scene"], "active": "camera_intrinsics"}}"#
         ),
-        "main: active \"intrinsics\" is not one of this leaf's tabs"
+        "main: active \"camera_intrinsics\" is not one of this leaf's tabs"
     );
 }
 
@@ -527,7 +527,7 @@ fn every_layout_action_is_logged_under_its_own_kind_and_none_coalesce() {
         layout_entries(&state),
         [
             (false, "Closed Action Log panel".to_string()),
-            (false, "Closed Intrinsics panel".to_string()),
+            (false, "Closed Camera Intrinsics panel".to_string()),
             (false, "Opened Action Log panel".to_string()),
             (false, "Raised Scene panel".to_string()),
             (false, "Reset layout".to_string()),

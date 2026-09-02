@@ -58,7 +58,7 @@ fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::
 /// panel below believing it had 726 px, reaching well into the dock cell next
 /// door. `ImageDetail::show` lays the image out in that rect *and* asks whether
 /// the pointer is inside it to decide whether a trackpad gesture is addressed to
-/// it, so scrolling the Intrinsics panel beside it panned the image — for
+/// it, so scrolling the Camera Intrinsics panel beside it panned the image — for
 /// exactly as far into that panel as the overhang reached, which is why widening
 /// the Image Detail panel made the symptom go away.
 #[test]

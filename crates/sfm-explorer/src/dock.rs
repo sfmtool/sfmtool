@@ -4,7 +4,7 @@
 //! Dock tab identity and tab rendering.
 //!
 //! Names the seven panels (Scene, 3D Viewer, Image Browser, Image Detail,
-//! Point Track Detail, Intrinsics, Action Log) and holds the `TabViewer`
+//! Point Track Detail, Camera Intrinsics, Action Log) and holds the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -44,7 +44,7 @@ impl Tab {
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
             Tab::PointTrackDetail => "Point Track",
-            Tab::IntrinsicsDetail => "Intrinsics",
+            Tab::IntrinsicsDetail => "Camera Intrinsics",
             Tab::ActionLog => "Action Log",
         }
     }

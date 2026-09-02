@@ -2,7 +2,7 @@
 
 **Status:** implemented — phase 1 (vocabulary and data model), phase 2
 (`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group),
-phase 4 (the Intrinsics panel), phase 5 (the projection plot, with the
+phase 4 (the Camera Intrinsics panel), phase 5 (the projection plot, with the
 trustworthy domain it needed) and phase 6 (the Image Detail overlay layer).
 
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
@@ -20,8 +20,8 @@ This spec adds it in three coupled pieces:
    toggled, composing with whichever feature or heatmap mode is active — drawing the
    principal point, angular axes, and the lens's distortion field *on the
    photograph*;
-3. an **Intrinsics** dock panel: the parameter table, the distortion curve, and
-   — when an image is selected — that image's extrinsics.
+3. a **Camera Intrinsics** dock panel: the parameter table, the distortion
+   curve, and — when an image is selected — that image's extrinsics.
 
 Related specs: [scene-graph.md](scene-graph.md) (the tree and the
 selection model), [multi-panel-image-browser.md](multi-panel-image-browser.md)
@@ -119,9 +119,9 @@ pub selected_camera: Option<CameraRef>,
 
 `selected_camera` is **stored, not derived**. It has to be: a user can select
 intrinsics with no image selected at all (that is the point of the group), and
-deriving it from `selected_image` would make the Intrinsics panel go blank the
-moment they clicked anything else. What is derived is the *constraint* between
-the two, enforced in one place.
+deriving it from `selected_image` would make the Camera Intrinsics panel go
+blank the moment they clicked anything else. What is derived is the
+*constraint* between the two, enforced in one place.
 
 ### The selection coupling
 
@@ -169,9 +169,9 @@ user's request implies:
   is not different, and clearing there would make clicking the highlighted
   intrinsics row of the image you are looking at throw that image away.
 - **Clearing the image keeps the camera.** Deselecting a photograph is not a
-  statement about the lens, and collapsing the Intrinsics panel because the user
-  dismissed an image would be a surprise. `Esc` pressed twice clears both — the
-  second press, seeing no image, clears the camera.
+  statement about the lens, and collapsing the Camera Intrinsics panel because
+  the user dismissed an image would be a surprise. `Esc` pressed twice clears
+  both — the second press, seeing no image, clears the camera.
 
 `AppState::retain_recon` / `close_node` / `reload_node` filter `selected_camera`
 by `ReconId` exactly as they already filter the other three.
@@ -193,7 +193,7 @@ this is the same "one declaration per camera model" rule
 ```rust
 impl CameraModel {
     /// This model's parameter names in declaration order — the order
-    /// `sfm inspect` prints and the Intrinsics panel tabulates.
+    /// `sfm inspect` prints and the Camera Intrinsics panel tabulates.
     ///
     /// For the two spline models the trailing `bspline_c{i}` names depend on
     /// the coefficient count, so this returns an owned `Vec<Cow<'static, str>>`
@@ -815,12 +815,12 @@ field and at some readable off-axis angle, which is the point of composing them.
 
 ---
 
-## The Intrinsics panel
+## The Camera Intrinsics panel
 
-A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Intrinsics"**, defaulting
-into the same top-right tab group as Image Detail and Point Track, as the
-non-active tab. It is a detail view of a selection like both of its neighbours,
-and like both it is fully re-dockable.
+A sixth dock tab, `Tab::IntrinsicsDetail`, title **"Camera Intrinsics"**,
+defaulting into the same top-right tab group as Image Detail and Point Track,
+as the non-active tab. It is a detail view of a selection like both of its
+neighbours, and like both it is fully re-dockable.
 
 **Empty state.** `No camera selected` centred, with a line beneath:
 `Select a camera under Camera Intrinsics in the Scene panel, or select an
@@ -1237,9 +1237,10 @@ Two caveats remain, both named in the tests rather than left implicit:
   renderer side `frustum_colors` resolves an image that is selected *and* in
   the track *and* a sibling to the strongest of the three, with all three
   written at the full alpha the tint exempts.
-- The Intrinsics panel renders its empty state with no selection, its populated
-  state with one, and the extrinsics block only when an image is selected;
-  the `P` row is absent for a fisheye fixture, replaced by the statement.
+- The Camera Intrinsics panel renders its empty state with no selection, its
+  populated state with one, and the extrinsics block only when an image is
+  selected; the `P` row is absent for a fisheye fixture, replaced by the
+  statement.
   Two of its assertions are numeric rather than textual, because the two places
   a sign error produces a plausible-looking matrix are exactly there: `P` is
   checked by projecting a real point through it and comparing against the
@@ -1377,7 +1378,7 @@ Each phase leaves the viewer in a shippable state.
    draw it, and the ranking is enforced in `frustum_colors` (weakest written
    first, each stronger one overwriting) and mirrored by the browser's
    `!selected && !in_track` guard.
-4. **Intrinsics panel** — *done.* Header, parameters, derived table, `K`,
+4. **Camera Intrinsics panel** — *done.* Header, parameters, derived table, `K`,
    extrinsics, rig block, copy menu. No plot yet — the tables alone already
    replace the `sfm inspect` round trip. `crates/sfm-explorer/src/intrinsics_detail/`,
    split the way `point_track_detail/` is: `mod.rs` owns the state and the one

@@ -208,8 +208,8 @@ pub(super) fn camera_image_row(
 /// [`sfmtool_core::CameraIntrinsics::parameters`] declaration order: a
 /// positional vector cannot be read without also shipping the model's
 /// parameter order, and an agent will get that wrong. The order matches what
-/// `sfm inspect` prints and what the Intrinsics panel shows, so the three can
-/// be diffed against each other.
+/// `sfm inspect` prints and what the Camera Intrinsics panel shows, so the
+/// three can be diffed against each other.
 pub(super) fn camera_intrinsics(camera: &sfmtool_core::CameraIntrinsics) -> Value {
     let params: serde_json::Map<String, Value> = camera
         .parameters()

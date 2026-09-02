@@ -787,10 +787,10 @@ of its own: the finger on the pad, mapped onto the screen. It has nothing to do
 with where the cursor is, and it walks across the window as the fingers move.
 Admitted, it turns the tracked cursor into a phantom that follows the gesture
 around, and the gesture lands on whichever panel the phantom is over rather than
-the one under the real cursor — a two-finger scroll aimed at the Intrinsics
-panel panning the Image Detail image beside it. The same rule covers the button
-state: a contact resting on the pad sets `POINTER_FLAG_FIRSTBUTTON`, which is
-not a mouse button being held.
+the one under the real cursor — a two-finger scroll aimed at the Camera
+Intrinsics panel panning the Image Detail image beside it. The same rule covers
+the button state: a contact resting on the pad sets `POINTER_FLAG_FIRSTBUTTON`,
+which is not a mouse button being held.
 
 The other half of the rule is that the rect a panel tests must be the panel's
 own. `ui.available_rect_before_wrap()` is only that if nothing drawn above it in

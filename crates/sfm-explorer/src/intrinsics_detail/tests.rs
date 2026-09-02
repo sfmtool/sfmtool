@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the Intrinsics panel.
+//! Headless tests for the Camera Intrinsics panel.
 //!
 //! egui lays a frame out with no GPU, so the panel really runs — the tables are
 //! really built, the grids really allocate, and the strings the panel decided

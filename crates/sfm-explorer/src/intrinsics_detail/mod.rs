@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Intrinsics panel — what the selected camera *is*.
+//! Camera Intrinsics panel — what the selected camera *is*.
 //!
 //! The viewer can show where a camera sits and what it saw; this panel is the
 //! one place that says what it **is**: which model, what focal length, how far
@@ -55,7 +55,7 @@ pub(crate) enum PoseFrame {
     NodeTransform,
 }
 
-/// Intrinsics panel state.
+/// Camera Intrinsics panel state.
 pub struct IntrinsicsDetail {
     /// The derived report per camera. Keyed by [`CameraRef`], so a second
     /// reconstruction reusing camera index 0 gets its own entry; dropped
@@ -71,7 +71,7 @@ pub struct IntrinsicsDetail {
     pose_frame: PoseFrame,
 }
 
-/// Response from the Intrinsics panel.
+/// Response from the Camera Intrinsics panel.
 ///
 /// The panel is nearly read-only — it reports only navigation, and the one
 /// navigation it offers is the image name in the extrinsics header.

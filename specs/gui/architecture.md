@@ -395,12 +395,13 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 - **Trackpad scroll in `ScrollArea`s**: DM claims the touchpad contacts for the
   whole window, so Windows never synthesises a `WM_MOUSEWHEEL` for a two-finger
   scroll and egui's own scroll areas — the scene graph tree and its inner
-  lists, the Intrinsics panel, the Point Track table — would sit still under
-  one. `platform::gesture_scroll_events` converts each frame's DM pan back into
-  a `Point`-unit `Event::MouseWheel` on the raw input, which is what makes them
-  scroll. X is negated on the way through: DM reports a horizontal pan with the
-  opposite sign to the way egui reads a wheel's X, which is why the image strip
-  adds `dx` to its scroll offset where it subtracts a wheel `delta.x` from it.
+  lists, the Camera Intrinsics panel, the Point Track table — would sit still
+  under one. `platform::gesture_scroll_events` converts each frame's DM pan back
+  into a `Point`-unit `Event::MouseWheel` on the raw input, which is what makes
+  them scroll. X is negated on the way through: DM reports a horizontal pan
+  with the opposite sign to the way egui reads a wheel's X, which is why the
+  image strip adds `dx` to its scroll offset where it subtracts a wheel
+  `delta.x` from it.
   The panels that read DM gestures directly (3D viewport, Image Detail,
   Image Browser) do not double-handle it: they take wheel input through
   `platform::ScrollInput`, which suppresses `Point` scroll for exactly the

@@ -42,7 +42,7 @@ root, and everything below describes the arrangement to its right.
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
   frustums, navigation.
 - **Image Detail**: top-right, ~1/3 width, sharing a tab group with Point Track
-  and Intrinsics. Full-resolution image of the selected camera.
+  and Camera Intrinsics. Full-resolution image of the selected camera.
 - **Image Browser**: bottom strip, full width, ~20% of the height.
   Horizontally-scrollable strip of 128×128 thumbnails. It shares its tab group
   with the **Action Log** ([action-log.md](action-log.md)) and is the active
@@ -245,10 +245,10 @@ The fourth tab, `PointTrackDetail`, is the per-point inspection panel
 documented in `specs/gui/point-track-detail.md`. A fifth, `SceneGraph`,
 was added by `specs/gui/scene-graph.md`.
 
-> _Added (2026-08-23): a sixth tab, `IntrinsicsDetail` (title "Intrinsics"),
-> joins the Image Detail / Point Track tab group as the third and non-active
-> member — see [camera-intrinsics.md](camera-intrinsics.md) § "The
-> Intrinsics panel"._
+> _Added (2026-08-23): a sixth tab, `IntrinsicsDetail` (title
+> "Camera Intrinsics"), joins the Image Detail / Point Track tab group as the
+> third and non-active member — see
+> [camera-intrinsics.md](camera-intrinsics.md) § "The Camera Intrinsics panel"._
 >
 > _Added (2026-09-01): a seventh, `ActionLog` (title "Action Log"), joins the
 > Image Browser's tab group as the second and non-active member — see
@@ -1102,9 +1102,9 @@ That rect is load-bearing twice over: the image is fitted and centred in it, and
 addressed to this panel (see
 [viewport-navigation.md](viewport-navigation.md#which-panel-a-gesture-is-addressed-to)).
 An overhang therefore both mis-lays-out the image and steals gestures aimed at
-whatever sits to the right — scrolling the Intrinsics panel beside it panned the
-image, for exactly as far into that panel as the overhang reached, which is why
-widening the Image Detail panel made the symptom disappear.
+whatever sits to the right — scrolling the Camera Intrinsics panel beside it
+panned the image, for exactly as far into that panel as the overhang reached,
+which is why widening the Image Detail panel made the symptom disappear.
 
 So `show_overlay_toolbar` draws its row into a child `Ui` and allocates back only
 the space it was *offered*, leaving the parent's `max_rect` alone. What does not
