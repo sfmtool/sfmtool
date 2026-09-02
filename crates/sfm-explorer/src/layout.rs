@@ -507,6 +507,16 @@ impl Layout {
     pub(crate) fn from_json(text: &str) -> Result<Self, LayoutError> {
         let value: Value = serde_json::from_str(text)
             .map_err(|error| LayoutError::at("", format!("not valid JSON: {error}")))?;
+        Layout::from_value(&value)
+    }
+
+    /// Validate an already-parsed layout document.
+    ///
+    /// The half of [`Layout::from_json`] below the JSON parse, so that a
+    /// document that arrived as a `serde_json::Value` — an MCP `set_layout`
+    /// argument — meets exactly the rules, and exactly the messages, a file on
+    /// disk meets.
+    pub(crate) fn from_value(value: &Value) -> Result<Self, LayoutError> {
         let Some(object) = value.as_object() else {
             return Err(LayoutError::at("", "the document must be a JSON object"));
         };

@@ -35,6 +35,14 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         "view": view(state, viewer),
         "status_message": state.status_message(),
         "window_title": state.window_title(),
+        // The window itself, from the snapshot the frame refreshes — `null`
+        // before there is a window to observe. Beside `window_title`, which it
+        // subsumes, and it saves an agent a `get_window` before deciding
+        // whether a screenshot is worth taking at all.
+        "window": state
+            .window
+            .as_ref()
+            .map(|info| super::window::block(info, None)),
     })
 }
 

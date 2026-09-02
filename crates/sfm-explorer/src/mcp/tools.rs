@@ -18,10 +18,13 @@
 
 use serde_json::{json, Map, Value};
 
+use super::layout::LayoutTarget;
+use super::window::{WindowChange, WindowState};
 use super::{
     CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
     ViewCommand,
 };
+use crate::dock::Tab;
 use crate::goto_point::{parse_point_query, PointQuery};
 
 /// What a tool does to the viewer, which is all the MCP annotations need to
@@ -132,6 +135,25 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           pixel it was seen at and that observation's reprojection error.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
+        },
+        ToolSpec {
+            name: "get_layout",
+            description: "Which panels are open and how they are arranged. Returns the layout \
+                          document the Panels menu saves and loads — the same schema set_layout \
+                          takes back — and, beside it, one entry per panel saying whether it is \
+                          open and whether it is the front tab of its node.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
+            name: "get_window",
+            description: "The window the human is looking at: whether it is normal, maximized, \
+                          minimized or fullscreen, whether it has focus, its outer and inner size \
+                          and its position in physical pixels, the scale factor those are \
+                          measured against, and every monitor it could sit on, the current one \
+                          first.",
+            kind: Read,
+            schema: object(&[], &[]),
         },
         ToolSpec {
             name: "open_reconstruction",
@@ -329,6 +351,94 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: set_view_schema(),
         },
         ToolSpec {
+            name: "set_layout",
+            description: "Replace the whole panel arrangement: a layout document, in the shape \
+                          get_layout returns and the Panels menu saves, or the string \"default\" \
+                          for the stock seven-panel grid. A panel the document does not mention \
+                          is closed. Every panel keeps its own state either way — a re-opened \
+                          Image Detail shows the image it had. A document that does not validate \
+                          is refused whole, naming what was wrong and where, and the arrangement \
+                          on screen is left untouched.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[(
+                    "layout",
+                    json!({
+                        "description":
+                            "A layout document, as get_layout returns one, or \"default\" for the \
+                             stock arrangement.",
+                        "anyOf": [
+                            { "type": "object" },
+                            { "type": "string", "enum": ["default"] },
+                        ],
+                    }),
+                )],
+            ),
+        },
+        ToolSpec {
+            name: "show_panel",
+            description: "Open a panel at its home position, or — if it is already open — raise \
+                          it, making it the front tab of its node without moving anything. Where \
+                          an opened panel lands is the viewer's own home rule; send a layout \
+                          document through set_layout to put one somewhere specific.",
+            kind: Write,
+            schema: object(&[], &[("panel_name", panel_name_schema())]),
+        },
+        ToolSpec {
+            name: "hide_panel",
+            description: "Close a panel. Hiding one that is already closed succeeds and changes \
+                          nothing. The panel keeps its state while it is closed, and show_panel \
+                          brings it back.",
+            kind: Write,
+            schema: object(&[], &[("panel_name", panel_name_schema())]),
+        },
+        ToolSpec {
+            name: "set_window",
+            description: "Change the window's state, size, position or focus, a piece at a time: \
+                          what a call does not carry is preserved. The pieces are applied in one \
+                          order — state, then outer_position, then inner_size, then focus — so a \
+                          call carrying several reads as one sentence. Sizes and positions are \
+                          physical pixels, and geometry needs a normal window: send \
+                          state: \"normal\" in the same call to move or resize a maximized, \
+                          minimized or fullscreen one. The reply is read back from the window \
+                          rather than echoed, so it reports what the window actually became.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("state", window_state_schema()),
+                    (
+                        "outer_position",
+                        int_pair_schema(
+                            "Where to put the window's top-left corner, in physical pixels in \
+                             desktop coordinates. Needs a normal window.",
+                            None,
+                        ),
+                    ),
+                    (
+                        "inner_size",
+                        int_pair_schema(
+                            "The drawable area to resize to, in physical pixels. Clamped by the \
+                             window's own minimum and by the platform; the reply says what it \
+                             became. Needs a normal window.",
+                            Some(1),
+                        ),
+                    ),
+                    (
+                        "focus",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "Bring the window to the front. A platform may decline to let an \
+                                 application take focus; the reply's focused says whether it \
+                                 worked.",
+                        }),
+                    ),
+                ],
+                &[],
+            ),
+        },
+        ToolSpec {
             name: "screenshot",
             description: "A PNG of the 3D viewport as it is drawn right now — the 3D view itself, \
                           not the surrounding panels. Answered after the next frame has been \
@@ -413,6 +523,46 @@ fn point_schema() -> Value {
             { "type": "integer", "minimum": 0 },
             { "type": "string" },
         ],
+    })
+}
+
+/// A panel argument: one of the seven names, spelled as the layout file spells
+/// them.
+///
+/// `panel_name` rather than `panel`, because the field carries a name and not
+/// a panel — the same rule that makes the reconstruction argument
+/// `reconstruction_label`.
+fn panel_name_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": Tab::ALL.map(|tab| tab.wire_name()),
+        "description":
+            "Which panel, by the name get_layout and the layout file use.",
+    })
+}
+
+fn window_state_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": WindowState::ALL.map(|state| state.wire_name()),
+        "description":
+            "What the window should be. \"normal\" restores it from all three of minimized, \
+             maximized and fullscreen.",
+    })
+}
+
+/// A two-element array of whole numbers: a size, or a position.
+fn int_pair_schema(description: &str, minimum: Option<i64>) -> Value {
+    let mut items = json!({ "type": "integer" });
+    if let Some(minimum) = minimum {
+        items["minimum"] = json!(minimum);
+    }
+    json!({
+        "type": "array",
+        "items": items,
+        "minItems": 2,
+        "maxItems": 2,
+        "description": description,
     })
 }
 
@@ -674,6 +824,59 @@ pub(crate) fn parse(
             }
         }
         "set_view" => parse_set_view(&args)?,
+        "get_layout" => {
+            args.reject_unknown(&[])?;
+            Command::GetLayout
+        }
+        "set_layout" => {
+            args.reject_unknown(&["layout"])?;
+            // The document is carried through unparsed: `Layout::from_value`
+            // reads it in the tool body, so a document the viewer will not
+            // accept is a refusal the agent and the Action Log both see, in the
+            // layout parser's own words.
+            let layout = match args.map.get("layout") {
+                Some(Value::String(name)) if name == "default" => LayoutTarget::Default,
+                Some(Value::String(other)) => {
+                    return Err(args.error(format!(
+                        "does not know the layout {other:?} — the only named layout is \
+                         \"default\"; anything else is a layout document, as get_layout returns \
+                         one."
+                    )))
+                }
+                Some(document @ Value::Object(_)) => LayoutTarget::Document(document.clone()),
+                Some(other) => {
+                    return Err(args.wrong_type(
+                        "layout",
+                        "a layout document or \"default\"",
+                        other,
+                    ))
+                }
+                None => {
+                    return Err(args.error(
+                        "needs layout — a layout document, as get_layout returns one, or \
+                         \"default\" for the stock arrangement.",
+                    ))
+                }
+            };
+            Command::SetLayout { layout }
+        }
+        "show_panel" => {
+            args.reject_unknown(&["panel_name"])?;
+            Command::ShowPanel {
+                panel: args.panel("panel_name")?,
+            }
+        }
+        "hide_panel" => {
+            args.reject_unknown(&["panel_name"])?;
+            Command::HidePanel {
+                panel: args.panel("panel_name")?,
+            }
+        }
+        "get_window" => {
+            args.reject_unknown(&[])?;
+            Command::GetWindow
+        }
+        "set_window" => parse_set_window(&args)?,
         "screenshot" => {
             args.reject_unknown(&["max_dimension"])?;
             Command::Screenshot {
@@ -689,6 +892,64 @@ pub(crate) fn parse(
         }
     };
     Ok(command)
+}
+
+/// `set_window`'s pieces, and the one combination that has no answer.
+///
+/// A maximized, minimized or fullscreen window's size and position belong to
+/// the window manager, so geometry is accepted only where the window will be
+/// normal once the call has been applied. Half of that is visible here — the
+/// call naming a state itself — and half only to the viewer, which knows the
+/// state the window is already in; `window::set_window` checks the other half.
+fn parse_set_window(args: &Args) -> Result<Command, ToolError> {
+    args.reject_unknown(&["state", "outer_position", "inner_size", "focus"])?;
+
+    let state = match args.optional_string("state")? {
+        None => None,
+        Some(text) => Some(WindowState::from_wire_name(&text).ok_or_else(|| {
+            args.error(format!(
+                "does not know the window state {text:?} — the states are {}.",
+                WindowState::all_wire_names()
+            ))
+        })?),
+    };
+    let focus = match args.optional_bool("focus")? {
+        None => false,
+        Some(true) => true,
+        // As `set_view` reads `exit_camera_view: false`: a field that can only
+        // ask for one thing has not asked for it.
+        Some(false) => {
+            return Err(
+                args.error("reads focus: false as no request at all — omit it, or pass true.")
+            )
+        }
+    };
+    let change = WindowChange {
+        state,
+        outer_position: args
+            .optional_int_pair("outer_position", i32::MIN.into(), i32::MAX.into())?
+            .map(|[x, y]| [x as i32, y as i32]),
+        inner_size: args
+            .optional_int_pair("inner_size", 1, u32::MAX.into())?
+            .map(|[width, height]| [width as u32, height as u32]),
+        focus,
+    };
+
+    if change.is_empty() {
+        return Err(args
+            .error("was given nothing to do — pass state, outer_position, inner_size or focus."));
+    }
+    if change.has_geometry() {
+        if let Some(state) = change.state.filter(|state| *state != WindowState::Normal) {
+            return Err(args.error(format!(
+                "was given a size or a position with state: {:?} — a {} window's geometry belongs \
+                 to the window manager. Send state: \"normal\" alongside them.",
+                state.wire_name(),
+                state.wire_name(),
+            )));
+        }
+    }
+    Ok(Command::SetWindow { change })
 }
 
 /// `set_view`'s five forms, told apart by which field is present.
@@ -1008,6 +1269,50 @@ impl Args<'_> {
                 .ok_or_else(|| self.wrong_type(key, &expected, value))?;
         }
         Ok(Some(out))
+    }
+
+    /// A pair of whole numbers in `[min, max]`: a window size or position.
+    fn optional_int_pair(
+        &self,
+        key: &str,
+        min: i64,
+        max: i64,
+    ) -> Result<Option<[i64; 2]>, ToolError> {
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let expected = format!("an array of 2 whole numbers between {min} and {max}");
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, &expected, value))?;
+        if array.len() != 2 {
+            return Err(self.error(format!(
+                "wants {key} to be {expected} — got {} of them.",
+                array.len()
+            )));
+        }
+        let mut out = [0i64; 2];
+        for (slot, element) in out.iter_mut().zip(array) {
+            *slot = element
+                .as_i64()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| self.wrong_type(key, &expected, value))?;
+        }
+        Ok(Some(out))
+    }
+
+    /// A panel argument, by the name the layout file spells it with.
+    fn panel(&self, key: &str) -> Result<Tab, ToolError> {
+        let name = self.optional_string(key)?.ok_or_else(|| {
+            self.error(format!("needs {key} — one of {}.", Tab::all_wire_names()))
+        })?;
+        Tab::from_wire_name(&name).ok_or_else(|| {
+            self.error(format!(
+                "does not know the panel {name:?} — the panels are {}.",
+                Tab::all_wire_names()
+            ))
+        })
     }
 
     /// A camera image argument, in either of its two spellings.

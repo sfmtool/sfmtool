@@ -350,6 +350,19 @@ pub struct AppState {
     #[cfg(feature = "mcp")]
     pub mcp: Option<McpStatus>,
 
+    /// The window as it was last observed, or `None` before there is a window
+    /// to observe.
+    ///
+    /// A snapshot rather than a live handle, so that reading the window is a
+    /// plain field access from the MCP `apply` seam — which is handed
+    /// `(&mut AppState, &mut Viewer3D)` and no `winit::Window` — and so the
+    /// same reads work headlessly in a test. The frame refreshes it at the top
+    /// of every frame the MCP endpoint is live for, and `set_window` refreshes
+    /// it again after a change, so nothing here can be a frame behind what an
+    /// agent just asked for. See `crate::mcp::window`.
+    #[cfg(feature = "mcp")]
+    pub(crate) window: Option<crate::mcp::window::WindowInfo>,
+
     /// Which panels are docked where.
     ///
     /// State rather than a field of `App`, so that a layout operation is an
@@ -440,6 +453,8 @@ impl AppState {
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]
             mcp: None,
+            #[cfg(feature = "mcp")]
+            window: None,
             dock: Layout::default().to_dock(),
         }
     }

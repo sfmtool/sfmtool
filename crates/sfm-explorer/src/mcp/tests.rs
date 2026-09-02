@@ -24,8 +24,11 @@ use serde_json::{json, Map, Value};
 use sfmtool_core::SfmrReconstruction;
 
 use super::tools::{self, ToolKind};
+use super::window::{MonitorInfo, NoWindow, WindowChange, WindowHost, WindowInfo, WindowState};
 use super::{apply, apply_as_agent, Command, Outcome, ToolError, ToolOutput};
 use crate::action_log::{Actor, Kind};
+use crate::dock::Tab;
+use crate::layout::Layout;
 use crate::scene::{PointRef, SceneNode};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
@@ -83,7 +86,129 @@ fn two_reconstructions() -> (AppState, Viewer3D) {
     // against and the view block can report the two fixed-axis FOVs.
     let mut viewer = Viewer3D::new();
     viewer.panel_size = [1280, 720];
+    // The snapshot the frame would have taken at the top of this frame, so the
+    // window block and the minimized check have a window to read even where
+    // the test hands no host to change one.
+    state.window = Some(FakeWindow::default().info());
     (state, viewer)
+}
+
+/// A [`WindowHost`] with no window behind it: it records what it was asked, in
+/// order, and reports what it then is.
+///
+/// The flags are kept apart rather than collapsed, because a window can be
+/// minimized *and* maximized at once and the collapse into one
+/// [`WindowState`] is exactly what is under test.
+#[derive(Debug, Clone)]
+struct FakeWindow {
+    minimized: bool,
+    maximized: bool,
+    fullscreen: bool,
+    focused: bool,
+    /// `None` stands in for a platform that will not say where a window is.
+    position: Option<[i32; 2]>,
+    inner_size: [u32; 2],
+    /// The smallest inner size it honours, as a real window's
+    /// `with_min_inner_size` does. A request below it is clamped, not refused.
+    minimum: [u32; 2],
+    /// Whether it lets an application take focus.
+    focusable: bool,
+    /// What it was asked, in the order it was asked.
+    applied: Vec<String>,
+}
+
+impl Default for FakeWindow {
+    fn default() -> Self {
+        FakeWindow {
+            minimized: false,
+            maximized: false,
+            fullscreen: false,
+            focused: true,
+            position: Some([120, 64]),
+            inner_size: [1920, 1080],
+            minimum: [1600, 1200],
+            focusable: true,
+            applied: Vec::new(),
+        }
+    }
+}
+
+impl FakeWindow {
+    fn info(&self) -> WindowInfo {
+        WindowInfo {
+            state: WindowState::of(self.minimized, self.fullscreen, self.maximized),
+            focused: self.focused,
+            scale_factor: 1.5,
+            outer_position: self.position,
+            outer_size: [self.inner_size[0] + 16, self.inner_size[1] + 39],
+            inner_size: self.inner_size,
+            monitor: Some(self.monitors()[0].clone()),
+        }
+    }
+
+    fn monitors(&self) -> Vec<MonitorInfo> {
+        vec![
+            MonitorInfo {
+                name: Some("DISPLAY1".to_string()),
+                position: [0, 0],
+                size: [3840, 2160],
+                scale_factor: 1.5,
+            },
+            MonitorInfo {
+                name: Some("DISPLAY2".to_string()),
+                position: [3840, 0],
+                size: [1920, 1080],
+                scale_factor: 1.0,
+            },
+        ]
+    }
+}
+
+impl WindowHost for FakeWindow {
+    fn apply(&mut self, change: &WindowChange) -> Result<(), ToolError> {
+        if let Some(state) = change.state {
+            self.applied.push(format!("state {}", state.wire_name()));
+            match state {
+                WindowState::Normal => {
+                    self.minimized = false;
+                    self.fullscreen = false;
+                    self.maximized = false;
+                }
+                WindowState::Maximized => {
+                    self.minimized = false;
+                    self.fullscreen = false;
+                    self.maximized = true;
+                }
+                WindowState::Minimized => self.minimized = true,
+                WindowState::Fullscreen => {
+                    self.minimized = false;
+                    self.fullscreen = true;
+                }
+            }
+        }
+        if let Some([x, y]) = change.outer_position {
+            self.applied.push(format!("position {x},{y}"));
+            if self.position.is_none() {
+                return Err(ToolError::new(
+                    "This platform does not let an application position its own window.",
+                ));
+            }
+            self.position = Some([x, y]);
+        }
+        if let Some([width, height]) = change.inner_size {
+            self.applied.push(format!("size {width}x{height}"));
+            self.inner_size = [width.max(self.minimum[0]), height.max(self.minimum[1])];
+        }
+        if change.focus {
+            self.applied.push("focus".to_string());
+            self.focused = self.focusable;
+        }
+        Ok(())
+    }
+
+    fn observe(&self) -> Option<(WindowInfo, Vec<MonitorInfo>)> {
+        Some((self.info(), self.monitors()))
+    }
 }
 
 /// Apply one command the way the frame does — as the agent, with the Action Log
@@ -93,7 +218,18 @@ fn two_reconstructions() -> (AppState, Viewer3D) {
 /// part of what an MCP call *is*, and a test that skipped it would be
 /// exercising a path the viewer never takes.
 fn agent(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome {
-    apply_as_agent(state, viewer, vec![command])
+    agent_with(state, viewer, &mut NoWindow, command)
+}
+
+/// The same, against a window host — the two window tools, and anything that
+/// wants to see what the window was asked.
+fn agent_with(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn WindowHost,
+    command: Command,
+) -> Outcome {
+    apply_as_agent(state, viewer, host, vec![command])
         .pop()
         .expect("one command, one outcome")
 }
@@ -101,7 +237,18 @@ fn agent(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outco
 /// Run one command and unwrap the JSON it produced.
 #[track_caller]
 fn ok(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Value {
-    match agent(state, viewer, command) {
+    ok_with(state, viewer, &mut NoWindow, command)
+}
+
+/// The same, against a window host.
+#[track_caller]
+fn ok_with(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn WindowHost,
+    command: Command,
+) -> Value {
+    match agent_with(state, viewer, host, command) {
         Outcome::Done(Ok(ToolOutput::Json(value))) => value,
         Outcome::Done(Ok(ToolOutput::Png { .. })) => panic!("expected JSON, got an image"),
         Outcome::Done(Err(e)) => panic!("expected success, got refusal: {e}"),
@@ -112,7 +259,18 @@ fn ok(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Value {
 /// Run one command and unwrap the refusal it produced.
 #[track_caller]
 fn refused(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> ToolError {
-    match agent(state, viewer, command) {
+    refused_with(state, viewer, &mut NoWindow, command)
+}
+
+/// The same, against a window host.
+#[track_caller]
+fn refused_with(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn WindowHost,
+    command: Command,
+) -> ToolError {
+    match agent_with(state, viewer, host, command) {
         Outcome::Done(Err(e)) => e,
         Outcome::Done(Ok(_)) => panic!("expected a refusal, got success"),
         Outcome::Deferred(_) => panic!("expected a refusal, got a deferral"),
@@ -122,12 +280,24 @@ fn refused(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Too
 /// Parse a tool call the way the transport would, then apply it.
 #[track_caller]
 fn call(state: &mut AppState, viewer: &mut Viewer3D, name: &str, arguments: Value) -> Value {
+    call_with(state, viewer, &mut NoWindow, name, arguments)
+}
+
+/// The same, against a window host.
+#[track_caller]
+fn call_with(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn WindowHost,
+    name: &str,
+    arguments: Value,
+) -> Value {
     let map = arguments
         .as_object()
         .cloned()
         .expect("test arguments are an object");
     let command = tools::parse(name, Some(&map)).unwrap_or_else(|e| panic!("{name}: {e}"));
-    ok(state, viewer, command)
+    ok_with(state, viewer, host, command)
 }
 
 /// Parse a tool call the way the transport would and unwrap the refusal, from
@@ -144,12 +314,24 @@ fn refused_call(
     name: &str,
     arguments: Value,
 ) -> ToolError {
+    refused_call_with(state, viewer, &mut NoWindow, name, arguments)
+}
+
+/// The same, against a window host.
+#[track_caller]
+fn refused_call_with(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn WindowHost,
+    name: &str,
+    arguments: Value,
+) -> ToolError {
     let map = arguments
         .as_object()
         .cloned()
         .expect("test arguments are an object");
     match tools::parse(name, Some(&map)) {
-        Ok(command) => refused(state, viewer, command),
+        Ok(command) => refused_with(state, viewer, host, command),
         Err(error) => error,
     }
 }
@@ -1367,6 +1549,13 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
                 "{}: {property:?} is a word that names two things",
                 spec.name
             );
+            // A panel argument carries a *name*, so it says so — the same rule
+            // that makes the reconstruction argument `reconstruction_label`.
+            assert!(
+                property != "panel",
+                "{}: a panel argument carries a name, so it is panel_name",
+                spec.name
+            );
         }
     }
     assert!(!names.iter().any(|name| name.contains("recon_")));
@@ -1412,6 +1601,8 @@ fn only_the_reads_are_annotated_read_only() {
             "get_camera_image",
             "get_camera_intrinsics",
             "get_point",
+            "get_layout",
+            "get_window",
             "screenshot",
         ]
     );

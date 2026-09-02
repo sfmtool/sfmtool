@@ -77,6 +77,9 @@ pub(crate) enum Kind {
     /// Which panels are docked where: a panel opened, closed or raised, and
     /// the layout reset, saved or loaded. See [`crate::layout`].
     Layout,
+    /// The window itself: the state, size, position and focus one `set_window`
+    /// call changed.
+    Window,
     /// A read-only MCP tool, by name. Coalesces per tool.
     Query(&'static str),
 }
@@ -93,6 +96,7 @@ impl Kind {
             Kind::Display => "Display",
             Kind::Animation => "Animation",
             Kind::Layout => "Layout",
+            Kind::Window => "Window",
             Kind::Query(tool) => tool,
         }
     }
@@ -103,10 +107,15 @@ impl Kind {
     /// drag and an agent's polling are all things that happen many times a
     /// second and mean one thing. The discrete kinds do not — two files opened
     /// in a row are two events, not one, and neither are two panels closed in
-    /// a row.
+    /// a row or two calls that moved the window.
     pub(crate) fn coalesces(self) -> bool {
         match self {
-            Kind::Session | Kind::File | Kind::Scene | Kind::Animation | Kind::Layout => false,
+            Kind::Session
+            | Kind::File
+            | Kind::Scene
+            | Kind::Animation
+            | Kind::Layout
+            | Kind::Window => false,
             Kind::Selection | Kind::View | Kind::Display | Kind::Query(_) => true,
         }
     }

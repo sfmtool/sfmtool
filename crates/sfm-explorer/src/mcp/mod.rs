@@ -24,8 +24,9 @@
 //! - [`tools`] — the tool table and the wire parse. Names, descriptions,
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply`] and [`render`] — the whole command vocabulary, applied to
-//!   `(&mut AppState, &mut Viewer3D)`. **No `App`, no GPU handle**, which is
-//!   what keeps fifteen of the sixteen tools under headless test.
+//!   `(&mut AppState, &mut Viewer3D)` and a [`window::WindowHost`]. **No
+//!   `App`, no GPU handle**, which is what keeps twenty-one of the twenty-two
+//!   tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -41,10 +42,12 @@ use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
 mod frame;
+mod layout;
 mod read;
 pub(crate) mod server;
 pub(crate) mod tools;
 mod view;
+pub(crate) mod window;
 mod write;
 
 pub(crate) mod render;
@@ -112,6 +115,20 @@ pub(crate) enum Command {
     },
     SetView {
         view: ViewCommand,
+    },
+    GetLayout,
+    SetLayout {
+        layout: layout::LayoutTarget,
+    },
+    ShowPanel {
+        panel: crate::dock::Tab,
+    },
+    HidePanel {
+        panel: crate::dock::Tab,
+    },
+    GetWindow,
+    SetWindow {
+        change: window::WindowChange,
     },
     Screenshot {
         max_dimension: Option<u32>,
@@ -291,14 +308,34 @@ pub(crate) struct Request {
     pub(crate) reply: tokio::sync::oneshot::Sender<Reply>,
 }
 
+/// Apply one command to the viewer, with no window behind it.
+///
+/// [`apply_with_window`] against a [`window::NoWindow`] host, which is the
+/// windowless case: `get_window` and `set_window` refuse with "no window", and
+/// every other tool behaves exactly as it does in the viewer. Kept as its own
+/// function for the callers that have no window to offer and should not have to
+/// invent one — which today is the tests, the real frame always having a window
+/// by the time it drains, so this is compiled for them.
+#[cfg(test)]
+pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome {
+    apply_with_window(state, viewer, &mut window::NoWindow, command)
+}
+
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes fifteen of the sixteen
-/// tools testable in a headless `cargo test`: `App` owns a `wgpu::Device`, a
-/// surface and a window, and constructing one needs a GPU and a display that
-/// this crate's lib tests deliberately do without. The one GPU-shaped command
-/// leaves through [`Outcome::Deferred`] instead.
-pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome {
+/// Takes no `App` and no GPU handle, which is what makes twenty-one of the
+/// twenty-two tools testable in a headless `cargo test`: `App` owns a
+/// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
+/// a display that this crate's lib tests deliberately do without. The one
+/// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
+/// window-shaped command through [`window::WindowHost`], which a fake can stand
+/// in for.
+pub(crate) fn apply_with_window(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    host: &mut dyn window::WindowHost,
+    command: Command,
+) -> Outcome {
     match command {
         Command::GetScene => done(Ok(render::scene(state, viewer))),
         Command::ListCameraImages {
@@ -363,12 +400,37 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
             reconstruction_label,
         } => done(write::set_solo(state, reconstruction_label.as_deref())),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),
-        Command::Screenshot { max_dimension } => Outcome::Deferred(Deferred::Screenshot {
-            max_dimension,
-            caption: screenshot_caption(state, viewer),
-        }),
+        Command::GetLayout => done(layout::get_layout(state)),
+        Command::SetLayout { layout } => done(layout::set_layout(state, &layout)),
+        Command::ShowPanel { panel } => done(layout::show_panel(state, panel)),
+        Command::HidePanel { panel } => done(layout::hide_panel(state, panel)),
+        Command::GetWindow => done(window::get_window(state, host)),
+        Command::SetWindow { change } => done(window::set_window(state, host, &change)),
+        Command::Screenshot { max_dimension } => {
+            // A minimized window renders nothing to photograph, and whether its
+            // swapchain still presents at all is platform-dependent — so this
+            // is refused rather than attempted, naming the call that fixes it.
+            // Checked here, against the window snapshot, so it is under
+            // headless test with the rest of the vocabulary.
+            if state.window.as_ref().map(|info| info.state) == Some(window::WindowState::Minimized)
+            {
+                return done(Err(ToolError::new(MINIMIZED)));
+            }
+            Outcome::Deferred(Deferred::Screenshot {
+                max_dimension,
+                caption: screenshot_caption(state, viewer),
+            })
+        }
     }
 }
+
+/// Why a `screenshot` of a minimized window is refused.
+///
+/// A picture of a window the human cannot see answers nothing an agent asked
+/// of a shared viewer, so the refusal names the call that makes one possible.
+pub(super) const MINIMIZED: &str =
+    "The window is minimized, so nothing is being rendered to photograph. Send \
+     set_window { \"state\": \"normal\" } first.";
 
 fn done(reply: JsonReply) -> Outcome {
     Outcome::Done(reply.map(ToolOutput::Json))
@@ -551,6 +613,7 @@ fn loaded_list(state: &AppState) -> String {
 pub(crate) fn apply_as_agent(
     state: &mut AppState,
     viewer: &mut Viewer3D,
+    host: &mut dyn window::WindowHost,
     commands: Vec<Command>,
 ) -> Vec<Outcome> {
     debug_assert_eq!(
@@ -566,7 +629,7 @@ pub(crate) fn apply_as_agent(
             let tool = command.tool_name();
             let kind = command.kind();
             let query = query_text(state, viewer, &command);
-            let outcome = apply(state, viewer, command);
+            let outcome = apply_with_window(state, viewer, host, command);
             match (&outcome, query) {
                 (Outcome::Done(Err(error)), _) => state
                     .action_log
@@ -608,6 +671,12 @@ impl Command {
             Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
             Command::SetSolo { .. } => "set_solo",
             Command::SetView { .. } => "set_view",
+            Command::GetLayout => "get_layout",
+            Command::SetLayout { .. } => "set_layout",
+            Command::ShowPanel { .. } => "show_panel",
+            Command::HidePanel { .. } => "hide_panel",
+            Command::GetWindow => "get_window",
+            Command::SetWindow { .. } => "set_window",
             Command::Screenshot { .. } => "screenshot",
         }
     }
@@ -624,6 +693,8 @@ impl Command {
             | Command::GetCameraImage { .. }
             | Command::GetCameraIntrinsics { .. }
             | Command::GetPoint { .. }
+            | Command::GetLayout
+            | Command::GetWindow
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. } | Command::CloseReconstruction { .. } => Kind::File,
             Command::SelectReconstruction { .. }
@@ -633,6 +704,10 @@ impl Command {
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
             Command::SetView { .. } => Kind::View,
+            Command::SetLayout { .. } | Command::ShowPanel { .. } | Command::HidePanel { .. } => {
+                Kind::Layout
+            }
+            Command::SetWindow { .. } => Kind::Window,
         }
     }
 }
@@ -680,6 +755,8 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             named(reconstruction_label)
         ),
         Command::GetPoint { point } => format!("get_point {}", point_text(point)),
+        Command::GetLayout => "get_layout".to_string(),
+        Command::GetWindow => "get_window".to_string(),
         Command::Screenshot { max_dimension } => {
             let [width, height] = screenshot_size(viewer, *max_dimension);
             format!("screenshot {width}×{height}")

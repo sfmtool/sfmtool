@@ -95,13 +95,15 @@ impl App {
         // lets `run_egui_pass` take a non-`Option` `&Window`.
         let window = self.window.clone().unwrap();
 
-        // Phase 0: apply every MCP tool call that has arrived since the last
-        // frame. First, ahead of everything else, so a command's effect is in
-        // the very frame the agent's request woke: an agent can `set_view` then
-        // `screenshot` and get the new view, and the title sync below already
-        // reflects a file the agent just opened.
+        // Phase 0: refresh the window snapshot, then apply every MCP tool call
+        // that has arrived since the last frame. First, ahead of everything
+        // else, so a command's effect is in the very frame the agent's request
+        // woke: an agent can `set_view` then `screenshot` and get the new view,
+        // a `set_window` lands before egui reads the window size for this
+        // frame's layout, and the title sync below already reflects a file the
+        // agent just opened.
         #[cfg(feature = "mcp")]
-        self.drain_mcp();
+        self.drain_mcp(&window);
 
         // Keep the window title in step with the loaded file. Compared against
         // the last applied title rather than set unconditionally: `set_title`
