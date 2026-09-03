@@ -684,6 +684,336 @@ fn hidden_by_hand_and_hidden_by_a_solo_are_distinguishable() {
     assert_eq!(entry["display"]["drawn"], false);
 }
 
+// ── The Image Detail panel's controls ───────────────────────────────────
+
+/// The document `get_image_detail_display` hands back, unwrapped.
+#[track_caller]
+fn image_detail_display(state: &mut AppState, viewer: &mut Viewer3D) -> Value {
+    ok(state, viewer, Command::GetImageDetailDisplay)["image_detail_display"].clone()
+}
+
+/// Parse and apply a `set_image_detail_display`, returning its document.
+#[track_caller]
+fn set_display(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Value {
+    call(state, viewer, "set_image_detail_display", arguments)["image_detail_display"].clone()
+}
+
+/// A fresh viewer reports what the panel would draw: the feature overlay on,
+/// unfiltered, with the intrinsics layer underneath it.
+#[test]
+fn get_image_detail_display_returns_the_defaults() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let document = image_detail_display(&mut state, &mut viewer);
+    assert_eq!(
+        document,
+        json!({
+            "overlay_mode": "features",
+            "max_features": Value::Null,
+            "feature_size_px": Value::Null,
+            "tracked_only": true,
+            "intrinsics": {
+                "enabled": true,
+                "axes": true,
+                "rings": false,
+                "distortion": true,
+                "distortion_scale": Value::Null,
+                "grid_cols": 16,
+            },
+        })
+    );
+}
+
+/// A call changes exactly the fields it names, at either level, and the reply
+/// is what the next read would say.
+#[test]
+fn set_image_detail_display_changes_only_what_it_names() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "overlay_mode": "reproj_error", "max_features": 500 }),
+    );
+    assert_eq!(reply["overlay_mode"], "reproj_error");
+    assert_eq!(reply["max_features"], 500);
+    // Untouched, at both levels.
+    assert_eq!(reply["tracked_only"], true);
+    assert_eq!(reply["intrinsics"]["grid_cols"], 16);
+    assert_eq!(reply, image_detail_display(&mut state, &mut viewer));
+
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "intrinsics": { "rings": true, "distortion_scale": 10, "grid_cols": 32 } }),
+    );
+    assert_eq!(reply["intrinsics"]["rings"], true);
+    assert_eq!(reply["intrinsics"]["distortion_scale"], 10.0);
+    assert_eq!(reply["intrinsics"]["grid_cols"], 32);
+    // The top level the second call did not mention is still the first's.
+    assert_eq!(reply["overlay_mode"], "reproj_error");
+    assert_eq!(reply["max_features"], 500);
+    assert_eq!(reply, image_detail_display(&mut state, &mut viewer));
+
+    // …and the two doubly-optional fields take an explicit null back to their
+    // "no filter" state.
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "max_features": Value::Null, "intrinsics": { "distortion_scale": Value::Null } }),
+    );
+    assert_eq!(reply["max_features"], Value::Null);
+    assert_eq!(reply["intrinsics"]["distortion_scale"], Value::Null);
+}
+
+/// Every mode the panel offers is reachable by its wire name, and comes back
+/// spelled the same way.
+#[test]
+fn every_overlay_mode_round_trips_over_the_wire() {
+    let (mut state, mut viewer) = two_reconstructions();
+    for mode in crate::state::OverlayMode::ALL {
+        let reply = set_display(
+            &mut state,
+            &mut viewer,
+            json!({ "overlay_mode": mode.wire_name() }),
+        );
+        assert_eq!(reply["overlay_mode"], mode.wire_name());
+        assert_eq!(state.feature_display.overlay_mode, mode);
+    }
+}
+
+/// The size filter is one thing on the wire because it is one checkbox in the
+/// toolbar: setting it writes all four fields, so the toolbar's per-frame
+/// re-derivation finds the drag values it also wrote and changes nothing.
+#[test]
+fn a_feature_size_filter_survives_the_toolbars_next_frame() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "feature_size_px": { "min": 2.0, "max": 40.0 } }),
+    );
+    assert_eq!(reply["feature_size_px"], json!({ "min": 2.0, "max": 40.0 }));
+    // All four, which is what the next frame re-derives the pair from.
+    assert_eq!(state.feature_display.min_feature_size, Some(2.0));
+    assert_eq!(state.feature_display.max_feature_size, Some(40.0));
+    assert_eq!(state.feature_display.min_feature_size_value, 2.0);
+    assert_eq!(state.feature_display.max_feature_size_value, 40.0);
+
+    // The toolbar, every frame: ticked, both options come from the drag
+    // values; unticked, both are cleared. Neither is a change here.
+    let before = crate::state::ImageDetailDisplay::snapshot(
+        &state.feature_display,
+        &state.intrinsics_display,
+    );
+    let feature = &mut state.feature_display;
+    let ticked = feature.min_feature_size.is_some() || feature.max_feature_size.is_some();
+    assert!(ticked);
+    feature.min_feature_size = Some(feature.min_feature_size_value);
+    feature.max_feature_size = Some(feature.max_feature_size_value);
+    let after = crate::state::ImageDetailDisplay::snapshot(
+        &state.feature_display,
+        &state.intrinsics_display,
+    );
+    assert_eq!(before, after, "the toolbar's re-derivation moved something");
+
+    // Null turns the filter off and leaves the drag values where they were,
+    // which is what unticking the checkbox does.
+    let reply = set_display(
+        &mut state,
+        &mut viewer,
+        json!({ "feature_size_px": Value::Null }),
+    );
+    assert_eq!(reply["feature_size_px"], Value::Null);
+    assert_eq!(state.feature_display.min_feature_size_value, 2.0);
+    assert_eq!(state.feature_display.max_feature_size_value, 40.0);
+}
+
+/// Every vocabulary here is static, so every refusal is at the parse — and a
+/// refused call has applied none of its good fields on the way out.
+#[test]
+fn set_image_detail_display_refuses_a_value_it_cannot_show() {
+    let (mut state, mut viewer) = two_reconstructions();
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "overlay_mode": "heatmap", "tracked_only": false }),
+    );
+    assert!(error.0.contains("heatmap"), "{error}");
+    for mode in crate::state::OverlayMode::ALL {
+        assert!(error.0.contains(mode.wire_name()), "{error}");
+    }
+    assert!(state.feature_display.tracked_only, "a refusal applied half");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "tracked_only": false, "intrinsics": { "distortion_scale": 4 } }),
+    );
+    assert!(error.0.contains("1, 2, 3, 5, 10, 20, 50"), "{error}");
+    assert!(state.feature_display.tracked_only, "a refusal applied half");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "intrinsics": { "grid_cols": 20 } }),
+    );
+    assert!(error.0.contains("8, 12, 16, 24, 32"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "max_features": 0 }),
+    );
+    assert!(error.0.contains("overlay_mode"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "feature_size_px": { "min": 40.0, "max": 2.0 } }),
+    );
+    assert!(error.0.contains("no feature at all"), "{error}");
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "feature_size_px": { "min": -1.0, "max": 2.0 } }),
+    );
+    assert!(error.0.contains("zero or more"), "{error}");
+
+    // A call with nothing in it has asked for nothing.
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({}),
+    );
+    assert!(error.0.contains("nothing to change"), "{error}");
+
+    // Nothing above touched the document.
+    assert_eq!(
+        image_detail_display(&mut state, &mut viewer),
+        json!({
+            "overlay_mode": "features",
+            "max_features": Value::Null,
+            "feature_size_px": Value::Null,
+            "tracked_only": true,
+            "intrinsics": {
+                "enabled": true,
+                "axes": true,
+                "rings": false,
+                "distortion": true,
+                "distortion_scale": Value::Null,
+                "grid_cols": 16,
+            },
+        })
+    );
+}
+
+/// One `Display` entry per field the call changed, in the words the panel's
+/// own controls record under — and nothing for a field set to the value it
+/// already had.
+#[test]
+fn set_image_detail_display_records_one_display_entry_per_changed_field() {
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "intrinsics": { "enabled": false } }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].text, "Intrinsics off");
+    assert_eq!(entries[0].kind, Kind::Display);
+    assert_eq!(entries[0].actor, Actor::Mcp);
+
+    // Three fields, three writes. `Display` coalesces, so the run folds into
+    // its newest in the panel while the clock ticks once per field.
+    let (mut state, mut viewer) = quiet_scene();
+    let before = state.action_log.revision();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({
+            "overlay_mode": "track_length",
+            "tracked_only": false,
+            "intrinsics": { "rings": true },
+        }),
+    );
+    assert_eq!(state.action_log.revision() - before, 3);
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .next_back()
+            .expect("an entry")
+            .text,
+        "Intrinsics rings on"
+    );
+
+    // A field set to the value it had is not a change.
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "overlay_mode": "features", "tracked_only": true }),
+    );
+    assert_eq!(
+        state.action_log.entries().count(),
+        0,
+        "{:?}",
+        state.action_log.entries().collect::<Vec<_>>()
+    );
+}
+
+/// Every one of this tool's vocabularies is static, so its refusals are
+/// protocol errors: they never reach the viewer, change nothing, and — like
+/// every protocol error — leave no Action Log row behind (§ "Errors").
+///
+/// The kind a `SetImageDetailDisplay` would be filed under is still
+/// `Kind::Display`, which is where the entries a *successful* call writes go.
+#[test]
+fn a_refused_display_call_never_reaches_the_viewer() {
+    let (mut state, mut viewer) = quiet_scene();
+    tools::parse(
+        "set_image_detail_display",
+        json!({ "intrinsics": { "grid_cols": 20 } }).as_object(),
+    )
+    .expect_err("off the ladder");
+    assert_eq!(
+        state.action_log.entries().count(),
+        0,
+        "a protocol error was logged"
+    );
+    assert_eq!(state.intrinsics_display.grid_cols, 16);
+
+    assert_eq!(
+        Command::SetImageDetailDisplay {
+            change: super::ImageDetailDisplayChange {
+                tracked_only: Some(false),
+                ..Default::default()
+            },
+        }
+        .kind(),
+        Kind::Display
+    );
+    // …and the read is a query, like every other read on the surface.
+    ok(&mut state, &mut viewer, Command::GetImageDetailDisplay);
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_image_detail_display"));
+    assert_eq!(entries[0].text, "get_image_detail_display");
+    assert_eq!(entries[0].actor, Actor::Mcp);
+}
+
 // ── set_view ────────────────────────────────────────────────────────────
 
 #[test]
@@ -1221,6 +1551,12 @@ fn each_mutating_command_records_one_entry_as_the_agent() {
                 ..Default::default()
             },
         },
+        Command::SetImageDetailDisplay {
+            change: super::ImageDetailDisplayChange {
+                tracked_only: Some(false),
+                ..Default::default()
+            },
+        },
         Command::SetView {
             view: super::ViewCommand::Fit {
                 reconstruction_label: None,
@@ -1274,6 +1610,7 @@ fn each_read_only_command_records_a_query_the_status_line_ignores() {
         Command::GetPoint {
             point: crate::goto_point::PointQuery::Index(1),
         },
+        Command::GetImageDetailDisplay,
     ];
     for command in commands {
         let (mut state, mut viewer) = quiet_scene();
@@ -2681,17 +3018,18 @@ fn only_the_reads_are_annotated_read_only() {
             "get_point",
             "get_action_log",
             "get_window_layout",
+            "get_image_detail_display",
             "screenshot",
         ]
     );
-    // Seven reads, thirteen writes, and the one that hands back a picture.
-    assert_eq!(catalog.len(), 21, "the catalog has grown or shrunk");
+    // Eight reads, fourteen writes, and the one that hands back a picture.
+    assert_eq!(catalog.len(), 23, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        13
+        14
     );
 }
 

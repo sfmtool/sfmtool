@@ -14,9 +14,10 @@ This is an opt-in control surface for the running viewer, speaking the
 [Model Context Protocol][mcp] (MCP) over a loopback HTTP endpoint. Started with
 `sfm-explorer --mcp`, the viewer hosts a small server; an agent connects to it
 and can then enumerate the loaded scene graph, open and close `.sfmr` files,
-move the selection and the 3D camera, arrange the panels, size and place the
-window, read back everything that has happened in the viewer, and photograph the
-window or any panel in it. The human keeps the window in front of them the whole
+move the selection and the 3D camera, choose what the Image Detail panel draws
+over its photograph, arrange the panels, size and place the window, read back
+everything that has happened in the viewer, and photograph the window or any
+panel in it. The human keeps the window in front of them the whole
 time and watches it change.
 
 The window itself is part of what the surface drives, because the window is
@@ -98,7 +99,7 @@ place.
 
 ## The tool surface
 
-Twenty-one tools. Seven read, thirteen write, one that closes the loop by
+Twenty-three tools. Eight read, fourteen write, one that closes the loop by
 handing back a picture.
 
 | Tool | Kind | What it does |
@@ -110,6 +111,7 @@ handing back a picture.
 | `get_point` | read | One 3D point: position, colour, error, full track |
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
+| `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene (reload if already open) |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -119,14 +121,15 @@ handing back a picture.
 | `clear_selection` | write | Drop the selection, wholly or one kind of it |
 | `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
+| `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
 | `set_view` | write | Frame the scene, look through a camera image, or set the viewport camera outright |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the seven reads and `screenshot` carry
-`readOnlyHint: true`, the thirteen writes `destructiveHint: false` (nothing here
+Every tool is annotated: the eight reads and `screenshot` carry
+`readOnlyHint: true`, the fourteen writes `destructiveHint: false` (nothing here
 touches a file on disk — `close_reconstruction` unloads, it does not delete;
 `set_window_layout` changes the window and the dock, not the layout file the
 menu saves), and every one of them `openWorldHint: false`. Every `inputSchema`
@@ -210,7 +213,11 @@ is not the wire.
 **`window_layout`** is the whole document — the window's placement and the panel
 arrangement — and **`layout`** is its panel section, so the fields holding them
 are named for the entities and not `layout_something`: they carry the things,
-not handles to them.
+not handles to them. **`image_detail_display`** is the same kind of thing for
+one panel: the Image Detail panel's controls as a document, with the feature
+overlay and its filters at the top level and the intrinsics layer as an
+**`intrinsics`** sub-block, which is how the panel's toolbar draws them — the
+feature controls in a row, the layer behind one checkbox and a gear.
 
 #### `<entity>` for the thing, `<entity>_<attribute>` for a reference to it
 
@@ -564,6 +571,136 @@ toggle is fine for a click, where the user can see the current state; an agent
 issuing one cannot know the outcome without reading the scene first, and a
 retried call would undo itself.
 
+### `get_image_detail_display` / `set_image_detail_display`
+
+The Image Detail panel is the picture that says *where* a solve is wrong: a
+reprojection-error heatmap over the photograph, the distortion field under it,
+the principal point marked. What it draws is decided by the panel's toolbar —
+seven feature overlay modes, three filters on the features, and the intrinsics
+layer with its own sub-toggles — and every one of those is scene-level state on
+`AppState` (`feature_display`, `intrinsics_display`), not a property of any
+image or reconstruction. Which is why they are one document and one pair of
+tools rather than a field on `set_reconstruction_display`: they describe how the
+panel looks at *whatever* is selected. A `screenshot` of `image_detail` shows
+whichever mode the human last picked; these two tools let the agent pick.
+
+`get_image_detail_display` takes no arguments and returns the document:
+
+```jsonc
+{
+  "image_detail_display": {
+    "overlay_mode": "features",       // none | features | reproj_error | track_length
+                                      // | max_track_angle | depth_reliability | condition_number
+    "max_features": null,             // an integer ≥ 1, or null for all of them
+    "feature_size_px": null,          // { "min": 0.0, "max": 50.0 }, or null for no size filter
+    "tracked_only": true,             // only features with a 3D point behind them
+    "intrinsics": {
+      "enabled": true,                // the layer at all; on by default
+      "axes": true,                   // angular axes through the principal point
+      "rings": false,                 // iso-angle rings
+      "distortion": true,             // the displacement field, where the model has any
+      "distortion_scale": null,       // 1 | 2 | 3 | 5 | 10 | 20 | 50, or null for auto
+      "grid_cols": 16                 // 8 | 12 | 16 | 24 | 32
+    }
+  }
+}
+```
+
+`set_image_detail_display` takes any subset of the same fields, at either
+level, and leaves every omitted one alone:
+
+```jsonc
+{ "overlay_mode": "reproj_error" }
+{ "overlay_mode": "features", "tracked_only": false, "max_features": 500 }
+{ "feature_size_px": { "min": 2.0, "max": 40.0 } }
+{ "feature_size_px": null }                                  // the filter off; the values it held persist
+{ "intrinsics": { "enabled": true, "rings": true, "distortion_scale": 10 } }
+{ "intrinsics": { "distortion_scale": null } }               // back to auto
+```
+
+The reply is the whole document, exactly as `get_image_detail_display` would
+return it, so the agent reads back the state rather than the fields it happened
+to set — the same rule as `set_reconstruction_display`.
+
+**The wire spellings are the code's.** `overlay_mode` takes the snake-cased
+`OverlayMode` variant (`OverlayMode::wire_name`, `from_wire_name`,
+`all_wire_names`, exactly as `Tab` spells the seven panels), because the GUI's
+labels — `Reproj Error`, `Max Track Angle` — are display text with spaces in
+it, and § "Where the GUI has no word, the code's word wins" applies to a word
+the GUI has only as a label. An unknown mode is refused with a message listing
+all seven. `distortion_scale` and `grid_cols` are refused off their ladders
+(`IntrinsicsDisplaySettings::SCALE_LADDER`, `GRID_LADDER`) with a message
+listing the ladder, for the reason `tint` refuses a free colour: those are the
+values the gear popup offers, and a value the popup cannot show is a value the
+human cannot see they are looking at. `max_features` is refused below `1` —
+"show no features" is `overlay_mode: "none"`'s job, and `0` would be a second
+spelling of it that the `Max:` dropdown cannot display. A `feature_size_px` is
+refused when either bound is negative or not finite, or when `min` exceeds
+`max`.
+
+**`feature_size_px` is one thing on the wire because it is one checkbox in the
+toolbar.** `FeatureDisplaySettings` keeps two `Option<f32>` — `min_feature_size`
+and `max_feature_size` — beside two persisted drag values, and the toolbar
+re-derives the pair from its single `Min/max size:` checkbox **every frame**:
+ticked, both options are written from the drag values; unticked, both are
+cleared. So the two are never independently `Some` while the panel is open, and
+a tool that let an agent set one without the other would have its half undone
+by the next frame. The document therefore reports the pair as one object or
+`null`, and setting it writes **all four fields** — both options *and* both
+drag values — so that the toolbar's next frame re-derives exactly what the
+agent asked for. Setting it to `null` clears the two options and leaves the drag
+values where they were, which is what unticking the checkbox does.
+
+**Refusals are atomic, and they happen at the parse.** Every vocabulary here
+is static — the seven modes, the two ladders, the bounds on a size filter — so
+the whole call is validated in `tools` before a `Command` exists, and `apply`
+cannot fail. A call naming a good field and a bad one changes nothing. Being
+turned away at the parse also makes it a *protocol* error rather than a domain
+one (§ "Errors"), so it never reaches the viewer and leaves no Action Log row;
+`Kind::Display`, which `Command::kind` gives the command, is where the entries
+a **successful** call writes go.
+
+**Every field the call changed is one Action Log entry**, under `Display` and
+in the words the HUD's own controls use — `{Control} {on|off}`, `{Control}
+{value}` — because each is its own control to the person watching the window
+(the same reasoning as `set_reconstruction_display`, [action-log.md](action-log.md)
+§ "Catalogue"). An unchanged field records nothing. `Display` coalesces, so a
+call that changed several of them advances the log's revision once per field
+while the run folds in the panel into the newest of them — the same folding a
+human's run of toolbar changes gets, and the reason a reader watching the panel
+sees one line move rather than a burst. The texts:
+
+| Field | Text |
+|-------|------|
+| `overlay_mode` | `Overlay {label}` — the GUI label, e.g. `Overlay Reproj Error` |
+| `max_features` | `Max features {n}` / `Max features all` |
+| `feature_size_px` | `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` |
+| `tracked_only` | `Tracked only {on|off}` |
+| `intrinsics.enabled` | `Intrinsics {on|off}` |
+| `intrinsics.axes` / `rings` / `distortion` | `Intrinsics axes {on|off}` / `Intrinsics rings {on|off}` / `Intrinsics distortion {on|off}` |
+| `intrinsics.distortion_scale` | `Distortion scale ×{n}` / `Distortion scale auto` |
+| `intrinsics.grid_cols` | `Grid density {n}` |
+
+**The human's changes to the same controls record the same texts**, as `User`.
+Before this pair existed the Image Detail toolbar, its gear popup and the `I`
+key wrote straight into the two settings structs and logged nothing, which was
+tolerable while only a human touched them and is not once an agent can: the
+Action Log's premise is that both actors see what the other did in one place,
+and a heatmap mode the agent switched on has to be as visible in the log as the
+grid the human switched off. The record is one function — the diff of the two
+settings structs before and after a change, one `Kind::Display` entry per field
+that differs, in the table's words — and **both actors call it**: the tool
+around its write, the dock around the panel's frame. One function is what
+guarantees the texts are identical; a second catalogue in the toolbar would
+drift.
+
+The settings hold whether or not the Image Detail panel is open, so a
+`set_image_detail_display` against a closed panel is not refused: it is what
+the panel will show when `show_panel` opens it. Nothing here selects an image —
+the panel shows the selected camera image of the selected reconstruction, as it
+always has, and `select_camera_image` is how the agent chooses which
+photograph the overlay is drawn on.
+
 ### The view block
 
 The block reports the viewport camera's stored state, field for field, and puts
@@ -826,8 +963,10 @@ the other panels have no picture underneath what is drawn on them"* — rather
 than read as a request to draw the frame differently. The Image Detail panel's
 overlays are content its own toggles control, not chrome, and a screenshot flag
 that quietly changed what the panel drew would give the agent a picture the
-human never saw; if an agent needs the raw image, the addition is a tool that
-sets the panel's display, which § "Open questions" already lists. `hud` is the
+human never saw; an agent that needs the raw photograph says so where the human
+would, with `set_image_detail_display { "overlay_mode": "none", "intrinsics":
+{ "enabled": false } }`, and the panel then shows what the screenshot
+returns. `hud` is the
 GUI's own word for the overlay ([viewport-hud.md](viewport-hud.md)), which is
 why the initialism stands where the vocabulary rule would otherwise want a
 spelled-out word.
@@ -1306,6 +1445,7 @@ testable without a window:
 | `tools` | The tool table and the wire parse: names, descriptions, `inputSchema`, and JSON arguments to a `Command` |
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
+| `display` | The `image_detail_display` document: its render, the parse of a change into `ImageDetailDisplayChange`, and the apply — over the two settings structs and the diff-and-record function in `crate::state` that the toolbar shares, unconditional because the human's changes are logged in every build |
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
@@ -1335,6 +1475,11 @@ pub(crate) enum Command {
     ClearSelection { scope: SelectionScope },
     SetReconstructionDisplay { reconstruction_label: String, change: DisplayChange },
     SetSolo { reconstruction_label: Option<String> },
+    GetImageDetailDisplay,
+    /// Every field an `Option`, `None` meaning "leave it": the parse has
+    /// already resolved the mode name, checked the ladders and the size
+    /// bounds, so `apply` only writes and records.
+    SetImageDetailDisplay { change: ImageDetailDisplayChange },
     SetView { view: ViewCommand },
     GetWindowLayout,
     /// The document as it arrived, unparsed, so that one the viewer will not
@@ -1351,7 +1496,10 @@ pub(crate) enum Command {
 
 `Command::kind` for `SetWindowLayout` is `Kind::Layout` when the object carries a
 `layout` key and `Kind::Window` otherwise, which is where a refusal of it is
-filed. Everything the window portion is made of — `WindowChange`, `WindowState`,
+filed. `SetImageDetailDisplay` is `Kind::Display` — the kind the HUD's own
+controls record under, since the Image Detail toolbar is the same sort of thing
+on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
+other read. Everything the window portion is made of — `WindowChange`, `WindowState`,
 `WindowInfo`, `MonitorInfo`, `NormalRect`, `fit_to_monitor` and the `WindowHost`
 trait — lives in `crate::window` and is spelled out in
 [panel-layout.md](panel-layout.md) § "The window"; the document itself, and
@@ -1411,7 +1559,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes twenty of the twenty-one tools testable in a headless
+/// makes twenty-two of the twenty-three tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -1446,9 +1594,9 @@ messages and its JSON shapes under headless test, and leaves exactly one tool
 (`screenshot`) needing a window.
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other twenty answer with JSON; squeezing an image through a
+picture and the other twenty-two answer with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-twenty return a plain `Result<Value, ToolError>` and are widened at the
+twenty-two return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
@@ -1522,7 +1670,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Twenty-one tools are cheap
+relaunch would call tools the new binary does not have. Twenty-three tools are cheap
 to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
 there are no authorization contexts to share a result across.
 
@@ -1642,6 +1790,26 @@ where a test hands no host over.
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
   call's other fields unapplied.
+- **`get_image_detail_display` returns the defaults on a fresh state**, with
+  `intrinsics.enabled` true, `feature_size_px` null and `overlay_mode`
+  `"features"`; **`set_image_detail_display`** changes exactly the fields it
+  names at either level and the reply equals the next `get`; every one of the
+  seven mode names round-trips; a `feature_size_px` set through the tool
+  survives one Image Detail panel frame (the toolbar's per-frame re-derivation
+  finds the drag values it also wrote); `null` clears the filter and leaves the
+  drag values; an unknown mode lists the seven, an off-ladder `distortion_scale`
+  or `grid_cols` lists its ladder, `max_features: 0` and a size filter with
+  `min > max` are refused, and each refusal leaves the call's good fields
+  unapplied — and, being a protocol error, records nothing. The log gets **one
+  `Display` entry per changed field** in the table's words, as `Mcp`, and
+  nothing for a field set to the value it had; a call that changed three fields
+  is read off the revision clock, which ticks once per write whether or not the
+  run folds. The texts themselves are asserted one field at a time against the
+  differ in `crate::state`, which is where both actors' entries come from.
+- **The human's Image Detail changes are logged the same way**: a
+  `Context::run_ui` frame that presses `I` over the panel records
+  `Intrinsics off` as `User`, and a frame that changes nothing records nothing —
+  the differ, not the widget, decides.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
@@ -1708,7 +1876,7 @@ where a test hands no host over.
   BGRA swizzle are tested over a synthetic padded buffer, in `mcp::frame`.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **The catalog is twenty-one tools**, seven of them reads;
+- **The catalog is twenty-three tools**, eight of them reads;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud` and `max_dimension`.
@@ -1872,6 +2040,9 @@ Other candidates, in rough order of value:
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
+| `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
+| `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
+| `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
 
 ## Open questions
 
@@ -1914,3 +2085,8 @@ Other candidates, in rough order of value:
   EDL thickness, patch opacity). They change what a screenshot shows, so an
   agent evaluating a reconstruction may want them; they are also a long tail of
   knobs that would double the tool's surface. Left out until something asks.
+  The Image Detail panel's controls got their own pair
+  (`get_image_detail_display` / `set_image_detail_display`) because that panel
+  is where "where is the solve wrong" is answered and its controls are a closed
+  set; if the HUD's are exposed, a `viewer_3d_display` document of the same
+  shape is the precedent to follow, not more fields on `set_view`.

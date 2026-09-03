@@ -274,6 +274,17 @@ impl TabViewer for TabContext<'_> {
                             recon.cameras.get(camera_index)?,
                         ))
                     });
+                    // What the panel's controls were before this frame ran.
+                    // The toolbar, the gear popup and the `I` key inside
+                    // `ImageDetail::show` all write straight into the two
+                    // settings structs, so one snapshot around the whole
+                    // stretch is what turns any of them into an Action Log
+                    // entry — in the same words `set_image_detail_display`
+                    // produces, since both call one differ.
+                    let before = crate::state::ImageDetailDisplay::snapshot(
+                        &self.state.feature_display,
+                        &self.state.intrinsics_display,
+                    );
                     // Overlay toolbar at the top of the detail panel
                     show_overlay_toolbar(
                         ui,
@@ -338,6 +349,15 @@ impl TabViewer for TabContext<'_> {
                         full_res,
                         &self.state.feature_display,
                         &mut self.state.intrinsics_display,
+                    );
+                    let after = crate::state::ImageDetailDisplay::snapshot(
+                        &self.state.feature_display,
+                        &self.state.intrinsics_display,
+                    );
+                    crate::state::record_image_detail_changes(
+                        &mut self.state.action_log,
+                        &before,
+                        &after,
                     );
                     if let Some(point_idx) = detail_response.select_point {
                         // Through the setter rather than the field: the point

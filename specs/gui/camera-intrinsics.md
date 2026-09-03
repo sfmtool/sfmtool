@@ -497,9 +497,12 @@ The layer's state is a sibling struct on `AppState` — not a field of
 /// Scene-level state of the intrinsics overlay layer, drawn on the Image
 /// Detail panel independently of `FeatureDisplaySettings::overlay_mode`.
 pub struct IntrinsicsDisplaySettings {
-    /// Draw the layer at all. Off by default: it is a diagnostic, and the
-    /// panel's default view is the photograph.
-    pub enabled: bool,            // default false
+    /// Draw the layer at all. On by default: the layer is the reference
+    /// frame the features sit in, and the first look at a photograph in this
+    /// panel is a diagnostic one — where the principal point is, how the lens
+    /// bends the rim — whether a human or an agent (via `screenshot`) is
+    /// looking. `I` turns it off in one keystroke for the clean view.
+    pub enabled: bool,            // default true
     /// Draw the angular axes through the principal point.
     pub axes: bool,               // default true
     /// Draw iso-angle rings at the same angular ladder as the axis ticks.
@@ -1276,6 +1279,11 @@ Two caveats remain, both named in the tests rather than left implicit:
   frame, which needs a warm-up pass first: egui resolves hover against the
   previous pass's widget rects, so on a fresh context's first frame nothing is
   hovered and neither `I` nor the panel's existing `Z` would fire.
+- The same frame with the dock's before/after snapshot around it records
+  `Intrinsics off` as `User`, and a frame that changed nothing records nothing —
+  the differ decides, not the widget
+  ([mcp-server.md](mcp-server.md) § "`get_image_detail_display` /
+  `set_image_detail_display`").
 - The layer's settings popup shows the `No distortion` line instead of the
   distortion row for a pinhole fixture, and its footer names the domain its
   maximum was taken over for a bounded model and not for an unbounded one.

@@ -7,7 +7,8 @@
 //! See `specs/gui/mcp-server.md`. Started with `sfm-explorer --mcp`, the viewer
 //! hosts a small HTTP server on loopback; a connected agent can enumerate the
 //! scene graph, open and close `.sfmr` files, move the selection and the 3D
-//! camera, and take a screenshot of the viewport.
+//! camera, choose what the Image Detail panel draws over its photograph, and
+//! take a screenshot of the viewport.
 //!
 //! ## The shape of this module, and why
 //!
@@ -25,8 +26,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps twenty of the twenty-one
-//!   tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps twenty-two of the
+//!   twenty-three tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -41,6 +42,7 @@ use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
+mod display;
 mod frame;
 mod layout;
 mod read;
@@ -124,6 +126,15 @@ pub(crate) enum Command {
     SetSolo {
         reconstruction_label: Option<String>,
     },
+    GetImageDetailDisplay,
+    /// Every field an `Option`, `None` meaning "leave it alone".
+    ///
+    /// The parse has already resolved the mode name, checked the two ladders
+    /// and the size bounds, so [`apply_with_window`] only writes and records —
+    /// which is what makes a refusal atomic without a rollback.
+    SetImageDetailDisplay {
+        change: ImageDetailDisplayChange,
+    },
     SetView {
         view: ViewCommand,
     },
@@ -202,6 +213,36 @@ pub(crate) struct DisplayChange {
     pub(crate) tint: Option<Option<String>>,
 }
 
+/// A `set_image_detail_display` request: the Image Detail panel's controls,
+/// with every field a call did not name left alone.
+///
+/// The feature overlay and its filters at the top level and the intrinsics
+/// layer in a sub-struct, which is the shape of the document on the wire and
+/// the shape of the toolbar it drives.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ImageDetailDisplayChange {
+    pub(crate) overlay_mode: Option<crate::state::OverlayMode>,
+    /// Doubly optional: the outer `None` is "the call did not mention the
+    /// cap", the inner one is "lift it", which is what a JSON `null` asks for.
+    pub(crate) max_features: Option<Option<usize>>,
+    pub(crate) feature_size_px: Option<display::FeatureSize>,
+    pub(crate) tracked_only: Option<bool>,
+    pub(crate) intrinsics: IntrinsicsChange,
+}
+
+/// The `intrinsics` sub-block of an [`ImageDetailDisplayChange`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct IntrinsicsChange {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) axes: Option<bool>,
+    pub(crate) rings: Option<bool>,
+    pub(crate) distortion: Option<bool>,
+    /// Doubly optional, as `max_features` is: an explicit `null` is "back to
+    /// the automatic scale".
+    pub(crate) distortion_scale: Option<Option<f32>>,
+    pub(crate) grid_cols: Option<usize>,
+}
+
 /// The five things `set_view` can be asked for.
 ///
 /// One enum rather than a bag of optional fields, because these are *intents*
@@ -275,7 +316,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other twenty answer with JSON, and squeezing an image through a JSON
+/// the other twenty-two answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -292,7 +333,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the twenty tools that speak only JSON.
+/// The answer of the twenty-two tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -363,8 +404,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes twenty of the
-/// twenty-one tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes twenty-two of the
+/// twenty-three tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -444,6 +485,8 @@ pub(crate) fn apply_with_window(
         Command::SetSolo {
             reconstruction_label,
         } => done(write::set_solo(state, reconstruction_label.as_deref())),
+        Command::GetImageDetailDisplay => done(display::get(state)),
+        Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),
         Command::GetWindowLayout => done(layout::get_window_layout(state, host)),
         Command::SetWindowLayout { document } => {
@@ -799,6 +842,8 @@ impl Command {
             Command::ClearSelection { .. } => "clear_selection",
             Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
             Command::SetSolo { .. } => "set_solo",
+            Command::GetImageDetailDisplay => "get_image_detail_display",
+            Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
             Command::SetView { .. } => "set_view",
             Command::GetWindowLayout => "get_window_layout",
             Command::SetWindowLayout { .. } => "set_window_layout",
@@ -822,6 +867,7 @@ impl Command {
             | Command::GetPoint { .. }
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
+            | Command::GetImageDetailDisplay
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. } | Command::CloseReconstruction { .. } => Kind::File,
             Command::SelectReconstruction { .. }
@@ -830,6 +876,9 @@ impl Command {
             | Command::SelectPoint { .. }
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
+            // The kind the HUD's own controls record under: the Image Detail
+            // toolbar is the same sort of thing on a different panel.
+            Command::SetImageDetailDisplay { .. } => Kind::Display,
             Command::SetView { .. } => Kind::View,
             Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
             // One call, two portions, and a refusal has to be filed somewhere:
@@ -894,6 +943,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             format!("get_action_log since {since_revision}")
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
+        Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::Screenshot {
             panel,
             hud,

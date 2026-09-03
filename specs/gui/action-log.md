@@ -174,6 +174,7 @@ strings, with `{…}` for the values that vary.
 | View | yes | MCP | `Camera placed` / `Camera restored` / `Field of view {fov:.1}°` |
 | Display | yes | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
 | Display | yes | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031` |
+| Display | yes | User / MCP | The Image Detail panel's controls, in the same two shapes: `Overlay {label}` / `Max features {n|all}` / `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` / `Tracked only {on|off}` / `Intrinsics {on|off}` / `Intrinsics {axes|rings|distortion} {on|off}` / `Distortion scale {×n|auto}` / `Grid density {n}` — one entry per field that changed, from one differ both the toolbar and `set_image_detail_display` call ([mcp-server.md](mcp-server.md) § "`get_image_detail_display` / `set_image_detail_display`") |
 | Animation | no | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
 | Animation | no | Viewer | `Animation reached the end at {name}` |
 | Animation | no | User | `Animation rate {fps} fps` |

@@ -689,11 +689,11 @@ fn the_layer_composes_with_every_feature_mode_without_disturbing_it() {
             ..Default::default()
         };
 
-        let mut off = IntrinsicsDisplaySettings::default();
-        let mut on = IntrinsicsDisplaySettings {
-            enabled: true,
+        let mut off = IntrinsicsDisplaySettings {
+            enabled: false,
             ..Default::default()
         };
+        let mut on = IntrinsicsDisplaySettings::default();
 
         let (mut without, mut with) = (Vec::new(), Vec::new());
         flatten(
@@ -726,7 +726,103 @@ fn i_toggles_the_layer_while_the_pointer_is_over_the_panel() {
     let (node, sift, image) = demo_panel_fixture();
     let feature_display = crate::state::FeatureDisplaySettings::default();
 
-    let press_i = |at: egui::Pos2| egui::RawInput {
+    let mut settings = IntrinsicsDisplaySettings::default();
+    assert!(
+        settings.enabled,
+        "on by default: it is the reference frame the features sit in"
+    );
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(450.0, 350.0)),
+    );
+    assert!(!settings.enabled, "`I` over the panel turns the layer off");
+
+    // And it is a toggle, not a latch.
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(450.0, 350.0)),
+    );
+    assert!(settings.enabled);
+
+    // With the pointer outside the panel the key belongs to whatever is under
+    // it instead, exactly as the panel's existing `Z` behaves.
+    panel_frame_with_input(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        press_i(egui::pos2(-40.0, -40.0)),
+    );
+    assert!(settings.enabled);
+}
+
+/// The human's `I` is one `Display` entry, in the words
+/// `set_image_detail_display` produces for the same control — and a frame
+/// nobody touched is not a change.
+///
+/// The differ and not the widget decides, which is what keeps the Action Log
+/// free of the phantom rows [`crate::action_log::ActionLog::changed`]
+/// documents: a value nobody touched is equal to the one before it.
+#[test]
+fn a_frame_that_toggles_the_layer_records_it_and_a_quiet_one_does_not() {
+    let (node, sift, image) = demo_panel_fixture();
+    let feature_display = crate::state::FeatureDisplaySettings::default();
+    let mut settings = IntrinsicsDisplaySettings::default();
+    let mut log = crate::action_log::ActionLog::new();
+
+    // A frame with the pointer over the panel and no keystroke: the toolbar's
+    // own re-derivations run, and none of them is a change.
+    logged_panel_frame(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        &mut log,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            events: vec![egui::Event::PointerMoved(egui::pos2(450.0, 350.0))],
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        log.entries().count(),
+        0,
+        "a frame nobody touched recorded {:?}",
+        log.entries().collect::<Vec<_>>()
+    );
+
+    logged_panel_frame(
+        &node,
+        &sift,
+        &image,
+        &feature_display,
+        &mut settings,
+        &mut log,
+        press_i(egui::pos2(450.0, 350.0)),
+    );
+    let entries: Vec<_> = log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].text, "Intrinsics off");
+    assert_eq!(entries[0].actor, crate::action_log::Actor::User);
+    assert_eq!(entries[0].kind, crate::action_log::Kind::Display);
+}
+
+/// One `I` press over the panel, as the key test spells it.
+fn press_i(at: egui::Pos2) -> egui::RawInput {
+    egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
             egui::vec2(900.0, 700.0),
@@ -742,42 +838,24 @@ fn i_toggles_the_layer_while_the_pointer_is_over_the_panel() {
             },
         ],
         ..Default::default()
-    };
+    }
+}
 
-    let mut settings = IntrinsicsDisplaySettings::default();
-    assert!(!settings.enabled, "off by default: it is a diagnostic");
-    panel_frame_with_input(
-        &node,
-        &sift,
-        &image,
-        &feature_display,
-        &mut settings,
-        press_i(egui::pos2(450.0, 350.0)),
-    );
-    assert!(settings.enabled, "`I` over the panel turns the layer on");
-
-    // And it is a toggle, not a latch.
-    panel_frame_with_input(
-        &node,
-        &sift,
-        &image,
-        &feature_display,
-        &mut settings,
-        press_i(egui::pos2(450.0, 350.0)),
-    );
-    assert!(!settings.enabled);
-
-    // With the pointer outside the panel the key belongs to whatever is under
-    // it instead, exactly as the panel's existing `Z` behaves.
-    panel_frame_with_input(
-        &node,
-        &sift,
-        &image,
-        &feature_display,
-        &mut settings,
-        press_i(egui::pos2(-40.0, -40.0)),
-    );
-    assert!(!settings.enabled);
+/// One panel frame with the dock's before/after snapshot around it — the same
+/// pair `TabViewer::ui` takes, so what this records is what the viewer records.
+fn logged_panel_frame(
+    node: &crate::scene::SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    image: &sfmtool_core::camera::remap::ImageU8,
+    feature_display: &crate::state::FeatureDisplaySettings,
+    intrinsics: &mut IntrinsicsDisplaySettings,
+    log: &mut crate::action_log::ActionLog,
+    input: egui::RawInput,
+) {
+    let before = crate::state::ImageDetailDisplay::snapshot(feature_display, intrinsics);
+    panel_frame_with_input(node, sift, image, feature_display, intrinsics, input);
+    let after = crate::state::ImageDetailDisplay::snapshot(feature_display, intrinsics);
+    crate::state::record_image_detail_changes(log, &before, &after);
 }
 
 // ── The hover readout ───────────────────────────────────────────────────

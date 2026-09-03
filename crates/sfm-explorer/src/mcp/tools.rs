@@ -206,6 +206,17 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[]),
         },
         ToolSpec {
+            name: "get_image_detail_display",
+            description: "What the Image Detail panel draws over its photograph: the feature \
+                          overlay mode, the three filters on the features, and the intrinsics \
+                          layer with its own sub-toggles, as one document. These are scene-level \
+                          controls rather than properties of any image, so they decide what a \
+                          screenshot of the image_detail panel shows whichever camera image is \
+                          selected.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
             name: "open_reconstruction",
             description: "Load an .sfmr file into the scene as a new reconstruction, and select \
                           it. Opening a path that is already open reloads that reconstruction in \
@@ -380,6 +391,55 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                             "The reconstruction to draw alone, or null to end the solo.",
                     }),
                 )],
+                &[],
+            ),
+        },
+        ToolSpec {
+            name: "set_image_detail_display",
+            description: "Change what the Image Detail panel draws over its photograph. Every \
+                          field is optional at either level and every omitted one is left alone; \
+                          the reply is the whole document, as get_image_detail_display returns \
+                          it. The panel does not have to be open — this is what it will show when \
+                          show_panel opens it — and nothing here selects an image: \
+                          select_camera_image chooses the photograph the overlay is drawn on. An \
+                          unknown overlay_mode, an off-ladder distortion_scale or grid_cols, a \
+                          max_features below 1 and a feature_size_px whose min exceeds its max \
+                          are refused whole, leaving the call's other fields unapplied.",
+            kind: Write,
+            schema: object(
+                &[
+                    (
+                        "overlay_mode",
+                        json!({
+                            "type": "string",
+                            "enum": crate::state::OverlayMode::ALL.map(|mode| mode.wire_name()),
+                            "description":
+                                "Which feature overlay to draw: \"none\" for the clean \
+                                 photograph, \"features\" for the keypoints themselves, and the \
+                                 five heatmaps for one metric each over the tracked features.",
+                        }),
+                    ),
+                    (
+                        "max_features",
+                        json!({
+                            "type": ["integer", "null"],
+                            "minimum": 1,
+                            "description":
+                                "Show at most this many features per image — the largest ones, \
+                                 since features are stored largest first — or null for all of \
+                                 them. 0 is refused: \"no features\" is overlay_mode \"none\".",
+                        }),
+                    ),
+                    ("feature_size_px", super::display::feature_size_schema()),
+                    (
+                        "tracked_only",
+                        flag(
+                            "Show only features with a 3D point behind them, which is the CLI's \
+                             --filter-sfm.",
+                        ),
+                    ),
+                    ("intrinsics", super::display::intrinsics_schema()),
+                ],
                 &[],
             ),
         },
@@ -930,6 +990,16 @@ pub(crate) fn parse(
                 reconstruction_label: args.optional_string("reconstruction_label")?,
             }
         }
+        "get_image_detail_display" => {
+            args.reject_unknown(&[])?;
+            Command::GetImageDetailDisplay
+        }
+        // Every vocabulary this tool has is static — seven modes, two ladders,
+        // the bounds on a size filter — so the whole call is validated here and
+        // `apply` cannot fail. That is what makes a refusal atomic.
+        "set_image_detail_display" => Command::SetImageDetailDisplay {
+            change: super::display::parse_change(&args)?,
+        },
         "set_view" => parse_set_view(&args)?,
         "get_window_layout" => {
             args.reject_unknown(&[])?;
@@ -1185,15 +1255,30 @@ fn parse_placement(args: &Args, fov: Option<f64>) -> Result<Placement, ToolError
 
 /// One tool call's argument object, with the accessors that turn a JSON value
 /// into a typed argument or into a message saying what was wrong with it.
-struct Args<'a> {
+pub(super) struct Args<'a> {
     tool: &'a str,
     map: &'a Map<String, Value>,
+}
+
+impl<'a> Args<'a> {
+    /// The accessors over a nested object, named for the path that reaches it
+    /// — `set_image_detail_display.intrinsics` — so a refusal from inside one
+    /// says which sub-object it is about.
+    pub(super) fn new(tool: &'a str, map: &'a Map<String, Value>) -> Self {
+        Self { tool, map }
+    }
+
+    /// The raw value under `key`, for the doubly-optional arguments where an
+    /// explicit `null` means something other than "absent".
+    pub(super) fn get(&self, key: &str) -> Option<&Value> {
+        self.map.get(key)
+    }
 }
 
 impl Args<'_> {
     /// `"<tool> <complaint>"`, so every message from this module reads as a
     /// sentence about the tool that was called.
-    fn error(&self, complaint: impl std::fmt::Display) -> ToolError {
+    pub(super) fn error(&self, complaint: impl std::fmt::Display) -> ToolError {
         ToolError::new(format!("{} {complaint}", self.tool))
     }
 
@@ -1210,7 +1295,7 @@ impl Args<'_> {
     /// enforced by clients that enforce it. An ignored typo would leave the
     /// agent believing it asked for something it did not, and the whole reason
     /// this surface returns its resulting state is so that never happens.
-    fn reject_unknown(&self, allowed: &[&str]) -> Result<(), ToolError> {
+    pub(super) fn reject_unknown(&self, allowed: &[&str]) -> Result<(), ToolError> {
         let unknown: Vec<String> = self
             .map
             .keys()
@@ -1228,7 +1313,7 @@ impl Args<'_> {
         Err(self.error(format!("has no argument {} — {known}.", unknown.join(", "))))
     }
 
-    fn optional_string(&self, key: &str) -> Result<Option<String>, ToolError> {
+    pub(super) fn optional_string(&self, key: &str) -> Result<Option<String>, ToolError> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::String(s)) => Ok(Some(s.clone())),
@@ -1241,7 +1326,7 @@ impl Args<'_> {
             .ok_or_else(|| self.error(format!("needs {key}.")))
     }
 
-    fn optional_bool(&self, key: &str) -> Result<Option<bool>, ToolError> {
+    pub(super) fn optional_bool(&self, key: &str) -> Result<Option<bool>, ToolError> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(Value::Bool(b)) => Ok(Some(*b)),
@@ -1249,7 +1334,7 @@ impl Args<'_> {
         }
     }
 
-    fn optional_usize(&self, key: &str) -> Result<Option<usize>, ToolError> {
+    pub(super) fn optional_usize(&self, key: &str) -> Result<Option<usize>, ToolError> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(value) => value
@@ -1259,7 +1344,7 @@ impl Args<'_> {
         }
     }
 
-    fn required_usize(&self, key: &str) -> Result<usize, ToolError> {
+    pub(super) fn required_usize(&self, key: &str) -> Result<usize, ToolError> {
         self.optional_usize(key)?
             .ok_or_else(|| self.error(format!("needs {key}.")))
     }
@@ -1322,7 +1407,7 @@ impl Args<'_> {
         }
     }
 
-    fn required_f64(&self, key: &str) -> Result<f64, ToolError> {
+    pub(super) fn required_f64(&self, key: &str) -> Result<f64, ToolError> {
         self.optional_f64(key)?
             .ok_or_else(|| self.error(format!("needs {key}.")))
     }

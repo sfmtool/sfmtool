@@ -443,6 +443,14 @@ struct FeatureDisplaySettings {
 **Defaults**: `overlay_mode: Features`, `max_features: None` (all), `tracked_only: true`,
 size filters disabled with persisted slider values (min: 0.0, max: 50.0).
 
+These settings, together with the intrinsics layer's, are also readable and
+writable over MCP as one `image_detail_display` document
+([mcp-server.md](mcp-server.md) § "`get_image_detail_display` /
+`set_image_detail_display`"), and every change to them — from the toolbar or
+from the tool — records a `Display` entry in the Action Log. The two size
+options are one `feature_size_px` object on the wire, because the toolbar's
+single checkbox re-derives both from the persisted slider values every frame.
+
 **Effective feature set per image**: The actual number of features displayed varies per
 image. Filtering is applied in order:
 

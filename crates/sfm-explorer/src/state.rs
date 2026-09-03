@@ -75,6 +75,48 @@ impl OverlayMode {
             OverlayMode::ConditionNumber => "Condition Number",
         }
     }
+
+    /// The mode's name on the wire: its variant, snake-cased.
+    ///
+    /// The variant and not [`OverlayMode::label`], for the reason the panel
+    /// names on the wire are the layout file's: `Reproj Error` is display text
+    /// with a space in it, and the MCP surface spells a thing the GUI has only
+    /// as a label with the code's own word (`specs/gui/mcp-server.md` § "Where
+    /// the GUI has no word, the code's word wins").
+    ///
+    /// The wire is the MCP surface's, which is a Cargo feature, so in a
+    /// `--no-default-features` build nothing calls this trio — a property of
+    /// that build rather than a loose end here, as in [`crate::action_log`].
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            OverlayMode::None => "none",
+            OverlayMode::Features => "features",
+            OverlayMode::ReprojError => "reproj_error",
+            OverlayMode::TrackLength => "track_length",
+            OverlayMode::MaxTrackAngle => "max_track_angle",
+            OverlayMode::DepthReliability => "depth_reliability",
+            OverlayMode::ConditionNumber => "condition_number",
+        }
+    }
+
+    /// The mode `name` spells, or `None`. Exact: `"Features"` is not a mode.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub fn from_wire_name(name: &str) -> Option<OverlayMode> {
+        OverlayMode::ALL
+            .into_iter()
+            .find(|mode| mode.wire_name() == name)
+    }
+
+    /// Every mode name, as an error message lists them.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub fn all_wire_names() -> String {
+        OverlayMode::ALL
+            .iter()
+            .map(|mode| mode.wire_name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// Scene-level state of the intrinsics overlay layer, drawn on the Image
@@ -89,9 +131,13 @@ impl OverlayMode {
 /// than in [`FeatureDisplaySettings`], whose name and contents are about
 /// *feature* display. See `specs/gui/camera-intrinsics.md` § "Image Detail:
 /// the Intrinsics overlay layer".
+#[derive(Debug, Clone, PartialEq)]
 pub struct IntrinsicsDisplaySettings {
-    /// Draw the layer at all. Off by default: it is a diagnostic, and the
-    /// panel's default view is the photograph.
+    /// Draw the layer at all. On by default: the layer is the reference
+    /// frame the features sit in, and the first look at a photograph in this
+    /// panel is a diagnostic one — where the principal point is, how the lens
+    /// bends the rim — whether a human or an agent (via `screenshot`) is
+    /// looking. `I` turns it off in one keystroke for the clean view.
     pub enabled: bool,
     /// Draw the angular axes through the principal point.
     pub axes: bool,
@@ -109,7 +155,7 @@ pub struct IntrinsicsDisplaySettings {
 impl Default for IntrinsicsDisplaySettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             axes: true,
             rings: false,
             distortion: true,
@@ -129,6 +175,7 @@ impl IntrinsicsDisplaySettings {
 }
 
 /// Scene-level settings controlling which features are displayed and how.
+#[derive(Debug, Clone, PartialEq)]
 pub struct FeatureDisplaySettings {
     /// Which overlay mode is active.
     pub overlay_mode: OverlayMode,
@@ -160,6 +207,142 @@ impl Default for FeatureDisplaySettings {
         }
     }
 }
+
+/// The Image Detail panel's controls as one value: the feature overlay and its
+/// filters, and the intrinsics layer.
+///
+/// It exists to be *diffed*. Both the panel's toolbar and the MCP surface's
+/// `set_image_detail_display` write straight into the two settings structs —
+/// the toolbar because an `egui` widget owns the value it draws, the tool
+/// because the fields are plain data — so the only way to say what a frame or
+/// a call changed is to have kept a copy of what it started from. Taking that
+/// copy is cheap: seven scalars and an enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageDetailDisplay {
+    pub feature: FeatureDisplaySettings,
+    pub intrinsics: IntrinsicsDisplaySettings,
+}
+
+impl ImageDetailDisplay {
+    /// Copy the two settings structs as they stand.
+    pub fn snapshot(
+        feature: &FeatureDisplaySettings,
+        intrinsics: &IntrinsicsDisplaySettings,
+    ) -> Self {
+        Self {
+            feature: feature.clone(),
+            intrinsics: intrinsics.clone(),
+        }
+    }
+}
+
+/// Record what changed in the Image Detail panel's controls, one
+/// [`Kind::Display`] entry per field, in the words the controls themselves use.
+///
+/// **One function, two callers**: the dock wraps the panel's frame in it — the
+/// toolbar, the gear popup and the `I` key all land in one before/after pair —
+/// and `set_image_detail_display` wraps its write. That is what guarantees the
+/// human's row and the agent's row for the same control read identically; a
+/// second catalogue of texts in the toolbar would drift from this one. The
+/// actor is the log's ambient one, so the same call needs no argument for it.
+///
+/// **A field that did not change records nothing.** This is a diff and not a
+/// widget signal, which sidesteps the hazard `ActionLog::changed` documents:
+/// there is no frame here that announces a value nobody touched, because a
+/// value nobody touched is equal to the one before it.
+pub fn record_image_detail_changes(
+    log: &mut ActionLog,
+    before: &ImageDetailDisplay,
+    after: &ImageDetailDisplay,
+) {
+    let (was, now) = (&before.feature, &after.feature);
+    if was.overlay_mode != now.overlay_mode {
+        log.record(
+            Kind::Display,
+            format!("Overlay {}", now.overlay_mode.label()),
+        );
+    }
+    if was.max_features != now.max_features {
+        log.record(Kind::Display, max_features_text(now.max_features));
+    }
+    // The pair, not either bound alone: the toolbar's one `Min/max size:`
+    // checkbox derives both from its two drag values every frame, so they are
+    // one control to the person watching and one line in the log.
+    if (was.min_feature_size, was.max_feature_size) != (now.min_feature_size, now.max_feature_size)
+    {
+        log.record(Kind::Display, feature_size_text(now));
+    }
+    if was.tracked_only != now.tracked_only {
+        log.record(Kind::Display, on_off("Tracked only", now.tracked_only));
+    }
+
+    let (was, now) = (&before.intrinsics, &after.intrinsics);
+    if was.enabled != now.enabled {
+        log.record(Kind::Display, on_off("Intrinsics", now.enabled));
+    }
+    if was.axes != now.axes {
+        log.record(Kind::Display, on_off("Intrinsics axes", now.axes));
+    }
+    if was.rings != now.rings {
+        log.record(Kind::Display, on_off("Intrinsics rings", now.rings));
+    }
+    if was.distortion != now.distortion {
+        log.record(
+            Kind::Display,
+            on_off("Intrinsics distortion", now.distortion),
+        );
+    }
+    if was.distortion_scale != now.distortion_scale {
+        log.record(Kind::Display, distortion_scale_text(now.distortion_scale));
+    }
+    if was.grid_cols != now.grid_cols {
+        log.record(Kind::Display, format!("Grid density {}", now.grid_cols));
+    }
+}
+
+/// `Tracked only on`, `Intrinsics rings off` — the shape every HUD checkbox
+/// records under [`Kind::Display`].
+fn on_off(control: &str, on: bool) -> String {
+    format!("{control} {}", if on { "on" } else { "off" })
+}
+
+/// `Max features 500`, or `Max features all` for no cap.
+fn max_features_text(max_features: Option<usize>) -> String {
+    match max_features {
+        Some(n) => format!("Max features {n}"),
+        None => "Max features all".to_string(),
+    }
+}
+
+/// `Feature size 2.0–40.0 px`, or `Feature size filter off`.
+///
+/// A bound that is somehow set on its own falls back to the drag value beside
+/// it, which is the number the toolbar would show for it.
+fn feature_size_text(feature: &FeatureDisplaySettings) -> String {
+    match (feature.min_feature_size, feature.max_feature_size) {
+        (None, None) => "Feature size filter off".to_string(),
+        (min, max) => format!(
+            "Feature size {:.1}{EN_DASH}{:.1} px",
+            min.unwrap_or(feature.min_feature_size_value),
+            max.unwrap_or(feature.max_feature_size_value),
+        ),
+    }
+}
+
+/// `Distortion scale ×3`, or `Distortion scale auto`.
+fn distortion_scale_text(scale: Option<f32>) -> String {
+    match scale {
+        Some(scale) => format!("Distortion scale {TIMES}{scale}"),
+        None => "Distortion scale auto".to_string(),
+    }
+}
+
+/// U+00D7 MULTIPLICATION SIGN, the `×` the gear popup's scale dropdown shows.
+/// Spelled once here so the glyph test can pin it.
+const TIMES: &str = "×";
+
+/// U+2013 EN DASH, the range separator in `Feature size 2.0–40.0 px`.
+const EN_DASH: &str = "–";
 
 /// Global application state shared across all views.
 pub struct AppState {
@@ -1275,4 +1458,191 @@ pub fn ensure_full_res_cached<'a>(
             })
         })
         .as_ref()
+}
+
+#[cfg(test)]
+mod image_detail_display_tests {
+    use super::*;
+
+    /// The two settings structs at their defaults, as a frame or a tool call
+    /// starts from.
+    fn defaults() -> ImageDetailDisplay {
+        ImageDetailDisplay {
+            feature: FeatureDisplaySettings::default(),
+            intrinsics: IntrinsicsDisplaySettings::default(),
+        }
+    }
+
+    /// The entries one change records, as text.
+    ///
+    /// One field per call, because [`Kind::Display`] coalesces: a run of like
+    /// entries inside the log's window folds into the newest of them, which is
+    /// what keeps a slider drag one line. Reading each text back therefore
+    /// means changing one field at a time — and the multi-field case is
+    /// covered by the revision clock, which ticks once per write however the
+    /// entries fold.
+    fn texts(change: impl FnOnce(&mut ImageDetailDisplay)) -> Vec<String> {
+        let before = defaults();
+        let mut after = before.clone();
+        change(&mut after);
+        let mut log = ActionLog::new();
+        record_image_detail_changes(&mut log, &before, &after);
+        log.entries().map(|entry| entry.text.clone()).collect()
+    }
+
+    /// Every row of the catalogue in `specs/gui/action-log.md`, in the words
+    /// the Image Detail panel's own controls use.
+    #[test]
+    fn every_control_records_the_text_the_catalogue_gives_it() {
+        assert_eq!(
+            texts(|d| d.feature.overlay_mode = OverlayMode::ReprojError),
+            ["Overlay Reproj Error"]
+        );
+        assert_eq!(
+            texts(|d| d.feature.overlay_mode = OverlayMode::None),
+            ["Overlay None"]
+        );
+        assert_eq!(
+            texts(|d| d.feature.max_features = Some(500)),
+            ["Max features 500"]
+        );
+        assert_eq!(
+            texts(|d| {
+                d.feature.min_feature_size = Some(2.0);
+                d.feature.max_feature_size = Some(40.0);
+            }),
+            ["Feature size 2.0–40.0 px"]
+        );
+        assert_eq!(
+            texts(|d| d.feature.tracked_only = false),
+            ["Tracked only off"]
+        );
+        assert_eq!(texts(|d| d.intrinsics.enabled = false), ["Intrinsics off"]);
+        assert_eq!(
+            texts(|d| d.intrinsics.axes = false),
+            ["Intrinsics axes off"]
+        );
+        assert_eq!(
+            texts(|d| d.intrinsics.rings = true),
+            ["Intrinsics rings on"]
+        );
+        assert_eq!(
+            texts(|d| d.intrinsics.distortion = false),
+            ["Intrinsics distortion off"]
+        );
+        assert_eq!(
+            texts(|d| d.intrinsics.distortion_scale = Some(10.0)),
+            ["Distortion scale ×10"]
+        );
+        assert_eq!(texts(|d| d.intrinsics.grid_cols = 32), ["Grid density 32"]);
+    }
+
+    /// The two texts that only a *return* to a default produces.
+    #[test]
+    fn lifting_a_filter_records_the_word_for_no_filter() {
+        let mut before = defaults();
+        before.feature.max_features = Some(500);
+        before.feature.min_feature_size = Some(2.0);
+        before.feature.max_feature_size = Some(40.0);
+        before.intrinsics.distortion_scale = Some(10.0);
+        let after = defaults();
+
+        let mut log = ActionLog::new();
+        record_image_detail_changes(&mut log, &before, &after);
+        // Three writes, folded by the log's own coalescing into the newest of
+        // the run — the revision ticks once per write either way.
+        assert_eq!(log.revision(), 3);
+        // Each of the three on its own, so every text is read back.
+        for (change, text) in [
+            (
+                Box::new(|d: &mut ImageDetailDisplay| d.feature.max_features = None)
+                    as Box<dyn FnOnce(&mut ImageDetailDisplay)>,
+                "Max features all",
+            ),
+            (
+                Box::new(|d: &mut ImageDetailDisplay| {
+                    d.feature.min_feature_size = None;
+                    d.feature.max_feature_size = None;
+                }),
+                "Feature size filter off",
+            ),
+            (
+                Box::new(|d: &mut ImageDetailDisplay| d.intrinsics.distortion_scale = None),
+                "Distortion scale auto",
+            ),
+        ] {
+            let mut after = before.clone();
+            change(&mut after);
+            let mut log = ActionLog::new();
+            record_image_detail_changes(&mut log, &before, &after);
+            assert_eq!(
+                log.entries().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+                [text]
+            );
+        }
+    }
+
+    /// A diff is not a widget signal: nothing changed, nothing recorded — the
+    /// hazard `ActionLog::changed` documents cannot arise here.
+    #[test]
+    fn an_unchanged_frame_records_nothing() {
+        let mut log = ActionLog::new();
+        record_image_detail_changes(&mut log, &defaults(), &defaults());
+        assert_eq!(log.entries().count(), 0);
+        // A drag value moved with the filter off is not a change either: the
+        // filter is the pair of options, and the toolbar's persisted values
+        // are what it re-derives them from.
+        let mut after = defaults();
+        after.feature.min_feature_size_value = 3.0;
+        record_image_detail_changes(&mut log, &defaults(), &after);
+        assert_eq!(log.entries().count(), 0);
+    }
+
+    /// One entry per field, however many a single call changed: the log's
+    /// clock ticks once per write, and the coalescing that folds the run in
+    /// the panel is the same folding a human's run of toolbar changes gets.
+    #[test]
+    fn one_entry_per_changed_field() {
+        let before = defaults();
+        let mut after = before.clone();
+        after.feature.overlay_mode = OverlayMode::TrackLength;
+        after.feature.tracked_only = false;
+        after.intrinsics.rings = true;
+        let mut log = ActionLog::new();
+        record_image_detail_changes(&mut log, &before, &after);
+        assert_eq!(log.revision(), 3);
+        assert_eq!(
+            log.entries().next_back().expect("an entry").text,
+            "Intrinsics rings on"
+        );
+    }
+
+    /// Every glyph these texts put in the Action Log is one egui bundles; one
+    /// it does not renders as a replacement box and nothing else would notice.
+    #[test]
+    fn the_texts_glyphs_are_available_in_the_bundled_fonts() {
+        let ctx = egui::Context::default();
+        crate::test_support::run_frame_headless(&ctx, egui::RawInput::default(), |ui| {
+            ui.label("warm the font atlas");
+        });
+        let font = egui::FontId::proportional(12.0);
+        for glyph in [TIMES, EN_DASH] {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyphs(&font, glyph)),
+                "{glyph:?} is not in egui's bundled fonts and would render as a box"
+            );
+        }
+    }
+
+    /// The wire spellings the MCP surface takes, round-tripping through the
+    /// enum they name — and exact, so a GUI label is not a mode name.
+    #[test]
+    fn every_overlay_mode_round_trips_through_its_wire_name() {
+        for mode in OverlayMode::ALL {
+            assert_eq!(OverlayMode::from_wire_name(mode.wire_name()), Some(mode));
+            assert!(OverlayMode::all_wire_names().contains(mode.wire_name()));
+        }
+        assert_eq!(OverlayMode::from_wire_name("Features"), None);
+        assert_eq!(OverlayMode::from_wire_name("reproj error"), None);
+    }
 }
