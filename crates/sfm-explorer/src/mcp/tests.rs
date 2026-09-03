@@ -24,14 +24,15 @@ use serde_json::{json, Map, Value};
 use sfmtool_core::SfmrReconstruction;
 
 use super::tools::{self, ToolKind};
-use super::window::{MonitorInfo, NoWindow, WindowChange, WindowHost, WindowInfo, WindowState};
 use super::{apply, apply_as_agent, Command, Outcome, ToolError, ToolOutput};
 use crate::action_log::{Actor, Kind};
 use crate::dock::Tab;
-use crate::layout::Layout;
+use crate::layout::WindowLayout;
 use crate::scene::{PointRef, SceneNode};
 use crate::state::AppState;
+use crate::test_support::{FakeWindow, NoWindow};
 use crate::viewer_3d::Viewer3D;
+use crate::window::{WindowHost, WindowState};
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -91,125 +92,6 @@ fn two_reconstructions() -> (AppState, Viewer3D) {
     // the test hands no host to change one.
     state.window = Some(FakeWindow::default().info());
     (state, viewer)
-}
-
-/// A [`WindowHost`] with no window behind it: it records what it was asked, in
-/// order, and reports what it then is.
-///
-/// The flags are kept apart rather than collapsed, because a window can be
-/// minimized *and* maximized at once and the collapse into one
-/// [`WindowState`] is exactly what is under test.
-#[derive(Debug, Clone)]
-struct FakeWindow {
-    minimized: bool,
-    maximized: bool,
-    fullscreen: bool,
-    focused: bool,
-    /// `None` stands in for a platform that will not say where a window is.
-    position: Option<[i32; 2]>,
-    inner_size: [u32; 2],
-    /// A size it will not go below, standing in for whatever a real platform
-    /// does to a request it will not honour: clamped, not refused, so that the
-    /// read-back has something to differ from the request about.
-    minimum: [u32; 2],
-    /// Whether it lets an application take focus.
-    focusable: bool,
-    /// What it was asked, in the order it was asked.
-    applied: Vec<String>,
-}
-
-impl Default for FakeWindow {
-    fn default() -> Self {
-        FakeWindow {
-            minimized: false,
-            maximized: false,
-            fullscreen: false,
-            focused: true,
-            position: Some([120, 64]),
-            inner_size: [1920, 1080],
-            minimum: [1600, 1200],
-            focusable: true,
-            applied: Vec::new(),
-        }
-    }
-}
-
-impl FakeWindow {
-    fn info(&self) -> WindowInfo {
-        WindowInfo {
-            state: WindowState::of(self.minimized, self.fullscreen, self.maximized),
-            focused: self.focused,
-            scale_factor: 1.5,
-            outer_position: self.position,
-            outer_size: [self.inner_size[0] + 16, self.inner_size[1] + 39],
-            inner_size: self.inner_size,
-            monitor: Some(self.monitors()[0].clone()),
-        }
-    }
-
-    fn monitors(&self) -> Vec<MonitorInfo> {
-        vec![
-            MonitorInfo {
-                name: Some("DISPLAY1".to_string()),
-                position: [0, 0],
-                size: [3840, 2160],
-                scale_factor: 1.5,
-            },
-            MonitorInfo {
-                name: Some("DISPLAY2".to_string()),
-                position: [3840, 0],
-                size: [1920, 1080],
-                scale_factor: 1.0,
-            },
-        ]
-    }
-}
-
-impl WindowHost for FakeWindow {
-    fn apply(&mut self, change: &WindowChange) -> Result<(), ToolError> {
-        if let Some(state) = change.state {
-            self.applied.push(format!("state {}", state.wire_name()));
-            match state {
-                WindowState::Normal => {
-                    self.minimized = false;
-                    self.fullscreen = false;
-                    self.maximized = false;
-                }
-                WindowState::Maximized => {
-                    self.minimized = false;
-                    self.fullscreen = false;
-                    self.maximized = true;
-                }
-                WindowState::Minimized => self.minimized = true,
-                WindowState::Fullscreen => {
-                    self.minimized = false;
-                    self.fullscreen = true;
-                }
-            }
-        }
-        if let Some([x, y]) = change.outer_position {
-            self.applied.push(format!("position {x},{y}"));
-            if self.position.is_none() {
-                return Err(ToolError::new(
-                    "This platform does not let an application position its own window.",
-                ));
-            }
-            self.position = Some([x, y]);
-        }
-        if let Some([width, height]) = change.inner_size {
-            self.applied.push(format!("size {width}x{height}"));
-            self.inner_size = [width.max(self.minimum[0]), height.max(self.minimum[1])];
-        }
-        if change.focus {
-            self.applied.push("focus".to_string());
-            self.focused = self.focusable;
-        }
-        Ok(())
-    }
-
-    fn observe(&self) -> Option<(WindowInfo, Vec<MonitorInfo>)> {
-        Some((self.info(), self.monitors()))
-    }
 }
 
 /// Apply one command the way the frame does — as the agent, with the Action Log
@@ -1473,18 +1355,38 @@ fn panel(reply: &Value, name: &str) -> Value {
     reply["panels"][name].clone()
 }
 
-#[test]
-fn get_layout_returns_the_layout_file_and_the_panels_it_holds() {
-    let (mut state, mut viewer) = two_reconstructions();
-    let reply = ok(&mut state, &mut viewer, Command::GetLayout);
+/// A fake in one of the four states, with the snapshot to match.
+fn windowed(state: WindowState) -> (AppState, Viewer3D, FakeWindow) {
+    let host = FakeWindow::in_state(state);
+    let (mut app_state, viewer) = two_reconstructions();
+    app_state.observe_window(&host);
+    (app_state, viewer, host)
+}
 
-    // `layout` is the file itself, not a rendering of it: read back through
-    // the file's own parser it is the arrangement the viewer is in.
-    let document = serde_json::to_string(&reply["layout"]).expect("a document");
+/// The reply's three views of one arrangement: the document the file holds,
+/// the live window, and the panels.
+#[test]
+fn get_window_layout_returns_the_file_the_window_and_the_panels() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let reply = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindowLayout);
+
+    // `window_layout` is the file itself, not a rendering of it: read back
+    // through the file's own parser it is what Save Layout… would write.
+    let text = serde_json::to_string(&reply["window_layout"]).expect("a document");
     assert_eq!(
-        Layout::from_json(&document).expect("the reply parses as a layout file"),
-        state.layout()
+        WindowLayout::from_json(&text).expect("the reply parses as a layout file"),
+        state.window_layout()
     );
+
+    // The block beside it is the observation, with every monitor.
+    assert_eq!(reply["window"]["state"], "normal");
+    let names: Vec<&str> = reply["window"]["monitors"]
+        .as_array()
+        .expect("a monitor list")
+        .iter()
+        .map(|monitor| monitor["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(names, ["DISPLAY1", "DISPLAY2"], "the current monitor first");
 
     let panels = reply["panels"].as_object().expect("a panels map");
     assert_eq!(panels.len(), Tab::ALL.len(), "all seven, always");
@@ -1507,6 +1409,36 @@ fn get_layout_returns_the_layout_file_and_the_panels_it_holds() {
         active,
         ["scene", "viewer_3d", "image_browser", "image_detail"]
     );
+}
+
+/// A maximized window's document says what it will restore to; the block says
+/// what it is. The difference is the information.
+#[test]
+fn the_document_carries_the_normal_rectangle_and_the_block_the_current_one() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let mut host = FakeWindow::default();
+    state.observe_window(&host);
+    host.set_state(WindowState::Maximized);
+    host.inner_size = [3840, 2160];
+
+    let reply = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindowLayout);
+    assert_eq!(reply["window"]["state"], "maximized");
+    assert_eq!(reply["window"]["inner_size"], json!([3840, 2160]));
+    assert_eq!(reply["window_layout"]["window"]["state"], "maximized");
+    assert_eq!(
+        reply["window_layout"]["window"]["inner_size"],
+        json!([1920, 1080])
+    );
+}
+
+/// The panels half of the answer is still an answer where there is no window.
+#[test]
+fn get_window_layout_answers_without_a_window() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let reply = ok(&mut state, &mut viewer, Command::GetWindowLayout);
+    assert_eq!(reply["window"], Value::Null);
+    assert_eq!(reply["window_layout"]["window"], Value::Null);
+    assert_eq!(panel(&reply, "scene")["open"], json!(true));
 }
 
 #[test]
@@ -1556,7 +1488,7 @@ fn hide_panel_closes_and_show_panel_takes_it_home() {
 #[test]
 fn show_panel_on_an_open_panel_raises_it_and_moves_nothing_else() {
     let (mut state, mut viewer) = two_reconstructions();
-    let before = ok(&mut state, &mut viewer, Command::GetLayout);
+    let before = ok(&mut state, &mut viewer, Command::GetWindowLayout);
     let raised = call(
         &mut state,
         &mut viewer,
@@ -1591,49 +1523,256 @@ fn an_unknown_panel_name_lists_the_seven() {
     );
 }
 
-/// The document `get_layout` hands out is a document `set_layout` takes back —
-/// one schema, one parser, and a file an agent saved is a file the menu loads.
+/// The document `get_window_layout` hands out is a document
+/// `set_window_layout` takes back, tag and all — one schema, one parser, and a
+/// file an agent saved is a file the viewer reads at startup.
 #[test]
-fn set_layout_takes_back_the_document_get_layout_returned() {
+fn a_whole_reply_can_be_sent_back() {
     let (mut state, mut viewer) = two_reconstructions();
-    call(
+    // A fake that clamps nothing, so the round trip is a round trip rather
+    // than a demonstration of the clamp.
+    let mut host = FakeWindow {
+        minimum: [1, 1],
+        ..FakeWindow::default()
+    };
+    state.observe_window(&host);
+    call_with(
         &mut state,
         &mut viewer,
+        &mut host,
         "hide_panel",
         json!({ "panel_name": "camera_intrinsics" }),
     );
-    let saved = ok(&mut state, &mut viewer, Command::GetLayout)["layout"].clone();
+    let saved = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindowLayout)
+        ["window_layout"]
+        .clone();
+    assert_eq!(saved["sfm_explorer_layout"], json!(2));
 
-    let reset = call(
+    let reset = call_with(
         &mut state,
         &mut viewer,
-        "set_layout",
+        &mut host,
+        "set_window_layout",
         json!({ "layout": "default" }),
     );
     assert!(state.is_panel_open(Tab::IntrinsicsDetail));
     assert_eq!(panel(&reset, "camera_intrinsics")["open"], json!(true));
 
-    let restored = call(
+    // The whole reply, unedited, including its version tag and window section.
+    let restored = call_with(
         &mut state,
         &mut viewer,
-        "set_layout",
-        json!({ "layout": saved.clone() }),
+        &mut host,
+        "set_window_layout",
+        saved.clone(),
     );
-    assert_eq!(restored["layout"], saved);
+    assert_eq!(restored["window_layout"], saved);
     assert!(!state.is_panel_open(Tab::IntrinsicsDetail));
 }
 
+/// And a file's text, parsed and sent as the argument, is the same document.
 #[test]
-fn a_layout_document_that_does_not_validate_is_refused_whole() {
-    let (mut state, mut viewer) = two_reconstructions();
-    let before = state.layout();
-    let error = refused_call(
+fn a_file_can_be_sent_as_the_argument() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let file = state.window_layout().to_json();
+    state.hide_panel(Tab::ActionLog);
+    let document: Value = serde_json::from_str(&file).expect("the file parses");
+    call_with(
         &mut state,
         &mut viewer,
-        "set_layout",
+        &mut host,
+        "set_window_layout",
+        document,
+    );
+    assert!(state.is_panel_open(Tab::ActionLog));
+}
+
+/// Every form in the spec's list, and what each leaves behind.
+#[test]
+fn each_form_of_set_window_layout_does_what_it_says() {
+    // Maximize where it is.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "state": "maximized" } }),
+    );
+    assert_eq!(reply["window"]["state"], "maximized");
+    assert_eq!(host.applied, ["state maximized"]);
+
+    // Restore, and resize.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "state": "normal", "inner_size": [1700, 1300] } }),
+    );
+    assert_eq!(reply["window"]["state"], "normal");
+    assert_eq!(reply["window"]["inner_size"], json!([1700, 1300]));
+
+    // A size against a maximized window changes what it restores to and leaves
+    // it maximized — the rule that replaced `set_window`'s refusal.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "inner_size": [1700, 1300] } }),
+    );
+    assert_eq!(reply["window"]["state"], "maximized");
+    assert_eq!(
+        reply["window_layout"]["window"]["inner_size"],
+        json!([1700, 1300]),
+        "the normal rectangle changed"
+    );
+
+    // Both portions, in that order.
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    state.hide_panel(Tab::ActionLog);
+    call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "state": "maximized" }, "layout": "default" }),
+    );
+    assert!(host.maximized);
+    assert!(state.is_panel_open(Tab::ActionLog));
+}
+
+/// The reply is a read-back rather than an echo, so a size the platform
+/// clamped comes back clamped — while the Action Log says what was asked for.
+#[test]
+fn the_reply_is_a_read_back_and_the_log_is_what_was_asked() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "inner_size": [640, 480] } }),
+    );
+    assert_eq!(reply["window"]["inner_size"], json!([1600, 1200]));
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .next_back()
+            .expect("an entry")
+            .text,
+        "Resized window to 640×480"
+    );
+}
+
+#[test]
+fn a_piece_a_window_section_does_not_carry_is_preserved() {
+    let mut host = FakeWindow {
+        focused: false,
+        ..FakeWindow::default()
+    };
+    let (mut state, mut viewer) = two_reconstructions();
+    state.observe_window(&host);
+    let before =
+        ok_with(&mut state, &mut viewer, &mut host, Command::GetWindowLayout)["window"].clone();
+    let after = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "focus": true } }),
+    )["window"]
+        .clone();
+    assert_eq!(after["state"], before["state"]);
+    assert_eq!(after["inner_size"], before["inner_size"]);
+    assert_eq!(after["outer_position"], before["outer_position"]);
+    assert_eq!(after["focused"], json!(true));
+    assert_eq!(host.applied, ["focus"]);
+}
+
+#[test]
+fn the_window_moves_between_the_four_states() {
+    for from in WindowState::ALL {
+        for to in WindowState::ALL {
+            let (mut state, mut viewer, mut host) = windowed(from);
+            let reply = call_with(
+                &mut state,
+                &mut viewer,
+                &mut host,
+                "set_window_layout",
+                json!({ "window": { "state": to.wire_name() } }),
+            );
+            assert_eq!(
+                reply["window"]["state"],
+                json!(to.wire_name()),
+                "{} -> {}",
+                from.wire_name(),
+                to.wire_name()
+            );
+        }
+    }
+}
+
+/// `normal` means all three flags off. Restoring a minimized window can bring
+/// a maximized one back, and the caller asked for normal.
+#[test]
+fn normal_clears_a_minimized_and_maximized_window() {
+    let mut host = FakeWindow {
+        minimized: true,
+        maximized: true,
+        ..FakeWindow::default()
+    };
+    let (mut state, mut viewer) = two_reconstructions();
+    state.observe_window(&host);
+    let reply = call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "state": "normal" } }),
+    );
+    assert_eq!(reply["window"]["state"], "normal");
+    assert!(!host.minimized && !host.maximized, "{host:?}");
+}
+
+/// The window portion is applied before the panels, so a platform refusal in
+/// it stops the call with the dock untouched.
+#[test]
+fn a_position_refusal_leaves_the_panels_alone() {
+    let mut host = FakeWindow {
+        position: None,
+        ..FakeWindow::default()
+    };
+    let (mut state, mut viewer) = two_reconstructions();
+    state.observe_window(&host);
+    state.hide_panel(Tab::ActionLog);
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "outer_position": [10, 20] }, "layout": "default" }),
+    );
+    assert!(error.0.contains("position its own window"), "{error}");
+    assert!(!state.is_panel_open(Tab::ActionLog), "the panels changed");
+}
+
+#[test]
+fn a_document_that_does_not_validate_is_refused_whole() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    let before = state.layout();
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
         json!({
+            "window": { "state": "maximized" },
             "layout": {
-                "sfm_explorer_layout": 1,
                 "main": {
                     "split": "left_right",
                     "fracton": 0.5,
@@ -1645,12 +1784,23 @@ fn a_layout_document_that_does_not_validate_is_refused_whole() {
         }),
     );
     // The layout parser's own message, path and all.
-    assert_eq!(error.0, "main: unknown key \"fracton\"", "{error}");
+    assert_eq!(error.0, "layout.main: unknown key \"fracton\"", "{error}");
     assert_eq!(
         state.layout(),
         before,
         "a refusal leaves the dock untouched"
     );
+    assert!(host.applied.is_empty(), "{:?}", host.applied);
+
+    // …and a window key's own rule reads the same way.
+    let error = refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "state": "big" } }),
+    );
+    assert!(error.0.starts_with("window.state: "), "{error}");
 }
 
 #[test]
@@ -1659,16 +1809,63 @@ fn the_only_named_layout_is_the_default() {
     let error = refused_call(
         &mut state,
         &mut viewer,
-        "set_layout",
+        "set_window_layout",
         json!({ "layout": "tidy" }),
     );
     assert!(
-        error.0.contains("tidy") && error.0.contains("default"),
+        error.0.contains("only named layout") && error.0.contains("default"),
         "{error}"
     );
 }
 
-/// The three layout writes go through the same `AppState` methods the Panels
+/// A call is a request, and these ask for nothing.
+#[test]
+fn a_call_that_asks_for_nothing_is_refused() {
+    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+    for arguments in [
+        json!({}),
+        json!({ "window": {} }),
+        json!({ "sfm_explorer_layout": 2 }),
+    ] {
+        let error = refused_call_with(
+            &mut state,
+            &mut viewer,
+            &mut host,
+            "set_window_layout",
+            arguments.clone(),
+        );
+        assert!(error.0.contains("nothing to do"), "{arguments}: {error}");
+    }
+    assert!(host.applied.is_empty(), "{:?}", host.applied);
+}
+
+/// Where there is no window, a window portion is refused — and a panel portion
+/// on its own succeeds, because the panels do not need one.
+#[test]
+fn a_window_portion_needs_a_window() {
+    let (mut state, mut viewer) = two_reconstructions();
+    state.window = None;
+    let error = refused(
+        &mut state,
+        &mut viewer,
+        Command::SetWindowLayout {
+            document: json!({ "window": { "state": "maximized" } }),
+        },
+    );
+    assert!(error.0.contains("no window"), "{error}");
+
+    state.hide_panel(Tab::ActionLog);
+    ok(
+        &mut state,
+        &mut viewer,
+        Command::SetWindowLayout {
+            document: json!({ "layout": "default" }),
+        },
+    );
+    assert!(state.is_panel_open(Tab::ActionLog));
+}
+
+/// The three panel writes go through the same `AppState` methods the Panels
 /// menu does, so the rows are the menu's rows with the agent in the actor
 /// column.
 #[test]
@@ -1687,8 +1884,8 @@ fn the_layout_writes_record_the_menus_own_entries_as_the_agent() {
             "Raised Point Track panel",
         ),
         (
-            Command::SetLayout {
-                layout: super::layout::LayoutTarget::Default,
+            Command::SetWindowLayout {
+                document: json!({ "layout": "default" }),
             },
             "Reset layout",
         ),
@@ -1722,14 +1919,12 @@ fn the_layout_writes_record_the_menus_own_entries_as_the_agent() {
     // …and a document says which tool set it, since `apply_layout` records
     // nothing itself.
     let (mut state, mut viewer) = quiet_scene();
-    let document = ok(&mut state, &mut viewer, Command::GetLayout)["layout"].clone();
+    let document = ok(&mut state, &mut viewer, Command::GetWindowLayout)["window_layout"].clone();
     state.action_log.clear();
     ok(
         &mut state,
         &mut viewer,
-        Command::SetLayout {
-            layout: super::layout::LayoutTarget::Document(document),
-        },
+        Command::SetWindowLayout { document },
     );
     let entries: Vec<_> = state.action_log.entries().collect();
     assert_eq!(entries.len(), 1, "{entries:?}");
@@ -1737,45 +1932,104 @@ fn the_layout_writes_record_the_menus_own_entries_as_the_agent() {
     assert_eq!(entries[0].kind, Kind::Layout);
 }
 
+/// One row per portion, because the two portions are two kinds — and the
+/// window row is composed in the order the pieces were applied.
 #[test]
-fn the_two_new_reads_are_query_entries() {
+fn a_call_carrying_both_portions_records_both() {
     let (mut state, mut viewer) = quiet_scene();
-    ok(&mut state, &mut viewer, Command::GetLayout);
+    let mut host = FakeWindow {
+        minimum: [1, 1],
+        ..FakeWindow::default()
+    };
+    state.observe_window(&host);
+    state.action_log.clear();
+    call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({
+            "window": {
+                "state": "maximized",
+                "outer_position": [120, 64],
+                "inner_size": [1280, 720],
+            },
+            "layout": "default",
+        }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(
+        entries[0].text,
+        "Moved window to (120, 64); resized window to 1280×720; maximized window"
+    );
+    assert_eq!(entries[0].kind, Kind::Window);
+    assert_eq!(entries[0].actor, Actor::Mcp);
+    assert_eq!(entries[1].text, "Reset layout");
+    assert_eq!(entries[1].kind, Kind::Layout);
+}
+
+/// A refusal is one failed row, filed under the kind of the portion the call
+/// carried.
+#[test]
+fn a_refusal_is_filed_under_the_portion_it_carried() {
+    let (mut state, mut viewer) = quiet_scene();
+    let mut host = FakeWindow {
+        position: None,
+        ..FakeWindow::default()
+    };
+    state.observe_window(&host);
+    state.action_log.clear();
+    refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "outer_position": [10, 20] } }),
+    );
     let entries: Vec<_> = state.action_log.entries().collect();
     assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0].kind, Kind::Query("get_layout"));
-    assert_eq!(entries[0].text, "get_layout");
+    assert!(entries[0].failed, "{entries:?}");
+    assert!(
+        entries[0].text.starts_with("set_window_layout failed: "),
+        "{entries:?}"
+    );
+    assert_eq!(entries[0].kind, Kind::Window);
+
+    // The same call carrying panels is a layout refusal.
+    let (mut state, mut viewer) = quiet_scene();
+    state.observe_window(&host);
+    state.action_log.clear();
+    refused_call_with(
+        &mut state,
+        &mut viewer,
+        &mut host,
+        "set_window_layout",
+        json!({ "window": { "outer_position": [10, 20] }, "layout": "default" }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Layout);
+}
+
+#[test]
+fn the_layout_read_is_a_query_entry() {
+    let (mut state, mut viewer) = quiet_scene();
+    ok(&mut state, &mut viewer, Command::GetWindowLayout);
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_window_layout"));
+    assert_eq!(entries[0].text, "get_window_layout");
     // A query never reaches the status line: an agent polling must not read
     // its own polling back as the viewer's status.
     assert_eq!(state.status_message(), None);
-
-    let (mut state, mut viewer) = quiet_scene();
-    let mut host = FakeWindow::default();
-    ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow);
-    let entries: Vec<_> = state.action_log.entries().collect();
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0].kind, Kind::Query("get_window"));
-    assert_eq!(state.status_message(), None);
 }
 
-// ── The window tools ────────────────────────────────────────────────────
-
-/// A fake in one of the four states, with the snapshot to match.
-fn windowed(state: WindowState) -> (AppState, Viewer3D, FakeWindow) {
-    let host = FakeWindow {
-        minimized: state == WindowState::Minimized,
-        maximized: state == WindowState::Maximized,
-        fullscreen: state == WindowState::Fullscreen,
-        ..FakeWindow::default()
-    };
-    let (mut app_state, viewer) = two_reconstructions();
-    app_state.window = Some(host.info());
-    (app_state, viewer, host)
-}
+// ── The window block ────────────────────────────────────────────────────
 
 #[test]
-fn get_scene_embeds_the_window_and_get_window_adds_the_monitors() {
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
+fn get_scene_embeds_the_window_block() {
+    let (mut state, mut viewer, _) = windowed(WindowState::Normal);
     let window = ok(&mut state, &mut viewer, Command::GetScene)["window"].clone();
     assert_eq!(window["state"], "normal");
     assert_eq!(window["focused"], json!(true));
@@ -1798,187 +2052,6 @@ fn get_scene_embeds_the_window_and_get_window_adds_the_monitors() {
         .as_f64()
         .expect("a fraction");
     assert!((fraction - 1936.0 / 3840.0).abs() < 1e-9, "{fraction}");
-
-    let reply = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow);
-    let names: Vec<&str> = reply["window"]["monitors"]
-        .as_array()
-        .expect("a monitor list")
-        .iter()
-        .map(|monitor| monitor["name"].as_str().expect("a name"))
-        .collect();
-    assert_eq!(names, ["DISPLAY1", "DISPLAY2"], "the current monitor first");
-}
-
-#[test]
-fn set_window_moves_between_the_four_states() {
-    for from in WindowState::ALL {
-        for to in WindowState::ALL {
-            let (mut state, mut viewer, mut host) = windowed(from);
-            let reply = call_with(
-                &mut state,
-                &mut viewer,
-                &mut host,
-                "set_window",
-                json!({ "state": to.wire_name() }),
-            );
-            assert_eq!(
-                reply["window"]["state"],
-                json!(to.wire_name()),
-                "{} -> {}",
-                from.wire_name(),
-                to.wire_name()
-            );
-        }
-    }
-}
-
-/// `normal` means all three flags off. Restoring a minimized window can bring
-/// a maximized one back, and the agent asked for normal.
-#[test]
-fn normal_clears_a_minimized_and_maximized_window() {
-    let mut host = FakeWindow {
-        minimized: true,
-        maximized: true,
-        ..FakeWindow::default()
-    };
-    let (mut state, mut viewer) = two_reconstructions();
-    state.window = Some(host.info());
-    let reply = call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "state": "normal" }),
-    );
-    assert_eq!(reply["window"]["state"], "normal");
-    assert!(!host.minimized && !host.maximized, "{host:?}");
-}
-
-#[test]
-fn geometry_needs_a_normal_window() {
-    // Refused in the parse, where the call's own fields are visible.
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
-    let error = refused_call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "state": "minimized", "inner_size": [1600, 900] }),
-    );
-    assert!(error.0.contains("minimized"), "{error}");
-    assert!(
-        host.applied.is_empty(),
-        "nothing was applied: {:?}",
-        host.applied
-    );
-
-    // Refused by the viewer, which is where the state the window is *already*
-    // in is known.
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
-    let error = refused_call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "inner_size": [1600, 900] }),
-    );
-    assert!(
-        error.0.contains("maximized") && error.0.contains("normal"),
-        "{error}"
-    );
-    assert!(host.applied.is_empty(), "{:?}", host.applied);
-
-    // …and accepted with `state: "normal"` in the same call, the pieces
-    // applied in the one order that reads as a sentence.
-    let reply = call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({
-            "state": "normal",
-            "outer_position": [100, 50],
-            "inner_size": [1700, 1300],
-            "focus": true,
-        }),
-    );
-    assert_eq!(
-        host.applied,
-        ["state normal", "position 100,50", "size 1700x1300", "focus"]
-    );
-    assert_eq!(reply["window"]["state"], "normal");
-    assert_eq!(reply["window"]["outer_position"], json!([100, 50]));
-    assert_eq!(reply["window"]["inner_size"], json!([1700, 1300]));
-}
-
-/// The reply is read back from the window rather than echoed, so a size the
-/// window clamped comes back clamped — and the Action Log says what was asked
-/// for, which is the thing the person watching can act on.
-#[test]
-fn the_reply_is_a_read_back_and_the_log_is_what_was_asked() {
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
-    let reply = call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "inner_size": [640, 480] }),
-    );
-    assert_eq!(reply["window"]["inner_size"], json!([1600, 1200]));
-    assert_eq!(
-        state
-            .action_log
-            .entries()
-            .next_back()
-            .expect("an entry")
-            .text,
-        "Resized window to 640×480"
-    );
-}
-
-#[test]
-fn a_piece_a_set_window_call_does_not_carry_is_preserved() {
-    let mut host = FakeWindow {
-        focused: false,
-        ..FakeWindow::default()
-    };
-    let (mut state, mut viewer) = two_reconstructions();
-    state.window = Some(host.info());
-    let before = ok_with(&mut state, &mut viewer, &mut host, Command::GetWindow)["window"].clone();
-    let after = call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "focus": true }),
-    )["window"]
-        .clone();
-    assert_eq!(after["state"], before["state"]);
-    assert_eq!(after["inner_size"], before["inner_size"]);
-    assert_eq!(after["outer_position"], before["outer_position"]);
-    assert_eq!(after["focused"], json!(true));
-    assert_eq!(host.applied, ["focus"]);
-}
-
-#[test]
-fn one_set_window_call_is_one_action_log_row() {
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Maximized);
-    state.action_log.clear();
-    call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "state": "normal", "inner_size": [1600, 1200] }),
-    );
-    let entries: Vec<_> = state.action_log.entries().collect();
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(
-        entries[0].text,
-        "Restored window; resized window to 1600×1200"
-    );
-    assert_eq!(entries[0].kind, Kind::Window);
-    assert_eq!(entries[0].actor, Actor::Mcp);
 }
 
 /// A picture of a window the human cannot see answers nothing an agent asked
@@ -1995,7 +2068,7 @@ fn a_screenshot_of_a_minimized_window_is_refused() {
         },
     );
     assert!(
-        error.0.contains("minimized") && error.0.contains("set_window"),
+        error.0.contains("minimized") && error.0.contains("set_window_layout"),
         "{error}"
     );
 
@@ -2014,44 +2087,6 @@ fn a_screenshot_of_a_minimized_window_is_refused() {
         ),
         "a screenshot must defer once there is something to photograph"
     );
-}
-
-/// `apply` is the windowless entry point, so a caller that forgets the host
-/// fails loudly rather than silently exercising nothing.
-#[test]
-fn the_window_tools_refuse_where_there_is_no_window() {
-    let (mut state, mut viewer) = two_reconstructions();
-    let error = refused(
-        &mut state,
-        &mut viewer,
-        Command::SetWindow {
-            change: WindowChange {
-                state: Some(WindowState::Maximized),
-                ..WindowChange::default()
-            },
-        },
-    );
-    assert!(error.0.contains("no window"), "{error}");
-    let error = refused(&mut state, &mut viewer, Command::GetWindow);
-    assert!(error.0.contains("no window"), "{error}");
-}
-
-#[test]
-fn set_window_refuses_a_call_that_asks_for_nothing() {
-    let (mut state, mut viewer, mut host) = windowed(WindowState::Normal);
-    let error = refused_call_with(&mut state, &mut viewer, &mut host, "set_window", json!({}));
-    assert!(error.0.contains("nothing to do"), "{error}");
-    // …and `focus: false` is not a request either, as `exit_camera_view:
-    // false` is not one.
-    let error = refused_call_with(
-        &mut state,
-        &mut viewer,
-        &mut host,
-        "set_window",
-        json!({ "focus": false }),
-    );
-    assert!(error.0.contains("focus"), "{error}");
-    assert!(host.applied.is_empty(), "{:?}", host.applied);
 }
 
 // ── The schema and its parser ───────────────────────────────────────────
@@ -2191,10 +2226,46 @@ fn only_the_reads_are_annotated_read_only() {
             "get_camera_image",
             "get_camera_intrinsics",
             "get_point",
-            "get_layout",
-            "get_window",
+            "get_window_layout",
             "screenshot",
         ]
+    );
+    // Six reads, thirteen writes, and the one that hands back a picture.
+    assert_eq!(catalog.len(), 20, "the catalog has grown or shrunk");
+    assert_eq!(
+        catalog
+            .iter()
+            .filter(|spec| spec.kind == ToolKind::Write)
+            .count(),
+        13
+    );
+}
+
+/// The two halves of the layout surface advertise the document they share.
+#[test]
+fn set_window_layout_advertises_the_document() {
+    let catalog = tools::catalog();
+    let spec = catalog
+        .iter()
+        .find(|spec| spec.name == "set_window_layout")
+        .expect("the tool is in the catalog");
+    let properties = spec.schema["properties"]
+        .as_object()
+        .expect("an object schema");
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["layout", "sfm_explorer_layout", "window"]);
+
+    let mut window_keys: Vec<&str> = properties["window"]["properties"]
+        .as_object()
+        .expect("the window section has a schema")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    window_keys.sort_unstable();
+    assert_eq!(
+        window_keys,
+        ["focus", "inner_size", "monitor", "outer_position", "state"]
     );
 }
 

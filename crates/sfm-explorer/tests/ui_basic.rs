@@ -47,8 +47,19 @@ fn init() {
 }
 
 fn launch() -> Child {
+    launch_with(&["--no-default-layout"])
+}
+
+/// Launch the viewer with the given arguments.
+///
+/// Every test but the startup-load one passes `--no-default-layout`: a
+/// developer who has saved a layout of their own to
+/// `~/.sfm-explorer-default-layout.json` must not have this suite's panel
+/// assertions fail on their machine.
+fn launch_with(args: &[&str]) -> Child {
     #[allow(unused_mut)] // `cmd` is only mutated on macOS (see below)
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
+    cmd.args(args);
     // Keep egui rendering so its AccessKit tree stays fresh for queries — an
     // idle window can be inspected before the tree is fully published. Only
     // needed on macOS; Windows attaches to a window that already repaints
@@ -74,6 +85,15 @@ impl Guard {
         let _lock = ui_test_lock();
         Guard {
             child: launch(),
+            _lock,
+        }
+    }
+
+    /// The same, with the viewer's command line spelled out.
+    fn with_args(args: &[&str]) -> Self {
+        let _lock = ui_test_lock();
+        Guard {
+            child: launch_with(args),
             _lock,
         }
     }
@@ -436,6 +456,80 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
                 panic!("context menu item '{item}' did not appear after a right-click")
             });
     }
+}
+
+/// The default layout file, moved aside for the length of a test and put back
+/// afterwards.
+///
+/// The file is a real one in the developer's home directory — the whole point
+/// of the feature is that the viewer reads it at startup — so a test that
+/// writes one has to give theirs back, whatever the test does.
+struct DefaultLayoutFile {
+    path: std::path::PathBuf,
+    saved: Option<std::path::PathBuf>,
+}
+
+impl DefaultLayoutFile {
+    /// Put `contents` at `~/.sfm-explorer-default-layout.json`, preserving
+    /// whatever was there.
+    fn written(contents: &str) -> Self {
+        #[allow(deprecated)] // Un-deprecated in 1.85, below the workspace MSRV.
+        let home = std::env::home_dir().expect("a home directory");
+        let path = home.join(".sfm-explorer-default-layout.json");
+        let saved = path.exists().then(|| {
+            let saved = home.join(".sfm-explorer-default-layout.json.ui-test-backup");
+            std::fs::rename(&path, &saved).expect("move the developer's layout aside");
+            saved
+        });
+        std::fs::write(&path, contents).expect("write a default layout file");
+        DefaultLayoutFile { path, saved }
+    }
+}
+
+impl Drop for DefaultLayoutFile {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).ok();
+        if let Some(saved) = &self.saved {
+            std::fs::rename(saved, &self.path).ok();
+        }
+    }
+}
+
+/// A layout saved to the default file comes back at the next start.
+///
+/// End to end, and only a real window can show it: the file is read in
+/// `resumed`, between the window's creation and its first appearance. The
+/// layout names the Action Log alone, so the panel's own toolbar — which the
+/// stock grid keeps behind the Image Browser and never draws — is the evidence
+/// that the file was read.
+#[test]
+fn a_saved_default_layout_is_loaded_at_startup() {
+    let _file = DefaultLayoutFile::written(
+        r#"{
+  "sfm_explorer_layout": 2,
+  "layout": {
+    "main": {
+      "tabs": ["action_log"],
+      "active": "action_log"
+    },
+    "windows": []
+  }
+}
+"#,
+    );
+    // Launched *without* `--no-default-layout`, unlike every other test here.
+    let guard = Guard::with_args(&[]);
+    let app = attach(guard.child());
+
+    app.locator(r#"button[name="Latest"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("the Action Log toolbar did not appear, so the layout was not loaded");
+    assert!(
+        app.locator(r#"static_text[name="No reconstruction loaded."]"#)
+            .wait_attached(Duration::from_millis(500))
+            .is_err(),
+        "the 3D viewer is still docked, so the stock grid was used"
+    );
 }
 
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).

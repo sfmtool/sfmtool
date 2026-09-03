@@ -354,14 +354,22 @@ pub struct AppState {
     /// to observe.
     ///
     /// A snapshot rather than a live handle, so that reading the window is a
-    /// plain field access from the MCP `apply` seam — which is handed
-    /// `(&mut AppState, &mut Viewer3D)` and no `winit::Window` — and so the
-    /// same reads work headlessly in a test. The frame refreshes it at the top
-    /// of every frame the MCP endpoint is live for, and `set_window` refreshes
-    /// it again after a change, so nothing here can be a frame behind what an
-    /// agent just asked for. See `crate::mcp::window`.
-    #[cfg(feature = "mcp")]
-    pub(crate) window: Option<crate::mcp::window::WindowInfo>,
+    /// plain field access from a method that has no `winit::Window` in reach —
+    /// Panels ▸ Save Layout…, and the MCP `apply` seam, which is handed
+    /// `(&mut AppState, &mut Viewer3D)` — and so the same reads work headlessly
+    /// in a test. The frame refreshes it at the top of *every* frame
+    /// ([`AppState::observe_window`]), and applying a window layout refreshes
+    /// it again after the change, so nothing here can be a frame behind what
+    /// was just asked for. See [`crate::window`].
+    pub(crate) window: Option<crate::window::WindowInfo>,
+
+    /// The rectangle the window had when it was last observed as `normal`.
+    ///
+    /// Remembered rather than read, because `winit` reports only the window's
+    /// *current* rectangle: once it is maximized, the rectangle it will restore
+    /// to is unreadable, and that is the one a saved layout needs. See
+    /// `specs/gui/panel-layout.md` § "The window layout file".
+    pub(crate) window_normal_rect: Option<crate::window::NormalRect>,
 
     /// Which panels are docked where.
     ///
@@ -453,8 +461,8 @@ impl AppState {
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]
             mcp: None,
-            #[cfg(feature = "mcp")]
             window: None,
+            window_normal_rect: None,
             dock: Layout::default().to_dock(),
         }
     }

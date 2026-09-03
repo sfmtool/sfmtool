@@ -1,97 +1,106 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The layout tools: which panels are open, and how they are arranged.
+//! The layout tools: where the window is, which panels are open, and how they
+//! are arranged.
 //!
-//! All four answer with the same block, [`layout_reply`], for the reason every
-//! write on this surface answers with its resulting state: where a panel
-//! *landed* is the home rule's decision (`specs/gui/panel-layout.md`
-//! § "Home positions"), not the caller's, and an agent that assumed would be
-//! wrong the first time a group-mate was closed.
+//! All four answer with the same block, [`reply`], for the reason every write
+//! on this surface answers with its resulting state: where a panel *landed* is
+//! the home rule's decision (`specs/gui/panel-layout.md` § "Home positions"),
+//! not the caller's, and an agent that assumed would be wrong the first time a
+//! group-mate was closed.
 //!
-//! Nothing here parses or prints a layout document itself. `set_layout` hands
-//! the argument object to [`Layout::from_value`] and `get_layout` re-reads
-//! [`Layout::to_json`], so the wire and the file share one schema, one parser
-//! and one set of validation messages — an agent can save what it read to a
-//! file the Panels menu loads, and send back a file a human saved.
+//! Nothing here parses or prints a document itself. `set_window_layout` hands
+//! its whole argument to [`WindowLayout::from_value`] and `get_window_layout`
+//! re-reads [`WindowLayout::to_json`], so the wire and the file share one
+//! schema, one parser and one set of validation messages — an agent can save
+//! what it read to the file the viewer reads at startup, and send back a file a
+//! human saved.
 
 use serde_json::{json, Value};
 
 use super::{JsonReply, ToolError};
 use crate::action_log::Kind;
 use crate::dock::Tab;
-use crate::layout::{Layout, LayoutNode};
+use crate::layout::{Layout, LayoutNode, LayoutSection, WindowLayout};
 use crate::state::AppState;
+use crate::window::{MonitorInfo, WindowHost};
 
-/// What `set_layout` was asked for: a document, or the one layout with a name.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum LayoutTarget {
-    /// The argument object, unparsed.
-    ///
-    /// Carried as JSON rather than as a parsed [`Layout`] so that a document
-    /// the viewer will not accept is a *domain* error — the agent gets the
-    /// parser's path-carrying message with `isError`, and the human at the
-    /// window gets the same words in the Action Log, exactly as a refused
-    /// Panels ▸ Load Layout… gives them.
-    Document(Value),
-    /// The stock seven-panel grid, as Panels ▸ Reset Layout restores it.
-    Default,
+/// `get_window_layout`: the document, the live window, and the panels.
+pub(super) fn get_window_layout(state: &mut AppState, host: &dyn WindowHost) -> JsonReply {
+    // A read is also the freshest observation anyone has, so the snapshot the
+    // rest of the surface answers from is brought up to date with it.
+    state.observe_window(host);
+    Ok(reply(state, host))
 }
 
-/// `get_layout`: the layout file, and the same information indexed by panel.
-pub(super) fn get_layout(state: &AppState) -> JsonReply {
-    Ok(layout_reply(state))
-}
-
-/// `set_layout`: replace the whole arrangement.
-pub(super) fn set_layout(state: &mut AppState, target: &LayoutTarget) -> JsonReply {
-    match target {
-        LayoutTarget::Default => state.reset_layout(),
-        LayoutTarget::Document(value) => {
-            // Parsed and validated as a whole before any of it is applied, so
-            // a refusal leaves the dock exactly as it was.
-            let layout =
-                Layout::from_value(value).map_err(|error| ToolError::new(error.to_string()))?;
-            state
-                .apply_layout(&layout)
-                .map_err(|error| ToolError::new(error.to_string()))?;
-            // `apply_layout` records nothing itself, because its two callers
-            // word the entry differently: the menu says which file, and this
-            // says which tool.
-            state.action_log.record(Kind::Layout, "Set layout");
-        }
+/// `set_window_layout`: the window portion, the panel portion, or both.
+pub(super) fn set_window_layout(
+    state: &mut AppState,
+    host: &mut dyn WindowHost,
+    value: &Value,
+) -> JsonReply {
+    // Parsed and validated as a whole before any of it is applied, so a
+    // refusal leaves the window and the dock exactly as they were.
+    let document =
+        WindowLayout::from_value(value).map_err(|error| ToolError::new(error.to_string()))?;
+    let applied = state
+        .apply_window_layout(host, &document)
+        .map_err(|error| ToolError::new(error.to_string()))?;
+    // One row per portion, because the two portions are two kinds. Neither
+    // `apply_window_layout` nor `apply_layout` records anything itself: their
+    // callers word the entry differently — the menu says which file, this says
+    // which tool.
+    if let Some(applied) = applied {
+        state
+            .action_log
+            .record(Kind::Window, applied.change.log_text(applied.fitted));
     }
-    Ok(layout_reply(state))
+    match &document.layout {
+        Some(LayoutSection::Layout(_)) => state.action_log.record(Kind::Layout, "Set layout"),
+        Some(LayoutSection::Default) => state.action_log.record(Kind::Layout, "Reset layout"),
+        None => {}
+    }
+    Ok(reply(state, host))
 }
 
 /// `show_panel`: open a panel at its home position, or raise it if it is open.
-pub(super) fn show_panel(state: &mut AppState, panel: Tab) -> JsonReply {
+pub(super) fn show_panel(state: &mut AppState, host: &dyn WindowHost, panel: Tab) -> JsonReply {
     state.show_panel(panel);
-    Ok(layout_reply(state))
+    Ok(reply(state, host))
 }
 
 /// `hide_panel`: close a panel. Idempotent, as the method is.
-pub(super) fn hide_panel(state: &mut AppState, panel: Tab) -> JsonReply {
+pub(super) fn hide_panel(state: &mut AppState, host: &dyn WindowHost, panel: Tab) -> JsonReply {
     state.hide_panel(panel);
-    Ok(layout_reply(state))
+    Ok(reply(state, host))
 }
 
 /// The block all four layout tools return.
 ///
-/// `layout` is the file itself, parsed — not a rendering of it and not a
-/// subset. `panels` is the same information indexed the other way, because
-/// "is the Action Log open" should not cost the agent a tree walk.
-pub(super) fn layout_reply(state: &AppState) -> Value {
-    let layout = state.layout();
+/// Three views of one arrangement. **`window_layout` is the file**: the object
+/// `WindowLayout::to_json` writes, parsed — an agent that saves it has a file
+/// the menu loads and the viewer reads at startup. The **`window` block beside
+/// it is the observation**: focus, scale factor, the *current* (not normal)
+/// geometry, and every monitor, read live from the host. The two agree for a
+/// normal window and differ for a maximized one, and that difference is the
+/// information. **`panels` is the same arrangement indexed the other way**,
+/// because "is the Action Log open" should not cost the agent a tree walk.
+pub(super) fn reply(state: &AppState, host: &dyn WindowHost) -> Value {
+    let monitors: Option<Vec<MonitorInfo>> = host.observe().map(|(_, monitors)| monitors);
     json!({
-        "layout": document(&layout),
-        "panels": panels(&layout),
+        "window_layout": document(&state.window_layout()),
+        "window": state
+            .window
+            .as_ref()
+            .map(|info| super::window::block(info, monitors.as_deref())),
+        "panels": panels(&state.layout()),
     })
 }
 
-/// The layout as the file spells it, read back through the file's own writer
+/// The document as the file spells it, read back through the file's own writer
 /// so the two can never describe one arrangement differently.
-fn document(layout: &Layout) -> Value {
+fn document(layout: &WindowLayout) -> Value {
     serde_json::from_str(&layout.to_json()).unwrap_or(Value::Null)
 }
 

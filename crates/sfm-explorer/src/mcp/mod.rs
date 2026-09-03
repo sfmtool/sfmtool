@@ -24,8 +24,8 @@
 //! - [`tools`] — the tool table and the wire parse. Names, descriptions,
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
-//!   `(&mut AppState, &mut Viewer3D)` and a [`window::WindowHost`]. **No
-//!   `App`, no GPU handle**, which is what keeps twenty-one of the twenty-two
+//!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
+//!   **No `App`, no GPU handle**, which is what keeps nineteen of the twenty
 //!   tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
@@ -116,19 +116,18 @@ pub(crate) enum Command {
     SetView {
         view: ViewCommand,
     },
-    GetLayout,
-    SetLayout {
-        layout: layout::LayoutTarget,
+    GetWindowLayout,
+    SetWindowLayout {
+        /// The document as it arrived, unparsed, so that one the viewer will
+        /// not accept is a *domain* error in the layout parser's own words —
+        /// path and all — rather than a malformed request.
+        document: Value,
     },
     ShowPanel {
         panel: crate::dock::Tab,
     },
     HidePanel {
         panel: crate::dock::Tab,
-    },
-    GetWindow,
-    SetWindow {
-        change: window::WindowChange,
     },
     Screenshot {
         max_dimension: Option<u32>,
@@ -257,7 +256,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other twenty-one answer with JSON, and squeezing an image through a JSON
+/// the other nineteen answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -274,7 +273,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the twenty-one tools that speak only JSON.
+/// The answer of the nineteen tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -310,7 +309,7 @@ pub(crate) struct Request {
 
 /// Apply one command to the viewer, with no window behind it.
 ///
-/// [`apply_with_window`] against a `window::NoWindow` host, which is the
+/// [`apply_with_window`] against a `test_support::NoWindow` host, which is the
 /// windowless case: `get_window` and `set_window` refuse with "no window", and
 /// every other tool behaves exactly as it does in the viewer. Kept as its own
 /// function for the callers that have no window to offer and should not have to
@@ -318,22 +317,22 @@ pub(crate) struct Request {
 /// by the time it drains, so this is compiled for them.
 #[cfg(test)]
 pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Command) -> Outcome {
-    apply_with_window(state, viewer, &mut window::NoWindow, command)
+    apply_with_window(state, viewer, &mut crate::test_support::NoWindow, command)
 }
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes twenty-one of the
-/// twenty-two tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes nineteen of the
+/// twenty tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
-/// window-shaped command through [`window::WindowHost`], which a fake can stand
+/// window-shaped command through [`crate::window::WindowHost`], which a fake can stand
 /// in for.
 pub(crate) fn apply_with_window(
     state: &mut AppState,
     viewer: &mut Viewer3D,
-    host: &mut dyn window::WindowHost,
+    host: &mut dyn crate::window::WindowHost,
     command: Command,
 ) -> Outcome {
     match command {
@@ -400,19 +399,20 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
         } => done(write::set_solo(state, reconstruction_label.as_deref())),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),
-        Command::GetLayout => done(layout::get_layout(state)),
-        Command::SetLayout { layout } => done(layout::set_layout(state, &layout)),
-        Command::ShowPanel { panel } => done(layout::show_panel(state, panel)),
-        Command::HidePanel { panel } => done(layout::hide_panel(state, panel)),
-        Command::GetWindow => done(window::get_window(state, host)),
-        Command::SetWindow { change } => done(window::set_window(state, host, &change)),
+        Command::GetWindowLayout => done(layout::get_window_layout(state, host)),
+        Command::SetWindowLayout { document } => {
+            done(layout::set_window_layout(state, host, &document))
+        }
+        Command::ShowPanel { panel } => done(layout::show_panel(state, host, panel)),
+        Command::HidePanel { panel } => done(layout::hide_panel(state, host, panel)),
         Command::Screenshot { max_dimension } => {
             // A minimized window renders nothing to photograph, and whether its
             // swapchain still presents at all is platform-dependent — so this
             // is refused rather than attempted, naming the call that fixes it.
             // Checked here, against the window snapshot, so it is under
             // headless test with the rest of the vocabulary.
-            if state.window.as_ref().map(|info| info.state) == Some(window::WindowState::Minimized)
+            if state.window.as_ref().map(|info| info.state)
+                == Some(crate::window::WindowState::Minimized)
             {
                 return done(Err(ToolError::new(MINIMIZED)));
             }
@@ -430,7 +430,7 @@ pub(crate) fn apply_with_window(
 /// of a shared viewer, so the refusal names the call that makes one possible.
 pub(super) const MINIMIZED: &str =
     "The window is minimized, so nothing is being rendered to photograph. Send \
-     set_window { \"state\": \"normal\" } first.";
+     set_window_layout { \"window\": { \"state\": \"normal\" } } first.";
 
 fn done(reply: JsonReply) -> Outcome {
     Outcome::Done(reply.map(ToolOutput::Json))
@@ -613,7 +613,7 @@ fn loaded_list(state: &AppState) -> String {
 pub(crate) fn apply_as_agent(
     state: &mut AppState,
     viewer: &mut Viewer3D,
-    host: &mut dyn window::WindowHost,
+    host: &mut dyn crate::window::WindowHost,
     commands: Vec<Command>,
 ) -> Vec<Outcome> {
     debug_assert_eq!(
@@ -671,12 +671,10 @@ impl Command {
             Command::SetReconstructionDisplay { .. } => "set_reconstruction_display",
             Command::SetSolo { .. } => "set_solo",
             Command::SetView { .. } => "set_view",
-            Command::GetLayout => "get_layout",
-            Command::SetLayout { .. } => "set_layout",
+            Command::GetWindowLayout => "get_window_layout",
+            Command::SetWindowLayout { .. } => "set_window_layout",
             Command::ShowPanel { .. } => "show_panel",
             Command::HidePanel { .. } => "hide_panel",
-            Command::GetWindow => "get_window",
-            Command::SetWindow { .. } => "set_window",
             Command::Screenshot { .. } => "screenshot",
         }
     }
@@ -693,8 +691,7 @@ impl Command {
             | Command::GetCameraImage { .. }
             | Command::GetCameraIntrinsics { .. }
             | Command::GetPoint { .. }
-            | Command::GetLayout
-            | Command::GetWindow
+            | Command::GetWindowLayout
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. } | Command::CloseReconstruction { .. } => Kind::File,
             Command::SelectReconstruction { .. }
@@ -704,10 +701,18 @@ impl Command {
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
             Command::SetView { .. } => Kind::View,
-            Command::SetLayout { .. } | Command::ShowPanel { .. } | Command::HidePanel { .. } => {
-                Kind::Layout
+            Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
+            // One call, two portions, and a refusal has to be filed somewhere:
+            // under the panels when it carried a panel portion — the coarser of
+            // the two, and the one a reader looks for a layout refusal in —
+            // and under the window otherwise.
+            Command::SetWindowLayout { document } => {
+                if document.get("layout").is_some() {
+                    Kind::Layout
+                } else {
+                    Kind::Window
+                }
             }
-            Command::SetWindow { .. } => Kind::Window,
         }
     }
 }
@@ -755,8 +760,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             named(reconstruction_label)
         ),
         Command::GetPoint { point } => format!("get_point {}", point_text(point)),
-        Command::GetLayout => "get_layout".to_string(),
-        Command::GetWindow => "get_window".to_string(),
+        Command::GetWindowLayout => "get_window_layout".to_string(),
         Command::Screenshot { max_dimension } => {
             let [width, height] = screenshot_size(viewer, *max_dimension);
             format!("screenshot {width}×{height}")

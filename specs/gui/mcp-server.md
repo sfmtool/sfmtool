@@ -22,7 +22,9 @@ The window itself is part of what the surface drives, because the window is
 shared. The agent wants the 3D viewport to fill it before a screenshot and the
 Action Log out of the way; the human wants the Action Log in front to see what
 the agent just did, and the window back to the size they had it. Both ask for
-that in the same vocabulary, and both see the result in the Action Log.
+that in the same vocabulary — one document carrying the window's placement and
+the panel arrangement, which is also the file the Panels menu saves — and both
+see the result in the Action Log.
 
 The surface is deliberately narrow. The viewer's own invariants
 (§ "Addressing", § "Threading") are what it is shaped around, not the other way
@@ -45,12 +47,13 @@ sfm explorer --mcp 9000 scene.sfmr     # same, through the Python CLI
 ```
 
 `crates/sfm-explorer/src/cli.rs` recognizes `--mcp`, `--mcp=PORT`, `--mcp PORT`,
-`--help`, and treats everything else as a path. Hand-rolled rather than `clap`:
-one flag and a list of paths is a dozen lines, and it keeps the binary's
-dependency tree as it was. The following-argument form has to look at what comes
-next, because `--mcp scene.sfmr` is the common invocation and means the default
-port and a file — so a next argument that is not a port is left alone rather
-than consumed.
+`--no-default-layout` ([panel-layout.md](panel-layout.md) § "The default layout
+file"), `--help`, and treats everything else as a path. Hand-rolled rather than
+`clap`: two flags and a list of paths is a dozen lines, and it keeps the
+binary's dependency tree as it was. The following-argument form has to look at
+what comes next, because `--mcp scene.sfmr` is the common invocation and means
+the default port and a file — so a next argument that is not a port is left
+alone rather than consumed.
 
 On startup the server binds and prints one line to stdout, which is what a
 human pastes into a client config:
@@ -94,8 +97,8 @@ place.
 
 ## The tool surface
 
-Twenty-two tools. Seven read, fourteen write, one that closes the loop by
-handing back a picture.
+Twenty tools. Six read, thirteen write, one that closes the loop by handing
+back a picture.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -104,8 +107,7 @@ handing back a picture.
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
 | `get_point` | read | One 3D point: position, colour, error, full track |
-| `get_layout` | read | The panel arrangement, as the layout file spells it, plus each panel's open state |
-| `get_window` | read | The window's state, size, position, scale factor, and the monitors |
+| `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene (reload if already open) |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -116,18 +118,17 @@ handing back a picture.
 | `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_view` | write | Frame the scene, look through a camera image, or set the viewport camera outright |
-| `set_layout` | write | Replace the whole arrangement with a layout document, or with the default |
+| `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
-| `set_window` | write | Change the window's state, size, position or focus, a piece at a time |
 | `screenshot` | observe | PNG of the 3D viewport |
 
-Every tool is annotated: the seven reads and `screenshot` carry
-`readOnlyHint: true`, the fourteen writes `destructiveHint: false` (nothing here
+Every tool is annotated: the six reads and `screenshot` carry
+`readOnlyHint: true`, the thirteen writes `destructiveHint: false` (nothing here
 touches a file on disk — `close_reconstruction` unloads, it does not delete;
-`set_layout` changes the dock, not the layout file the menu saves), and every
-one of them `openWorldHint: false`. Every `inputSchema` is closed
-(`additionalProperties: false`).
+`set_window_layout` changes the window and the dock, not the layout file the
+menu saves), and every one of them `openWorldHint: false`. Every `inputSchema`
+is closed (`additionalProperties: false`).
 
 ### The wire vocabulary
 
@@ -204,9 +205,10 @@ refused with a message listing all seven (`Tab::all_wire_names`). `Tab` stays
 the Rust name — it is `egui_dock`'s word for the thing in a node, and the code
 is not the wire.
 
-**`layout`** is the whole arrangement as a document, so the field holding one
-is `layout` and not `layout_something`: it carries the entity, not a handle to
-it.
+**`window_layout`** is the whole document — the window's placement and the panel
+arrangement — and **`layout`** is its panel section, so the fields holding them
+are named for the entities and not `layout_something`: they carry the things,
+not handles to them.
 
 #### `<entity>` for the thing, `<entity>_<attribute>` for a reference to it
 
@@ -339,8 +341,8 @@ viewer for the *state*. `points_at_infinity` is read the way
 `scene::visible_stats` reads it, so this number and the one in the viewport's
 stats overlay are the same number.
 
-**`window` is carried here as well as by `get_window`**, everything but the
-monitor list (§ "The window block"). "Can the human see this window, and how
+**`window` is carried here as well as by `get_window_layout`**, everything but
+the monitor list (§ "The window block"). "Can the human see this window, and how
 much of the desktop is it" is a question an agent asks before deciding whether
 a screenshot is worth taking at all, and a second call for it every time is a
 call too many. It is `null` only before the window exists, which no tool call
@@ -701,7 +703,7 @@ filter's aliasing invents exactly that.
 **A minimized window is refused rather than photographed:**
 
 > The window is minimized, so nothing is being rendered to photograph. Send
-> `set_window { "state": "normal" }` first.
+> `set_window_layout { "window": { "state": "normal" } }` first.
 
 Whether a minimized window's swapchain still presents is platform-dependent,
 and a picture of a window the human cannot see answers nothing an agent asked
@@ -712,20 +714,20 @@ the rest of the vocabulary rather than only on a machine with a window.
 `screenshot` is the one tool that cannot answer during the apply phase
 (§ "Threading").
 
-### `get_layout`
+### `get_window_layout`
 
-The panel arrangement, and which panels are where. No arguments.
+Where the window is, and which panels are where. No arguments.
 
 ```jsonc
 {
-  "layout": {                       // the layout file, verbatim (panel-layout.md § "The layout file")
-    "sfm_explorer_layout": 1,
-    "main": { "split": "left_right", "fraction": 0.18,
-              "first": { "tabs": ["scene"], "active": "scene" },
-              "second": { /* … */ } },
-    "windows": []
+  "window_layout": {                // the file, verbatim: what Save Layout… writes right now
+    "sfm_explorer_layout": 2,
+    "window": { "state": "maximized", "outer_position": [120, 64], "inner_size": [1280, 720],
+                "monitor": { "position": [0, 0], "size": [3840, 2160] } },
+    "layout": { "main": { /* … */ }, "windows": [] }
   },
-  "panels": {                       // derived from `layout`: one entry per panel, always all seven
+  "window": { /* the window block, live, with `monitors` — null with no window */ },
+  "panels": {                       // one entry per panel, always all seven
     "scene":             { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
@@ -737,53 +739,101 @@ The panel arrangement, and which panels are where. No arguments.
 }
 ```
 
-**`layout` is the file.** Not a rendering of it, not a subset: the object
-`Layout::to_json` writes, parsed. An agent that saves it to disk has a file the
-Panels menu loads, and a file the human saved is an argument `set_layout`
-takes. One schema, one parser, one set of validation messages.
+**`window_layout` is the file.** Not a rendering of it, not a subset: the object
+`WindowLayout::to_json` writes, parsed. An agent that saves it has a file the
+Panels menu loads and the viewer reads at startup, and a file the human saved is
+an argument `set_window_layout` takes. One schema, one parser, one set of
+validation messages ([panel-layout.md](panel-layout.md) § "The window layout
+file").
 
-**`panels` is the same information, indexed the other way.** "Is the Action Log
-open" should not cost the agent a tree walk. `open` is whether the panel
-appears anywhere in `layout`; `active` is whether it is the front tab of its
-node — a panel alone in a node is active, and the default layout's two
+**The `window` block beside it is the observation.** Its `window_layout.window`
+sibling is the *settable* placement — the state plus the **normal** rectangle,
+what the window restores to — while the block is focus, scale factor, the
+current (not normal) position and sizes, the monitor, `derived`, and `monitors`
+read live from the host. The two agree for a normal window and differ for a
+maximized one, and that difference is the information: the agent sees both what
+the window is showing as and what it would come back to.
+
+**`panels` is the arrangement indexed the other way.** "Is the Action Log open"
+should not cost the agent a tree walk. `open` is whether the panel appears
+anywhere in the document's `layout`; `active` is whether it is the front tab of
+its node — a panel alone in a node is active, and the default layout's two
 multi-tab nodes leave three of the seven behind a sibling. A closed panel is
 `active: false`.
 
-### `set_layout`
+Where there is no window — a headless `AppState` — `window` is `null` and the
+document has no `window` section, rather than the tool refusing: the panels half
+of the answer is still an answer. The snapshot is refreshed from the host first,
+so a read is also the freshest observation anyone has.
+
+### `set_window_layout`
+
+The argument **is the document**, version tag optional:
 
 ```jsonc
-{ "layout": { "sfm_explorer_layout": 1, "main": { /* … */ }, "windows": [] } }
-{ "layout": "default" }           // the stock seven-panel grid, as Reset Layout
+{ "window": { "state": "maximized" } }
+{ "window": { "state": "normal", "inner_size": [1600, 900] } }
+{ "layout": { "main": { /* … */ }, "windows": [] } }
+{ "layout": "default" }                                     // the stock seven-panel grid
+{ "window": { "state": "maximized" }, "layout": "default" } // both, in that order
+{ "sfm_explorer_layout": 2, "window": { /* … */ }, "layout": { /* … */ } }  // a file, or a whole reply, sent back
 ```
 
-The reply is `get_layout`'s.
+The reply is `get_window_layout`'s.
 
-The document form goes through `Layout::from_value`, which is `from_json`'s
-rules unchanged — the version tag is required, every panel at most once, no
-empty leaves, no unknown keys — so the wire and the file cannot come to differ
-about what a layout is. A violation is a **domain error** carrying the layout
-parser's own message with its path: *"main.second.first: unknown key
-`fracton`"*. It reaches the human too, as a failed Action Log entry, exactly as
-a refused Panels ▸ Load Layout… does. A refused document leaves the dock
-untouched, because the document is parsed and validated whole before any of it
-is applied.
+The whole argument goes through `WindowLayout::from_value` — the file's parser,
+so the wire and the file cannot differ about what a document is, and a violation
+is a **domain error** in the parser's words with its path (`layout.main.second:
+unknown key "fracton"`, `window.state: unknown window state "big"; …`). It
+reaches the human too, as a failed Action Log entry, exactly as a refused
+Panels ▸ Load Layout… does. The version tag is accepted so a reply or a file can
+be sent back without editing, and checked when present. Two things are the
+tool's own:
 
-The argument is the object rather than a pre-parsed layout for that reason: a
-document the viewer will not accept is the viewer's refusal, not a malformed
-request (§ "Errors"). The one thing checked at the parse is the *other* form —
-`"default"` is the only string the field accepts, and any other is a protocol
-error, since a name this surface does not have is a request that does not fit
-the schema.
+- **An empty call is refused at the parse**: `{}`, `{ "window": {} }` and
+  `{ "sfm_explorer_layout": 2 }` all ask for nothing, and a call is a request.
+  What counts as empty is the parser's own `WindowLayout::is_empty`, so the two
+  halves cannot come to disagree about it.
+- **Where there is no window, a `window` portion is refused** with the "no
+  window" message; a call with only a `layout` portion succeeds there.
 
-`"default"` is a named layout rather than a separate `reset_layout` tool
-because it *is* setting the layout, to the one arrangement that has a name; an
-agent that has just made a mess of the window wants one call back, not a
-document it has to reconstruct.
+Application is `AppState::apply_window_layout`: **window portion first, panel
+portion second**, so a call reads "make the window like this, then arrange the
+panels" and a panel tree is laid out into the window it was meant for. A
+platform refusal in the window portion stops the call before the panels; a
+validation refusal applies nothing, because the document is parsed and validated
+whole before any of it is applied.
 
-`set_layout` **replaces** the arrangement — a panel absent from the document is
-closed. Every panel keeps its state either way (a re-opened Image Detail shows
-the image it had), because panel structs live for the process and the dock only
-decides which of them draw.
+The window portion **preserves what it does not carry**, and its rectangle is
+the window's *normal* rectangle — so a size sent to a maximized window changes
+what it restores to and leaves it maximized ([panel-layout.md](panel-layout.md)
+§ "How a `window` section is applied"). A `window` carrying `monitor` is fitted
+exactly as a file's is (§ "Fitting a rectangle to the desktop" there), which is
+what lets a file saved at another desk be sent through the tool unchanged; a
+rectangle sent without one is applied as written, because an agent that sends a
+bare rectangle means that rectangle. The reply is a read-back rather than an
+echo: what the platform does with a requested size is not knowable in advance —
+the window's `with_min_inner_size` of `800 × 600` logical is the minimum the
+*user's drag* respects, and on Windows a programmatic resize goes straight past
+it — so an agent that needs to know what it got reads the reply. `focus` may
+likewise be declined by a platform that does not let applications steal focus;
+`focused` in the reply says whether it worked.
+
+The panel portion **replaces** the arrangement: a panel the document does not
+mention is closed. Every panel keeps its state either way (a re-opened Image
+Detail shows the image it had), because panel structs live for the process and
+the dock only decides which of them draw. `"default"` is a named layout rather
+than a separate `reset_layout` tool because it *is* setting the layout, to the
+one arrangement that has a name; an agent that has just made a mess of the window
+wants one call back, not a document it has to reconstruct.
+
+**The change is applied at the top of the frame**, in the drain, before egui
+reads the window size for that frame's layout — so the frame the request woke is
+laid out at the new size and a `screenshot` in the *next* call sees it. The reply
+is read back from the window immediately after the change, by which time the OS
+has processed it on Windows (the calls are synchronous there). On a platform that
+animates or defers window changes the read-back may be a frame early; an agent
+that needs certainty confirms with `get_window_layout`.
 
 ### `show_panel` / `hide_panel`
 
@@ -792,8 +842,9 @@ decides which of them draw.
 // hide_panel  { "panel_name": "action_log" }
 ```
 
-Both reply with `get_layout`'s block, so the agent sees where the panel landed
-rather than assuming.
+Both reply with `get_window_layout`'s block, so the four tools that touch the
+arrangement answer alike and the agent sees where the panel landed rather than
+assuming.
 
 `show_panel` is `AppState::show_panel`: the three home-position rules of
 [panel-layout.md](panel-layout.md) § "Home positions", so a panel the agent
@@ -809,22 +860,24 @@ issuing a toggle cannot know the outcome without reading first, and a retried
 call would undo itself.
 
 Neither takes a position. Where a panel goes is the home rule's decision; an
-agent that wants a panel *there* sends the tree through `set_layout`.
+agent that wants a panel *there* sends the tree through `set_window_layout`.
 
-**In the Action Log**, the three layout writes are the Panels menu's own rows
-with `MCP` in the actor column, because they go through the same `AppState`
-methods the menu does — `Opened Action Log panel`, `Raised Action Log panel`,
-`Closed Action Log panel`, `Reset layout`. `set_layout` with a document records
-`Set layout`: `AppState::apply_layout` records nothing itself, since its two
-callers word the entry differently — the menu says which file, the tool says
-which tool. All of them are `Kind::Layout` and none coalesce, so two panels
-closed in a row are two rows. `get_layout` is a `Query` entry and never reaches
-the status line.
+**In the Action Log**, the panel writes are the Panels menu's own rows with
+`MCP` in the actor column, because they go through the same `AppState` methods
+the menu does — `Opened Action Log panel`, `Raised Action Log panel`, `Closed
+Action Log panel`. A `set_window_layout` records **one row per portion it
+carried**: the window portion under `Kind::Window`, composed from the pieces in
+application order, and the panel portion under `Kind::Layout` as `Set layout` for
+a document or `Reset layout` for `"default"` — the menu's own words, since
+`AppState::apply_window_layout` records nothing itself and its three callers word
+the entry differently. None of them coalesce, so two panels closed in a row are
+two rows. `get_window_layout` is a `Query` entry and never reaches the status
+line. The texts are listed in [action-log.md](action-log.md).
 
 ### The window block
 
-`get_scene` carries this beside `window_title`, and `get_window` returns it with
-one addition.
+`get_scene` carries this beside `window_title`, and `get_window_layout` returns
+it with one addition.
 
 ```jsonc
 {
@@ -846,7 +899,7 @@ one addition.
       "monitor_fraction": [0.504, 0.518],   // outer_size / monitor.size, per axis; null without a monitor
       "monitor_area_fraction": 0.261
     },
-    "monitors": [ /* get_window and set_window only: every monitor, same shape as `monitor`, the current one first */ ]
+    "monitors": [ /* the four layout tools only: every monitor, same shape as `monitor`, the current one first */ ]
   }
 }
 ```
@@ -870,8 +923,8 @@ viewer's business. `is_minimized` returning `None` (a platform that cannot say)
 reads as not minimized.
 
 **`outer_position` can be `null`.** Wayland does not tell a window where it is.
-The field says so rather than reporting `[0, 0]`, and `set_window`'s
-`outer_position` fails on such a platform for the same reason.
+The field says so rather than reporting `[0, 0]`, and an `outer_position` in a
+window layout fails on such a platform for the same reason.
 
 **`derived.monitor_fraction` is the answer to "how much of the desktop"**, per
 axis, with the area under it; both are `null` when there is no current monitor
@@ -886,80 +939,13 @@ inventing plausible numbers, and `state` is the field that explains them.
 **The block a tool returns is a snapshot, `AppState::window`** (§ "Threading"),
 which is why `get_scene` can carry it without a window handle and why the
 minimized check in `screenshot` is headless. `monitors` is the exception: it is
-read from the window at the moment the tool runs, which is why only the two
-window tools carry it.
+read from the window at the moment the tool runs, which is why `get_scene` does
+not carry it.
 
-### `set_window`
-
-```jsonc
-{ "state": "maximized" }                     // "normal" | "maximized" | "minimized" | "fullscreen"
-{ "state": "normal" }                        // restore: un-minimize, un-maximize, leave fullscreen — all three
-{ "inner_size": [1600, 900] }                // physical px; the drawable area
-{ "outer_position": [100, 50] }              // physical px, desktop coordinates
-{ "focus": true }                            // bring to the front, where the platform allows it
-
-// pieces combine when each has an answer
-{ "state": "normal", "inner_size": [1600, 900], "outer_position": [100, 50] }
-```
-
-The reply is `{ "window": … }`, the block `get_window` returns.
-
-**What a call does not carry is preserved**, as in `set_view`. The pieces are
-applied in a fixed order — `state`, then `outer_position`, then `inner_size`,
-then `focus` — so that a call carrying several reads as one sentence: "make it
-normal, put it here, this big, and in front".
-
-**Geometry needs a normal window, and the call is refused otherwise.** A
-maximized, minimized or fullscreen window's size and position belong to the
-window manager, and asking for a size the OS will immediately overrule is a call
-with no honest answer. So `inner_size` and `outer_position` are accepted when
-the window is `normal` after the `state` piece — either it already was, or the
-call says `"state": "normal"` — and refused, naming the state, when the call
-would leave it anything else. `{ "state": "minimized", "inner_size": […] }` is
-refused at the parse, which can see the call's own fields; `{ "inner_size": […] }`
-against a maximized window is refused by the viewer, which knows the state the
-window is already in, with *"The window is maximized; send `state: "normal"` in
-the same call to move or resize it."*
-
-**`normal` means all three flags off**, applied minimized → fullscreen →
-maximized, because restoring a minimized window can bring a maximized one back
-and the agent asked for normal, not for whatever was underneath.
-
-**What the platform does with a requested size is not knowable in advance,
-which is why the reply is a read-back and not an echo.** It may clamp, and it
-may not: the window's `with_min_inner_size` of `800 × 600` logical is the
-minimum the *user's drag* respects, and on Windows a programmatic resize goes
-straight past it — `set_window { "inner_size": [200, 150] }` gives a 200 × 150
-window and the reply says so. Other platforms and other window managers answer
-differently, and an agent that needs to know what it got reads the reply rather
-than assuming its request. `focus` may likewise be declined by a platform that
-does not let applications steal focus; `focused` in the reply says whether it
-was. `focus: false` is refused rather than read as "leave it" — a field that can
-only ask for one thing has not asked for it, which is how `set_view` reads
-`exit_camera_view: false`.
-
-**The change is applied at the top of the frame**, in the drain, before egui
-reads the window size for that frame's layout — so the frame the request woke is
-laid out at the new size and a `screenshot` in the *next* call sees it. The reply
-is read back from the window immediately after the change, by which time the OS
-has processed it on Windows (the calls are synchronous there). On a platform that
-animates or defers window changes the read-back may be a frame early; an agent
-that needs certainty confirms with `get_window`.
-
-**Both window tools refuse where there is no window** — a headless `apply`, or a
-viewer whose window has not been created yet — rather than reporting a window
-that is not there.
-
-**In the Action Log**, one entry per call, `Kind::Window`, non-coalescing,
-composed from the pieces the call carried in application order: `Maximized
-window`, `Restored window`, `Minimized window`, `Made window fullscreen`, `Moved
-window to (100, 50)`, `Resized window to 1600×900`, `Focused window` — joined
-with `; ` when a call carries more than one, so `Restored window; resized window
-to 1600×900` is one row for one call. The numbers are the ones the call *asked
-for* rather than the read-back's, which is the rule the Action Log already keeps
-(it records what was asked); a row reading `1598×898` for a call that said
-`1600×900` would be reporting the platform rather than the action. A refusal is
-the usual failed entry, `set_window failed: …`. `get_window` is a `Query` entry.
+**The block is the window's *current* geometry.** What a layout document's
+`window` section carries is the rectangle the window restores to, which is a
+different number for a maximized window and the same one for a normal window
+(§ "`get_window_layout`").
 
 ## Addressing
 
@@ -1064,25 +1050,29 @@ Four things this buys, each load-bearing:
   screenshot would sit until the caller's timeout rather than until the next
   frame.
 
-**The one command that must reach `winit` goes through a two-method trait**,
-`WindowHost`, for the same reason `screenshot` leaves through
+**The commands that must reach `winit` go through a trait**,
+`crate::window::WindowHost`, for the same reason `screenshot` leaves through
 `Outcome::Deferred`: to keep the command vocabulary applicable to
-`(&mut AppState, &mut Viewer3D)` and nothing else. But it is not deferred, and
-the difference is worth stating. A screenshot's answer does not exist until the
-frame has been rendered; a window change can be applied on the spot, its effect
-is wanted in *this* frame's layout, and its answer is a read-back that a fake
-can produce as well as a real window can. Deferring it would apply it after the
-present — a frame late — and would leave a `set_window` followed by a
-`get_window` in one batch answering with the old window.
+`(&mut AppState, &mut Viewer3D)` and nothing else. But a window change is not
+deferred, and the difference is worth stating. A screenshot's answer does not
+exist until the frame has been rendered; a window change can be applied on the
+spot, its effect is wanted in *this* frame's layout, and its answer is a
+read-back that a fake can produce as well as a real window can. Deferring it
+would apply it after the present — a frame late — and would leave a
+`set_window_layout` followed by a `get_window_layout` in one batch answering with
+the old window. The trait is not the MCP surface's: it is where every window
+change goes, the Panels menu's and the startup load's included
+([panel-layout.md](panel-layout.md) § "The window").
 
 **`AppState::window` is refreshed twice.** Once at the top of
-`run_ui_and_paint`, in the drain and before the batch is applied, from
-`WindowHost::observe` — so `get_scene`'s window block and a `screenshot`'s
-minimized check see this frame's window — and again inside `apply_with_window`
-after a `set_window` or a `get_window`, so a later call in the same batch, and
-the `set_window` reply itself, see the change. The refresh is a handful of
-platform calls a frame, and only in frames the endpoint is live for; an idle
-viewer renders none at all.
+`run_ui_and_paint`, *before* the drain, by `AppState::observe_window` — so
+`get_scene`'s window block and a `screenshot`'s minimized check see this frame's
+window — and again inside `apply_window_layout` after a change, so a later call
+in the same batch, and the reply itself, see it. The first refresh happens on
+**every** frame rather than only the ones the endpoint is live for, because Save
+Layout… reads the same snapshot and the normal rectangle it remembers has to be
+current at the moment the window is maximized. The cost is a handful of platform
+calls a frame; an idle viewer renders none at all.
 
 **Every reply is timeout-bounded** — 10 s on the HTTP side. The GUI thread can
 legitimately stop pumping (a modal `rfd` file dialog is open, the user is
@@ -1106,12 +1096,12 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 **refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
 same words the agent receives.
 
-Two tools word their own entry, and for the same reason in both cases — no
-state method owns the change. `set_layout` with a document goes through
-`AppState::apply_layout`, which deliberately records nothing because its two
-callers word it differently; and `set_window` changes the *window*, which is not
-application state at all and so has no `AppState` method behind it. Both are
-listed with their texts in [action-log.md](action-log.md).
+One tool words its own entries, and for one reason — no state method owns the
+change. `set_window_layout` goes through `AppState::apply_window_layout`, which
+deliberately records nothing because its three callers word it differently: the
+menu and the startup load say which *file* they loaded, and the tool says what
+each of its two portions did. Its texts are listed in
+[action-log.md](action-log.md).
 
 The actor is ambient rather than an argument: `mcp::apply_as_agent` moves the
 Action Log's actor to `Mcp` for the frame's batch and restores `User` after, so
@@ -1126,8 +1116,8 @@ testable without a window:
 |--------|--------------|
 | `tools` | The tool table and the wire parse: names, descriptions, `inputSchema`, and JSON arguments to a `Command` |
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
-| `layout` | The four layout tools and their shared reply, over `AppState`'s own panel operations |
-| `window` | The window tools, the `WindowHost` seam, and the types the window block is rendered from |
+| `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
+| `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The two phases `run_ui_and_paint` calls: the drain, and the deferred screenshot |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
@@ -1154,65 +1144,27 @@ pub(crate) enum Command {
     SetReconstructionDisplay { reconstruction_label: String, change: DisplayChange },
     SetSolo { reconstruction_label: Option<String> },
     SetView { view: ViewCommand },
-    GetLayout,
-    SetLayout { layout: LayoutTarget },
+    GetWindowLayout,
+    /// The document as it arrived, unparsed, so that one the viewer will not
+    /// accept is a domain error in the layout parser's own words — path and
+    /// all — rather than a protocol error.
+    SetWindowLayout { document: serde_json::Value },
     ShowPanel { panel: Tab },
     HidePanel { panel: Tab },
-    GetWindow,
-    SetWindow { change: WindowChange },
     Screenshot { max_dimension: Option<u32> },
 }
+```
 
-/// `set_layout`'s argument: the document as it arrived, or the one layout with
-/// a name. Unparsed, so that a document the viewer will not accept is a domain
-/// error in the layout parser's own words rather than a protocol error.
-pub(crate) enum LayoutTarget { Document(serde_json::Value), Default }
+`Command::kind` for `SetWindowLayout` is `Kind::Layout` when the object carries a
+`layout` key and `Kind::Window` otherwise, which is where a refusal of it is
+filed. Everything the window portion is made of — `WindowChange`, `WindowState`,
+`WindowInfo`, `MonitorInfo`, `NormalRect`, `fit_to_monitor` and the `WindowHost`
+trait — lives in `crate::window` and is spelled out in
+[panel-layout.md](panel-layout.md) § "The window"; the document itself, and
+`AppState::apply_window_layout`, in § "The document" there. What is left here is
+the wire:
 
-/// `set_window`'s pieces. `None` is "leave it".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct WindowChange {
-    pub(crate) state: Option<WindowState>,
-    pub(crate) outer_position: Option<[i32; 2]>,
-    pub(crate) inner_size: Option<[u32; 2]>,
-    /// Not an `Option`: `focus: false` is refused at the parse, so this can
-    /// only say yes.
-    pub(crate) focus: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum WindowState { #[default] Normal, Maximized, Minimized, Fullscreen }
-
-/// The window as last observed: the block the tools render, minus `monitors`.
-/// Lives on `AppState` as `window`, `None` until there is a window, refreshed
-/// as § "Threading" describes — which is what makes every window read a plain
-/// field access and so headless.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct WindowInfo {
-    pub(crate) state: WindowState,
-    pub(crate) focused: bool,
-    pub(crate) scale_factor: f64,
-    pub(crate) outer_position: Option<[i32; 2]>,
-    pub(crate) outer_size: [u32; 2],
-    pub(crate) inner_size: [u32; 2],
-    pub(crate) monitor: Option<MonitorInfo>,
-}
-
-pub(crate) struct MonitorInfo {
-    name: Option<String>, position: [i32; 2], size: [u32; 2], scale_factor: f64,
-}
-
-/// What `apply_with_window` needs from the window, and all it needs.
-/// Implemented for the frame's `Arc<Window>` in `mcp::frame`, and for a fake
-/// in the tests.
-pub(crate) trait WindowHost {
-    /// Apply the pieces in the fixed order. `Err` only for something the
-    /// platform cannot do at all — a position on Wayland, or no window; a
-    /// clamp is not an error, the read-back reports it.
-    fn apply(&mut self, change: &WindowChange) -> Result<(), ToolError>;
-    /// The window as it is now, and every monitor, the current one first.
-    fn observe(&self) -> Option<(WindowInfo, Vec<MonitorInfo>)>;
-}
-
+```rust
 /// What a tool produced: JSON, or the one tool that answers with a picture.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -1229,12 +1181,12 @@ pub(crate) enum Outcome {
 }
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes twenty-one of the twenty-two tools testable in a headless
+/// makes nineteen of the twenty tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
 
-/// The same against a `NoWindow` host, which refuses the two window tools with
+/// The same against a `NoWindow` host, which refuses a window portion with
 /// "no window" and leaves every other tool as it is. Compiled for the tests,
 /// its only callers: the frame always has a window by the time it drains.
 #[cfg(test)]
@@ -1264,9 +1216,9 @@ messages and its JSON shapes under headless test, and leaves exactly one tool
 (`screenshot`) needing a window.
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other twenty-one answer with JSON; squeezing an image through a
+picture and the other nineteen answer with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-twenty-one return a plain `Result<Value, ToolError>` and are widened at the
+nineteen return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
@@ -1338,7 +1290,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary no longer has. Sixteen tools are cheap
+relaunch would call tools the new binary does not have. Twenty tools are cheap
 to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
 there are no authorization contexts to share a result across.
 
@@ -1458,38 +1410,50 @@ where a test hands no host over.
   keeps `visible` and `drawn` distinguishable.
 - **A refusal is atomic**: an unknown tint lists the palette and leaves the
   call's other fields unapplied.
-- **`get_layout` returns the file**: its `layout`, parsed back through
-  `Layout::from_json`, equals `state.layout()`; `panels` has all seven, with the
-  default layout's three behind-a-sibling tabs inactive and the rest active.
-- **`set_layout`** with a document applies it and replies with it; with
-  `"default"` after a `hide_panel` it restores all seven; with a document that
-  does not validate it is refused with the layout parser's path-carrying message
-  and `state.layout()` is unchanged. A string other than `"default"` is refused
-  at the parse.
+- **`get_window_layout` returns the file**: its `window_layout`, parsed back
+  through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
+  block beside it is the live one with `monitors`, current first; `panels` has
+  all seven, with the default layout's three behind-a-sibling tabs inactive and
+  the rest active. A maximized fake makes the two disagree on purpose: the block
+  reports the monitor-sized rectangle and the document the one it restores to.
+  With no host, `window` is `null` and the document has no `window` section,
+  while the panels are still answered.
+- **`set_window_layout`** takes back each form the spec lists, including a whole
+  `get_window_layout` reply sent back unedited and a file's text parsed and sent
+  as the argument; `{}`, `{ "window": {} }` and `{ "sfm_explorer_layout": 2 }`
+  are refused at the parse; a `window` portion with no host is refused with the
+  "no window" message while a `layout`-only call succeeds there; a document that
+  does not validate is refused with the parser's path-carrying message and
+  neither the window nor the dock moves. A string other than `"default"` is
+  refused, and so is a bad window state, in the parser's own words.
+- **The window portion behaves as the table says**: it moves between all four
+  states, from each of them to each of them; `normal` from a
+  minimized-and-maximized fake clears both flags; a size against a maximized
+  window changes what it restores to and leaves it maximized; a piece a call does
+  not carry is preserved, so `{ "focus": true }` leaves the state, size and
+  position as they were.
+- **Both portions in one call**: the window is applied first, and a position
+  refusal from the fake stops the call with the dock untouched.
+- **The reply is a read-back**: a fake that clamps to its minimum replies with
+  the clamped size, while the Action Log row says what was asked for.
 - **`show_panel` / `hide_panel`**: hiding closes and reports `open: false`;
   hiding a closed panel succeeds and changes nothing; showing after hiding lands
   the panel in its default group-mate's node and in front; showing an open panel
   raises it and moves nothing else; an unknown name lists the seven.
-- **The layout writes record the menu's own entries** — `Closed …`, `Opened …`,
-  `Raised …`, `Reset layout`, and `Set layout` for a document — each under
-  `Kind::Layout` as actor `MCP`; the two new reads record a `Query` that never
-  reaches the status line.
-- **`get_scene` embeds the window block**, and `get_window` adds `monitors` with
-  the current monitor first.
-- **`set_window` moves between all four states**, from each of them to each of
-  them, and `normal` from a minimized-and-maximized fake clears both flags.
-- **Geometry rules**: a size with `"state": "minimized"` is refused at the parse;
-  a size against a maximized window without `"state": "normal"` is refused by the
-  viewer, naming the state; with it, the pieces are applied in order — the fake
-  records that they were. A refusal applies nothing.
-- **A piece a call does not carry is preserved**: `{ "focus": true }` leaves the
-  state, size and position as they were.
-- **The reply is a read-back**: a fake that clamps to its minimum replies with
-  the clamped size, while the Action Log row says what was asked for.
+- **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
+  `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
+  actor `MCP`, and a document records `Set layout`. A call carrying both portions
+  records two rows, the window one first and composed in application order; a
+  refusal is one failed row, filed under the kind of the portion the call
+  carried. The read records a `Query` that never reaches the status line.
+- **`get_scene` embeds the window block** without `monitors`.
 - **`screenshot` while minimized is refused** with the message naming
-  `set_window`; not minimized, it still defers.
-- **The window tools through plain `apply`** — no host — are refused with "no
+  `set_window_layout`; not minimized, it still defers.
+- **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
+- **The catalog is twenty tools**, six of them reads, and
+  `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
+  `layout`, with the `window` section's five keys under it.
 - **Schema and parser cannot drift**: every property any tool advertises is one
   the parser accepts, walked over the whole catalog rather than tool by tool, so
   a tool added later is covered by construction. The vocabulary rule is asserted
@@ -1521,10 +1485,12 @@ Two things are not covered here. **`screenshot`** needs a real frame and belongs
 in `ui_basic` (Windows/macOS, `pixi run ui-test`) — asserting a decodable PNG of
 the expected size, not its pixels. What the headless tests do assert about it is
 that it defers, that it refuses a minimized window, and that its caption is built
-while the state is still borrowed. **A `set_window` against a real window**
-belongs there too: maximize, read back `maximized`, restore, read back the
-original inner size — the round trip, not pixel positions, since where a window
-manager actually puts a window is its business.
+while the state is still borrowed. **A `set_window_layout` window portion against
+a real window** belongs there too: maximize, read back `maximized`, restore, read
+back the original inner size — the round trip, not pixel positions, since where a
+window manager actually puts a window is its business. What `ui_basic` does cover
+of the document is the startup load ([panel-layout.md](panel-layout.md)
+§ "Testing").
 
 ## Editing reconstruction data
 
@@ -1611,15 +1577,18 @@ Other candidates, in rough order of value:
   machine is a different problem.
 - **No headless mode.** The window is the point. An MCP server with no window
   behind it would be a worse `sfm inspect`.
-- **No persistence.** The endpoint is not remembered between runs, and neither
-  is anything an agent did through it — including the panel layout, which the
-  viewer restores to the stock grid on the next start unless someone loads a
-  file.
+- **No persistence of what an agent did.** The endpoint is not remembered
+  between runs, and neither is anything an agent set through it. The viewer does
+  restore a layout at startup — the one *the human* saved to
+  `~/.sfm-explorer-default-layout.json` ([panel-layout.md](panel-layout.md)
+  § "The default layout file")— and an agent that wants its arrangement to
+  survive a restart asks the human to save it; `get_window_layout` hands over the
+  document to point at.
 - **No positioning a panel.** `show_panel` has no `where`: the home rule
-  decides, and `set_layout` takes the whole tree. A `move_panel` with a
+  decides, and `set_window_layout` takes the whole tree. A `move_panel` with a
   destination vocabulary is a later question, if the tree turns out to be too
   blunt an instrument.
-- **No choosing a monitor by name.** `set_window` takes a position; an agent
+- **No choosing a monitor by name.** A window portion takes a position; an agent
   that wants the other monitor reads `monitors` and sends a position on it.
 - **No exclusive fullscreen.** `fullscreen` is `Fullscreen::Borderless(None)`,
   on the current monitor. Video modes are a different feature.
@@ -1660,8 +1629,11 @@ Other candidates, in rough order of value:
   if `get_scene` replies grow noisy.
 - **`focus: true` and the human.** An agent that steals focus while the human is
   typing in another application is being rude. The platform usually prevents it;
-  if it does not, the tool may want to become "request attention"
-  (`Window::request_user_attention`) instead.
+  if it does not, the window section's `focus` may want to become "request
+  attention" (`Window::request_user_attention`) instead.
+- **Reporting the default layout file in `get_window_layout`** (`default_file:
+  { path, exists }`), so an agent can tell the human where to save the document
+  it just read. Two fields; add if an agent asks.
 - **Window and layout notifications.** The human resizing the window or dragging
   a tab is still something the agent learns by asking. Same gap as selection
   changes, same answer.

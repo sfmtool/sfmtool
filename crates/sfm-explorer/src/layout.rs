@@ -3,22 +3,29 @@
 
 //! Panel layout: the arrangement of the dock, and its file.
 //!
-//! See `specs/gui/panel-layout.md`. Three things live here:
+//! See `specs/gui/panel-layout.md`. Four things live here:
 //!
+//! - [`WindowLayout`], the layout **document**: the window's placement
+//!   ([`crate::window`]) and the panel arrangement, either of them optional. It
+//!   is what the file holds, what Panels ▸ Save Layout… writes, and what one
+//!   MCP `set_window_layout` carries.
 //! - [`Layout`], a description of a dock arrangement that is independent of
 //!   `egui_dock`'s node indices — a split tree of panel names, readable and
-//!   writable by hand, and the schema of the layout file.
+//!   writable by hand, and the `layout` section of that document.
 //! - The conversions [`Layout::from_dock`] / [`Layout::to_dock`], the one place
 //!   in the crate that knows how `egui_dock` represents a tree.
-//! - The panel operations on [`AppState`] — [`AppState::show_panel`],
+//! - The operations on [`AppState`] — [`AppState::show_panel`],
 //!   [`AppState::hide_panel`], [`AppState::reset_layout`],
-//!   [`AppState::apply_layout`] — which is where the Action Log is in reach,
-//!   and the Panels menu that drives them ([`panels_menu`]).
+//!   [`AppState::apply_layout`], [`AppState::apply_window_layout`],
+//!   [`AppState::load_layout_file`] — which is where the Action Log is in
+//!   reach, and the Panels menu that drives them ([`panels_menu`]).
 //!
 //! The JSON is read and written by hand rather than through `serde`: a node is
 //! a leaf or a split by which keys it carries, and `serde` does not honour
 //! `deny_unknown_fields` on an untagged enum, so a derive could not refuse a
 //! typo in `"fraction"`.
+
+use std::path::{Path, PathBuf};
 
 use egui_dock::{DockState, LeafNode, Node, NodeIndex, Split, Surface, TabIndex, Tree};
 use serde_json::Value;
@@ -26,12 +33,13 @@ use serde_json::Value;
 use crate::action_log::Kind;
 use crate::dock::Tab;
 use crate::state::AppState;
+use crate::window::{MonitorRect, NormalRect, WindowChange, WindowHost, WindowState};
 
 #[cfg(test)]
 mod tests;
 
 /// The `sfm_explorer_layout` value written, and the only one read.
-pub(crate) const LAYOUT_VERSION: u64 = 1;
+pub(crate) const LAYOUT_VERSION: u64 = 2;
 
 /// The tab a placeholder leaf carries while [`Layout::to_dock`] grows the tree.
 ///
@@ -126,7 +134,7 @@ pub(crate) struct LayoutError {
 }
 
 impl LayoutError {
-    fn at(path: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn at(path: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             path: path.into(),
             message: message.into(),
@@ -369,13 +377,21 @@ impl Layout {
 
     /// Check every rule of `specs/gui/panel-layout.md` § "Validation" that
     /// survives parsing, naming the first violation.
-    pub(crate) fn validate(&self) -> Result<(), LayoutError> {
+    ///
+    /// `path` is where the arrangement sits in the document — `"layout"` for a
+    /// document's section — so a violation reads
+    /// `layout.main.second: unknown key "fracton"`.
+    pub(crate) fn validate(&self, path: &str) -> Result<(), LayoutError> {
         let mut seen = Vec::new();
         if let Some(main) = &self.main {
-            validate_node(main, "main", &mut seen)?;
+            validate_node(main, &format!("{path}.main"), &mut seen)?;
         }
         for (index, window) in self.windows.iter().enumerate() {
-            validate_node(&window.tree, &format!("windows[{index}].tree"), &mut seen)?;
+            validate_node(
+                &window.tree,
+                &format!("{path}.windows[{index}].tree"),
+                &mut seen,
+            )?;
         }
         Ok(())
     }
@@ -497,100 +513,250 @@ fn validate_node(node: &LayoutNode, path: &str, seen: &mut Vec<Tab>) -> Result<(
     }
 }
 
-// ── The layout file ──────────────────────────────────────────────────────
+// ── The layout document ──────────────────────────────────────────────────
 
-impl Layout {
+/// One document's worth of panels: an arrangement, or the stock grid by name.
+///
+/// `"default"` is legal in a file as well as on the wire — a file that says it
+/// is a reset — and the viewer never writes that form.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LayoutSection {
+    Layout(Layout),
+    Default,
+}
+
+/// The layout document: the window's placement and the panel arrangement,
+/// either of them optional.
+///
+/// One document rather than two, because the two are one thing to the person
+/// sitting at the window: "my viewer, maximized on the left monitor, with the
+/// Action Log along the bottom" is one arrangement, and saving half of it is
+/// not saving it. A section that is `None` is one the document does not
+/// describe and applying it leaves alone.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WindowLayout {
+    pub(crate) window: Option<WindowChange>,
+    pub(crate) layout: Option<LayoutSection>,
+}
+
+impl Default for WindowLayout {
+    /// The stock grid, and nothing about the window — which is what a headless
+    /// [`AppState`] has to say about where its window is.
+    fn default() -> Self {
+        WindowLayout {
+            window: None,
+            layout: Some(LayoutSection::Layout(Layout::default())),
+        }
+    }
+}
+
+impl WindowLayout {
     /// Parse and validate a layout file.
     ///
     /// The document is refused as a whole: a caller that gets an `Err` has a
-    /// layout it can leave exactly as it was.
+    /// window and a layout it can leave exactly as they were.
     pub(crate) fn from_json(text: &str) -> Result<Self, LayoutError> {
         let value: Value = serde_json::from_str(text)
             .map_err(|error| LayoutError::at("", format!("not valid JSON: {error}")))?;
-        Layout::from_value(&value)
+        WindowLayout::from_value(&value)
     }
 
-    /// Validate an already-parsed layout document.
+    /// Validate an already-parsed document.
     ///
-    /// The half of [`Layout::from_json`] below the JSON parse, so that a
-    /// document that arrived as a `serde_json::Value` — an MCP `set_layout`
+    /// The half of [`WindowLayout::from_json`] below the JSON parse, so a
+    /// document that arrived as a `serde_json::Value` — a `set_window_layout`
     /// argument — meets exactly the rules, and exactly the messages, a file on
     /// disk meets.
+    ///
+    /// The version tag is optional and checked when present: a file carries it,
+    /// and so does a reply sent back whole, but a call that asks for one thing
+    /// should not have to.
     pub(crate) fn from_value(value: &Value) -> Result<Self, LayoutError> {
         let Some(object) = value.as_object() else {
             return Err(LayoutError::at("", "the document must be a JSON object"));
         };
         // The version first, so a JSON file that is not a layout at all says so
-        // rather than complaining about its own perfectly good keys.
-        let Some(version) = object.get("sfm_explorer_layout").and_then(Value::as_u64) else {
-            return Err(LayoutError::at("", "Not a layout file"));
+        // rather than complaining about its own perfectly good keys. With no
+        // tag and no section, there is nothing here that claims to be a layout.
+        match object.get("sfm_explorer_layout") {
+            Some(value) => {
+                let Some(version) = value.as_u64() else {
+                    return Err(LayoutError::at("", "Not a layout file"));
+                };
+                if version > LAYOUT_VERSION {
+                    return Err(LayoutError::at(
+                        "",
+                        format!(
+                            "Layout version {version} is newer than this viewer reads \
+                             ({LAYOUT_VERSION})"
+                        ),
+                    ));
+                }
+                if version != LAYOUT_VERSION {
+                    return Err(LayoutError::at(
+                        "",
+                        format!(
+                            "Layout version {version} is not one this viewer reads \
+                             ({LAYOUT_VERSION})"
+                        ),
+                    ));
+                }
+            }
+            None if !object.is_empty()
+                && !object.contains_key("window")
+                && !object.contains_key("layout") =>
+            {
+                return Err(LayoutError::at("", "Not a layout file"))
+            }
+            None => {}
+        }
+        known_keys(object, "", &["sfm_explorer_layout", "window", "layout"])?;
+
+        let window = match object.get("window") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(WindowChange::from_json(value, "window")?),
         };
-        if version > LAYOUT_VERSION {
-            return Err(LayoutError::at(
-                "",
-                format!(
-                    "Layout version {version} is newer than this viewer reads ({LAYOUT_VERSION})"
-                ),
-            ));
+        let layout = match object.get("layout") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(name)) if name == "default" => Some(LayoutSection::Default),
+            Some(Value::String(_)) => {
+                return Err(LayoutError::at(
+                    "layout",
+                    "the only named layout is \"default\"",
+                ))
+            }
+            Some(value @ Value::Object(_)) => {
+                Some(LayoutSection::Layout(Layout::from_value(value, "layout")?))
+            }
+            Some(_) => {
+                return Err(LayoutError::at(
+                    "layout",
+                    "must be an arrangement, null, or \"default\"",
+                ))
+            }
+        };
+        Ok(WindowLayout { window, layout })
+    }
+
+    /// The document as a file: pretty-printed, keys in schema order, one
+    /// trailing newline.
+    pub(crate) fn to_json(&self) -> String {
+        let mut out = String::new();
+        out.push_str("{\n");
+        out.push_str(&format!("  \"sfm_explorer_layout\": {LAYOUT_VERSION}"));
+        if let Some(window) = &self.window {
+            out.push_str(",\n  \"window\": ");
+            window.write_json(&mut out, 1);
         }
-        if version != LAYOUT_VERSION {
-            return Err(LayoutError::at(
-                "",
-                format!("Layout version {version} is not one this viewer reads ({LAYOUT_VERSION})"),
-            ));
+        match &self.layout {
+            Some(LayoutSection::Layout(layout)) => {
+                out.push_str(",\n  \"layout\": ");
+                layout.write_json(&mut out, 1);
+            }
+            Some(LayoutSection::Default) => out.push_str(",\n  \"layout\": \"default\""),
+            None => {}
         }
-        known_keys(object, "", &["sfm_explorer_layout", "main", "windows"])?;
+        out.push_str("\n}\n");
+        out
+    }
+
+    /// Whether the document asks for anything at all.
+    ///
+    /// A file that asks for nothing loads as a no-op; a tool call that asks for
+    /// nothing is a request with no request in it, and is refused — which is
+    /// the only caller, so a build without the MCP surface has none.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.layout.is_none() && self.window.as_ref().is_none_or(WindowChange::is_empty)
+    }
+}
+
+/// What the window portion of a document did.
+///
+/// `change` is what reached the window, which is the *fitted* rectangle where
+/// one was fitted, and `fitted` the monitor it came from — the two things an
+/// Action Log row needs to say what happened rather than what was asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedWindow {
+    pub(crate) change: WindowChange,
+    pub(crate) fitted: Option<MonitorRect>,
+}
+
+/// Where the default layout file lives, or `None` without a home directory.
+///
+/// The name is fixed and the directory is the one place the viewer can rely on
+/// without knowing a workspace.
+pub(crate) fn default_layout_path() -> Option<PathBuf> {
+    #[allow(deprecated)] // Un-deprecated in 1.85, below the workspace MSRV.
+    std::env::home_dir().map(|home| home.join(DEFAULT_LAYOUT_FILE_NAME))
+}
+
+/// What the viewer reads at startup, and what the save dialog offers to call
+/// the file.
+pub(crate) const DEFAULT_LAYOUT_FILE_NAME: &str = ".sfm-explorer-default-layout.json";
+
+// ── The `layout` section ─────────────────────────────────────────────────
+
+impl Layout {
+    /// Validate the `layout` section of a document.
+    ///
+    /// `path` is where the section sits in the document, so a violation below a
+    /// node reads `layout.main.second: unknown key "fracton"`.
+    pub(crate) fn from_value(value: &Value, path: &str) -> Result<Self, LayoutError> {
+        let Some(object) = value.as_object() else {
+            return Err(LayoutError::at(path, "must be a JSON object"));
+        };
+        known_keys(object, path, &["main", "windows"])?;
 
         let main = match object.get("main") {
             None | Some(Value::Null) => None,
-            Some(value) => Some(node_from_json(value, "main")?),
+            Some(value) => Some(node_from_json(value, &format!("{path}.main"))?),
         };
         let windows = match object.get("windows") {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(items)) => {
                 let mut windows = Vec::with_capacity(items.len());
                 for (index, item) in items.iter().enumerate() {
-                    windows.push(window_from_json(item, &format!("windows[{index}]"))?);
+                    windows.push(window_from_json(item, &format!("{path}.windows[{index}]"))?);
                 }
                 windows
             }
-            Some(_) => return Err(LayoutError::at("", "\"windows\" must be an array")),
+            Some(_) => return Err(LayoutError::at(path, "\"windows\" must be an array")),
         };
 
         let layout = Layout { main, windows };
-        layout.validate()?;
+        layout.validate(path)?;
         Ok(layout)
     }
 
-    /// The layout as a file: pretty-printed, keys in schema order, one trailing
-    /// newline.
-    pub(crate) fn to_json(&self) -> String {
-        let mut out = String::new();
+    /// The arrangement as the file writes it, indented for a parent at `depth`.
+    pub(crate) fn write_json(&self, out: &mut String, depth: usize) {
+        let inner = "  ".repeat(depth + 1);
+        let outer = "  ".repeat(depth);
         out.push_str("{\n");
-        out.push_str(&format!("  \"sfm_explorer_layout\": {LAYOUT_VERSION},\n"));
-        out.push_str("  \"main\": ");
+        out.push_str(&format!("{inner}\"main\": "));
         match &self.main {
-            Some(node) => write_node(&mut out, node, 1),
+            Some(node) => write_node(out, node, depth + 1),
             None => out.push_str("null"),
         }
         out.push_str(",\n");
         if self.windows.is_empty() {
-            out.push_str("  \"windows\": []\n");
+            out.push_str(&format!("{inner}\"windows\": []\n"));
         } else {
-            out.push_str("  \"windows\": [\n");
+            out.push_str(&format!("{inner}\"windows\": [\n"));
             for (index, window) in self.windows.iter().enumerate() {
-                out.push_str("    ");
-                write_window(&mut out, window, 2);
+                out.push_str(&"  ".repeat(depth + 2));
+                write_window(out, window, depth + 2);
                 out.push_str(if index + 1 == self.windows.len() {
                     "\n"
                 } else {
                     ",\n"
                 });
             }
-            out.push_str("  ]\n");
+            out.push_str(&format!("{inner}]\n"));
         }
-        out.push_str("}\n");
-        out
+        out.push_str(&outer);
+        out.push('}');
     }
 }
 
@@ -598,7 +764,7 @@ impl Layout {
 ///
 /// A typo silently applying a default would leave the author believing the file
 /// says something it does not.
-fn known_keys(
+pub(crate) fn known_keys(
     object: &serde_json::Map<String, Value>,
     path: &str,
     allowed: &[&str],
@@ -872,7 +1038,7 @@ impl AppState {
     /// — the menu says where the file came from, an MCP tool would say which
     /// tool — and a method that logged would have to be told which.
     pub(crate) fn apply_layout(&mut self, layout: &Layout) -> Result<(), LayoutError> {
-        layout.validate()?;
+        layout.validate("layout")?;
         self.dock = layout.to_dock();
         Ok(())
     }
@@ -880,6 +1046,153 @@ impl AppState {
     /// The current arrangement, as the layout file spells it.
     pub(crate) fn layout(&self) -> Layout {
         Layout::from_dock(&self.dock)
+    }
+
+    /// Refresh the window snapshot from `host`, remembering the rectangle
+    /// whenever the window reads as `normal`.
+    ///
+    /// Called at the top of every frame. The remembering is why: `winit`
+    /// reports only the *current* rectangle, so once a window is maximized its
+    /// restored rectangle is unreadable, and the memory has to have been
+    /// current at the moment of the maximize.
+    pub(crate) fn observe_window(&mut self, host: &dyn WindowHost) {
+        let observed = host.observe().map(|(info, _)| info);
+        if let Some(info) = &observed {
+            if info.state == WindowState::Normal {
+                self.window_normal_rect = Some(NormalRect {
+                    outer_position: info.outer_position,
+                    inner_size: info.inner_size,
+                });
+            }
+        }
+        self.window = observed;
+    }
+
+    /// The document Panels ▸ Save Layout… writes: the window's placement, and
+    /// the panel arrangement.
+    ///
+    /// The placement is the snapshot's state with the *remembered* normal
+    /// rectangle beside it, so a maximized window saves as `maximized` plus the
+    /// rectangle it will come back to. Without a snapshot — a headless
+    /// `AppState` — there is no window section at all.
+    pub(crate) fn window_layout(&self) -> WindowLayout {
+        WindowLayout {
+            window: self.window.as_ref().map(|info| WindowChange {
+                state: Some(info.state),
+                outer_position: self.window_normal_rect.and_then(|rect| rect.outer_position),
+                inner_size: self.window_normal_rect.map(|rect| rect.inner_size),
+                monitor: info.monitor.as_ref().map(MonitorRect::of),
+                focus: false,
+            }),
+            layout: Some(LayoutSection::Layout(self.layout())),
+        }
+    }
+
+    /// Apply a whole document: **window portion first, panel portion second.**
+    ///
+    /// In that order so the call reads "make the window like this, then arrange
+    /// the panels", and so a panel tree is laid out into the window it was
+    /// meant for. The document is validated whole before any of it is applied,
+    /// so a validation refusal touches nothing; a *platform* refusal can only
+    /// come from the host, and stops the call before the panels.
+    ///
+    /// Records nothing: the menu, the startup load and the MCP tool each word
+    /// their own entry. What it hands back is what the *window* portion did
+    /// ([`AppliedWindow`]), because a fitted rectangle is not the one the
+    /// caller sent and the Action Log row has to say the numbers that reached
+    /// the window.
+    pub(crate) fn apply_window_layout(
+        &mut self,
+        host: &mut dyn WindowHost,
+        document: &WindowLayout,
+    ) -> Result<Option<AppliedWindow>, LayoutError> {
+        if let Some(LayoutSection::Layout(layout)) = &document.layout {
+            layout.validate("layout")?;
+        }
+        let mut applied = None;
+        if let Some(change) = document.window.as_ref().filter(|c| !c.is_empty()) {
+            // The fit happens here rather than in the host, so it is one pure
+            // function under headless test and every host sees a plain
+            // rectangle.
+            let monitors = host.observe().map(|(_, monitors)| monitors);
+            let (change, fitted) = crate::window::fit_to_monitor(
+                change,
+                monitors.as_deref().unwrap_or(&[]),
+                self.window.as_ref().and_then(|info| info.monitor.as_ref()),
+            );
+            host.apply(&change)
+                .map_err(|error| LayoutError::at("window", error.0))?;
+            // So the reply, and a later call in the same batch, see the change
+            // rather than the window as it was.
+            self.observe_window(host);
+            self.remember_applied_rect(&change);
+            applied = Some(AppliedWindow { change, fitted });
+        }
+        match &document.layout {
+            Some(LayoutSection::Layout(layout)) => self.apply_layout(layout)?,
+            Some(LayoutSection::Default) => self.apply_layout(&Layout::default())?,
+            None => {}
+        }
+        Ok(applied)
+    }
+
+    /// Remember a rectangle that was applied to a window that is not showing
+    /// it.
+    ///
+    /// [`AppState::observe_window`] can only remember what it can read, and a
+    /// window that came out of the apply maximized, minimized or fullscreen
+    /// does not report the rectangle underneath. But the viewer *just set* that
+    /// rectangle, so it knows it — and without this the document would keep
+    /// describing the rectangle from before the call as the one the window
+    /// restores to. A normal window needs none of this: the observation above
+    /// already read the truth, clamps included.
+    fn remember_applied_rect(&mut self, change: &WindowChange) {
+        if !change.has_geometry()
+            || self
+                .window
+                .as_ref()
+                .is_none_or(|info| info.state == WindowState::Normal)
+        {
+            return;
+        }
+        let previous = self.window_normal_rect;
+        let Some(inner_size) = change.inner_size.or(previous.map(|rect| rect.inner_size)) else {
+            return;
+        };
+        self.window_normal_rect = Some(NormalRect {
+            outer_position: change
+                .outer_position
+                .or(previous.and_then(|rect| rect.outer_position)),
+            inner_size,
+        });
+    }
+
+    /// Load and apply one layout file, recording what happened.
+    ///
+    /// Shared by Panels ▸ Load Layout… and the startup load of the default
+    /// file, so the two cannot come to treat a file differently. A file that
+    /// does not parse, does not validate, or names something the platform will
+    /// not do is refused as a whole and the failed entry says why — which puts
+    /// it on the viewport status line, where the human sees *why* their layout
+    /// did not come back.
+    pub(crate) fn load_layout_file(&mut self, host: &mut dyn WindowHost, path: &Path) {
+        let outcome = std::fs::read_to_string(path)
+            .map_err(|error| error.to_string())
+            .and_then(|text| WindowLayout::from_json(&text).map_err(|error| error.to_string()))
+            .and_then(|document| {
+                self.apply_window_layout(host, &document)
+                    .map_err(|error| error.to_string())
+            });
+        match outcome {
+            Ok(_) => self.action_log.record(
+                Kind::Layout,
+                format!("Loaded layout from {}", path.display()),
+            ),
+            Err(message) => self.action_log.fail(
+                Kind::Layout,
+                format!("Load layout from {}: {message}", path.display()),
+            ),
+        }
     }
 
     /// The entry a panel's arrival writes, wherever it landed.
@@ -902,8 +1215,13 @@ impl AppState {
 /// layout-wide items.
 ///
 /// Split out of `app.rs` so it can be drawn — and read back — in a headless
-/// frame.
-pub(crate) fn panels_menu(ui: &mut egui::Ui, state: &mut AppState) {
+/// frame. It takes the window host because Save and Load carry the window's
+/// placement as well as the panels; the frame passes a clone of its
+/// `Arc<Window>` and the headless test passes a fake. A menu load applies the
+/// window change mid-frame rather than at the top of one, so the *next* frame
+/// is the first laid out at the new size — right for a human click, and not
+/// worth a deferral.
+pub(crate) fn panels_menu(ui: &mut egui::Ui, state: &mut AppState, host: &mut dyn WindowHost) {
     for tab in Tab::ALL {
         let mut open = state.is_panel_open(tab);
         if ui.checkbox(&mut open, tab.title()).clicked() {
@@ -930,21 +1248,29 @@ pub(crate) fn panels_menu(ui: &mut egui::Ui, state: &mut AppState) {
         ui.close();
     }
     if ui.button("Load Layout...").clicked() {
-        load_layout(state);
+        load_layout(state, host);
         ui.close();
     }
 }
 
 /// Panels ▸ Save Layout…: a save dialog, then the file.
+///
+/// The dialog opens on the default file (§ "The default layout file"), so the
+/// common case — "keep it like this" — is Save Layout…, Enter, and the viewer
+/// comes up this way next time.
 fn save_layout(state: &mut AppState) {
-    let Some(path) = rfd::FileDialog::new()
+    let mut dialog = rfd::FileDialog::new()
         .add_filter("Layout", &["json"])
-        .set_file_name(DEFAULT_LAYOUT_FILE_NAME)
-        .save_file()
-    else {
+        .set_file_name(DEFAULT_LAYOUT_FILE_NAME);
+    if let Some(directory) =
+        default_layout_path().and_then(|path| path.parent().map(Path::to_owned))
+    {
+        dialog = dialog.set_directory(directory);
+    }
+    let Some(path) = dialog.save_file() else {
         return;
     };
-    match std::fs::write(&path, state.layout().to_json()) {
+    match std::fs::write(&path, state.window_layout().to_json()) {
         Ok(()) => state
             .action_log
             .record(Kind::Layout, format!("Saved layout to {}", path.display())),
@@ -956,33 +1282,16 @@ fn save_layout(state: &mut AppState) {
 }
 
 /// Panels ▸ Load Layout…: an open dialog, then the file — or a refusal that
-/// leaves the arrangement on screen exactly as it was.
-fn load_layout(state: &mut AppState) {
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("Layout", &["json"])
-        .pick_file()
-    else {
+/// leaves the window and the arrangement exactly as they were.
+fn load_layout(state: &mut AppState, host: &mut dyn WindowHost) {
+    let mut dialog = rfd::FileDialog::new().add_filter("Layout", &["json"]);
+    if let Some(directory) =
+        default_layout_path().and_then(|path| path.parent().map(Path::to_owned))
+    {
+        dialog = dialog.set_directory(directory);
+    }
+    let Some(path) = dialog.pick_file() else {
         return;
     };
-    let parsed = std::fs::read_to_string(&path)
-        .map_err(|error| error.to_string())
-        .and_then(|text| Layout::from_json(&text).map_err(|error| error.to_string()));
-    let outcome = parsed.and_then(|layout| {
-        state
-            .apply_layout(&layout)
-            .map_err(|error| error.to_string())
-    });
-    match outcome {
-        Ok(()) => state.action_log.record(
-            Kind::Layout,
-            format!("Loaded layout from {}", path.display()),
-        ),
-        Err(message) => state.action_log.fail(
-            Kind::Layout,
-            format!("Load layout from {}: {message}", path.display()),
-        ),
-    }
+    state.load_layout_file(host, &path);
 }
-
-/// What the save dialog offers to call the file.
-const DEFAULT_LAYOUT_FILE_NAME: &str = "layout.json";

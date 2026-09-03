@@ -36,6 +36,7 @@ mod state;
 mod test_support;
 mod texture;
 mod viewer_3d;
+mod window;
 
 use std::sync::Arc;
 #[cfg(target_os = "windows")]
@@ -195,6 +196,7 @@ pub fn run() {
         prev_transform_epoch: 0,
         quit_requested: false,
         applied_title: String::new(),
+        no_default_layout: args.no_default_layout,
         #[cfg(feature = "mcp")]
         mcp_rx,
         #[cfg(feature = "mcp")]
@@ -303,6 +305,9 @@ pub(crate) struct App {
     /// sync in `run_ui_and_paint` only calls `set_title` when it changes.
     /// Starts empty so the first frame always applies the real title.
     pub(crate) applied_title: String,
+    /// `--no-default-layout`: start from the stock grid whatever is saved at
+    /// [`layout::default_layout_path`]. Read once, in `resumed`.
+    pub(crate) no_default_layout: bool,
     /// Tool calls waiting to be applied, or `None` when no endpoint is running.
     ///
     /// Drained at the top of every frame ([`App::drain_mcp`]) and nowhere else:
@@ -420,6 +425,18 @@ impl ApplicationHandler<UserEvent> for App {
         self.wgpu_surface_config = Some(surface_config);
         self.egui_renderer = Some(egui_renderer);
         self.egui_winit_state = Some(egui_winit_state);
+
+        // The default layout, if the human saved one — window and panels both,
+        // through the same path as Panels ▸ Load Layout…. Applied while the
+        // window is still hidden, so a saved "maximized on the left monitor"
+        // comes up that way rather than appearing at 1280 × 720 in the middle
+        // and jumping. A file that is absent is nothing: no entry, no log line.
+        if !self.no_default_layout {
+            if let Some(path) = layout::default_layout_path().filter(|path| path.is_file()) {
+                let mut host = window.clone();
+                self.state.load_layout_file(&mut host, &path);
+            }
+        }
 
         window.set_visible(true);
 

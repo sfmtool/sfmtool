@@ -18,14 +18,13 @@
 
 use serde_json::{json, Map, Value};
 
-use super::layout::LayoutTarget;
-use super::window::{WindowChange, WindowState};
 use super::{
     CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
     ViewCommand,
 };
 use crate::dock::Tab;
 use crate::goto_point::{parse_point_query, PointQuery};
+use crate::window::WindowState;
 
 /// What a tool does to the viewer, which is all the MCP annotations need to
 /// know.
@@ -137,21 +136,16 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[("point", point_schema())]),
         },
         ToolSpec {
-            name: "get_layout",
-            description: "Which panels are open and how they are arranged. Returns the layout \
-                          document the Panels menu saves and loads — the same schema set_layout \
-                          takes back — and, beside it, one entry per panel saying whether it is \
-                          open and whether it is the front tab of its node.",
-            kind: Read,
-            schema: object(&[], &[]),
-        },
-        ToolSpec {
-            name: "get_window",
-            description: "The window the human is looking at: whether it is normal, maximized, \
-                          minimized or fullscreen, whether it has focus, its outer and inner size \
-                          and its position in physical pixels, the scale factor those are \
-                          measured against, and every monitor it could sit on, the current one \
-                          first.",
+            name: "get_window_layout",
+            description: "Where the window is and how its panels are arranged, as one document — \
+                          the layout file the Panels menu saves and the viewer reads at startup, \
+                          which set_window_layout takes back unchanged. Beside it: the live \
+                          window block (state, focus, scale factor, current position and sizes in \
+                          physical pixels, and every monitor, the current one first) and one \
+                          entry per panel saying whether it is open and whether it is the front \
+                          tab of its node. The document's window section is the *normal* \
+                          rectangle — what the window restores to — so it and the live block \
+                          differ for a maximized window, on purpose.",
             kind: Read,
             schema: object(&[], &[]),
         },
@@ -351,29 +345,46 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: set_view_schema(),
         },
         ToolSpec {
-            name: "set_layout",
-            description: "Replace the whole panel arrangement: a layout document, in the shape \
-                          get_layout returns and the Panels menu saves, or the string \"default\" \
-                          for the stock seven-panel grid. A panel the document does not mention \
-                          is closed. Every panel keeps its own state either way — a re-opened \
-                          Image Detail shows the image it had. A document that does not validate \
-                          is refused whole, naming what was wrong and where, and the arrangement \
-                          on screen is left untouched.",
+            name: "set_window_layout",
+            description: "Place the window, arrange the panels, or both: the argument is a \
+                          layout document, in the shape get_window_layout returns and the Panels \
+                          menu saves, so a whole reply — or a file a human saved — can be sent \
+                          back unedited. Both sections are optional and a call must carry one. \
+                          The window section is applied first: its rectangle is the window's \
+                          *normal* rectangle, so a size sent to a maximized window changes what \
+                          it restores to and leaves it maximized, and what the section does not \
+                          carry is preserved. The layout section replaces the whole arrangement \
+                          — a panel it does not mention is closed, though every panel keeps its \
+                          own state — or is the string \"default\" for the stock seven-panel \
+                          grid. A document that does not validate is refused whole, naming what \
+                          was wrong and where, and nothing is applied.",
             kind: Write,
             schema: object(
+                &[
+                    (
+                        "sfm_explorer_layout",
+                        json!({
+                            "type": "integer",
+                            "description":
+                                "The document version, 2. Optional: send it when passing a file \
+                                 or a whole get_window_layout reply back unedited.",
+                        }),
+                    ),
+                    ("window", window_section_schema()),
+                    (
+                        "layout",
+                        json!({
+                            "description":
+                                "The panel arrangement, as get_window_layout's document carries \
+                                 one, or \"default\" for the stock arrangement.",
+                            "anyOf": [
+                                { "type": "object" },
+                                { "type": "string", "enum": ["default"] },
+                            ],
+                        }),
+                    ),
+                ],
                 &[],
-                &[(
-                    "layout",
-                    json!({
-                        "description":
-                            "A layout document, as get_layout returns one, or \"default\" for the \
-                             stock arrangement.",
-                        "anyOf": [
-                            { "type": "object" },
-                            { "type": "string", "enum": ["default"] },
-                        ],
-                    }),
-                )],
             ),
         },
         ToolSpec {
@@ -381,7 +392,7 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             description: "Open a panel at its home position, or — if it is already open — raise \
                           it, making it the front tab of its node without moving anything. Where \
                           an opened panel lands is the viewer's own home rule; send a layout \
-                          document through set_layout to put one somewhere specific.",
+                          document through set_window_layout to put one somewhere specific.",
             kind: Write,
             schema: object(&[], &[("panel_name", panel_name_schema())]),
         },
@@ -392,51 +403,6 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           brings it back.",
             kind: Write,
             schema: object(&[], &[("panel_name", panel_name_schema())]),
-        },
-        ToolSpec {
-            name: "set_window",
-            description: "Change the window's state, size, position or focus, a piece at a time: \
-                          what a call does not carry is preserved. The pieces are applied in one \
-                          order — state, then outer_position, then inner_size, then focus — so a \
-                          call carrying several reads as one sentence. Sizes and positions are \
-                          physical pixels, and geometry needs a normal window: send \
-                          state: \"normal\" in the same call to move or resize a maximized, \
-                          minimized or fullscreen one. The reply is read back from the window \
-                          rather than echoed, so it reports what the window actually became.",
-            kind: Write,
-            schema: object(
-                &[
-                    ("state", window_state_schema()),
-                    (
-                        "outer_position",
-                        int_pair_schema(
-                            "Where to put the window's top-left corner, in physical pixels in \
-                             desktop coordinates. Needs a normal window.",
-                            None,
-                        ),
-                    ),
-                    (
-                        "inner_size",
-                        int_pair_schema(
-                            "The drawable area to resize to, in physical pixels. The platform \
-                             has the last word on it, so read the reply rather than assuming \
-                             the request. Needs a normal window.",
-                            Some(1),
-                        ),
-                    ),
-                    (
-                        "focus",
-                        json!({
-                            "type": "boolean",
-                            "description":
-                                "Bring the window to the front. A platform may decline to let an \
-                                 application take focus; the reply's focused says whether it \
-                                 worked.",
-                        }),
-                    ),
-                ],
-                &[],
-            ),
         },
         ToolSpec {
             name: "screenshot",
@@ -537,7 +503,7 @@ fn panel_name_schema() -> Value {
         "type": "string",
         "enum": Tab::ALL.map(|tab| tab.wire_name()),
         "description":
-            "Which panel, by the name get_layout and the layout file use.",
+            "Which panel, by the name get_window_layout and the layout file use.",
     })
 }
 
@@ -548,6 +514,55 @@ fn window_state_schema() -> Value {
         "description":
             "What the window should be. \"normal\" restores it from all three of minimized, \
              maximized and fullscreen.",
+    })
+}
+
+/// The `window` section of a layout document: the same five keys the file
+/// carries, since the file and the wire are one document with one parser.
+fn window_section_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description":
+            "Where the window goes. Every key is optional and what the section does not carry is \
+             preserved; omit the section to leave the window alone.",
+        "properties": {
+            "state": window_state_schema(),
+            "outer_position": int_pair_schema(
+                "The top-left corner of the window's normal rectangle, in physical pixels in \
+                 desktop coordinates.",
+                None,
+            ),
+            "inner_size": int_pair_schema(
+                "The drawable area of the window's normal rectangle, in physical pixels. The \
+                 platform has the last word on it, so read the reply rather than assuming the \
+                 request.",
+                Some(1),
+            ),
+            "monitor": {
+                "type": "object",
+                "additionalProperties": false,
+                "description":
+                    "The monitor the rectangle was measured on, as get_window_layout writes it. \
+                     A rectangle that lands nowhere visible on this desktop is mapped onto the \
+                     current monitor by the share of it the window occupied. Needs a rectangle \
+                     to fit.",
+                "properties": {
+                    "position": int_pair_schema(
+                        "The monitor's top-left corner, physical pixels.",
+                        None,
+                    ),
+                    "size": int_pair_schema("The monitor's size, physical pixels.", Some(1)),
+                },
+                "required": ["position", "size"],
+            },
+            "focus": {
+                "type": "boolean",
+                "description":
+                    "Bring the window to the front. A platform may decline to let an application \
+                     take focus; the reply's focused says whether it worked.",
+            },
+        },
     })
 }
 
@@ -824,41 +839,26 @@ pub(crate) fn parse(
             }
         }
         "set_view" => parse_set_view(&args)?,
-        "get_layout" => {
+        "get_window_layout" => {
             args.reject_unknown(&[])?;
-            Command::GetLayout
+            Command::GetWindowLayout
         }
-        "set_layout" => {
-            args.reject_unknown(&["layout"])?;
-            // The document is carried through unparsed: `Layout::from_value`
-            // reads it in the tool body, so a document the viewer will not
-            // accept is a refusal the agent and the Action Log both see, in the
-            // layout parser's own words.
-            let layout = match args.map.get("layout") {
-                Some(Value::String(name)) if name == "default" => LayoutTarget::Default,
-                Some(Value::String(other)) => {
-                    return Err(args.error(format!(
-                        "does not know the layout {other:?} — the only named layout is \
-                         \"default\"; anything else is a layout document, as get_layout returns \
-                         one."
-                    )))
-                }
-                Some(document @ Value::Object(_)) => LayoutTarget::Document(document.clone()),
-                Some(other) => {
-                    return Err(args.wrong_type(
-                        "layout",
-                        "a layout document or \"default\"",
-                        other,
-                    ))
-                }
-                None => {
-                    return Err(args.error(
-                        "needs layout — a layout document, as get_layout returns one, or \
-                         \"default\" for the stock arrangement.",
-                    ))
-                }
-            };
-            Command::SetLayout { layout }
+        "set_window_layout" => {
+            args.reject_unknown(&["sfm_explorer_layout", "window", "layout"])?;
+            let document = Value::Object(args.map.clone());
+            // Carried through unparsed: `WindowLayout::from_value` reads it in
+            // the tool body, so a document the viewer will not accept is a
+            // refusal the agent and the Action Log both see, in the layout
+            // parser's own words with its path. The one thing checked here is
+            // the tool's own rule — that a call has to ask for something —
+            // which is the parser's own definition of empty, so the two cannot
+            // come to disagree about what an empty document is.
+            if crate::layout::WindowLayout::from_value(&document)
+                .is_ok_and(|document| document.is_empty())
+            {
+                return Err(args.error("was given nothing to do — pass window, layout, or both."));
+            }
+            Command::SetWindowLayout { document }
         }
         "show_panel" => {
             args.reject_unknown(&["panel_name"])?;
@@ -872,11 +872,6 @@ pub(crate) fn parse(
                 panel: args.panel("panel_name")?,
             }
         }
-        "get_window" => {
-            args.reject_unknown(&[])?;
-            Command::GetWindow
-        }
-        "set_window" => parse_set_window(&args)?,
         "screenshot" => {
             args.reject_unknown(&["max_dimension"])?;
             Command::Screenshot {
@@ -892,64 +887,6 @@ pub(crate) fn parse(
         }
     };
     Ok(command)
-}
-
-/// `set_window`'s pieces, and the one combination that has no answer.
-///
-/// A maximized, minimized or fullscreen window's size and position belong to
-/// the window manager, so geometry is accepted only where the window will be
-/// normal once the call has been applied. Half of that is visible here — the
-/// call naming a state itself — and half only to the viewer, which knows the
-/// state the window is already in; `window::set_window` checks the other half.
-fn parse_set_window(args: &Args) -> Result<Command, ToolError> {
-    args.reject_unknown(&["state", "outer_position", "inner_size", "focus"])?;
-
-    let state = match args.optional_string("state")? {
-        None => None,
-        Some(text) => Some(WindowState::from_wire_name(&text).ok_or_else(|| {
-            args.error(format!(
-                "does not know the window state {text:?} — the states are {}.",
-                WindowState::all_wire_names()
-            ))
-        })?),
-    };
-    let focus = match args.optional_bool("focus")? {
-        None => false,
-        Some(true) => true,
-        // As `set_view` reads `exit_camera_view: false`: a field that can only
-        // ask for one thing has not asked for it.
-        Some(false) => {
-            return Err(
-                args.error("reads focus: false as no request at all — omit it, or pass true.")
-            )
-        }
-    };
-    let change = WindowChange {
-        state,
-        outer_position: args
-            .optional_int_pair("outer_position", i32::MIN.into(), i32::MAX.into())?
-            .map(|[x, y]| [x as i32, y as i32]),
-        inner_size: args
-            .optional_int_pair("inner_size", 1, u32::MAX.into())?
-            .map(|[width, height]| [width as u32, height as u32]),
-        focus,
-    };
-
-    if change.is_empty() {
-        return Err(args
-            .error("was given nothing to do — pass state, outer_position, inner_size or focus."));
-    }
-    if change.has_geometry() {
-        if let Some(state) = change.state.filter(|state| *state != WindowState::Normal) {
-            return Err(args.error(format!(
-                "was given a size or a position with state: {:?} — a {} window's geometry belongs \
-                 to the window manager. Send state: \"normal\" alongside them.",
-                state.wire_name(),
-                state.wire_name(),
-            )));
-        }
-    }
-    Ok(Command::SetWindow { change })
 }
 
 /// `set_view`'s five forms, told apart by which field is present.
@@ -1266,37 +1203,6 @@ impl Args<'_> {
             *slot = element
                 .as_f64()
                 .filter(|n| n.is_finite())
-                .ok_or_else(|| self.wrong_type(key, &expected, value))?;
-        }
-        Ok(Some(out))
-    }
-
-    /// A pair of whole numbers in `[min, max]`: a window size or position.
-    fn optional_int_pair(
-        &self,
-        key: &str,
-        min: i64,
-        max: i64,
-    ) -> Result<Option<[i64; 2]>, ToolError> {
-        let value = match self.map.get(key) {
-            None | Some(Value::Null) => return Ok(None),
-            Some(value) => value,
-        };
-        let expected = format!("an array of 2 whole numbers between {min} and {max}");
-        let array = value
-            .as_array()
-            .ok_or_else(|| self.wrong_type(key, &expected, value))?;
-        if array.len() != 2 {
-            return Err(self.error(format!(
-                "wants {key} to be {expected} — got {} of them.",
-                array.len()
-            )));
-        }
-        let mut out = [0i64; 2];
-        for (slot, element) in out.iter_mut().zip(array) {
-            *slot = element
-                .as_i64()
-                .filter(|n| (min..=max).contains(n))
                 .ok_or_else(|| self.wrong_type(key, &expected, value))?;
         }
         Ok(Some(out))

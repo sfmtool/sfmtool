@@ -1,11 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The command line: `sfm-explorer [--mcp [PORT]] [path.sfmr ...]`.
+//! The command line:
+//! `sfm-explorer [--mcp [PORT]] [--no-default-layout] [path.sfmr ...]`.
 //!
-//! Hand-rolled rather than `clap`, because there is one flag and a list of
+//! Hand-rolled rather than `clap`, because there are two flags and a list of
 //! paths. A dozen lines keeps the binary's dependency tree as it was; reach for
-//! an argument parser if a third flag ever appears, not before.
+//! an argument parser if this grows options that take values, not before.
 
 use std::path::PathBuf;
 
@@ -24,6 +25,9 @@ pub(crate) struct Args {
     /// The port `--mcp` asked for, if it was given at all. `Some(0)` means an
     /// ephemeral port, which the endpoint line then reports.
     pub(crate) mcp_port: Option<u16>,
+    /// Skip the startup load of `~/.sfm-explorer-default-layout.json`, and come
+    /// up with the stock grid whatever is saved there.
+    pub(crate) no_default_layout: bool,
     /// `--help` was asked for; print [`USAGE`] and exit without opening a
     /// window.
     pub(crate) help: bool,
@@ -44,6 +48,9 @@ OPTIONS:
                     agent can drive this window. Off unless asked for. PORT
                     defaults to 8787; 0 takes an ephemeral port, reported on
                     stdout at startup.
+    --no-default-layout
+                    Start with the stock panel grid, ignoring any layout saved
+                    at ~/.sfm-explorer-default-layout.json.
     -h, --help      Print this message and exit.
 ";
 
@@ -60,6 +67,7 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
     while let Some(arg) = argv.next() {
         match arg.as_str() {
             "-h" | "--help" => args.help = true,
+            "--no-default-layout" => args.no_default_layout = true,
             "--mcp" => {
                 let port = match argv.peek().and_then(|next| next.parse::<u16>().ok()) {
                     Some(port) => {
@@ -145,6 +153,16 @@ mod tests {
     fn an_unknown_option_is_an_error_rather_than_a_path() {
         let error = parse(["--verbose".to_string()]).expect_err("rejected");
         assert!(error.contains("--verbose"), "{error}");
+    }
+
+    /// The flag the UI tests pass, so a developer's own saved layout cannot
+    /// make the suite's panel assertions fail on their machine.
+    #[test]
+    fn the_default_layout_can_be_skipped() {
+        assert!(!parse_ok(&["scene.sfmr"]).no_default_layout);
+        let args = parse_ok(&["--no-default-layout", "scene.sfmr"]);
+        assert!(args.no_default_layout);
+        assert_eq!(args.paths, vec![PathBuf::from("scene.sfmr")]);
     }
 
     #[test]

@@ -186,7 +186,10 @@ app-global about the *viewport* is left for it to hold. **File**
 
 **Panels** lists the seven docked panels with a tick beside each open one, and
 holds Reset Layout and Save / Load Layout. It is the way back from a closed
-panel, which is what makes every panel closeable in the first place. See
+panel, which is what makes every panel closeable in the first place. Save Layout
+writes the window's placement as well as the panel arrangement, and opens on
+`~/.sfm-explorer-default-layout.json` — the file the viewer reads at startup — so
+"keep it like this" is Save Layout…, Enter. See
 [panel-layout.md](panel-layout.md).
 
 **Go** (Go to Point…, Ctrl/Cmd+G) is the one other menu, and the one thing that

@@ -12,6 +12,7 @@
 //! - [`App::run_egui_pass`] — run the egui/dock UI and tessellate.
 //! - [`App::process_pick_readback`] — apply hover/selection from GPU pick.
 
+use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use std::time::Instant;
 
@@ -99,9 +100,15 @@ impl App {
         // that has arrived since the last frame. First, ahead of everything
         // else, so a command's effect is in the very frame the agent's request
         // woke: an agent can `set_view` then `screenshot` and get the new view,
-        // a `set_window` lands before egui reads the window size for this
+        // a window change lands before egui reads the window size for this
         // frame's layout, and the title sync below already reflects a file the
         // agent just opened.
+        //
+        // The snapshot is taken every frame, not only in frames the endpoint is
+        // live for: Panels ▸ Save Layout… reads it, and the normal rectangle it
+        // remembers has to be current at the moment the window is maximized
+        // (`AppState::observe_window`). An idle viewer renders no frames at all.
+        self.state.observe_window(&window);
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 
@@ -567,9 +574,13 @@ impl App {
     /// primitives, the frame's texture deltas, and the pixels-per-point scale.
     fn run_egui_pass(
         &mut self,
-        window: &Window,
+        window: &Arc<Window>,
         egui_winit_state: &mut EguiWinitState,
     ) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
+        // The Panels menu's Save and Load carry the window's placement as well
+        // as the panels, so the menu body is drawn with a host. A clone of the
+        // frame's `Arc<Window>`, which is what `WindowHost` is implemented for.
+        let mut window_host = window.clone();
         let scene_texture_id = self.scene_renderer.texture_id();
         let hover_depth = self.scene_renderer.hover_depth();
         let hover_pick = self.scene_renderer.hover_pick();
@@ -713,7 +724,7 @@ impl App {
                     // app-global about the window is which panels are in it,
                     // and that is the Panels menu below rather than a View one.
                     ui.menu_button("Panels", |ui| {
-                        crate::layout::panels_menu(ui, app_state);
+                        crate::layout::panels_menu(ui, app_state, &mut window_host);
                     });
                 });
             });
