@@ -22,6 +22,7 @@ use super::{
     CameraImageSel, CloseTarget, Command, DisplayChange, Placement, SelectionScope, ToolError,
     ViewCommand,
 };
+use crate::action_log::Actor;
 use crate::dock::Tab;
 use crate::goto_point::{parse_point_query, PointQuery};
 use crate::window::WindowState;
@@ -134,6 +135,61 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           pixel it was seen at and that observation's reprojection error.",
             kind: Read,
             schema: object(&[], &[("point", point_schema())]),
+        },
+        ToolSpec {
+            name: "get_action_log",
+            description: "What has happened in the viewer, oldest first — the human's selections \
+                          and file loads, the agent's own calls, and every refusal, each with the \
+                          revision it was written at. Pass the revision from a previous reply back \
+                          as since_revision to read only what has happened since; the log's \
+                          revision goes up on every entry and on every fold of a run of like \
+                          entries into one, so a line that changed is reported again. \
+                          oldest_revision says how far back the log still goes: a since_revision \
+                          below it means entries were missed. actors filters by who did it, and \
+                          actors: [\"user\"] is the read that answers \"what did the human do while \
+                          I was working\".",
+            kind: Read,
+            schema: object(
+                &[
+                    (
+                        "since_revision",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description":
+                                "Return entries written or changed after this revision. Defaults \
+                                 to 0, the start of the log.",
+                        }),
+                    ),
+                    (
+                        "limit",
+                        json!({
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": super::read::ACTION_LOG_MAX_LIMIT,
+                            "description":
+                                "How many entries to return. Defaults to 200, capped at 1000; \
+                                 truncated in the reply says there are more, and the last entry's \
+                                 revision is where to continue from.",
+                        }),
+                    ),
+                    (
+                        "actors",
+                        json!({
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": crate::action_log::Actor::ALL.map(|a| a.wire_name()),
+                            },
+                            "minItems": 1,
+                            "description":
+                                "Which actors' entries to return. Omit for all of them; an empty \
+                                 array is refused, since it can return nothing by construction.",
+                        }),
+                    ),
+                ],
+                &[],
+            ),
         },
         ToolSpec {
             name: "get_window_layout",
@@ -406,21 +462,47 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "screenshot",
-            description: "A PNG of the 3D viewport as it is drawn right now — the 3D view itself, \
-                          not the surrounding panels. Answered after the next frame has been \
-                          rendered, so it reflects any change made in the same batch of calls.",
+            description: "A PNG of the window as the human sees it — menu bar, every panel, \
+                          status line — or, with panel_name, of one panel's body cropped from the \
+                          same frame. The 3D viewport is panel_name \"viewer_3d\", and hud: false \
+                          returns its render alone with nothing drawn over it. A panel that is \
+                          closed, or behind another tab in its node, is refused naming show_panel. \
+                          Answered after the next frame has been rendered, so it reflects any \
+                          change made in the same batch of calls.",
             kind: Read,
             schema: object(
-                &[(
-                    "max_dimension",
-                    json!({
-                        "type": "integer",
-                        "minimum": 16,
-                        "description":
-                            "Scale the image down so neither side exceeds this many pixels. \
-                             Omit for the viewport's native size.",
-                    }),
-                )],
+                &[
+                    (
+                        "panel_name",
+                        json!({
+                            "type": "string",
+                            "enum": Tab::ALL.map(|tab| tab.wire_name()),
+                            "description":
+                                "Photograph one panel's body instead of the whole window, by the \
+                                 name get_window_layout and the layout file use.",
+                        }),
+                    ),
+                    (
+                        "hud",
+                        json!({
+                            "type": "boolean",
+                            "description":
+                                "With panel_name \"viewer_3d\" only: false returns the 3D render \
+                                 target itself, without the HUD, the stats and the status line \
+                                 painted over it. Defaults to true.",
+                        }),
+                    ),
+                    (
+                        "max_dimension",
+                        json!({
+                            "type": "integer",
+                            "minimum": 16,
+                            "description":
+                                "Scale the image down so neither side exceeds this many pixels. \
+                                 Omit for the native size of whatever was photographed.",
+                        }),
+                    ),
+                ],
                 &[],
             ),
         },
@@ -726,6 +808,16 @@ pub(crate) fn parse(
                 point: args.point("point")?,
             }
         }
+        "get_action_log" => {
+            args.reject_unknown(&["since_revision", "limit", "actors"])?;
+            Command::GetActionLog {
+                since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
+                limit: args
+                    .optional_usize("limit")?
+                    .unwrap_or(super::read::ACTION_LOG_DEFAULT_LIMIT),
+                actors: args.actors("actors")?,
+            }
+        }
         "open_reconstruction" => {
             args.reject_unknown(&["path"])?;
             Command::OpenReconstruction {
@@ -873,8 +965,26 @@ pub(crate) fn parse(
             }
         }
         "screenshot" => {
-            args.reject_unknown(&["max_dimension"])?;
+            args.reject_unknown(&["panel_name", "hud", "max_dimension"])?;
+            let panel = match args.map.get("panel_name") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(args.panel("panel_name")?),
+            };
+            let hud = args.optional_bool("hud")?.unwrap_or(true);
+            // `hud` is a statement about the picture *underneath* what egui
+            // painted, and only the 3D Viewer has one. Refused elsewhere rather
+            // than read as a request to draw the frame differently: a panel
+            // drawn differently for a screenshot would hand the agent a picture
+            // the human never saw.
+            if !hud && panel != Some(Tab::Viewer3D) {
+                return Err(args.error(
+                    "takes hud only with panel_name \"viewer_3d\": hud applies to the 3D Viewer \
+                     only; the other panels have no picture underneath what is drawn on them.",
+                ));
+            }
             Command::Screenshot {
+                panel,
+                hud,
                 max_dimension: args
                     .optional_usize("max_dimension")?
                     .map(|d| d.min(u32::MAX as usize) as u32),
@@ -1152,6 +1262,54 @@ impl Args<'_> {
     fn required_usize(&self, key: &str) -> Result<usize, ToolError> {
         self.optional_usize(key)?
             .ok_or_else(|| self.error(format!("needs {key}.")))
+    }
+
+    fn optional_u64(&self, key: &str) -> Result<Option<u64>, ToolError> {
+        match self.map.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => value
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| self.wrong_type(key, "a whole number, zero or more", value)),
+        }
+    }
+
+    /// The actors a call named, or every actor where it named none.
+    ///
+    /// An empty array is refused rather than read as "everything": a call that
+    /// can return nothing by construction has not asked a question, and reading
+    /// it as its opposite would be the surface guessing.
+    fn actors(&self, key: &str) -> Result<Vec<Actor>, ToolError> {
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(Actor::ALL.to_vec()),
+            Some(value) => value,
+        };
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, "an array of actor names", value))?;
+        if array.is_empty() {
+            return Err(self.error(format!(
+                "was given an empty {key}, which can return nothing — omit it for every actor, or \
+                 name some of {}.",
+                Actor::all_wire_names()
+            )));
+        }
+        let mut actors = Vec::with_capacity(array.len());
+        for element in array {
+            let name = element
+                .as_str()
+                .ok_or_else(|| self.wrong_type(key, "an array of actor names", value))?;
+            let actor = Actor::from_wire_name(name).ok_or_else(|| {
+                self.error(format!(
+                    "does not know the actor {name:?} — the actors are {}.",
+                    Actor::all_wire_names()
+                ))
+            })?;
+            if !actors.contains(&actor) {
+                actors.push(actor);
+            }
+        }
+        Ok(actors)
     }
 
     fn optional_f64(&self, key: &str) -> Result<Option<f64>, ToolError> {

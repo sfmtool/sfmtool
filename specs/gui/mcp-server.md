@@ -15,8 +15,9 @@ This is an opt-in control surface for the running viewer, speaking the
 `sfm-explorer --mcp`, the viewer hosts a small server; an agent connects to it
 and can then enumerate the loaded scene graph, open and close `.sfmr` files,
 move the selection and the 3D camera, arrange the panels, size and place the
-window, and take a screenshot of the viewport. The human keeps the window in
-front of them the whole time and watches it change.
+window, read back everything that has happened in the viewer, and photograph the
+window or any panel in it. The human keeps the window in front of them the whole
+time and watches it change.
 
 The window itself is part of what the surface drives, because the window is
 shared. The agent wants the 3D viewport to fill it before a screenshot and the
@@ -97,8 +98,8 @@ place.
 
 ## The tool surface
 
-Twenty tools. Six read, thirteen write, one that closes the loop by handing
-back a picture.
+Twenty-one tools. Seven read, thirteen write, one that closes the loop by
+handing back a picture.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -107,6 +108,7 @@ back a picture.
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
 | `get_point` | read | One 3D point: position, colour, error, full track |
+| `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene (reload if already open) |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
@@ -121,9 +123,9 @@ back a picture.
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
-| `screenshot` | observe | PNG of the 3D viewport |
+| `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the six reads and `screenshot` carry
+Every tool is annotated: the seven reads and `screenshot` carry
 `readOnlyHint: true`, the thirteen writes `destructiveHint: false` (nothing here
 touches a file on disk — `close_reconstruction` unloads, it does not delete;
 `set_window_layout` changes the window and the dock, not the layout file the
@@ -220,6 +222,8 @@ attribute that identifies* an entity is named for both:
 | `camera_intrinsics` | the expanded record — model, size, params |
 | `camera_intrinsics_index` | just the index, whether as a cross-reference from a camera image or as the argument naming which record to act on |
 | `reconstruction_label` | just the label, identifying which reconstruction |
+| `revision` | the Action Log's clock, on the log and on each entry |
+| `since_revision` | just the revision, identifying where a read of the log starts — "the revision I have seen since" |
 
 This is why the argument is `reconstruction_label` and not `reconstruction`. It
 carries a label, not a reconstruction, and a reader comparing
@@ -329,6 +333,7 @@ addressable. No arguments.
     "looking_through": null               // a camera image, in camera-view mode
   },
   "status_message": null,
+  "action_log_revision": 530,             // the Action Log's clock — see § "get_action_log"
   "window_title": "SfM Explorer - seoul_bull.sfmr [MCP :8787]",
   "window": { "state": "normal", … }      // see § "The window block"
 }
@@ -669,36 +674,167 @@ over the top of the one the agent asked for. `Viewer3D::jump_to_camera_view` is
 one derivation (`compute_camera_view`) so they cannot drift apart on where a
 camera looks from.
 
+### `get_action_log`
+
+Everything else on this surface lets the agent *act* and lets the human *see*
+what it did. This is the other direction: what the human did, read as a
+transcript.
+
+```jsonc
+{ "since_revision": 512 }                       // entries recorded or changed after revision 512
+{ "since_revision": 0, "limit": 50 }            // from the start, at most 50
+{ "since_revision": 512, "actors": ["user"] }   // what the human did since 512
+{}                                              // everything kept, every actor
+```
+
+```jsonc
+{
+  "revision": 530,                    // the log's current revision — send it back next time
+  "oldest_revision": 3,               // of the entries the log still holds (CAPACITY, Clear)
+  "truncated": false,                 // true when `limit` cut the reply short
+  "entries": [
+    {
+      "revision": 513,
+      "at": "2026-09-02T12:41:07.123-07:00",   // RFC 3339, the zone the panel formats in
+      "actor": "user",                          // "user" | "mcp" | "viewer"
+      "kind": "selection",                      // Kind::wire_name; "query" carries `tool`
+      "failed": false,
+      "text": "Selected image images/IMG_0007.jpg"
+    },
+    {
+      "revision": 519,
+      "at": "2026-09-02T12:41:09.004-07:00",
+      "actor": "mcp",
+      "kind": "layout",
+      "failed": true,
+      "text": "set_window_layout failed: layout.main: unknown key \"fracton\""
+    },
+    {
+      "revision": 522,
+      "at": "2026-09-02T12:41:12.870-07:00",
+      "actor": "mcp",
+      "kind": "query",
+      "tool": "get_scene",
+      "failed": false,
+      "text": "get_scene"
+    }
+  ]
+}
+```
+
+**A revision is the log's clock.** `ActionLog` keeps a counter that goes up by
+one on every record *and on every coalescing replacement*, and stamps the entry
+it just wrote or replaced. So `since_revision: N` returns exactly the entries
+whose current text the agent has not seen: a new entry once, and an entry that
+a run folded into again, with its newest text and time. A timestamp could not
+do this — two entries can share an instant, and a fold changes an entry's time
+to the newest of the run, which is what the agent needs to be told about.
+`revision` in the reply is the counter now, and sending it back as the next
+`since_revision` reads the gap and nothing else; `since_revision: 0`, or an
+omitted one, is the start.
+
+**Order is log order**, oldest first, because the agent reads it as a
+transcript. `limit` defaults to `200` and is capped at `1000`
+(`read::ACTION_LOG_DEFAULT_LIMIT`, `read::ACTION_LOG_MAX_LIMIT`); past it,
+`truncated: true` and the agent continues from the last entry's `revision`.
+
+**`actors` filters by who did it.** A set of the Action Log's three actors
+(`Actor::wire_name`: `user`, `mcp`, `viewer`), and an entry is returned when its
+actor is in the set. Omitted, it is all three, which is the whole log; an empty
+set is refused at the parse, since a call that can return nothing by
+construction has not asked a question. The read an agent makes most is
+`actors: ["user"]`: what the human did, with none of the agent's own rows in it
+— and since every query is the agent's, that filter is also what keeps a polling
+loop's `get_scene` rows out of the answer without a switch of their own.
+`actors: ["mcp"]` is the agent auditing itself, queries and refusals included,
+`tool` beside `kind` on the query rows. `viewer` is the small third set the log
+already keeps apart in its actor column: the session lines, and an animation
+running out of images ([action-log.md](action-log.md)).
+
+No `kinds` filter, for the same reason the panel has none: at one second of
+coalescing, a session's log is readable whole.
+
+**`oldest_revision`** is the revision of the oldest entry still held. An agent
+whose `since_revision` is older than it has missed entries — dropped past
+`CAPACITY`, or gone with the toolbar's Clear — and can say so rather than
+assuming the gap was quiet. The counter never resets, Clear included.
+
+**`get_action_log` is a read and is recorded as one**, a `Query` entry
+`get_action_log since 512`, coalescing per tool like every other read — so a
+poll is one row, however often it asks — and out of its own reply under
+`actors: ["user"]`. A read of the log that the log did not record would be the
+one action the human could not see. The row is written after the reply is built,
+so a call never reports itself and always reports the one before it.
+
+**`get_scene` carries the revision.** One field, `action_log_revision`, beside
+`status_message`, so an agent that already reads `get_scene` knows whether
+anything happened since its last `get_action_log` without a second call.
+`status_message` stays: it is the status line, which is a different thing from
+the log.
+
 ### `screenshot`
 
 ```jsonc
-// { "max_dimension": 1024 }   optional; omit for the viewport's native size
+{}                                              // the whole window
+{ "panel_name": "viewer_3d" }                   // one panel's body
+{ "panel_name": "image_detail", "max_dimension": 1024 }
+{ "panel_name": "viewer_3d", "hud": false }     // the 3D render alone, nothing drawn over it
 ```
 
 Returns an MCP `ImageContent` block — base64 PNG, `mimeType: "image/png"` — plus
-a text block naming the pixel size and what is in frame (which reconstructions
-are drawn, the point and camera-image counts, and the camera image being looked
-through, if any). That caption is built during the *apply* phase, while
-`AppState` is still borrowed, so the picture and the description of it are of
-the same instant.
+a text block naming the pixel size and what was photographed: `The window,
+1920×1129.` or `The Image Detail panel, 640×480.` For the window and for the 3D
+Viewer it keeps the frame description too (which reconstructions are drawn, the
+point and camera-image counts, and the camera image being looked through, if
+any), because those are the pictures the 3D view is in. That caption is built
+during the *apply* phase, while `AppState` is still borrowed, so the picture and
+the description of it are of the same instant.
 
-**It is the 3D viewport, not the window.** The viewport already renders into an
-offscreen texture that can be copied from; the window is a surface texture, and
-copying that back requires configuring the surface with `TextureUsages::COPY_SRC`
-and compositing egui's output — a bigger change for a picture whose interesting
-part is the 3D view. Full-window capture is a later question
-(§ "Open questions").
+**Without `panel_name` it is the window**: the frame the human is looking at, at
+`inner_size` in physical pixels, menu bar and status line included. It is the
+surface texture that was presented, copied before the present, so the picture is
+of the frame the request woke and nothing composited differently.
 
-Mechanics, in `scene_renderer/capture.rs`: `scene_renderer::sizing` creates the
-final `edl output` texture with `COPY_SRC` alongside its render-attachment and
-texture-binding usages, and keeps the texture (not only its view, which cannot
-be a copy source). The copy-to-buffer and map-read follow
-`scene_renderer/readback.rs`, including its 256-byte row-alignment rule, and
-`image` — already a dependency — encodes the PNG. The texture is
-`Rgba8UnormSrgb`, so the bytes are already display-ready and no colour
-conversion is needed. `max_dimension` downscales with a Lanczos3 filter: what a
-downscaled point cloud is asked to answer is "is this noisy", and a cheap
-filter's aliasing invents exactly that.
+**With `panel_name` it is that panel's body**, cropped from the same frame:
+`LeafNode::viewport`, the tab body below the tab bar, in logical points from the
+dock's layout of *this* frame, scaled to pixels and rounded. A panel in a
+floating dock window is still inside the surface and crops the same way. A panel
+that is **closed** is refused, naming `show_panel`; one that is **behind another
+tab** in its node is refused, naming the tab in front and `show_panel` — a
+screenshot of a tab that is not drawn would be a picture of the tab in front of
+it. Both checks are against `AppState::dock` at apply time, so a `show_panel`
+earlier in the same batch satisfies them, and both are headless.
+
+**`viewer_3d` is a crop by default, and the render target on request.** The
+default for every panel is a crop of the one presented frame, so the viewport's
+comes with what is drawn over it — the HUD, the stats, the status line — because
+that is what the human sees. But an agent judging a point cloud does not want a
+status line across it, and the clean picture already exists: the `edl output`
+texture the viewport renders into. **`hud: false`** returns that texture instead
+of the crop, through the capture path in `scene_renderer/capture.rs`, so the two
+pictures of the viewport differ only in what egui painted over it.
+
+The two are very nearly the same size and not exactly: the crop is the tab
+*body*, which `egui_dock` insets by its own `tab_body.inner_margin` before the
+viewport allocates what is left, so the render is the crop less that margin on
+each side — twelve logical points in each axis at the stock style. Each picture
+says its own size in the caption.
+
+`hud` is accepted with `panel_name: "viewer_3d"` only. With another panel or
+with no panel it is refused at the parse — *"hud applies to the 3D Viewer only;
+the other panels have no picture underneath what is drawn on them"* — rather
+than read as a request to draw the frame differently. The Image Detail panel's
+overlays are content its own toggles control, not chrome, and a screenshot flag
+that quietly changed what the panel drew would give the agent a picture the
+human never saw; if an agent needs the raw image, the addition is a tool that
+sets the panel's display, which § "Open questions" already lists. `hud` is the
+GUI's own word for the overlay ([viewport-hud.md](viewport-hud.md)), which is
+why the initialism stands where the vocabulary rule would otherwise want a
+spelled-out word.
+
+**`max_dimension`** applies after the crop, Lanczos3: what a downscaled point
+cloud is asked to answer is "is this noisy", and a cheap filter's aliasing
+invents exactly that.
 
 **A minimized window is refused rather than photographed:**
 
@@ -713,6 +849,52 @@ the rest of the vocabulary rather than only on a machine with a window.
 
 `screenshot` is the one tool that cannot answer during the apply phase
 (§ "Threading").
+
+#### Mechanics
+
+The surface is configured with `TextureUsages::COPY_SRC` added to the default
+when `Surface::get_capabilities(&adapter).usages` allows it — DX12, Vulkan and
+Metal all do in practice, and DX12 hands out a `Bgra8UnormSrgb` swapchain that
+takes the usage. `lib.rs` ors the flag in and records whether it got it on `App`
+(`surface_readable: bool`); the same configuration is what `resize` reconfigures
+with, so the flag survives a resize.
+
+In a frame with a deferred window or panel screenshot, and only then, the
+frame's encoder copies the surface texture into a readback buffer **after the
+egui pass and before `present`** (`App::encode_screenshot_copy`, the same
+submit; the texture is not readable once it has been handed back to the
+presentation engine), following `scene_renderer/readback.rs`'s 256-byte
+row-alignment rule. `App::resolve_mcp_deferred` maps the buffer after the
+present and answers every screenshot of that frame from the one copy — they are
+all pictures of the same pixels, differing only in where they are cropped. The
+surface format is whatever `get_default_config` chose, so the readback swizzles
+`Bgra8Unorm[Srgb]` to RGBA — `image` has no BGRA8 colour type to encode from —
+and passes `Rgba8Unorm[Srgb]` through; any other format is refused naming it. A
+copy per screenshot frame, and no cost in any other frame.
+
+Where the surface does not allow `COPY_SRC`, a screenshot of the window or of a
+panel is refused: *"This platform's window surface cannot be read back, so there
+is nothing to photograph."* — and the refusal points at `hud: false`, which
+reads the render target and does not go through the surface. The alternative —
+rendering every frame through an intermediate texture and blitting — is a
+per-frame cost for a case no supported platform has shown; it is the fallback if
+one does (§ "Open questions").
+
+**The crop rectangle is resolved at readback, not at apply.** A panel opened by
+a `show_panel` earlier in the batch has no rectangle until this frame's egui
+pass has laid the dock out, so `Deferred::Screenshot` carries the `Tab` and the
+frame reads `viewport` from `AppState::dock` after the pass. A rectangle that is
+still `Rect::NOTHING` there — a panel that was not drawn after all — is refused
+rather than cropped to nothing. Points become pixels through the frame's own
+`egui::Context::pixels_per_point`, which is the window's scale factor composed
+with egui's zoom and the only number the dock's rectangles are in step with.
+
+**In the Action Log** the `Query` text names the target: `screenshot window
+1920×1129`, `screenshot image_detail 640×480`, `screenshot viewer_3d 1280×720
+without HUD`. The size is the size the picture will be, after `max_dimension`;
+for a panel, the crop's size is not known until the frame, so the text records
+the panel's *last* laid-out size, which is the right size in every frame but the
+one that opened it.
 
 ### `get_window_layout`
 
@@ -1018,6 +1200,7 @@ thread, and waits for the answer.
    │                                      ├─ prepare_uploads
    │                                      ├─ render_scene
    │                                      ├─ run_egui_pass
+   │                                      ├─ encode_screenshot_copy ── the surface, if one was asked for
    │                                      ├─ submit + present
    │                                      ├─ process_pick_readback
    │                                      └─ resolve_mcp_deferred ── screenshots
@@ -1046,9 +1229,15 @@ Four things this buys, each load-bearing:
   the frame the request woke, including whatever else was applied alongside it.
   A frame can bail before that — GPU state not up yet, a surface that could not
   be presented — so a redraw is requested again while anything is still
-  deferred. An idle viewer asks for no frames of its own, and without that the
-  screenshot would sit until the caller's timeout rather than until the next
-  frame.
+  deferred, and a deferred screenshot simply waits for the next frame. An idle
+  viewer asks for no frames of its own, and without that the screenshot would
+  sit until the caller's timeout rather than until the next frame.
+- **The surface copy is the one thing that happens mid-frame.** A window or
+  panel screenshot cannot be answered after the present, because the texture is
+  gone by then; the copy into a readback buffer is encoded between the egui pass
+  and the present, into the frame's own encoder, and only in a frame that has
+  such a screenshot waiting (§ "screenshot", "Mechanics"). Everything after that
+  — the map, the crop, the PNG — is still in the readback phase.
 
 **The commands that must reach `winit` go through a trait**,
 `crate::window::WindowHost`, for the same reason `screenshot` leaves through
@@ -1118,7 +1307,7 @@ testable without a window:
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
-| `frame` | The two phases `run_ui_and_paint` calls: the drain, and the deferred screenshot |
+| `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
 | `server` | The `rmcp` handler and the `axum` / `tokio` plumbing |
 
@@ -1134,6 +1323,9 @@ pub(crate) enum Command {
     GetCameraImage { reconstruction_label: Option<String>, camera_image: CameraImageSel },
     GetCameraIntrinsics { reconstruction_label: Option<String>, camera_intrinsics_index: usize },
     GetPoint { point: goto_point::PointQuery },
+    /// `actors` is never empty: the parse refuses `[]` and fills an omitted
+    /// field with every actor.
+    GetActionLog { since_revision: u64, limit: usize, actors: Vec<action_log::Actor> },
     OpenReconstruction { path: PathBuf },
     CloseReconstruction { target: CloseTarget },
     SelectReconstruction { reconstruction_label: String },
@@ -1151,7 +1343,9 @@ pub(crate) enum Command {
     SetWindowLayout { document: serde_json::Value },
     ShowPanel { panel: Tab },
     HidePanel { panel: Tab },
-    Screenshot { max_dimension: Option<u32> },
+    /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
+    /// parse refuses it elsewhere.
+    Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },
 }
 ```
 
@@ -1180,8 +1374,44 @@ pub(crate) enum Outcome {
     Deferred(Deferred),
 }
 
+/// A command whose answer cannot exist until this frame has been rendered.
+pub(crate) enum Deferred {
+    Screenshot { source: ScreenshotSource, max_dimension: Option<u32>, caption: String },
+}
+
+/// Which pixels a deferred screenshot reads.
+pub(crate) enum ScreenshotSource {
+    /// The presented surface, whole.
+    Window,
+    /// The presented surface, cropped to a panel's body. The rectangle is not
+    /// resolved here: the frame reads it after the egui pass.
+    Panel(Tab),
+    /// The viewport's own render target — `viewer_3d` with `hud: false`.
+    ViewportRender,
+}
+
+// read::get_action_log(state, since_revision, limit, &actors) -> JsonReply
+// read::ACTION_LOG_DEFAULT_LIMIT: usize = 200;  read::ACTION_LOG_MAX_LIMIT: usize = 1000;
+
+impl App {
+    /// Encode the surface copy into this frame's encoder when a window or
+    /// panel screenshot is deferred, and hand back the buffer to map. Called
+    /// between the egui pass and `present`; `None` in every other frame.
+    fn encode_screenshot_copy(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder,
+                              surface: &wgpu::Texture) -> Option<SurfaceCopy>;
+    /// Map the copy, crop to each named panel's body, encode. Called after the
+    /// present.
+    fn resolve_mcp_deferred(&mut self, device: &wgpu::Device, queue: &wgpu::Queue,
+                            surface: Option<SurfaceCopy>);
+}
+
+/// The crop rectangle's derivation, pure over the dock and the frame's scale,
+/// which is what puts it under headless test.
+fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
+              surface: [u32; 2]) -> Option<[u32; 4]>;
+
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes nineteen of the twenty tools testable in a headless
+/// makes twenty of the twenty-one tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -1216,14 +1446,16 @@ messages and its JSON shapes under headless test, and leaves exactly one tool
 (`screenshot`) needing a window.
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other nineteen answer with JSON; squeezing an image through a
+picture and the other twenty answer with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-nineteen return a plain `Result<Value, ToolError>` and are widened at the
+twenty return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
-`App` carries two fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`
-and `mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`. `App::drain_mcp`
+`App` carries three fields for this: `mcp_rx: Option<UnboundedReceiver<Request>>`,
+`mcp_deferred: Vec<(Deferred, oneshot::Sender<Reply>)>`, and
+`surface_readable: bool` — whether the swapchain took `COPY_SRC`, which is what
+a window screenshot's refusal reads. `App::drain_mcp`
 takes the frame's `&Arc<Window>` and hands a clone of it to `apply_as_agent` as
 the host, which is the whole of what `WindowHost` costs the caller. The request counter the
 Scene panel shows lives on `AppState::mcp`, beside the port, so the panel and
@@ -1290,7 +1522,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Twenty tools are cheap
+relaunch would call tools the new binary does not have. Twenty-one tools are cheap
 to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
 there are no authorization contexts to share a result across.
 
@@ -1347,8 +1579,8 @@ Two levels, and the distinction matters to a client:
   viewer refuses. An unknown reconstruction label, a camera image index out of
   range, an unreadable `.sfmr`, an unknown tint name, a degenerate `set_view`, a
   layout document that does not validate, a size for a window that is maximized,
-  a screenshot of a minimized window or of a viewport that has not rendered yet,
-  and the 10 s apply timeout.
+  a screenshot of a minimized window, of a panel that is not drawn, or of a
+  viewport that has not rendered yet, and the 10 s apply timeout.
 
 The line is whose problem it is: a request that does not fit the advertised
 schema is the client's, and a request the viewer will not carry out is the
@@ -1446,19 +1678,46 @@ where a test hands no host over.
   records two rows, the window one first and composed in application order; a
   refusal is one failed row, filed under the kind of the portion the call
   carried. The read records a `Query` that never reaches the status line.
-- **`get_scene` embeds the window block** without `monitors`.
+- **`get_scene` embeds the window block** without `monitors`, and carries
+  `action_log_revision` equal to the log's clock at the moment it answered.
+- **`get_action_log` reads what happened**: the reply shape, row for row;
+  `since_revision` returns the gap and only the gap, after a mutating call and
+  after a coalesced run; `actors: ["user"]` returns the human's rows and none of
+  the agent's, `["mcp"]` the agent's including its queries with `tool` beside
+  `kind`, an omitted filter gives every actor, and `[]` and an unknown actor
+  name are refused at the parse with the three names listed; `limit` truncates
+  with `truncated: true` and the continuation reads the rest; a `limit` above
+  the cap is capped; the call itself appears as a `Query` on the next read, and
+  a repeat of it coalesces into one row.
 - **`screenshot` while minimized is refused** with the message naming
   `set_window_layout`; not minimized, it still defers.
+- **`screenshot` defers with what it will photograph**: no panel with
+  `ScreenshotSource::Window` and a `window` caption; a panel with
+  `Panel(tab)`, the panel's name and its last laid-out size in the caption and
+  in the query text; `viewer_3d` keeping the frame description. A closed panel
+  is refused naming `show_panel`, one behind another is refused naming the tab
+  in front, an unknown name lists the seven, and a `show_panel` followed by a
+  `screenshot` of that panel in one batch is accepted.
+- **`hud: false` with `viewer_3d`** defers with `ScreenshotSource::ViewportRender`
+  and a query text ending `without HUD`; with another panel or with no panel it
+  is refused at the parse with its message; `hud: true` is accepted anywhere and
+  changes nothing.
+- **The crop rectangle**: a dock with known `viewport` rectangles and a scale
+  factor of 1.5 gives the expected pixel rectangle, clipped to the frame, and
+  `None` for a panel the dock has never laid out. The readback's unpad and its
+  BGRA swizzle are tested over a synthetic padded buffer, in `mcp::frame`.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **The catalog is twenty tools**, six of them reads, and
+- **The catalog is twenty-one tools**, seven of them reads;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
-  `layout`, with the `window` section's five keys under it.
+  `layout`, with the `window` section's five keys under it, and `screenshot`'s
+  advertises `panel_name`, `hud` and `max_dimension`.
 - **Schema and parser cannot drift**: every property any tool advertises is one
   the parser accepts, walked over the whole catalog rather than tool by tool, so
   a tool added later is covered by construction. The vocabulary rule is asserted
   the same way, including that a panel argument is `panel_name` and never
-  `panel`.
+  `panel`, and that `hud` — the one allowed initialism — is on `screenshot` and
+  nowhere else, so a second one cannot arrive quietly.
 - **The tool list carries its cache hints at the revision a real client
   negotiates.** The test initializes the way a current client does and then uses
   whatever version comes back, rather than hard-coding one — the SDK negotiates
@@ -1481,16 +1740,25 @@ argument arriving as a JSON-RPC error instead, and a foreign `Origin` getting
 `crates/sfm-explorer/src/cli.rs` carries its own tests for the flag, including
 the case that matters most: `--mcp scene.sfmr` must not eat the path as a port.
 
-Two things are not covered here. **`screenshot`** needs a real frame and belongs
-in `ui_basic` (Windows/macOS, `pixi run ui-test`) — asserting a decodable PNG of
-the expected size, not its pixels. What the headless tests do assert about it is
-that it defers, that it refuses a minimized window, and that its caption is built
-while the state is still borrowed. **A `set_window_layout` window portion against
-a real window** belongs there too: maximize, read back `maximized`, restore, read
-back the original inner size — the round trip, not pixel positions, since where a
-window manager actually puts a window is its business. What `ui_basic` does cover
-of the document is the startup load ([panel-layout.md](panel-layout.md)
-§ "Testing").
+**`screenshot` is the one tool with a real frame behind it**, so it also has
+tests in `ui_basic` (Windows/macOS, `pixi run ui-test`), which launch a viewer
+with `--mcp 0`, read the endpoint off its stdout and speak the same hand-written
+HTTP to it. Those assert the size and decodability of the PNG rather than its
+pixels, since what a frame *looks* like is not a stable thing to assert: a
+`screenshot` with no arguments decodes to the window's `inner_size`, one of a
+panel decodes smaller in both axes, `max_dimension` bounds the longer side, the
+render target is inside the `viewer_3d` crop and within a body margin of it, and
+a panel that is closed or behind a sibling is refused by the real viewer with
+the message the headless tests specify. What the headless tests assert about the
+tool is everything before the pixels: that it defers, what it defers with, that
+it refuses a minimized window, and that its caption is built while the state is
+still borrowed.
+
+**A `set_window_layout` window portion against a real window** is not covered:
+maximize, read back `maximized`, restore, read back the original inner size —
+the round trip, not pixel positions, since where a window manager actually puts
+a window is its business. What `ui_basic` does cover of the document is the
+startup load ([panel-layout.md](panel-layout.md) § "Testing").
 
 ## Editing reconstruction data
 
@@ -1562,7 +1830,6 @@ Other candidates, in rough order of value:
   or opens a file, so an agent watching alongside a human stays in step. This is
   the one feature that needs SSE, which is why the server can answer every
   request with `application/json` today.
-- **Full-window screenshot**, including the panels (§ "screenshot").
 - **`run_align`**, exposing the Scene panel's `Align to…` — a real operation
   with a real answer, and the natural next verb after the read surface.
 
@@ -1592,9 +1859,6 @@ Other candidates, in rough order of value:
   that wants the other monitor reads `monitors` and sends a position on it.
 - **No exclusive fullscreen.** `fullscreen` is `Fullscreen::Borderless(None)`,
   on the current monitor. Video modes are a different feature.
-- **No full-window screenshot.** Now that an agent can arrange the panels it
-  will want to see them, but that is the renderer change listed under § "Loose
-  images, and the names held for them" rather than part of this surface.
 
 ## Parameters
 
@@ -1603,7 +1867,9 @@ Other candidates, in rough order of value:
 | `--mcp PORT` | `8787` (`cli::DEFAULT_MCP_PORT`) | The loopback port to bind. `0` takes an ephemeral one, printed at startup. |
 | `list_camera_images` `limit` | `50` (`read::DEFAULT_LIMIT`) | Rows per page. |
 | `list_camera_images` `limit` cap | `500` (`read::MAX_LIMIT`) | The most one call will return, whatever it asked for. |
-| `screenshot` `max_dimension` | none — native viewport size | Longest side of the returned PNG. |
+| `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. |
+| `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. |
+| `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
 
@@ -1616,13 +1882,11 @@ Other candidates, in rough order of value:
 - **Should the human be able to turn it off?** A `Help ▸ MCP` menu item showing
   the endpoint and a Stop button costs little and is the honest counterpart to
   the title-bar announcement.
-- **Screenshot resolution policy.** Native viewport size can be a 4K PNG, which
-  is a lot of tokens. `max_dimension` defaulting to something like 1280 might
+- **Screenshot resolution policy.** A native-size window on a 4K display is a
+  lot of tokens. `max_dimension` defaulting to something like 1280 might
   serve agents better than defaulting to native — but a downscaled screenshot is
   a worse answer to "is this point cloud noisy". Decide with a real agent in the
   loop.
-- **`screenshot` has no test that renders a frame** (§ "Testing"). It belongs in
-  `ui_basic`, which runs on Windows and macOS only.
 - **Should `get_scene` carry `window` at all?** It costs a few lines in every
   `get_scene` reply and saves an agent one call before deciding whether to
   screenshot. Kept for now, alongside `window_title`, which it subsumes; drop it
@@ -1635,8 +1899,17 @@ Other candidates, in rough order of value:
   { path, exists }`), so an agent can tell the human where to save the document
   it just read. Two fields; add if an agent asks.
 - **Window and layout notifications.** The human resizing the window or dragging
-  a tab is still something the agent learns by asking. Same gap as selection
-  changes, same answer.
+  a tab reaches the agent only where the Action Log records it, which the dock
+  rearrangements deliberately are not ([action-log.md](action-log.md)); a resize
+  is still something the agent learns by asking. Same gap as selection changes,
+  same answer.
+- **An intermediate render target** if a platform's surface refuses `COPY_SRC`.
+  None of the three supported backends has, and a per-frame blit for a case that
+  has not arisen is the wrong trade until it does.
+- **Should a panel screenshot include its tab bar?** The body is what the panel
+  shows; the tab bar is the same seven words every time. Excluded; include it if
+  an agent needs to see which tab is in front, which `get_window_layout`'s
+  `panels` already says.
 - **Whether `set_view` should expose the HUD's display controls** (point size,
   EDL thickness, patch opacity). They change what a screenshot shows, so an
   agent evaluating a reconstruction may want them; they are also a long tail of

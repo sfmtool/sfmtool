@@ -34,6 +34,11 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         "solo": state.solo.and_then(|id| label_of(state, id)),
         "view": view(state, viewer),
         "status_message": state.status_message(),
+        // The Action Log's clock, so an agent that already reads `get_scene`
+        // knows whether anything has happened since its last `get_action_log`
+        // without a second call. `status_message` stays beside it: the status
+        // line is one row of the log, which is a different thing from the log.
+        "action_log_revision": state.action_log.revision(),
         "window_title": state.window_title(),
         // The window itself, from the snapshot the frame refreshes — `null`
         // before there is a window to observe. Beside `window_title`, which it

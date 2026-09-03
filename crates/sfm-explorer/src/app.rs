@@ -252,6 +252,15 @@ impl App {
             &screen_descriptor,
         );
 
+        // The frame the human is about to see, copied off the surface for a
+        // pending `screenshot` of the window or of a panel. Here and nowhere
+        // else: after the egui pass, so the picture has every panel in it, and
+        // before the present, because a surface texture handed back to the
+        // presentation engine is no longer readable. Nothing is encoded in a
+        // frame with no such screenshot waiting.
+        #[cfg(feature = "mcp")]
+        let surface_copy = self.encode_screenshot_copy(&device, &mut encoder, &output.texture);
+
         // Submit
         let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
         cmd_bufs.push(encoder.finish());
@@ -265,7 +274,7 @@ impl App {
         // happened. After the present, so what is read back is the image the
         // human is looking at right now.
         #[cfg(feature = "mcp")]
-        self.resolve_mcp_deferred(&device, &queue);
+        self.resolve_mcp_deferred(&device, &queue, surface_copy);
 
         // Free textures released by egui this frame.
         let renderer = self.egui_renderer.as_mut().unwrap();

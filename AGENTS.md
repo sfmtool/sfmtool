@@ -209,9 +209,9 @@ backlog and keep them honest as findings get addressed:
 - **The viewer can be driven over MCP, and an agent may own its lifecycle.**
   `pixi run gui-mcp <file>.sfmr` hosts a Model Context Protocol endpoint on
   `127.0.0.1:8787` for reading the scene graph, moving the selection and the 3D
-  camera, and **screenshotting the viewport** — usually the fastest way to find
-  out whether a solve is wrong and *where*. Off unless asked for; see
-  `specs/gui/mcp-server.md`.
+  camera, reading the Action Log back, and **screenshotting the window or any
+  panel in it** — usually the fastest way to find out whether a solve is wrong
+  and *where*. Off unless asked for; see `specs/gui/mcp-server.md`.
 
   Setup is a human's job, exactly once, because Claude Code binds its MCP
   servers when a session starts:

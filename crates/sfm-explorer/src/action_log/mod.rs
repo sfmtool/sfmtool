@@ -23,6 +23,13 @@
 //!   for screenshots stays one line. Failures are exempt, which is why the log
 //!   is a readable record rather than an audit trail.
 
+// Several things here exist for the MCP surface, which is a Cargo feature: the
+// wire spellings of a kind and an actor, the revision clock `get_action_log`
+// reads, and the `query` entry the drain writes. In a `--no-default-features`
+// build nothing calls them, which is a property of that build rather than a
+// loose end here.
+#![cfg_attr(not(feature = "mcp"), allow(dead_code))]
+
 use std::collections::VecDeque;
 
 use jiff::tz::TimeZone;
@@ -47,6 +54,9 @@ pub(crate) enum Actor {
 }
 
 impl Actor {
+    /// Every actor, in the order an error message lists them.
+    pub(crate) const ALL: [Actor; 3] = [Actor::User, Actor::Mcp, Actor::Viewer];
+
     /// The word the actor column shows, and the clipboard export writes.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -54,6 +64,31 @@ impl Actor {
             Actor::Mcp => "MCP",
             Actor::Viewer => "Viewer",
         }
+    }
+
+    /// The actor's name on the wire: its column word, lower-cased.
+    pub(crate) fn wire_name(self) -> &'static str {
+        match self {
+            Actor::User => "user",
+            Actor::Mcp => "mcp",
+            Actor::Viewer => "viewer",
+        }
+    }
+
+    /// The actor `name` spells, or `None`. Exact: `"User"` is not an actor.
+    pub(crate) fn from_wire_name(name: &str) -> Option<Actor> {
+        Actor::ALL
+            .into_iter()
+            .find(|actor| actor.wire_name() == name)
+    }
+
+    /// Every actor name, as an error message lists them.
+    pub(crate) fn all_wire_names() -> String {
+        Actor::ALL
+            .iter()
+            .map(|actor| actor.wire_name())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -101,6 +136,28 @@ impl Kind {
         }
     }
 
+    /// The kind's name on the wire: [`Kind::label`] lower-cased, with every
+    /// query under the one word `query`.
+    ///
+    /// A query's tool travels beside the kind rather than inside it — a reply
+    /// row carries `"kind": "query"` and `"tool": "get_scene"` — so that an
+    /// agent filtering or grouping by kind has a closed vocabulary rather than
+    /// one that grows with the tool table.
+    pub(crate) fn wire_name(self) -> &'static str {
+        match self {
+            Kind::Session => "session",
+            Kind::File => "file",
+            Kind::Selection => "selection",
+            Kind::Scene => "scene",
+            Kind::View => "view",
+            Kind::Display => "display",
+            Kind::Animation => "animation",
+            Kind::Layout => "layout",
+            Kind::Window => "window",
+            Kind::Query(_) => "query",
+        }
+    }
+
     /// Whether a run of entries of this kind folds into one.
     ///
     /// The continuous kinds do: a selection scrub, a camera framing, a slider
@@ -124,6 +181,14 @@ impl Kind {
 /// One line of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
+    /// The revision at which this entry was written or last replaced.
+    ///
+    /// Strictly increasing along the buffer, because the only two writes are a
+    /// push of a fresh highest revision and a coalescing replacement of the
+    /// newest entry with one. That ordering is what lets
+    /// [`ActionLog::since`] stop as soon as it reaches an entry the caller has
+    /// already seen.
+    pub revision: u64,
     /// When it was recorded. Wall clock, because the log's job is to be read
     /// next to something else — an agent's transcript, a CI log, a screen
     /// recording — and only wall-clock time lines those up.
@@ -149,6 +214,15 @@ pub(crate) struct ActionLog {
     zone: TimeZone,
     /// How many entries have been dropped off the front at [`ActionLog::CAPACITY`].
     dropped: usize,
+    /// The log's clock: one tick per write, whether the write appended an
+    /// entry or folded into the newest one.
+    ///
+    /// A timestamp could not stand in for it — two entries can share an
+    /// instant, and a fold moves an entry's time to the newest of the run,
+    /// which is precisely the change a reader has to be told about. Never
+    /// reset, [`ActionLog::clear`] included, so a revision an agent is holding
+    /// stays comparable for the life of the session.
+    revision: u64,
 }
 
 impl ActionLog {
@@ -173,6 +247,7 @@ impl ActionLog {
             mute: 0,
             zone,
             dropped: 0,
+            revision: 0,
         }
     }
 
@@ -245,7 +320,11 @@ impl ActionLog {
         if self.mute > 0 {
             return;
         }
+        // One tick per write, in both branches below: an entry a run folded
+        // into is as new to a reader as one that was appended.
+        self.revision += 1;
         let entry = Entry {
+            revision: self.revision,
             at,
             actor: self.actor,
             kind,
@@ -314,6 +393,42 @@ impl ActionLog {
         self.entries.iter()
     }
 
+    /// The counter now: the revision of the newest write.
+    ///
+    /// Sent to an agent as `revision` and handed back as `since_revision`, so
+    /// that a reader can ask for exactly what it has not seen.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The entries whose revision is above `since`, oldest first.
+    ///
+    /// Walks from the back and stops at the first entry the caller has already
+    /// seen, which entry order makes sound and which makes a poll that finds
+    /// nothing O(1).
+    pub(crate) fn since(&self, since: u64) -> impl ExactSizeIterator<Item = &Entry> {
+        let fresh = self
+            .entries
+            .iter()
+            .rev()
+            .take_while(|entry| entry.revision > since)
+            .count();
+        self.entries.iter().skip(self.entries.len() - fresh)
+    }
+
+    /// The revision of the oldest entry still held, or [`ActionLog::revision`]
+    /// when the log is empty.
+    ///
+    /// A reader whose `since_revision` is below this has missed entries — to
+    /// [`ActionLog::CAPACITY`], or to the toolbar's Clear — and can say so
+    /// rather than assume the gap was quiet.
+    pub(crate) fn oldest_revision(&self) -> u64 {
+        self.entries
+            .front()
+            .map(|entry| entry.revision)
+            .unwrap_or(self.revision)
+    }
+
     /// One entry by position, oldest first — what the virtualized list asks
     /// for, since it lays out a slice of the rows and not all of them.
     pub(crate) fn get(&self, index: usize) -> Option<&Entry> {
@@ -332,6 +447,11 @@ impl ActionLog {
 
     /// Empty the log. Also empties the viewport status line, which is a view of
     /// it.
+    ///
+    /// The revision counter is left alone: an agent holding a revision from
+    /// before a Clear should learn that entries went missing, which
+    /// [`ActionLog::oldest_revision`] tells it, rather than be handed a
+    /// rewound clock that makes the gap look quiet.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.dropped = 0;
@@ -385,6 +505,15 @@ impl ActionLog {
     /// `at` in this log's zone, through `jiff`'s `strftime`.
     pub(crate) fn format(&self, at: Timestamp, fmt: &str) -> String {
         at.to_zoned(self.zone.clone()).strftime(fmt).to_string()
+    }
+
+    /// `at` as RFC 3339 in this log's zone, to the millisecond:
+    /// `2026-09-02T12:41:07.123-07:00`.
+    ///
+    /// The zone the panel formats in rather than UTC, so a time an agent reads
+    /// off the wire is the time the human beside it is reading off the row.
+    pub(crate) fn format_rfc3339(&self, at: Timestamp) -> String {
+        self.format(at, "%Y-%m-%dT%H:%M:%S%.3f%:z")
     }
 }
 

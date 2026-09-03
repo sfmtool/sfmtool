@@ -63,7 +63,7 @@ monospace font, oldest at the top, newest at the bottom:
 14:04:02  MCP     get_scene
 14:04:02  MCP     Opened global from C:\data\global.sfmr
 14:04:03  MCP     Aligned global → seoul_bull: 15/17 cameras, RMS 0.031
-14:04:05  MCP     screenshot 1280×720
+14:04:05  MCP     screenshot viewer_3d 1280×720
 14:04:19  MCP     select_camera_image failed: No loaded reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`.
 14:05:10  User    Closed all (2)
 ```
@@ -183,7 +183,7 @@ strings, with `{…}` for the values that vary.
 | Layout | no | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
 | Layout | no | MCP | `Set layout` / `Reset layout` — the panel portion of a `set_window_layout`, which `apply_window_layout` leaves to its caller to word |
 | Window | no | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
-| Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_window_layout` / `screenshot {w}×{h}` |
+| Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target |
 | any | never | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
 
 Rules that the table implies:
@@ -260,6 +260,17 @@ Coalescing is decided at record time and is not reversible; the entries it
 replaces are gone. This is deliberate — the log is a readable record, not an
 audit trail — and is the reason failures are exempt.
 
+**A fold takes a fresh revision.** The log keeps a counter that goes up by one
+on every write, appended or folded, and stamps the entry it wrote
+(`Entry::revision`). A replacement therefore lifts the surviving entry above
+every other, because a fold is a *change* to a line a reader may already have
+read: its text and its time are both the newest of the run, and a reader asking
+for what it has not seen must be told. Nothing else touches the counter —
+`clear` included, so a revision an agent is holding stays comparable for the
+life of the session. This is what `get_action_log`'s `since_revision` is
+measured against ([mcp-server.md](mcp-server.md) § "get_action_log"); a
+timestamp could not serve, because two entries can share an instant.
+
 ## Timestamps
 
 Each entry carries a `jiff::Timestamp`, the instant it was recorded, and the
@@ -323,10 +334,24 @@ impl Kind {
     pub(crate) fn coalesces(self) -> bool;
     /// The word the row tooltip shows; for a query, the tool's name.
     pub(crate) fn label(self) -> &'static str;
+    /// The word the MCP wire uses: `label` lower-cased, every query under the
+    /// one word `query`, with the tool travelling beside it.
+    pub(crate) fn wire_name(self) -> &'static str;
+}
+
+impl Actor {
+    pub(crate) const ALL: [Actor; 3];
+    pub(crate) fn label(self) -> &'static str;
+    /// `user`, `mcp`, `viewer` — what the MCP `actors` filter takes.
+    pub(crate) fn wire_name(self) -> &'static str;
+    pub(crate) fn from_wire_name(name: &str) -> Option<Actor>;
+    pub(crate) fn all_wire_names() -> String;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
+    /// The revision at which this entry was written or last replaced.
+    pub revision: u64,
     pub at: jiff::Timestamp,
     pub actor: Actor,
     pub kind: Kind,
@@ -334,7 +359,7 @@ pub(crate) struct Entry {
     pub text: String,
 }
 
-pub(crate) struct ActionLog { /* VecDeque<Entry>, the current actor, a mute depth, the zone, a dropped count */ }
+pub(crate) struct ActionLog { /* VecDeque<Entry>, the current actor, a mute depth, the zone, a dropped count, the revision counter */ }
 
 impl ActionLog {
     pub(crate) const CAPACITY: usize = 10_000;
@@ -374,7 +399,15 @@ impl ActionLog {
     pub(crate) fn get(&self, index: usize) -> Option<&Entry>;
     pub(crate) fn len(&self) -> usize;
     pub(crate) fn dropped(&self) -> usize;
+    /// Empty the buffer. The revision counter is left alone.
     pub(crate) fn clear(&mut self);
+
+    /// The counter now: the revision of the newest write.
+    pub(crate) fn revision(&self) -> u64;
+    /// Entries with `revision > since`, oldest first.
+    pub(crate) fn since(&self, since: u64) -> impl ExactSizeIterator<Item = &Entry>;
+    /// The revision of the oldest entry held, or `revision()` when empty.
+    pub(crate) fn oldest_revision(&self) -> u64;
 
     /// The most recent entry that is not a successful query, as the status line shows it:
     /// prefixed `MCP: ` when its actor is `Mcp`.
@@ -386,6 +419,9 @@ impl ActionLog {
     pub(crate) fn line(&self, entry: &Entry) -> String;
     /// `at` in this log's zone, through `jiff`'s `strftime`.
     pub(crate) fn format(&self, at: jiff::Timestamp, fmt: &str) -> String;
+    /// `at` as RFC 3339 in this log's zone, to the millisecond — what the MCP
+    /// read puts on the wire, in the zone the panel formats in.
+    pub(crate) fn format_rfc3339(&self, at: jiff::Timestamp) -> String;
 }
 
 /// The panel body. Draws the toolbar and the virtualized list into `ui`.
@@ -512,10 +548,10 @@ coalescing, with the one exception named above (a multi-field
   calls, with the text from the catalogue and actor `Mcp` because the drain
   set it. The tool itself writes nothing on success.
 - A read-only tool's entry is written by the drain from the command, as a
-  `Query` — `get_scene`, `screenshot 1280×720`, and so on — because there is
-  no state method for a read to log through. A deferred screenshot logs when it
-  is *applied* (the frame the request was drained), not when the pixels come
-  back, so its line appears in order with the commands around it.
+  `Query` — `get_scene`, `screenshot window 1920×1080`, and so on — because
+  there is no state method for a read to log through. A deferred screenshot logs
+  when it is *applied* (the frame the request was drained), not when the pixels
+  come back, so its line appears in order with the commands around it.
 - A refusal — `apply` returning a tool error — is written by the drain as a
   failed entry, `{tool} failed: {message}`, with the same message the agent
   receives. So that a failure is not logged twice, once by the method in its
@@ -531,10 +567,21 @@ coalescing, with the one exception named above (a multi-field
   the `Align … failed` and `Resect … refused` rows are logged by the methods
   themselves because no MCP tool calls them.
 
-`get_scene` continues to report `status_message`, now from
-`AppState::status_message()`. Its value is the newest entry that is not a successful query, so an
-agent reading it back after its own mutating call sees that call, as the
-spec already promises.
+`get_scene` reports `status_message` from `AppState::status_message()`. Its
+value is the newest entry that is not a successful query, so an agent reading it
+back after its own mutating call sees that call.
+
+**The log is also readable over MCP**, whole rather than one row at a time:
+`get_action_log` returns the entries above a revision, filtered by actor, each
+with its `revision`, its time as RFC 3339 in the panel's zone, its actor and
+kind as wire names, whether it failed, and its text
+([mcp-server.md](mcp-server.md) § "get_action_log"). It is itself a `Query`
+entry, `get_action_log since {n}`, recorded after its reply is built — so a call
+never reports itself and always reports the one before it. `get_scene` carries
+`action_log_revision` beside `status_message`, so an agent that already polls it
+knows whether anything has happened without a second call. Nothing about the log
+changes for the read: it is `since`, `revision` and `oldest_revision` over the
+same buffer the panel draws, on the same thread.
 
 ## Implementation notes
 
@@ -632,7 +679,23 @@ Buffer rules, with `record_at` and fixed instants:
   `MCP: ` exactly when the actor is `Mcp`.
 - `mute` nests: two `mute`s and one `unmute` still record nothing.
 - `to_clipboard_text` renders a fixed zone (`TimeZone::fixed(-7 h)`) as
-  `2026-09-01 14:04:03  MCP     text`, and a failed entry as `MCP   ! text`.
+  `2026-09-01 14:04:03  MCP     text`, and a failed entry as `MCP   ! text`;
+  `format_rfc3339` renders the same instant as
+  `2026-09-01T14:04:03.250-07:00`.
+
+Revisions, the clock the MCP read is measured against:
+
+- Every record ticks the counter by one and stamps the entry, so revisions are
+  strictly increasing along the buffer; a coalescing replacement takes a fresh
+  revision, above every other, rather than keeping the replaced entry's.
+- `since(n)` returns exactly the entries above `n`, oldest first, nothing for
+  `since(revision())`, and the whole log for `since(0)`; an entry a run folded
+  into comes back into view.
+- `oldest_revision()` follows what is still held — the third entry's after two
+  are dropped at `CAPACITY` — and `clear` empties the buffer while leaving the
+  counter where it was, so the next entry continues the sequence.
+- Every `Kind` and every `Actor` has a wire name, and no two share one;
+  `from_wire_name` is exact, so `"User"` is not an actor.
 
 Panel, headless:
 
@@ -651,8 +714,11 @@ exercise a path the viewer never takes:
   and the actor is `User` again afterwards.
 - Applying each read-only `Command` records one `Query` entry that
   `status_line()` does not report.
-- A deferred `screenshot` is logged when it is *applied*, at the size the
-  picture will come back at.
+- A deferred `screenshot` is logged when it is *applied*, naming what it will
+  photograph and at the size the picture will come back at.
+- `get_action_log` records itself as a `Query`, `get_action_log since {n}`,
+  and a repeat of it coalesces into one row; its `actors` filter separates the
+  human's rows from the agent's over a log that holds both.
 - A refused command records one failed entry whose text is the refusal, and it
   reaches the status line.
 - `open_reconstruction` on an unreadable path records exactly one failed entry.
@@ -676,9 +742,12 @@ Scene-graph and resection tests that read `state.status_message` moved to
 - **Persistence.** The log is per session and lives in memory; **Copy** is the
   export. A file sink is the `log` crate's job, and the `log::info!` mirror
   gives it the same stream.
-- **Filtering and search.** At 10 000 entries and one second of coalescing the
-  list is scrollable; an actor filter is the obvious first addition if it stops
-  being.
+- **Filtering and search in the panel.** At 10 000 entries and one second of
+  coalescing the list is scrollable; an actor filter is the obvious first
+  addition if it stops being. The *wire* has one — `get_action_log`'s `actors`
+  — because an agent reading the log is nearly always asking the one question
+  the panel's reader is not: what did the human do, with none of my own rows in
+  it. Scrolling past a row costs a human nothing and costs an agent tokens.
 - **Raising the tab on a failure.** The status line already puts the failure
   on the viewport; raising a tab the user may have docked elsewhere would move
   their layout under them.

@@ -94,6 +94,33 @@ fn two_reconstructions() -> (AppState, Viewer3D) {
     (state, viewer)
 }
 
+/// A `screenshot` command spelled out, since three of its fields are optional
+/// and most tests care about one of them.
+fn screenshot(panel: Option<Tab>, hud: bool, max_dimension: Option<u32>) -> Command {
+    Command::Screenshot {
+        panel,
+        hud,
+        max_dimension,
+    }
+}
+
+/// The `Deferred::Screenshot` a command produced, or a panic saying it did not
+/// defer.
+#[track_caller]
+fn deferred_screenshot(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    command: Command,
+) -> (super::ScreenshotSource, String) {
+    match agent(state, viewer, command) {
+        Outcome::Deferred(super::Deferred::Screenshot {
+            source, caption, ..
+        }) => (source, caption),
+        Outcome::Done(Ok(_)) => panic!("a screenshot must defer, not answer in the frame"),
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+    }
+}
+
 /// Apply one command the way the frame does — as the agent, with the Action Log
 /// entries that go with it.
 ///
@@ -1270,30 +1297,22 @@ fn each_read_only_command_records_a_query_the_status_line_ignores() {
 fn a_deferred_screenshot_is_logged_when_it_is_drained() {
     let (mut state, mut viewer) = quiet_scene();
     viewer.panel_size = [1280, 720];
-    let outcome = agent(
-        &mut state,
-        &mut viewer,
-        Command::Screenshot {
-            max_dimension: None,
-        },
-    );
+    let outcome = agent(&mut state, &mut viewer, screenshot(None, true, None));
     assert!(matches!(outcome, Outcome::Deferred(_)), "not deferred");
     let entries: Vec<_> = state.action_log.entries().collect();
     assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0].text, "screenshot 1280×720", "{entries:?}");
+    // The window, at the size the window snapshot reports.
+    assert_eq!(
+        entries[0].text, "screenshot window 1920×1080",
+        "{entries:?}"
+    );
     // …and `max_dimension` is reported at the size the picture comes back at.
     let (mut state, mut viewer) = quiet_scene();
     viewer.panel_size = [1280, 720];
-    agent(
-        &mut state,
-        &mut viewer,
-        Command::Screenshot {
-            max_dimension: Some(640),
-        },
-    );
+    agent(&mut state, &mut viewer, screenshot(None, true, Some(640)));
     assert_eq!(
         state.action_log.entries().next().expect("an entry").text,
-        "screenshot 640×360"
+        "screenshot window 640×360"
     );
 }
 
@@ -1344,6 +1363,421 @@ fn open_reconstruction_on_an_unreadable_path_records_one_failed_entry() {
             .text
             .starts_with("open_reconstruction failed: Failed to load "),
         "{entries:?}"
+    );
+}
+
+// ── Reading the Action Log back ─────────────────────────────────────────
+
+/// A `get_action_log` command with every field spelled out.
+fn action_log_read(since_revision: u64, actors: &[Actor]) -> Command {
+    Command::GetActionLog {
+        since_revision,
+        limit: super::read::ACTION_LOG_DEFAULT_LIMIT,
+        actors: actors.to_vec(),
+    }
+}
+
+/// Every entry text in a `get_action_log` reply, oldest first.
+fn log_texts(reply: &Value) -> Vec<&str> {
+    reply["entries"]
+        .as_array()
+        .expect("entries is an array")
+        .iter()
+        .map(|entry| entry["text"].as_str().expect("a text"))
+        .collect()
+}
+
+/// The reply is a transcript: oldest first, each row saying when, who, what
+/// kind and whether it failed, with the log's clock beside it.
+#[test]
+fn the_action_log_read_returns_a_transcript_with_the_clock_beside_it() {
+    let (mut state, mut viewer) = quiet_scene();
+    state
+        .action_log
+        .record(Kind::File, "Opened alpha from /runs/alpha.sfmr");
+    let expected_revision = state.action_log.revision();
+    let reply = ok(&mut state, &mut viewer, action_log_read(0, &Actor::ALL));
+
+    assert_eq!(reply["revision"], json!(expected_revision));
+    assert_eq!(reply["oldest_revision"], json!(expected_revision));
+    assert_eq!(reply["truncated"], json!(false));
+    let entries = reply["entries"].as_array().expect("an array");
+    assert_eq!(entries.len(), 1, "{reply}");
+    let row = &entries[0];
+    assert_eq!(row["revision"], json!(expected_revision));
+    assert_eq!(row["actor"], "user");
+    assert_eq!(row["kind"], "file");
+    assert_eq!(row["failed"], json!(false));
+    assert_eq!(row["text"], "Opened alpha from /runs/alpha.sfmr");
+    assert!(row["tool"].is_null(), "only a query row carries a tool");
+    // RFC 3339 in the panel's zone, so the agent's time and the human's row
+    // are the same time.
+    let at = row["at"].as_str().expect("a timestamp");
+    assert!(at.len() >= 24 && at.contains('T'), "{at}");
+}
+
+/// The read an agent makes most: what the human did, with none of the agent's
+/// own rows in it.
+#[test]
+fn the_actors_filter_separates_the_human_from_the_agent() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.action_log.record(Kind::Selection, "Selected image a");
+    ok(
+        &mut state,
+        &mut viewer,
+        Command::SelectReconstruction {
+            reconstruction_label: "beta".into(),
+        },
+    );
+    ok(&mut state, &mut viewer, Command::GetScene);
+
+    let human = ok(&mut state, &mut viewer, action_log_read(0, &[Actor::User]));
+    assert_eq!(log_texts(&human), ["Selected image a"]);
+
+    let agent_rows = ok(&mut state, &mut viewer, action_log_read(0, &[Actor::Mcp]));
+    let entries = agent_rows["entries"].as_array().expect("an array");
+    assert_eq!(
+        log_texts(&agent_rows),
+        [
+            "Selected reconstruction beta",
+            "get_scene",
+            // The human's read above was the agent's own call, and a read of
+            // the log that the log did not record would be the one action the
+            // human could not see.
+            "get_action_log since 0",
+        ],
+        "the agent audits itself, queries included"
+    );
+    // A query row carries its tool beside the kind, which stays the one word.
+    assert_eq!(entries[1]["kind"], "query");
+    assert_eq!(entries[1]["tool"], "get_scene");
+    assert!(entries[0]["tool"].is_null());
+
+    // Omitted, the filter is every actor, which is the whole log.
+    let all = call(&mut state, &mut viewer, "get_action_log", json!({}));
+    assert_eq!(all["entries"].as_array().expect("an array").len(), 4);
+}
+
+/// A call that can return nothing by construction has asked no question, and a
+/// misspelled actor is a typo rather than a filter.
+#[test]
+fn an_empty_or_unknown_actors_list_is_refused_at_the_parse() {
+    let (mut state, mut viewer) = quiet_scene();
+    let empty = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_action_log",
+        json!({ "actors": [] }),
+    );
+    assert!(empty.0.contains("empty actors"), "{empty}");
+    assert!(
+        empty.0.contains("user") && empty.0.contains("mcp"),
+        "{empty}"
+    );
+
+    let unknown = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_action_log",
+        json!({ "actors": ["human"] }),
+    );
+    assert!(unknown.0.contains("\"human\""), "{unknown}");
+    assert!(unknown.0.contains("viewer"), "{unknown}");
+}
+
+/// Past `limit` the reply says so, and the last entry's revision is where the
+/// next call picks up.
+#[test]
+fn the_read_truncates_at_its_limit_and_continues_from_the_last_revision() {
+    let (mut state, mut viewer) = quiet_scene();
+    for i in 0..5 {
+        state.action_log.record(Kind::File, format!("Opened {i}"));
+    }
+    let first = ok(
+        &mut state,
+        &mut viewer,
+        Command::GetActionLog {
+            since_revision: 0,
+            limit: 2,
+            actors: Actor::ALL.to_vec(),
+        },
+    );
+    assert_eq!(log_texts(&first), ["Opened 0", "Opened 1"]);
+    assert_eq!(first["truncated"], json!(true));
+
+    let from = first["entries"][1]["revision"]
+        .as_u64()
+        .expect("a revision");
+    let rest = ok(
+        &mut state,
+        &mut viewer,
+        action_log_read(from, &[Actor::User]),
+    );
+    assert_eq!(log_texts(&rest), ["Opened 2", "Opened 3", "Opened 4"]);
+    assert_eq!(rest["truncated"], json!(false));
+
+    // A reader that is up to date is told nothing, which is the poll that
+    // costs nothing. Under `["user"]`, which is what keeps the agent's own
+    // polling rows out of the answer.
+    let caught_up = ok(
+        &mut state,
+        &mut viewer,
+        action_log_read(
+            rest["revision"].as_u64().expect("a revision"),
+            &[Actor::User],
+        ),
+    );
+    assert_eq!(log_texts(&caught_up), Vec::<&str>::new());
+}
+
+/// A limit above the cap is capped rather than honoured: the surface is not a
+/// data channel.
+#[test]
+fn a_limit_above_the_cap_is_capped() {
+    let (mut state, mut viewer) = quiet_scene();
+    for i in 0..super::read::ACTION_LOG_MAX_LIMIT + 5 {
+        state.action_log.record(Kind::File, format!("Opened {i}"));
+    }
+    let reply = ok(
+        &mut state,
+        &mut viewer,
+        Command::GetActionLog {
+            since_revision: 0,
+            limit: 100_000,
+            actors: Actor::ALL.to_vec(),
+        },
+    );
+    assert_eq!(
+        reply["entries"].as_array().expect("an array").len(),
+        super::read::ACTION_LOG_MAX_LIMIT
+    );
+    assert_eq!(reply["truncated"], json!(true));
+}
+
+/// A read of the log that the log did not record would be the one action the
+/// human could not see.
+#[test]
+fn the_action_log_read_records_itself_as_a_query() {
+    let (mut state, mut viewer) = quiet_scene();
+    ok(&mut state, &mut viewer, action_log_read(512, &Actor::ALL));
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Query("get_action_log"));
+    assert_eq!(entries[0].actor, Actor::Mcp);
+    assert_eq!(entries[0].text, "get_action_log since 512");
+    // A poll is one row however often it asks, like every other read.
+    ok(&mut state, &mut viewer, action_log_read(512, &Actor::ALL));
+    assert_eq!(state.action_log.entries().count(), 1);
+}
+
+/// One field on `get_scene`, so an agent that already polls it knows whether
+/// anything happened without a second call.
+#[test]
+fn get_scene_carries_the_action_log_revision() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.action_log.record(Kind::File, "Opened alpha");
+    let expected = state.action_log.revision();
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(scene["action_log_revision"], json!(expected));
+    assert!(
+        scene["status_message"].is_string(),
+        "the status line is a different thing from the log and stays: {scene}"
+    );
+}
+
+// ── Screenshots of the window and of a panel ────────────────────────────
+
+/// Give a panel's node the body rectangle a frame's egui pass would have laid
+/// out, since a headless dock has never been drawn.
+fn lay_out(state: &mut AppState, panel: Tab, rect: egui::Rect) {
+    let path = state.dock.find_tab(&panel).expect("the panel is docked");
+    state
+        .dock
+        .leaf_mut(path.node_path())
+        .expect("the path names a leaf")
+        .viewport = rect;
+}
+
+/// A 320 × 180 point body at (100, 40), which at the fixture's scale factor of
+/// 1.5 is 480 × 270 physical pixels at (150, 60).
+fn body() -> egui::Rect {
+    egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(320.0, 180.0))
+}
+
+/// No panel is the whole window, at the size the window snapshot reports, with
+/// the frame description kept because the 3D view is in the picture.
+#[test]
+fn a_screenshot_with_no_panel_photographs_the_window() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let (source, caption) =
+        deferred_screenshot(&mut state, &mut viewer, screenshot(None, true, None));
+    assert_eq!(source, super::ScreenshotSource::Window);
+    assert!(caption.starts_with("The window, 1920×1080."), "{caption}");
+    assert!(caption.contains("alpha"), "{caption}");
+}
+
+/// A panel defers with its tab — the rectangle is resolved at readback, not
+/// here — and its caption and log line name the panel and its last laid-out
+/// size.
+#[test]
+fn a_screenshot_of_a_panel_defers_with_the_tab_and_names_it() {
+    let (mut state, mut viewer) = quiet_scene();
+    lay_out(&mut state, Tab::ImageDetail, body());
+    let (source, caption) = deferred_screenshot(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::ImageDetail), true, None),
+    );
+    assert_eq!(source, super::ScreenshotSource::Panel(Tab::ImageDetail));
+    assert_eq!(caption, "The Image Detail panel, 480×270.");
+    assert_eq!(
+        state.action_log.entries().next().expect("an entry").text,
+        "screenshot image_detail 480×270"
+    );
+}
+
+/// The 3D Viewer's crop keeps the frame description, because that picture is
+/// of the scene.
+#[test]
+fn a_screenshot_of_the_viewport_keeps_the_frame_description() {
+    let (mut state, mut viewer) = two_reconstructions();
+    lay_out(&mut state, Tab::Viewer3D, body());
+    let (source, caption) = deferred_screenshot(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::Viewer3D), true, None),
+    );
+    assert_eq!(source, super::ScreenshotSource::Panel(Tab::Viewer3D));
+    assert!(
+        caption.starts_with("The 3D Viewer panel, 480×270."),
+        "{caption}"
+    );
+    assert!(caption.contains("points"), "{caption}");
+}
+
+/// A panel that is not drawn cannot be photographed, and the two ways that
+/// happens have two different fixes.
+#[test]
+fn a_panel_that_is_not_drawn_is_refused_naming_show_panel() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.hide_panel(Tab::ActionLog);
+    let closed = refused(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::ActionLog), true, None),
+    );
+    assert!(closed.0.contains("closed"), "{closed}");
+    assert!(closed.0.contains("show_panel"), "{closed}");
+    assert!(closed.0.contains("action_log"), "{closed}");
+
+    // Behind a sibling: a picture of it would be a picture of the tab in
+    // front, so the refusal names that tab too.
+    let behind = refused(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::PointTrackDetail), true, None),
+    );
+    assert!(behind.0.contains("Image Detail"), "{behind}");
+    assert!(behind.0.contains("show_panel"), "{behind}");
+
+    // An unknown name is the panel vocabulary's own refusal, listing all seven.
+    let unknown = refused_call(
+        &mut state,
+        &mut viewer,
+        "screenshot",
+        json!({ "panel_name": "viewport" }),
+    );
+    assert!(unknown.0.contains("viewer_3d") && unknown.0.contains("action_log"));
+}
+
+/// Both checks are against the dock at *apply* time, so a `show_panel` earlier
+/// in the same batch satisfies them.
+#[test]
+fn show_panel_then_a_screenshot_of_it_is_accepted_in_one_batch() {
+    let (mut state, mut viewer) = quiet_scene();
+    let outcomes = apply_as_agent(
+        &mut state,
+        &mut viewer,
+        &mut NoWindow,
+        vec![
+            Command::ShowPanel {
+                panel: Tab::PointTrackDetail,
+            },
+            screenshot(Some(Tab::PointTrackDetail), true, None),
+        ],
+    );
+    assert!(
+        matches!(outcomes[1], Outcome::Deferred(_)),
+        "the raised panel was still refused"
+    );
+}
+
+/// `hud: false` asks for the picture underneath what egui painted, and only the
+/// 3D Viewer has one.
+#[test]
+fn hud_false_reads_the_render_target_and_is_refused_elsewhere() {
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    let (source, caption) = deferred_screenshot(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::Viewer3D), false, None),
+    );
+    assert_eq!(source, super::ScreenshotSource::ViewportRender);
+    assert!(
+        caption.starts_with("The 3D Viewer panel without its HUD, 1280×720."),
+        "{caption}"
+    );
+    assert_eq!(
+        state.action_log.entries().next().expect("an entry").text,
+        "screenshot viewer_3d 1280×720 without HUD"
+    );
+
+    for arguments in [
+        json!({ "panel_name": "image_detail", "hud": false }),
+        json!({ "hud": false }),
+    ] {
+        let error = refused_call(&mut state, &mut viewer, "screenshot", arguments.clone());
+        assert!(
+            error.0.contains("hud applies to the 3D Viewer only"),
+            "{arguments}: {error}"
+        );
+    }
+
+    // `hud: true` is accepted anywhere and changes nothing.
+    let (with_hud, _) = deferred_screenshot(
+        &mut state,
+        &mut viewer,
+        screenshot(Some(Tab::ImageDetail), true, None),
+    );
+    assert_eq!(with_hud, super::ScreenshotSource::Panel(Tab::ImageDetail));
+}
+
+/// The crop rectangle is the dock's own points scaled to pixels, clipped to the
+/// frame — pure arithmetic over the dock, which is what puts it under headless
+/// test.
+#[test]
+fn the_crop_rectangle_scales_the_docks_points_and_clips_to_the_frame() {
+    let (mut state, _) = two_reconstructions();
+    lay_out(&mut state, Tab::ImageDetail, body());
+    assert_eq!(
+        super::panel_crop(&state.dock, Tab::ImageDetail, 1.5, [1920, 1080]),
+        Some([150, 60, 480, 270])
+    );
+    // A frame smaller than the layout clips rather than reading past the end.
+    assert_eq!(
+        super::panel_crop(&state.dock, Tab::ImageDetail, 1.5, [400, 200]),
+        Some([150, 60, 250, 140])
+    );
+    // A panel the dock has never laid out has no rectangle to crop to, and one
+    // that lies wholly outside the frame has none either.
+    assert_eq!(
+        super::panel_crop(&state.dock, Tab::SceneGraph, 1.5, [1920, 1080]),
+        None
+    );
+    assert_eq!(
+        super::panel_crop(&state.dock, Tab::ImageDetail, 1.5, [100, 100]),
+        None
     );
 }
 
@@ -2060,13 +2494,7 @@ fn get_scene_embeds_the_window_block() {
 #[test]
 fn a_screenshot_of_a_minimized_window_is_refused() {
     let (mut state, mut viewer, _) = windowed(WindowState::Minimized);
-    let error = refused(
-        &mut state,
-        &mut viewer,
-        Command::Screenshot {
-            max_dimension: None,
-        },
-    );
+    let error = refused(&mut state, &mut viewer, screenshot(None, true, None));
     assert!(
         error.0.contains("minimized") && error.0.contains("set_window_layout"),
         "{error}"
@@ -2076,13 +2504,7 @@ fn a_screenshot_of_a_minimized_window_is_refused() {
     state.window = Some(FakeWindow::default().info());
     assert!(
         matches!(
-            agent(
-                &mut state,
-                &mut viewer,
-                Command::Screenshot {
-                    max_dimension: None
-                }
-            ),
+            agent(&mut state, &mut viewer, screenshot(None, true, None)),
             Outcome::Deferred(_)
         ),
         "a screenshot must defer once there is something to photograph"
@@ -2186,6 +2608,43 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
     assert!(!names.iter().any(|name| name.contains("recon_")));
     let unique: std::collections::BTreeSet<&&str> = names.iter().collect();
     assert_eq!(unique.len(), names.len(), "tool names must be unique");
+
+    // `hud` is the one initialism on the surface, and it is here because it is
+    // the GUI's own word for the overlay (specs/gui/viewport-hud.md), which the
+    // agent and the human have to be able to say the same way. Asserted by name
+    // so a second one cannot arrive quietly.
+    let hud_takers: Vec<&str> = tools::catalog()
+        .iter()
+        .filter(|spec| {
+            spec.schema["properties"]
+                .as_object()
+                .is_some_and(|properties| properties.contains_key("hud"))
+        })
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(hud_takers, ["screenshot"]);
+}
+
+/// The tool that hands back a picture advertises what it can photograph.
+#[test]
+fn screenshot_advertises_the_panel_the_hud_and_the_size() {
+    let catalog = tools::catalog();
+    let spec = catalog
+        .iter()
+        .find(|spec| spec.name == "screenshot")
+        .expect("the tool is in the catalog");
+    let properties = spec.schema["properties"]
+        .as_object()
+        .expect("an object schema");
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["hud", "max_dimension", "panel_name"]);
+    // The panel names are the layout file's, so there is no second spelling of
+    // them anywhere.
+    assert_eq!(
+        properties["panel_name"]["enum"],
+        json!(Tab::ALL.map(|tab| tab.wire_name()))
+    );
 }
 
 /// The one tool that cannot answer in the frame it arrives in says so, rather
@@ -2193,13 +2652,7 @@ fn the_wire_vocabulary_holds_across_the_catalog() {
 #[test]
 fn screenshot_defers_to_the_frame() {
     let (mut state, mut viewer) = two_reconstructions();
-    match apply(
-        &mut state,
-        &mut viewer,
-        Command::Screenshot {
-            max_dimension: None,
-        },
-    ) {
+    match apply(&mut state, &mut viewer, screenshot(None, true, None)) {
         Outcome::Deferred(super::Deferred::Screenshot { caption, .. }) => {
             // The caption is built here, while the state is still borrowed, so
             // the picture and the description of it are of the same instant.
@@ -2226,12 +2679,13 @@ fn only_the_reads_are_annotated_read_only() {
             "get_camera_image",
             "get_camera_intrinsics",
             "get_point",
+            "get_action_log",
             "get_window_layout",
             "screenshot",
         ]
     );
-    // Six reads, thirteen writes, and the one that hands back a picture.
-    assert_eq!(catalog.len(), 20, "the catalog has grown or shrunk");
+    // Seven reads, thirteen writes, and the one that hands back a picture.
+    assert_eq!(catalog.len(), 21, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()

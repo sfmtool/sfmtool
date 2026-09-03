@@ -532,6 +532,281 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     );
 }
 
+// --- The MCP screenshot, against a real frame ---
+//
+// Everything else the MCP surface does is under headless test in
+// `mcp::tests`, which is where it belongs: the command vocabulary takes no
+// GPU and no window. `screenshot` is the exception — it is a picture of a
+// frame that has actually been rendered and presented — so it is here, and
+// what these assert is the size and decodability of the PNG rather than its
+// pixels, since what the frame *looks* like is not a stable thing to assert.
+
+/// A viewer with its MCP endpoint live, and the address it printed.
+struct McpViewer {
+    /// Held for its `Drop`, which kills the viewer and releases the
+    /// serialization lock. Read only on macOS, where the accessibility root is
+    /// found by pid.
+    #[allow(dead_code)]
+    guard: Guard,
+    address: String,
+}
+
+impl McpViewer {
+    /// Launch a viewer on an ephemeral port and wait for it to say where it is.
+    ///
+    /// `--mcp 0` rather than a fixed port, because a developer running this
+    /// suite very likely has a viewer of their own on 8787 and a port
+    /// collision is a fatal startup error by design.
+    fn launch() -> McpViewer {
+        let _lock = ui_test_lock();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
+        cmd.args(["--mcp", "0", "--no-default-layout"]);
+        cmd.stdout(std::process::Stdio::piped());
+        #[cfg(target_os = "macos")]
+        cmd.env("SFMTOOL_EXPLORER_FORCE_REPAINT", "1");
+        let mut child = cmd.spawn().expect("failed to spawn sfm-explorer");
+        let stdout = child.stdout.take().expect("stdout was piped");
+        // Read the endpoint line off a thread: a viewer that died before
+        // printing it must fail this test rather than block it forever.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let mut line = String::new();
+            let _ = std::io::BufReader::new(stdout).read_line(&mut line);
+            let _ = tx.send(line);
+        });
+        let line = rx
+            .recv_timeout(ATTACH_TIMEOUT)
+            .expect("the viewer never printed its MCP endpoint");
+        let address = line
+            .trim()
+            .rsplit_once("http://")
+            .and_then(|(_, rest)| rest.strip_suffix("/mcp"))
+            .unwrap_or_else(|| panic!("no endpoint in {line:?}"))
+            .to_string();
+        McpViewer {
+            guard: Guard { child, _lock },
+            address,
+        }
+    }
+
+    /// Wait for the window to exist, since MCP commands are applied inside a
+    /// frame and a viewer with no window yet renders none.
+    ///
+    /// Not [`attach`]: while the endpoint is live the title carries an
+    /// `[MCP :port]` suffix, which an exact-name match does not find.
+    fn wait_for_window(&self) -> App {
+        init();
+        #[cfg(windows)]
+        {
+            App::find(ATTACH_TIMEOUT, |d| {
+                d.name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("SfM Explorer"))
+            })
+            .expect("sfm-explorer window did not appear")
+        }
+        #[cfg(target_os = "macos")]
+        {
+            App::by_pid(self.guard.child().id(), ATTACH_TIMEOUT)
+                .expect("sfm-explorer did not appear")
+        }
+    }
+
+    /// POST one JSON-RPC body and return the `result` object.
+    ///
+    /// Hand-written HTTP/1.1 for the reason `mcp::tests` writes its own: a POST
+    /// with a JSON body is a dozen lines, and an HTTP client dev-dependency
+    /// would buy nothing this needs.
+    fn rpc(&self, body: &str) -> serde_json::Value {
+        use std::io::{Read as _, Write as _};
+        let mut stream =
+            std::net::TcpStream::connect(&self.address).expect("the endpoint is listening");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .expect("a read timeout is settable");
+        let request = format!(
+            "POST /mcp HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            self.address,
+            body.len()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .expect("the request is writable");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .expect("the response is readable");
+        let response = String::from_utf8_lossy(&response).into_owned();
+        let json = response
+            .lines()
+            .map(|line| line.strip_prefix("data: ").unwrap_or(line).trim())
+            .find(|line| line.starts_with('{'))
+            .unwrap_or_else(|| panic!("no JSON in {response:?}"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("{e} in {json:?}"));
+        assert_eq!(parsed["error"], serde_json::Value::Null, "{parsed}");
+        parsed["result"].clone()
+    }
+
+    /// Complete the handshake, which a client does once before anything else.
+    fn initialize(&self) {
+        self.rpc(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ui-test","version":"0"}}}"#,
+        );
+    }
+
+    /// Call one tool and return its result.
+    fn call(&self, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        });
+        self.rpc(&body.to_string())
+    }
+
+    /// Call `screenshot` and decode the PNG it handed back.
+    fn screenshot(&self, arguments: serde_json::Value) -> image::RgbaImage {
+        use base64::Engine as _;
+        let result = self.call("screenshot", arguments.clone());
+        assert_ne!(
+            result["isError"],
+            serde_json::Value::Bool(true),
+            "{arguments}: {result}"
+        );
+        let encoded = result["content"]
+            .as_array()
+            .expect("a content array")
+            .iter()
+            .find_map(|block| block["data"].as_str())
+            .unwrap_or_else(|| panic!("no image block in {result}"));
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("the image block is base64");
+        image::load_from_memory(&bytes)
+            .expect("the image block is a decodable PNG")
+            .to_rgba8()
+    }
+
+    /// The window's drawable area in physical pixels, as the viewer reports it.
+    fn inner_size(&self) -> [u32; 2] {
+        let layout = self.call("get_window_layout", serde_json::json!({}));
+        let size = &layout["structuredContent"]["window"]["inner_size"];
+        [
+            size[0].as_u64().expect("a width") as u32,
+            size[1].as_u64().expect("a height") as u32,
+        ]
+    }
+}
+
+/// The default screenshot is the window itself, read back off the presented
+/// surface — which is what `COPY_SRC` on the swapchain buys.
+#[test]
+fn a_screenshot_is_the_whole_window() {
+    let viewer = McpViewer::launch();
+    // The window has to exist before it can be photographed.
+    viewer.wait_for_window();
+    viewer.initialize();
+
+    let [width, height] = viewer.inner_size();
+    let window = viewer.screenshot(serde_json::json!({}));
+    assert_eq!(
+        (window.width(), window.height()),
+        (width, height),
+        "the picture is not the window's drawable area"
+    );
+
+    // A panel is a crop of that same frame, so it is smaller in both axes.
+    let scene = viewer.screenshot(serde_json::json!({ "panel_name": "scene" }));
+    assert!(
+        scene.width() < window.width() && scene.height() < window.height(),
+        "the Scene panel's crop ({} × {}) is not inside the window ({} × {})",
+        scene.width(),
+        scene.height(),
+        window.width(),
+        window.height()
+    );
+
+    // `max_dimension` bounds the longer side, after the crop.
+    let bounded = viewer.screenshot(serde_json::json!({ "max_dimension": 320 }));
+    assert_eq!(bounded.width().max(bounded.height()), 320);
+}
+
+/// The two pictures of the 3D viewport: the crop of the presented frame, with
+/// the HUD over it, and the render target it was drawn from.
+///
+/// They are the same view and very nearly the same size — the crop is the tab
+/// *body*, which egui_dock insets by its own margin before the viewport
+/// allocates what is left — so what this asserts is that the render is inside
+/// the crop and close to it, not that the two are identical.
+#[test]
+fn the_viewport_can_be_photographed_with_and_without_its_hud() {
+    let viewer = McpViewer::launch();
+    let app = viewer.wait_for_window();
+    viewer.initialize();
+    // The render target only exists once the viewport has something to draw:
+    // with nothing loaded the panel shows its empty state and never sizes one.
+    load_demo_data(&app);
+
+    let with_hud = viewer.screenshot(serde_json::json!({ "panel_name": "viewer_3d" }));
+    let without_hud =
+        viewer.screenshot(serde_json::json!({ "panel_name": "viewer_3d", "hud": false }));
+    assert!(
+        without_hud.width() <= with_hud.width() && without_hud.height() <= with_hud.height(),
+        "the render ({} × {}) is not inside its panel's body ({} × {})",
+        without_hud.width(),
+        without_hud.height(),
+        with_hud.width(),
+        with_hud.height()
+    );
+    assert!(
+        with_hud.width() - without_hud.width() < 64
+            && with_hud.height() - without_hud.height() < 64,
+        "the two pictures of the viewport are further apart than a body margin"
+    );
+}
+
+/// A panel that is not drawn is refused rather than photographed, and the
+/// refusal names the call that fixes it.
+#[test]
+fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
+    let viewer = McpViewer::launch();
+    viewer.wait_for_window();
+    viewer.initialize();
+
+    // Behind Image Detail in the stock grid.
+    let behind = viewer.call(
+        "screenshot",
+        serde_json::json!({ "panel_name": "point_track" }),
+    );
+    assert_eq!(behind["isError"], serde_json::Value::Bool(true), "{behind}");
+    let message = behind["content"][0]["text"].as_str().expect("a refusal");
+    assert!(
+        message.contains("Image Detail") && message.contains("show_panel"),
+        "{message}"
+    );
+
+    // Closed.
+    viewer.call(
+        "hide_panel",
+        serde_json::json!({ "panel_name": "action_log" }),
+    );
+    let closed = viewer.call(
+        "screenshot",
+        serde_json::json!({ "panel_name": "action_log" }),
+    );
+    assert_eq!(closed["isError"], serde_json::Value::Bool(true), "{closed}");
+    let message = closed["content"][0]["text"].as_str().expect("a refusal");
+    assert!(
+        message.contains("closed") && message.contains("show_panel"),
+        "{message}"
+    );
+}
+
 /// Diagnostic: dump the accessibility tree (run with -- --ignored --nocapture).
 #[test]
 #[ignore]

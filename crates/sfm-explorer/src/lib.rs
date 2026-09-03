@@ -201,6 +201,8 @@ pub fn run() {
         mcp_rx,
         #[cfg(feature = "mcp")]
         mcp_deferred: Vec::new(),
+        #[cfg(feature = "mcp")]
+        surface_readable: false,
         #[cfg(target_os = "windows")]
         early_dm,
         #[cfg(target_os = "windows")]
@@ -320,6 +322,12 @@ pub(crate) struct App {
     /// where the `wgpu::Device` already is.
     #[cfg(feature = "mcp")]
     pub(crate) mcp_deferred: Vec<(mcp::Deferred, tokio::sync::oneshot::Sender<mcp::Reply>)>,
+    /// Whether the window surface was configured with `COPY_SRC`, which is what
+    /// a screenshot of the window reads back from. Set once, when the surface
+    /// is first configured; a platform that refuses the usage leaves it false
+    /// and every window screenshot is refused rather than attempted.
+    #[cfg(feature = "mcp")]
+    pub(crate) surface_readable: bool,
     #[cfg(target_os = "windows")]
     pub(crate) early_dm: Option<EarlyDmState>,
     #[cfg(target_os = "windows")]
@@ -380,10 +388,33 @@ impl ApplicationHandler<UserEvent> for App {
                 .expect("Failed to create wgpu device");
 
         let size = window.inner_size();
-        let surface_config = surface
+        let mut surface_config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("Surface not supported by adapter");
+        // `COPY_SRC` on the swapchain is what lets the MCP `screenshot` tool
+        // photograph the window the human is looking at rather than only the 3D
+        // render target. `get_default_config` asks for `RENDER_ATTACHMENT`
+        // alone, and a usage the surface does not advertise is a validation
+        // error at `configure` — so it is added only where the platform allows
+        // it (DX12, Vulkan and Metal all do in practice) and the viewer
+        // remembers whether it got it. The same config is what `resize`
+        // reconfigures with, so the flag survives a resize.
+        let surface_readable = surface
+            .get_capabilities(&adapter)
+            .usages
+            .contains(wgpu::TextureUsages::COPY_SRC);
+        if surface_readable {
+            surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         surface.configure(&device, &surface_config);
+        log::debug!(
+            "surface {:?}, readable: {surface_readable}",
+            surface_config.format
+        );
+        #[cfg(feature = "mcp")]
+        {
+            self.surface_readable = surface_readable;
+        }
 
         // Step 3: Initialize DirectManipulation AFTER wgpu (matching working test order)
         #[cfg(target_os = "windows")]

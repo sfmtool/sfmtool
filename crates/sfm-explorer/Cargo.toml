@@ -142,6 +142,12 @@ wgpu = { version = "30", features = ["noop"] }
 # the headless CI display lacks the AT-SPI bridge the tree needs.
 [target.'cfg(any(windows, target_os = "macos"))'.dev-dependencies]
 xa11y = "0.12"
+# `ui_basic`'s MCP screenshot tests speak the wire to a real viewer and decode
+# the PNG a real frame produced. An integration test sees only dev-dependencies,
+# so the three the crate already builds with are named again here.
+base64 = "0.22"
+image = "0.25"
+serde_json = "1"
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]

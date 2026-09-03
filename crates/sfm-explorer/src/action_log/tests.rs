@@ -123,6 +123,141 @@ fn queries_coalesce_per_tool_and_not_across_tools() {
     assert_eq!(texts(&log), ["screenshot 9×9", "get_scene"]);
 }
 
+// ── Revisions ───────────────────────────────────────────────────────────
+
+/// The revision of every entry the log holds, oldest first.
+fn revisions(log: &ActionLog) -> Vec<u64> {
+    log.entries().map(|entry| entry.revision).collect()
+}
+
+#[test]
+fn every_record_ticks_the_clock_and_stamps_the_entry() {
+    let mut log = log();
+    assert_eq!(log.revision(), 0, "a fresh log has not written anything");
+    for i in 0..3 {
+        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("Opened {i}"));
+    }
+    assert_eq!(revisions(&log), [1, 2, 3]);
+    assert_eq!(log.revision(), 3);
+}
+
+/// A fold is a *change* to an entry the agent may already have read, so it
+/// takes a new revision — the newest of the log — rather than keeping the one
+/// the replaced entry had.
+#[test]
+fn a_coalescing_replacement_takes_a_fresh_revision() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::File, false, "Opened a");
+    log.record_at(at(0.1), Kind::Selection, false, "Selected image a");
+    log.record_at(at(0.5), Kind::Selection, false, "Selected image b");
+    assert_eq!(texts(&log), ["Opened a", "Selected image b"]);
+    assert_eq!(
+        revisions(&log),
+        [1, 3],
+        "the fold kept the replaced revision"
+    );
+    assert_eq!(log.revision(), 3);
+}
+
+#[test]
+fn since_returns_exactly_the_entries_above_it() {
+    let mut log = log();
+    for i in 0..4 {
+        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("Opened {i}"));
+    }
+    let after_two: Vec<&str> = log.since(2).map(|entry| entry.text.as_str()).collect();
+    assert_eq!(after_two, ["Opened 2", "Opened 3"], "oldest first");
+    assert_eq!(log.since(0).count(), 4, "since 0 is the whole log");
+    assert_eq!(
+        log.since(log.revision()).count(),
+        0,
+        "a reader that is up to date is told nothing"
+    );
+    // A fold brings an entry the reader had already seen back into view.
+    log.record_at(at(8.0), Kind::Selection, false, "Selected image a");
+    let mark = log.revision();
+    log.record_at(at(8.5), Kind::Selection, false, "Selected image b");
+    let after_mark: Vec<&str> = log.since(mark).map(|entry| entry.text.as_str()).collect();
+    assert_eq!(after_mark, ["Selected image b"]);
+}
+
+#[test]
+fn oldest_revision_follows_the_entries_that_are_still_held() {
+    let mut log = log();
+    assert_eq!(
+        log.oldest_revision(),
+        log.revision(),
+        "an empty log is as old as it is new"
+    );
+    for i in 0..ActionLog::CAPACITY + 2 {
+        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("entry {i}"));
+    }
+    assert_eq!(
+        log.oldest_revision(),
+        3,
+        "two entries dropped, so the third is the oldest held"
+    );
+    // Clear empties the buffer and leaves the clock alone, so a reader holding
+    // an older revision can still tell that it missed everything.
+    let before = log.revision();
+    log.clear();
+    assert_eq!(log.revision(), before, "Clear rewound the clock");
+    assert_eq!(log.oldest_revision(), before);
+    log.record_at(at(0.0), Kind::File, false, "Opened again");
+    assert_eq!(revisions(&log), [before + 1]);
+}
+
+// ── The wire vocabulary ─────────────────────────────────────────────────
+
+/// Every kind has a wire name, and no two of them share one — the compiler
+/// guarantees the first through an exhaustive match, and this guarantees the
+/// second, which it cannot.
+#[test]
+fn every_kind_and_actor_has_a_distinct_wire_name() {
+    let kinds = [
+        Kind::Session,
+        Kind::File,
+        Kind::Selection,
+        Kind::Scene,
+        Kind::View,
+        Kind::Display,
+        Kind::Animation,
+        Kind::Layout,
+        Kind::Window,
+        Kind::Query("get_scene"),
+    ];
+    let names: std::collections::BTreeSet<&str> =
+        kinds.iter().map(|kind| kind.wire_name()).collect();
+    assert_eq!(names.len(), kinds.len(), "two kinds share a wire name");
+    assert!(names
+        .iter()
+        .all(|name| name.chars().all(|c| c.is_ascii_lowercase() || c == '_')));
+    // Every query is one wire kind, whichever tool it came from: the tool
+    // travels beside the kind so that `kind` stays a closed vocabulary.
+    assert_eq!(Kind::Query("screenshot").wire_name(), "query");
+    assert_eq!(Kind::Query("get_scene").wire_name(), "query");
+
+    let actors: std::collections::BTreeSet<&str> =
+        Actor::ALL.iter().map(|actor| actor.wire_name()).collect();
+    assert_eq!(actors.len(), Actor::ALL.len());
+    for actor in Actor::ALL {
+        assert_eq!(Actor::from_wire_name(actor.wire_name()), Some(actor));
+    }
+    assert_eq!(Actor::from_wire_name("User"), None, "the names are exact");
+    assert_eq!(Actor::all_wire_names(), "user, mcp, viewer");
+}
+
+/// The wire's timestamp is the panel's, in the panel's zone, so a time an agent
+/// reads is the time the human beside it is reading.
+#[test]
+fn a_wire_timestamp_is_rfc_3339_in_the_logs_own_zone() {
+    let log = log();
+    assert_eq!(
+        log.format_rfc3339(at(0.25)),
+        "2026-09-01T14:04:03.250-07:00"
+    );
+}
+
 // ── The status line ─────────────────────────────────────────────────────
 
 #[test]
