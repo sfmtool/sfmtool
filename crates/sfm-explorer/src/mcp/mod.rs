@@ -799,13 +799,20 @@ pub(crate) fn apply_as_agent(
             log::debug!("MCP: applying {command:?}");
             let tool = command.tool_name();
             let kind = command.kind();
+            let run = command.run();
             let query = query_text(state, viewer, &command);
             let outcome = apply_with_window(state, viewer, host, command);
             match (&outcome, query) {
                 (Outcome::Done(Err(error)), _) => state
                     .action_log
                     .fail(kind, format!("{tool} failed: {error}")),
-                (_, Some(text)) => state.action_log.query(tool, text),
+                // A read that folds goes through `query`, which puts the
+                // tool in both the kind and the run; `screenshot` has no run
+                // and is recorded as the discrete act it is.
+                (_, Some(text)) => match run {
+                    Some(run) => state.action_log.query(run, text),
+                    None => state.action_log.record(kind, text),
+                },
                 (_, None) => {}
             }
             outcome
@@ -822,6 +829,10 @@ pub(crate) fn apply_as_agent(
 // actor column trustworthy, since two rows reading the same did the same thing.
 // What is left for the drain is the two things no state method can know: the
 // name of the tool, for a refusal, and the fact that a read happened at all.
+//
+// Which reads fold is the drain's knowledge too: a poll is one row per tool,
+// but a screenshot is a picture the agent took and presumably looked at, so
+// ten in a second are ten lines.
 
 impl Command {
     /// The tool this command came from, as the wire names it.
@@ -850,6 +861,20 @@ impl Command {
             Command::ShowPanel { .. } => "show_panel",
             Command::HidePanel { .. } => "hide_panel",
             Command::Screenshot { .. } => "screenshot",
+        }
+    }
+
+    /// What the entry the drain writes for this command folds with.
+    ///
+    /// A read folds per tool, so a poll is one row however often it asks —
+    /// except `screenshot`, which is discrete: a reader wants to know how many
+    /// pictures were taken and of what. A mutating command records through the
+    /// `AppState` / `Viewer3D` method it calls, which chooses its own run, and
+    /// a refusal never folds, so `None` is the answer for everything else.
+    pub(crate) fn run(&self) -> crate::action_log::Run {
+        match self.kind() {
+            Kind::Query(tool) if !matches!(self, Command::Screenshot { .. }) => Some(tool),
+            _ => None,
         }
     }
 

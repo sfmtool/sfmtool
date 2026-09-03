@@ -18,10 +18,12 @@
 //! - **Muting is a depth counter.** Composite actions nest — `close_all` over
 //!   `close_node`, `resect_image` over `append_node` — and each layer only
 //!   knows about itself.
-//! - **Coalescing happens at record time and is not reversible.** A run of like
-//!   entries folds into one so that a scrub, a slider drag or an agent polling
-//!   for screenshots stays one line. Failures are exempt, which is why the log
-//!   is a readable record rather than an audit trail.
+//! - **Coalescing happens at record time and is not reversible.** Successive
+//!   values of one [`Run`] — a control, a selection slot, a polled query tool —
+//!   fold into one line, so that a scrub or a slider drag stays one line. An
+//!   entry with no run is a discrete act and never folds, and neither does a
+//!   failure, which is why the log is a readable record rather than an audit
+//!   trail.
 
 // Several things here exist for the MCP surface, which is a Cargo feature: the
 // wire spellings of a kind and an actor, the revision clock `get_action_log`
@@ -92,7 +94,11 @@ impl Actor {
     }
 }
 
-/// What an entry is about; decides whether a run of them coalesces.
+/// What an entry is about: the panel's tooltip word and the wire's `kind`.
+///
+/// Says nothing about folding — that is [`Run`]'s job, and the run is finer
+/// than the kind: two `Display` entries are the same kind whether or not they
+/// are the same control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     /// The viewer starting, and the endpoints it brought up with it.
@@ -115,7 +121,7 @@ pub(crate) enum Kind {
     /// The window itself: the state, size, position and focus one `set_window`
     /// call changed.
     Window,
-    /// A read-only MCP tool, by name. Coalesces per tool.
+    /// A read-only MCP tool, by name.
     Query(&'static str),
 }
 
@@ -157,26 +163,25 @@ impl Kind {
             Kind::Query(_) => "query",
         }
     }
-
-    /// Whether a run of entries of this kind folds into one.
-    ///
-    /// The continuous kinds do: a selection scrub, a camera framing, a slider
-    /// drag and an agent's polling are all things that happen many times a
-    /// second and mean one thing. The discrete kinds do not — two files opened
-    /// in a row are two events, not one, and neither are two panels closed in
-    /// a row or two calls that moved the window.
-    pub(crate) fn coalesces(self) -> bool {
-        match self {
-            Kind::Session
-            | Kind::File
-            | Kind::Scene
-            | Kind::Animation
-            | Kind::Layout
-            | Kind::Window => false,
-            Kind::Selection | Kind::View | Kind::Display | Kind::Query(_) => true,
-        }
-    }
 }
+
+/// The one thing an entry is a successive value *of* — a control's label, a
+/// selection slot, a query tool — or `None` for a discrete act.
+///
+/// Two entries with the same run, kind and actor inside
+/// [`ActionLog::COALESCE_WINDOW`] fold into one line; an entry with no run
+/// never folds, in either direction. The run is finer than the [`Kind`] on
+/// purpose: folding by kind alone took every `Display` entry within a second
+/// to be the same gesture, so a call that changed three fields kept only the
+/// third field's row. A fold is for a widget or a slot being dragged through
+/// intermediate values, and two different controls are two acts however close
+/// together. The catalogue in `specs/gui/action-log.md` gives every row its
+/// run.
+///
+/// A `&'static str` because every run is a literal at its call site — the
+/// HUD's control labels, the selection slots, the tool table's names — and the
+/// log compares them, never composes them.
+pub(crate) type Run = Option<&'static str>;
 
 /// One line of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +200,11 @@ pub(crate) struct Entry {
     pub at: Timestamp,
     pub actor: Actor,
     pub kind: Kind,
+    /// What this entry folds with, or `None` for a discrete act.
+    ///
+    /// Not on the wire: an agent reads rows, and which rows folded is already
+    /// visible in the revisions it did not see.
+    pub run: Run,
     /// Whether the action was refused or failed. A failed entry never
     /// coalesces, in either direction.
     pub failed: bool,
@@ -251,14 +261,20 @@ impl ActionLog {
         }
     }
 
-    /// Record a successful action as the current actor, now.
+    /// Record a discrete action as the current actor, now. Never coalesces.
     pub(crate) fn record(&mut self, kind: Kind, text: impl Into<String>) {
-        self.record_at(Timestamp::now(), kind, false, text);
+        self.record_at(Timestamp::now(), kind, None, false, text);
+    }
+
+    /// Record one value of `run` as the current actor, now: folds into the
+    /// newest entry when that entry is the same run.
+    pub(crate) fn record_run(&mut self, kind: Kind, run: &'static str, text: impl Into<String>) {
+        self.record_at(Timestamp::now(), kind, Some(run), false, text);
     }
 
     /// Record a failed action as the current actor, now. Never coalesces.
     pub(crate) fn fail(&mut self, kind: Kind, text: impl Into<String>) {
-        self.record_at(Timestamp::now(), kind, true, text);
+        self.record_at(Timestamp::now(), kind, None, true, text);
     }
 
     /// Record one entry as `actor`, restoring the standing one afterwards.
@@ -274,12 +290,17 @@ impl ActionLog {
         self.actor = standing;
     }
 
-    /// Record a read-only MCP tool call, coalescing per tool.
+    /// Record a read-only MCP tool call, coalescing per tool: the tool names
+    /// both the kind and the run, so a poll is one row however often it asks.
+    ///
+    /// `screenshot` does not come through here — it is recorded with
+    /// [`ActionLog::record`], as the discrete act it is.
     pub(crate) fn query(&mut self, tool: &'static str, text: impl Into<String>) {
-        self.record_at(Timestamp::now(), Kind::Query(tool), false, text);
+        self.record_at(Timestamp::now(), Kind::Query(tool), Some(tool), false, text);
     }
 
-    /// Record a widget's change as one entry, building the text only then.
+    /// Record a widget's change as one value of `run` — the control's label —
+    /// building the text only then.
     ///
     /// The whole of what a HUD checkbox or slider needs: those write straight
     /// into the state they govern, so `changed()` is the only signal that a
@@ -295,6 +316,7 @@ impl ActionLog {
         &mut self,
         response: &egui::Response,
         kind: Kind,
+        run: &'static str,
         text: impl FnOnce() -> String,
     ) {
         let touched = response.is_pointer_button_down_on()
@@ -302,11 +324,11 @@ impl ActionLog {
             || response.drag_stopped()
             || response.has_focus();
         if response.changed() && touched {
-            self.record(kind, text());
+            self.record_run(kind, run, text());
         }
     }
 
-    /// The `record` / `fail` primitive with an explicit instant.
+    /// The `record` / `record_run` / `fail` primitive with an explicit instant.
     ///
     /// Public to the crate for the tests, which drive the coalescing window and
     /// the formatting with fixed instants rather than the wall clock.
@@ -314,6 +336,7 @@ impl ActionLog {
         &mut self,
         at: Timestamp,
         kind: Kind,
+        run: Run,
         failed: bool,
         text: impl Into<String>,
     ) {
@@ -328,6 +351,7 @@ impl ActionLog {
             at,
             actor: self.actor,
             kind,
+            run,
             failed,
             text: text.into(),
         };
@@ -351,6 +375,9 @@ impl ActionLog {
 
     /// Whether `entry` should replace the newest entry rather than follow it.
     ///
+    /// The [`Run`] decides, not the kind: both entries must name the same one,
+    /// so an entry with no run neither folds nor is folded into.
+    ///
     /// The window is measured from the entry being *replaced*, which is itself
     /// the time of the last replacement — so an unbroken run folds
     /// indefinitely, and a pause longer than the window starts a new line.
@@ -360,7 +387,8 @@ impl ActionLog {
         };
         !entry.failed
             && !last.failed
-            && entry.kind.coalesces()
+            && entry.run.is_some()
+            && last.run == entry.run
             && last.kind == entry.kind
             && last.actor == entry.actor
             && entry.at >= last.at

@@ -38,7 +38,10 @@ pub(super) fn set_view(
     view: ViewCommand,
 ) -> JsonReply {
     viewer.cancel_transition();
-    let what = match view {
+    // The run beside the text: an agent animating a path through `place`, or
+    // walking the field of view, is one line, while a framing or a
+    // look-through is a deliberate act that keeps its own.
+    let (run, what) = match view {
         ViewCommand::Fit {
             reconstruction_label,
         } => {
@@ -50,7 +53,7 @@ pub(super) fn set_view(
             // left the render inside a camera view would frame nothing the
             // caller can see).
             viewer.camera_view = None;
-            what
+            (None, what)
         }
         ViewCommand::LookThrough {
             reconstruction_label,
@@ -61,23 +64,29 @@ pub(super) fn set_view(
             let node = state.node(id).expect("just resolved");
             let name = node.recon.images[image.index()].name.clone();
             viewer.jump_to_camera_view(image, node);
-            format!("Looking through {name}")
+            (None, format!("Looking through {name}"))
         }
         ViewCommand::ExitCameraView => {
             viewer.camera_view = None;
-            "Left camera view".to_string()
+            (None, "Left camera view".to_string())
         }
-        ViewCommand::Place(placement) => place(viewer, placement)?,
+        ViewCommand::Place(placement) => (Some("camera"), place(viewer, placement)?),
         ViewCommand::Fov { fov_short_axis_deg } => {
             set_fov(viewer, Some(fov_short_axis_deg))?;
-            format!("Field of view {fov_short_axis_deg:.1}°")
+            (
+                Some("field of view"),
+                format!("Field of view {fov_short_axis_deg:.1}°"),
+            )
         }
     };
 
     // The one entry `set_view` writes, in the catalogue's own words: the five
     // forms all end here, and `jump_to_camera_view` records nothing of its own
     // so that a look-through is one line and not two.
-    state.action_log.record(Kind::View, what);
+    match run {
+        Some(run) => state.action_log.record_run(Kind::View, run, what),
+        None => state.action_log.record(Kind::View, what),
+    }
     Ok(json!({ "view": render::view(state, viewer) }))
 }
 

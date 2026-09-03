@@ -933,8 +933,8 @@ fn set_image_detail_display_records_one_display_entry_per_changed_field() {
     assert_eq!(entries[0].kind, Kind::Display);
     assert_eq!(entries[0].actor, Actor::Mcp);
 
-    // Three fields, three writes. `Display` coalesces, so the run folds into
-    // its newest in the panel while the clock ticks once per field.
+    // Three fields, three runs, three rows in field order. Folding by kind
+    // alone — the rule the log started with — kept only the last of them.
     let (mut state, mut viewer) = quiet_scene();
     let before = state.action_log.revision();
     call(
@@ -943,8 +943,7 @@ fn set_image_detail_display_records_one_display_entry_per_changed_field() {
         "set_image_detail_display",
         json!({
             "overlay_mode": "track_length",
-            "tracked_only": false,
-            "intrinsics": { "rings": true },
+            "intrinsics": { "rings": true, "distortion_scale": 10.0 },
         }),
     );
     assert_eq!(state.action_log.revision() - before, 3);
@@ -952,10 +951,34 @@ fn set_image_detail_display_records_one_display_entry_per_changed_field() {
         state
             .action_log
             .entries()
-            .next_back()
-            .expect("an entry")
-            .text,
-        "Intrinsics rings on"
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Overlay Track Length",
+            "Intrinsics rings on",
+            "Distortion scale ×10"
+        ]
+    );
+
+    // A repeat of one of those fields folds into that field's row and leaves
+    // the other two standing.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_display",
+        json!({ "intrinsics": { "distortion_scale": 20.0 } }),
+    );
+    assert_eq!(
+        state
+            .action_log
+            .entries()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Overlay Track Length",
+            "Intrinsics rings on",
+            "Distortion scale ×20"
+        ]
     );
 
     // A field set to the value it had is not a change.
@@ -1651,6 +1674,30 @@ fn a_deferred_screenshot_is_logged_when_it_is_drained() {
         state.action_log.entries().next().expect("an entry").text,
         "screenshot window 640×360"
     );
+}
+
+/// A screenshot is not a value an agent is scrubbing through: it is a picture
+/// it took and presumably looked at, so every one taken is its own row however
+/// fast they arrive.
+#[test]
+fn every_screenshot_taken_is_its_own_row() {
+    let (mut state, mut viewer) = quiet_scene();
+    viewer.panel_size = [1280, 720];
+    for _ in 0..3 {
+        agent(&mut state, &mut viewer, screenshot(None, true, None));
+    }
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    assert!(
+        entries.iter().all(|entry| entry.run.is_none()),
+        "a screenshot carries a run: {entries:?}"
+    );
+    // …while the read beside it polls into one row, as every other read does.
+    let (mut state, mut viewer) = quiet_scene();
+    for _ in 0..3 {
+        ok(&mut state, &mut viewer, Command::GetScene);
+    }
+    assert_eq!(state.action_log.entries().count(), 1);
 }
 
 /// A refusal is one failed entry, in the words the agent was given — not two,

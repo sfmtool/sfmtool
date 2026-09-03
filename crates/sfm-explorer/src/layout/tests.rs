@@ -700,7 +700,6 @@ fn a_floating_window_round_trips_with_and_without_a_rect() {
 
 #[test]
 fn every_layout_action_is_logged_under_its_own_kind_and_none_coalesce() {
-    assert!(!Kind::Layout.coalesces());
     assert_eq!(Kind::Layout.label(), "Layout");
 
     let mut state = state();
@@ -720,6 +719,15 @@ fn every_layout_action_is_logged_under_its_own_kind_and_none_coalesce() {
         ]
     );
     assert_eq!(state.layout(), Layout::default());
+    // None of them carries a run, which is what keeps five layout actions
+    // inside one second five lines.
+    assert!(
+        state
+            .action_log
+            .entries()
+            .all(|entry| entry.kind != Kind::Layout || entry.run.is_none()),
+        "a layout entry folds"
+    );
 }
 
 #[test]

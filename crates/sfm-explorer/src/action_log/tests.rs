@@ -10,7 +10,7 @@
 use jiff::tz::{Offset, TimeZone};
 use jiff::Timestamp;
 
-use super::{show, ActionLog, Actor, Kind};
+use super::{show, ActionLog, Actor, Kind, Run};
 
 /// A log in a fixed zone, seven hours behind UTC, so a formatted row is the
 /// same string wherever the tests run.
@@ -29,6 +29,26 @@ fn texts(log: &ActionLog) -> Vec<&str> {
     log.entries().map(|entry| entry.text.as_str()).collect()
 }
 
+/// The runs the tests below record successive values of, spelled as the record
+/// sites spell them: two selection slots and two HUD controls.
+const IMAGE: Run = Some("image");
+const POINT: Run = Some("point");
+const POINT_SIZE: Run = Some("Point size");
+const GRID: Run = Some("Grid");
+const CAMERA: Run = Some("camera");
+
+/// [`ActionLog::query`] at a fixed instant: the tool names both the kind and
+/// the run, which is what makes a poll one row.
+trait QueryAt {
+    fn query_at(&mut self, at: Timestamp, tool: &'static str, text: &str);
+}
+
+impl QueryAt for ActionLog {
+    fn query_at(&mut self, at: Timestamp, tool: &'static str, text: &str) {
+        self.record_at(at, Kind::Query(tool), Some(tool), false, text);
+    }
+}
+
 // ── The buffer ──────────────────────────────────────────────────────────
 
 #[test]
@@ -36,7 +56,7 @@ fn past_capacity_the_oldest_entry_goes_and_is_counted() {
     let mut log = log();
     // `File` so nothing coalesces and the count is exactly what was recorded.
     for i in 0..ActionLog::CAPACITY + 3 {
-        log.record_at(at(i as f64), Kind::File, false, format!("entry {i}"));
+        log.record_at(at(i as f64), Kind::File, None, false, format!("entry {i}"));
     }
     assert_eq!(log.len(), ActionLog::CAPACITY);
     assert_eq!(log.dropped(), 3);
@@ -50,8 +70,8 @@ fn past_capacity_the_oldest_entry_goes_and_is_counted() {
 #[test]
 fn two_like_entries_inside_the_window_become_one() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Selection, false, "Selected image a");
-    log.record_at(at(0.5), Kind::Selection, false, "Selected image b");
+    log.record_at(at(0.0), Kind::Selection, IMAGE, false, "Selected image a");
+    log.record_at(at(0.5), Kind::Selection, IMAGE, false, "Selected image b");
     assert_eq!(texts(&log), ["Selected image b"]);
     assert_eq!(
         log.entries().next().expect("an entry").at,
@@ -63,8 +83,8 @@ fn two_like_entries_inside_the_window_become_one() {
 #[test]
 fn two_like_entries_outside_the_window_stay_two() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Selection, false, "Selected image a");
-    log.record_at(at(1.5), Kind::Selection, false, "Selected image b");
+    log.record_at(at(0.0), Kind::Selection, IMAGE, false, "Selected image a");
+    log.record_at(at(1.5), Kind::Selection, IMAGE, false, "Selected image b");
     assert_eq!(texts(&log), ["Selected image a", "Selected image b"]);
 }
 
@@ -75,25 +95,89 @@ fn two_like_entries_outside_the_window_stay_two() {
 fn an_unbroken_run_coalesces_however_long_it_lasts() {
     let mut log = log();
     for (i, t) in [0.0, 0.8, 1.6].into_iter().enumerate() {
-        log.record_at(at(t), Kind::Selection, false, format!("Selected image {i}"));
+        log.record_at(
+            at(t),
+            Kind::Selection,
+            IMAGE,
+            false,
+            format!("Selected image {i}"),
+        );
     }
     assert_eq!(texts(&log), ["Selected image 2"]);
 }
 
+/// An entry with no run is a discrete act: it neither folds into the line
+/// above it nor is folded over by the line below, whatever the kind.
 #[test]
-fn a_discrete_kind_never_coalesces() {
+fn an_entry_with_no_run_never_coalesces_in_either_direction() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::File, false, "Opened a");
-    log.record_at(at(0.1), Kind::File, false, "Opened b");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened a");
+    log.record_at(at(0.1), Kind::File, None, false, "Opened b");
     assert_eq!(texts(&log), ["Opened a", "Opened b"]);
+
+    // A run, a discrete entry of the same kind and actor inside the window,
+    // then the run again: three lines, and the deselection is not folded into
+    // the selection it undid.
+    log.clear();
+    log.record_at(at(0.0), Kind::Selection, IMAGE, false, "Selected image a");
+    log.record_at(at(0.1), Kind::Selection, None, false, "Deselected image");
+    log.record_at(at(0.2), Kind::Selection, IMAGE, false, "Selected image b");
+    assert_eq!(
+        texts(&log),
+        ["Selected image a", "Deselected image", "Selected image b"]
+    );
+}
+
+/// **The run, not the kind, decides.** Two entries of one kind fold only when
+/// they are successive values of the same control, slot or tool; two different
+/// ones are two acts however close together they arrived.
+#[test]
+fn the_run_and_not_the_kind_decides_a_fold() {
+    // Two selection slots that both still hold.
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Selection, IMAGE, false, "Selected image a");
+    log.record_at(at(0.1), Kind::Selection, POINT, false, "Selected point 7");
+    assert_eq!(texts(&log), ["Selected image a", "Selected point 7"]);
+
+    // Two HUD controls, and then one of them twice.
+    log.clear();
+    log.record_at(at(0.0), Kind::Display, POINT_SIZE, false, "Point size 2.0");
+    log.record_at(at(0.1), Kind::Display, GRID, false, "Grid off");
+    assert_eq!(texts(&log), ["Point size 2.0", "Grid off"]);
+    log.record_at(at(0.2), Kind::Display, POINT_SIZE, false, "Point size 3.0");
+    log.record_at(at(0.3), Kind::Display, POINT_SIZE, false, "Point size 4.0");
+    assert_eq!(
+        texts(&log),
+        ["Point size 2.0", "Grid off", "Point size 4.0"]
+    );
+
+    // A view an agent drives through values, and a deliberate framing.
+    log.clear();
+    log.record_at(at(0.0), Kind::View, CAMERA, false, "Camera placed");
+    log.record_at(at(0.1), Kind::View, CAMERA, false, "Camera placed");
+    assert_eq!(texts(&log), ["Camera placed"]);
+    log.record_at(at(0.2), Kind::View, None, false, "Framed the scene");
+    assert_eq!(texts(&log), ["Camera placed", "Framed the scene"]);
 }
 
 #[test]
 fn a_failure_is_never_coalesced_away_in_either_direction() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Selection, true, "select_point failed: no");
-    log.record_at(at(0.1), Kind::Selection, false, "Selected point p");
-    log.record_at(at(0.2), Kind::Selection, true, "select_point failed: no");
+    log.record_at(
+        at(0.0),
+        Kind::Selection,
+        POINT,
+        true,
+        "select_point failed: no",
+    );
+    log.record_at(at(0.1), Kind::Selection, POINT, false, "Selected point p");
+    log.record_at(
+        at(0.2),
+        Kind::Selection,
+        POINT,
+        true,
+        "select_point failed: no",
+    );
     assert_eq!(
         texts(&log),
         [
@@ -107,20 +191,46 @@ fn a_failure_is_never_coalesced_away_in_either_direction() {
 #[test]
 fn different_actors_do_not_coalesce() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Selection, false, "Selected image a");
+    log.record_at(at(0.0), Kind::Selection, IMAGE, false, "Selected image a");
     log.set_actor(Actor::Mcp);
-    log.record_at(at(0.1), Kind::Selection, false, "Selected image b");
+    log.record_at(at(0.1), Kind::Selection, IMAGE, false, "Selected image b");
     assert_eq!(texts(&log), ["Selected image a", "Selected image b"]);
 }
 
 #[test]
 fn queries_coalesce_per_tool_and_not_across_tools() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Query("screenshot"), false, "screenshot 8×8");
-    log.record_at(at(0.2), Kind::Query("screenshot"), false, "screenshot 9×9");
-    assert_eq!(texts(&log), ["screenshot 9×9"]);
-    log.record_at(at(0.4), Kind::Query("get_scene"), false, "get_scene");
-    assert_eq!(texts(&log), ["screenshot 9×9", "get_scene"]);
+    for t in [0.0, 0.2] {
+        log.query_at(at(t), "get_scene", "get_scene");
+    }
+    assert_eq!(texts(&log), ["get_scene"]);
+    log.query_at(at(0.4), "get_point", "get_point #7");
+    assert_eq!(texts(&log), ["get_scene", "get_point #7"]);
+}
+
+/// A screenshot is not a value being scrubbed through: it is a picture the
+/// agent took and presumably looked at, so the reader is told how many were
+/// taken and of what.
+#[test]
+fn three_screenshots_in_a_second_are_three_rows() {
+    let mut log = log();
+    for (i, t) in [0.0, 0.2, 0.4].into_iter().enumerate() {
+        log.record_at(
+            at(t),
+            Kind::Query("screenshot"),
+            None,
+            false,
+            format!("screenshot viewer_3d {i}×{i}"),
+        );
+    }
+    assert_eq!(
+        texts(&log),
+        [
+            "screenshot viewer_3d 0×0",
+            "screenshot viewer_3d 1×1",
+            "screenshot viewer_3d 2×2"
+        ]
+    );
 }
 
 // ── Revisions ───────────────────────────────────────────────────────────
@@ -135,7 +245,13 @@ fn every_record_ticks_the_clock_and_stamps_the_entry() {
     let mut log = log();
     assert_eq!(log.revision(), 0, "a fresh log has not written anything");
     for i in 0..3 {
-        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("Opened {i}"));
+        log.record_at(
+            at(i as f64 * 2.0),
+            Kind::File,
+            None,
+            false,
+            format!("Opened {i}"),
+        );
     }
     assert_eq!(revisions(&log), [1, 2, 3]);
     assert_eq!(log.revision(), 3);
@@ -147,9 +263,9 @@ fn every_record_ticks_the_clock_and_stamps_the_entry() {
 #[test]
 fn a_coalescing_replacement_takes_a_fresh_revision() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::File, false, "Opened a");
-    log.record_at(at(0.1), Kind::Selection, false, "Selected image a");
-    log.record_at(at(0.5), Kind::Selection, false, "Selected image b");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened a");
+    log.record_at(at(0.1), Kind::Selection, IMAGE, false, "Selected image a");
+    log.record_at(at(0.5), Kind::Selection, IMAGE, false, "Selected image b");
     assert_eq!(texts(&log), ["Opened a", "Selected image b"]);
     assert_eq!(
         revisions(&log),
@@ -163,7 +279,13 @@ fn a_coalescing_replacement_takes_a_fresh_revision() {
 fn since_returns_exactly_the_entries_above_it() {
     let mut log = log();
     for i in 0..4 {
-        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("Opened {i}"));
+        log.record_at(
+            at(i as f64 * 2.0),
+            Kind::File,
+            None,
+            false,
+            format!("Opened {i}"),
+        );
     }
     let after_two: Vec<&str> = log.since(2).map(|entry| entry.text.as_str()).collect();
     assert_eq!(after_two, ["Opened 2", "Opened 3"], "oldest first");
@@ -174,9 +296,9 @@ fn since_returns_exactly_the_entries_above_it() {
         "a reader that is up to date is told nothing"
     );
     // A fold brings an entry the reader had already seen back into view.
-    log.record_at(at(8.0), Kind::Selection, false, "Selected image a");
+    log.record_at(at(8.0), Kind::Selection, IMAGE, false, "Selected image a");
     let mark = log.revision();
-    log.record_at(at(8.5), Kind::Selection, false, "Selected image b");
+    log.record_at(at(8.5), Kind::Selection, IMAGE, false, "Selected image b");
     let after_mark: Vec<&str> = log.since(mark).map(|entry| entry.text.as_str()).collect();
     assert_eq!(after_mark, ["Selected image b"]);
 }
@@ -190,7 +312,13 @@ fn oldest_revision_follows_the_entries_that_are_still_held() {
         "an empty log is as old as it is new"
     );
     for i in 0..ActionLog::CAPACITY + 2 {
-        log.record_at(at(i as f64 * 2.0), Kind::File, false, format!("entry {i}"));
+        log.record_at(
+            at(i as f64 * 2.0),
+            Kind::File,
+            None,
+            false,
+            format!("entry {i}"),
+        );
     }
     assert_eq!(
         log.oldest_revision(),
@@ -203,7 +331,7 @@ fn oldest_revision_follows_the_entries_that_are_still_held() {
     log.clear();
     assert_eq!(log.revision(), before, "Clear rewound the clock");
     assert_eq!(log.oldest_revision(), before);
-    log.record_at(at(0.0), Kind::File, false, "Opened again");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened again");
     assert_eq!(revisions(&log), [before + 1]);
 }
 
@@ -269,12 +397,12 @@ fn the_status_line_is_empty_until_something_happens() {
 fn the_status_line_skips_queries_and_prefixes_the_agent() {
     let mut log = log();
     log.set_actor(Actor::Mcp);
-    log.record_at(at(0.0), Kind::Scene, false, "Soloed beta");
-    log.record_at(at(1.0), Kind::Query("get_scene"), false, "get_scene");
+    log.record_at(at(0.0), Kind::Scene, None, false, "Soloed beta");
+    log.record_at(at(1.0), Kind::Query("get_scene"), None, false, "get_scene");
     assert_eq!(log.status_line().as_deref(), Some("MCP: Soloed beta"));
 
     log.set_actor(Actor::User);
-    log.record_at(at(2.0), Kind::Scene, false, "Soloed alpha");
+    log.record_at(at(2.0), Kind::Scene, None, false, "Soloed alpha");
     assert_eq!(log.status_line().as_deref(), Some("Soloed alpha"));
 }
 
@@ -284,10 +412,11 @@ fn the_status_line_skips_queries_and_prefixes_the_agent() {
 fn the_status_line_shows_a_failed_query() {
     let mut log = log();
     log.set_actor(Actor::Mcp);
-    log.record_at(at(0.0), Kind::Scene, false, "Soloed beta");
+    log.record_at(at(0.0), Kind::Scene, None, false, "Soloed beta");
     log.record_at(
         at(1.0),
         Kind::Query("get_camera_image"),
+        None,
         true,
         "get_camera_image failed: no such image",
     );
@@ -305,10 +434,10 @@ fn mute_nests() {
     log.mute();
     log.mute();
     log.unmute();
-    log.record_at(at(0.0), Kind::File, false, "Opened a");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened a");
     assert_eq!(log.len(), 0, "an outstanding mute still recorded");
     log.unmute();
-    log.record_at(at(1.0), Kind::File, false, "Opened b");
+    log.record_at(at(1.0), Kind::File, None, false, "Opened b");
     assert_eq!(texts(&log), ["Opened b"]);
 }
 
@@ -318,8 +447,8 @@ fn mute_nests() {
 fn the_clipboard_text_carries_the_date_the_actor_and_the_failures() {
     let mut log = log();
     log.set_actor(Actor::Mcp);
-    log.record_at(at(0.0), Kind::Scene, false, "text");
-    log.record_at(at(0.0), Kind::File, true, "text");
+    log.record_at(at(0.0), Kind::Scene, None, false, "text");
+    log.record_at(at(0.0), Kind::File, None, true, "text");
     assert_eq!(
         log.to_clipboard_text(),
         "2026-09-01 14:04:03  MCP     text\n2026-09-01 14:04:03  MCP   ! text\n"
@@ -344,9 +473,9 @@ fn painted(log: &mut ActionLog) -> Vec<String> {
 #[test]
 fn the_rows_paint_oldest_first_as_time_actor_and_text() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::File, false, "Opened alpha");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened alpha");
     log.set_actor(Actor::Mcp);
-    log.record_at(at(61.0), Kind::File, false, "Opened beta");
+    log.record_at(at(61.0), Kind::File, None, false, "Opened beta");
 
     let texts = painted(&mut log);
     let index = |needle: &str| {
@@ -398,7 +527,7 @@ fn painted_widths(log: &mut ActionLog, panel: egui::Vec2) -> Vec<(String, f32)> 
 fn a_text_wider_than_the_panel_is_elided() {
     let mut log = log();
     let long = "Aligned ".to_string() + &"very-long-label ".repeat(40);
-    log.record_at(at(0.0), Kind::Scene, false, long.clone());
+    log.record_at(at(0.0), Kind::Scene, None, false, long.clone());
     let panel = egui::vec2(600.0, 400.0);
     let (_, width) = painted_widths(&mut log, panel)
         .into_iter()
@@ -414,7 +543,7 @@ fn a_text_wider_than_the_panel_is_elided() {
 #[test]
 fn clear_empties_the_buffer_and_the_next_frame_paints_no_rows() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::File, false, "Opened alpha");
+    log.record_at(at(0.0), Kind::File, None, false, "Opened alpha");
     log.clear();
     assert_eq!(log.len(), 0);
     assert_eq!(log.status_line(), None);

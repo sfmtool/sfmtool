@@ -138,54 +138,60 @@ the log and has no state of its own. Consequences that differ from before:
 
 ## What gets logged
 
-The catalogue, by kind. **Kind** decides whether a run of entries coalesces
-(§ "Coalescing"); **actor** is whoever applied the action. Texts are the exact
-strings, with `{…}` for the values that vary.
+The catalogue, by kind. **Kind** is what the row is about, and what the
+tooltip and the MCP wire name it; **run** is the one thing the entry is a
+successive value *of* — a control, a selection slot, a poll — and decides
+whether a burst of entries folds into one line (§ "Coalescing"): entries with
+the same run replace one another, and an entry with no run (`—`) is a discrete
+act that always gets its own line. **Actor** is whoever applied the action.
+Texts are the exact strings, with `{…}` for the values that vary.
 
-| Kind | Coalesces | Actor | Text |
-|------|-----------|-------|------|
-| Session | no | Viewer | `SfM Explorer {version} started` |
-| Session | no | Viewer | `MCP endpoint listening on {url}` |
-| File | no | User / MCP | `Opened {label} from {path}` |
-| File | no | User / MCP | `Reloaded {label}` |
-| File | no | User / MCP | `Failed to load {path}: {error}` — **failed** |
-| File | no | User / MCP | `Failed to reload {path}: {error}` — **failed** |
-| File | no | User / MCP | `Closed {label}` |
-| File | no | User / MCP | `Closed all ({n})` — one entry, not one per node |
-| File | no | User | `Loaded demo data` |
-| Scene | no | User / MCP | `Soloed {label}` / `Ended the solo` |
-| Scene | no | User / MCP | `{label} hidden` / `{label} shown` |
-| Scene | no | User / MCP | `{Points|Camera images|Patches|Points at infinity} of {label} hidden/shown` |
-| Scene | no | User / MCP | `{label} made non-interactive` / `interactive` |
-| Scene | no | User / MCP | `Tint of {label}: {Red|Green|…|None}` |
-| Scene | no | User | `Reset transform of {label}` |
-| Scene | no | User | `Aligned {src} → {tgt}: {i}/{n} {cameras|points}, RMS {rms:.3}` — existing text |
-| Scene | no | User | `Align {src} → {tgt} failed: {reason}` — existing text, **failed** |
-| Scene | no | User | `Resected {image} in {label}: …` — existing text |
-| Scene | no | User | `Resect {image} in {label} refused: {reason}` — existing text, **failed** |
-| Selection | yes | User / MCP | `Selected reconstruction {label}` |
-| Selection | yes | User / MCP | `Selected image {name} in {label}` |
-| Selection | yes | User / MCP | `Selected camera intrinsics #{k} in {label}` |
-| Selection | yes | User / MCP | `Selected point {pt3d_id}` |
-| Selection | yes | User / MCP | `Cleared selection` / `Deselected image` / `Deselected camera intrinsics` / `Deselected point` |
-| View | yes | User / MCP | `Framed the scene` / `Framed {label}` / `Framed camera #{k} of {label}` |
-| View | yes | User / MCP | `Looking through {name}` / `Left camera view` |
-| View | yes | User | `Levelled the horizon` / `Reset the view` |
-| View | yes | MCP | `Camera placed` / `Camera restored` / `Field of view {fov:.1}°` |
-| Display | yes | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
-| Display | yes | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031` |
-| Display | yes | User / MCP | The Image Detail panel's controls, in the same two shapes: `Overlay {label}` / `Max features {n|all}` / `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` / `Tracked only {on|off}` / `Intrinsics {on|off}` / `Intrinsics {axes|rings|distortion} {on|off}` / `Distortion scale {×n|auto}` / `Grid density {n}` — one entry per field that changed, from one differ both the toolbar and `set_image_detail_display` call ([mcp-server.md](mcp-server.md) § "`get_image_detail_display` / `set_image_detail_display`") |
-| Animation | no | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
-| Animation | no | Viewer | `Animation reached the end at {name}` |
-| Animation | no | User | `Animation rate {fps} fps` |
-| Layout | no | User / MCP | `Opened {Panel} panel` / `Closed {Panel} panel` / `Raised {Panel} panel` |
-| Layout | no | User / MCP | `Reset layout` |
-| Layout | no | User | `Saved layout to {path}` / `Loaded layout from {path}` — the menu, and the startup load of the default file |
-| Layout | no | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
-| Layout | no | MCP | `Set layout` / `Reset layout` — the panel portion of a `set_window_layout`, which `apply_window_layout` leaves to its caller to word |
-| Window | no | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
-| Query | yes | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target |
-| any | never | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
+| Kind | Run | Actor | Text |
+|------|-----|-------|------|
+| Session | — | Viewer | `SfM Explorer {version} started` |
+| Session | — | Viewer | `MCP endpoint listening on {url}` |
+| File | — | User / MCP | `Opened {label} from {path}` |
+| File | — | User / MCP | `Reloaded {label}` |
+| File | — | User / MCP | `Failed to load {path}: {error}` — **failed** |
+| File | — | User / MCP | `Failed to reload {path}: {error}` — **failed** |
+| File | — | User / MCP | `Closed {label}` |
+| File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
+| File | — | User | `Loaded demo data` |
+| Scene | — | User / MCP | `Soloed {label}` / `Ended the solo` |
+| Scene | — | User / MCP | `{label} hidden` / `{label} shown` |
+| Scene | — | User / MCP | `{Points|Camera images|Patches|Points at infinity} of {label} hidden/shown` |
+| Scene | — | User / MCP | `{label} made non-interactive` / `interactive` |
+| Scene | — | User / MCP | `Tint of {label}: {Red|Green|…|None}` |
+| Scene | — | User | `Reset transform of {label}` |
+| Scene | — | User | `Aligned {src} → {tgt}: {i}/{n} {cameras|points}, RMS {rms:.3}` — existing text |
+| Scene | — | User | `Align {src} → {tgt} failed: {reason}` — existing text, **failed** |
+| Scene | — | User | `Resected {image} in {label}: …` — existing text |
+| Scene | — | User | `Resect {image} in {label} refused: {reason}` — existing text, **failed** |
+| Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
+| Selection | `image` | User / MCP | `Selected image {name} in {label}` |
+| Selection | `camera intrinsics` | User / MCP | `Selected camera intrinsics #{k} in {label}` |
+| Selection | `point` | User / MCP | `Selected point {pt3d_id}` |
+| Selection | — | User / MCP | `Cleared selection` / `Deselected image` / `Deselected camera intrinsics` / `Deselected point` |
+| View | — | User / MCP | `Framed the scene` / `Framed {label}` / `Framed camera #{k} of {label}` |
+| View | — | User / MCP | `Looking through {name}` / `Left camera view` |
+| View | — | User | `Levelled the horizon` / `Reset the view` |
+| View | `camera` | MCP | `Camera placed` / `Camera restored` |
+| View | `field of view` | MCP | `Field of view {fov:.1}°` |
+| Display | the control's label | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
+| Display | the control's label | User | `{Control} {value}` for HUD sliders, e.g. `Point size 3.0`, `Scene scale 0.031` |
+| Display | the control's label | User / MCP | The Image Detail panel's controls, in the same two shapes: `Overlay {label}` / `Max features {n|all}` / `Feature size {min:.1}–{max:.1} px` / `Feature size filter off` / `Tracked only {on|off}` / `Intrinsics {on|off}` / `Intrinsics {axes|rings|distortion} {on|off}` / `Distortion scale {×n|auto}` / `Grid density {n}` — one entry per field that changed, from one differ both the toolbar and `set_image_detail_display` call ([mcp-server.md](mcp-server.md) § "`get_image_detail_display` / `set_image_detail_display`"). The run is the control: `Feature size` for both of its texts, `Intrinsics axes` and `Intrinsics rings` two different runs |
+| Animation | — | User | `Animation playing at {fps} fps` / `Animation paused at {name}` |
+| Animation | — | Viewer | `Animation reached the end at {name}` |
+| Animation | — | User | `Animation rate {fps} fps` |
+| Layout | — | User / MCP | `Opened {Panel} panel` / `Closed {Panel} panel` / `Raised {Panel} panel` |
+| Layout | — | User / MCP | `Reset layout` |
+| Layout | — | User | `Saved layout to {path}` / `Loaded layout from {path}` — the menu, and the startup load of the default file |
+| Layout | — | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
+| Layout | — | MCP | `Set layout` / `Reset layout` — the panel portion of a `set_window_layout`, which `apply_window_layout` leaves to its caller to word |
+| Window | — | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
+| Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` |
+| Query | — | MCP | `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target — every picture taken is its own line |
+| any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
 
 Rules that the table implies:
 
@@ -237,12 +243,13 @@ Not logged, by design:
 
 ## Coalescing
 
-A run of like entries folds into one. When a new entry arrives, it **replaces**
-the newest existing entry — text and timestamp both — instead of being appended
-if all of these hold:
+A burst of successive values of one thing folds into one line. When a new
+entry arrives, it **replaces** the newest existing entry — text and timestamp
+both — instead of being appended if all of these hold:
 
-1. both have a kind that coalesces (Selection, View, Display, Query);
-2. they have the same kind — and for queries, the same tool name;
+1. both entries have a run, and it is the same run (the catalogue's **Run**
+   column: the same control, the same selection slot, the same query tool);
+2. they have the same kind;
 3. they have the same actor;
 4. neither is a failed entry;
 5. the new entry's time is within `COALESCE_WINDOW` (1 s) of the existing
@@ -251,11 +258,45 @@ if all of these hold:
 The window is measured from the *replaced* entry's timestamp, which is itself
 the time of the last replacement, so an unbroken run coalesces indefinitely: a
 17-image scrub with the arrow keys is one line, a slider drag is one line, an
-animation playing at 4 fps is one line, and an agent taking a screenshot every
+animation playing at 4 fps is one line, and an agent polling `get_scene` every
 200 ms is one line. The run breaks on any pause longer than the window, on a
-different kind, on a change of actor (the user clicking during an agent's
+different run, on a change of actor (the user clicking during an agent's
 selection run), or on a failure. The user's own scrub and the agent's
 selection therefore never merge into each other.
+
+**The run is finer than the kind, on purpose.** Folding by kind alone — the
+rule the log started with — took every `Display` entry within a second to be
+the same gesture, so a `set_image_detail_display` that changed three fields
+kept only the third field's row, and a human who ticked `Grid` and then
+`Axes` inside a second saw one line say `Axes on` and nothing say `Grid`. The
+thing a fold is *for* is a widget or a slot being dragged through
+intermediate values, where only the value it was let go at matters; two
+different controls are two acts, however close together, and each keeps its
+line. So the run names the control, not the category, and the same
+distinction gives every kind its answer:
+
+- **Selection** folds per slot: a scrub through images is one `Selected image`
+  line, but selecting an image and then a point within a second is two lines,
+  since they are two selections that both still hold. `Cleared selection` and
+  the `Deselected …` texts have no run — a deselection is a discrete act, and
+  folding one into the selection it undid would show a selection that no
+  longer exists.
+- **View** folds only the two things an agent drives through values: the
+  camera's placement (`Camera placed` / `Camera restored`, an agent animating a
+  path) and the field of view. `Framed …`, `Looking through …`, `Levelled the
+  horizon` and `Reset the view` are each one deliberate act and never fold.
+- **Display** folds per control, the control being the word in front of the
+  value: a `Point size` drag is one line; `Point size` followed by `Grid` is
+  two. The Image Detail differ's fields are each their own control, so a call
+  that changes three of them leaves three rows, and a `Feature size` filter
+  set and then cleared is one row that ends `filter off`.
+- **Query** folds per tool, so a poll is one row however often it asks —
+  **except `screenshot`, which never folds.** A screenshot is not a value
+  being scrubbed through; it is a picture the agent took and presumably
+  looked at, and the human reading the log wants to know how many were taken
+  and of what. Ten screenshots in a second are ten lines.
+- Everything else — Session, File, Scene, Animation, Layout, Window — is
+  discrete, as before.
 
 Coalescing is decided at record time and is not reversible; the entries it
 replaces are gone. This is deliberate — the log is a readable record, not an
@@ -312,7 +353,8 @@ pub(crate) enum Actor {
     Viewer,
 }
 
-/// What an entry is about; decides whether a run of them coalesces.
+/// What an entry is about: the panel's tooltip word and the wire's `kind`.
+/// Says nothing about folding — that is [`Run`]'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     Session,
@@ -327,12 +369,20 @@ pub(crate) enum Kind {
     /// The window itself: the state, size and placement one window layout
     /// changed. See `specs/gui/panel-layout.md`.
     Window,
-    /// A read-only MCP tool, by name. Coalesces per tool.
+    /// A read-only MCP tool, by name.
     Query(&'static str),
 }
 
+/// The one thing an entry is a successive value of — a control's label, a
+/// selection slot, a query tool — or `None` for a discrete act. Two entries
+/// with the same run, kind and actor inside `COALESCE_WINDOW` fold into one
+/// line; an entry with no run never folds (§ "Coalescing", and the catalogue's
+/// Run column). A `&'static str` because every run is a literal at its call
+/// site — the HUD's control labels, the selection slots, the tool table's
+/// names — and the log compares them, never composes them.
+pub(crate) type Run = Option<&'static str>;
+
 impl Kind {
-    pub(crate) fn coalesces(self) -> bool;
     /// The word the row tooltip shows; for a query, the tool's name.
     pub(crate) fn label(self) -> &'static str;
     /// The word the MCP wire uses: `label` lower-cased, every query under the
@@ -356,6 +406,9 @@ pub(crate) struct Entry {
     pub at: jiff::Timestamp,
     pub actor: Actor,
     pub kind: Kind,
+    /// What this entry folds with. Not on the wire: an agent reads rows, and
+    /// which rows folded is already visible in the revisions it did not see.
+    pub run: Run,
     pub failed: bool,
     pub text: String,
 }
@@ -371,19 +424,26 @@ impl ActionLog {
     /// A log formatting in `zone`. The tests use a fixed one.
     pub(crate) fn with_zone(zone: jiff::tz::TimeZone) -> Self;
 
-    /// Record a successful action as the current actor, now.
+    /// Record a discrete action as the current actor, now. Never folds.
     pub(crate) fn record(&mut self, kind: Kind, text: impl Into<String>);
-    /// Record a failed action as the current actor, now. Never coalesces.
+    /// Record one value of `run` as the current actor, now: folds into the
+    /// newest entry when that entry is the same run (§ "Coalescing").
+    pub(crate) fn record_run(&mut self, kind: Kind, run: &'static str, text: impl Into<String>);
+    /// Record a failed action as the current actor, now. Never folds.
     pub(crate) fn fail(&mut self, kind: Kind, text: impl Into<String>);
-    /// Record one entry as `actor`, restoring the standing one afterwards.
+    /// Record one discrete entry as `actor`, restoring the standing one afterwards.
     pub(crate) fn record_as(&mut self, actor: Actor, kind: Kind, text: impl Into<String>);
-    /// Record a read-only MCP tool call: `Kind::Query(tool)`, coalescing per tool.
+    /// Record a read-only MCP tool call: `Kind::Query(tool)` with `tool` as
+    /// its run, so a poll folds. `screenshot` does not come through here — it
+    /// is recorded with `record`, as the discrete act it is.
     pub(crate) fn query(&mut self, tool: &'static str, text: impl Into<String>);
-    /// Record `response.changed()` as one entry, building the text only then.
-    pub(crate) fn changed(&mut self, response: &egui::Response, kind: Kind,
+    /// Record `response.changed()` as one value of `run` — the control's
+    /// label — building the text only then.
+    pub(crate) fn changed(&mut self, response: &egui::Response, kind: Kind, run: &'static str,
                           text: impl FnOnce() -> String);
-    /// The `record` / `fail` primitives with an explicit instant, for tests.
-    pub(crate) fn record_at(&mut self, at: jiff::Timestamp, kind: Kind, failed: bool, text: impl Into<String>);
+    /// The `record` / `record_run` / `fail` primitive with an explicit instant, for tests.
+    pub(crate) fn record_at(&mut self, at: jiff::Timestamp, kind: Kind, run: Run, failed: bool,
+                            text: impl Into<String>);
 
     /// Who subsequent entries are attributed to. `User` by default.
     pub(crate) fn set_actor(&mut self, actor: Actor);
@@ -498,8 +558,8 @@ of every text. `get_scene` renders it into its reply as `status_message`,
 unchanged in shape.
 
 **`Kind::Query(&'static str)`** rather than a `Query` variant plus a text
-match: coalescing per tool needs the tool's identity, and the tool table
-already holds every name as a `&'static str`.
+match: the row's tooltip word and the query's run are both the tool's name,
+and the tool table already holds every name as a `&'static str`.
 
 **`record_at` exists for tests only.** `record` is `record_at(Timestamp::now(),
 …)`; the coalescing window and the local-time formatting are both tested with
@@ -542,8 +602,9 @@ headless test as the command vocabulary, since `App` needs a GPU and a window
 and `apply_as_agent` needs neither.
 
 Within that batch, each applied command yields exactly one entry before
-coalescing, with the one exception named above (a multi-field
-`set_reconstruction_display` records one per field it changed):
+coalescing, with the two exceptions named above (a multi-field
+`set_reconstruction_display` or `set_image_detail_display` records one per
+field it changed):
 
 - A mutating tool's entry is written by the `AppState` / `Viewer3D` method it
   calls, with the text from the catalogue and actor `Mcp` because the drain
@@ -669,13 +730,24 @@ same buffer the panel draws, on the same thread.
 Buffer rules, with `record_at` and fixed instants:
 
 - Past `CAPACITY`, the oldest entry goes and `dropped()` counts it.
-- Two `Selection` entries 0.5 s apart become one, carrying the second text and
-  the second time; 1.5 s apart they stay two. The window is measured from the
-  replaced entry's time, so three entries at 0, 0.8 and 1.6 s are one.
+- Two `Selected image` entries 0.5 s apart become one, carrying the second
+  text and the second time; 1.5 s apart they stay two. The window is measured
+  from the replaced entry's time, so three entries at 0, 0.8 and 1.6 s are one.
 - A `File` entry never coalesces. A failed `Selection` entry never coalesces,
   and a `Selection` after it does not replace it.
 - Different actors do not coalesce; different query tools do not coalesce; the
-  same query tool does.
+  same query tool does. `screenshot` does not fold with itself: three in a
+  second are three rows.
+- **The run, not the kind, decides.** `Selected image` then `Selected point`
+  inside the window are two rows; `Point size 2.0` then `Grid off` are two
+  rows and `Point size 2.0` then `Point size 3.0` one; `Camera placed` then
+  `Framed the scene` are two; a `record` with no run after a `record_run` of
+  any run is never folded into it, and never folded over. Every catalogue row
+  with a run folds with itself and with no other.
+- **A multi-field `set_image_detail_display` keeps every field's row**: a call
+  changing `overlay_mode`, `intrinsics.rings` and `intrinsics.distortion_scale`
+  reads back as three `Display` rows, in field order, and a second call
+  changing only `distortion_scale` folds into the third.
 - `status_line()` is `None` when empty, skips `Query` entries, and prefixes
   `MCP: ` exactly when the actor is `Mcp`.
 - `mute` nests: two `mute`s and one `unmute` still record nothing.
@@ -772,3 +844,10 @@ Scene-graph and resection tests that read `state.status_message` moved to
   entry after all. Per-field is right while the fields read as separate things
   in the tree; an agent that habitually sets four at once would make the case
   for a single `Display of {label} changed` line.
+- **Whether a folded row should say how many it folded.** A `Selected image`
+  line that stood in for a 40-image scrub, or a `get_camera_image` line for
+  85 reads, reads as one act. A count on the entry (`×85`, in the tooltip or
+  after the text) would keep that information at no cost to readability, and
+  would answer the case for never folding `get_camera_image` across images.
+  Not done: nothing has asked, and the revision clock already lets an agent
+  see that a fold happened.

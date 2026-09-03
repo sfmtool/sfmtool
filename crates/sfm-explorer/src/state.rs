@@ -239,6 +239,11 @@ impl ImageDetailDisplay {
 /// Record what changed in the Image Detail panel's controls, one
 /// [`Kind::Display`] entry per field, in the words the controls themselves use.
 ///
+/// **Each field is its own run**, so a call that changed three of them leaves
+/// three rows and only a repeat of the *same* field inside the log's window
+/// folds — an agent stepping `distortion_scale` up the ladder, a human dragging
+/// the size filter. See `crate::action_log::Run`.
+///
 /// **One function, two callers**: the dock wraps the panel's frame in it — the
 /// toolbar, the gear popup and the `I` key all land in one before/after pair —
 /// and `set_image_detail_display` wraps its write. That is what guarantees the
@@ -257,46 +262,76 @@ pub fn record_image_detail_changes(
 ) {
     let (was, now) = (&before.feature, &after.feature);
     if was.overlay_mode != now.overlay_mode {
-        log.record(
+        log.record_run(
             Kind::Display,
+            "Overlay",
             format!("Overlay {}", now.overlay_mode.label()),
         );
     }
     if was.max_features != now.max_features {
-        log.record(Kind::Display, max_features_text(now.max_features));
+        log.record_run(
+            Kind::Display,
+            "Max features",
+            max_features_text(now.max_features),
+        );
     }
     // The pair, not either bound alone: the toolbar's one `Min/max size:`
     // checkbox derives both from its two drag values every frame, so they are
     // one control to the person watching and one line in the log.
     if (was.min_feature_size, was.max_feature_size) != (now.min_feature_size, now.max_feature_size)
     {
-        log.record(Kind::Display, feature_size_text(now));
+        log.record_run(Kind::Display, "Feature size", feature_size_text(now));
     }
     if was.tracked_only != now.tracked_only {
-        log.record(Kind::Display, on_off("Tracked only", now.tracked_only));
+        log.record_run(
+            Kind::Display,
+            "Tracked only",
+            on_off("Tracked only", now.tracked_only),
+        );
     }
 
     let (was, now) = (&before.intrinsics, &after.intrinsics);
     if was.enabled != now.enabled {
-        log.record(Kind::Display, on_off("Intrinsics", now.enabled));
+        log.record_run(
+            Kind::Display,
+            "Intrinsics",
+            on_off("Intrinsics", now.enabled),
+        );
     }
     if was.axes != now.axes {
-        log.record(Kind::Display, on_off("Intrinsics axes", now.axes));
+        log.record_run(
+            Kind::Display,
+            "Intrinsics axes",
+            on_off("Intrinsics axes", now.axes),
+        );
     }
     if was.rings != now.rings {
-        log.record(Kind::Display, on_off("Intrinsics rings", now.rings));
+        log.record_run(
+            Kind::Display,
+            "Intrinsics rings",
+            on_off("Intrinsics rings", now.rings),
+        );
     }
     if was.distortion != now.distortion {
-        log.record(
+        log.record_run(
             Kind::Display,
+            "Intrinsics distortion",
             on_off("Intrinsics distortion", now.distortion),
         );
     }
     if was.distortion_scale != now.distortion_scale {
-        log.record(Kind::Display, distortion_scale_text(now.distortion_scale));
+        log.record_run(
+            Kind::Display,
+            "Distortion scale",
+            distortion_scale_text(now.distortion_scale),
+        );
     }
     if was.grid_cols != now.grid_cols {
-        log.record(Kind::Display, format!("Grid density {}", now.grid_cols));
+        log.record_run(
+            Kind::Display,
+            "Grid density",
+            format!("Grid density {}", now.grid_cols),
+        );
     }
 }
 
@@ -869,8 +904,11 @@ impl AppState {
         self.selected_point = self.selected_point.filter(|p| p.recon == id);
         if moved {
             let label = self.label_of(id);
-            self.action_log
-                .record(Kind::Selection, format!("Selected reconstruction {label}"));
+            self.action_log.record_run(
+                Kind::Selection,
+                "reconstruction",
+                format!("Selected reconstruction {label}"),
+            );
         }
     }
 
@@ -940,7 +978,7 @@ impl AppState {
                 self.image_name(image),
                 self.label_of(image.recon)
             );
-            self.action_log.record(Kind::Selection, text);
+            self.action_log.record_run(Kind::Selection, "image", text);
         }
     }
 
@@ -995,7 +1033,8 @@ impl AppState {
                 camera.index(),
                 self.label_of(camera.recon)
             );
-            self.action_log.record(Kind::Selection, text);
+            self.action_log
+                .record_run(Kind::Selection, "camera intrinsics", text);
         }
     }
 
@@ -1051,7 +1090,7 @@ impl AppState {
                 .map(|node| crate::scene::point_id(&node.recon, point.index()))
                 .unwrap_or_else(|| format!("#{}", point.index()));
             self.action_log
-                .record(Kind::Selection, format!("Selected point {id}"));
+                .record_run(Kind::Selection, "point", format!("Selected point {id}"));
         }
     }
 
@@ -1475,12 +1514,10 @@ mod image_detail_display_tests {
 
     /// The entries one change records, as text.
     ///
-    /// One field per call, because [`Kind::Display`] coalesces: a run of like
-    /// entries inside the log's window folds into the newest of them, which is
-    /// what keeps a slider drag one line. Reading each text back therefore
-    /// means changing one field at a time — and the multi-field case is
-    /// covered by the revision clock, which ticks once per write however the
-    /// entries fold.
+    /// One field per call, so that each text is read back on its own. Nothing
+    /// here folds — every field is its own run — so a multi-field call reads
+    /// back as many rows as it changed fields, which
+    /// `one_entry_per_changed_field` covers.
     fn texts(change: impl FnOnce(&mut ImageDetailDisplay)) -> Vec<String> {
         let before = defaults();
         let mut after = before.clone();
@@ -1549,9 +1586,9 @@ mod image_detail_display_tests {
 
         let mut log = ActionLog::new();
         record_image_detail_changes(&mut log, &before, &after);
-        // Three writes, folded by the log's own coalescing into the newest of
-        // the run — the revision ticks once per write either way.
+        // Three fields, three runs, three rows: nothing here folds.
         assert_eq!(log.revision(), 3);
+        assert_eq!(log.entries().count(), 3);
         // Each of the three on its own, so every text is read back.
         for (change, text) in [
             (
@@ -1598,9 +1635,9 @@ mod image_detail_display_tests {
         assert_eq!(log.entries().count(), 0);
     }
 
-    /// One entry per field, however many a single call changed: the log's
-    /// clock ticks once per write, and the coalescing that folds the run in
-    /// the panel is the same folding a human's run of toolbar changes gets.
+    /// One entry per field, however many a single call changed — and each
+    /// field is its own run, so all three rows survive and only a repeat of
+    /// the *same* field folds into the row it already has.
     #[test]
     fn one_entry_per_changed_field() {
         let before = defaults();
@@ -1612,8 +1649,24 @@ mod image_detail_display_tests {
         record_image_detail_changes(&mut log, &before, &after);
         assert_eq!(log.revision(), 3);
         assert_eq!(
-            log.entries().next_back().expect("an entry").text,
-            "Intrinsics rings on"
+            log.entries().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            [
+                "Overlay Track Length",
+                "Tracked only off",
+                "Intrinsics rings on"
+            ]
+        );
+        let mut later = after.clone();
+        later.intrinsics.rings = false;
+        record_image_detail_changes(&mut log, &after, &later);
+        assert_eq!(
+            log.entries().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            [
+                "Overlay Track Length",
+                "Tracked only off",
+                "Intrinsics rings off"
+            ],
+            "the repeat did not fold into its own field's row"
         );
     }
 

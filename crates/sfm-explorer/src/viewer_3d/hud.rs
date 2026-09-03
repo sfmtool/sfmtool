@@ -113,10 +113,17 @@ fn on_off(on: bool) -> &'static str {
 /// them, they all write straight into the state they govern, and
 /// `response.changed()` is the only signal that this frame's value is a new
 /// one.
-fn checkbox(ui: &mut egui::Ui, log: &mut crate::action_log::ActionLog, on: &mut bool, label: &str) {
+fn checkbox(
+    ui: &mut egui::Ui,
+    log: &mut crate::action_log::ActionLog,
+    on: &mut bool,
+    label: &'static str,
+) {
     let response = ui.checkbox(on, label);
     let value = *on;
-    log.changed(&response, Kind::Display, || {
+    // The label is the run as well as the word the entry opens with: two
+    // checkboxes ticked inside a second are two acts and keep two lines.
+    log.changed(&response, Kind::Display, label, || {
         format!("{label} {}", on_off(value))
     });
 }
@@ -130,16 +137,21 @@ fn checkbox(ui: &mut egui::Ui, log: &mut crate::action_log::ActionLog, on: &mut 
 /// A drag records once a frame while it is moving; those entries coalesce into
 /// a single line carrying the value it was let go at, which is the granularity
 /// wanted and needs no `drag_stopped` plumbing.
+///
+/// `run` is the control's name — the word `text` opens with — and is what a
+/// drag folds under, so that this slider's run and the next slider's stay two
+/// lines however close together they were moved.
 fn slider(
     ui: &mut egui::Ui,
     log: &mut crate::action_log::ActionLog,
     value: &mut f32,
+    run: &'static str,
     text: impl FnOnce(f32) -> String,
     build: impl for<'a> FnOnce(&'a mut f32) -> egui::Slider<'a>,
 ) {
     let response = ui.add(build(&mut *value));
     let now = *value;
-    log.changed(&response, Kind::Display, || text(now));
+    log.changed(&response, Kind::Display, run, || text(now));
 }
 
 impl Viewer3D {
@@ -252,16 +264,20 @@ impl Viewer3D {
                 )
                 .on_disabled_hover_text("This reconstruction carries no patch bitmaps");
             let on = state.show_patches;
-            state.action_log.changed(&patches, Kind::Display, || {
-                format!("Patches {}", on_off(on))
-            });
+            state
+                .action_log
+                .changed(&patches, Kind::Display, "Patches", || {
+                    format!("Patches {}", on_off(on))
+                });
             let infinity = ui
                 .checkbox(&mut state.show_points_at_infinity, "Points at ∞")
                 .on_hover_text("Draw w = 0 points — directions with no parallax");
             let on = state.show_points_at_infinity;
-            state.action_log.changed(&infinity, Kind::Display, || {
-                format!("Points at ∞ {}", on_off(on))
-            });
+            state
+                .action_log
+                .changed(&infinity, Kind::Display, "Points at ∞", || {
+                    format!("Points at ∞ {}", on_off(on))
+                });
         });
 
         section(ui, "size", "Size", true, |ui| {
@@ -269,6 +285,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.point_size_log2,
+                "Point size",
                 |v| format!("Point size {v:.1}"),
                 |v| {
                     egui::Slider::new(v, -3.0..=3.0)
@@ -278,12 +295,18 @@ impl Viewer3D {
             );
             if ui.button("Reset point size").clicked() {
                 state.point_size_log2 = 0.0;
-                state.action_log.record(Kind::Display, "Point size 0.0");
+                // Another value of the same control, so a drag this button
+                // interrupts folds into it rather than leaving the abandoned
+                // value on the line above.
+                state
+                    .action_log
+                    .record_run(Kind::Display, "Point size", "Point size 0.0");
             }
             slider(
                 ui,
                 &mut state.action_log,
                 &mut state.infinity_point_px,
+                "∞ point size",
                 |v| format!("∞ point size {v:.1} px"),
                 |v| {
                     egui::Slider::new(v, 1.0..=16.0)
@@ -295,6 +318,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.length_scale,
+                "Scene scale",
                 |v| format!("Scene scale {v:.3}"),
                 |v| {
                     egui::Slider::new(v, 0.001..=100.0)
@@ -313,6 +337,7 @@ impl Viewer3D {
                     ui,
                     &mut state.action_log,
                     &mut state.patch_opacity,
+                    "Patch opacity",
                     |v| format!("Patch opacity {v:.2}"),
                     |v| {
                         egui::Slider::new(v, 0.0..=1.0)
@@ -324,6 +349,7 @@ impl Viewer3D {
                     ui,
                     &mut state.action_log,
                     &mut state.patch_size_log2,
+                    "Patch size",
                     |v| format!("Patch size {v:.1}"),
                     |v| {
                         egui::Slider::new(v, -3.0..=3.0)
@@ -335,6 +361,7 @@ impl Viewer3D {
                     ui,
                     &mut state.action_log,
                     &mut state.patch_alpha_cutoff,
+                    "Patch edge cutoff",
                     |v| format!("Patch edge cutoff {v:.2}"),
                     |v| {
                         egui::Slider::new(v, 0.0..=1.0)
@@ -357,13 +384,16 @@ impl Viewer3D {
             }
             // The same text the MCP `set_view` fov form records, so the two
             // ways to change one number read as one action.
-            state.action_log.changed(&response, Kind::Display, || {
-                format!("Field of view {fov_degrees:.1}°")
-            });
+            state
+                .action_log
+                .changed(&response, Kind::Display, "Field of view", || {
+                    format!("Field of view {fov_degrees:.1}°")
+                });
             if ui.button("Reset FOV").clicked() {
                 self.camera.fov = std::f64::consts::FRAC_PI_4;
-                state.action_log.record(
+                state.action_log.record_run(
                     Kind::Display,
+                    "Field of view",
                     format!("Field of view {:.1}°", self.camera.fov.to_degrees()),
                 );
             }
@@ -376,6 +406,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.edl_line_thickness,
+                "EDL width",
                 |v| format!("EDL width {v:.1}"),
                 |v| {
                     egui::Slider::new(v, 0.5..=8.0)
@@ -387,6 +418,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.frustum_size_multiplier,
+                "Frustum size",
                 |v| format!("Frustum size {v:.2}"),
                 |v| {
                     egui::Slider::new(v, 0.05..=5.0)
@@ -399,6 +431,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.target_size_multiplier,
+                "Target size",
                 |v| format!("Target size {v:.2}"),
                 |v| {
                     egui::Slider::new(v, 0.05..=5.0)
@@ -411,6 +444,7 @@ impl Viewer3D {
                 ui,
                 &mut state.action_log,
                 &mut state.target_fog_multiplier,
+                "Target fog",
                 |v| format!("Target fog {v:.1}"),
                 |v| {
                     egui::Slider::new(v, 0.5..=100.0)

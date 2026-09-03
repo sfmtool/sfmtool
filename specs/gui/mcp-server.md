@@ -664,11 +664,11 @@ a **successful** call writes go.
 in the words the HUD's own controls use — `{Control} {on|off}`, `{Control}
 {value}` — because each is its own control to the person watching the window
 (the same reasoning as `set_reconstruction_display`, [action-log.md](action-log.md)
-§ "Catalogue"). An unchanged field records nothing. `Display` coalesces, so a
-call that changed several of them advances the log's revision once per field
-while the run folds in the panel into the newest of them — the same folding a
-human's run of toolbar changes gets, and the reason a reader watching the panel
-sees one line move rather than a burst. The texts:
+§ "Catalogue"). An unchanged field records nothing. Each field is its own
+run ([action-log.md](action-log.md) § "Coalescing"), so a call that changes
+three fields leaves three rows, and only a repeat of the *same* field inside
+the window — an agent stepping `distortion_scale` up the ladder, a human
+dragging the size filter — folds into one line. The texts:
 
 | Field | Text |
 |-------|------|
@@ -897,8 +897,9 @@ whose `since_revision` is older than it has missed entries — dropped past
 assuming the gap was quiet. The counter never resets, Clear included.
 
 **`get_action_log` is a read and is recorded as one**, a `Query` entry
-`get_action_log since 512`, coalescing per tool like every other read — so a
-poll is one row, however often it asks — and out of its own reply under
+`get_action_log since 512`, coalescing per tool like every other read but
+`screenshot` — so a poll is one row, however often it asks — and out of its
+own reply under
 `actors: ["user"]`. A read of the log that the log did not record would be the
 one action the human could not see. The row is written after the reply is built,
 so a call never reports itself and always reports the one before it.
