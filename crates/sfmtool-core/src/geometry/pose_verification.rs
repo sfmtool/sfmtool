@@ -2,49 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Displacement-neighborhood pose verification and repair
-//! ([`verify_poses`] / [`repair_poses`]). See
-//! `specs/core/geometry/pose-verification.md`.
+//! ([`verify_poses`] / [`repair_poses`]).
 //!
 //! Detects and repairs misregistered cameras in a reconstruction without a
 //! reference solve, an image ordering, or a motion model. The ruler is the
 //! [`DisplacementNeighborhood`] substrate — which images are near-duplicate
-//! viewpoints of which, measured by keypoint displacement, computed once from
-//! the 2D cluster tracks — and the screens hold the current poses against it:
+//! viewpoints of which, measured by keypoint displacement over the 2D cluster
+//! tracks — and [`verify_poses`] holds the current poses against it with two
+//! screens: self-resection of each camera against its own 2D-3D support, and the
+//! measured relative rotation of each low-displacement neighbour pair against
+//! the pose-implied one. [`repair_poses`] re-initializes a flagged camera from
+//! its registered near neighbours and re-refines it pose-only.
 //!
-//! - **Screen A (self-resection):** re-resect every registered camera's own
-//!   observations against the shared structure with
-//!   [`crate::geometry::batch_resection::resect_images_batch`]; a camera whose
-//!   pose cannot be re-derived from its own 2D-3D support is flagged.
-//! - **Screen B (measured-versus-posed relative rotation):** for each
-//!   registered camera and each of its `nearest` low-displacement neighbours
-//!   (the low-parallax regime, where the conjugate-homography model holds),
-//!   estimate the homography over the pair's shared-cluster correspondences,
-//!   extract `R = K⁻¹HK` (orthonormalized, conjugated to the canonical frame
-//!   by `S = diag(1, −1, −1)`), and compare with the pose-implied relative
-//!   rotation. The per-image score is the **median** angular discrepancy over
-//!   its neighbours; flag at or above a threshold.
+//! Everything runs in the canonical camera frame — the camera looks along `−Z`,
+//! poses are world-to-camera `x_cam = R·X + t` — so the second screen's `K⁻¹HK`,
+//! an *optical*-frame rotation, is conjugated by `S = diag(1, −1, −1)` on both
+//! sides before it is compared. Both screens are read-only on the observation
+//! data, images are independent and run in parallel, and every random draw
+//! derives deterministically from the input seed.
 //!
-//! Two properties are load-bearing: the comparison is restricted to
-//! low-displacement neighbours (at wider baselines the displacement carries
-//! parallax and the small-rotation model misattributes it) and the
-//! aggregation is a per-image median (a single discrepant pair is noise or
-//! parallax; a misregistered camera is implicated consistently by every
-//! neighbour that overlaps it).
-//!
-//! **Repair:** a flagged camera is re-initialized from its top-2 `nearest`
-//! registered neighbours — chordal mean of their rotations, mean of their
-//! centres — then trimmed pose-only refinement against the current structure.
-//! A repair is accepted only when the all-observation inlier fraction reaches
-//! `max(floor, before + margin)`: an "improvement" below the absolute floor
-//! means the camera's neighbourhood structure is itself broken, which
-//! pose-only repair cannot fix. Rejected repairs leave the pose untouched and
-//! the flag standing.
-//!
-//! Everything runs in the canonical camera frame (the camera looks along
-//! `−Z`); poses are world-to-camera `x_cam = R·X + t`. Both screens are
-//! read-only on the observation data, images are independent and run in
-//! parallel, and every random draw derives deterministically from the input
-//! seed — identical inputs reproduce identical output bit for bit.
+//! See `specs/core/geometry/pose-verification.md` for the design.
 
 use nalgebra::{Matrix3, Quaternion, UnitQuaternion, Vector3};
 use rayon::prelude::*;

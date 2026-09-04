@@ -8,6 +8,8 @@
 //! multi-scale exoneration that separates a structural disagreement from a
 //! spectral one. Nothing here renders — the matrix is built in
 //! [`super::matrix`].
+//!
+//! See `specs/core/patch/member-coherence-validation.md` for the design.
 
 use super::{
     scored_mask, MemberCoherenceParams, MemberDecision, MemberMatrix, MemberVerdict,
@@ -181,127 +183,50 @@ fn self_normalized_thresholds(
 
 /// Read a verdict off a pairwise member matrix.
 ///
-/// Takes the max-support block (`max_support_block`), then gates the cut on its
-/// **separation margin** — the weakest link inside the block minus the strongest
-/// link leaving it. A margin at or below `margin_gate` (or an undefined one) means
-/// the block boundary runs through a continuum rather than between two surfaces,
-/// and the track is kept whole. Past the gate, a block holding a strict majority
-/// of the members splits the track; a block that does not is a track whose
-/// evidence supports two incompatible surfaces with neither prevailing, and the
-/// point is retired.
+/// **The whole rule runs over the [scored](scored_mask) members only** — the
+/// block sweep, both margin sides, and the majority denominator. An unscored
+/// member carries no pairwise evidence, so it can neither be evicted by a cut it
+/// took no part in nor dilute a majority among members that did: it passes
+/// through `kept` and stays out of `block`. Fewer than two scored members means
+/// no evidence at all: `KeepAll`, empty block, `support = 0`, undefined margin.
 ///
-/// # The self-normalized admission bar
-///
-/// `bar` and `margin_gate` are absolute, and an absolute threshold can only be
-/// calibrated against one kind of disagreement. A member imaging a *different*
-/// surface scores 0.2–0.5 against the core and 0.65 catches it. A member imaging
-/// an *occluder in front of the same repeating texture* shares the core's
-/// dominant structure and scores 0.85–0.95 — against a core that agrees with
-/// itself at 0.99. The block structure is real and entirely above the bar.
-///
-/// So the thresholds are re-derived **per track, from the track's own
-/// coherence**, in two passes over the same matrix:
+/// The pass, in order:
 ///
 /// 1. Sweep the max-support block (`max_support_block`) at the absolute `bar`.
-/// 2. Measure that block's own [`core_coherence`] — centre `c`, scatter `σ`.
-/// 3. `effective_bar = max(bar, min(c − self_bar_k · σ, `[`SELF_BAR_CEILING`]`))`
-///    and `effective_margin_gate = min(margin_gate, σ)`.
-/// 4. Re-sweep the block at `effective_bar` (only when it actually rose), and run
-///    the margin and majority tests below on *that* block, against
-///    `effective_margin_gate`.
+/// 2. Measure that block's own [`core_coherence`] — centre `c`, scatter `σ` —
+///    and re-derive both thresholds in the track's own units:
+///    `effective_bar = max(bar, min(c − self_bar_k · σ, `[`SELF_BAR_CEILING`]`))`
+///    and `effective_margin_gate = min(margin_gate, σ)`. Both relax back to the
+///    absolute pair exactly when `σ` is large. The tightening runs **once**, and
+///    is inactive at `self_bar_k = 0` or below [`SELF_BAR_MIN_PAIRS`]
+///    intra-block pairs.
+/// 3. Re-sweep the block at `effective_bar`, but only when it actually rose.
+/// 4. Gate the cut on its **separation margin** — the weakest link inside the
+///    block minus the strongest link leaving it — against
+///    `effective_margin_gate`. A margin at or below the gate, or an undefined
+///    one, is `KeepAll`.
+/// 5. **Exonerate**: of the members the *relative* term alone would evict, spare
+///    those whose disagreement does not survive coarsening. The retained deficit
+///    is [`core_deficit`] at the **first** coarse table of
+///    [`MemberMatrix::zncc_coarse`] — one halving — over the deficit at full
+///    scale, compared against
+///    [`MemberCoherenceParams::exoneration_ratio`]. A spared member stays in
+///    `kept`, out of `block`, and is marked in [`MemberDecision::exonerated`],
+///    while `margin`, `min_intra`, `max_cross`, `support` and `block` keep
+///    describing the cut that was proposed. Inert at `exoneration_ratio = 0`,
+///    whenever the relative term is inactive, and on a matrix with no coarse
+///    scale.
+/// 6. A block holding a strict majority of the scored members splits the track;
+///    a block that does not retires the point. Sparing every rejected member
+///    falls back to `KeepAll`; sparing enough to restore a majority turns a
+///    `Retire` into a `Split`.
 ///
-/// The margin floor moves with the bar because it is the same problem one level
-/// down: a margin is a difference of two ZNCCs, and the noise on that difference
-/// is the core's own pair-to-pair scatter. A tight core separates from an
-/// occluder by 0.02–0.04 — a real gap in its own units, refused outright by an
-/// absolute 0.05. Both terms therefore relax back to the absolute pair exactly
-/// when σ is large, which is what a drift chain and a noisy track have in common.
-///
-/// The circularity is real and is **cut, not solved**: admission defines the
-/// block whose statistics set the admission bar. Pass 1 is deliberately run at
-/// the loose absolute bar so the block is the widest defensible one, the scatter
-/// estimator is one-sided so the members under suspicion cannot inflate the
-/// scale that is meant to exclude them, and the tightening runs **once**. It is
-/// not iterated to a fixed point: each pass would shrink the block, tighten the
-/// bar off the survivors, and shrink it again, converging on the tightest
-/// sub-clique of every track regardless of whether anything is wrong with it.
-///
-/// `self_bar_k = 0` disables all of it, reproducing the absolute rule exactly.
-/// Below [`SELF_BAR_MIN_PAIRS`] intra-block pairs — a block of three or fewer —
-/// there is nothing to estimate a scatter from and the relative term stays
-/// inactive for the same reason.
-///
-/// `self_bar_k` **trades occlusion recall against collateral**: every member that
-/// trails a tight core for an innocent reason — motion blur, an exposure step, a
-/// grazing view — is a member the tightened bar is also more willing to evict,
-/// and nothing in the *full-scale* matrix distinguishes the two. Multi-scale
-/// exoneration, below, is what does.
-///
-/// # Multi-scale exoneration
-///
-/// A member that trails a tight core does so for one of two reasons, and the
-/// pairwise agreement at a single scale cannot tell them apart because the two
-/// produce the same number. They stop looking alike as soon as the fine detail is
-/// taken away:
-///
-/// - **Structural** disagreement — an occluder, a different surface — is present
-///   at every scale. The member's low-frequency content is already the wrong
-///   content, so blurring both sides changes nothing about how badly they agree.
-/// - **Spectral** disagreement — a defocused or motion-blurred frame of the *same*
-///   surface — lives entirely in the detail. Coarsen both sides and it evaporates:
-///   the member's low frequencies are the core's low frequencies.
-///
-/// So for each member the **relative** term alone would evict, the agreement
-/// deficit is measured twice:
-///
-/// `deficit(scale) = mean(core↔core at scale) − mean(member↔core at scale)`
-///
-/// where the core is the winning block minus the member itself, over the tables
-/// [`MemberMatrix::zncc_coarse`] already carries. Their quotient — the **retained
-/// deficit** — is compared to [`MemberCoherenceParams::exoneration_ratio`], and a
-/// member at or below it is **exonerated**: it stays in `kept`, out of `block`,
-/// and marked in [`MemberDecision::exonerated`].
-///
-/// The comparison scale is the **first** coarse table — one halving — and not the
-/// coarsest, because the test is whether the disagreement *survives* removing
-/// detail, and a grid coarse enough washes out structure too. Measured against
-/// the two labelled populations, one halving separates them (occluders retain
-/// 0.85–1.00 of their deficit, soft frames a median 0.85 with a long lower tail);
-/// two halvings collapses the occluders into the same range as the soft frames
-/// and the separation is gone. That is why the threshold sits high: it is
-/// asking "did *anything* decay", not "did most of it".
-///
-/// **Only the relative term's evictions are exonerable, and this asymmetry is
-/// deliberate.** A member the *absolute* bar rejects is not a soft frame of the
-/// track's surface at all — it correlates 0.2–0.5, the cross-surface chimera the
-/// absolute rule was calibrated on — and how its disagreement is distributed
-/// across scales says nothing about whether it belongs. Blur is not a defence
-/// against imaging a different thing. Exoneration therefore never loosens the
-/// validated absolute rule; it only refunds what tightening the bar per track
-/// took.
-///
-/// Exoneration runs **after** the margin gate and before the majority test, on
-/// the block the sweep produced. It re-admits individual members from the rejected
-/// side rather than re-running the sweep: `margin`, `min_intra`, `max_cross`,
-/// `support` and `block` all keep describing the cut that was proposed, and
-/// exoneration is recorded as what it is — a spared member, not a different
-/// block. When every rejected member is spared the verdict falls back to
-/// `KeepAll`; when enough are spared to restore a majority, a `Retire` becomes a
-/// `Split`.
-///
-/// `exoneration_ratio = 0` disables it. It is also inert whenever the relative
-/// term is (there is nothing it may spare), and whenever the matrix carries no
-/// coarse scale.
-///
-/// **The whole rule runs over the [scored](scored_mask) members only** — the block
-/// sweep, both margin sides, and the majority denominator. An unscored member
-/// carries no pairwise evidence at all, so it can neither be evicted by a cut it
-/// took no part in nor dilute a majority among members that did: it passes through
-/// `kept` (a `Retire` still ships nothing, the point itself is refused) and stays
-/// out of `block`. With every member scored this is the plain rule, unchanged.
-///
-/// Fewer than two scored members means no evidence: `KeepAll`, empty block,
-/// `support = 0`, undefined margin.
+/// See `specs/core/patch/member-coherence-validation.md` for why each step is
+/// shaped this way: what the absolute bar is calibrated against and why a
+/// per-track bar is needed on top of it, why the admission/statistics
+/// circularity is cut rather than iterated, why the margin gate refuses to cut a
+/// drift continuum, why only the relative term's evictions are exonerable, and
+/// why one halving is the comparison scale.
 pub fn decide_member_coherence(
     matrix: &MemberMatrix,
     params: &MemberCoherenceParams,

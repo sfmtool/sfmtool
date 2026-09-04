@@ -1,8 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Far-field rotation initialization ([`rotation_init`]). See
-//! `specs/core/geometry/rotation-init.md`.
+//! Far-field rotation initialization ([`rotation_init`]).
 //!
 //! Builds an initial multi-camera reconstruction from cluster tracks by using
 //! the two point populations for what each observes: parallax-free
@@ -10,31 +9,9 @@
 //! through conjugate homographies `H = K R K⁻¹`, independent of baseline;
 //! parallax-bearing (near-field) correspondences then supply the metric side —
 //! a seed baseline, structure, and translation growth — with rotations held.
-//!
-//! The stages:
-//!
-//! 1. **Rotation edge graph** — per image, the largest-mean-displacement
-//!    covisible partners; per candidate pair a robust homography over the
-//!    centred shared-cluster correspondences, validated as a conjugate
-//!    rotation at `f0` by the orthogonality residual. A validated edge stores
-//!    the polar-orthogonalized `K⁻¹ H K` and its inlier partition (H-inliers
-//!    are the edge's far field, H-outliers its near field).
-//! 2. **Global rotations** — over the largest connected component:
-//!    spanning-tree propagation from the highest-degree image, then iterative
-//!    chordal-mean rotation averaging to absorb tree drift.
-//! 3. **Seed baseline and structure** — the component edge with the most
-//!    near-field correspondences; with both rotations known the translation
-//!    direction is linear (`x₂ · (t × R_rel x₁) = 0`), sign fixed by
-//!    triangulation cheirality; the near clusters triangulate into the
-//!    initial structure at unit baseline scale.
-//! 4. **Translation growth** — rotation-locked resection of unposed images
-//!    against the triangulated structure, retriangulating over the posed set
-//!    each round, finishing with one staged bundle adjustment at fixed `f0`.
-//!    The far-field cluster ids feed the adjustment's points-at-infinity
-//!    mask: left finite, a dominant far cloud rewards baseline collapse (the
-//!    LM walks the scale gauge until the near field crosses the trim depth
-//!    floor and the core degenerates to a panorama). After the adjustment
-//!    the gauge is renormalized so the seed baseline is unit again.
+//! Four stages, in order: the rotation edge graph (`build_pair_tables`,
+//! `build_edges`), global rotations (`average_rotations`), the seed baseline
+//! and its structure (`seed_baseline`), and rotation-locked translation growth.
 //!
 //! Everything runs in the canonical camera frame (the camera looks along
 //! `−Z`); the conjugate-homography rotation is extracted in the optical pixel
@@ -42,6 +19,8 @@
 //! table pass and all selections are deterministic, and the RANSAC estimator
 //! derives its sampling from the input seed, so identical inputs and seed
 //! reproduce identical output.
+//!
+//! See `specs/core/geometry/rotation-init.md` for the design.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

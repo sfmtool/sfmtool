@@ -5,31 +5,19 @@
 //! ([`p3p_solve`]) and a deterministic RANSAC estimator
 //! ([`estimate_absolute_pose`]).
 //!
-//! See `specs/core/geometry/absolute-pose.md`. Given `N` correspondences between
-//! observed image **bearings** (unit ray directions in the canonical camera
-//! frame — a camera looks along `−Z`, a point in front has `z < 0`) and known
-//! world points, estimate the camera's world-to-camera pose `x_cam = R·X + t`,
-//! robust to a heavily contaminated correspondence set.
+//! Both take correspondences between observed image **bearings** — unit ray
+//! directions in the canonical camera frame, where a camera looks along `−Z` and
+//! a point in front has `z < 0` — and known world points, and return
+//! world-to-camera poses in the same convention, `x_cam = R·X + t`.
 //!
-//! The minimal solver returns up to four poses from three correspondences by
-//! solving the two-quadric depth system with the Lambda Twist parameterization
-//! (Persson & Nordberg, ECCV 2018): the depths follow from a real root of the
-//! pencil-degeneracy cubic and the eigendecomposition of a 3×3 symmetric
-//! matrix, and each depth triple is upgraded to a rigid motion by a three-point
-//! Kabsch alignment. It is pure: no allocation beyond the fixed-capacity
-//! result, no randomness, bit-stable across runs.
+//! Both are bit-stable across runs: [`p3p_solve`] is pure, and
+//! [`estimate_absolute_pose`]'s minimal samples come from a seeded SplitMix64,
+//! so the same inputs and seed give identical output. [`p3p_solve`] returns its
+//! at-most-four poses in a plain `Vec` reserved once, rather than a
+//! fixed-capacity vector, because the workspace carries no `arrayvec` dependency
+//! and uses fixed-capacity vectors nowhere else.
 //!
-//! The estimator draws minimal samples with a SplitMix64 sampler (seeded, so
-//! same inputs + same seed give bit-identical output), scores every candidate
-//! pose against all correspondences by the angular inlier test in input order,
-//! keeps the best consensus, optionally locally optimizes it (Gauss-Newton on
-//! angular residuals over the inliers), and terminates adaptively.
-//!
-//! **Deviation from the spec** (2026-07-14): the spec's [`p3p_solve`] signature
-//! returns `ArrayVec<_, 4>`. The workspace has no `arrayvec` dependency and
-//! does not use fixed-capacity vectors elsewhere, so the solver returns a
-//! `Vec<(UnitQuaternion<f64>, Vector3<f64>)>` (allocated once with capacity 4).
-//! Recorded in the spec.
+//! See `specs/core/geometry/absolute-pose.md` for the design.
 
 use nalgebra::{Matrix3, Matrix6, Point3, UnitQuaternion, Vector3, Vector6};
 

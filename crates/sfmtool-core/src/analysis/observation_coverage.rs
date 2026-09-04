@@ -3,19 +3,10 @@
 
 //! Observation coverage: which image pixels existing tracks already claim.
 //!
-//! Several per-image decisions need the same structure — spawning new candidate
-//! tracks should aim at regions no existing observation claims, expansion around
-//! an under-determined point should reach into directions with no coverage, and a
-//! contested region (many overlapping claims) is a duplicate / alias signal — and
-//! differ only in how they read it. [`ObservationCoverage::build`] rasterizes
-//! every observation's image-space footprint into per-image occupancy grids once,
-//! and the batch queries answer against them.
-//!
-//! Coverage is deliberately observation-based and depth-free: a pixel is
-//! "claimed" because some track *observes* it there, with the footprint radius
-//! supplied per observation (typically the feature's detection scale or the
-//! projected patch extent). Counts are kept, not booleans, so sparse coverage and
-//! contested coverage read differently.
+//! [`ObservationCoverage::build`] rasterizes every observation's image-space
+//! footprint — a disk at its keypoint, with the radius supplied per observation —
+//! into per-image grids of saturating counts once, and the batch queries answer
+//! against them.
 //!
 //! See `specs/core/analysis/observation-coverage.md` for the design.
 

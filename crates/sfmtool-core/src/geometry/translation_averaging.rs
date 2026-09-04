@@ -3,31 +3,11 @@
 
 //! Camera centres from pairwise baselines, with every rotation held.
 //!
-//! With the rotations known and the direction of each connected pair's
-//! baseline read off correspondences
-//! ([`super::baseline_direction`]), the centres of the whole graph are one
-//! linear problem. Over frames `i` and edges `(i, j)` with unit direction
-//! `d_ij`, direction weight `w_ij` and, where stated, a relative length `L_ij`
-//! at weight `a_ij`, the objective is
-//!
-//! ```text
-//! sum_ij  w_ij | P_ij (c_j - c_i) |^2  +  a_ij ( d_ij . (c_j - c_i) - s L_ij )^2
-//! ```
-//!
-//! with `P_ij = I - d_ij d_ij^T`. The lengths are RELATIVE, so the scale `s`
-//! that turns them into distances is an unknown of the fit and is eliminated
-//! in closed form, which leaves a homogeneous quadratic form `B` in the
-//! centres alone.
-//!
-//! The TRUE centres are what `B` sends to zero whenever the directions agree,
-//! so the constellation is the form's own null space and the solve is
-//! `argmin x^T B x` under the scale gauge rather than a linear system posed
-//! against `B`. The null space is read at the numerical rank tolerance; a null
-//! space of more than one dimension is the graph stating that it does not
-//! determine the constellation (a straight path leaves one null direction per
-//! free spacing along the line), and a frame that owns more than half of one
-//! null dimension is loose. In either case the answer is the range solution,
-//! which leaves a loose frame where the measurement leaves it.
+//! With the rotations known and the direction of each connected pair's baseline
+//! read off correspondences ([`super::baseline_direction`]), the centres of the
+//! whole graph are one linear problem: [`average_translations`] fits them to the
+//! stated directions, and to the relative lengths wherever a caller supplies
+//! them.
 //!
 //! Two further operations sit beside the solve, because they are consumed
 //! separately: [`relative_lengths`] reads the lengths off the two-view depths
@@ -35,7 +15,10 @@
 //! directions cannot, which of the two mirror-image constellations has the
 //! structure in front of the cameras.
 //!
-//! See `specs/core/geometry/translation-averaging.md` for the design.
+//! See `specs/core/geometry/translation-averaging.md` for the design — the
+//! objective and its gauges, why the constellation is the fitted form's own
+//! null space rather than the solution of a linear system posed against it, and
+//! what the census reports when the graph does not determine it.
 
 use std::collections::HashMap;
 

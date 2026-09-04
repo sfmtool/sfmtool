@@ -11,26 +11,20 @@
 //! equidistant base, the normalized image-plane radius `ρ = tan θ` for the
 //! pinhole base — and `d_max` is the model's domain-end parameter
 //! (`bspline_theta_max` / `bspline_rho_max`). Everything below is arithmetic
-//! on that scalar, so one basis serves both models.
+//! on that scalar and on the caller's coefficient slice: one basis serves both
+//! models, and nothing here allocates.
 //!
 //! The basis is a cubic open-uniform (clamped) B-spline on `[0, d_max]` with
-//! the **first two** basis functions of the full clamped basis omitted — their
-//! coefficients are pinned to zero — so `δ(0) = 0` and `δ'(0) = 0` by
-//! construction. That is the center-anchored gauge: the focal length alone
-//! carries the central scale, and the spline cannot express a central-scale
-//! correction, which keeps `f` a pure multiplier of an `f`-independent
-//! distorted coordinate (the property the bundle adjustment's focal column
-//! relies on). Beyond `d_max` the correction is held constant at `δ(d_max)`
-//! with zero slope, so the map continues linearly with `r' = f`.
+//! the **first two** functions of the full clamped basis omitted and their
+//! coefficients pinned to zero — the center-anchored gauge, which fixes
+//! `δ(0) = 0` and `δ'(0) = 0` by construction. Beyond `d_max` the correction is
+//! held constant at `δ(d_max)` with zero slope, so the map continues linearly
+//! with `r' = f`.
 //!
-//! A coefficient vector of `N` values spans a full clamped basis of `N + 2`
-//! functions, which needs `N ≥ 2` ([`MIN_BSPLINE_COEFFS`]); shorter
-//! coefficient vectors (including the empty one) evaluate as the identity
-//! `δ ≡ 0`. At any `d` at most [`BSPLINE_SUPPORT`] basis functions are
-//! non-zero (cubic local support), which is what lets a bundle-adjustment
-//! kernel treat the per-observation coefficient block as fixed-size.
-//!
-//! Everything here is pure arithmetic on the caller's slice — no allocation.
+//! See `specs/core/camera/sfmtool-fisheye-kernels.md` for the design — basis
+//! evaluation, the monotonicity invariant and where it is enforced — and
+//! `specs/formats/sfmtool-camera-models.md` for why the gauge is anchored at
+//! the centre rather than left free.
 
 /// Number of basis functions active at any `d` (cubic local support). The
 /// per-`d` outputs of [`basis_at`] are fixed arrays of this length.
@@ -206,11 +200,10 @@ pub(crate) fn delta(bspline: &[f64], d_max: f64, d: f64) -> f64 {
 /// (`1 + δ'(d) > 0`) over `[0, min(d_span, d_max)]`.
 ///
 /// Beyond `d_max` the slope is exactly 1, so only the spline's own domain
-/// needs checking. Two-stage: first the **sufficient** condition via the
-/// derivative spline's control points `3·(a_{i+1} − a_i)/(t_{i+4} − t_{i+1})`
-/// (the quadratic `δ'` is a convex combination of them, so all
-/// `1 + d_i > 0` proves monotonicity outright); when that conservative test
-/// fails, a dense sampling of `δ'` over the requested span decides.
+/// needs checking. Two-stage: a **sufficient** convexity test on the derivative
+/// spline's control points, which proves monotonicity outright over the whole
+/// domain when it passes, and — only when that conservative test fails — a
+/// dense sampling of `δ'` over the requested span.
 ///
 /// This is the bundle adjustment's spline step guard's primitive
 /// (`bspline_step_admissible`).
