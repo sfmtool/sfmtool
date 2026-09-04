@@ -26,11 +26,12 @@ from pathlib import Path
 import click
 
 
-# `--model` -> the `focal_vote` column set it evaluates. The named forms run a
-# single column, so the binding reports that column's own consensus and no
-# arbitration takes place.
+# `--model` -> the `columns` the kernel evaluates. The named forms run a single
+# column, so the binding reports that column's own consensus and no arbitration
+# takes place. `auto` hands the choice to the kernel: it votes pinhole-only and
+# pays for the camera-model columns only when that vote comes back weak.
 _MODEL_COLUMNS = {
-    "auto": ("pinhole", "equidistant"),
+    "auto": "auto",
     "pinhole": ("pinhole",),
     "fisheye": ("equidistant",),
 }
@@ -214,6 +215,24 @@ def _report_lines(estimate: dict, data: dict) -> list[str]:
             f"out of band {result['n_band_rejected']}",
         ]
 
+    # Whether the camera-model columns ran at all is the kernel's decision under
+    # `--model auto`, so the report states it rather than leaving the reader to
+    # infer it from a missing Columns block.
+    escalation = estimate["escalation"]
+    if escalation is not None:
+        if escalation:
+            lines += [
+                "",
+                "Arbitration:   the camera-model columns ran, on a weak pinhole "
+                f"vote ({', '.join(escalation)})",
+            ]
+        else:
+            lines += [
+                "",
+                "Arbitration:   not run -- the pinhole-only vote stood on its "
+                "own, leaving the camera-model columns nothing to overturn",
+            ]
+
     if result["columns"]:
         lines += ["", "Columns:"]
         for column in result["columns"]:
@@ -353,8 +372,9 @@ def _write_camrig(
     default="auto",
     show_default=True,
     help=(
-        "Camera-model columns to run: `auto` runs both and arbitrates between "
-        "them; the named forms run one column and skip arbitration."
+        "Camera-model columns to run: `auto` votes pinhole-only and runs both "
+        "columns, arbitrating between them, when that vote comes back weak; "
+        "the named forms run one column and skip arbitration."
     ),
 )
 @click.option(
@@ -408,8 +428,10 @@ def estimate_intrinsics(
     estimator their geometry can observe, and the pooled log-median is the
     focal consensus. No structure is estimated, so the answer cannot be biased
     by the depth/focal compensation of structure-based estimation. Under
-    `--model auto` the pinhole and equidistant-fisheye columns are both run and
-    arbitrated on their certified mass of model-informative scan votes.
+    `--model auto` the pinhole vote runs first, and the equidistant-fisheye
+    column is added -- and arbitrated against the pinhole one on their certified
+    mass of model-informative scan votes -- only when that pinhole vote comes
+    back weak. The report says which of the two happened, and why.
 
     The report is the product: a capture with no consensus still exits 0.
     Passing --write-camrig also commits the estimate as a one-sensor .camrig,
@@ -435,7 +457,7 @@ def estimate_intrinsics(
             data["width"],
             data["height"],
             seed=seed,
-            columns=list(_MODEL_COLUMNS[model_option.lower()]),
+            columns=_MODEL_COLUMNS[model_option.lower()],
         )
     except click.UsageError:
         raise
@@ -459,6 +481,10 @@ def estimate_intrinsics(
         payload["diagonal_fov_deg"] = _diagonal_fov_deg(
             result["camera_model"], result["focal_px"], data["width"], data["height"]
         )
+        # What `--model auto` decided: the weak-vote reasons that made the
+        # camera-model columns worth running, `[]` when they were not run, and
+        # null when the columns were named outright.
+        payload["escalation"] = result["escalation"]
         # The evidence behind THIS verdict, unlike the flat vote lists above,
         # which always describe the pinhole closed-form kernel.
         payload["verdict_votes"] = result["verdict_votes"]

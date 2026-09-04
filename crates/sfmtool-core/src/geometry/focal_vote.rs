@@ -249,9 +249,14 @@ const ROTATION_MIN_SHARED: usize = 25;
 const ROTATION_MIN_DISP_FRAC: f64 = 0.08;
 const ROTATION_MIN_INLIERS: usize = 12;
 
-const ORTHO_GRID_N: usize = 48;
-const ORTHO_GRID_LO: f64 = 0.3;
-const ORTHO_GRID_HI: f64 = 4.0;
+// The rotation self-calibration's focal grid, in units of the longer image
+// dimension. `pub(crate)` because the weak-vote escalation in
+// `super::estimate_intrinsics` asks whether a rotation consensus landed on the
+// grid's bottom rung, which is a question about THESE numbers -- restating them
+// there would be a second copy free to drift.
+pub(crate) const ORTHO_GRID_N: usize = 48;
+pub(crate) const ORTHO_GRID_LO: f64 = 0.3;
+pub(crate) const ORTHO_GRID_HI: f64 = 4.0;
 const ORTHO_COST_FLOOR: f64 = 0.15;
 
 const FOCAL_BAND_LO: f64 = 0.2;
@@ -264,7 +269,11 @@ const DIRECTION_AGREEMENT_BAND: f64 = 0.05;
 /// Log-focal gap between the two families' medians beyond which the pool is
 /// bimodal: blending it would report a focal no pair voted for, so the
 /// consensus falls back to the majority family's median.
-const FAMILY_DISAGREEMENT_BAND: f64 = 0.25;
+///
+/// `pub(crate)` because the weak-vote escalation in
+/// [`mod@super::estimate_intrinsics`] reads a pool over this band as evidence that
+/// the pinhole answer is contested, and that is the same band.
+pub(crate) const FAMILY_DISAGREEMENT_BAND: f64 = 0.25;
 
 /// Pooled votes needed for a consensus.
 const MIN_POOL: usize = 2;

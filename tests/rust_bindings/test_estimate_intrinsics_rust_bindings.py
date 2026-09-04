@@ -8,9 +8,11 @@
 The estimate is the high-level face of the focal vote: it runs the same vote
 and hands back one typed answer -- the model verdict, whether that verdict is
 corroborated, the consensus focal, and the votes that belong to it -- with the
-raw vote nested under ``"vote"``. The synthetic scenes are the vote binding's
-own, imported rather than rebuilt, so the two bindings are read against
-identical captures.
+raw vote nested under ``"vote"``. It also owns WHEN the camera-model columns
+are worth running: ``columns="auto"`` screens on the pinhole-only vote and
+escalates only when that vote comes back weak. The synthetic scenes are the
+vote binding's own, imported rather than rebuilt, so the two bindings are read
+against identical captures.
 """
 
 import numpy as np
@@ -23,6 +25,7 @@ from .test_focal_vote_rust_bindings import (
     H,
     W,
     _fisheye_scene,
+    _parallax_scene,
     _rotation_scene,
 )
 
@@ -37,6 +40,8 @@ def test_estimate_dict_layout():
         "confirmed",
         "focal_px",
         "verdict_votes",
+        "escalation",
+        "screening_vote",
         "vote",
     }
     assert est["camera_model"] in ("Pinhole", "EquidistantFisheye", None)
@@ -47,6 +52,10 @@ def test_estimate_dict_layout():
     assert set(est["vote"]) >= {"columns", "epipolar_votes", "rotation_votes"}
     assert est["focal_px"] == est["vote"]["focal_px"]
     assert est["camera_model"] == est["vote"]["camera_model"]
+    # Named columns never escalate, so there is no decision to report and no
+    # screening vote to keep.
+    assert est["escalation"] is None
+    assert est["screening_vote"] is None
 
 
 def test_default_columns_are_both():
@@ -151,6 +160,61 @@ def test_shape_validation():
         estimate_intrinsics(
             np.zeros(10, np.uint32), np.zeros(9, np.uint32), np.zeros((10, 2)), W, H
         )
+
+
+def _two_subcapture_scene() -> tuple:
+    """A far-field rotation rig and a baseline track in one observation set, on
+    disjoint images and clusters -- both vote families at once, so the pinhole
+    pool is wide enough to stand without the camera-model columns."""
+    rot_c, rot_i, rot_p = _rotation_scene(2024)
+    par_c, par_i, par_p = _parallax_scene(7)
+    return (
+        np.concatenate([rot_c, par_c + rot_c.max() + 1]).astype(np.uint32),
+        np.concatenate([rot_i, par_i + rot_i.max() + 1]).astype(np.uint32),
+        np.concatenate([rot_p, par_p]).astype(np.float64),
+    )
+
+
+def test_auto_escalates_a_weak_pinhole_vote_to_the_two_column_answer():
+    cl, im, pos = _fisheye_scene(2718)
+    auto = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns="auto")
+    assert auto["escalation"], "a fisheye capture's pinhole vote is weak"
+    assert all(isinstance(reason, str) for reason in auto["escalation"])
+
+    # The escalated answer is the both-columns answer on the same inputs.
+    both = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns=BOTH)
+    assert auto["camera_model"] == both["camera_model"]
+    assert auto["confirmed"] == both["confirmed"]
+    assert auto["focal_px"] == both["focal_px"]
+    assert auto["vote"] == both["vote"]
+
+    # The weak vote it screened on is kept, because the escalated result's
+    # top-level fields are the fisheye column's, not the pinhole ones.
+    screening = auto["screening_vote"]
+    assert screening["columns"] == []
+    assert screening["camera_model"] == "Pinhole"
+    assert screening == focal_vote(cl, im, pos, W, H, seed=0)
+
+
+def test_auto_leaves_a_strong_pinhole_vote_alone():
+    cl, im, pos = _two_subcapture_scene()
+    auto = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns="auto")
+    # No reason fired, so no scan ran: no columns, a Pinhole verdict by
+    # construction, nothing to confirm and no screening vote to keep separate.
+    assert auto["escalation"] == []
+    assert auto["screening_vote"] is None
+    assert auto["vote"]["columns"] == []
+    assert auto["camera_model"] == "Pinhole"
+    assert auto["confirmed"] is None
+    assert auto["verdict_votes"] == []
+    # It IS the pinhole-only vote, which is what makes skipping the scans free.
+    assert auto["vote"] == focal_vote(cl, im, pos, W, H, seed=0)
+
+
+def test_rejects_unknown_column_policy_string():
+    cl, im, pos = _rotation_scene(2024)
+    with pytest.raises(ValueError):
+        estimate_intrinsics(cl, im, pos, W, H, columns="both")
 
 
 def test_empty_input_has_no_verdict():

@@ -4,12 +4,19 @@
 
 `estimate_intrinsics` is the high-level face of the structure-free focal
 vote ([focal-vote.md](focal-vote.md)): it takes the same cluster-track
-observation arrays the vote takes, runs the two camera-model columns, and
+observation arrays the vote takes, runs the camera-model columns, and
 returns one typed answer -- the model verdict, whether that verdict is
 confirmed, the consensus focal, and the votes that actually belong to the
 verdict. Callers that want a camera, not a diagnostic table, call this;
 `focal_vote` remains the diagnostic layer underneath, returned intact for
 callers that want everything.
+
+It also owns WHEN the camera-model columns are worth running. Those columns
+cost two self-consistency scans per candidate pair, which the closed-form
+pinhole vote does not run at all, and a capture whose pinhole vote is strong
+has nothing for the arbitration to overturn. `ColumnPolicy::Auto` therefore
+screens on the pinhole-only vote and re-runs with both columns exactly when
+that vote comes back weak, reporting which weak-vote reasons fired.
 
 The function does no I/O. Reading a `.matches` file, resolving keypoint
 positions, and choosing which clusters to admit are the caller's job; the
@@ -26,9 +33,29 @@ bound as `sfmtool._sfmtool.geometry.estimate_intrinsics`; the
 is its caller.
 
 ```rust
+pub enum ColumnPolicy {
+    /// Run `IntrinsicsOptions::vote`'s own `columns`, always.
+    Fixed,
+    /// Vote pinhole-only first; re-run with both columns only when that
+    /// vote comes back weak. Auto picks both column sets itself, so
+    /// `vote.columns` is not read under this policy.
+    Auto,
+}
+
+pub enum EscalationReason {
+    NoConsensus,         // "no_consensus"
+    RotationRailed,      // "rotation_railed"
+    FamilyDisagreement,  // "family_disagreement"
+    ThinPool,            // "thin_pool"
+}
+
 pub struct IntrinsicsOptions {
-    /// Passed through to the vote (seed, epipolar_min_disp_frac, ...).
+    /// Passed through to the vote (seed, epipolar_min_disp_frac, and --
+    /// under `Fixed` -- the column set).
     pub vote: FocalVoteOptions,
+    /// Whether the column set is the one `vote` names, or one the
+    /// estimator escalates its way to.
+    pub columns: ColumnPolicy,
     /// Certified rotation-cell votes an equidistant verdict needs in the
     /// equidistant column before it counts as confirmed. The default 1 is
     /// the structural rule: a wrong ray map cannot fake a pure rotation of
@@ -49,9 +76,24 @@ pub struct IntrinsicsEstimate {
     /// behind THIS verdict, unlike the raw vote result's flat lists, which
     /// always belong to the pinhole closed-form kernel.
     pub verdict_votes: Vec<ScanVote>,
-    /// The full vote result, untouched, for diagnostics.
+    /// Under `Auto`: the weak-vote reasons that fired, in check order.
+    /// Empty means the pinhole vote stood and no second run happened.
+    /// `None` under `Fixed`.
+    pub escalation: Option<Vec<EscalationReason>>,
+    /// The pinhole-only vote the escalation decision was read off, kept
+    /// only when the estimate then re-ran with both columns -- the source
+    /// of a caller's PINHOLE numbers, which the two-column `vote` no
+    /// longer reports at the top level.
+    pub screening_vote: Option<FocalVoteResult>,
+    /// The full vote result behind the verdict, untouched.
     pub vote: FocalVoteResult,
 }
+
+pub fn escalation_reasons(
+    vote: &FocalVoteResult,
+    width: u32,
+    height: u32,
+) -> Vec<EscalationReason>
 
 pub fn estimate_intrinsics(
     cluster_indexes: &[u32],
@@ -64,10 +106,13 @@ pub fn estimate_intrinsics(
 ```
 
 Example call: the CLI's `--model auto` is
-`estimate_intrinsics(ci, ii, xy, w, h, &IntrinsicsOptions::default())` --
-both columns, structural confirmation -- and then reads `camera_model`,
-`confirmed` and `focal_px` off the result instead of re-deriving them from
-the vote dict.
+`estimate_intrinsics(ci, ii, xy, w, h, &IntrinsicsOptions { columns:
+ColumnPolicy::Auto, ..Default::default() })` -- pinhole first, both columns
+on a weak vote, structural confirmation -- and then reads `camera_model`,
+`confirmed`, `focal_px` and `escalation` off the result instead of
+re-deriving any of them from the vote dict. A caller that wants both columns
+unconditionally leaves `columns` at its `Fixed` default, whose `vote.columns`
+is already the pair.
 
 ## Verdict semantics
 
@@ -97,14 +142,70 @@ An unconfirmed equidistant verdict is returned as-is (`camera_model` set,
 `confirmed == Some(false)`); refusing to act on it is the caller's policy,
 not the estimator's.
 
+## The weak-vote escalation
+
+`ColumnPolicy::Auto` runs the vote pinhole-only, reads `escalation_reasons`
+off that result, and re-runs with both columns when any reason fired. The
+disjunction is over the pinhole vote's own diagnostics -- four reasons,
+checked and reported in this order:
+
+- **`no_consensus`** -- `focal_px` is `None`. Fewer than the vote's
+  `MIN_POOL` votes pooled, so there is no pinhole answer to weigh.
+- **`rotation_railed`** -- the consensus came from the rotation family and
+  that family's median sits within one grid step of the bottom of the
+  rotation self-calibration's focal grid, `ORTHO_GRID_LO * max(w, h)`. The
+  grid is 48 log-spaced points over `[0.3, 4.0] * max(w, h)`, so one step is
+  `(4/0.3)^(1/47) = 1.0566`; an answer there is a scan that ran out of grid
+  rather than one that found an interior minimum. That is what a fisheye
+  capture looks like through a perspective chart: on the fleet, kerry at
+  480 px lands exactly on the floor (ratio 1.000) while the nearest
+  rectilinear capture sits 2.2 grid steps above it (1.153).
+- **`family_disagreement`** -- the gap between the two families' medians
+  exceeds the vote's own `FAMILY_DISAGREEMENT_BAND` (0.25 in log-focal).
+  Two independent estimators past the kernel's own bimodality band are
+  answering different questions about the same capture, and the reported
+  consensus is one family's median with the other discarded.
+- **`thin_pool`** -- `n_pool <= 9`. The one cut point without a kernel
+  constant behind it: 9 is the tightest bar that still reaches every fisheye
+  capture on the fleet (three of them pool exactly 9, and no other reason
+  catches them); it is half the vote's `MAX_EPIPOLAR_PAIRS` budget of 18,
+  and the rectilinear captures it additionally admits all pool 3 to 8, i.e.
+  thinner still.
+
+Over the fleet (42 captures at last measurement, 6 of them fisheye) the
+disjunction fires on every fisheye capture and on 9 of the 36 rectilinear
+ones, every one of those 9 a genuinely weak pinhole vote (7 tripped the
+bimodality band, 5 pooled 8 votes or fewer). What it buys against always
+running both columns is arbitration error: run unconditionally, 3 of those
+36 rectilinear captures arbitrate to a fisheye verdict.
+
+The screening vote is kept as `screening_vote` when the escalation fires,
+because the escalated result's top-level fields report the WINNING column --
+the fisheye answer whenever the escalation paid off -- while a caller's
+pinhole consensus, pool and spread are the screening vote's. Its pinhole
+column would carry the same consensus, but reading those numbers off a
+column is exactly the hand-derivation this API exists to end.
+
+The two runs share the closed-form pass, so an escalated estimate costs that
+pass twice; a screened-out one costs the scans zero times, which is where the
+policy pays for itself.
+
 ## Implementation notes
 
 - The function composes `focal_vote_with_options` and reads its output; it
-  re-runs nothing and holds no thresholds beyond `min_rotation_mass`. Any
-  future change to arbitration lives in the vote, not here.
+  holds no thresholds beyond `min_rotation_mass` and the escalation's four,
+  and re-runs the vote only where `Auto` escalates. Any future change to
+  arbitration lives in the vote, not here.
+- `ORTHO_GRID_{LO,HI,N}` and `FAMILY_DISAGREEMENT_BAND` are read from
+  `focal_vote` as `pub(crate)` constants rather than restated: two of the
+  four cut points are questions about the vote's own grid and band, and a
+  second copy would be free to drift from the machinery it describes.
 - Determinism: same inputs and seed give bit-identical output, exactly as
   the vote guarantees; the estimate adds no randomness and no ordering of
   its own (`verdict_votes` preserves the column's stored vote order).
 - The PyO3 binding returns the estimate as a dict with the vote dict nested
   under `"vote"`, so Python callers keep full diagnostic access without a
-  second call.
+  second call. Its `columns` argument takes the string `"auto"` for
+  `ColumnPolicy::Auto` and a sequence of column names for `Fixed`;
+  `escalation` comes back as the reasons' string names and `screening_vote`
+  as a nested vote dict.

@@ -6,7 +6,7 @@ use crate::geometry::focal_vote::tests::{
     baseline_cameras, emit_fisheye_parallax_pair, fisheye_scene, two_subcapture_scene, Lcg, Obs,
     F_TRUE, H, W,
 };
-use crate::geometry::focal_vote::ScanCell;
+use crate::geometry::focal_vote::{ScanCell, VoteFamily};
 
 /// Run the estimator over a synthetic capture, both columns, seed 0.
 fn estimate(obs: &Obs, options: &IntrinsicsOptions) -> IntrinsicsEstimate {
@@ -228,4 +228,248 @@ fn empty_input_has_no_verdict_and_no_question() {
     assert_eq!(est.confirmed, None);
     assert_eq!(est.focal_px, None);
     assert!(est.verdict_votes.is_empty());
+    // A fixed column set asks its question outright; nothing was escalated to.
+    assert_eq!(est.escalation, None);
+    assert!(est.screening_vote.is_none());
+}
+
+// ── The weak-vote escalation ─────────────────────────────────────────────────
+//
+// Each arm of the disjunction is pinned against a hand-built vote result, so a
+// test says which single quantity it is moving. The scene-level tests below
+// then check that `Auto` acts on the reasons: it re-runs when one fires, leaves
+// the pinhole vote alone when none does, and its escalated answer is the
+// two-column answer.
+
+/// A strong pinhole vote: a consensus, one family, a wide pool. Every
+/// escalation test starts here and moves exactly one field.
+fn strong_vote() -> FocalVoteResult {
+    FocalVoteResult {
+        focal_px: Some(800.0),
+        family: Some(VoteFamily::Epipolar),
+        epipolar_focal_px: Some(800.0),
+        rotation_focal_px: None,
+        n_epipolar: 12,
+        n_rotation: 0,
+        n_pool: 12,
+        pool_spread: 0.01,
+        family_disagreement: None,
+        parallax_poverty: 0.1,
+        epipolar_spread: 0.01,
+        rotation_spread: 0.0,
+        epipolar_votes: Vec::new(),
+        rotation_votes: Vec::new(),
+        n_h_dominated: 0,
+        n_estimator_failed: 0,
+        n_band_rejected: 0,
+        n_degenerate: 0,
+        n_inconsistent_pairs: 0,
+        camera_model: Some(CameraModel::Pinhole),
+        columns: Vec::new(),
+    }
+}
+
+#[test]
+fn a_strong_vote_escalates_for_no_reason() {
+    assert!(escalation_reasons(&strong_vote(), W, H).is_empty());
+}
+
+#[test]
+fn no_consensus_escalates() {
+    let vote = FocalVoteResult {
+        focal_px: None,
+        ..strong_vote()
+    };
+    assert_eq!(
+        escalation_reasons(&vote, W, H),
+        vec![EscalationReason::NoConsensus]
+    );
+}
+
+#[test]
+fn a_railed_rotation_consensus_escalates() {
+    // The grid's bottom rung is `ORTHO_GRID_LO * max(w, h)`, and the cut is one
+    // multiplicative step above it: on it and just under the step escalates,
+    // just over does not.
+    let max_wh = f64::from(W.max(H));
+    let step = (ORTHO_GRID_HI / ORTHO_GRID_LO).powf(1.0 / (ORTHO_GRID_N - 1) as f64);
+    let railed = |f: f64| {
+        let vote = FocalVoteResult {
+            family: Some(VoteFamily::Rotation),
+            rotation_focal_px: Some(f),
+            ..strong_vote()
+        };
+        escalation_reasons(&vote, W, H)
+    };
+    assert_eq!(
+        railed(ORTHO_GRID_LO * max_wh),
+        vec![EscalationReason::RotationRailed]
+    );
+    assert_eq!(
+        railed(step * ORTHO_GRID_LO * max_wh),
+        vec![EscalationReason::RotationRailed],
+        "the cut is inclusive at one grid step above the floor"
+    );
+    assert!(railed(1.001 * step * ORTHO_GRID_LO * max_wh).is_empty());
+
+    // The same focal from the epipolar family is not railing: the grid is the
+    // rotation self-calibration's, so only its answer can sit on the floor.
+    let epipolar = FocalVoteResult {
+        family: Some(VoteFamily::Epipolar),
+        rotation_focal_px: Some(ORTHO_GRID_LO * max_wh),
+        ..strong_vote()
+    };
+    assert!(escalation_reasons(&epipolar, W, H).is_empty());
+}
+
+#[test]
+fn family_disagreement_escalates() {
+    let over = FocalVoteResult {
+        family_disagreement: Some(FAMILY_DISAGREEMENT_BAND + 1e-9),
+        ..strong_vote()
+    };
+    assert_eq!(
+        escalation_reasons(&over, W, H),
+        vec![EscalationReason::FamilyDisagreement]
+    );
+    // The band itself is not disagreement -- the vote's own pooling rule reads
+    // it the same way.
+    let at_band = FocalVoteResult {
+        family_disagreement: Some(FAMILY_DISAGREEMENT_BAND),
+        ..strong_vote()
+    };
+    assert!(escalation_reasons(&at_band, W, H).is_empty());
+}
+
+#[test]
+fn a_thin_pool_escalates() {
+    let thin = FocalVoteResult {
+        n_epipolar: THIN_POOL,
+        n_pool: THIN_POOL,
+        ..strong_vote()
+    };
+    assert_eq!(
+        escalation_reasons(&thin, W, H),
+        vec![EscalationReason::ThinPool]
+    );
+    let one_more = FocalVoteResult {
+        n_epipolar: THIN_POOL + 1,
+        n_pool: THIN_POOL + 1,
+        ..strong_vote()
+    };
+    assert!(escalation_reasons(&one_more, W, H).is_empty());
+}
+
+#[test]
+fn every_reason_that_fires_is_reported_in_check_order() {
+    let max_wh = f64::from(W.max(H));
+    let all = FocalVoteResult {
+        focal_px: None,
+        family: Some(VoteFamily::Rotation),
+        rotation_focal_px: Some(ORTHO_GRID_LO * max_wh),
+        family_disagreement: Some(0.9),
+        n_epipolar: 1,
+        n_rotation: 1,
+        n_pool: 2,
+        ..strong_vote()
+    };
+    assert_eq!(
+        escalation_reasons(&all, W, H),
+        vec![
+            EscalationReason::NoConsensus,
+            EscalationReason::RotationRailed,
+            EscalationReason::FamilyDisagreement,
+            EscalationReason::ThinPool,
+        ]
+    );
+}
+
+#[test]
+fn reason_names_are_stable() {
+    assert_eq!(EscalationReason::NoConsensus.as_str(), "no_consensus");
+    assert_eq!(EscalationReason::RotationRailed.as_str(), "rotation_railed");
+    assert_eq!(
+        EscalationReason::FamilyDisagreement.as_str(),
+        "family_disagreement"
+    );
+    assert_eq!(EscalationReason::ThinPool.as_str(), "thin_pool");
+}
+
+/// [`ColumnPolicy::Auto`], everything else default.
+fn auto() -> IntrinsicsOptions {
+    IntrinsicsOptions {
+        columns: ColumnPolicy::Auto,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn auto_escalates_a_fisheye_capture_to_the_two_column_answer() {
+    let obs = fisheye_scene(2718);
+    let est = estimate(&obs, &auto());
+    let reasons = est.escalation.clone().expect("Auto records its decision");
+    assert!(
+        !reasons.is_empty(),
+        "a fisheye capture's pinhole vote is weak: {:?}",
+        est.screening_vote.as_ref().map(|v| v.n_pool)
+    );
+
+    // The escalated answer IS the both-columns answer on the same inputs.
+    let direct = estimate(&obs, &IntrinsicsOptions::default());
+    assert_eq!(est.camera_model, direct.camera_model);
+    assert_eq!(est.confirmed, direct.confirmed);
+    assert_eq!(
+        est.focal_px.map(f64::to_bits),
+        direct.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(est.vote.columns.len(), direct.vote.columns.len());
+    assert_eq!(est.verdict_votes.len(), direct.verdict_votes.len());
+
+    // ...and the weak pinhole vote that triggered it is kept, because the
+    // escalated result's top-level fields are the fisheye column's.
+    let screening = est.screening_vote.expect("the screening vote is kept");
+    assert!(screening.columns.is_empty());
+    assert_eq!(screening.camera_model, Some(CameraModel::Pinhole));
+    assert_eq!(escalation_reasons(&screening, W, H), reasons);
+}
+
+#[test]
+fn auto_leaves_a_strong_pinhole_vote_alone() {
+    let obs = two_subcapture_scene(6, 8, F_TRUE, F_TRUE, 99);
+    let est = estimate(&obs, &auto());
+    assert_eq!(
+        est.escalation.as_deref(),
+        Some(&[][..]),
+        "a strong pinhole vote has nothing for the columns to overturn"
+    );
+    // No second run: no columns, a Pinhole verdict by construction, and no
+    // confirmation question.
+    assert!(est.screening_vote.is_none());
+    assert!(est.vote.columns.is_empty());
+    assert_eq!(est.camera_model, Some(CameraModel::Pinhole));
+    assert_eq!(est.confirmed, None);
+    assert!(est.verdict_votes.is_empty());
+
+    // It is exactly the pinhole-only vote, which is what makes skipping the
+    // scans free rather than a different answer.
+    let pinhole = crate::geometry::focal_vote::focal_vote_with_options(
+        &obs.cluster,
+        &obs.image,
+        &obs.pos,
+        W,
+        H,
+        &FocalVoteOptions::default(),
+    );
+    assert_eq!(
+        est.focal_px.map(f64::to_bits),
+        pinhole.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(est.vote.n_pool, pinhole.n_pool);
+}
+
+#[test]
+fn a_fixed_column_set_never_escalates() {
+    let est = estimate(&fisheye_scene(2718), &IntrinsicsOptions::default());
+    assert_eq!(est.escalation, None);
+    assert!(est.screening_vote.is_none());
 }

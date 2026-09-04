@@ -7,10 +7,10 @@
 
 use numpy::{PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyString};
 
 use sfmtool_core::geometry::estimate_intrinsics::{
-    estimate_intrinsics as core_estimate_intrinsics, IntrinsicsOptions,
+    estimate_intrinsics as core_estimate_intrinsics, ColumnPolicy, IntrinsicsOptions,
 };
 use sfmtool_core::geometry::focal_vote::{CameraModel, FocalVoteOptions};
 
@@ -40,7 +40,10 @@ use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
 ///         (``"pinhole"``, ``"equidistant"`` / ``"fisheye"``). The default
 ///         ``None`` runs both columns, because arbitrating between them is
 ///         what this function is for; a single named column is the verdict by
-///         construction and arbitrates nothing.
+///         construction and arbitrates nothing. The string ``"auto"`` instead
+///         lets the estimator choose: it runs the pinhole-only vote and pays
+///         for the two-column run only when that vote comes back weak (see
+///         ``escalation`` below).
 ///     min_rotation_mass: Certified rotation-cell votes an equidistant
 ///         verdict needs in the equidistant column before ``confirmed`` is
 ///         True (default 1). The default is structural rather than tuned: a
@@ -51,7 +54,8 @@ use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
 ///
 /// Returns:
 ///     ``{"camera_model": str | None, "confirmed": bool | None, "focal_px":
-///     float | None, "verdict_votes": list[dict], "vote": dict}``.
+///     float | None, "verdict_votes": list[dict], "escalation": list[str] |
+///     None, "screening_vote": dict | None, "vote": dict}``.
 ///
 ///     ``camera_model`` is the model verdict and ``focal_px`` the winning
 ///     column's consensus focal. ``confirmed`` answers whether an
@@ -68,7 +72,22 @@ use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
 ///     pinhole closed-form kernel regardless of the verdict, so those are not
 ///     the evidence behind a fisheye answer -- these are.
 ///
-///     ``vote`` is the full ``focal_vote`` result dict, untouched.
+///     ``escalation`` is what ``columns="auto"`` decided: the weak-vote reason
+///     names that fired, in check order (``"no_consensus"``,
+///     ``"rotation_railed"``, ``"family_disagreement"``, ``"thin_pool"``). An
+///     empty list means the pinhole-only vote stood on its own, no scan ran,
+///     and ``vote`` is that pinhole-only result -- no columns and a
+///     ``"Pinhole"`` verdict. It is ``None`` whenever the columns were named
+///     outright, which never escalates.
+///
+///     ``screening_vote`` is the pinhole-only vote that decision was read off,
+///     present only when the estimate then re-ran with both columns. Read the
+///     capture's PINHOLE numbers off it: a two-column ``vote`` reports the
+///     winning column at the top level, which is the fisheye answer whenever
+///     the escalation paid off.
+///
+///     ``vote`` is the full ``focal_vote`` result dict behind the verdict,
+///     untouched.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
 // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -85,15 +104,30 @@ pub fn estimate_intrinsics<'py>(
     height: u32,
     seed: u64,
     epipolar_min_disp_frac: f64,
-    columns: Option<Vec<String>>,
+    columns: Option<Bound<'py, PyAny>>,
     min_rotation_mass: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
     let inputs = vote_inputs(cluster_indexes, image_indexes, positions_xy)?;
     // Unlike `focal_vote`, whose default is the closed-form pinhole kernel,
     // this function's default is both columns: the verdict is the product.
-    let models = match columns {
-        None => vec![CameraModel::Pinhole, CameraModel::EquidistantFisheye],
-        some => vote_columns(some)?,
+    // `"auto"` hands the choice to the estimator instead, and then the column
+    // set it passes here is the one it never reads.
+    let (policy, models) = match columns {
+        None => (
+            ColumnPolicy::Fixed,
+            vec![CameraModel::Pinhole, CameraModel::EquidistantFisheye],
+        ),
+        Some(obj) if obj.is_instance_of::<PyString>() => {
+            let name: String = obj.extract()?;
+            if !name.eq_ignore_ascii_case("auto") {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "columns must be \"auto\" or a sequence of column names \
+                     (\"pinhole\", \"equidistant\"); got {name:?}"
+                )));
+            }
+            (ColumnPolicy::Auto, Vec::new())
+        }
+        Some(obj) => (ColumnPolicy::Fixed, vote_columns(Some(obj.extract()?))?),
     };
     let options = IntrinsicsOptions {
         vote: FocalVoteOptions {
@@ -101,6 +135,7 @@ pub fn estimate_intrinsics<'py>(
             epipolar_min_disp_frac,
             columns: models,
         },
+        columns: policy,
         min_rotation_mass,
     };
 
@@ -124,6 +159,21 @@ pub fn estimate_intrinsics<'py>(
         votes.append(scan_vote_dict(py, v)?)?;
     }
     d.set_item("verdict_votes", votes)?;
+    d.set_item(
+        "escalation",
+        estimate
+            .escalation
+            .as_ref()
+            .map(|rs| rs.iter().map(|r| r.as_str()).collect::<Vec<_>>()),
+    )?;
+    d.set_item(
+        "screening_vote",
+        estimate
+            .screening_vote
+            .as_ref()
+            .map(|v| vote_dict(py, v))
+            .transpose()?,
+    )?;
     d.set_item("vote", vote_dict(py, &estimate.vote)?)?;
     Ok(d)
 }

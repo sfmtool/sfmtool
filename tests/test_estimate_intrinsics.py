@@ -51,17 +51,23 @@ def _estimate(
     n_pool=6,
     confirmed=None,
     verdict_votes=None,
+    escalation=None,
 ) -> dict:
     """An `estimate_intrinsics` result dict, with its vote nested under `vote`.
 
     The verdict fields are the kernel's: the command reads them rather than
     re-deriving them, so a test that wants an UNCONFIRMED report says so here.
+    `escalation` is likewise the kernel's record of whether it ran the
+    camera-model columns -- `None` for a named `--model`, a (possibly empty)
+    list of reason names under `--model auto`.
     """
     return {
         "camera_model": camera_model,
         "confirmed": confirmed,
         "focal_px": focal_px,
         "verdict_votes": verdict_votes or [],
+        "escalation": escalation,
+        "screening_vote": None,
         "vote": _vote_result(camera_model, focal_px, columns, n_pool),
     }
 
@@ -179,9 +185,11 @@ def test_report_marks_the_kernel_s_confirmation(
 @pytest.mark.parametrize(
     ("model_option", "expected_columns"),
     [
-        ("auto", ["pinhole", "equidistant"]),
-        ("pinhole", ["pinhole"]),
-        ("fisheye", ["equidistant"]),
+        # `auto` is the kernel's escalating policy, not a fixed pair of
+        # columns: it votes pinhole-only and adds the second column itself.
+        ("auto", "auto"),
+        ("pinhole", ("pinhole",)),
+        ("fisheye", ("equidistant",)),
     ],
 )
 def test_model_option_selects_the_columns(
@@ -190,6 +198,43 @@ def test_model_option_selects_the_columns(
     out = stub_estimate(_estimate(), "--model", model_option)
     assert out.exit_code == 0, out.output
     assert stub_estimate.calls[-1]["columns"] == expected_columns
+
+
+# ── Whether the camera-model columns ran ─────────────────────────────────────
+#
+# Under `--model auto` the kernel decides, so the report says which way it went
+# rather than leaving the reader to infer it from a missing Columns block.
+
+
+def test_report_states_the_escalation_that_ran(stub_estimate):
+    result = _estimate(
+        camera_model="EquidistantFisheye",
+        focal_px=131.0,
+        columns=[
+            _column("Pinhole", 210.0),
+            _column("EquidistantFisheye", 131.0, epipolar=9, rotation=4),
+        ],
+        confirmed=True,
+        escalation=["thin_pool", "family_disagreement"],
+    )
+    out = stub_estimate(result)
+    assert out.exit_code == 0, out.output
+    assert "the camera-model columns ran" in out.output
+    assert "thin_pool, family_disagreement" in out.output
+
+
+def test_report_states_an_escalation_that_did_not_run(stub_estimate):
+    out = stub_estimate(_estimate(escalation=[]))
+    assert out.exit_code == 0, out.output
+    assert "Arbitration:   not run" in out.output
+    # No second run means no columns to report.
+    assert "Columns:" not in out.output
+
+
+def test_report_is_silent_about_arbitration_for_a_named_model(stub_estimate):
+    out = stub_estimate(_estimate(), "--model", "pinhole")
+    assert out.exit_code == 0, out.output
+    assert "Arbitration:" not in out.output
 
 
 def test_unconfirmed_fisheye_report_recommends_pinhole(stub_estimate):
@@ -488,7 +533,9 @@ def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     assert "17 @ 270x480" in out.output
     assert "Camera model:  Pinhole (SIMPLE_PINHOLE)" in out.output
     assert "UNCONFIRMED" not in out.output
-    # Both columns ran and are reported.
+    # The pinhole vote was weak enough that both columns ran, and the report
+    # says so before listing them.
+    assert "the camera-model columns ran" in out.output
     assert "EquidistantFisheye" in out.output
 
     focal = float(re.search(r"Focal length:\s+([\d.]+) px", out.output).group(1))
@@ -509,6 +556,11 @@ def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     assert payload["focal_px"] == pytest.approx(focal, abs=0.01)
     assert payload["fisheye_confirmed"] is None
     assert payload["n_pool"] >= 2
+    # `--model auto` on this capture: the pinhole vote is weak (the pool is a
+    # handful of votes), so the kernel paid for the camera-model columns and
+    # records why. Which reasons fire is not pinned -- the fixture's matches
+    # come from a fresh SIFT extraction whose pool differs across platforms.
+    assert payload["escalation"], "the columns ran, so a weak-vote reason fired"
 
     # Committing the estimate to a rig.
     workspace_dir = cluster_matches_file.parent.parent

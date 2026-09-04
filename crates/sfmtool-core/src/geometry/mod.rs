@@ -36,7 +36,10 @@ pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};
 pub use bundle_adjust::{
     bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
-pub use estimate_intrinsics::{estimate_intrinsics, IntrinsicsEstimate, IntrinsicsOptions};
+pub use estimate_intrinsics::{
+    escalation_reasons, estimate_intrinsics, ColumnPolicy, EscalationReason, IntrinsicsEstimate,
+    IntrinsicsOptions,
+};
 pub use pose_refine::{refine_absolute_pose, PoseRefinement};
 pub use pose_verification::{
     repair_poses, verify_poses, PoseRepair, PoseVerification, RepairOptions, VerifyOptions,
