@@ -551,7 +551,33 @@ struct EpipolarFit {
 /// are genuinely different measurements — a symmetric residual would score the
 /// swapped correspondences identically, because the epipolar matrix of the swap
 /// is exactly the transpose.
+///
+/// Dispatches to a bit-identical AVX2 kernel where the CPU has it (see
+/// [`crate::geometry::simd`]); `epipolar_residuals_scalar` is both the fallback
+/// and the reference the parity tests compare against.
 pub(crate) fn epipolar_residuals(
+    e: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    side_two: bool,
+    out: &mut [f64],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let n = r1.len();
+        if crate::geometry::simd::avx2_enabled() && r2.len() >= n && out.len() >= n {
+            // SAFETY: avx2 confirmed available, and both ray slices and `out`
+            // cover the `n` points the kernel reads and writes.
+            unsafe { epipolar_residuals_avx2(e, r1, r2, side_two, out) };
+            return;
+        }
+    }
+    epipolar_residuals_scalar(e, r1, r2, side_two, out);
+}
+
+/// Scalar reference for [`epipolar_residuals`], and its fallback where AVX2 is
+/// unavailable or switched off.
+fn epipolar_residuals_scalar(
     e: &Matrix3<f64>,
     r1: &[Vector3<f64>],
     r2: &[Vector3<f64>],
@@ -567,6 +593,62 @@ pub(crate) fn epipolar_residuals(
         };
         let nn = n.norm().max(1e-15);
         out[i] = (n.dot(&other).abs() / nn).min(1.0);
+    }
+}
+
+/// Four correspondences per iteration of [`epipolar_residuals`], one per lane.
+///
+/// Every lane repeats the scalar sequence exactly: the `3×3` matvec in
+/// nalgebra's `gemv` order (`(m₀·x + m₁·y) + m₂·z` per row), the length-3 dot
+/// products in nalgebra's unrolled `U3` order (`(a + b) + c`), then
+/// `sqrt`/`max`/`abs`/`div`/`min`. The side branch and the transpose are
+/// loop-invariant and hoisted out; nothing else moves.
+///
+/// # Safety
+/// Requires the `avx2` target feature, `r2.len() >= r1.len()` and
+/// `out.len() >= r1.len()` (all guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn epipolar_residuals_avx2(
+    e: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    side_two: bool,
+    out: &mut [f64],
+) {
+    use crate::geometry::simd::{broadcast_mat3, dot3, load_vec3x4, row3};
+    use std::arch::x86_64::*;
+
+    let n = r1.len();
+    let et = e.transpose();
+    let (m, src, other) = if side_two { (e, r1, r2) } else { (&et, r2, r1) };
+    let m = broadcast_mat3(m);
+    let floor = _mm256_set1_pd(1e-15);
+    let one = _mm256_set1_pd(1.0);
+    // `andnot` against the sign bit is what `f64::abs` compiles to.
+    let sign = _mm256_set1_pd(-0.0);
+
+    let blocks = n / 4;
+    for b in 0..blocks {
+        let (sx, sy, sz) = load_vec3x4(src.as_ptr().add(b * 4) as *const f64);
+        let (ox, oy, oz) = load_vec3x4(other.as_ptr().add(b * 4) as *const f64);
+
+        let nx = row3(&m[0], sx, sy, sz);
+        let ny = row3(&m[1], sx, sy, sz);
+        let nz = row3(&m[2], sx, sy, sz);
+
+        // `norm().max(1e-15)`: value first, so a NaN norm yields the floor,
+        // matching `f64::max`.
+        let nn = _mm256_max_pd(_mm256_sqrt_pd(dot3(nx, ny, nz, nx, ny, nz)), floor);
+        let d = _mm256_andnot_pd(sign, dot3(nx, ny, nz, ox, oy, oz));
+        // `.min(1.0)`: value first again, so a NaN quotient yields `1.0`.
+        let r = _mm256_min_pd(_mm256_div_pd(d, nn), one);
+        _mm256_storeu_pd(out.as_mut_ptr().add(b * 4), r);
+    }
+
+    let rem = blocks * 4;
+    if rem < n {
+        epipolar_residuals_scalar(e, &r1[rem..], &r2[rem..n], side_two, &mut out[rem..]);
     }
 }
 
@@ -711,7 +793,46 @@ fn scan_epipolar(
 // ── Rotation cell ────────────────────────────────────────────────────────────
 
 /// Angle between each rotated ray and its measured partner.
+///
+/// The cosines vectorize (matvec, dot, clamp); the `acos` does not — it is a
+/// libm call and a polynomial SIMD replacement would not be bit-identical — so
+/// the AVX2 path fills `out` with clamped cosines and then walks it with a
+/// scalar `acos` tail. The vectorized half is taken only when `idx` is a
+/// consecutive run, which is the hot shape: the RANSAC scoring loops in
+/// [`rotation_support_at`] and [`crate::geometry::relative_pose`] pass all `n`
+/// points at every one of the ~128 minimal samples, while the arbitrary-subset
+/// callers ([`fit_rotation`]'s trimmed support) run three times per grid point.
 pub(crate) fn rotation_residuals(
+    rot: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    idx: &[usize],
+    out: &mut [f64],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let len = out.len().min(idx.len());
+        if crate::geometry::simd::avx2_enabled()
+            && !idx.is_empty()
+            && idx.iter().enumerate().all(|(j, &i)| i == idx[0] + j)
+            && idx[0] + len <= r1.len().min(r2.len())
+        {
+            // SAFETY: avx2 confirmed available, and the consecutive run
+            // `idx[0] .. idx[0] + len` lies inside both ray slices while `out`
+            // covers `len` elements.
+            unsafe { rotation_cosines_avx2(rot, &r1[idx[0]..], &r2[idx[0]..], &mut out[..len]) };
+            for o in out[..len].iter_mut() {
+                *o = o.acos();
+            }
+            return;
+        }
+    }
+    rotation_residuals_scalar(rot, r1, r2, idx, out);
+}
+
+/// Scalar reference for [`rotation_residuals`], and its fallback where AVX2 is
+/// unavailable, switched off, or `idx` is not a consecutive run.
+fn rotation_residuals_scalar(
     rot: &Matrix3<f64>,
     r1: &[Vector3<f64>],
     r2: &[Vector3<f64>],
@@ -720,6 +841,49 @@ pub(crate) fn rotation_residuals(
 ) {
     for (o, &i) in out.iter_mut().zip(idx.iter()) {
         *o = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0).acos();
+    }
+}
+
+/// `clamp((rot·r1ᵢ) · r2ᵢ, −1, 1)` for the first `out.len()` points, four per
+/// iteration — [`rotation_residuals`] without the `acos`.
+///
+/// The clamp is [`f64::clamp`]'s, which propagates a NaN rather than quieting
+/// it, so the constants go *first* into `min`/`max` here (the opposite of the
+/// `f64::min` convention in [`epipolar_residuals_avx2`]); see
+/// [`crate::geometry::simd`].
+///
+/// # Safety
+/// Requires the `avx2` target feature, and `r1` and `r2` must both cover
+/// `out.len()` points (all guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rotation_cosines_avx2(
+    rot: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    out: &mut [f64],
+) {
+    use crate::geometry::simd::{broadcast_mat3, dot3, load_vec3x4, row3};
+    use std::arch::x86_64::*;
+
+    let n = out.len();
+    let m = broadcast_mat3(rot);
+    let lo = _mm256_set1_pd(-1.0);
+    let hi = _mm256_set1_pd(1.0);
+
+    let blocks = n / 4;
+    for b in 0..blocks {
+        let (ax, ay, az) = load_vec3x4(r1.as_ptr().add(b * 4) as *const f64);
+        let (bx, by, bz) = load_vec3x4(r2.as_ptr().add(b * 4) as *const f64);
+        let px = row3(&m[0], ax, ay, az);
+        let py = row3(&m[1], ax, ay, az);
+        let pz = row3(&m[2], ax, ay, az);
+        let c = dot3(px, py, pz, bx, by, bz);
+        let c = _mm256_min_pd(hi, _mm256_max_pd(lo, c));
+        _mm256_storeu_pd(out.as_mut_ptr().add(b * 4), c);
+    }
+    for i in blocks * 4..n {
+        out[i] = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0);
     }
 }
 

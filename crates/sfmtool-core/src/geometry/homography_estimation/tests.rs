@@ -174,3 +174,88 @@ fn determinism_same_seed_bit_identical() {
     assert_eq!(a.inliers, b.inliers);
     assert_eq!(a.iterations, b.iterations);
 }
+
+// ── SIMD parity ──────────────────────────────────────────────────────────────
+
+/// The AVX2 `score_h` is a lane-per-correspondence repetition of the scalar
+/// loop, so its mask and count must agree exactly. Lengths sweep the 4-wide
+/// lane boundary and its tail; the point set mixes ordinary correspondences
+/// with ones that drive the transfer onto the plane at infinity (`w ≈ 0`, the
+/// `+∞` guard) and with non-finite input, which is where a compare that quieted
+/// NaNs the other way would diverge.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn score_h_simd_matches_scalar() {
+    if !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+    let mut rng = Lcg(4242);
+    // A homography whose last row is large enough that some points really do
+    // transfer through a near-zero third coordinate.
+    let h = Matrix3::new(1.02, 0.03, 12.0, -0.04, 0.98, -7.0, 1e-3, -2e-3, 1.0);
+    let h_inv = h.try_inverse().expect("invertible");
+    for &len in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 64, 199] {
+        let x1: Vec<[f64; 2]> = (0..len)
+            .map(|i| match i % 13 {
+                3 => [500.0, 500.0], // lands near the vanishing line of `h`
+                7 => [f64::NAN, 1.0],
+                _ => [rng.uniform(-600.0, 600.0), rng.uniform(-600.0, 600.0)],
+            })
+            .collect();
+        let x2: Vec<[f64; 2]> = x1
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let q = apply_h(&h, *p);
+                let n = if i % 5 == 0 { 40.0 } else { 0.4 };
+                [q[0] + n * rng.gaussian(), q[1] + n * rng.gaussian()]
+            })
+            .collect();
+        for &thresh2 in &[1.0, 9.0, 1e6] {
+            let mut want = vec![false; len];
+            let mut got = vec![false; len];
+            let want_n = score_h_scalar(&h, &h_inv, &x1, &x2, thresh2, &mut want);
+            // SAFETY: avx2 confirmed above; `x2` and the mask both cover `x1`.
+            let got_n = unsafe { score_h_avx2(&h, &h_inv, &x1, &x2, thresh2, &mut got) };
+            assert_eq!(got_n, want_n, "len {len} thresh2 {thresh2}");
+            assert_eq!(got, want, "len {len} thresh2 {thresh2}");
+            // ...and the dispatcher must reach the same place.
+            let mut dispatched = vec![false; len];
+            assert_eq!(
+                score_h(&h, &x1, &x2, thresh2, &mut dispatched),
+                want_n,
+                "dispatch len {len}"
+            );
+            assert_eq!(dispatched, want, "dispatch len {len}");
+        }
+    }
+}
+
+/// The degenerate-infinity guard, pinned on its own: a point exactly on the
+/// vanishing line of `h` transfers to `w = 0`, and the SIMD path must reproduce
+/// the scalar early return's `+∞` (never an inlier) by blending rather than by
+/// skipping the lane — including when its three lane-mates are inliers.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn score_h_simd_reproduces_the_infinity_guard() {
+    if !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+    // Last row (0, 1, -1): the point y = 1 maps to w = 0 exactly.
+    let h = Matrix3::new(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0);
+    let h_inv = h.try_inverse().expect("invertible");
+    let x1 = [[3.0, 1.0], [2.0, 5.0], [-4.0, 9.0], [7.0, 3.0]];
+    let x2: Vec<[f64; 2]> = x1.iter().map(|p| apply_h(&h, *p)).collect();
+    assert!(
+        symmetric_transfer_sq(&h, &h_inv, x1[0], x2[0]).is_infinite(),
+        "fixture must hit the degenerate branch"
+    );
+    let mut want = vec![false; 4];
+    let mut got = vec![false; 4];
+    let want_n = score_h_scalar(&h, &h_inv, &x1, &x2, 9.0, &mut want);
+    // SAFETY: avx2 confirmed above; every slice holds the same four points.
+    let got_n = unsafe { score_h_avx2(&h, &h_inv, &x1, &x2, 9.0, &mut got) };
+    assert_eq!(want, [false, true, true, true], "guard marks only lane 0");
+    assert_eq!(got, want);
+    assert_eq!(got_n, want_n);
+}

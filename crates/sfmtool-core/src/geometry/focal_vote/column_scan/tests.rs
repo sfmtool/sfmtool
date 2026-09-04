@@ -619,3 +619,96 @@ fn column_names_round_trip() {
     );
     assert_eq!(CameraModel::from_str_name("brown"), None);
 }
+
+// ── SIMD parity ──────────────────────────────────────────────────────────────
+
+/// Rays for the parity tests: unit rays over the whole sphere, plus a handful
+/// of shapes that exercise the guards — a zero ray (so `‖E x‖` hits the `1e-15`
+/// floor), a huge one, and a non-finite one (so the NaN branches of `min`,
+/// `max` and `clamp` are compared, which is where a mis-ordered SIMD operand
+/// would show).
+fn parity_rays(seed: u64, n: usize) -> Vec<Vector3<f64>> {
+    let mut rng = Lcg(seed);
+    (0..n)
+        .map(|i| match i % 17 {
+            5 => Vector3::zeros(),
+            11 => Vector3::new(1e200, -1e200, 1e200),
+            13 => Vector3::new(f64::NAN, 1.0, 0.0),
+            _ => Vector3::new(rng.gaussian(), rng.gaussian(), rng.gaussian()).normalize(),
+        })
+        .collect()
+}
+
+/// The AVX2 residual kernels are lane-per-point repetitions of the scalar loop,
+/// so their agreement is exact, not approximate — compare the bits. Lengths
+/// sweep the 4-wide lane boundary and its tail.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn epipolar_residuals_simd_matches_scalar() {
+    if !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+    let mut rng = Lcg(77);
+    let e = Matrix3::from_fn(|_, _| rng.gaussian());
+    for &len in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 64, 199] {
+        let r1 = parity_rays(11, len);
+        let r2 = parity_rays(29, len);
+        for side_two in [true, false] {
+            let mut want = vec![0.0f64; len];
+            let mut got = vec![0.0f64; len];
+            epipolar_residuals_scalar(&e, &r1, &r2, side_two, &mut want);
+            // SAFETY: avx2 confirmed above; all three slices have length `len`.
+            unsafe { epipolar_residuals_avx2(&e, &r1, &r2, side_two, &mut got) };
+            for i in 0..len {
+                assert_eq!(
+                    got[i].to_bits(),
+                    want[i].to_bits(),
+                    "len {len} side_two {side_two} index {i}"
+                );
+            }
+            // ...and the dispatcher must reach the same place.
+            let mut dispatched = vec![0.0f64; len];
+            epipolar_residuals(&e, &r1, &r2, side_two, &mut dispatched);
+            for i in 0..len {
+                assert_eq!(dispatched[i].to_bits(), want[i].to_bits(), "dispatch {i}");
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn rotation_residuals_simd_matches_scalar() {
+    if !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+    let rot = rx(0.7) * ry(-1.3);
+    for &len in &[0usize, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 64, 199] {
+        let r1 = parity_rays(5, len);
+        let r2 = parity_rays(23, len);
+        let all: Vec<usize> = (0..len).collect();
+        let mut want = vec![0.0f64; len];
+        let mut got = vec![0.0f64; len];
+        rotation_residuals_scalar(&rot, &r1, &r2, &all, &mut want);
+        rotation_residuals(&rot, &r1, &r2, &all, &mut got);
+        for i in 0..len {
+            assert_eq!(got[i].to_bits(), want[i].to_bits(), "len {len} index {i}");
+        }
+
+        // A consecutive run that does not start at zero takes the same path;
+        // an arbitrary subset falls back to the scalar loop. Both must agree
+        // with the scalar reference over their own index list.
+        for idx in [
+            (len / 3..len).collect::<Vec<usize>>(),
+            (0..len).filter(|i| i % 3 != 1).collect::<Vec<usize>>(),
+        ] {
+            let mut want = vec![0.0f64; idx.len()];
+            let mut got = vec![0.0f64; idx.len()];
+            rotation_residuals_scalar(&rot, &r1, &r2, &idx, &mut want);
+            rotation_residuals(&rot, &r1, &r2, &idx, &mut got);
+            for i in 0..idx.len() {
+                assert_eq!(got[i].to_bits(), want[i].to_bits(), "len {len} sub {i}");
+            }
+        }
+    }
+}

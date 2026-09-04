@@ -431,6 +431,37 @@ so the cost curves carry no RANSAC jitter, the columns are directly
 comparable, and the per-pair scans may run in parallel without affecting
 the result.
 
+## Vectorized residual loops
+
+Three loops carry the kernel's per-correspondence arithmetic: the
+one-sided epipolar residual, the rotation cell's angular residual, and
+the homography estimator's symmetric-transfer scoring. Each dispatches at
+runtime to an AVX2 kernel on `x86_64` and runs its scalar loop everywhere
+else; setting `SFMTOOL_FOCAL_VOTE_NO_SIMD` forces the scalar path.
+
+The dispatch is a performance switch and nothing else, which is what
+keeps the determinism above unqualified: every kernel is lane-per-point,
+so lane `j` performs exactly the IEEE-754 operations the scalar loop
+performed for point `j`, in the same order. Three consequences shape the
+kernels:
+
+- The length-3 dot products keep their scalar order *inside* each lane
+  and nothing is reduced across lanes — a sum whose order changed would
+  be a different `f64`.
+- `acos` stays a scalar libm call. The rotation kernel fills its output
+  with clamped cosines and a scalar tail takes the angle, and it takes
+  that path only when the caller's index list is a consecutive run (the
+  shape the RANSAC scoring loops pass); an arbitrary support falls back
+  to the scalar loop.
+- The degenerate-transfer guard is a compare and a blend rather than a
+  skipped lane, so a correspondence whose homography transfer lands on
+  the plane at infinity carries the same `+∞` the scalar early return
+  produced.
+
+The `min`/`max` operand order inside the kernels encodes which NaN
+convention each site uses: `f64::min` and `f64::max` return the *other*
+operand for a NaN input, while `f64::clamp` propagates it.
+
 ## Tests
 
 - Rust: synthetic pure-rotation pairs recover a known focal through the
@@ -472,6 +503,15 @@ the result.
   ungated epipolar votes dragged the pooled median to 624 px against a
   planted 320) gates every epipolar candidate, leaves the rotation cell
   to carry the verdict, and lands on the planted focal.
+- Rust, SIMD parity: each AVX2 residual kernel is compared bit for bit
+  (`f64::to_bits`) against its scalar reference over lengths sweeping the
+  four-wide lane boundary and its tail, on inputs carrying zero, huge and
+  non-finite vectors so the `min`/`max`/`clamp` NaN branches are compared
+  too; the rotation kernel is checked over a consecutive run that does
+  not start at zero and over an arbitrary subset (its scalar fallback);
+  the homography scorer additionally pins the degenerate-infinity guard
+  on a point that transfers to `w = 0` beside three inliers; the lane
+  transposes are pinned element by element.
 - Python bindings: the default-argument dict is exactly the explicit
   pinhole-only dict; an unknown column name raises; a fisheye fixture is
   arbitrated `EquidistantFisheye` with the per-column diagnostic dict

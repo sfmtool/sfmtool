@@ -196,6 +196,11 @@ fn draw4(state: &mut u64, n: usize) -> [usize; 4] {
 
 /// Count and mark inliers for `H`, scoring in input order (deterministic).
 /// A non-invertible `H` scores zero inliers.
+///
+/// This is the estimator's hottest loop — one pass over every correspondence per
+/// RANSAC trial — so it dispatches to a bit-identical AVX2 kernel where the CPU
+/// has it (see [`crate::geometry::simd`]); `score_h_scalar` is both the fallback
+/// and the reference the parity tests compare against.
 fn score_h(
     h: &Matrix3<f64>,
     x1: &[[f64; 2]],
@@ -207,9 +212,112 @@ fn score_h(
         mask.iter_mut().for_each(|m| *m = false);
         return 0;
     };
+    #[cfg(target_arch = "x86_64")]
+    {
+        let n = x1.len();
+        if crate::geometry::simd::avx2_enabled() && x2.len() >= n && mask.len() >= n {
+            // SAFETY: avx2 confirmed available, and `x2` and `mask` both cover
+            // the `n` points the kernel reads and writes.
+            return unsafe { score_h_avx2(h, &h_inv, x1, x2, thresh2, mask) };
+        }
+    }
+    score_h_scalar(h, &h_inv, x1, x2, thresh2, mask)
+}
+
+/// Scalar reference for [`score_h`], and its fallback where AVX2 is unavailable
+/// or switched off.
+fn score_h_scalar(
+    h: &Matrix3<f64>,
+    h_inv: &Matrix3<f64>,
+    x1: &[[f64; 2]],
+    x2: &[[f64; 2]],
+    thresh2: f64,
+    mask: &mut [bool],
+) -> usize {
     let mut count = 0;
     for i in 0..x1.len() {
-        let inlier = symmetric_transfer_sq(h, &h_inv, x1[i], x2[i]) <= thresh2;
+        let inlier = symmetric_transfer_sq(h, h_inv, x1[i], x2[i]) <= thresh2;
+        mask[i] = inlier;
+        count += inlier as usize;
+    }
+    count
+}
+
+/// Four correspondences per iteration of [`score_h`], one per lane.
+///
+/// Each lane repeats [`symmetric_transfer_sq`] term for term: the two `3×3`
+/// matvecs against `(x, y, 1)` in nalgebra's `gemv` order, four divisions, the
+/// squared forward and backward offsets, and their sum. The degenerate-infinity
+/// guard becomes a compare-and-blend rather than a skipped lane, so a lane whose
+/// transfer lands on the plane at infinity carries `+∞` into the threshold
+/// compare exactly as the scalar early return did. The compare is ordered
+/// (`_CMP_LE_OQ`), matching Rust's `<=`, so a NaN transfer is an outlier both
+/// ways.
+///
+/// # Safety
+/// Requires the `avx2` target feature, `x2.len() >= x1.len()` and
+/// `mask.len() >= x1.len()` (all guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn score_h_avx2(
+    h: &Matrix3<f64>,
+    h_inv: &Matrix3<f64>,
+    x1: &[[f64; 2]],
+    x2: &[[f64; 2]],
+    thresh2: f64,
+    mask: &mut [bool],
+) -> usize {
+    use crate::geometry::simd::{broadcast_mat3, load_vec2x4, row3};
+    use std::arch::x86_64::*;
+
+    let n = x1.len();
+    let hm = broadcast_mat3(h);
+    let hi = broadcast_mat3(h_inv);
+    let one = _mm256_set1_pd(1.0);
+    let eps = _mm256_set1_pd(1e-12);
+    let inf = _mm256_set1_pd(f64::INFINITY);
+    let thr = _mm256_set1_pd(thresh2);
+    // `andnot` against the sign bit is what `f64::abs` compiles to.
+    let sign = _mm256_set1_pd(-0.0);
+
+    let mut count = 0usize;
+    let blocks = n / 4;
+    for b in 0..blocks {
+        let (ax, ay) = load_vec2x4(x1.as_ptr().add(b * 4) as *const f64);
+        let (bx, by) = load_vec2x4(x2.as_ptr().add(b * 4) as *const f64);
+
+        // The third component of both source points is the literal `1.0` of
+        // `Vector3::new(x, y, 1.0)`, so the matvec's last term is the matrix
+        // column itself.
+        let f0 = row3(&hm[0], ax, ay, one);
+        let f1 = row3(&hm[1], ax, ay, one);
+        let f2 = row3(&hm[2], ax, ay, one);
+        let g0 = row3(&hi[0], bx, by, one);
+        let g1 = row3(&hi[1], bx, by, one);
+        let g2 = row3(&hi[2], bx, by, one);
+
+        let degen = _mm256_or_pd(
+            _mm256_cmp_pd(_mm256_andnot_pd(sign, f2), eps, _CMP_LT_OQ),
+            _mm256_cmp_pd(_mm256_andnot_pd(sign, g2), eps, _CMP_LT_OQ),
+        );
+
+        let dfx = _mm256_sub_pd(_mm256_div_pd(f0, f2), bx);
+        let dfy = _mm256_sub_pd(_mm256_div_pd(f1, f2), by);
+        let dbx = _mm256_sub_pd(_mm256_div_pd(g0, g2), ax);
+        let dby = _mm256_sub_pd(_mm256_div_pd(g1, g2), ay);
+        let fwd = _mm256_add_pd(_mm256_mul_pd(dfx, dfx), _mm256_mul_pd(dfy, dfy));
+        let bwd = _mm256_add_pd(_mm256_mul_pd(dbx, dbx), _mm256_mul_pd(dby, dby));
+        let err = _mm256_blendv_pd(_mm256_add_pd(fwd, bwd), inf, degen);
+
+        let bits = _mm256_movemask_pd(_mm256_cmp_pd(err, thr, _CMP_LE_OQ)) as u32;
+        for k in 0..4 {
+            mask[b * 4 + k] = bits & (1 << k) != 0;
+        }
+        count += bits.count_ones() as usize;
+    }
+
+    for i in blocks * 4..n {
+        let inlier = symmetric_transfer_sq(h, h_inv, x1[i], x2[i]) <= thresh2;
         mask[i] = inlier;
         count += inlier as usize;
     }
