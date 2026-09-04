@@ -4,13 +4,16 @@
 //! Core `.sfmr` data types: [`SfmrReconstruction`] and its parts.
 //!
 //! [`SfmrReconstruction`] holds all data from a `.sfmr` file using nalgebra
-//! geometric types. This file owns the type definitions and their accessors;
-//! the rest of the type's surface lives in three children:
+//! geometric types — the in-memory side of the format's I/O boundary, described
+//! in `specs/formats/sfmr-file-format.md`. This file owns the type definitions
+//! and their accessors; the rest of the type's surface lives in four children:
 //!
 //! - [`conversion`] — the `.sfmr` boundary: the [`sfmr_format::SfmrData`] round
 //!   trip (the raw columnar I/O representation) plus the `load`/`save` wrappers.
 //! - [`recompute`] — derived quantities recomputed from geometry: per-observation
 //!   and per-point reprojection errors, and the depth statistics/histograms.
+//! - [`affine_shape`] — an observation's keypoint affine shape, projected out of
+//!   the point's patch frame.
 //! - [`demo`] — a synthetic reconstruction with no files behind it.
 
 use std::collections::HashMap;

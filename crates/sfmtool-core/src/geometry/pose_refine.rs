@@ -4,19 +4,14 @@
 //! Trimmed pose-only resection refinement.
 //!
 //! Refines a single world-to-camera pose against known 3D points by minimizing
-//! pixel reprojection error with iterative trimming — the robust companion to
-//! the minimal [`crate::geometry::absolute_pose`] estimator. A plain L2 warm-up
-//! is dragged by junk correspondences' leverage and a robust loss has near-zero
-//! gradient when every residual starts as a large outlier, so from a decent
-//! init we instead refit L2 on the best-fitting fraction each round.
+//! pixel reprojection error — the robust companion to the minimal
+//! [`crate::geometry::absolute_pose`] estimator. Each round refits L2 by
+//! Levenberg–Marquardt on the best-fitting fraction of the correspondences,
+//! stepping over a local `SO(3) × ℝ³` perturbation of the pose with an analytic
+//! Jacobian. Canonical camera frame throughout (the camera looks along `−Z`; a
+//! point in front has `z < 0`).
 //!
-//! Canonical camera frame throughout (the camera looks along `−Z`; a point in
-//! front has `z < 0`). Each Levenberg–Marquardt step is taken over a local
-//! `SO(3) × ℝ³` perturbation of the pose with an analytic Jacobian: the
-//! projection derivative from
-//! [`crate::CameraIntrinsics::ray_to_pixel_with_jacobian`] (a central
-//! difference for models without an analytic one) composed with the exact
-//! `−[R·X]ₓ` rotation and identity translation blocks.
+//! See `specs/core/geometry/absolute-pose.md` § Pose refinement for the design.
 
 use nalgebra::{Matrix6, UnitQuaternion, Vector3, Vector6};
 
