@@ -182,7 +182,8 @@ a yielded group has `W ≥ min_shared`.
 ```python
 ClusterCovisibility.from_matches_file(path)          # str | Path
 ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
-                                member_accepted=None)
+                                member_accepted=None, positions_xy=None,
+                                seed=0)
 
 cov.num_images          # getter
 cov.counts              # numpy (N, N) uint32 copy; errors above dense bound

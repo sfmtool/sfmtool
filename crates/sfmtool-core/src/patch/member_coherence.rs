@@ -378,9 +378,11 @@ pub struct MemberDecision {
     /// block the sweep actually produced.
     pub exonerated: Vec<bool>,
     /// Per member: the **retained-deficit ratio** — the member's agreement
-    /// deficit against the block on the coarsest available grid scale, over the
-    /// same deficit at full scale. Near `1` the disagreement survives the loss of
-    /// the fine detail (structure); near `0` it is made of it (spectrum).
+    /// deficit against the block on the *first* coarse grid scale (one halving:
+    /// the first of [`MemberMatrix::zncc_coarse`]'s tables, not its coarsest),
+    /// over the same deficit at full scale. Near `1` the disagreement survives
+    /// the loss of the fine detail (structure); near `0` it is made of it
+    /// (spectrum).
     ///
     /// `NaN` where it was not computed or is undefined: an unflagged member, a
     /// matrix carrying no coarse scale, a block with fewer than two other

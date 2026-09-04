@@ -5,15 +5,6 @@
 `sfmtool._sfmtool.matching.ClusterCovisibility` in
 `crates/sfmtool-py/src/matching/covisibility.rs`).
 
-> _Status (2026-07-18): Implemented. Two additive notes against the text
-> below: (1) the binding keeps the existing `member_accepted` keyword —
-> the full signature is `from_arrays(cluster_starts, member_images,
-> num_images, member_accepted=None, positions_xy=None, seed=0)`, and the
-> acceptance mask also gates which members the displacement pass samples;
-> (2) core-side the optional inputs live on a new
-> `from_clusters_with_positions` constructor so existing `from_clusters`
-> call sites compile unchanged._
-
 ## Purpose
 
 Callers working from cluster tracks need three selection primitives that
@@ -25,16 +16,22 @@ and deterministic given a seed.
 
 ## Construction
 
-`ClusterCovisibility` gains an optional per-observation position input:
+`ClusterCovisibility` carries an optional per-observation position input.
+Core-side it arrives through the `from_clusters_with_positions`
+constructor, alongside the positionless `from_clusters`; the binding
+exposes both through one staticmethod:
 
-```
-ClusterCovisibility.from_arrays(cluster_starts, member_images, n_img,
-                                positions_xy=None, seed=0)
+```python
+ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
+                                member_accepted=None, positions_xy=None,
+                                seed=0)
 ```
 
 `positions_xy` (`f64 [n_obs, 2]`, aligned with `member_images`) enables
 the displacement queries; construction without it leaves them
-unavailable (calls raise). The shared-cluster counts are unchanged.
+unavailable (calls raise). The shared-cluster counts are unchanged. The
+`member_accepted` mask gates the displacement pass too: only accepted
+members are sampled.
 
 ## Pair displacement
 

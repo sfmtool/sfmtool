@@ -114,7 +114,7 @@ each posed image's surviving inlier fraction from the final adjustment.
 
 ```python
 rotation_init(cluster_indexes, image_indexes, positions_xy,
-              width, height, f0, seed=0,
+              width, height, f0, *, seed=0,
               min_images=8, max_images=14)
     -> {"image_indexes", "quaternions_wxyz", "translations",
         "points", "inlier_fractions"} | None

@@ -28,7 +28,7 @@ sfm cluster-patches -i clusters.matches [-o out.matches] [OPTIONS...]
 | `-i, --input` | path | required | Cluster-bearing `.matches` file (from `sfm match --cluster`) |
 | `-o, --output` | path | input with a `-patches` suffix | Output `.matches` path; must not already exist |
 | `--patch-size` | float > 0 | 12.0 | Template size — the full patch edge length, keypoint-frame units; halved to the kernel's template half-width. The default sits at SIFT's ~12× descriptor window |
-| `--resolution` | int ≥ 3 | 15 | Template samples per axis |
+| `--resolution` | int ≥ 3 | 25 | Template samples per axis |
 | `--min-zncc` | float in [−1, 1] | 0.85 | Member acceptance threshold on the achieved windowed ZNCC |
 | `--max-shift` | float ≥ 0 | 3.0 | Max translation drift from the SIFT seed, px |
 | `--max-keypoint-uncertainty` | float ≥ 0 | 0.35 | Localizability gate: exclude members whose own patch scores a predicted keypoint position uncertainty (`σ_pos`, template-grid px) above this, before reference selection and refinement; `0` disables |

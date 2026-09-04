@@ -52,9 +52,18 @@ As built, in `crates/matches-format` (`types.rs` / `read.rs` / `write.rs` /
   with no usable reference. **The core kernel's `MemberStatus` (§2) must
   emit these same discriminants** — the binding passes the u8 array through
   untouched (`sfmtool-core` does not depend on `matches-format`).
-- `MATCHES_FORMAT_VERSION = 3`; readers accept 1–3, version ≤ 2 files are
-  pairwise-only and load unchanged, pairwise byte streams and hashes are
-  preserved.
+- `MATCHES_FORMAT_VERSION = 5`; readers accept 1–5 and reject anything
+  newer. Version ≤ 2 files are pairwise-only and load unchanged, and
+  pairwise byte streams and hashes are preserved. Three version gates guard
+  the cluster sections: a file below version 3 may not claim `clusters/` or
+  `cluster_patches/` at all; a `cluster_patches/` file below version 4 is
+  refused because `member_affines` stores the affine translation `t` rather
+  than the absolute refined keypoint position `p = A·x_ref + t`; and one
+  below version 5 is refused because its leading 2×2 is the
+  reference→member warp `W` rather than the member's absolute affine shape
+  `S = W·S_ref`. Neither upgrade is possible on load (both need the
+  reference `.sift` row the reader does not have), so the cluster backbone
+  still loads and the enrichment is regenerated with `sfm cluster-patches`.
 - Two deliberate deviations from the original sketch, kept because they make
   failures legible: `verify()` runs the backbone/flag/entry-consistency gate
   up front (structurally incoherent files report structured errors instead
@@ -534,7 +543,7 @@ category, spec to live at `specs/cli/image-feature/cluster-patches-command.md`:
 
 ```
 sfm cluster-patches -i clusters.matches [-o out.matches]
-    [--patch-size 8.0] [--resolution 25] [--min-zncc 0.85] [--max-shift 3.0]
+    [--patch-size 12.0] [--resolution 25] [--min-zncc 0.85] [--max-shift 3.0]
     [--max-keypoint-uncertainty 0.35]
 ```
 

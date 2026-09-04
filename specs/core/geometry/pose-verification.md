@@ -53,10 +53,11 @@ cluster matcher's size cap the total is linear in observations. Storage
 is sparse — only realized pairs, itself linear under the cap — with
 per-image queries:
 
-- `nearest(i, k)` — the k lowest-mean-displacement partners above a
-  shared-count floor (near-duplicate viewpoints);
-- `farthest(i, k)` — the k highest-displacement partners (wide-baseline
-  pairs, e.g. for focal estimation);
+- `nearest(i, k, min_shared)` — the k lowest-mean-displacement partners
+  with at least `min_shared` shared clusters (near-duplicate viewpoints);
+- `farthest(i, k, min_shared)` — the k highest-displacement partners over
+  the same shared-count floor (wide-baseline pairs, e.g. for focal
+  estimation);
 - pair stats lookup.
 
 A cluster-member acceptance mask (as elsewhere on `ClusterCovisibility`)
