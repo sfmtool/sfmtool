@@ -15,19 +15,18 @@
 //! that leaves the frame by more than [`OUT_OF_FRAME_FRACTION`] of its
 //! diagonal.
 //!
-//! The spec says of these polylines that "**they are not straight** — under
-//! distortion they bend, and the bend *is* the distortion". That is true only
-//! of a model with decentring terms. A purely **radial** model — which is most
-//! of the registry, and both checked-in fixtures — moves every point along its
-//! own radius from the principal point, so a line *through* the principal
-//! point stays exactly straight however violent its distortion is: on
-//! `kerry_park`'s `OPENCV_FISHEYE` the sampled vertical axis is straight to
-//! under a hundredth of a pixel. What its distortion does to these axes is
-//! bunch the **ticks** along them — evenly spaced angles landing at unevenly
-//! spaced pixels — and that is the reading the ticks are for. Sampling rather
-//! than drawing two straight lines is still the right implementation, because
-//! it is what makes the tangential and thin-prism models' real curvature show
-//! up without a special case; it just is not what a `SIMPLE_RADIAL` shows you.
+//! Whether an axis bends is a property of the model, not of how violent its
+//! distortion is. A purely **radial** model — which is most of the registry,
+//! and both checked-in fixtures — moves every point along its own radius from
+//! the principal point, so a line *through* the principal point stays exactly
+//! straight however violent its distortion is: on `kerry_park`'s
+//! `OPENCV_FISHEYE` the sampled vertical axis is straight to under a hundredth
+//! of a pixel. What its distortion does to these axes is bunch the **ticks**
+//! along them — evenly spaced angles landing at unevenly spaced pixels — and
+//! that is the reading the ticks are for. Sampling rather than drawing two
+//! straight lines is still the right implementation, because it is what makes
+//! the tangential and thin-prism models' real curvature show up without a
+//! special case; it just is not what a `SIMPLE_RADIAL` shows you.
 //!
 //! # The ladder is a function of the zoom
 //!
@@ -441,11 +440,9 @@ fn tick_positions(
 /// [`MIN_TICK_SPACING_PX`] apart at this scale, or the coarsest step when even
 /// that is too dense.
 ///
-/// The spec says "the coarsest of `1°, 2°, 5°, …` that keeps adjacent ticks at
-/// least 48 panel pixels apart", which is the wrong end of the ladder: the
-/// coarsest step always keeps them apart, and picking it would put three ticks
-/// on a zoomed-in long lens. The rule that gives the ladder its stated purpose
-/// — as many ticks as fit — is the *finest* step that clears the spacing.
+/// The **finest** end of the ladder, not the coarsest: the coarsest step always
+/// clears the spacing, so picking it would put three ticks on a zoomed-in long
+/// lens. As many ticks as fit is the reading the ladder exists for.
 pub(super) fn tick_ladder(
     camera: &CameraIntrinsics,
     scale: f32,

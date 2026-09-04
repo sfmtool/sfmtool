@@ -87,14 +87,13 @@ pub(super) struct ProfileSample {
 /// The largest `|model − ideal|` displacement the panel found, and the domain
 /// it was allowed to look over.
 ///
-/// Phase 4 reported the maximum over the whole image *rectangle* and explained
-/// itself in a tooltip, because it had no way to say anything narrower. It is
-/// worth being precise about why that was not good enough: on `kerry_park`'s
-/// real `OPENCV_FISHEYE` the rectangle's corners are 150° off-axis, outside
-/// the lens's image circle, where the `k1..k4` polynomial has folded — and the
-/// maximum came out at 272.7 px, twenty times the 13.0 px the lens actually
-/// displaces anything. That number was honest about two forward maps and
-/// misleading about the camera.
+/// The maximum bounds its own domain rather than running over the whole image
+/// *rectangle*, and the row names the bound it used. On `kerry_park`'s real
+/// `OPENCV_FISHEYE` the rectangle's corners are 150° off-axis, outside the
+/// lens's image circle, where the `k1..k4` polynomial has folded — and the
+/// unrestricted maximum comes out at 272.7 px, twenty times the 13.0 px the
+/// lens actually displaces anything. Such a number is honest about two forward
+/// maps and misleading about the camera.
 pub(super) struct DistortionExtent {
     /// Largest displacement in pixels over the nodes that count.
     pub max_px: f64,

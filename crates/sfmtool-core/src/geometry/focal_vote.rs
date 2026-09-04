@@ -406,8 +406,8 @@ fn log_median(vals: &[f64]) -> Option<f64> {
     Some(l.exp())
 }
 
-/// Per-image-pair accumulator from the sampled pass: how many clusters sampled
-/// this pair, and the sum of their feature displacements.
+/// Per-image-pair accumulator over the exhaustive per-cluster pass: how many
+/// clusters the pair shares, and the sum of their feature displacements.
 #[derive(Clone, Copy, Default)]
 struct PairAccum {
     count: f64,
@@ -626,9 +626,9 @@ pub fn focal_vote_with_options(
     // Each cluster's covisible member pairs contribute to their image pair's
     // shared-cluster count and mean feature displacement. The same pass builds,
     // per image, the (run, position) list used for the full-correspondence
-    // merge-join. Counts are the true shared-cluster covisibility (the sampled
-    // single-pair estimate of the spec undercounts too far to reach the 25/30
-    // thresholds on parallax-poor captures — see the spec's deviation note).
+    // merge-join. Counts are the true shared-cluster covisibility; a sampled
+    // single pair per cluster undercounts too far to reach the 25/30 cluster
+    // thresholds on parallax-poor captures — see the spec's "Pair tables".
     let mut image_clusters: ImageClusters = vec![Vec::new(); n_img];
     let mut pair_accum: HashMap<(u32, u32), PairAccum> = HashMap::new();
 

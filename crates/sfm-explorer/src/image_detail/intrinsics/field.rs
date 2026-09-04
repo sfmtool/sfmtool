@@ -34,10 +34,10 @@
 //! maximum and the multiplier on every frame: an exaggerated field that does not
 //! admit it is a lie, and this is a diagnostic tool.
 //!
-//! # What the spec did not anticipate
+//! # Only the trustworthy half of the grid is drawn as arrows
 //!
-//! The spec's auto scale fits "the largest displacement in the grid". On a
-//! circular fisheye the largest displacement in the grid is not a lens at all:
+//! The auto scale fits the largest displacement in the grid, and on a circular
+//! fisheye the largest displacement in the grid is not a lens at all:
 //! `kerry_park`'s image rectangle has corners 150° off-axis, outside the lens's
 //! image circle, where the `k1..k4` polynomial folds and reports 273 px of
 //! "distortion" against the 13 px the lens actually applies. Fitting the scale

@@ -228,8 +228,11 @@ pub enum PatchExtent {
     FeatureSize { factor: f64, across: ViewReduce },
 }
 
-// PatchExtent::default() == FeatureSize { factor: 5.0, across: Median }, and the
-// Python binding's `extent` defaults to "feature_size" / `extent_value` to 5.0.
+// PatchExtent::default() == FeatureSize { factor: 2.5, across: Median }, and the
+// Python binding's `extent` defaults to "feature_size" / `extent_value` to 2.5.
+// `factor` is a HALF-extent multiplier, so the full patch edge is 5x the
+// projected feature size; the CLI's `--extent-value` states that full size and
+// halves it before the call.
 
 /// How to reduce a per-view quantity across a point's observing views.
 pub enum ViewReduce { Min, Max, Median, Mean }

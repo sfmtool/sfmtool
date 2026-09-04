@@ -430,7 +430,7 @@ fn base_opts() -> FundamentalOptions {
 fn contamination_sweep_recovers_geometry() {
     // Floor at 0.35 keeps the (unoptimized) test-profile `w⁷` RANSAC tractable;
     // the 0.2 floor from the spec is exercised in the release-built Python
-    // binding tests. See the spec's deviation note.
+    // binding tests. See the spec's Testing requirements → Contamination sweep.
     let n = 120;
     for &frac in &[0.9, 0.7, 0.5, 0.35] {
         let outlier = 1.0 - frac;

@@ -32,9 +32,11 @@ type Pose = (UnitQuaternion<f64>, Vector3<f64>);
 /// the `k² = a / dᵀMd` scale recovery against division by ~0.
 const SCALE_DENOM_EPS: f64 = 1e-12;
 
-/// Kabsch rejects a point triple whose cross-covariance smallest singular
+/// Kabsch rejects a point triple whose cross-covariance **second** singular
 /// value is below this fraction of the largest — collinear or coincident world
-/// points, where the rigid alignment is not determined.
+/// points, where the rigid alignment is not determined. Not the third: three
+/// points are always coplanar, so the third vanishes for every triple and its
+/// direction is fixed by the determinant correction instead.
 const KABSCH_RANK_EPS: f64 = 1e-9;
 
 /// Up to four world-to-camera poses from three bearing/point correspondences.

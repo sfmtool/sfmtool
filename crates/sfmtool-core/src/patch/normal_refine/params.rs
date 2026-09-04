@@ -176,9 +176,12 @@ pub struct NormalRefineParams {
     /// the per-candidate render cost roughly linearly in the views dropped. `0`
     /// (default) disables the cap (use all views; byte-for-byte the uncapped
     /// behavior). Internally floored at [`min_views`](Self::min_views) so a cap
-    /// below the refine floor can't strand a patch, and ignored per-patch when
-    /// the selected subset would lose too much observability of one tilt DOF
-    /// (the conditioning fallback).
+    /// below the refine floor can't strand a patch. There is no conditioning
+    /// fallback to the full view set: the greedy already returns the
+    /// best-conditioned `K` available, and a point whose views leave one tilt
+    /// DOF loose is no better conditioned with all of them. The subset does
+    /// widen back to every view where there is nothing to select from — a point
+    /// at infinity, or no front-facing view to anchor on.
     pub max_refine_views: u32,
 }
 
@@ -224,7 +227,8 @@ impl Default for NormalRefineParams {
 pub struct NormalRefineResult {
     /// The input patch with its normal replaced by the optimum; `center`,
     /// `half_extent`, and the in-plane convention are preserved (the input
-    /// `u_axis` is reprojected onto the new plane, `v = n × u`).
+    /// `v_axis` is reprojected onto the new plane, and `u_axis = v_axis ×
+    /// normal` follows).
     pub patch: OrientedPatch,
     /// Consensus photoconsistency `Φ` at the returned normal (NaN if it could
     /// not be evaluated).

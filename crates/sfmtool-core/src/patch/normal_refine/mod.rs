@@ -68,9 +68,10 @@ use support::repose_patch;
 /// updated copy plus diagnostics; see `specs/core/patch/patch-normal-refinement.md`.
 ///
 /// In-plane rotation can't affect photoconsistency, so the routine searches
-/// only the 2-DOF normal; it reprojects the input `u_axis` onto each candidate
-/// plane (`v = n × u`) and keeps the input's `center`/`half_extent`, so the
-/// frame moves as little as the new plane forces and no `up` hint is needed.
+/// only the 2-DOF normal; it reprojects the input `v_axis` onto each candidate
+/// plane (and `u_axis = v_axis × normal` follows) and keeps the input's
+/// `center`/`half_extent`, so the frame moves as little as the new plane forces
+/// and no `up` hint is needed.
 ///
 /// The search is seeded from the patch's current normal and the mean-viewing
 /// normal of the supplied views, runs a coarse-to-fine exp-map grid per seed,
