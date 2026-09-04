@@ -4,41 +4,9 @@
 (`crates/sfmtool-core/src/geometry/rotation_init.rs`, bound as
 `sfmtool._sfmtool.geometry.rotation_init` in
 `crates/sfmtool-py/src/geometry/rotation_init.rs`). Depends on
-`estimate_homography` (specs/core/geometry/focal-vote.md), covisibility selection
-(specs/core/features/covisibility-selection.md), rotation-locked resection
-(specs/core/geometry/rotation-locked-resection.md), and the staged bundle
-adjustment (specs/core/geometry/bundle-adjustment.md).
-
-> _Status (2026-07-18): Implemented, with four notes against the text
-> below. (1) The finishing bundle adjustment feeds the far-field cluster
-> ids to its own points-at-infinity mask rather than leaving that to the
-> caller: with the far field modeled as finite points, the LM walks the
-> flat scale gauge downward until the near field crosses the adjustment's
-> trim depth floor and the core collapses to a panorama (observed on the
-> synthetic far-field scene; each stage alone is fine, the walk compounds
-> across the staged rounds). Consequently the far clusters' rows of
-> `points` return as unit world-frame directions, not triangulated
-> positions, and after the adjustment the gauge is renormalized so the
-> seed baseline is unit again. (2) The mask is the deduplicated union over
-> the component's validated edges; it is internal to the kernel and is not
-> exported (see the 2026-08-11 status below). (3) The
-> displacement tables are computed in-kernel with the focal vote's full
-> covisible-pair table (mean displacement over all covisible member pairs
-> of each cluster), not the sampled `ClusterCovisibility` tables — same
-> reasoning as the focal-vote deviation: sampled counts undercount against
-> the 25-shared threshold. (4) The growth resection runs with an 8 px trim
-> gate and a 10-survivor floor (candidacy still requires 12 observed
-> triangulated points, per the text)._
-
-> _Status (2026-08-11): `far_cluster_indexes` is no longer part of the
-> output. The far-field mask stays inside the kernel, where it feeds the
-> finishing adjustment's points-at-infinity mask and the gauge
-> renormalization; the far rows of `points` are still unit directions, so
-> a caller that wants to know which clusters those are reads them off
-> `points`. The only consumer of the exported ids was the seed pipeline's
-> far-field admission channel, which was removed after an ablation
-> measured its whole fleet effect at 15 forced points across 3 of 41
-> entries, 14 of which their own observations explain better finite._
+`estimate_homography` (specs/core/geometry/focal-vote.md), rotation-locked
+resection (specs/core/geometry/rotation-locked-resection.md), and the staged
+bundle adjustment (specs/core/geometry/bundle-adjustment.md).
 
 ## Purpose
 
@@ -62,16 +30,25 @@ image size, a focal `f0` (typically a focal-vote consensus), and a seed.
 
 ### 1. Rotation edge graph
 
+One pass over the cluster runs builds the shared-cluster count and mean
+feature displacement of every covisible image pair, exactly as the focal
+vote's pair tables do: each cluster keeps one position per member image
+(last observation wins) and contributes every pair of its distinct member
+images. The kernel builds these tables itself rather than reading the
+sampled `ClusterCovisibility` tables, because a single sampled member pair
+per cluster undercounts covisibility far enough to starve the 25-shared
+gate that follows, on exactly the parallax-poor captures this method
+exists for.
+
 Candidate pairs per image: the largest-mean-displacement covisible
-partners (displacement tables from covisibility selection; at least 25
-shared clusters, displacement at least `0.05 × diagonal`, up to 3 edges
-per image). Per candidate: estimate the homography over the pair's
-shared-cluster correspondences (centred coordinates); require at least
-12 inliers; validate as a conjugate rotation at `f0` by the
-orthogonality residual (`< 0.12`; a finite-plane homography never
-passes). A validated edge stores `R_ij` — the polar-orthogonalized
-`K⁻¹ H K` — and its inlier partition: H-inliers are the edge's far
-field, H-outliers its near field.
+partners (at least 25 shared clusters, displacement at least
+`0.05 × diagonal`, up to 3 edges per image). Per candidate: estimate the
+homography over the pair's shared-cluster correspondences (centred
+coordinates); require at least 12 inliers; validate as a conjugate
+rotation at `f0` by the orthogonality residual (`< 0.12`; a finite-plane
+homography never passes). A validated edge stores `R_ij` — the
+polar-orthogonalized `K⁻¹ H K` — and its inlier partition: H-inliers are
+the edge's far field, H-outliers its near field.
 
 ### 2. Global rotations
 
@@ -97,11 +74,24 @@ camera's translation defines unit scale.
 ### 4. Translation growth
 
 Grow over the component by rotation-locked resection: any unposed image
-observing at least 12 triangulated points resects its translation;
-after each growth round, retriangulate all clusters over the posed set
-and repeat until no image is added or the core reaches its size budget
-(`max_images`, default 14). Finish with one staged bundle adjustment
-(full default schedule) over the posed set at fixed `f0`.
+observing at least 12 triangulated points is a candidate, and its
+translation resects under an 8 px trim gate needing at least 10
+survivors. After each growth round, retriangulate all clusters over the
+posed set and repeat until no image is added or the core reaches its size
+budget (`max_images`, default 14). Finish with one staged bundle
+adjustment (full default schedule) over the posed set at fixed `f0`.
+
+That adjustment models the far field at infinity, over a mask the kernel
+builds itself as the deduplicated union of the H-inlier clusters of the
+component's validated edges. The mask is not optional and not the
+caller's to supply: with the far clusters left as finite points, a
+dominant far cloud rewards baseline collapse, and the LM walks the flat
+scale gauge downward until the near field crosses the adjustment's trim
+depth floor and the core degenerates to a panorama — each staged round is
+individually well behaved, and the walk compounds across them. Because
+the gauge is flat it can also wander harmlessly, so after the adjustment
+the posed translations and the finite points are rescaled to pin the seed
+baseline back to unit; the far rows are directions and are left alone.
 
 ## Output
 
@@ -109,6 +99,8 @@ Posed-image indices with rotations (WXYZ) and translations, the
 triangulated points (`NaN` where absent, and unit world-frame directions
 on the far-field rows the finishing adjustment modeled at infinity), and
 each posed image's surviving inlier fraction from the final adjustment.
+The far-field mask itself is internal: a caller that needs to know which
+clusters were held at infinity reads the unit rows off `points`.
 
 ## Binding
 

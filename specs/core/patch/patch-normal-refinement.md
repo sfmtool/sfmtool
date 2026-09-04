@@ -3,59 +3,6 @@
 **Status:** Builds on `specs/core/patch/patch-cloud.md`
 (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
 
-> _Status (2026-06-12): v1 implemented — `sfmtool-core/src/patch/normal_refine/`
-> (`ProjectedImage`, `Objective`, `PatchWindow`, `NormalRefineParams`,
-> `NormalRefineResult`, `refine_patch_normal`, `refine_patch_cloud_normals`,
-> `view_indices_from_reconstruction`) and the PyO3 binding
-> `PatchCloud.refine_normals`. Deferred from v1: the analytic Gauss-Newton polish
-> and its centered-Hessian confidence (v1 uses a finite-difference grid-curvature
-> confidence and does not yet gate on a confidence threshold to keep the init
-> normal); the geometric/PCA seed (v1 seeds from the patch's current normal and
-> the mean-viewing direction); stochastic view subsets; and the
-> atlas-backed textured patch cloud. The `scripts/patch_crossval.py` strip
-> renderer drives this routine via `--refine-normal`._
->
-> _Status (2026-06-20): the `representative` texture output is now produced — a
-> per-patch fused RGBA bitmap rendered at the found normal, gated on the new
-> `NormalRefineParams::render_bitmap` (Python `refine_normals(render_bitmaps=…)`),
-> scattered to per-3D-point rows and persisted as `patch_bitmaps_y_x_rgba` by
-> `sfm xform --refine-normals bitmaps=true`. RGB is the cross-view (robust)
-> fusion; alpha is per-pixel cross-view agreement. The final scoring pass renders
-> each candidate's per-view stack (`PatchViewStack`) and keeps the winner's, so
-> the bitmap and the consensus view-weights it fuses with come from that one
-> render — no extra render or IRLS pass. This is the simple fused-render form; the
-> **joint normal + per-pixel robust template** of item 7 (a free latent `m`,
-> super-resolvable, atlas-backed) remains beyond v1._
->
-> _Status (2026-07-01): the `sfm embed-patches` pipeline **no longer sources its
-> stored bitmaps from this refinement** — the sub-pixel keypoint refiner now
-> fuses each point's representative at the *final* per-view keypoints
-> (`refine_keypoints(render_bitmaps=True)`, reusing this module's
-> `PatchViewStack::render`/`fuse`), fixing the one-round staleness and covering
-> points at infinity, which this refinement skips. The `render_bitmaps`
-> capability here remains in place and in use — `sfm xform --refine-normals
-> bitmaps=true` and the strips diagnostics (`compare --strips` /
-> `inspect --strips`) still render through it._
->
-> _Status (2026-07-05): the refinement basis can now be **capped per patch** at
-> the `K` most normal-informative views — a D-optimal geometric subset selection
-> (`NormalRefineParams::max_refine_views`, `0` = off; Python
-> `refine_normals(max_refine_views=…)`, CLI `sfm embed-patches
-> --refine-max-views`). See
-> [patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md) for
-> the design, algorithm, and validation harness._
->
-> _Status (2026-06-13): performance characterized — see
-> `reports/2026-06-13-perf-patch-normal-refinement.md` (phase breakdown,
-> per-knob perf-vs-benefit, prioritized optimization list). The search defaults
-> hold up; the **sampler default moved to `Bilinear`** (the analysis found
-> anisotropic barely changes the found normal at 1.6–3× the cost — it stays an
-> opt-in for unbiased `Φ`/confidence). Landed behavior-preserving fixes: small
-> warp/remap grids run sequentially instead of nested-rayon, and `remap_aniso`
-> skips zero-weight hi-level taps. `SFMTOOL_PROFILE=1` enables hot-path phase
-> timers; `scripts/bench_normal_refine.py` and the `patch_render` criterion bench
-> reproduce the measurements._
-
 ## Problem
 
 A reconstructed 3D point `X` is seen by cameras `{(Kᵢ, Tᵢ)}`. Its surface around
@@ -201,69 +148,85 @@ view (or the whole candidate) invalid. Two subtleties the identity above assumes
   easy region. Compute the mask once at the level's center normal and hold it
   fixed across that level's candidates.
 
-## Current prototype algorithm
+## The search
 
-```
-refine_normal(center, init_n, half_extent, views, images):
-    u, v = tangent_basis(init_n)        # search basis; any tangent basis of init_n
-    grid = linspace(-tan(range), tan(range), steps)        # default range=25°, steps=7
-    best = (init_n, Φ(init_n))
-    for a in grid, b in grid:                              # steps² candidates
-        n = normalize(init_n + a·u + b·v)
-        if Φ(n) > best.score: best = (n, Φ(n))
-    return best
-Φ(n):  render patch under n into each view (from_patch + remap_bilinear at the
-       validated resolution); return mean pairwise windowed-NCC.
-```
+The search is a coarse-to-fine grid on the sphere around the initial normal;
+the objective it ranks by is the consensus `Φ` above.
 
-`tangent_basis(init_n)` is only the **search** basis — the two directions the grid
-tilts `n` — not the patch's in-plane orientation. The prototype still passes an
-`up` to `OrientedPatch.from_center_normal` when rendering, but since in-plane
-rotation can't affect `Φ` it's immaterial; the core API drops it.
+**Parameterization (`δ ∈ ℝ²`, exp-map).** A candidate perturbs the level's
+center normal by a tangent vector `δ` via the exponential map
+`n(δ) = cos‖δ‖·n₀ + sin‖δ‖·δ̂` (`exp_map_normal` / `exp_map_in_basis`, with `δ`
+expressed in the deterministic tangent basis) — i.e. tilt `n₀` by angle `‖δ‖`
+toward `δ`, equivalently a rotation about axis `n₀ × δ̂`. This is angle-uniform:
+equal steps are equal angles, unlike the flat (gnomonic) `normalize(n₀ + a·u +
+b·v)`, whose square `[-tan r, tan r]²` stretches to `atan(√2·tan r) ≈ √2·r` into
+the corners. The search domain is the **disk** `‖δ‖ ≤ range`: the square lattice
+is generated but candidates outside the disk are skipped, which keeps every
+level's cone circular and matches the radial `GaussianDisk` support.
 
-Two requirements on the search basis:
+`tangent_basis(n)` is only the **search** basis — the two directions the grid
+tilts `n` — not the patch's in-plane orientation. It is a pure function of `n`
+(least-aligned world axis + Gram-Schmidt), so a refinement is reproducible; the
+continuous optimum is basis-independent anyway, and on a finite grid the basis
+only rotates the sampling lattice. In-plane rotation cannot affect `Φ`, so
+nothing in the search needs an `up` hint — `repose_patch` reprojects the input
+frame onto each candidate plane.
 
-- **Deterministic in `n`.** `tangent_basis` must be a pure function of `init_n`
-  (e.g. the prototype's least-aligned world axis + Gram-Schmidt), so a refinement
-  is reproducible. The continuous optimum is basis-independent anyway; on a finite
-  grid the basis only rotates the sampling lattice, which coarse-to-fine and the
-  gradient polish wash out.
-- **Square-grid caveat.** `n = normalize(init_n + a·u + b·v)` is a flat (gnomonic)
-  projection: equal `(a, b)` steps are *not* equal angles, and the square
-  `[-tan r, tan r]²` reaches `atan(√2·tan r) ≈ √2·r` into the corners. Fine for a
-  modest cone; for
-  wide cones prefer clamping to the disk `‖(a, b)‖ ≤ tan r` (it also matches the
-  radial `GaussianDisk` support and keeps the per-level cone circular).
+**Seeds.** Two, at most: the patch's current normal, plus the mean-viewing
+normal of the supplied views when it differs from it by more than 0.5°. Each
+seed runs its own coarse-to-fine walk and contributes its winner; a geometric /
+PCA seed is not among them (`PatchCloud::from_reconstruction` can *seed the
+cloud* that way, but the refinement does not add one).
 
-Single-level dense grid; `steps²·V` renders per point. On seoul it lifts mean
-pairwise NCC by ~0.03 on average and up to +0.17 on the least-consistent tracks.
+**Coarse-to-fine grid (`coarse_to_fine`).** Per seed and per level: freeze the
+common-valid support at the level's center normal, evaluate the center and every
+in-disk candidate of an `init_steps × init_steps` lattice (at least 3 per axis —
+with 2 the only non-center samples are disk corners that clamp away, leaving a
+no-op search), recenter on the best, and shrink the cone to **one previous grid
+spacing**, `2·range/(steps − 1)`. Repeat `refine_levels` times. Renders per point
+are ≈ `seeds · refine_levels · init_steps² · V`, far below one dense grid of the
+same precision — and the fronto-parallel cache
+([fronto-parallel-patch-cache.md](fronto-parallel-patch-cache.md)) removes most
+of that render cost by scoring candidates against one base render per view. The
+search may rank with a cheaper objective than the reported one
+(`search_robust_iters`); the final pass never does.
 
-## Optimization
+**Capping the refinement basis.** `max_refine_views` (`0` = uncapped, the
+default) restricts a patch with more views than the cap to the `K` most
+normal-informative ones, chosen by a D-optimal geometric selection — a
+least-oblique anchor plus a greedy `det(M + wᵢwᵢᵀ)` fill over each view's
+tangent-plane information vector. The normal is 2-DOF, so a few azimuthally
+spread oblique views already determine it, and the cap cuts the per-candidate
+render cost roughly linearly in the views dropped. It is floored at `min_views`
+so it cannot strand a patch, and it shrinks only the *refinement basis* — the
+returned patch is a repose of the full input patch, and no observation leaves the
+reconstruction. See
+[patch-normal-refine-view-subset.md](patch-normal-refine-view-subset.md) for the
+design, algorithm and validation harness.
 
-The proposed core replaces the single dense grid with a parameterization and a
-two-stage search; the objective is the consensus `Φ` above.
+**Final pass.** `build_final_context` freezes one support at the *init* normal,
+intersects it with each seed winner's validity, and drops a winner that is
+back-facing in a kept view or that would leave fewer than 8 commonly-valid
+pixels. The init and every survivor are then scored over that single frozen
+support, so with the fronto-parallel prior off the returned `Φ` is never below
+`init_photoconsistency`. Points failing the validity gates outright — fewer than
+`max(min_views, 2)` views, or no scoreable support — are returned unrefined with
+NaN scores, and a `w = 0` patch (a point at infinity, whose outward normal is
+fixed by its direction) is returned untouched without searching.
 
-**Parameterization (`δ ∈ ℝ²`, exp-map).** Perturb the normal by a tangent vector
-`δ` via the exponential map `n(δ) = cos‖δ‖·n₀ + sin‖δ‖·δ̂` (with `δ` expressed in
-the deterministic tangent basis) — i.e. tilt `n₀` by angle `‖δ‖` toward `δ`
-(equivalently a rotation about axis `n₀ × δ̂`). This is angle-uniform — equal steps
-are equal angles, fixing the corner stretch of
-`normalize(n₀ + a·u + b·v)` — and is the natural coordinate for both the grid and
-the gradient step. The search domain is the disk `‖δ‖ ≤ angular_range`.
+With `render_bitmap` set (Python `refine_normals(render_bitmaps=True)`) this pass
+scores through a `PatchViewStack` — a retained per-view render — and keeps the
+*winner's* stack together with the consensus view-weights that scored it, so the
+`representative` texture is fused from that one render with no extra render and
+no second IRLS pass. Without it the pass stays on the lean masked-only scorer and
+pays nothing for a feature it does not use.
 
-**Stage 1 — global (derivative-free).** Coarse-to-fine grid over the `δ`-disk:
-a coarse grid, recenter on the best, shrink the cone, repeat `refine_levels`
-times. Handles the multi-modality of `Φ` under repetitive texture; seed from
-**multiple inits** (mean-viewing and geometric/PCA normals) and keep the best
-basin. Renders per point ≈ `seeds · refine_levels · init_steps² · V`, far below
-one dense grid of the same precision.
-
-**Stage 2 — local polish (Gauss-Newton / LK).** `Φ` is smooth, and minimizing the
-photometric variance `Σ wᵢ‖xᵢ(δ) − x̄_w‖²` (weights frozen within the step) is a
-nonlinear least-squares problem, so a Gauss-Newton step in `δ` converges in 1–3
-iterations from the stage-1 basin. Because `Σ wᵢ(xᵢ − x̄_w) = 0`, treating `x̄_w`
-as fixed gives the *exact* gradient `∇E = 2 Σ wᵢ Jᵢᵀ(xᵢ − x̄_w)`. The `P×2`
-per-view Jacobian chains
+**Local polish (Gauss-Newton / LK) — not implemented.** `Φ` is smooth, and
+minimizing the photometric variance `Σ wᵢ‖xᵢ(δ) − x̄_w‖²` (weights frozen within
+the step) is a nonlinear least-squares problem, so a Gauss-Newton step in `δ`
+would converge in 1–3 iterations from the grid's basin. Because
+`Σ wᵢ(xᵢ − x̄_w) = 0`, treating `x̄_w` as fixed gives the *exact* gradient
+`∇E = 2 Σ wᵢ Jᵢᵀ(xᵢ − x̄_w)`. The `P×2` per-view Jacobian chains
 
 ```
 Jᵢ = ∂xᵢ/∂δ  =  (z-normalize)′ · ∂image/∂pixel · ∂pixel/∂world · ∂world/∂δ
@@ -273,24 +236,36 @@ Jᵢ = ∂xᵢ/∂δ  =  (z-normalize)′ · ∂image/∂pixel · ∂pixel/∂wo
 `∂world/∂δ = ∂(patch point)/∂n · ∂n/∂δ`. Note `∂pixel/∂world` here is *not* the
 `remap_aniso` SVD (that is the in-plane `2×2` map); under a tilt a patch point
 moves *out of plane*, so the dominant column is the one the in-plane map omits —
-use the camera model's analytic projection Jacobian, or finite-difference `δ`
-(2 extra renders/view per step). The z-normalization derivative projects out the
-mean/scale directions. (Inverse-compositional LK could precompute steepest-descent
-images, but the template `x̄_w` and the weights change each iteration, so the
-symmetric multi-view form is a research note, not a v1 plan.) GN is optional for
-v1 — the coarse-to-fine grid alone is usable.
+it would need the camera model's analytic projection Jacobian, or a
+finite-difference in `δ` (2 extra renders/view per step). The z-normalization
+derivative projects out the mean/scale directions. (Inverse-compositional LK
+could precompute steepest-descent images, but the template `x̄_w` and the weights
+change each iteration, so the symmetric multi-view form is a research note.) The
+grid alone is what runs, and the sub-grid accuracy the polish would buy in one
+pass is instead reachable by refining again — see "Not idempotent" below.
 
-**Confidence.** Use the **centered** Gauss-Newton Hessian
-`H̃ = Σ wᵢ JᵢᵀJᵢ − J̄ᵀJ̄` (with `J̄ = Σ wᵢ Jᵢ`), i.e. the *between-view* curvature
-— not `Σ wᵢ JᵢᵀJᵢ`. This matters: in the narrow-baseline degeneracy we want to
-flag, all views nearly coincide, so every `Jᵢ ≈ J̄`, tilting the plane shifts all
-patches identically, and `Φ` is genuinely flat — `H̃ ≈ 0`, while `Σ wᵢ JᵢᵀJᵢ`
-stays *large* on any textured patch and would falsely report high confidence. Its
-smaller eigenvalue measures how tightly the normal is constrained; report
-`confidence` from it (normalized for scale — eigenvalues grow with texture
-contrast, `R`, and window mass — relative to the trace or an image-noise estimate)
-and, below a threshold, keep the init normal and flag it. Degenerate (≤ 2 valid,
-single-sided) points skip the search outright.
+**Confidence.** Computed only when `compute_confidence` is set (it is off by
+default, an extra un-cached source-render pass per patch for a purely
+informational number; otherwise `confidence` is NaN). `grid_confidence` samples
+`Φ` on a 3×3 stencil around the optimum — spacing the schedule's final grid
+spacing, clamped to `[0.2°, 5°]` — forms the negated 2×2 finite-difference
+Hessian, and reports `λ_min / (λ_max + 1)`: `≈ 0` on a flat `Φ` and `≈ 1` on an
+isotropically peaked one, dimensionless in texture contrast because `Φ` is
+already a correlation, with the `+1` floor (in `Φ` per radian²) keeping a weakly
+curved optimum off full confidence. The stencil excludes the fronto-parallel
+prior, so confidence reports the data's curvature alone.
+
+The grid stencil stands in for the analytic **centered** Gauss-Newton Hessian
+`H̃ = Σ wᵢ JᵢᵀJᵢ − J̄ᵀJ̄` (with `J̄ = Σ wᵢ Jᵢ`), which is the shape the analytic
+form must take if it is ever built: the *between-view* curvature, not
+`Σ wᵢ JᵢᵀJᵢ`. In the narrow-baseline degeneracy this exists to flag, all views
+nearly coincide, so every `Jᵢ ≈ J̄`, tilting the plane shifts all patches
+identically, and `Φ` is genuinely flat — `H̃ ≈ 0`, while `Σ wᵢ JᵢᵀJᵢ` stays
+*large* on any textured patch and would falsely report high confidence. The grid
+estimate needs no Jacobians and captures the same degeneracy for exactly that
+reason: `Φ` itself is flat there. Confidence is **report-only** — nothing gates
+on it, and a low-confidence patch keeps the normal the search found rather than
+falling back to its init.
 
 **Not idempotent — by design.** `refine_patch_normal` is *not* a fixed-point
 operation: feeding a refined normal back in can improve it further, and that is
@@ -302,9 +277,18 @@ Each pass still honors never-worse-than-its-own-init, so repeated refinement
 drives `Φ` toward the continuous optimum — running to convergence is the
 *thorough* setting. Forcing idempotence (e.g. an acceptance threshold or no cone
 reopening) would only cap the achievable accuracy; the Gauss-Newton polish above
-is the right way to converge in one pass instead.
+is the way to converge in one pass instead.
 
-## Proposed core API
+## Rust API
+
+Everything below lives in `sfmtool-core/src/patch/normal_refine/`, split across
+`params` (the config and result types), `parameterization` (the sphere exp-map),
+`support` / `level` (window and per-level frozen support), `znorm` (render +
+z-normalize), `consensus` (`Φ`), `search` (the coarse-to-fine walk),
+`view_stack` (the multi-view render substrate the representative fuses),
+`view_subset` (the D-optimal basis cap), `obliquity` (the two priors) and
+`fronto_cache` (the candidate cache). The PyO3 binding is
+`PatchCloud.refine_normals`.
 
 ```rust
 /// A fully-calibrated source camera: its intrinsics, its world-to-camera pose,
@@ -329,35 +313,49 @@ pub enum Objective {
     RobustWeighted { iters: u32 },
 }
 
+/// How candidate normals are scored: re-rendered from the source images, or
+/// resampled from a cached fronto-parallel base patch per view. See
+/// `fronto-parallel-patch-cache.md`.
+pub enum CacheMode { Off, FrontoParallel }
+
 pub struct NormalRefineParams {
-    pub angular_range_deg: f64,   // half-extent of the search cone
-    pub init_steps: u32,          // coarse grid resolution per axis
+    pub angular_range_deg: f64,   // half-extent of the level-0 search cone
+    pub init_steps: u32,          // grid resolution per tangent axis, each level
     pub refine_levels: u32,       // coarse-to-fine passes (each shrinks the cone)
     pub objective: Objective,     // MeanPairwise | RobustWeighted
     pub window: PatchWindow,      // per-pixel scoring weight / support (below)
     pub min_valid_fraction: f64,  // per-view valid-pixel floor
     pub min_views: u32,
     pub sampler: Sampler,         // how to sample the source pyramids
+    pub cache: CacheMode,         // source re-render vs. fronto-parallel cache
+    pub cache_supersample: f64,   // base density for the cache (ignored when Off)
+    pub compute_confidence: bool, // else `confidence` is NaN (an extra pass)
+    pub search_robust_iters: Option<u32>,
+                                  // cheaper objective for the *search* ranking
+                                  // only; the final pass always uses `objective`
+    pub obliquity_weight_power: f64,  // `p` of the |cos θ|^p view-weight (A)
+    pub fronto_prior_weight: f64,     // `λ` of the fronto-parallel prior (B)
     pub render_bitmap: bool,      // also render the `representative` RGBA texture
                                   // at the found normal (off by default; one extra
                                   // full-grid source render per kept view per patch)
+    pub max_refine_views: u32,    // cap the refinement basis at the K most
+                                  // normal-informative views (`0` = uncapped)
 }
 
 /// How to sample a `ProjectedImage`'s pyramid when rendering a patch.
 pub enum Sampler {
-    /// Plain bilinear from the full-resolution level — the cheapest option, and
-    /// the most accurate one at sub-pixel scale, but it aliases wherever the
-    /// patch grid minifies the source. The perf analysis found the found normal
-    /// barely differs from anisotropic (≤ ~1° on pinhole cameras) at a fraction
-    /// of the cost.
+    /// Plain bilinear from the full-resolution level — the cheapest tap, within
+    /// ~1° of anisotropic on fronto-parallel pinhole views, but it aliases
+    /// wherever the patch grid minifies the source, which corrupts the score
+    /// surface the search descends.
     Bilinear,
     /// Single bilinear sample from the pyramid level nearest the warp's local
     /// compression (`round(log2(sigma_major))` per pixel, from the Jacobian SVD).
-    /// The default, and the middle point: bounds aliasing on compressive warps
-    /// (e.g. cross-scale views with one camera much closer) at ≈ bilinear cost,
-    /// but blurs oblique views whose anisotropic footprint only `Anisotropic`
-    /// resolves, and locates a sub-pixel optimum on the selected level's coarser
-    /// sample grid.
+    /// The default, and the middle point: bounds the aliasing `Bilinear` suffers
+    /// on compressive warps (e.g. cross-scale views with one camera much closer)
+    /// at ≈ bilinear cost, but blurs oblique views whose anisotropic footprint
+    /// only `Anisotropic` resolves, and locates a sub-pixel optimum on the
+    /// selected level's coarser sample grid.
     BilinearMip,
     /// Anisotropic over the pyramid (the warp's Jacobian SVD picks the level),
     /// de-aliasing oblique / grazing views. Costs ~1.6–3× more; keeps the reported
@@ -373,7 +371,7 @@ pub enum PatchWindow {
     /// Uniform weight over the whole square grid (rotation-leaky; mainly a
     /// baseline).
     Uniform,
-    /// Gaussian center weight over the square grid (the prototype default).
+    /// Gaussian center weight over the square grid.
     Gaussian { sigma: f64 },
     /// Gaussian weight confined to the inscribed disk — radial, so in-plane
     /// rotation is exactly free and grazing corners don't leak in. Recommended
@@ -391,16 +389,17 @@ pub struct NormalRefineResult {
     pub photoconsistency: f64,
     pub init_photoconsistency: f64,
     pub valid_view_count: u32,
-    pub confidence: f64,          // peakedness of Φ at the optimum (see below)
+    pub confidence: f64,          // peakedness of Φ at the optimum, NaN when
+                                  // `compute_confidence` is false (see above)
     /// The canonical appearance in the patch `(s, t)` frame at the found normal:
     /// a fused `R×R` RGBA texture, flat row-major `(row, col, channel)`. RGB is
     /// the cross-view fused colour (the robust IRLS view weights under
     /// `RobustWeighted`, an unweighted mean under `MeanPairwise`); `A` is a
     /// per-pixel cross-view *agreement* confidence (0 where no kept view covers
     /// the pixel). Populated when `NormalRefineParams::render_bitmap` is set;
-    /// `None` otherwise. This is the simple fused-render form — the per-pixel
-    /// robust *template* `m` of item 7 (a free latent, super-resolvable) is still
-    /// beyond v1.
+    /// `None` otherwise, or when the patch was not refined. This is the simple
+    /// fused-render form — the per-pixel robust *template* `m` of item 7 (a free
+    /// latent, super-resolvable) is not built.
     pub representative: Option<Vec<u8>>,
 }
 
@@ -410,34 +409,72 @@ pub struct NormalRefineResult {
 /// the 2-DOF normal; it reprojects the input `v_axis` onto each plane (`u = v × n`)
 /// and keeps the input's `center`/`half_extent`, so the frame moves as little as
 /// the new plane forces and no `up` hint is needed.
+///
+/// `view_keypoints`, when given, is parallel to `views`: `Some([x, y])` anchors
+/// that view's patch at the given source-image keypoint instead of the
+/// reprojected point center, `None` leaves it centered. An all-`None` slice (or
+/// `None` outright) is byte-for-byte the un-anchored behavior.
 pub fn refine_patch_normal(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
     resolution: u32,
     params: &NormalRefineParams,
+    view_keypoints: Option<&[Option<[f64; 2]>]>,
 ) -> NormalRefineResult;
 
-/// Batch over a PatchCloud (parallel across patches). Replaces each patch with
-/// the refined one (same `center`/`half_extent`/in-plane convention, new normal).
-pub fn refine_patch_cloud_normals(cloud: &mut PatchCloud, views: ..., params: ...) -> Vec<NormalRefineResult>;
+/// Batch over a PatchCloud (parallel across patches, rayon). Replaces each patch
+/// with the refined one (same `center`/`half_extent`/in-plane convention, new
+/// normal) and returns the per-patch results in order. `patch_views[i]` indexes
+/// `views` for patch `i` (see `view_indices_from_reconstruction`), and
+/// `progress`, when given, is bumped as each patch finishes so a Python poller
+/// can report intra-pass progress with the GIL released.
+pub fn refine_patch_cloud_normals(
+    cloud: &mut PatchCloud,
+    views: &[ProjectedImage<'_>],
+    patch_views: &[Vec<u32>],
+    resolution: u32,
+    params: &NormalRefineParams,
+    patch_view_keypoints: Option<&[Vec<Option<[f64; 2]>>]>,
+    progress: Option<&std::sync::atomic::AtomicUsize>,
+) -> Vec<NormalRefineResult>;
+
+/// For each patch of `cloud` (linked to `recon` by `point_indexes`), the image
+/// indices observing its source 3D point — the default `patch_views` above.
+pub fn view_indices_from_reconstruction(
+    recon: &SfmrReconstruction,
+    cloud: &PatchCloud,
+) -> Vec<Vec<u32>>;
 ```
 
 `refine_patch_normal` composes `WarpMap::from_patch` + `remap` over the
 `ProjectedImage` pyramids.
 
+**Who consumes the representative.** `sfm xform --refine-normals bitmaps=true`
+scatters the per-patch textures to per-3D-point rows and persists them as the
+`.sfmr` `patch_bitmaps_y_x_rgba` array, and `sfm inspect --strips` renders
+through the same flag. The `sfm embed-patches` pipeline does **not**: it takes
+its stored bitmaps from the sub-pixel keypoint refiner instead
+(`refine_keypoints(render_bitmaps=True)`, which reuses this module's
+`PatchViewStack::render` / `fuse`), because that fuses each point's
+representative at the *final* per-view keypoints rather than one round stale,
+and covers the points at infinity this refinement skips.
+
 ## Improvements to discuss
 
-The objective and the two-stage search above already absorb what were the
-highest-value items — coarse-to-fine grid, multiple inits, the robust weighted
-consensus, the Gauss-Newton polish, and the Hessian confidence — and make the
-reference-view objective unnecessary. What remains open:
+The objective and the coarse-to-fine search above already absorb what were the
+highest-value items — the exp-map grid, multiple seeds, the robust weighted
+consensus, and a curvature confidence — and make the reference-view objective
+unnecessary. What remains open:
 
 1. **Anti-aliased sampling (`remap_aniso`).** Oblique views foreshorten the patch;
    bilinear sampling then aliases and *biases `Φ` downward*, pulling the optimum
    off the true normal. `remap_aniso` (the patch warp's Jacobian SVD picks the
-   pyramid level) de-aliases grazing views — this is `Sampler::Anisotropic`, and
-   the same Jacobian feeds the GN step. Cost: one pyramid per source image
-   (already in `ProjectedImage`).
+   pyramid level) de-aliases grazing views — this is `Sampler::Anisotropic`, at
+   no extra storage (the pyramid per source image is already in
+   `ProjectedImage`). It is not the default because it costs 1.6–3× for a normal
+   that differs by ≲ 1° on pinhole views; what stays open is whether the
+   unbiased `Φ` it reports is worth that on distorted / fisheye rigs, where the
+   measured benefit is small but real.
 
 2. **Back-face / grazing culling + good-view iteration.** Cull **back-facing**
    views (`is_front_facing`), past-grazing views, and views where the patch
@@ -454,28 +491,30 @@ reference-view objective unnecessary. What remains open:
 
 3. **Stochastic view subsets (for large `V`).** The per-step cost is rendering the
    `V` patches, so scoring a candidate on a random `S < V` subset cuts it to `S/V`
-   and buys more grid candidates / GN steps for the same budget. The consensus is a
+   and buys more grid candidates for the same budget. The consensus is a
    mean over view pairs, so the within-subset pairwise mean is an *unbiased*
-   estimate of `ρ̄` (variance ~`1/S`, and `C(S, 2)` pairs from `S` renders). Make
-   it pay off, not mislead:
+   estimate of `ρ̄` (variance ~`1/S`, and `C(S, 2)` pairs from `S` renders). The
+   *deterministic* form of this trade is what `max_refine_views` already does;
+   the stochastic one is not implemented, and would need to:
    - **Common random numbers per level** — score all candidates of a grid level on
      the *same* subset so the noise cancels in their ranking.
    - **Grow `S` over the schedule** — small in coarse levels (just locate the
-     basin), toward full `V` for the fine levels / GN polish.
+     basin), toward full `V` for the fine levels.
    - **Exact final pass** — evaluate the chosen optimum *and* the init on all `V`
-     for the reported `Φ`, the keep-vs-init decision, and the confidence Hessian.
+     for the reported `Φ`, the keep-vs-init decision, and the confidence.
    - Keep `S ≥ min_views`; small subsets fight the robust weighting (they can miss
      or be dominated by an occluded view). A win for orbits / dense rigs, neutral
-     for small `V` — an optional lever, not a v1 default.
+     for small `V` — an optional lever, not a default.
 
 4. **Render-path constant factors (large clouds).** The hot loop is `V` renders
    per candidate, so at millions of points the per-render constants dominate:
    - **Fused f32 sampling.** Compute source coords and sample in one pass into a
      per-thread scratch buffer — no per-candidate `WarpMap` or `ImageU8`
      allocation — and keep the patch in f32: the `remap_*` u8 output otherwise
-     quantizes before z-normalization and injects noise into `Φ` and the GN
-     gradients. (So `from_patch + remap` as composed is the prototype path, not
-     the fast one.)
+     quantizes before z-normalization and injects noise into `Φ`. (So
+     `from_patch + remap` as composed is the source path, not the fast one; the
+     fronto cache's resample already writes f32 straight into the scorer's
+     layout, and is where that shape is proven.)
    - **Fidelity schedule.** Mirror the view-count schedule on resolution: coarse
      levels only need to rank basins, so run them at reduced `R`, luminance only,
      and a coarser pyramid level (also better anti-aliased); reserve full `R`, all
@@ -484,15 +523,14 @@ reference-view objective unnecessary. What remains open:
    - **Locality.** Order patches by primary observing image so the V pyramids stay
      hot in cache across neighbouring points; pyramids are read-only, so per-point
      parallelism shares them freely.
-   - A GPU stage 1 (this is textured-quad sampling; pyramids ≈ mipmaps,
-     `remap_aniso` ≈ anisotropic filtering) is the order-of-magnitude follow-up —
-     see Batch placement. Keep the API batch-shaped so it can slot under the CPU
-     GN polish.
+   - A GPU grid search (this is textured-quad sampling; pyramids ≈ mipmaps,
+     `remap_aniso` ≈ anisotropic filtering) is the order-of-magnitude follow-up.
+     Keep the API batch-shaped so it can slot under a CPU polish.
 
 5. **Cloud-level smoothness (later).** Refining points independently can give noisy
    normals on weak points. A light prior (blend toward the mean normal of k-NN
    points) or a post-pass smoothing trades a little photoconsistency for spatial
-   coherence. Out of scope for v1.
+   coherence. Not implemented.
 
 6. **Patch-carried alpha mask (`PatchWindow::Alpha`).** Generalize the window from
    an analytic shape to an explicit per-`(s, t)` weight attached to the patch — a
@@ -501,9 +539,9 @@ reference-view objective unnecessary. What remains open:
    region. Subsumes `GaussianDisk`/`Gaussian` (those are fixed masks) and pairs with the
    good-view iteration in (2); per-view alpha could even carry per-view occlusion.
    Needs the mask to ride on `OrientedPatch` (or a thin `MaskedPatch` wrapper);
-   deferred until a producer exists. Out of scope for v1.
+   deferred until a producer exists. Not implemented.
 
-7. **Joint normal + robust representative patch (beyond v1).** The consensus
+7. **Joint normal + robust representative patch.** The consensus
    already carries an *implicit* representative — the mean `x̄` — and minimizing
    across-view variance is identical to fitting a free template `m`:
    `minₘ Σwᵢ‖xᵢ − m‖²` gives `m = x̄`. So making the representative an explicit
@@ -514,21 +552,24 @@ reference-view objective unnecessary. What remains open:
      occlusion mask — rejecting occluded **pixels**, not whole views (which
      `RobustWeighted` and the supplied alpha mask cannot: half-occlusions,
      part-of-patch specularities, thin foreground edges). Solve by alternation:
-     fix `n`, update `m` and the weights; fix `m`, GN-step `n` against it. This
+     fix `n`, update `m` and the weights; fix `m`, step `n` against it. This
      synthesizes a robust reference — unifying the reference-view and consensus
      framings — and subsumes items (2) and (6) (learned vs supplied per-pixel
      weights).
    - **A carryable template.** `m` is a latent patch tied to no single projection
      — super-resolvable, regularizable across neighbouring patches (ties to
-     cloud smoothness), or kept as the surfel's canonical appearance. It is then a
-     first-class **output** (`NormalRefineResult::representative`): an RGBA
-     `PatchTexture` whose `A` is the learned per-pixel coverage — so this and the
-     supplied alpha of item 6 are one channel (alpha in, alpha out). Keep it *off*
+     cloud smoothness), or kept as the surfel's canonical appearance. The
+     **output** it would fill is already there: `NormalRefineResult::representative`
+     carries the *fused-render* form of exactly this — an RGBA texture whose `A`
+     is a per-pixel cross-view agreement rather than a learned coverage — so this
+     and the supplied alpha of item 6 are one channel (alpha in, alpha out).
+     What is missing is the latent: the texture is fused from the winner's view
+     stack, not solved for. It stays *off*
      the geometric `OrientedPatch` (which `WarpMap::from_patch` consumes and the
      `PatchCloud` stores struct-of-arrays — an inline `R×R` bitmap per point is
-     heavy and usually unused); carry it via a thin `TexturedPatch { patch,
-     texture }` wrapper or an optional parallel array on `PatchCloud`, with the
-     texture holding its own resolution. At cloud scale the textures want a
+     heavy and usually unused); today the cloud-level carrier is the
+     reconstruction's `patch_bitmaps_y_x_rgba` array. At cloud scale the
+     textures want a
      **tile atlas** (cf. `tile-batched-consensus-atlas.md`) so the cloud renders
      as instanced textured surfels on the GPU — a separate textured-patch-cloud
      spec, not this one.
@@ -538,21 +579,46 @@ reference-view objective unnecessary. What remains open:
    ZNCC already absorbs a *per-view* affine, so `m`'s added value is the per-pixel
    robustness, not the gain/offset.
 
-## Recommended v1
+## Parameters
 
-Exp-map coarse-to-fine grid (3 levels) seeded from mean-viewing + geometric inits,
-**bilinear sampling** (the perf analysis found anisotropic barely changes the
-found normal at 1.6–3× the cost — keep it as an opt-in for unbiased `Φ`), a
-`GaussianDisk` window, back-face/grazing culling, the `RobustWeighted` consensus
-objective, and a Hessian-based confidence. Gauss-Newton polish and the iterative
-good-view set are fast-follows.
+`NormalRefineParams::default()` (in `normal_refine/params.rs`), which the
+`PatchCloud.refine_normals` binding mirrors keyword-for-keyword so the two layers
+cannot drift:
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `angular_range_deg` | `25.0` | half-extent of the level-0 search cone |
+| `init_steps` | `7` | grid samples per tangent axis, per level (floored at 3) |
+| `refine_levels` | `3` | coarse-to-fine passes; each shrinks to one grid spacing |
+| `objective` | `RobustWeighted { iters: 3 }` | consensus objective |
+| `window` | `GaussianDisk { sigma: 0.6 }` | scoring window, `sigma` in `(s, t)` units |
+| `min_valid_fraction` | `0.6` | per-view floor on the window-weighted valid fraction |
+| `min_views` | `3` | minimum kept views (floored at 2 for the outright skip) |
+| `sampler` | `BilinearMip` | mip-nearest bilinear tap |
+| `cache` | `FrontoParallel` | score candidates off one base render per view |
+| `cache_supersample` | `2.0` | base density for that cache |
+| `compute_confidence` | `false` | else `confidence` is NaN |
+| `search_robust_iters` | `None` | search ranks with `objective` |
+| `obliquity_weight_power` | `0.0` | obliquity view-weight (A) off |
+| `fronto_prior_weight` | `0.0` | fronto-parallel prior (B) off |
+| `render_bitmap` | `false` | no `representative` texture |
+| `max_refine_views` | `0` | refinement basis uncapped |
+
+`BilinearMip` is the sampler default rather than `Anisotropic` because the found
+normal barely moves (≲ 1° on pinhole views) at 1.6–3× the cost; `Anisotropic`
+stays an opt-in for an unbiased `Φ` and confidence. The
+`reports/2026-06-13-perf-patch-normal-refinement.md` measurements behind that —
+phase breakdown and per-knob perf-vs-benefit — are reproducible with
+`scripts/bench_normal_refine.py` and the `patch_render` criterion bench;
+`SFMTOOL_PROFILE=1` turns on the hot-path phase timers (`normal_refine/prof.rs`),
+which `refine_patch_cloud_normals` reports per batch.
 
 ## Open questions
 
-- **Cone schedule** for the coarse-to-fine grid: `angular_range`, `init_steps`,
-  `refine_levels`, and the per-level shrink factor (defaults TBD).
-- **Confidence threshold** below which we keep the init normal — and how to
-  normalize the smaller eigenvalue of the centered Hessian `H̃` for scale (it
-  grows with texture contrast, `R`, and window mass).
-- **Batch placement:** Rust `refine_patch_cloud_normals` (parallel, pyramids per view) vs
-  leaving orchestration to callers.
+- **Confidence threshold** below which a caller should distrust the refined
+  normal — and how to normalize the curvature for scale (it grows with texture
+  contrast, `R`, and window mass). The routine itself never gates: it reports
+  `confidence` and keeps the normal it found.
+- **The analytic centered Hessian** `H̃`, as the replacement for the
+  finite-difference stencil — cheaper only alongside a Gauss-Newton polish that
+  already forms the `Jᵢ`.

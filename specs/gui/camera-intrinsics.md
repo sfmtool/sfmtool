@@ -265,11 +265,11 @@ pub fn trustworthy_max_theta_deg(cam: &CameraIntrinsics) -> Option<f64>;
 
 ### The trustworthy domain
 
-Every function above is defined over the whole image **rectangle**, and phase 4
-found out the hard way what that costs: on `kerry_park`'s real `OPENCV_FISHEYE`
-— a circular fisheye in a square 480 × 480 frame — the displacement field's
-maximum over a 16 × 16 grid is **272.7 px**, twenty times the 13 px the lens
-actually displaces anything. The image rectangle's corners sit 150° off-axis,
+Every function above is defined over the whole image **rectangle**, and that
+costs something real: on `kerry_park`'s `OPENCV_FISHEYE` — a circular fisheye in
+a square 480 × 480 frame — the displacement field's maximum over a 16 × 16 grid
+is **272.7 px**, twenty times the 13 px the lens actually displaces anything.
+The image rectangle's corners sit 150° off-axis,
 outside the lens's image circle, where the `k1..k4` polynomial is evaluated
 with nothing constraining it and has folded: its forward map takes θ = 132.7°
 to a radius of 8.8 px, where the equidistant ideal puts it at 299 px. The
@@ -604,12 +604,14 @@ arms reaching outward from just outside it — drawn last and fully opaque per t
 compositing rules above. This is the one mark that must never be lost under a
 dense feature overlay.
 
-> _Correction (2026-08-23, phase 6). This said "a small cross (4 px arms) plus a
-> 3 px open circle". Drawn that way in the real viewer, with the halo every
-> stroke of this layer carries, the cross and the ring merge into a filled dark
-> disc a few pixels across with no readable shape in it. Leaving the middle open
-> is what makes it a mark you can put on a pixel. The halo also narrowed from
-> two pixels wider than its stroke to one and a half, for the same reason._
+The middle stays **open**, and the arms start outside the ring rather than
+crossing at the centre. Drawn as a cross through the ring, with the halo every
+stroke of this layer carries, the two merge into a filled dark disc a few pixels
+across with no readable shape in it; leaving the middle open is what makes this
+a mark you can put on a pixel. The halo is one and a half pixels wider than its
+stroke rather than two for the same reason — at two, the halos of the several
+short strokes this reticle is made of merge and the mark is lost inside the
+blob.
 
 **Image centre and the offset.** A faint `+` at `(w/2, h/2)` and a thin
 connector to the principal point, labelled with the offset in pixels and as a
@@ -630,34 +632,35 @@ projecting rays rather than by drawing straight lines:
 Each is drawn as a polyline through densely sampled `ray_to_pixel` results (one
 sample per ~4 panel pixels), with tick marks and labels at the ladder values.
 
-> _Correction (2026-08-23, phase 6). This section said "**they are not
-> straight** — under distortion they bend, and the bend *is* the distortion".
-> That holds only for a model with decentring terms. A purely **radial** model —
-> most of the registry, and both checked-in fixtures — moves every point along
-> its own radius from the principal point, so a line *through* the principal
-> point stays exactly straight however violent the lens: on `kerry_park`'s
-> `OPENCV_FISHEYE` the sampled vertical axis is straight to under a hundredth of
-> a pixel. What a radial lens does to these axes is bunch the **ticks** along
-> them — evenly spaced angles landing at unevenly spaced pixels — and that is
-> the reading the ticks are for. Sampling rather than drawing two straight lines
-> is still the right implementation, because it is what makes the thin-prism and
-> tangential models' real curvature appear with no special case._
+**Whether an axis bends is a property of the model, not of how violent its
+distortion is.** A purely **radial** model — most of the registry, and both
+checked-in fixtures — moves every point along its own radius from the principal
+point, so a line *through* the principal point stays exactly straight: on
+`kerry_park`'s `OPENCV_FISHEYE` the sampled vertical axis is straight to under a
+hundredth of a pixel. What a radial lens does to these axes is bunch the
+**ticks** along them — evenly spaced angles landing at unevenly spaced pixels —
+and that is the reading the ticks are for. Only the models with decentring terms
+(`OPENCV`, `FULL_OPENCV`, and the two thin-prism fisheyes) bend the axes
+themselves. Sampling rather than drawing two straight lines is still the right
+implementation, because it is what makes that curvature appear with no special
+case.
 
 Sampling stops at the first `ray_to_pixel` that returns `None` (outside the
-model's domain), that leaves the image by more than 5% of its diagonal, or —
-phase 6 — at which the **radius from the principal point stops increasing**. An
-axis is a scale only where it is monotone: `kerry_park`'s polynomial turns over
-near 130° and the radius crashes from 191 px back to 6 px, which without the
-check draws the axis back through everything it has already drawn and lands a
-confident `−120°` tick between the `−60°` and `−30°` ones.
+model's domain), that leaves the image by more than 5% of its diagonal, or at
+which the **radius from the principal point stops increasing**. An axis is a
+scale only where it is monotone: `kerry_park`'s polynomial turns over near 130°
+and the radius crashes from 191 px back to 6 px, which without the check draws
+the axis back through everything it has already drawn and lands a confident
+`−120°` tick between the `−60°` and `−30°` ones.
 
 *Tick ladder*: the **finest** of `1°, 2°, 5°, 10°, 15°, 30°, 45°` that keeps
 adjacent ticks at least 48 panel pixels apart at the current zoom — the panel
-zooms to 32×, and a ladder fixed at load time would be useless at both ends.
-(This section originally said "coarsest", which is the wrong end of the ladder:
-the coarsest step always clears the spacing and would put three ticks on a
-zoomed-in long lens.) The whole grid is resampled when the scale crosses a
-half-octave bucket rather than every frame, per § "Performance and caching".
+zooms to 32×, and a ladder fixed at load time would be useless at both ends. The
+finest rather than the coarsest, because the coarsest step always clears the
+spacing and would put three ticks on a zoomed-in long lens; when even 45° is too
+dense to clear it, 45° is what gets drawn. The whole grid is resampled when the
+scale crosses a half-octave bucket rather than every frame, per § "Performance
+and caching".
 Labels are signed (`−20°`, `−10°`, `0°`, `+10°`) with `+` to the right and `+`
 upward, per the frame convention above; `0°` is labelled once, on the horizontal
 axis, since both axes cross there and the principal-point marker is already
@@ -691,28 +694,24 @@ keep cells square). For each grid pixel `u`:
 Arrow direction therefore reads as "the content under *this* pixel belongs
 *there*" — the correction itself, drawn on the pixel it corrects.
 
-> _Correction (2026-08-24, phase 6). Step 3 said to draw from `u_ref` to
-> `u_ref + s·(u − u_ref)`, and the sentence after it justified that as "the
-> direction a rectification would undo" — an instruction and a rationale
-> naming opposite conventions. The rationale was the right one. Both directions
-> are arithmetically true and the old one had the correct sign (a positive `k1`
-> puts `u` outside `u_ref`, so those arrows pointed outward, which is faithfully
-> how a pixel moves from undistorted to distorted); it is nonetheless the wrong
-> thing to draw **on a photograph**. The field is painted on the distorted
-> image, where every pixel on screen is an actual pixel, so an arrow tailed at
-> `u_ref` starts at a point that does not exist in the picture being looked at
-> — and an arrow on a photograph is read as "this content moves that way",
-> which is only true when the tail is the real pixel. Tailing at `u` also puts
-> every tail on the exact grid lattice rather than the warped one `u_ref` forms.
-> Found by looking at `seoul_bull_sculpture` in the viewer: every automated check
-> passed on a field pointing the wrong way, because nothing asserted direction._
+**The tail is the real pixel**, and that is what settles the direction. The
+opposite convention — tail at `u_ref`, head at `u` — is just as true
+arithmetically and carries the same sign (a positive `k1` puts `u` outside
+`u_ref`, so those arrows point outward, which is faithfully how a pixel moves
+from undistorted to distorted). It is nonetheless the wrong thing to draw **on
+a photograph**: the field is painted on the distorted image, where every pixel
+on screen is an actual pixel, so an arrow tailed at `u_ref` starts at a point
+that does not exist in the picture being looked at — and an arrow on a
+photograph is read as "this content moves that way", which is only true when the
+tail is the real pixel. Tailing at `u` also puts every tail on the exact grid
+lattice rather than on the warped one `u_ref` forms, so the field reads as a
+field.
 
-Arrowheads scale
-with magnitude and are omitted below **3** panel pixels — this section said 1,
-but at two or three pixels two barbs on a short shaft render as a blob, which is
-what the first draft put across the middle of `kerry_park` where the lens
-displaces almost nothing. Below three quarters of a pixel no arrow is drawn at
-all: that is the absence of a measurement, not a small one.
+Arrowheads scale with magnitude and are omitted below **3** panel pixels: at two
+or three pixels two barbs on a short shaft render as a blob rather than as an
+arrow, which is what a one-pixel floor put across the middle of `kerry_park`
+where the lens displaces almost nothing. Below three quarters of a pixel no
+arrow is drawn at all: that is the absence of a measurement, not a small one.
 
 **Only the trustworthy half of the grid is drawn as arrows.** This section's
 auto scale fits "the largest displacement in the grid", and on a circular
@@ -788,10 +787,9 @@ distortion  4.21 px
 
 `distortion` is the same `|u − u_ref|` the arrows draw, at the exact pixel under
 the cursor rather than at a grid node — `camera::report::displacement_at`, which
-phase 6 made public for exactly this and which `distortion_field` is now defined
-in terms of, so the two cannot disagree about the ideal map. It carries no sign:
-it is a magnitude, and the `+` this section originally showed would be reporting
-a direction the figure does not have.
+`distortion_field` is itself defined in terms of, so the two cannot disagree
+about the ideal map. It carries no sign: it is a magnitude, and a `+` would be
+reporting a direction the figure does not have.
 
 The line is omitted entirely for a model with no distortion, and past
 `trustworthy_max_theta_deg` it reads `distortion  not modelled past 84.5°` with
@@ -886,26 +884,27 @@ A second table, visually separated, holding what the parameters *mean*:
 | 35 mm equivalent | `19.1 mm` | perspective models only; `f_px · 43.267 / diagonal_px`, sensor-independent by construction |
 | distortion | `yes — max 13.0 px inside 84.1°` / `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum, bounded by § "The trustworthy domain" |
 
+**The distortion row bounds its own domain.** The maximum is taken over
+`distortion_field`'s grid — 16 columns, with the row count chosen to keep the
+cells square — restricted to the nodes inside `trustworthy_max_theta_deg`, and
+the row names the bound it used: `yes — max 13.0 px inside 84.1°`. Its tooltip
+says how many of the grid's nodes were dropped and why. Unqualified the number
+would be a true statement about two forward maps and a false one about a
+camera: on `kerry_park` the maximum over the whole rectangle is **272.7 px**,
+twenty times what the lens displaces anything (§ "The trustworthy domain").
+When the bound excludes no node — because the model is trustworthy everywhere,
+or because its bound sits beyond every node the grid produced — the row falls
+back to the plain `over the image` phrasing, since a qualifier that excludes
+nothing is the same statement one clause longer.
+
+The row deliberately does **not** say "at the corner", for two reasons, both
+found against the real fixtures. `distortion_field` samples cell *centres*, so
+a corner is never one of the nodes; and the maximum is not guaranteed to sit at
+a corner anyway — a mustache polynomial or a thin-prism term can put it
+elsewhere.
+
 Then `K`, rendered as a 3×3 grid, with the note that it is the optical-frame
 matrix and that `P = K · S · [R|t]`.
-
-> _Status (2026-08-23): the distortion row does not say "at the corner". Two
-> reasons, both found against the real fixtures. The grid `distortion_field`
-> samples is cell *centres*, so the corner is never one of the nodes; and the
-> maximum is not guaranteed to be at a corner anyway — a mustache polynomial or
-> a thin-prism term can put it elsewhere._
->
-> _Status (2026-08-23, phase 5): the row now bounds its own domain. Phase 4
-> printed the maximum **over the image** with a tooltip explaining that the
-> number might be about the frame's corners rather than about the lens, because
-> it had no way of saying anything narrower; on `kerry_park` that number was
-> **272.7 px**. With `trustworthy_max_theta_deg` it can be precise instead: the
-> maximum is taken over the grid nodes inside the model's trustworthy domain
-> and the row names the bound — `yes — max 13.0 px inside 84.1°` — with the
-> tooltip saying how many of the grid's nodes were excluded and why. A model
-> that is trustworthy everywhere keeps the plain `over the image` phrasing,
-> since a qualifier that excludes nothing is the same statement one clause
-> longer. See § "The trustworthy domain"._
 
 ### 4. Projection plot
 
@@ -942,7 +941,7 @@ wide enough to be getting near it.
 and on a circular fisheye most of that is outside the lens's image circle,
 where § "The trustworthy domain" says the model has stopped describing
 anything. Drawing that stretch as the same kind of fact as the rest would be
-the plot's version of the number phase 4 had to hedge in a tooltip, so
+the plot's version of quoting a maximum the lens never applies, so
 everything past `trustworthy_max_theta_deg` is drawn as extrapolation and says
 so three ways at once:
 
@@ -1012,31 +1011,37 @@ transform is not identity, a toggle appears above the block —
 while the second is active. Showing one silently would make the panel wrong half
 the time, in a way nobody would notice.
 
-**Rigs.** When `recon.rig_frame_data` is present, a further block:
+**Rigs.** When `recon.rig_frame_data` is present, a further block, headed
+"Rig and frame" so that the heading and the row beneath it are not the same word
+twice running:
 
 | Row | Source |
 |-----|--------|
-| Rig | `rigs[rig_index].name` |
-| Sensor | `sensor_names[s − sensor_offset]`, index `s`, and `(reference sensor)` when this image's sensor is it |
+| Rig | the name of the rig whose sensor span contains `s = image_sensor_indexes[i]` |
+| Sensor | `sensor_names[s − sensor_offset]` of that rig, index `s`, and `(reference sensor)` when this image's sensor is it |
 | Frame | `image_frame_indexes[i]`, and the number of images in that frame |
 | `sensor_from_rig` | rotation + translation, or `identity (reference sensor)` |
 
-This is the part of "extrinsics" that a rig dataset actually needs and that
-nothing in the viewer surfaces today.
+`image_sensor_indexes` holds a **global** sensor index while `sensor_names` is
+per rig, so the rig is the one whose `[sensor_offset, sensor_offset +
+sensor_count)` span contains `s` and the name sits at `s − sensor_offset` within
+it — the same arithmetic `sfm inspect`'s rig section does
+(`src/sfmtool/analyze/summary.py`). Found by span rather than through the
+frame's `rig_indexes`, so a file whose two disagree still names the sensor it
+actually has instead of indexing into the wrong rig's list; `rig_indexes` is the
+fallback when no span claims `s`.
 
-> _Status (2026-08-23): two corrections against the real arrays, both in the
-> table above. `image_sensor_indexes` is a **global** sensor index while
-> `sensor_names` is per rig, so the name is at `s − sensor_offset` of the rig
-> whose sensor span contains `s` — the same arithmetic `sfm inspect`'s rig
-> section does (`analyze/summary.py`). And the `(reference sensor)` marker rides
-> the **Sensor** row, not the Rig row: it is a statement about which sensor this
-> image came from, and `kerry_park · (reference sensor)` on a row that names the
-> rig reads as a claim about the rig. The `sensor_from_rig` row says
-> `identity (reference sensor)` only when the stored quaternion and translation
-> really are the identity — a file storing something else for its reference
-> sensor gets the numbers, since claiming an identity that is not there would
-> hide exactly the corruption worth seeing. The section heading is "Rig and
-> frame" so that it and the row beneath it are not the same word twice._
+The `(reference sensor)` marker rides the **Sensor** row rather than the Rig
+row: it is a statement about which sensor this image came from, and
+`kerry_park · (reference sensor)` on a row that names the rig reads as a claim
+about the rig. The `sensor_from_rig` row collapses to
+`identity (reference sensor)` only when the stored quaternion and translation
+really are the identity — a file storing something else for its reference sensor
+gets the numbers, since claiming an identity that is not there would hide
+exactly the corruption worth seeing.
+
+This is the part of "extrinsics" that a rig dataset actually needs and that
+nothing else in the viewer surfaces.
 
 ### Response type
 
@@ -1084,13 +1089,14 @@ The one table to check an implementation against:
 
 | Model family | Axes / rings | Distortion field | Radial plot reference | `P` |
 |--------------|--------------|------------------|-----------------------|-----|
-| Pinhole, SimplePinhole | straight, to <90° | suppressed (`has_distortion` false) | `f·tan θ`, residual ≡ 0 | yes |
-| SimpleRadial, Radial, OpenCV, FullOpenCV | bent, to <90° | shown | `f·tan θ` | yes |
-| SfmtoolPinhole | bent, to <90° | shown; domain contour at `atan(ρ_max)` | `f·tan θ` | yes |
-| SimpleRadialFisheye, RadialFisheye, OpenCVFisheye | bent, past 90° | shown | `f·θ` | no |
+| Pinhole, SimplePinhole | straight, evenly spaced ticks, to <90° | suppressed (`has_distortion` false) | `f·tan θ`, residual ≡ 0 | yes |
+| SimpleRadial, Radial | straight, ticks bunch, to <90° | shown | `f·tan θ` | yes |
+| OpenCV, FullOpenCV | bent by the tangential terms, to <90° | shown | `f·tan θ` | yes |
+| SfmtoolPinhole | straight, ticks bunch, to <90° | shown; domain contour at `atan(ρ_max)` | `f·tan θ` | yes |
+| SimpleRadialFisheye, RadialFisheye, OpenCVFisheye | straight, ticks bunch, past 90° | shown | `f·θ` | no |
 | ThinPrismFisheye, RadTanThinPrismFisheye | bent, past 90° | shown, azimuth band on the plot | `f·θ` | no |
-| EquidistantFisheye | straight in θ | suppressed | `f·θ`, residual ≡ 0 | no |
-| SfmtoolFisheye | bent; domain contour at `θ_max` | shown | `f·θ` | no |
+| EquidistantFisheye | straight, evenly spaced ticks | suppressed | `f·θ`, residual ≡ 0 | no |
+| SfmtoolFisheye | straight, ticks bunch; domain contour at `θ_max` | shown | `f·θ` | no |
 | Equirectangular | linear in lon/lat, ladder to ±180°/±90° | suppressed | identity, residual ≡ 0 | no |
 
 Every model with zero-valued distortion coefficients falls into its family's
@@ -1098,30 +1104,26 @@ Every model with zero-valued distortion coefficients falls into its family's
 inactive — the kernels short-circuit those to the exact base arithmetic, so
 reporting distortion for them would be a lie the projection does not tell.
 
-> _Note (2026-08-23), from phase 4 reading real fixtures and corrected by phase
-> 5: past `FISHEYE_BLEND_START_RAD` the polynomial fisheye models'
-> `undistort_to_ray` blends toward the identity ray rather than inverting an
-> unreliable polynomial (`blend_fisheye_ray`, and the caveat § "Testing"
-> already names). That threshold is **90° of distorted radius**, not 80° and
-> not an incidence angle — phase 4 wrote "past 80° off-axis" from a stale doc
-> comment on `blend_fisheye_ray` that contradicted the constant beside it, and
-> both have been corrected. Where it lands in incidence angle is per-camera and
-> is what `trustworthy_max_theta_deg` reports: **84.1°** on `kerry_park`'s
-> camera 0._
->
-> _Inside that angle `kerry_park`'s round trip is exact; outside it the round
-> trip drifts, and the forward map itself turns over and folds — at θ = 132.7°
-> it puts the ray 8.8 px from the principal point where the equidistant ideal
-> puts it at 299 px, and past 132.7° it refuses the ray altogether. Every
-> reading taken at the **corners** of a circular fisheye's image rectangle is
-> therefore in that regime — `max_off_axis` (150.5° on `kerry_park`),
-> `diagonal` (301.0°), and the distortion field's unfiltered maximum (272.7 px
-> against 13.0 px inside the bound). They are the honest output of the
-> definitions this spec sets out, and they describe the black corners outside
-> the lens circle rather than the lens. The `horizontal` / `vertical` pair,
-> swept through the mid-edges, is the reading that answers "is this fisheye
-> really 180°?" for such a camera: 212.9° on `kerry_park`, against `f = 129.15`
-> px/rad over a 480-pixel frame._
+**What a circular fisheye does to the far end of the table.** Past
+`FISHEYE_BLEND_START_RAD` the polynomial fisheye models' `undistort_to_ray`
+blends toward the identity ray rather than inverting an unreliable polynomial
+(`blend_fisheye_ray`, and the caveat § "Testing" names). That threshold is 90°
+of *distorted radius* `r_d`, not an incidence angle: where it lands in incidence
+angle is per-camera, and is exactly what `trustworthy_max_theta_deg` reports —
+**84.1°** on `kerry_park`'s camera 0, an `OPENCV_FISHEYE` with `f = 129.15`
+px/rad over a 480 × 480 frame.
+
+Inside that angle `kerry_park`'s round trip is exact; outside it the round trip
+drifts, and the forward map itself turns over and folds — at θ = 132.7° it puts
+the ray 8.8 px from the principal point where the equidistant ideal puts it at
+299 px, and beyond that it refuses the ray altogether. Every reading taken at
+the **corners** of such a frame is therefore in that regime: `max_off_axis`
+reads 150.5°, `diagonal` 301.0°, and the distortion field's unfiltered maximum
+272.7 px against the 13.0 px inside the bound. Those are the honest output of
+the definitions above, and they describe the black corners outside the lens
+circle rather than the lens. The `horizontal` / `vertical` pair, swept through
+the mid-edges, is the reading that answers "is this fisheye really 180°?" for
+such a camera: 212.9° on `kerry_park`.
 
 ---
 

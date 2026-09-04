@@ -10,22 +10,6 @@ Estimates the fundamental matrix relating two views from pixel correspondences
 that may be contaminated by wrong matches, and extracts a focal-length estimate
 from it.
 
-> _Deviation (2026-07-16): [`focal_from_fundamental`] adds a floor that treats a
-> (numerically) zero fundamental matrix as degenerate before the denominator /
-> sign tests. Rotation-only (zero-baseline) motion produces `F ≈ 0`, whose
-> normalized direction is pure round-off and whose Bougnoux `f₁²` is an
-> arbitrary value the sign test does not catch; the spec lists rotation-only as
-> a degeneracy that must return `None`, and this floor is what enforces it. The
-> denominator-vanishing and `f₁² ≤ 0` tests still handle the fixating and
-> forward-motion cases as specified._
->
-> _Deviation (2026-07-16): the in-crate contamination sweep
-> (`epipolar_estimation/tests.rs`) floors at inlier fraction 0.35 rather than
-> the spec's 0.2 — the `w⁷` RANSAC needs ~5×10⁵ trials at 0.2, impractical in
-> the unoptimized test profile. The 0.2 floor is exercised in
-> `test_epipolar_estimation_rust_bindings.py`, which runs against the
-> release-built extension (there it completes in ~2 s)._
-
 The complementary direction — the fundamental matrix **of two known
 cameras**, for epipolar curve rendering — already exists in
 `crates/sfmtool-core/src/camera/epipolar.rs` (`compute_fundamental_matrix`,
@@ -220,11 +204,30 @@ f₁² = − ( p̃₂ᵀ [ẽ₂]ₓ Ĩ F p̃₁ ) · ( p̃₂ᵀ F p̃₁ )
 ```
 
 Camera 2's focal follows from the same formula applied to `Fᵀ` with the
-principal points swapped. Return `None` when the denominator vanishes or
-`f₁² ≤ 0` — the classical degeneracies land there: optical axes
+principal points swapped. `F` is rescaled to unit Frobenius norm before
+the tests below, so their absolute thresholds mean the same thing
+whatever scale the caller's matrix carries. The formula assumes square
+pixels, zero skew, and known principal points.
+
+`None` comes back on three checks, in this order. A matrix with a
+non-finite entry, or whose Frobenius norm falls below
+`ZERO_F_EPS = 1e-12`, is numerically zero and carries no epipolar
+geometry — which is exactly what rotation-only, zero-baseline motion
+produces. That case has to be caught *before* the rescaling: the
+normalized direction of such a matrix is pure round-off, and the Bougnoux
+`f₁²` computed from it is an arbitrary value the sign test below does not
+reject. Real two-view matrices — physically scaled, or the estimator's
+unit-norm output — sit far above the floor. The remaining classical
+degeneracies are taken by a vanishing denominator
+(`|den| < BOUGNOUX_DEN_EPS = 1e-12`) and then by `f₁² ≤ 0`: optical axes
 intersecting (both cameras fixating the same point), pure forward
-translation along the optical axis, and rotation-dominant motion. The
-formula assumes square pixels, zero skew, and known principal points.
+translation along the optical axis, and rotation-dominant motion that
+still leaves a measurable baseline. Both constants live in
+`epipolar_estimation.rs`. The denominator is an inherent
+near-cancellation even for a healthy pair — order `1e-8` with `F` at unit
+Frobenius norm and pixel-scale principal points — so its threshold sits
+well below the healthy range and the degenerate cases collapse it far
+past the floor.
 
 Under noise the estimate is heavy-tailed and biased for near-degenerate
 motion, so a single pair's focal is an initialization, not a
@@ -278,7 +281,12 @@ focal_from_fundamental(
 - **Contamination sweep**: synthetic sets at inlier fractions from 0.9
   down to 0.2 recover the generating epipolar geometry (Sampson residuals
   of the true inliers within tolerance); below `min_inliers` support the
-  estimator returns `None`.
+  estimator returns `None`. The 0.2 end of that sweep runs in
+  `tests/rust_bindings/test_epipolar_estimation_rust_bindings.py`, against
+  the release-built extension, because `w⁷` sampling needs ~5×10⁵ trials
+  to reach 0.999 confidence at `w = 0.2`; the in-crate sweep in
+  `epipolar_estimation/tests.rs` therefore floors at 0.35, the lowest
+  fraction the unoptimized test profile can run in reasonable time.
 - **Determinism**: identical inputs and seed give bit-identical results
   (matrix, mask, iteration count).
 - **Differential**: agreement with an established implementation

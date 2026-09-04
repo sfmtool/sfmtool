@@ -8,19 +8,6 @@ homography_estimation}.rs` (`sfmtool._sfmtool.geometry.focal_vote` /
 `estimate_homography`); Python tests in
 `tests/rust_bindings/test_focal_vote_rust_bindings.py`.
 
-> _Deviation (2026-07-18): the pair table accumulates the **true**
-> shared-cluster count and mean displacement over every covisible member pair
-> of each cluster, in one pass, rather than the single uniformly-sampled member
-> pair per cluster the Pair-tables section describes. The sampled single-pair
-> count undercounts covisibility so severely that the `30`/`25`-cluster
-> thresholds never reach quorum on parallax-poor captures — the target capture
-> `20240614_225938434` fell one vote short in each family and produced no
-> consensus. The true count is what the original script gated on
-> (`build_covisibility`), and restores the expected Rotation-family selection
-> (structure refines to −0.6% of the ground-truth focal). The pass is
-> deterministic, so the pair table no longer consumes the seed; the seed still
-> drives the RANSAC estimators._
-
 ## Overview
 
 `focal_vote` estimates a shared focal length from cluster-track observations
@@ -91,12 +78,20 @@ two member images contribute nothing.
 
 ## Pair tables
 
-One sampled pass over the clusters produces, for every covisible image
-pair, a shared-cluster count and a mean feature displacement: each cluster
-with two or more member images contributes one uniformly sampled member
-pair (skipping same-image pairs); displacements accumulate per image pair.
-All later pair selection reads these tables; nothing depends on image
-ordering.
+One pass over the cluster runs produces, for every covisible image pair, a
+shared-cluster count and a mean feature displacement. Within a cluster each
+member image contributes a single position — the last observation carrying
+that image wins — and every pair of distinct member images adds one to that
+image pair's count and its feature separation to the pair's displacement
+sum. The counts are therefore the true shared-cluster covisibility over the
+whole cluster set, enumerated exhaustively rather than estimated: one
+uniformly sampled member pair per cluster undercounts covisibility far
+enough that the downstream `30`-cluster epipolar and `25`-cluster rotation
+thresholds cannot reach quorum on parallax-poor captures, which is exactly
+where this estimator has to work. The pass consumes no randomness, so the
+tables do not depend on the seed — the seed drives the RANSAC estimators
+and the column scans only. All later pair selection reads these tables;
+nothing depends on image ordering.
 
 ## Epipolar votes
 
@@ -427,7 +422,9 @@ exposed alongside `estimate_fundamental` and returns
 
 ## Determinism
 
-All sampling (pair tables, RANSAC) derives from the input seed; identical
+The pair tables and every pair selection built on them are exhaustive and
+draw no randomness at all; all sampling that remains (the RANSAC
+estimators and the column scans) derives from the input seed. Identical
 inputs and seed produce identical output on every platform. The column
 scans draw their minimal-sample index sets once per candidate pair from
 the seed and the pair's position in the candidate list, then reuse them

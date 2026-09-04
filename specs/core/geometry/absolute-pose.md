@@ -16,19 +16,6 @@ tests in `pose_refine/tests.rs`), bound as
 (`crates/sfmtool-py/src/geometry/pose_refine.rs`), Python tests in
 `tests/rust_bindings/test_reprojection_rust_bindings.py`.
 
-> _Deviation (2026-07-14): `p3p_solve` returns
-> `Vec<(UnitQuaternion<f64>, Vector3<f64>)>` (allocated with capacity 4), not
-> the specified `ArrayVec<_, 4>` — the workspace has no `arrayvec` dependency
-> and does not use fixed-capacity vectors elsewhere, so a plain `Vec` is the
-> house-style fit. Behaviourally identical: at most four poses, allocated once._
->
-> _Deviation (2026-07-14): the three-point Kabsch alignment necessarily has a
-> rank-2 cross-covariance (three points are always coplanar), so the collinear
-> degeneracy is detected from the collapse of the **second** singular value,
-> not the third; the third (plane-normal) direction is resolved by the
-> determinant correction. The spec's contract (collinear points ⇒ empty) is
-> unchanged._
-
 ## Purpose
 
 Given `N` correspondences between observed image bearings and known 3D
@@ -73,7 +60,7 @@ pairwise geometry.
 pub fn p3p_solve(
     bearings: &[Vector3<f64>; 3],
     points: &[Point3<f64>; 3],
-) -> ArrayVec<(UnitQuaternion<f64>, Vector3<f64>), 4>;
+) -> Vec<(UnitQuaternion<f64>, Vector3<f64>)>;
 ```
 
 The three unknown depths `λ_i` (distances from the camera center along
@@ -90,17 +77,28 @@ symmetric matrix, avoiding the numerically fragile quartic of the
 classical (Grunert 1841) formulation. Up to four real solutions survive
 the positivity constraint `λ_i > 0`. For each, the camera-frame points
 `λ_i b_i` and the world points `X_i` are related by a rigid motion;
-recover `(R, t)` with an exact three-point rigid alignment. The paper's
-direct rotation recovery and a Kabsch alignment are both acceptable —
-the contract is that clean inputs reproduce the generating pose to
-floating-point accuracy.
+recover `(R, t)` with an exact three-point rigid alignment — a Kabsch
+alignment of the two triples, the paper's direct rotation recovery being
+an equally acceptable route to the same contract: clean inputs reproduce
+the generating pose to floating-point accuracy.
 
 Degenerate inputs return an empty result rather than poses: collinear
 `X_i` (alignment is rank-deficient), coincident or antipodal bearings,
-and non-finite values.
+and non-finite values. Collinearity is read off the **second** singular
+value of the Kabsch cross-covariance rather than the third, because three
+points are always coplanar: the third singular value is ~0 for every
+triple — that free plane-normal direction is fixed by the determinant
+correction `R = V · diag(1, 1, det(V·Uᵀ)) · Uᵀ` that keeps `R` proper — so
+only the collapse of the *second* distinguishes a collinear triple from a
+usable one. The test is relative: reject when `σ₁ < KABSCH_RANK_EPS · σ₀`,
+with `KABSCH_RANK_EPS = 1e-9` in `absolute_pose.rs`.
 
-The solver is a pure function: no allocation beyond the fixed-capacity
-result, no randomness, bit-stable across runs.
+The solver is a pure function: one allocation for the result, no
+randomness, bit-stable across runs. That result is a plain `Vec` reserved
+once for four poses rather than a fixed-capacity vector, because the
+workspace carries no `arrayvec` dependency and uses fixed-capacity vectors
+nowhere else; at most four poses are ever pushed, so the reservation never
+grows.
 
 ## The robust estimator
 

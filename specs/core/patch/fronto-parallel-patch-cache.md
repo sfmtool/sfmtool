@@ -8,10 +8,9 @@ source-rendering path). The cache lives in
 `NormalRefineParams { cache: CacheMode, cache_supersample }`, exposed through
 `PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
 `sfm xform --refine-normals cache=…/quality=…`. The resample is runtime-dispatched
-to an AVX2 kernel (Phase 2) with the scalar path as reference/fallback. Builds on
+to an AVX2 kernel with the scalar path as reference/fallback. Builds on
 `specs/core/patch/patch-normal-refinement.md` (the search this accelerates) and
 `specs/core/patch/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
-Prototype exploration and measurements: `reports/2026-06-15-patch-cache-status.md`.
 
 ## Problem
 
@@ -115,9 +114,9 @@ curvature that the three-corner fit does not see.
   own pixels instead.
 
 - **Supersample the base.** Rendering the base denser than the candidate grid
-  (`set_patch_cache_supersample`) sharpens the resample and is the **only** lever
-  that moves accuracy: it halves the median (ss1 median 3.9° → ss2 2.07°). It
-  costs a bigger base render. This is the accuracy/speed knob.
+  (`NormalRefineParams::cache_supersample`) sharpens the resample and is the
+  **only** lever that moves accuracy: it halves the median (ss1 median 3.9° →
+  ss2 2.07°). It costs a bigger base render. This is the accuracy/speed knob.
 
 - **Kernel layout: packed `u32`, planar output, masked support.** The kernel is
   **gather-bound**, so the wins are about *gathered bytes* and *store shape*, not
@@ -188,78 +187,53 @@ runtime-R kernel.
   patch's search one level early rather than dropping the point (level 0 — seeded
   at the search centre — is always covered).
 
-## Implementation plan (production)
+## Implementation
 
-The prototype proves the algorithm; production needs it parameterized,
-deterministic-first, tested, and exposed. Land it as two reviewable changes —
-"changes the numbers" first, "changes only speed" second.
+`fronto_cache.rs` holds the whole cache: `prerender` (the per-view base render,
+the affine fit and its one-off inverse), the `FrontoCache` / `FrontoBase` /
+`Scratch` types, and `eval_phi` (the per-candidate composition, resample,
+z-normalize and consensus). `coarse_to_fine` calls `prerender` once per patch and
+threads one `Scratch` through every candidate of every level, so scoring a
+candidate allocates nothing after warm-up. A `None` from `prerender` — fewer than
+`min_views` usable bases, e.g. non-RGB imagery or a degenerate fronto projection —
+falls that patch back to source rendering; nothing else in the search changes.
 
-### Phase 1 — algorithm, scalar kernel, parameterized (the merge that matters)
+The knobs are on `NormalRefineParams` (`cache: CacheMode { Off, FrontoParallel }`,
+with room to grow, and `cache_supersample: f64`) rather than globals, which is
+what lets the `PatchCloud.refine_normals(cache=…, cache_supersample=…)` binding
+and the `sfm xform --refine-normals cache=/cache_supersample=/quality=` keys be a
+straight pass-through. `quality` is a preset over the pair: `coarse` is
+`cache=fronto, cache_supersample=2` — the default operating point — and `fine` is
+`cache=off`, the exact source path. See
+`specs/cli/reconstruction/xform/refine-normals-command.md`.
 
-> _Status (2026-06-15): done. `patch/normal_refine/fronto_cache.rs`
-> (`FrontoCache`, `prerender`, `eval_phi`, scalar packed/planar/masked-support
-> resample with the guarded base + single int clamp); `CacheMode` +
-> `cache_supersample` on `NormalRefineParams` (default `Off`); the
-> `PatchCloud.refine_normals(cache=, cache_supersample=)` binding; the
-> `--refine-normals cache=/cache_supersample=/quality=` CLI keys and the
-> coarse/fine preset; unit tests for the affine fit and padding plus
-> `tests/patch/test_patch_normal_refine.py` (Φ-equivalence + population on seoul_bull,
-> distortion-independence on the kerry_park fisheye rig — a bounded-divergence
-> check, not an exactness proof; see "Limitations") and
-> `tests/xform/test_refine_normals.py` (preset + validation). Measured ~2.3× at
-> Φ-equivalent median on dino R=32. Phase 2 (AVX2) pending._
+**Two resample kernels, one result.** `resample_support` runtime-dispatches (the
+`kdforest` `is_x86_feature_detected!` pattern) to `resample_support_avx2` —
+packed `vpgatherdd`, 4 gathers per tap instead of 12, branch-free against the
+guarded base, planar stores — with `resample_support_scalar` as both the
+reference and the `n % 8` tail. The scalar path is what *defines* the produced
+numbers: it is portable and needs no `target_feature`, so the AVX2 kernel is a
+pure speed change that cannot move accuracy, and `resample_avx2_matches_scalar`
+(including an off-base-edge map) is what holds that. The packed-`u32` + planar +
+masked-support *layout* is the data-movement win and is independent of SIMD —
+the scalar kernel keeps it too.
 
-1. **Lift the cache into the refine module**: the fronto base render
-   (`prerender`), the affine fit and composition, and `eval_phi`. (Written fresh
-   as production code rather than lifted from the prototype branch, which never
-   reached `main`.)
-2. **Parameterize via `NormalRefineParams`**, not globals: add
-   `cache: CacheMode { Off, FrontoParallel }` (room to grow) and
-   `cache_supersample: f64`. Default `Off` so existing behavior is unchanged
-   until opted in.
-3. **Scalar resample only.** Portable, deterministic, no `target_feature`. The
-   scalar path *defines* the production result so the SIMD follow-up is a pure
-   speed change. Keep the packed-`u32` + planar + masked-support *layout* (it is
-   the data-movement win and is independent of SIMD).
-4. **Wire the coarse/fine quality preset** in `sfm xform --refine-normals`
-   (`specs/cli/reconstruction/xform/refine-normals-command.md`): a `quality=coarse` selects
-   `cache=fronto, cache_supersample=2` (the ~2.25× / Φ-equivalent-median point);
-   `quality=fine` selects `cache=off`. Add `cache` / `cache_supersample` to that
-   command's parameter table.
-5. **Tests** (`tests/rust_bindings/` + a core unit test):
-   - cache-on vs cache-off on a fixture (e.g. `seoul_bull`) — assert mean Φ within
-     a tolerance and the **scored-point count is unchanged** (the cache must not
-     drop points);
-   - the affine composition round-trips a known plane;
-   - distortion independence: a distorted/fisheye view (kerry) refines without the
-     cache diverging from source rendering beyond tolerance. Bounded divergence
-     is the claim — the three-corner fit leaves the projection's curvature over
-     the patch as fit error under any model (see "Limitations").
-6. **Update specs/docs**: promote this file's Status to "v1 implemented", update
-   the refinement spec and the CLI command spec.
+**What it costs and buys.** The AVX2 kernel is **3.5×** the scalar reference at
+the microbench (`resample_bench`, an `#[ignore]`d test run on demand). End to
+end the cache is ~2.3–2.5× off vs on at unchanged accuracy, well short of the
+kernel's own factor: the resample is only a slice of the work, and the
+un-cacheable remainder — the one base render per view, the consensus, the final
+source-scored pass, the confidence stencil — plus the per-candidate affine
+inverse set the Amdahl ceiling. Attacking that remainder is the next lever, not
+a faster kernel.
 
-### Phase 2 — AVX2 kernel (pure speed, no behavior change)
-
-> _Status (2026-06-15): done. `resample_support` runtime-dispatches (the
-> `kdforest` `is_x86_feature_detected!` pattern) to `resample_support_avx2`
-> (packed `vpgatherdd` — 4 gathers/tap not 12 — branch-free guarded base, planar
-> stores), with `resample_support_scalar` the reference and the `n % 8` tail.
-> Correctness test `resample_avx2_matches_scalar` (incl. an off-base-edge map);
-> the kernel is **3.5×** the scalar reference at the microbench
-> (`resample_bench`, `--ignored`). End-to-end the cache is ~2.3–2.5× off vs on at
-> unchanged accuracy (Φ and normals identical to Phase 1 within rounding); the
-> kernel win is gather/Amdahl-capped by the un-cacheable work and the
-> per-candidate affine inverse, as the report predicted._
-
-1. Add the runtime-dispatched AVX2 masked affine kernel (packed/planar,
-   branch-free with the guarded base) behind the same path, with the **scalar
-   kernel as the reference**.
-2. Correctness test: `avx2 ≈ scalar` within an eps over a fixture's candidates;
-   an on-demand `resample_bench` (`#[ignore]`) is the microbenchmark.
-3. Because the scalar path already fixed the numbers, this merge cannot regress
-   quality — it only needs to prove "same output, faster."
-
-### Out of scope (follow-ups)
-
-- The un-cacheable e2e work (level-0 base render, consensus, final pass,
-  confidence) is the remaining Amdahl ceiling; attack it separately.
+**Tests.** `fronto_cache/tests.rs` covers the affine fit against a known affine,
+the replicate padding, the AVX2/scalar agreement, and that a ray-path camera's
+corners are model pixels that survive past 90°.
+`tests/patch/test_patch_normal_refine.py` runs cache-on against cache-off on
+`seoul_bull` — mean `Φ` within tolerance *and* an unchanged scored-point count,
+since the cache must not drop points — and on the `kerry_park` fisheye rig for
+distortion independence. That last one is a bounded-divergence check, not an
+exactness proof: the three-corner fit leaves the projection's curvature over the
+patch as fit error under any model (see "Limitations").
+`tests/xform/test_refine_normals.py` covers the preset and the CLI validation.

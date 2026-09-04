@@ -10,46 +10,12 @@ PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
 per-point `normals` in place, and re-persists the refined patch cloud alongside
 them.
 
-> _Note (2026-06-13): the Click option is declared `is_flag=False,
-> flag_value=""` so the optional value accepts all three forms — bare
-> `--refine-normals`, space-separated `--refine-normals init_steps=7`, and
-> joined `--refine-normals=init_steps=7` — while still leaving a following
-> option (e.g. `--refine-normals --bundle-adjust`) untouched. The ordered
-> `_arg_parser` walk mirrors that tokenization. The reported low-confidence
-> count uses a fixed reporting threshold (0.1) on the normalized confidence; it
-> is diagnostic only (no per-point gating), as specified below._
-
-> _**Precondition — shipped (2026-06-25):** `--refine-normals` now **requires** a
-> `feature_source == "embedded_patches"` reconstruction and **rejects**
-> `sift_files` with a `UsageError` pointing at `sfm xform --to-embedded-patches`
-> (enforced per-step in `xform/_apply.py` via the
-> `RefineNormalsTransform.required_feature_source` attribute, so a
-> `--to-embedded-patches --refine-normals` chain converts first and passes). On an
-> `embedded_patches` recon it positions each view's patch at that observation's
-> **stored keypoint** (not the reprojected point center), which is the win
-> measured in
-> the keypoint-source experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`).
-> It re-refines the normal (and optionally re-renders the bitmap) over the
-> stored keypoints/view set; it does not re-run view selection or keypoint
-> localization._
->
-> _Because the input already carries a per-point patch frame, `apply` reads the
-> stored frame back (`recon.patches`) instead of rebuilding one, and always
-> re-persists it (the `u`/`v` frame stays consistent with the rewritten normal).
-> Consequently the frame-building knobs that were `sift_files`-era levers —
-> `extent`, `extent_value`, `initial_normals`, and the `save_patches` opt-in —
-> **no longer exist on `--refine-normals`** (it takes none of them). Frame sizing
-> and seeding now belong solely to `--to-embedded-patches` (`extent` /
-> `extent_value` / `normal`); `--refine-normals` reuses that frame. `bitmaps`
-> controls whether the RGBA textures are (re)rendered — it defaults **on** so the
-> refined reconstruction is self-contained; `bitmaps=false` skips the render._
-
 ## Why this fits `xform` (and how)
 
 `xform` is the reconstruction-in / reconstruction-out pipeline. Normal
 refinement reads a reconstruction and produces a reconstruction with the same
 points, poses, and cameras but **better surface normals**, so it slots in
-naturally — with two characteristics that shape the design:
+naturally — with three characteristics that shape the design:
 
 1. **It is a modifier, not a point filter.** Unlike `--remove-short-tracks`
    et al. it removes no points and changes no positions; it only rewrites the
@@ -73,9 +39,29 @@ naturally — with two characteristics that shape the design:
    already loads with `cv2.imread`). A missing image is a hard error
    (`FileNotFoundError`), mirroring the SIFT-reading filters.
 
-The result: a transform that builds a `PatchCloud` from the reconstruction,
-calls `PatchCloud.refine_normals(recon, images, …)`, and writes the refined
-normals back onto the points.
+3. **It takes an `embedded_patches` reconstruction only.** Refinement anchors
+   each view's patch at that observation's **stored keypoint** rather than at
+   the reprojected point centre — the real detected feature gives a cleaner
+   cross-view consensus — and it reads the point's stored patch frame back
+   rather than building one. Neither the inline per-observation keypoints nor
+   the frame exists on a `sift_files` reconstruction, so `--refine-normals`
+   accepts a `feature_source == "embedded_patches"` input and rejects
+   `sift_files` with a `click.UsageError` naming
+   `sfm xform --to-embedded-patches` (or `sfm embed-patches`) — the shared
+   `require_embedded_patches` gate in `_feature_source.py`. The check is
+   per-step: `xform/_apply.py` reads the
+   `RefineNormalsTransform.required_feature_source` attribute and validates the
+   reconstruction *as it stands at that point in the pipeline*, so a
+   `--to-embedded-patches --refine-normals` chain converts first and passes.
+   The pass re-refines the normal (and, with `bitmaps`, re-renders the texture)
+   over the stored keypoints and the stored view set; it runs no view selection
+   and no keypoint localization of its own — those are `--localize-keypoints`
+   and `--refine-keypoints`.
+
+The result: a transform that reads the stored `PatchCloud` off the
+reconstruction (`recon.patches`), calls
+`PatchCloud.refine_normals(recon, images, …)`, and writes the refined normals —
+and the refined cloud — back onto the points.
 
 ## Command syntax
 
@@ -94,6 +80,16 @@ order-free and self-documenting however many knobs are set:
 --refine-normals angular_range_deg=25,init_steps=7,sampler=anisotropic,objective=mean
 --refine-normals resolution=32,bitmaps=false
 ```
+
+The option is declared `is_flag=False, flag_value=""` in `_commands/xform.py`,
+which is what makes all three spellings work — bare
+`--refine-normals`, space-separated `--refine-normals init_steps=7`, and joined
+`--refine-normals=init_steps=7` — while leaving a following option untouched:
+`--refine-normals --bundle-adjust` runs the refinement on its defaults and then
+bundle-adjusts. Because `xform` re-walks the raw argument list to recover
+operation order, `xform/_arg_parser.py` reproduces that tokenization itself — a
+value joined with `=` is taken verbatim, otherwise the next token becomes the
+value only if it does not start with `-`.
 
 (This differs from the older `xform` mini-DSLs — `--remove-isolated
 factor,value_spec`, `--include-by-distribution COUNT[,verbose]` — which lead
@@ -129,6 +125,15 @@ CLI re-specifies nothing and the two layers cannot drift.
 Unknown keys, malformed `key=value` tokens (no `=`, empty key), or out-of-range
 values raise `click.UsageError`, consistent with the other parsers in
 `xform/_arg_parser.py`.
+
+That table is the whole key set (`_REFINE_NORMALS_KEYS` in
+`xform/_arg_parser.py`). Frame sizing and seeding are deliberately not in it:
+`extent`, `extent_value` and `normal` are `--to-embedded-patches` keys, because
+that is the step which builds the frame this one reuses (see "Patch frame"
+below). Persisting the frame is not a knob either — the refined cloud is always
+written back, so the stored frame cannot fall out of step with the rewritten
+normals. `bitmaps` is the only persistence choice here, and it governs the RGBA
+textures alone.
 
 ### Candidate-scoring cache (`cache` / `cache_supersample` / `quality`)
 
@@ -169,7 +174,11 @@ the optimum) and includes a `… N low-confidence` count in the summary. It is
 **off by default**: the stencil is an extra un-cached source-render pass per patch
 (~1/6 of the cached runtime) and is purely informational — refinement does not
 persist it. When off, the summary omits the low-confidence count and the
-`refine_normals` `confidence` array is `NaN`.
+`refine_normals` `confidence` array is `NaN`. A patch counts toward the reported
+count when its normalized confidence is below a fixed reporting threshold of
+`0.1` (`_LOW_CONFIDENCE_THRESHOLD` in `xform/_refine_normals.py`); the count is
+diagnostic only, with no per-point gating (see "Confidence is report-only"
+below).
 
 **Not surfaced in v1.** The `refine_normals` binding also accepts tuning knobs
 (e.g. for the non-default window/sampler combinations) that are left at their
@@ -190,6 +199,16 @@ refine pass only rotates each stored normal toward the photometric optimum (it
 re-seeds from the stored normal plus the routine's internal mean-viewing seed;
 refinement is intentionally **not idempotent** — a second `--refine-normals` can
 improve further). It does **not** resize the patch.
+
+Because the rotation changes the frame, the cloud that comes back is always
+re-persisted: the stored `u`/`v` pair spans the patch plane, so leaving the old
+frame in place would put it at odds with the normal just written beside it. That
+is why the frame is the upstream step's business and its consistency is this
+step's — sizing and seeding are knobs on `--to-embedded-patches`, while keeping
+the frame true to the refined normal is unconditional here. An
+`embedded_patches` input always carries the frame; `apply` still raises a
+`ValueError` when `recon.patches` is `None`, naming `--to-embedded-patches` as
+the fix.
 
 ## Which points are refined
 
@@ -363,8 +382,9 @@ Unlike `scripts/patch_crossval.py`, the CLI op refines the **whole** cloud (no
   `RemoveLargeFeaturesFilter`, normal scatter-write).
 - Export it from `xform/__init__.py`; add the `--refine-normals` branch to
   `xform/_arg_parser.py` (`key=value` parsing) and a Click
-  `@click.option("--refine-normals", multiple=True, …)` to
-  `_commands/xform.py` for `--help` / unknown-option rejection.
+  `@click.option("--refine-normals", is_flag=False, flag_value="",
+  multiple=True, …)` to `_commands/xform.py` for `--help` / unknown-option
+  rejection.
 - Add a short **Optimization** subsection to `specs/cli/reconstruction/xform/xform-command.md`
   linking here (the pattern used by `--find-points-at-infinity` and
   `--include-by-distribution`).

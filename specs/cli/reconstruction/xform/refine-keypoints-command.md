@@ -138,6 +138,15 @@ its views carry NaN scores and keep their seed):
   can move them further (within `max_offset_px` of the *new* seed).
 - **Images must be resolvable.** Fails fast if `workspace_dir` or any image is
   missing, exactly like `--refine-normals` and the `.sift`-reading ops.
+- **`--localize-keypoints` is the upstream search.** That op surfaces
+  `PatchCloud.localize_keypoints` — basin *search*, a heavier, structural
+  operation that drops views and points
+  ([localize-keypoints-command.md](localize-keypoints-command.md)) — and is
+  what puts seeds inside the basin this op needs when the stored keypoints may
+  be further than ~1 px from the optimum; run it first, as
+  `--localize-keypoints --refine-keypoints`. The localizer renders no bitmaps,
+  so a following `--refine-keypoints` (bitmaps on by default) also regenerates
+  them.
 
 ## Performance and memory
 
@@ -145,13 +154,3 @@ Same envelope as `--refine-normals`: the binding loads **all** full-resolution
 images (plus pyramids) into memory at once and releases the GIL during the
 solve, parallelizing across points. Work scales with observations × GN steps ×
 sweeps; there is no streaming of the image set.
-
-## Future
-
-A `--localize-keypoints` op could later surface
-`PatchCloud.localize_keypoints` — basin *search* that can drop views, a
-heavier, structural (filter-like) operation — as the upstream step that puts
-seeds in the basin; this op is subpixel refinement only.
-
-> _Status (2026-07-05): Done —
-> [localize-keypoints-command.md](localize-keypoints-command.md)._

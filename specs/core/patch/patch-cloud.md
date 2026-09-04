@@ -48,7 +48,13 @@ shape. That has three limitations the 3D formulation removes:
 
 ## `OrientedPatch`
 
-A planar surface element (surfel) in world space.
+A planar surface element (surfel) in world space. It and everything else in this
+section live in `sfmtool-core/src/patch/cloud.rs` — `PatchCloud` with its
+`from_reconstruction` / `from_tracks` constructors, the `PatchNormal` and
+`PatchExtent` policies, and the free `mean_viewing_normal` / `pca_plane_normal`
+helpers the policies are built from — except `WarpMap::from_patch`, which sits
+with the rest of the warp-map constructors. `OrientedPatch`, `PatchCloud` and
+`WarpMap.from_patch` are all exposed to Python.
 
 ```rust
 /// An oriented planar patch (surfel) in world space.
@@ -179,7 +185,10 @@ impl PatchCloud {
 pub enum PatchNormal {
     /// Use the reconstruction's stored estimated normal (whatever is in the
     /// `.sfmr`, not necessarily the mean viewing direction); falls back to the
-    /// mean viewing direction if zero/degenerate.
+    /// mean viewing direction if zero/degenerate. On the COLMAP-solved
+    /// reconstructions measured here the stored normals happened to coincide
+    /// with the mean viewing direction (`|cos| = 1.0` at every point) — an
+    /// observation about that solver, not a property of `Stored`.
     Stored,
     /// Normalized mean of the unit directions from the point to each observing
     /// camera centre.
@@ -307,17 +316,18 @@ reduce across views exactly as the finite sizes do. The same two closed forms:
 `FeatureSize` sizes an infinity patch the same way, with the observation's
 keypoint scale `σ_i` in place of `radius_px`.
 
-> _Status (2026-08-10): Implemented — `CameraIntrinsics::min_pixel_scale` /
-> `pixel_radius_to_world` / `pixel_radius_to_angle` in `camera/distortion.rs`,
-> consumed by `build_patch_cloud` and `push_infinity_patches`. `PatchScene`
-> carries whole per-image cameras rather than focals plus a projection-family
-> flag. `FeatureSize` routes through the same pair (finite sizes through
-> `pixel_radius_to_world`, infinity angles through `pixel_radius_to_angle`), so
-> `PatchScene` no longer exposes a bare focal at all. Both are exposed to Python
-> as `CameraIntrinsics.pixel_radius_to_world_batch` /
-> `.pixel_radius_to_angle_batch`, so a caller outside the patch cloud that needs
-> this sizing rule uses the camera's own implementation rather than re-deriving a
-> closed form._
+All three of `min_pixel_scale`, `pixel_radius_to_world` and
+`pixel_radius_to_angle` are `CameraIntrinsics` methods living in
+`camera/distortion.rs`, and the cloud builder reaches for them there rather than
+carrying a closed form of its own: `build_patch_cloud` calls the first pair for
+finite sizes, `push_infinity_patches` the angular one, and both `PixelRadius` and
+`FeatureSize` route through the same code. That is why the internal `PatchScene`
+carries a whole `CameraIntrinsics` per image and never a bare focal — a focal
+alone cannot say how a lens magnifies, so a family flag beside it would only
+approximate what the model already knows. The two applied rules are also exposed
+to Python as `CameraIntrinsics.pixel_radius_to_world_batch` /
+`.pixel_radius_to_angle_batch`, so a caller outside the patch cloud that needs
+this sizing gets the camera's own implementation.
 
 **Points at infinity across patch operations.** `from_reconstruction` builds the
 tangent-sphere frame for points at infinity when asked
@@ -386,20 +396,11 @@ bitmaps — parameterised in the patch's own `(s, t)` frame — are carried unch
 The per-point `normal` rotates in step, so `normalize(u × v)` stays consistent
 with it.
 
-> _Status (2026-06-11): Implemented — `patch/cloud.rs`
-> (`OrientedPatch`, `PatchCloud::from_reconstruction`, `PatchNormal`,
-> `PatchExtent`, `mean_viewing_normal`, `pca_plane_normal`), `WarpMap::from_patch`,
-> PyO3 bindings (`OrientedPatch`, `PatchCloud`, `WarpMap.from_patch`). The
-> For the COLMAP-solved reconstructions tested here the stored normals happened
-> to match the mean viewing direction (`|cos| = 1.0` for all points), but that is
-> an empirical observation about the solver, not a property of `Stored`. A
-> photometric normal-refinement prototype lives in `scripts/patch_crossval.py`
-> (`--refine-normal`)._
-
 ## Patch operations without a reconstruction
 
 Every patch kernel binding (`PatchCloud.refine_normals`, `select_views`,
-`localize_keypoints`, `refine_keypoints`) and `ImagePyramidSet` takes a
+`localize_keypoints`, `refine_keypoints`, `validate_member_coherence`) and
+`ImagePyramidSet` takes a
 reconstruction as its first argument, but consumes only three things from it:
 the per-image camera intrinsics, the per-image `cam_from_world` pose, and — as
 defaults — the per-point track view lists. The core kernels are already
@@ -494,37 +495,33 @@ Semantics match `from_reconstruction` exactly, sourced from the arrays:
   so the kernels' `view_sets` / `point_indexes` arguments key the same way as in
   reconstruction mode.
 
-In core, the body of `PatchCloud::from_reconstruction` becomes a shared routine
-over positions + homogeneous weights, grouped observation indexes, poses,
-cameras, and a per-observation keypoint-scale source; `from_reconstruction`
-supplies scales by reading the `.sift` files (behavior unchanged) and
-`from_tracks` supplies the caller's array. One implementation of the sizing
-policies, the infinity frames, and the error taxonomy.
+In core there is one implementation. Both `from_reconstruction` and
+`from_tracks` pack their inputs into an internal `PatchScene` — positions and
+homogeneous weights, grouped observation indexes, per-image poses and cameras,
+a per-observation keypoint-scale source, and the stored normals — and hand it to
+the shared `build_patch_cloud` (with `push_infinity_patches` for the `w = 0`
+rows). The only thing that differs is where the scales come from:
+`from_reconstruction` reads the workspace `.sift` files, `from_tracks` takes the
+caller's array with `NaN` meaning unreadable. So the sizing policies, the
+infinity frames and the error taxonomy exist once. `patch/cloud/tests.rs` pins
+that down patch-for-patch: `from_tracks` ≡ `from_reconstruction` under
+`FeatureSize` (against written `.sift` files) and under `PixelRadius` + `Stored`,
+plus NaN-scale-as-unreadable and the infinity frames.
 
-> _Status (2026-07-16): Implemented._
-> - Core: `patch/cloud.rs` — `from_reconstruction` / the new public
->   `PatchCloud::from_tracks` both build an internal `PatchScene` (positions +
->   weights, grouped observations, per-image poses/focal, per-observation scale
->   source, stored normals) and call the shared `build_patch_cloud`; the finite
->   sizing and `push_infinity_patches` are now one implementation. Scales come
->   from `.sift` (reconstruction) or the caller's array with `NaN` = unreadable
->   (tracks). Rust tests in `patch/cloud/tests.rs` cover the patch-for-patch
->   `from_tracks` ≡ `from_reconstruction` equivalence (FeatureSize via written
->   `.sift`, and PixelRadius + Stored), NaN-scale-as-unreadable, and the infinity
->   frames.
-> - Binding: `sfmtool-py/src/patches/views.rs` — frozen `CameraViews`
->   (validates shapes / camera-index range / unit quaternions, `__len__`), an
->   internal `PosedViews` both a reconstruction and a `CameraViews` reduce to,
->   and `PatchCloud.from_tracks`. `ImagePyramidSet` and the four kernels
->   (`localize_keypoints`, `refine_keypoints`, `refine_normals`, `select_views`)
->   accept either as their first argument; in views mode `view_sets` /
->   `view_indices` / the new `select_views(candidate_views=…)` are required
->   (`candidate_views` also overrides the track-derived lists in reconstruction
->   mode). Python coverage in
->   `tests/rust_bindings/test_camera_views_rust_bindings.py`.
-> - Deviation: the kernels' first parameter keeps the public name `recon` (its
->   type widened to accept a `CameraViews`) rather than being renamed, so
->   existing `recon=`-keyword callers keep working.
+On the Python side `sfmtool-py/src/patches/views.rs` holds the frozen
+`CameraViews` (which validates array shapes, camera-index range and unit
+quaternions, and reports `__len__`), `PatchCloud.from_tracks`, and the internal
+`PosedViews` that both a reconstruction and a `CameraViews` reduce to — the
+reason every scene-taking binding (`ImagePyramidSet`, `localize_keypoints`,
+`refine_keypoints`, `refine_normals`, `select_views`,
+`validate_member_coherence` and
+`spawn_candidate_tracks`) accepts either as its first argument. That parameter keeps
+the public name `recon` even though its type is wider than that, so `recon=`-keyword
+callers keep working. In views mode the per-patch view lists have no track to
+come from, so `view_sets` / `view_indices` / `select_views(candidate_views=…)`
+become required — and `candidate_views` overrides the track-derived lists in
+reconstruction mode too. Python coverage is in
+`tests/rust_bindings/test_camera_views_rust_bindings.py`.
 
 ## Routine: project an image onto a patch
 

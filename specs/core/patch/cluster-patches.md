@@ -1,8 +1,6 @@
 # Cluster Patches: SIFT Clusters → Patch Clusters
 
-_Status: draft for review. Design informed by the experiments in
-`reports/2026-07-09-exp-pairwise-sift-warp.md` (harnesses
-`scripts/exp_pairwise_sift_warp.py`, `scripts/exp_cluster_patch_clusters.py`)._
+_Status: draft for review._
 
 ## The Idea
 
@@ -80,9 +78,10 @@ The expansion is deterministic and cheap (`clusters_to_pair_matches` already
 exists), while storing both roughly doubles the correspondence payload with
 derived values; per-pair data grows as Σ C(k,2) over cluster sizes versus the
 Σ k the clusters themselves cost. Existing consumers (TVG verification,
-`to-colmap-db`, solve) obtain pairs by calling the expansion at read time —
-the reader exposes one pairs API that returns stored pairs or expands
-clusters, so consumer code has a single path. Pair descriptor distances,
+`to-colmap-db`, solve) obtain pairs by calling the expansion at read time
+through `sfmtool.feature_match.pairs_from_matches` — the single helper that
+returns a pairwise file's stored arrays verbatim and expands a cluster file's
+backbone, so consumer code has one path. Pair descriptor distances,
 which the stored pairwise form carries, are recomputed from the referenced
 `.sift` files when a consumer actually needs them (the files are already
 located and content-hash-verified through the images section).
@@ -102,9 +101,9 @@ images, pairs, clusters, cluster_patches, two_view_geometries.
 
 ### `clusters/` — the matcher's primary artifact
 
-Written by `sfm match --cluster` **in place of** the `image_pairs/` section
-(which such a file omits entirely). CSR layout identical to the in-memory
-`ClusterSet`:
+Written by `sfm match --cluster` before geometric verification, **in place
+of** the `image_pairs/` section (which such a file omits entirely). CSR layout
+identical to the in-memory `ClusterSet`:
 
 ```
 clusters/
@@ -239,18 +238,6 @@ the file-level selection derivation specified in
 
 - Reference-selection policy (largest scale vs self-agreement/centrality) —
   measurable with the existing harness; the format does not constrain it.
-- Migration timing for the derived-pairs read path: the consumers that today
-  read `image_pairs/` directly (TVG verification, `to-colmap-db`, solve
-  ingestion) all need to go through the expansion-aware pairs API before
-  `sfm match --cluster` switches its output to cluster-bearing files.
-
-  > _Status (2026-07-10): **Resolved** — the pairwise consumers were migrated
-  > to the single `sfmtool.feature_match.pairs_from_matches` helper and
-  > `sfm match --cluster` now persists the cluster file as its primary
-  > artifact (before verification) in the same change, alongside the
-  > unchanged verified pairwise+TVG output. See
-  > [cluster-patch-refinement.md](cluster-patch-refinement.md) §1 and
-  > `specs/cli/image-feature/match-command.md` for the as-built surface._
 - Whether the operation should also emit a per-cluster fused reference
   template (the 2D analog of the consensus bitmap) for downstream photometric
   gates; deferred until a consumer needs it.
