@@ -54,6 +54,15 @@ Two things override the sample: a spec the user names, and a spec covering code
 that changed materially since the last audit — check `git log` over the
 implementing paths and pull those in.
 
+**Verify the sampled specs' `Non-goals` and deferral language against the code.**
+A `Non-goals` bullet or a "not yet implemented" / "a natural v2" aside is a claim
+about what does not exist, and it is the claim most likely to have been overtaken
+by a shipped module — stale ones have turned up in consecutive audits. Roughly 14
+specs carry a `Non-goals` section and 28 contain deferral language; recent runs
+checked one of them between them. Check every such entry in a sampled spec, and
+say in the report how many you checked, so the next run knows the size of the
+gap rather than inheriting silence.
+
 A spec and its implementing code are rarely the only two copies of a design. Doc
 comments are a third, and they drift like any other. While you have both texts
 open — which no other skill does — also check the three things below.
@@ -173,6 +182,13 @@ Each one narrows 131 specs to a handful worth close attention.
    Normalize numeric spellings (`0.9` / `0.90`) and expect false positives from
    table parsing, so verify each hit against the code before reporting it. Real
    hits are behavioural drift and belong in **Top priorities**.
+
+   Two blind spots this check has had, both of which hid real drift — close them:
+   **key on (spec → owning command → parameter), not on the bare parameter
+   name**, or a name several commands share is acquitted as soon as any one of
+   them matches; and **read declared defaults out of fenced code too**, not only
+   out of tables, since a value stated in a ` ```rust ` block or a signature is
+   invisible to a table scan.
 2. **Duplicate prose between a spec and its implementing code.** Normalize long
    lines (lowercase, strip markup) from every spec and every doc comment, bucket
    them, and report file pairs sharing many. A spec↔code pair sharing dozens of
