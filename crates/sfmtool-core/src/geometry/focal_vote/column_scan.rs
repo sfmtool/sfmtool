@@ -453,6 +453,28 @@ pub(crate) fn null_from_rows(
     m.iter().all(|x| x.is_finite()).then_some(m)
 }
 
+/// Epipolar matrix of a minimal sample: the 8×9 elimination null space of the
+/// selected rows, reshaped row-major into a `3×3` matrix.
+///
+/// The exact null space of exactly [`EPI_SAMPLE`] rows, so
+/// [`crate::geometry::numeric::null9_from_8rows`] answers it directly and the
+/// squared system never forms. Any other row count — and the
+/// `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` diagnostic — falls back to
+/// [`null_from_rows`], which is also what the consensus refits keep using: a
+/// least-squares smallest direction is not an exact null space.
+fn null_from_minimal_sample(rows: &[SVector<f64, 9>], s: &[usize]) -> Option<Matrix3<f64>> {
+    if s.len() != EPI_SAMPLE || crate::geometry::numeric::eigen_minsolve_enabled() {
+        return null_from_rows(rows, s.iter().copied());
+    }
+    let mut a = [[0.0f64; 9]; 8];
+    for (k, &i) in s.iter().enumerate() {
+        a[k].copy_from_slice(rows[i].as_slice());
+    }
+    let v = crate::geometry::numeric::null9_from_8rows(a)?;
+    let m = Matrix3::new(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
+    m.iter().all(|x| x.is_finite()).then_some(m)
+}
+
 /// Rotation taking `r1` onto `r2` in the least-squares sense (orthogonal
 /// Procrustes with a reflection guard): `R r1ᵢ ≈ r2ᵢ`.
 pub(crate) fn kabsch(
@@ -691,7 +713,7 @@ fn fit_epipolar(
     let mut best_e: Option<Matrix3<f64>> = None;
     let mut best_mask = vec![false; n];
     for s in samples.chunks_exact(EPI_SAMPLE) {
-        let Some(e) = null_from_rows(&rows, s.iter().copied()) else {
+        let Some(e) = null_from_minimal_sample(&rows, s) else {
             continue;
         };
         epipolar_residuals(&e, r1, r2, side_two, &mut resid);
@@ -794,10 +816,11 @@ fn scan_epipolar(
 
 /// Angle between each rotated ray and its measured partner.
 ///
-/// The cosines vectorize (matvec, dot, clamp); the `acos` does not — it is a
-/// libm call and a polynomial SIMD replacement would not be bit-identical — so
-/// the AVX2 path fills `out` with clamped cosines and then walks it with a
-/// scalar `acos` tail. The vectorized half is taken only when `idx` is a
+/// The AVX2 path fills `out` with clamped cosines and then takes the angles
+/// with the vector `acos` polynomial, whose scalar twin
+/// [`crate::geometry::numeric::acos_poly_scalar`] serves the ragged tail and
+/// the fallback below — one arithmetic in every arm, so the dispatch stays a
+/// pure performance switch. The vectorized half is taken only when `idx` is a
 /// consecutive run, which is the hot shape: the RANSAC scoring loops in
 /// [`rotation_support_at`] and [`crate::geometry::relative_pose`] pass all `n`
 /// points at every one of the ~128 minimal samples, while the arbitrary-subset
@@ -821,8 +844,13 @@ pub(crate) fn rotation_residuals(
             // `idx[0] .. idx[0] + len` lies inside both ray slices while `out`
             // covers `len` elements.
             unsafe { rotation_cosines_avx2(rot, &r1[idx[0]..], &r2[idx[0]..], &mut out[..len]) };
-            for o in out[..len].iter_mut() {
-                *o = o.acos();
+            if crate::geometry::numeric::libm_acos_enabled() {
+                for o in out[..len].iter_mut() {
+                    *o = o.acos();
+                }
+            } else {
+                // SAFETY: avx2 confirmed available just above.
+                unsafe { acos_slice_avx2(&mut out[..len]) };
             }
             return;
         }
@@ -839,8 +867,14 @@ fn rotation_residuals_scalar(
     idx: &[usize],
     out: &mut [f64],
 ) {
+    if crate::geometry::numeric::libm_acos_enabled() {
+        for (o, &i) in out.iter_mut().zip(idx.iter()) {
+            *o = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0).acos();
+        }
+        return;
+    }
     for (o, &i) in out.iter_mut().zip(idx.iter()) {
-        *o = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0).acos();
+        *o = crate::geometry::numeric::acos_poly_scalar((rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0));
     }
 }
 
@@ -884,6 +918,28 @@ unsafe fn rotation_cosines_avx2(
     }
     for i in blocks * 4..n {
         out[i] = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0);
+    }
+}
+
+/// In-place `acos` over a slice of clamped cosines, four lanes at a time.
+///
+/// The ragged tail takes [`crate::geometry::numeric::acos_poly_scalar`], the
+/// bit-identical twin of the vector form, so a slice length that is not a
+/// multiple of four changes nothing but the instruction count.
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn acos_slice_avx2(out: &mut [f64]) {
+    use std::arch::x86_64::*;
+    let blocks = out.len() / 4;
+    for b in 0..blocks {
+        let p = out.as_mut_ptr().add(b * 4);
+        _mm256_storeu_pd(p, crate::geometry::simd::acos_pd(_mm256_loadu_pd(p)));
+    }
+    for o in out[blocks * 4..].iter_mut() {
+        *o = crate::geometry::numeric::acos_poly_scalar(*o);
     }
 }
 

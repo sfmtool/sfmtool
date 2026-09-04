@@ -14,8 +14,12 @@
 //!   different `f64`. The per-point dot products of fixed length 3 keep their
 //!   scalar order *inside* each lane (`(a·b + c·d) + e·f`, matching nalgebra's
 //!   unrolled `U3` dot), which is why they are safe.
-//! - **No vectorized transcendentals.** `acos` is a libm call; a polynomial
-//!   SIMD replacement is not bit-identical, so those tails stay scalar.
+//! - **No libm in one arm and an approximation in the other.** A transcendental
+//!   is vectorized only as a polynomial that has a scalar twin performing the
+//!   same operations in the same order, so both arms evaluate the same
+//!   arithmetic: [`acos_pd`] and
+//!   [`crate::geometry::numeric::acos_poly_scalar`] read one shared coefficient
+//!   table and each ragged tail takes the scalar twin, never `f64::acos`.
 //! - **No skipped lanes.** Where the scalar code takes a guard branch to a
 //!   sentinel (`f64::INFINITY` for a degenerate homography transfer), the SIMD
 //!   path reproduces it with a compare and a blend.
@@ -204,6 +208,56 @@ pub(crate) unsafe fn broadcast_mat3(
             _mm256_set1_pd(m[(2, 2)]),
         ],
     ]
+}
+
+/// `acos` over `[-1, 1]`, four lanes at a time — the vector twin of
+/// [`crate::geometry::numeric::acos_poly_scalar`].
+///
+/// Same coefficient table ([`crate::geometry::numeric::ACOS_POLY`]), same
+/// operations in the same order, with the scalar form's branches as compares
+/// and blends: `copysign(r, d)` is `or(r, and(signmask, d))`, and the big/small
+/// and sign selections are `blendv`. Every lane therefore yields the bits the
+/// scalar twin yields for that argument, which is what lets the rotation
+/// residual dispatch — vector body, ragged tail, scalar fallback — stay one
+/// arithmetic.
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn acos_pd(d: std::arch::x86_64::__m256d) -> std::arch::x86_64::__m256d {
+    use crate::geometry::numeric::ACOS_POLY as A;
+    use std::arch::x86_64::*;
+
+    let signmask = _mm256_set1_pd(-0.0);
+    let half = _mm256_set1_pd(0.5);
+    let one = _mm256_set1_pd(1.0);
+    let pi = _mm256_set1_pd(std::f64::consts::PI);
+    let pi_2 = _mm256_set1_pd(std::f64::consts::FRAC_PI_2);
+
+    let a = _mm256_andnot_pd(signmask, d);
+    let big = _mm256_cmp_pd(a, half, _CMP_GT_OQ);
+    let z = _mm256_blendv_pd(
+        _mm256_mul_pd(a, a),
+        _mm256_mul_pd(_mm256_sub_pd(one, a), half),
+        big,
+    );
+    let s = _mm256_blendv_pd(a, _mm256_sqrt_pd(z), big);
+
+    let mut p = _mm256_set1_pd(A[13]);
+    let mut k = 13usize;
+    while k > 0 {
+        k -= 1;
+        p = _mm256_add_pd(_mm256_mul_pd(p, z), _mm256_set1_pd(A[k]));
+    }
+    let r = _mm256_add_pd(s, _mm256_mul_pd(_mm256_mul_pd(s, z), p));
+
+    let r_signed = _mm256_or_pd(r, _mm256_and_pd(signmask, d));
+    let res_small = _mm256_sub_pd(pi_2, r_signed);
+    let two_r = _mm256_add_pd(r, r);
+    let neg = _mm256_cmp_pd(d, _mm256_setzero_pd(), _CMP_LT_OQ);
+    let res_big = _mm256_blendv_pd(two_r, _mm256_sub_pd(pi, two_r), neg);
+    _mm256_blendv_pd(res_small, res_big, big)
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]

@@ -3,15 +3,200 @@
 
 //! Small numeric primitives shared across the geometry kernels.
 //!
-//! Every item here previously existed as two or more byte-identical private
-//! copies in sibling modules. They are RNG and threshold primitives feeding
-//! RANSAC sampling and robust statistics, so a copy that drifts changes
-//! reconstruction results without failing to compile — the reason they are
+//! What lands here is arithmetic that more than one module has to perform
+//! *identically*: RNG and threshold primitives feeding RANSAC sampling and
+//! robust statistics, and the deterministic kernels of the focal vote — the
+//! [`ACOS_POLY`] table with its scalar evaluation [`acos_poly_scalar`] (whose
+//! AVX2 twin in `crate::geometry::simd` reads the same table) and the minimal
+//! solvers' null space [`null9_from_8rows`]. A copy that drifts changes
+//! reconstruction results without failing to compile, which is why these are
 //! centralized rather than left co-located.
+//!
+//! Nothing here is architecture-gated: the focal vote's residuals and minimal
+//! samples are ordinary `f64` arithmetic that computes the same bits on every
+//! platform, and that is a property of the kernel, not of `x86_64`.
 
 use nalgebra::Matrix3;
 
 use crate::camera::{CameraIntrinsics, CameraModel};
+
+/// Diagnostic switch restoring the platform libm `acos` in the focal vote's
+/// rotation residuals, set by `SFMTOOL_FOCAL_VOTE_LIBM_ACOS`.
+///
+/// The production path is [`acos_poly_scalar`] and its vector twin, which are
+/// platform-deterministic where libm is not; this exists only to reproduce an
+/// older run's bits when a difference has to be attributed.
+static LIBM_ACOS: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_FOCAL_VOTE_LIBM_ACOS").is_some());
+
+/// Whether the rotation residuals take the libm `acos` instead of
+/// [`acos_poly_scalar`]. See [`LIBM_ACOS`].
+#[inline]
+pub(crate) fn libm_acos_enabled() -> bool {
+    *LIBM_ACOS
+}
+
+/// Diagnostic switch restoring the `AᵀA` + 9×9 `symmetric_eigen` minimal
+/// solvers in place of [`null9_from_8rows`], set by
+/// `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE`.
+static EIGEN_MINSOLVE: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE").is_some());
+
+/// Whether the minimal samples take the eigen solvers instead of
+/// [`null9_from_8rows`]. See [`EIGEN_MINSOLVE`].
+#[inline]
+pub(crate) fn eigen_minsolve_enabled() -> bool {
+    *EIGEN_MINSOLVE
+}
+
+/// Coefficients of the degree-13 polynomial `P` behind [`acos_poly_scalar`] and
+/// its AVX2 twin `acos_pd` in `crate::geometry::simd`, ascending
+/// (`A[0]` multiplies `z⁰`).
+///
+/// Degree-13 Chebyshev interpolation of `P(z) = (asin(√z) − √z)/(z·√z)` on
+/// `[0, 0.25]`, node values computed with exact rational series arithmetic and
+/// converted to the monomial basis. The trailing coefficients are
+/// interpolation artifacts that compensate one another and are exact as
+/// written — rounding them degrades the fit.
+///
+/// One table, read by both evaluations: a second copy would be free to drift,
+/// and the scalar/vector bit-identity is the whole point of the arrangement.
+pub(crate) const ACOS_POLY: [f64; 14] = [
+    0.16666666666666666,
+    0.07500000000000406,
+    0.04464285714150171,
+    0.030381944571586314,
+    0.02237215339997836,
+    0.017352913993464503,
+    0.013962288953824856,
+    0.01158174875867126,
+    0.009513962068006003,
+    0.009846417300000855,
+    0.0012909120006875199,
+    0.02336097864008306,
+    -0.024103731139602444,
+    0.03238761648605816,
+];
+
+/// `acos(d)` for `d ∈ [−1, 1]` by polynomial evaluation, the scalar twin of
+/// the AVX2 `acos_pd` in `crate::geometry::simd`.
+///
+/// Through the asin core: `a = |d|`; for `a ≤ 0.5`, `z = a²` and `s = a`; for
+/// `a > 0.5`, `z = (1 − a)/2` and `s = √z` (so `z ∈ [0, 0.25]` and
+/// `s ∈ [0, 0.5]` either way); `asin(s) = s + s·z·P(z)` with `P` the
+/// [`ACOS_POLY`] Horner evaluation from the top coefficient down; then
+/// `acos = π/2 − copysign(asin, d)` for the small branch, `2·asin` or
+/// `π − 2·asin` by the sign of `d` for the big one. Measured accuracy is 1 ULP
+/// against libm over dense `[−1, 1]` sampling plus adversarial near-`±1`
+/// populations, and a NaN argument yields a NaN as libm's does.
+///
+/// Two properties are why the focal vote uses this rather than [`f64::acos`],
+/// and both depend on the operation order below matching the vector form term
+/// for term: the two dispatch arms of the rotation residual produce identical
+/// bits, and they produce the *same* bits on every platform, where libm's
+/// `acos` differs in the last bits between operating systems.
+pub(crate) fn acos_poly_scalar(d: f64) -> f64 {
+    let a = d.abs();
+    let big = a > 0.5;
+    let z = if big { (1.0 - a) * 0.5 } else { a * a };
+    let s = if big { z.sqrt() } else { a };
+    let mut p = ACOS_POLY[13];
+    let mut k = 13usize;
+    while k > 0 {
+        k -= 1;
+        p = p * z + ACOS_POLY[k];
+    }
+    let r = s + (s * z) * p;
+    if big {
+        let two_r = r + r;
+        if d < 0.0 {
+            std::f64::consts::PI - two_r
+        } else {
+            two_r
+        }
+    } else {
+        std::f64::consts::FRAC_PI_2 - f64::copysign(r, d)
+    }
+}
+
+/// Unit-norm right null vector of an 8×9 system by Gaussian elimination with
+/// partial pivoting.
+///
+/// A generic rank-8 minimal sample has a one-dimensional null space, and this
+/// returns it directly instead of taking the smallest eigenvector of `AᵀA`:
+/// better conditioned (no squaring of the condition number), about an order of
+/// magnitude cheaper, and free of an iterative decomposition. The pivot rule is
+/// part of the determinism contract — strict `>` when scanning a column, so the
+/// *first* maximal pivot is kept.
+///
+/// Rank-deficient input takes the last free column with the other free
+/// coordinates zero: a deterministic member of the null space, and such
+/// degenerate samples score few inliers and lose the RANSAC regardless.
+/// `None` when the design carries no pivot at all, or the result is
+/// non-finite.
+pub(crate) fn null9_from_8rows(mut a: [[f64; 9]; 8]) -> Option<[f64; 9]> {
+    let mut pivot_cols = [usize::MAX; 8];
+    let mut rank = 0usize;
+    let mut col = 0usize;
+    while rank < 8 && col < 9 {
+        let mut best = rank;
+        let mut best_v = a[rank][col].abs();
+        for (r, row) in a.iter().enumerate().skip(rank + 1) {
+            let v = row[col].abs();
+            if v > best_v {
+                best = r;
+                best_v = v;
+            }
+        }
+        if best_v <= 0.0 {
+            col += 1;
+            continue;
+        }
+        a.swap(rank, best);
+        let (upper, lower) = a.split_at_mut(rank + 1);
+        let pivot_row = &upper[rank];
+        for row in lower.iter_mut() {
+            let f = row[col] / pivot_row[col];
+            if f != 0.0 {
+                row[col] = 0.0;
+                for (x, &p) in row.iter_mut().zip(pivot_row.iter()).skip(col + 1) {
+                    *x -= f * p;
+                }
+            }
+        }
+        pivot_cols[rank] = col;
+        rank += 1;
+        col += 1;
+    }
+    if rank == 0 {
+        return None;
+    }
+    let mut is_pivot = [false; 9];
+    for &pc in &pivot_cols[..rank] {
+        is_pivot[pc] = true;
+    }
+    let free = (0..9).rev().find(|&c| !is_pivot[c])?;
+    let mut v = [0.0f64; 9];
+    v[free] = 1.0;
+    for r in (0..rank).rev() {
+        let pc = pivot_cols[r];
+        let mut s = 0.0;
+        for c in pc + 1..9 {
+            if v[c] != 0.0 {
+                s += a[r][c] * v[c];
+            }
+        }
+        v[pc] = -s / a[r][pc];
+    }
+    let n = v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    for x in v.iter_mut() {
+        *x /= n;
+    }
+    v.iter().all(|x| x.is_finite()).then_some(v)
+}
 
 /// SplitMix64 step: advance `state` and return the mixed output.
 ///
@@ -136,3 +321,6 @@ pub(crate) fn cam_with_bspline(
     coeffs.extend_from_slice(bspline);
     out
 }
+
+#[cfg(test)]
+mod tests;

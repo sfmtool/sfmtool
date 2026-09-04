@@ -431,7 +431,7 @@ so the cost curves carry no RANSAC jitter, the columns are directly
 comparable, and the per-pair scans may run in parallel without affecting
 the result.
 
-## Vectorized residual loops
+## Deterministic residual and minimal-solver kernels
 
 Three loops carry the kernel's per-correspondence arithmetic: the
 one-sided epipolar residual, the rotation cell's angular residual, and
@@ -448,11 +448,14 @@ kernels:
 - The length-3 dot products keep their scalar order *inside* each lane
   and nothing is reduced across lanes — a sum whose order changed would
   be a different `f64`.
-- `acos` stays a scalar libm call. The rotation kernel fills its output
-  with clamped cosines and a scalar tail takes the angle, and it takes
-  that path only when the caller's index list is a consecutive run (the
-  shape the RANSAC scoring loops pass); an arbitrary support falls back
-  to the scalar loop.
+- A transcendental is vectorized only as a polynomial with a scalar twin
+  of identical operation order, never as libm in one arm and an
+  approximation in the other. The rotation cell's `acos` is such a pair:
+  the vector body, its ragged tail and the scalar fallback all evaluate
+  one shared coefficient table, so the arms agree bit for bit. The
+  vectorized half is taken only when the caller's index list is a
+  consecutive run (the shape the RANSAC scoring loops pass); an arbitrary
+  support falls back to the scalar loop, which computes the same values.
 - The degenerate-transfer guard is a compare and a blend rather than a
   skipped lane, so a correspondence whose homography transfer lands on
   the plane at infinity carries the same `+∞` the scalar early return
@@ -461,6 +464,77 @@ kernels:
 The `min`/`max` operand order inside the kernels encodes which NaN
 convention each site uses: `f64::min` and `f64::max` return the *other*
 operand for a NaN input, while `f64::clamp` propagates it.
+
+### Polynomial `acos`
+
+`acos(d)` for `d ∈ [−1, 1]` goes through the asin core, branch-free in
+the vector form:
+
+```text
+a = |d|;  big = a > 0.5
+z = big ? (1 − a)/2 : a²          (z ∈ [0, 0.25])
+s = big ? √z        : a           (s ∈ [0, 0.5])
+asin(s) = s + s·z·P(z)            (P = degree-13 polynomial, Horner from A13)
+acos(d) = big ? (d < 0 ? π − 2·asin : 2·asin)
+              : π/2 − copysign(asin, d)
+```
+
+`P` is the degree-13 Chebyshev interpolant of
+`P(z) = (asin(√z) − √z)/(z·√z)` on `[0, 0.25]`, node values computed with
+exact rational series arithmetic and converted to the monomial basis; its
+trailing coefficients are interpolation artifacts that compensate one
+another and are exact as written. Accuracy is 1 ULP against libm over
+dense `[−1, 1]` sampling plus adversarial near-`±1` populations, and a
+NaN cosine (reachable only from a NaN ray) yields a NaN residual, as libm
+did.
+
+One table serves both evaluations — a second copy would be free to drift,
+and the scalar/vector bit-identity is the whole point. It lives with the
+scalar evaluation in `geometry::numeric`, which is **not** gated on
+`x86_64`: every platform evaluates the polynomial, and that is what makes
+this path platform-deterministic where libm's `acos`, differing in the
+last bits between operating systems, was not.
+
+### Elimination minimal solvers
+
+A minimal sample of eight rows has an exact one-dimensional null space, so
+the RANSAC hypotheses take it directly by Gaussian elimination with
+partial pivoting (`numeric::null9_from_8rows`) instead of forming `AᵀA`
+and running a 9×9 `symmetric_eigen`. That avoids squaring the condition
+number as well as an iterative decomposition, and it is ordinary `f64`
+arithmetic, hence platform-deterministic like the polynomial above. The
+pivot rule is part of that contract: a strict `>` when scanning a column,
+so the first maximal pivot is kept. Rank-deficient input takes the last
+free column with the other free coordinates zero — a deterministic member
+of the null space, and such degenerate samples score few inliers and lose
+the RANSAC regardless; a design with no pivot at all, or a non-finite
+result, is rejected.
+
+Two call sites, both minimal-sample only: the epipolar cell's hypothesis
+loop (samples of exactly eight rows, reshaped row-major into the `3×3`
+epipolar matrix) and `homography_dlt` at `N = 4`, whose eight
+Hartley-normalized DLT rows feed the same primitive with denormalization
+and unit-Frobenius scaling unchanged (`E` and `H` consumers are scale- and
+sign-invariant, so the normalization convention is cosmetic). The
+consensus refits keep the eigen path — a least-squares smallest direction
+over an arbitrary index set is not an exact null space — as do `kabsch`,
+`estimate_fundamental` and `relative_pose`.
+
+### Environment flags
+
+Three, none of them a compatibility switch and none read on a production
+decision path:
+
+- `SFMTOOL_FOCAL_VOTE_NO_SIMD` forces the scalar residual loops. Output is
+  unchanged by construction, which is what makes it a parity harness.
+- `SFMTOOL_FOCAL_VOTE_LIBM_ACOS` restores the libm `acos` in the rotation
+  residuals.
+- `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` restores the eigen minimal solvers.
+
+The last two are diagnostic: they change the vote in the last bits (that
+is the point — they reproduce the arithmetic that preceded these kernels
+when a difference has to be attributed), so a run that sets them is a
+forensic run, not a supported configuration.
 
 ## Tests
 
@@ -512,6 +586,15 @@ operand for a NaN input, while `f64::clamp` propagates it.
   the homography scorer additionally pins the degenerate-infinity guard
   on a point that transfers to `w = 0` beside three inliers; the lane
   transposes are pinned element by element.
+- Rust, deterministic kernels: the polynomial `acos` tracks `f64::acos`
+  within `5e-16` over a dense `[−1, 1]` grid and end-crowded random
+  samples, is exact at `±1` and `±0` and within a ULP at the `±0.5`
+  branch boundary, and propagates NaN; its vector and scalar forms are
+  compared with `to_bits` over seeded inputs including those boundary and
+  NaN populations. `null9_from_8rows` returns a unit vector annihilating
+  every row of a seeded rank-8 design and spanning the same direction the
+  eigen path finds (`|v·v_eig| ≈ 1`), rejects the zero design, and still
+  returns a finite null vector for a rank-deficient one.
 - Python bindings: the default-argument dict is exactly the explicit
   pinhole-only dict; an unknown column name raises; a fisheye fixture is
   arbitrated `EquidistantFisheye` with the per-column diagnostic dict

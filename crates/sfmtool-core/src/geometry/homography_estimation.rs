@@ -57,6 +57,33 @@ pub fn homography_dlt(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>> 
     let (n1, t1) = hartley_normalize(x1)?;
     let (n2, t2) = hartley_normalize(x2)?;
 
+    // The minimal sample's eight rows have an exact null space, so take it by
+    // elimination rather than through the squared system: better conditioned,
+    // an order of magnitude cheaper, and this is the hot path — every RANSAC
+    // hypothesis in `estimate_homography` lands here. Denormalization and the
+    // unit-Frobenius scaling are the same as below, and `H` consumers are
+    // scale- and sign-invariant, so the sign the elimination happens to pick is
+    // cosmetic. `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` sends it through the eigen
+    // path instead.
+    if n == 4 && !crate::geometry::numeric::eigen_minsolve_enabled() {
+        let mut a = [[0.0f64; 9]; 8];
+        for (k, (p, q)) in n1.iter().zip(n2.iter()).enumerate() {
+            let (x, y) = (p[0], p[1]);
+            let (xp, yp) = (q[0], q[1]);
+            a[2 * k] = [-x, -y, -1.0, 0.0, 0.0, 0.0, xp * x, xp * y, xp];
+            a[2 * k + 1] = [0.0, 0.0, 0.0, -x, -y, -1.0, yp * x, yp * y, yp];
+        }
+        let v = crate::geometry::numeric::null9_from_8rows(a)?;
+        let h_hat = vec_to_mat3(&SVector::<f64, 9>::from_column_slice(&v));
+        let t2_inv = t2.try_inverse()?;
+        let h = t2_inv * h_hat * t1;
+        let norm = h.norm();
+        if norm < 1e-300 || !h.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        return Some(h / norm);
+    }
+
     // Accumulate AᵀA over the two DLT rows per correspondence:
     //   [ -x, -y, -1,  0,  0,  0,  x'x, x'y, x' ]
     //   [  0,  0,  0, -x, -y, -1,  y'x, y'y, y' ]
