@@ -55,6 +55,12 @@ The last three are worse than a stale table: a reader who copies the documented
 call gets a `TypeError`, or worse, passes `positions_xy` into the
 `member_accepted` slot positionally.
 
+> _Status (2026-09-03): Done — all six rows corrected in commit 7ddbe97; see
+> the Top priority 2 annotation, which also records where this finding's own
+> wording was off (the `member_accepted` slot number, and the count of the
+> `MATCHES_FORMAT_VERSION` gates). The methodology note for the next run — key
+> the check on spec → owning command → parameter, not the bare name — stands._
+
 ### 2. Duplicate prose between a spec and its implementing code
 
 Long prose lines (≥55 chars, normalized, code fences stripped) bucketed across
@@ -271,6 +277,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
   - F1 fails (quoted in §4). Proposed: "Cluster covisibility measures how many match clusters each pair of images shares, so a caller can pick mutually-overlapping image groups and rank candidate views before any reconstruction exists."
   - Three dead references (§5c). The real consumer today is `geometry/reconstruction_growth.rs:620,1027` (`cv.thin_to(...)`), which the spec never names.
   - Bindings block (`:183-191`) documents a 4-parameter `from_arrays`; actual is 6 (`py:126-127`). A reader of *this* spec alone gets a wrong signature.
+    > _Status (2026-09-03): Done — the Bindings block now shows the full signature `from_arrays(cluster_starts, member_images, num_images, member_accepted=None, positions_xy=None, seed=0)`, commit 7ddbe97. The `cov.counts` error claim, the dead references and the missing `next_seed_group` are untouched._
   - `cov.counts  # ... errors above dense bound` (`:188`) — the getter never errors (`py:206-216`); the bound is enforced only at construction (`:213`).
   - `matcher_options.d` (`:80,102`) is not a symbol; it is `BackgroundFloorParams::d`, default 10 (`cluster_match/mod.rs:52,64` — value correct).
   - `next_seed_group` (`:412`) is public API — the step function both iterators drive — and appears in neither covisibility spec.
@@ -285,6 +292,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Inconsistencies:**
   - F1 fails twice: the opening rests on a symbol from another spec, and the Purpose paragraph (`:19-24`) describes the world *before* the change. Proposed: "Three queries over a set of images' shared-cluster counts: how far apart two covisible images are in appearance, which subset survives redundancy-thinning, and how much of the capture a chosen subset connects to."
   - **F2 confirmed.** No `rust` block. The only fenced block (`:30-33`) is a pseudo-signature that **omits `member_accepted`** — a reader following it positionally passes `positions_xy` into the mask slot. The Rust constructor these queries require, `from_clusters_with_positions` (`:205`), is named only inside the status note.
+    > _Status (2026-09-03): Partially done — the Construction block now carries the real signature and names `from_clusters_with_positions` as the core-side constructor; the 2026-07-18 errata block, whose note (1) admitted the signature was wrong, is deleted and its content folded into the section it corrected, commit 7ddbe97. The missing Rust interface block itself remains open._
   - `:44` "squared-root pixel distances accumulate" — the code accumulates plain Euclidean distance via `f64::hypot` (`covisibility.rs:283`).
   - `thin` unconditionally keeps the first swept image regardless of the band (`selection.rs:46-49`); the spec's band description implies every image is band-tested. The code doc says it; the spec does not.
   - `thin_to`'s search range `[1, median per-image row peak]` and its fixed 25 iterations (`selection.rs:95-104`) are load-bearing and absent.
@@ -341,6 +349,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Inconsistencies:**
   - F1/F5: opening is a status line built from a symbol and three links, followed by a 19-line numbered errata block (`:15-33`). Proposed: "Find the cameras in a finished reconstruction whose poses are wrong, and put them back — using only the 2D tracks, with no reference solve, image ordering, or motion model to check against."
   - Signatures wrong: spec writes `nearest(i, k)` / `farthest(i, k)` (`:56-59`); actual is `nearest(&self, i: u32, k: usize, min_shared: u32)` (`displacement.rs:255,262`). Errata note (5) *admits* the missing parameter rather than the body being fixed.
+    > _Status (2026-09-03): Partially done — the body now reads `nearest(i, k, min_shared)` / `farthest(i, k, min_shared)`, commit 7ddbe97. Errata note (5) is left in place for the Top priority 3 folding pass, along with the `displacement.rs` path drift and the undocumented defaults._
   - `verify_poses`'s 10-argument signature and the two option structs are never shown; no example call in either language.
   - Undocumented defaults: `resect_min_obs = 8`, `resect_accept_gate = 0.30`, `max_neighbors = 4`, `min_pair_correspondences = 30`, `min_h_inliers = 20`, `min_rotation_measurements = 2` (`:106-117`), `RepairOptions::min_obs = 12` (`:194`), `INLIER_PX = 3.0`, `REFINE_TRIM_ROUNDS = 5`, `REFINE_KEEP_FRACTION = 0.6` (`:66-72`). Two are load-bearing: `resect_accept_gate` is what Screen A's "no acceptable consensus" means, and `min_rotation_measurements` is why Screen B abstains with `NaN`.
   - Path drift: spec:5 places `DisplacementNeighborhood` in `covisibility.rs`; it is in `covisibility/displacement.rs:43`. Spec:81 writes `R = K⁻¹HK` "conjugated to the canonical frame" without naming the conjugator; the code uses `S = diag(1, −1, −1)` on both sides (`:365-368`).
@@ -368,6 +377,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Implementing code:** `geometry/rotation_init.rs` (`rotation_init :637`, `build_pair_tables :171`, `build_edges :249`, `average_rotations :409`, `seed_baseline :474`, constants `:64-101`); `sfmtool-py/src/geometry/rotation_init.rs`.
 **Inconsistencies:**
   - **Signature wrong.** Spec:116-118 shows `seed`, `min_images`, `max_images` as positional; the binding makes them keyword-only via `*` (`py:51`). A call written from the spec raises `TypeError`.
+    > _Status (2026-09-03): Done — the published binding signature now carries the keyword-only `*` before `seed`, commit 7ddbe97. The two dated status notes and the remaining documentation gaps are left for Top priority 3._
   - **Body contradicts its own note.** Spec:65-66 says displacement tables come "from covisibility selection"; note (3) at `:24-29` says in-kernel over all covisible member pairs — and `build_pair_tables` (`:171-212`) agrees with the note. Same for note (4): the 8 px trim gate (`RESECT_MAX_ERROR_PX :88`) and 10-survivor floor (`RESECT_MIN_INLIERS :90`) exist only in the note, while §4 (`:99-104`) still reads as though 12 points is the whole gate.
   - `H_MAX_ERROR_PX = 3.0` (`:71`) is undocumented, yet it *defines* the far/near partition the whole method rests on.
   - Input contract missing: the binding requires `cluster_indexes` nondecreasing with each cluster a contiguous run (`py:28-29`), because `build_pair_tables` scans runs (`:180-186`). Unsorted input silently produces wrong tables.
@@ -383,7 +393,9 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Implementing code:** `patch/cluster_refine/{mod.rs:806, params.rs:96, kernels.rs, consistency.rs:174, prof.rs}`; `sfmtool-py/src/matching/cluster.rs:317`; `src/sfmtool/_commands/cluster_patches.py`, `src/sfmtool/_cluster_patches.py:42`.
 **Inconsistencies:**
   - **`--patch-size` documented 8.0 (`:537`); shipped 12.0** (`_commands/cluster_patches.py:36`). The CLI spec has it right; conversely that spec's `--resolution` row says 15 against a shipped 25 — this spec has *that* one right. Each spec is wrong about the parameter the other gets right.
+    > _Status (2026-09-03): Done — the usage line now reads `--patch-size 12.0`, and `cluster-patches-command.md`'s `--resolution` row now reads 25, commit 7ddbe97._
   - **`MATCHES_FORMAT_VERSION` documented 3, readers 1–3 (`:55`); actual 5**, with cluster_patches gated at ≥4 and ≥5 (`matches-format/src/types.rs:120`, `read.rs:98,111`). `cluster_refine/mod.rs:26` already says version 5.
+    > _Status (2026-09-03): Done — the bullet now says `MATCHES_FORMAT_VERSION = 5`, readers accept 1–5 and reject anything newer, and it spells out all three cluster-section gates: clusters at ≥ 3, cluster-patch `p = A·x_ref + t` at ≥ 4, cluster-patch `S = W·S_ref` at ≥ 5 (`read.rs:74,98,111`). Commit 7ddbe97; the rest of this spec's rewrite stays with Top priority 3._
   - **Contradicted default 65 lines apart:** `:182` writes `PatchWindow::GaussianDisk { sigma: 15.0/4.0 }`; the status block at `:117-118` and `params.rs:104` both say 0.5.
   - Two dead artifacts cited as authoritative (§5c), making the §5 "cross-check with the prototype" item (`:598-601`) unrunnable. Stale AVX2 prescription at `:401` (`_mm256_i32gather_ps`), explicitly replaced by pair loads in the 2026-07-11 block at `:369-385`. §3 return keys (`:513-515`) omit `member_consistency_residual`, which the binding does set (`cluster.rs:457`).
   - **Reuse-map line refs stale, two badly:** `affine_core_map` / `sample_support_affine` cited at `view_selection.rs:314/385` are at **391/496**; `score_raw_against_reference` cited `:538` (twice) is at **669**; `ImageU8Pyramid::build` cited `remap.rs:282` is at **182**; `bilinear_geometry` cited `:385` is at **276** (cited 3×); `sample_bilinear_u8` cited `:338` is at **229**.
@@ -400,6 +412,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Implementing code:** `patch/member_coherence.rs`; `member_coherence/decide.rs` (`decide_member_coherence`, `max_support_block`, `core_coherence`, `core_deficit`); `member_coherence/matrix.rs`; `sfmtool-py/src/patches/member_coherence.rs:168`.
 **Inconsistencies:**
   - **Doc contradicts spec and code.** `member_coherence.rs:380-382` documents `retained_deficit` as the deficit "on the **coarsest available grid scale**". The code reads the *first* coarse table — `matrix.zncc_coarse.first()` (`decide.rs:360`, used at `:499`) — and spec:318 and `decide.rs:265` both say first / one-halving explicitly. At the default `resolution = 24` the two tables differ (12×12 vs 6×6), so this is substantive. The sibling `sharpness_deficit` (`:389`) is the one that reads `.last()` (`decide.rs:361`).
+    > _Status (2026-09-03): Done — `retained_deficit`'s doc now says the *first* coarse grid scale (one halving), not the coarsest, and points at `MemberMatrix::zncc_coarse`, commit 7ddbe97. No behaviour change. Shrinking `decide.rs:182-304` and adding the spec link to `decide.rs:4-10` stay open._
   - No example call in either language — only signatures (`:549-568`, `:578-586`).
   - F2 judged: most teaching before line 483 *is* load-bearing (the frozen common support and keypoint anchoring both change what `bar` means), but the calibration narrative at `:431-479` — 49 lines of prototype-vs-native Spearman fits, per-dataset split counts, two out-of-reach exemplars — is derivation sitting between the Parameters table and the API. Moving it below would put the callable surface at ~63% with no loss.
   - The API sketch lists `MemberMatrix` fields in a different order from the struct — cosmetic, but a reader diffing them stumbles.
@@ -537,6 +550,33 @@ a new document.
    in the mask slot). Also fix `member_coherence.rs:381`'s doc, which says
    "coarsest available grid scale" where the code reads `.first()` — a real
    behavioural miswording, not a typo.
+
+> _Status (2026-09-03): Done — all six corrected, plus one the finding did not
+> list. `cluster-patches-command.md`'s `--resolution` row is 25;
+> `cluster-patch-refinement.md`'s usage line is `--patch-size 12.0`;
+> `rotation-init.md`'s binding signature carries the keyword-only `*` before
+> `seed`; `cluster-covisibility.md` and `covisibility-selection.md` both publish
+> `from_arrays(cluster_starts, member_images, num_images, member_accepted=None,
+> positions_xy=None, seed=0)`, and `covisibility-selection.md`'s 2026-07-18
+> errata block — whose note (1) admitted the body's signature was wrong — is
+> deleted, its content folded into the Construction section it corrected;
+> `member_coherence.rs`'s `retained_deficit` doc now says the *first* coarse
+> grid scale (one halving), not the coarsest. The seventh:
+> `pose-verification.md`'s body now reads `nearest(i, k, min_shared)` /
+> `farthest(i, k, min_shared)`. No behaviour change. Commit 7ddbe97._
+>
+> _Three corrections to the finding's own wording, established while verifying
+> against the code. First, §5a attributes the `nearest`/`farthest` `min_shared`
+> admission to `covisibility-selection.md`; that admission is note (5) of
+> `pose-verification.md`, which is also where the two stale signatures live —
+> `covisibility-selection.md` never mentions either function (the per-spec
+> section has this right, only the §5a bullet does not). Second, the §1 table
+> calls `member_accepted` "third positional"; it is the fourth parameter, after
+> `cluster_starts`, `member_images` and `num_images`. Third,
+> `MATCHES_FORMAT_VERSION` has **three** cluster-section gates, not two: a file
+> below version 3 may not claim `clusters/` or `cluster_patches/` at all
+> (`read.rs:74`), on top of the ≥ 4 and ≥ 5 cluster-patch gates — and readers
+> also reject anything above 5 (`read.rs:65`). All three are now in the spec._
 
 3. **Retire the 29 dated errata blocks across 12 specs by folding them into the
    prose they correct.** Every spec read this run that had one showed the note and
