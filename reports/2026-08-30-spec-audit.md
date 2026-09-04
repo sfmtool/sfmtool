@@ -196,6 +196,56 @@ disagreement**, with nothing telling a reader which wins:
   signatures in the body are missing their `min_shared` parameter, rather than
   fixing them.
 
+> _Status (2026-09-03): Partially done — 32 blocks across 14 specs folded into
+> the prose they corrected and deleted, the code read first in every case. Every
+> disagreement this section names is resolved in the code's favour:
+> `focal-vote.md`'s Pair tables section describes the exhaustive enumeration,
+> `rotation-init.md` §1 builds the tables in-kernel and §4 carries the 8 px trim
+> gate and 10-survivor floor, and `pose-verification.md`'s note (5) — which is
+> where the `nearest`/`farthest` admission actually lives, not
+> `covisibility-selection.md`; see the Top priority 2 annotation — is gone, its
+> `min_shared` default and the other eleven undocumented tunables now in a
+> Parameters table. Not done: `cluster-patch-refinement.md`'s seven, held back
+> for the wholesale rewrite Top priority 3 asks for._
+>
+> _The table above undercounts, because the survey grepped for the word
+> "Status". The same construct is also spelled `Deviation`, `Note` and
+> `Correction`: 39 blocks across 16 specs, not 29 across 12. The extra ten are
+> `absolute-pose.md` (2), `epipolar-estimation.md` (2), `focal-vote.md` (1 — the
+> one this section itself cites), `refine-normals-command.md` (1), and four more
+> in `camera-intrinsics.md`, which has seven rather than three. All ten are
+> folded here._
+>
+> _Widen the grep once more — to any blockquote carrying a date — and a further
+> family appears under labels the audit did not look for at all. What remains
+> open, after this pass and excluding `cluster-patch-refinement.md`'s own two
+> (`Addition (2026-07-10)`, `Revision (2026-07-11)`): the coordinated
+> `**Precondition — shipped (2026-06-25):**` set in `compare-command.md:126`,
+> `xform-command.md:330` and `render-patches-command.md:14` with its sibling
+> `**Re-layered (2026-06-25):**` in `embed-patches-command.md:10` (the matching
+> one in `refine-normals-command.md` is folded here, since that file was already
+> being edited); `sift.md:216` (`Revision`); `track-cluster-matching.md:309`
+> (`Performance pass`); `keypoint-localization-search-cache.md:155,170`
+> (`Incremental LOO consensus`, `Convergence fix`);
+> `keypoint-localization-consensus-basis.md:9`;
+> `patch-normal-refine-view-subset.md:11,13`;
+> `sift-to-patch-reconstruction.md:46`; and `multi-panel-image-browser.md:248,
+> 253, 300` (`Added`, `Added`, `Changed`), which annotate the GUI panel work of
+> #344-#349 and are the freshest of the set. Sixteen blocks in eleven specs — a
+> second pass of the same shape, and the next audit's grep should be written to
+> catch them._
+>
+> _Two code comments now point at notes that no longer exist and should be
+> redirected rather than deleted, since what they say is still true:
+> `focal_vote.rs:647` ("see the spec's deviation note" → the Pair tables
+> section) and `epipolar_estimation/tests.rs:433` (→ Testing requirements,
+> Contamination sweep). `absolute_pose.rs:28-32` carries a "Deviation from the
+> spec (2026-07-14)" module-doc note whose premise the spec no longer holds; it
+> should shrink to the plain rationale. In `sfm-explorer`,
+> `image_detail/intrinsics/axes.rs:18-19,435-443`,
+> `intrinsics_detail/derived.rs:88-97` and `image_detail/intrinsics/field.rs:36`
+> quote or argue with spec wording that this pass replaced._
+
 **b. Imperative construction language and phase headings.** `## Prior state
 (before this change)` and `## Consumers & migration`
 (`batch-triangulation-api.md:54,287`); `## Implementation plan (production)` with
@@ -216,6 +266,24 @@ never did: `scripts/exp_pinhole_bootstrap.py` (`cluster-covisibility.md:8,216`),
 `scripts/exp_cluster_patch_clusters.py` (`cluster-patch-refinement.md:14`, called
 "the behavioral reference"), and
 `reports/2026-07-09-exp-pairwise-sift-warp.md` (`cluster-patch-refinement.md:10,600`).
+> _Status (2026-09-03): Partially done — the phantom citations in two of the
+> specs the Top priority 3 pass was already editing are gone.
+> `cluster-patches.md:3-5` cited `reports/2026-07-09-exp-pairwise-sift-warp.md`
+> plus harnesses `scripts/exp_pairwise_sift_warp.py` and
+> `scripts/exp_cluster_patch_clusters.py`, and
+> `fronto-parallel-patch-cache.md:14` cited
+> `reports/2026-06-15-patch-cache-status.md`. `git log --all` finds no commit
+> that ever added any of the four, so the count of never-existing artifacts is
+> five, not three — `exp_pairwise_sift_warp.py` and the two reports are not in
+> the list above. `randomized-kdtree-forest.md` also pointed at
+> `crates/sfmtool-py/src/py_kdforest.rs`, which is `spatial/kdforest.rs`, and
+> named a Python test `test_exhaustive_budget_matches_brute_force` that does not
+> exist; both are corrected. Still open: the citations inside
+> `cluster-patch-refinement.md`, which the wholesale rewrite will take, and
+> `sift-to-patch-reconstruction.md:61`'s
+> `reports/exp/2026-06-21-mvs-normal-refinement.md` — `reports/exp/` is not a
+> directory in this repo._
+
 Also dangling: `specs/.../cluster-pinhole-bootstrap.md` and the symbol
 `MAX_CLUSTERS`, neither of which exists anywhere in the repo.
 
@@ -313,6 +381,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
   - `AbsolutePoseOptions::default()` (`max_angular_error: 0.01`) is undocumented; only binding defaults are given. `p3p_solve`'s binding is named in the Status block but absent from the Bindings section.
 **Third copies:** `absolute_pose.rs:4-32` re-derives purpose, Lambda Twist rationale and determinism, and reproduces the spec's ArrayVec deviation note verbatim; **the module doc is the one to shrink.** `pose_refine.rs:6-19` restates spec:191-207 nearly word for word. Spec:107-140 and 172-189 transcribe the struct/fn declarations *including their doc comments*.
 **Recommendation:** update spec — fix the Jacobian model list, the allocation and "best refit" claims, reconcile `w=0.05` with `max_iterations`, and replace the copied declarations with rationale plus one real call.
+    > _Status (2026-09-03): Partially done — the two 2026-07-14 `Deviation` blocks, which §5a's grep missed, are folded and deleted. `p3p_solve`'s published signature is the real `-> Vec<(UnitQuaternion<f64>, Vector3<f64>)>`, with the reason kept in the "pure function" paragraph: a plain `Vec` reserved once for four poses, because the workspace carries no `arrayvec` dependency. The Kabsch degeneracy paragraph now says the collinearity test reads the **second** singular value against the first (`σ₁ < KABSCH_RANK_EPS · σ₀`, `1e-9`), not the third — three points are always coplanar, so the third vanishes for every triple and its direction is fixed by the determinant correction. The section's other findings are untouched. Two follow-ons: `absolute_pose.rs:28-32`'s module-doc deviation note now contradicts the spec it cites, and `absolute_pose.rs:47-50` documents `KABSCH_RANK_EPS` as the "smallest" singular value where the code (correctly) uses the second — the in-body comment at `:284-288` has it right._
 **Unclear / incorrect / suspicious:** `absolute_pose.rs:505-506`'s comment reads "Keep the refined pose only if it did not shrink the consensus", but the branch it sits in is taken on `new_count <= count` and *discards* the refit — the comment describes behaviour the code does not have (the sibling `local_optimize_f` comment is correct). F1: purpose is stranded at line 8; proposed opening — "Registers one camera against known 3D structure: given image bearings paired with world points, most of which may be wrong matches, recover the camera's rigid pose."
 
 ### specs/core/geometry/epipolar-estimation.md
@@ -328,6 +397,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
   - `hartley_normalize` and `vec_to_mat3` are `pub(crate)` and consumed by `homography_estimation.rs:22`; the code doc records this (`:58-60`), the spec presents them as module-internal.
 **Third copies:** `epipolar_estimation.rs:4-26` restates purpose, the 7-point cubic derivation and determinism from spec:1-12 and 89-101. Spec:13-20's deviation note re-derives what the `ZERO_F_EPS` doc comment says better (`:40-44`). Spec:120-151 is a verbatim copy of `FundamentalOptions`/`FundamentalEstimate` including doc comments.
 **Recommendation:** update spec **and code** — fix `fundamental_8pt`'s rank guard to match the documented `None` contract, delete the `compute_epipole` sentence, retire the two overtaken non-goals.
+    > _Status (2026-09-03): Partially done — the two 2026-07-16 `Deviation` blocks, which §5a's grep missed, are folded and deleted. "Focal length" now lists the three rejection checks in the order the code applies them: a non-finite entry or a Frobenius norm below `ZERO_F_EPS = 1e-12` **before** the rescaling, because that is what rotation-only zero-baseline motion produces and the normalized direction of such a matrix is pure round-off the `f₁² ≤ 0` sign test does not catch; then `|den| < BOUGNOUX_DEN_EPS = 1e-12`, whose value is set by the denominator's inherent near-cancellation (order `1e-8` at unit Frobenius norm); then the sign test. The Contamination sweep testing bullet states both floors and why they differ — `w⁷` sampling needs ~5×10⁵ trials for 0.999 confidence at `w = 0.2`, so the in-crate sweep floors at 0.35 and the 0.2 end runs against the release-built extension in `test_epipolar_estimation_rust_bindings.py`. The `compute_epipole` sentence, the overtaken non-goals, the `local_optimize_f` refit claim and the post-loop rescoring remain open. Follow-on: `epipolar_estimation/tests.rs:433`'s "See the spec's deviation note" now dangles and should point at Testing requirements → Contamination sweep._
 **Unclear / incorrect / suspicious:** `epipolar_estimation.rs:224-225`'s comment ("A rank-deficient design ... leaves the null direction ambiguous — reject when the largest eigenvalue is ~0") is a non sequitur papering over the missing check. F1: proposed opening — "Recovers the epipolar geometry between two images from matched pixels alone — the fundamental matrix, robust to a match set that may be mostly wrong, plus the focal length it implies when the principal points are known."
 
 ### specs/core/geometry/focal-vote.md
@@ -335,6 +405,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Implementing code:** `geometry/focal_vote.rs` (`focal_vote :533`, `focal_vote_with_min_disp :559`, `focal_vote_with_options :588`, `FocalVoteOptions :289`, `family_consensus`, `rotation_self_calib_focal`); `geometry/focal_vote/column_scan.rs`; `geometry/homography_estimation.rs`.
 **Inconsistencies:**
   - **Live contradiction (F5).** "Pair tables" (`:92-99`) still says each cluster contributes one uniformly sampled member pair; the code accumulates *every* covisible member pair exhaustively (`:645,672-681`), as the spec's own deviation note (`:11-22`) says.
+    > _Status (2026-09-03): Done — "Pair tables" now describes the exhaustive per-cluster enumeration and the last-observation-wins per-image dedupe, and says why the counts are the true covisibility (a sampled single pair starves the `30`-cluster epipolar and `25`-cluster rotation gates on exactly the parallax-poor captures the estimator exists for). The deviation note is deleted. "Determinism" said "All sampling (pair tables, RANSAC) derives from the input seed" — the same falsehood one section further on — and now says the tables draw no randomness at all. The section's other findings (no `rust` fence, `FocalVoteOptions` unnamed, the mid-spec `**Status:** Implemented (2026-08-08)` stamp, `PairAccum`'s stale doc at `focal_vote.rs:425`) are untouched._
   - **F2/F3 total.** No signature, struct or example call in 487 lines. `FocalVoteOptions{seed, epipolar_min_disp_frac, columns}` (`:289-305`) is never named. Only the Python binding is given, in prose (`:415-426`), and even that omits the keyword-only `*` boundary (`py:163`).
   - `estimate_homography` documented as `(points1, points2, max_error_px=3.0, seed=0)`; the binding also takes `confidence=0.999, max_iterations=10_000, min_inliers=4, local_optimization=true`, all keyword-only (`py/homography_estimation.rs:71-81`).
   - `camera_model` and `columns` are result fields but appear only in prose, not the Output table (`:71-90`). `parallax_poverty` is `0.0`, not absent, when no pair reaches 16 F inliers (`:884-888`) — undocumented.
@@ -350,6 +421,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
   - F1/F5: opening is a status line built from a symbol and three links, followed by a 19-line numbered errata block (`:15-33`). Proposed: "Find the cameras in a finished reconstruction whose poses are wrong, and put them back — using only the 2D tracks, with no reference solve, image ordering, or motion model to check against."
   - Signatures wrong: spec writes `nearest(i, k)` / `farthest(i, k)` (`:56-59`); actual is `nearest(&self, i: u32, k: usize, min_shared: u32)` (`displacement.rs:255,262`). Errata note (5) *admits* the missing parameter rather than the body being fixed.
     > _Status (2026-09-03): Partially done — the body now reads `nearest(i, k, min_shared)` / `farthest(i, k, min_shared)`, commit 7ddbe97. Errata note (5) is left in place for the Top priority 3 folding pass, along with the `displacement.rs` path drift and the undocumented defaults._
+    > _Status (2026-09-03): Done — the errata block is folded and deleted. Its five notes are body prose: the Substrate section explains why the shared count is per-cluster deduplicated while the mean displacement is exhaustive over cross-image member pairs (and that the two coincide when clusters hold one member per image), and that `to_arrays`/`from_arrays` round-trip the neighborhood alone; Screen A states that it tests support rather than agreement with the stored pose, which is what makes it complementary to Screen B; Screen B names the whole-sign polar factor and the `S = diag(1, −1, −1)` conjugation the note and `pose_verification.rs:365-368` both carry; Repair states the ascending-image-order walk with accepted repairs feeding later inits. The `displacement.rs` path is corrected, and a Parameters table publishes all sixteen defaults — the twelve `VerifyOptions`/`RepairOptions` fields plus `INLIER_PX`, `REFINE_TRIM_ROUNDS`, `REFINE_KEEP_FRACTION` and `REPAIR_INIT_NEIGHBORS` — with the note's calibration guidance as the paragraph under it. The `verify_poses` signature, the example call and the "Testing requirements" phrasing remain open._
   - `verify_poses`'s 10-argument signature and the two option structs are never shown; no example call in either language.
   - Undocumented defaults: `resect_min_obs = 8`, `resect_accept_gate = 0.30`, `max_neighbors = 4`, `min_pair_correspondences = 30`, `min_h_inliers = 20`, `min_rotation_measurements = 2` (`:106-117`), `RepairOptions::min_obs = 12` (`:194`), `INLIER_PX = 3.0`, `REFINE_TRIM_ROUNDS = 5`, `REFINE_KEEP_FRACTION = 0.6` (`:66-72`). Two are load-bearing: `resect_accept_gate` is what Screen A's "no acceptable consensus" means, and `min_rotation_measurements` is why Screen B abstains with `NaN`.
   - Path drift: spec:5 places `DisplacementNeighborhood` in `covisibility.rs`; it is in `covisibility/displacement.rs:43`. Spec:81 writes `R = K⁻¹HK` "conjugated to the canonical frame" without naming the conjugator; the code uses `S = diag(1, −1, −1)` on both sides (`:365-368`).
@@ -378,6 +450,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Inconsistencies:**
   - **Signature wrong.** Spec:116-118 shows `seed`, `min_images`, `max_images` as positional; the binding makes them keyword-only via `*` (`py:51`). A call written from the spec raises `TypeError`.
     > _Status (2026-09-03): Done — the published binding signature now carries the keyword-only `*` before `seed`, commit 7ddbe97. The two dated status notes and the remaining documentation gaps are left for Top priority 3._
+    > _Status (2026-09-03): Done — both notes folded and deleted, and the two contradictions this section names are resolved in the code's favour. §1 opens with the in-kernel pair-table pass (`build_pair_tables`) and says why the kernel builds its own rather than reading the sampled `ClusterCovisibility` tables; §4 carries the 8 px trim gate and 10-survivor floor alongside the 12-point candidacy floor. Notes (1), (2) and the 2026-08-11 note are one paragraph in §4 plus a sentence in Output: the finishing adjustment holds the far field at infinity over a mask it builds itself as the deduplicated union of the component's validated edges' H-inliers, because a finite far cloud rewards baseline collapse into a panorama; the gauge is renormalized to a unit seed baseline afterwards; the mask is internal, and a caller reads the far clusters off the unit rows of `points`. The `**Status:**` header also listed covisibility selection as a dependency — `rotation_init.rs` imports nothing from it — and no longer does. `H_MAX_ERROR_PX`, the cluster-run input contract, the pose convention and the BA budget remain open._
   - **Body contradicts its own note.** Spec:65-66 says displacement tables come "from covisibility selection"; note (3) at `:24-29` says in-kernel over all covisible member pairs — and `build_pair_tables` (`:171-212`) agrees with the note. Same for note (4): the 8 px trim gate (`RESECT_MAX_ERROR_PX :88`) and 10-survivor floor (`RESECT_MIN_INLIERS :90`) exist only in the note, while §4 (`:99-104`) still reads as though 12 points is the whole gate.
   - `H_MAX_ERROR_PX = 3.0` (`:71`) is undocumented, yet it *defines* the far/near partition the whole method rests on.
   - Input contract missing: the binding requires `cluster_indexes` nondecreasing with each cluster a contiguous run (`py:28-29`), because `build_pair_tables` scans runs (`:180-186`). Unsorted input silently produces wrong tables.
@@ -589,6 +662,32 @@ a new document.
    — seven blocks, the repo's highest-churn module, plus dead artifact citations
    and eight stale line references — should be rewritten wholesale rather than
    patched.
+
+> _Status (2026-09-03): Partially done — 32 blocks across 14 specs are folded
+> into the prose they corrected and deleted. `cluster-patch-refinement.md`'s
+> seven remain, deliberately: they go with the wholesale rewrite this finding
+> asks for, as a separate change._
+>
+> _Folded here: `focal-vote.md`, `rotation-init.md` (2), `pose-verification.md`,
+> `reconstruction-growth.md`, `absolute-pose.md` (2), `epipolar-estimation.md`
+> (2), `randomized-kdtree-forest.md` (2), `patch-normal-refinement.md` (5),
+> `patch-cloud.md` (3), `fronto-parallel-patch-cache.md` (2),
+> `cluster-patches.md`, `camera-intrinsics.md` (7),
+> `refine-keypoints-command.md`, `refine-normals-command.md` (2).
+> `covisibility-selection.md`'s single block went earlier, in commit 7ddbe97.
+> In each case the code was read first and the body rewritten to what the code
+> does, with the note's rationale kept where it was load-bearing and phrased as
+> a reason rather than as a change. Three sections that existed only to host a
+> note went with it: `refine-keypoints-command.md`'s `## Future`,
+> `randomized-kdtree-forest.md`'s `## Phasing`, and
+> `fronto-parallel-patch-cache.md`'s `## Implementation plan (production)` with
+> its Phase 1/Phase 2 headings (finding §5b), which is now a present-tense
+> `## Implementation`. `cluster-patches.md`'s settled Open question went too._
+>
+> _The count is larger than the finding's because §5a's grep keyed on the word
+> "Status": ten more blocks of the identical shape are spelled `Deviation`,
+> `Note` or `Correction`, including the `focal-vote.md` one this finding
+> itself cites. The full inventory and what is left is under §5a below._
 
 4. **Decide the `**Status:**`-line convention and write it into `specs/TEMPLATE.md`
    either way.** 61% of the corpus opens with one, in every case before any
