@@ -301,6 +301,40 @@ disagreement**, with nothing telling a reader which wins:
 > second pass of the same shape, and the next audit's grep should be written to
 > catch them._
 >
+> _Status (2026-09-04): Done — `grep -rnE '^>.*\(20[0-9]{2}-[0-9]{2}-[0-9]{2}\)'
+> over `specs/` is empty. The inventory was written against line numbers that had
+> already moved and overcounts by six: at the start of this pass the wide grep
+> found **ten** blocks in seven specs, not sixteen in eleven.
+> `embed-patches-command.md`'s `Re-layered`, `keypoint-localization-consensus-basis.md:9`,
+> `patch-normal-refine-view-subset.md:11,13` and `sift-to-patch-reconstruction.md:46`
+> no longer existed — they went with the `**Status:**` sweep of commits 1883d2d /
+> 89c381d, which rewrote the tops of those files. `cluster-patch-refinement.md`'s
+> two were already gone with its rewrite, as this section's own last annotation
+> records._
+>
+> _The ten, folded into the prose each corrected with the code read first:
+> `compare-command.md:126` — `--strips` is deliberately ungated, and the
+> "`scripts/exp_*`/`cmp_*` probes" it cited do not exist (only
+> `scripts/exp_plus_descent_localize_compare.py` matches the glob, and no `cmp_*`
+> does), so the sentence now names `PatchCloud.from_reconstruction` staying
+> dual-mode and `_solve_strips.py`, which is what actually holds;
+> `xform-command.md:330` and `render-patches-command.md:14` — the
+> `embedded_patches` precondition is body prose in each, in
+> `render-patches-command.md` next to the conversion recipe that was already
+> there; `sift.md:216` — cap-aware coarse-to-fine detection is §7's own
+> paragraph, keeping the 94%-of-detection-pixels and 300 s → 141 s numbers;
+> `track-cluster-matching.md:309` — a `### Where the time actually goes`
+> subsection under `## Cost Analysis`, keeping the DinoLedge measurement and the
+> determinism statement, and stating each optimization as a constraint on how the
+> matcher may be changed rather than as a diff;
+> `keypoint-localization-search-cache.md:139,154` — the Gram-space LOO consensus
+> and the round-over-round convergence metric are two prose paragraphs after the
+> round-loop pseudocode; `multi-panel-image-browser.md:254,259,306` — the two
+> `Added` blocks are fixed by correcting the `Tab` enum itself against `dock.rs`
+> (it now lists all seven variants, in the code's order, with a table naming the
+> spec that owns each of the four later ones), and `Changed` becomes the sentence
+> saying the grid is the layout the panels start in._
+>
 > _Two code comments now point at notes that no longer exist and should be
 > redirected rather than deleted, since what they say is still true:
 > `focal_vote.rs:647` ("see the spec's deviation note" → the Pair tables
@@ -371,6 +405,109 @@ presented as live: `cluster-patch-refinement.md:567-571` says `sfm match
 > undecided items — the localizability threshold's resolution dependence and the
 > reference-selection policy. The other five `New module …` lines and the phase
 > headings named above are untouched._
+>
+> _Status (2026-09-04): Done — every remaining item of this finding is gone, and
+> the greps it was written from come back empty across `specs/` outside
+> `specs/drafts/`: no `## Implementation Status` / `Plan` / `phases` / `Order` /
+> `Staging` / `Phasing` / `Plumbing` heading, no `— DONE`, `[x]` or `NOT
+> STARTED` marker, no `New module …` / `New file …` line._
+>
+> _The nineteen sections: `sift.md`'s `## Phasing`;
+> `track-cluster-matching.md`'s `## Implementation Status` and
+> `### Implementation order (suggested)`;
+> `keypoint-localization-consensus-basis.md`'s and
+> `patch-normal-refine-view-subset.md`'s `## Plumbing` **and** their
+> `## Task-completion checks (from AGENTS.md)` sections (the latter restated
+> `AGENTS.md` and carried nothing about the design);
+> `batch-triangulation-api.md`'s `## Prior state (before this change)` and
+> `## Consumers & migration`; `image-warping.md`'s `## Implementation Order`,
+> which the audit's grep missed because the word is "Order"; and in `specs/gui/`,
+> `camera-intrinsics.md`'s `## Implementation phases`, `camera-views.md`'s Steps
+> 1-9, `image-animation.md`'s Steps 1-4, `multi-panel-image-browser.md`'s whole
+> `## Implementation Plan` including Phase B, `patch-rendering.md`'s
+> `## Implementation sketch (v1)` and `## Implementation Status`,
+> `point-cloud-rendering.md`'s, `viewport-hud.md`'s `## Staging` and
+> `## Implementation Status`, `viewport-navigation.md`'s, and
+> `scene-graph.md`'s `## Implementation Phases`. `goto-point.md`'s lone `[x]`
+> was never a checklist item — it is the close box in an ASCII mock of the
+> dialog's title bar, now `[×]`._
+>
+> _Every ticked item was verified against the code before its line was deleted,
+> and **five turned out to be wrong**, all in `specs/gui/`. (1)
+> `viewport-hud.md`'s "Remove the View menu outright, leaving File as the only
+> menu": the View menu is gone, but `app.rs:661,718,735` shows **File, Go,
+> Panels** — the spec's opening paragraph said "the only menu" too, and now says
+> the menu bar has no View menu. (2) `viewport-hud.md`'s `## State ownership`
+> said "the HUD opens collapsed each launch" while `Viewer3D::hud_open` starts
+> `true` and `hud/tests.rs:344` asserts it opens expanded. (3)
+> `multi-panel-image-browser.md`'s `### Phase B — NOT STARTED` listed five
+> "potential additions", of which point hover, hover-based track highlighting
+> and the feature overlay modes all **exist** (`state.rs hovered_point`,
+> `image_browser.rs hover_track_images`, `OverlayMode`), specified since in
+> `cross-panel-hover.md`; only co-track highlighting is genuinely absent, and it
+> is now a Non-goal. (4) Its Step 7 named `observations_for_point` /
+> `track_image_indices` helpers that do not exist — call sites index
+> `observation_offsets` directly, which `batch-triangulation-api.md`'s Reuse map
+> also mis-stated. (5) `track-cluster-matching.md`'s status claimed the bindings
+> are "exposed as `sfmtool.background_floor_clusters` /
+> `sfmtool.clusters_to_pair_matches`"; nothing re-exports them at the package top
+> level — they live in `sfmtool._sfmtool.matching`, which is where
+> `_cluster_matching.py` imports them from — and its `#### Python package
+> surface` section had asked for a re-export that was never done. Two smaller
+> ones went the same way: `camera-views.md`'s Step 4 named a
+> `bg_image_loaded_index: Option<usize>` field that is now
+> `bg_image_loaded: Option<ImageRef>`, and `image-animation.md`'s Design section
+> put the minibar transport in `dock.rs` when it is in `image_browser.rs`._
+>
+> _Nothing that only a checklist stated was lost. What moved into the body, by
+> spec: `track-cluster-matching.md` — the three-layer code pointers and the
+> four-dataset end-to-end reproduction now lead `## Production Implementation`,
+> and the `d = 28 → 10` sweep is `### Choosing d` under `## Parameters`, where the
+> defaults table already pointed;
+> `keypoint-localization-consensus-basis.md` — a new `## How the ranking inputs
+> reach the kernel` carries the `view_scores` / `track_view_counts` optional
+> inputs, `select_views`'s `track_view_count` output, and the `basis_pick` /
+> `tail_register` profiling phases with the `N_BASIS` / `N_TAIL` /
+> `N_TAIL_NO_BASIS` counters; `patch-normal-refine-view-subset.md` — a
+> `## Where it lives`, and its `## Validation harness` now describes
+> `scripts/validate_refine_subset.py`, which exists (the section asked for a
+> `.sh` that does not); `batch-triangulation-api.md` — the max-track-angle
+> comparison is its own section rather than a "prior state" table;
+> `camera-views.md` — Step 9's design (which navigation keeps camera view, the
+> FOV rules, the camera-to-camera transition, `CameraViewMode`) is promoted to
+> `## Persistent camera view and free-look navigation`, since four cross-links
+> pointed into it; `camera-intrinsics.md` — the module paths for
+> `camera/report.rs`, `intrinsics_detail/` and `image_detail/intrinsics/`, the
+> `sfmr_format::{RigFrameData, …}` re-export, and the `_CAMERA_PARAM_NAMES`
+> desync consequence for `sfm inspect`; `multi-panel-image-browser.md` — the
+> `Tab` enum, corrected against `dock.rs` and given a table of which spec owns
+> each later tab. Unticked items became Non-goals sections in
+> `viewport-navigation.md` (five), `point-cloud-rendering.md` (four, plus one
+> Open question), `camera-views.md` (five), `multi-panel-image-browser.md`
+> (three, two of them carried over from `plan.md`) and
+> `track-cluster-matching.md` (`sfm solve --cluster`, which does not exist)._
+>
+> _Four unticked items were genuine intentions with design detail behind them,
+> and became amendment drafts under the convention Top priority 4 settled:
+> `specs/drafts/sift-gpu-amendment.md`,
+> `specs/drafts/sift-incremental-extraction-amendment.md`,
+> `specs/drafts/patch-normal-refine-zncc-weighted-selection-amendment.md` and
+> `specs/drafts/patch-rendering-flat-shaded-amendment.md`. Each is linked from
+> one present-tense sentence in the spec it amends and names that spec back.
+> `specs/drafts/README.md` is new and indexes them; `specs/README.md`'s drafts
+> row now links it._
+>
+> _`specs/gui/plan.md` is retired. It was a roadmap, dated 2026-06-10, whose
+> `## Current Implementation Status` is now duplicated in more detail by the
+> per-panel specs; its spec table listed 6 of the 21 files in `specs/gui/`, its
+> status list predates the Scene Graph, MCP server, Action Log, Camera
+> Intrinsics panel, panel layout and Go-to-Point work, it called
+> `viewport-hud.md` "(proposed)" though it shipped, and its Performance Targets
+> table is a verbatim copy of `architecture.md`'s. Two ideas in it were found
+> nowhere else and were carried into `multi-panel-image-browser.md`'s Non-goals
+> — a grid mode for the browser strip, and epipolar lines to the selected image
+> as an overlay mode. `specs/gui/README.md`'s "Planning and Reference" section
+> is now "Reference"._
 
 **c. Dead references.** Three cited artifacts do not exist and, per `git log`,
 never did: `scripts/exp_pinhole_bootstrap.py` (`cluster-covisibility.md:8,216`),
@@ -608,6 +745,21 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 > _Status (2026-09-03): Partially done — `rotation_init.rs:4-44` is 41 lines to 20, commit c11c885. The four Mechanism stages go to the spec, which carries them in full after the folding pass, and the doc names the four private helpers in their running order instead. **The −Z frame convention and the `S = diag(1,−1,−1)` boundary conjugation stay in the doc in full**: this section asks that they move *into* the spec, and after #351 `rotation-init.md` contains neither string, so deleting them from the code would have lost them outright. That half of the finding is still open, with `H_MAX_ERROR_PX`, the cluster-run input contract, the pose convention and the BA budget._
 >
 > _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, and the paragraph that follows keeps its two-populations argument while dropping the trailing "it succeeds precisely on captures whose windowed parallax is too weak…", which the new opening now says. The Status line and its three-item dependency list are gone; the pointer plus a short "builds on" clause leads `## Binding`. Commit 1883d2d. The −Z frame and `S = diag(1,−1,−1)` conjugation still are not in this spec, so the code doc still carries them; that half of Top priority 5 stays open._
+>
+> _Status (2026-09-04): Done — the spec has a `## Frame convention` section
+> between `## Inputs` and `## Mechanism`, where a caller reading the input
+> contract meets it before any rotation is named. It states that every rotation in
+> and out is canonical-frame (camera along `−Z`, `+Y` up, world-to-camera, the
+> frame `.sfmr` stores), that `H = K R K⁻¹` is a pixel-frame relation and so
+> `K⁻¹ H K` comes out optical (`+Y` down, looking along `+Z`), and that the two
+> differ by `S = diag(1, −1, −1)` with `R_canonical = S · R_optical · S`, `S² = I`,
+> applied once at the edge-building boundary — plus why the error is silent, since
+> `S R S` is still a rotation of the same angle and shows up only as a mirrored
+> reconstruction. §1 now says the stored `R_ij` is the polar-orthogonalized
+> `K⁻¹ H K` conjugated by `S`, and links the section. Per the task, the module doc
+> in `rotation_init.rs` is left at full length in this pass; it could now point at
+> the spec instead. `H_MAX_ERROR_PX`, the cluster-run input contract and the BA
+> budget are still undocumented._
 
 ### specs/core/patch/cluster-patch-refinement.md
 **Summary:** Turns a `.matches` file's SIFT clusters into patch clusters. All five numbered steps are genuinely shipped and the kernel, binding, CLI and every `ClusterRefineParams` default match. But the document is still shaped as a work order — the most drifted spec found this run, and the highest-churn module in the repo since the last audit.
@@ -998,6 +1150,22 @@ a new document.
 > `## Consumers & migration`. §5b names four of these; the real count is
 > fifteen-plus. This is now the largest remaining work-order residue in the
 > corpus._
+>
+> _Status (2026-09-04): Done — nineteen sections across sixteen specs, plus the
+> ten remaining dated blockquotes and `specs/gui/plan.md`'s retirement. The
+> per-spec detail, the five ticked-but-false claims found while verifying, and
+> the four amendment drafts created are under Mechanical findings §5b above. The
+> two rules this annotation added are what the drafts follow: an unbuilt part is
+> one present-tense sentence in the standing spec linking a draft that names the
+> spec back, and a non-goal is a fact with no draft and no link — which is what
+> the fifteen new Non-goals entries are._
+>
+> _One correction to this paragraph's inventory: `scene-graph.md`'s five phases
+> and `camera-intrinsics.md`'s six were the same construct as the checklists, and
+> `image-warping.md` carried a nineteenth section (`## Implementation Order`) the
+> word-based grep never had a chance of finding. A future grep wants
+> `-iE '^#{2,4} .*(implementation|staging|phasing|plumbing|prior state|task-completion)'`
+> rather than an enumeration of the three nouns seen so far._
 
 5. **Shrink the module docs that re-derive their specs, and fix the one spec whose
    consumers are fiction.** Eight doc blocks totalling ~420 lines re-derive their
