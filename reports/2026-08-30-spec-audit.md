@@ -873,6 +873,26 @@ the container contract once, and cut the four format specs back to their own
 schema, validation and error type — which is exactly the split the code already
 implements.
 
+> _Status (2026-09-04): Done — `specs/formats/archive-container.md` is filed,
+> with a row in `specs/formats/README.md` and a pointer back from the crate's
+> module doc. It carries the on-disk contract (ZIP STORE, one zstd frame per
+> entry, compact JSON and little-endian columnar binary, the
+> `{field}.{dims}.{dtype}.zst` naming, the section and whole-file hashing over
+> uncompressed bytes, and the two byte orders — data little-endian, folded
+> digests big-endian), then the Rust surface with why it is shaped that way and
+> a worked call, the alignment and trailing-byte hazards, the tests, and the
+> non-goals. Across the four format specs the trim deleted 192 lines and put
+> back 129 — net `sfmr` −33, `camrig` −19, `matches` −11, and `sift` ±0, which
+> spent its saving on an opening paragraph the trim would otherwise have left it
+> without — and each now links the container spec where it used to describe it.
+> Commit 19fad39._
+>
+> _Three corrections to the finding's figures, checked against the code: the
+> crate is 278 lines with **13** public items, not 263 and 12; its module doc is
+> `lib.rs:4-12`, not `1-9` (lines 1–2 are the licence header). And one deleted
+> `.sfmr` claim was not duplication but a falsehood — "optimize for compression
+> ratio vs speed based on file size"; every entry is written at one level._
+
 ### crates/sfmtool-core/src/geometry/pose_refine.rs
 **What it does:** Trimmed pose-only resection refinement — the robust companion to
 the minimal `absolute_pose` estimator, refitting L2 on the best-fitting fraction
@@ -884,6 +904,23 @@ its doc comment.
 **Recommendation:** add a note to `specs/core/geometry/absolute-pose.md` — it
 already carries the rationale; the module doc should link there and shrink.
 
+> _Status (2026-09-04): Done — the module doc is 16 lines to 11 and ends with
+> `See specs/core/geometry/absolute-pose.md § Pose refinement for the design.`,
+> the form `focal_vote.rs`, `rotation_init.rs` and `absolute_pose.rs` use. What
+> survives is what a reader of the code needs: what the function does, that each
+> round refits L2 by LM on the best-fitting fraction, that the step is a local
+> `SO(3) × ℝ³` perturbation with an analytic Jacobian, and the canonical frame
+> (`−Z` forward, `z < 0` in front). What goes is the re-derivation — the
+> outlier-leverage and dead-gradient argument for trimmed L2, and the
+> composition of the Jacobian from `ray_to_pixel_with_jacobian` with the
+> `−[R·X]ₓ` block. Commit 8eed44c._
+>
+> _`absolute-pose.md` needed nothing added: its "Pose refinement" section
+> (`:152-207`) already states every one of those, the central-difference
+> fallback included, so the shrink lost nothing. The spec also already named
+> `pose_refine.rs` in its interface section (`:46`) — the missing link was
+> one-directional, code → spec._
+
 ### crates/sfmtool-core/src/reconstruction/data
 **What it does:** The in-memory `.sfmr` model — `SfmrReconstruction` plus
 `conversion` (the format boundary), `recompute` (reprojection errors, depth
@@ -894,6 +931,20 @@ owns it; its on-disk counterpart is specced but the in-memory boundary is not.
 accurate and well-shaped. A one-line pointer from `specs/formats/sfmr-file-format.md`
 naming `SfmrReconstruction` as the in-memory boundary would close the gap without
 a new document.
+
+> _Status (2026-09-04): Done — `sfmr-file-format.md` names it in § "Conversions
+> happen at the I/O boundary", where the spec already argues that in-memory and
+> on-disk `.sfmr` data are both canonical: the in-memory side is
+> `SfmrReconstruction` (linked to `crates/sfmtool-core/src/reconstruction/data.rs`),
+> whose `conversion` child owns the round trip to the columnar representation the
+> entry tables describe. Commit 19fad39. No new document, as recommended._
+>
+> _One correction: the module doc was **not** accurate. It said the type's
+> surface "lives in three children" and listed `conversion`, `recompute` and
+> `demo`; there are four — `affine_shape` (the keypoint affine shape projected
+> out of a point's patch frame) has been a sibling since the patch-frame work.
+> It is now listed, and the doc names the type as the in-memory side of the I/O
+> boundary to match the spec. Commit 8eed44c._
 
 ---
 
@@ -1226,3 +1277,12 @@ was checked this run, and it was stale.
 **Methodology note for the next run:** key the defaults check on
 (spec → owning command → parameter) rather than the bare parameter name. Two real
 drifts hid behind name collisions this time.
+
+> _Status (2026-09-04): Carried forward — both methodology notes (key on
+> spec → owning command → parameter; also read declared defaults out of fenced
+> code, not only out of tables) now sit in `skills/audit-specs/SKILL.md` under
+> mechanical check 1, and the `Non-goals` / deferral-language coverage gap sits
+> under "Choosing the sample" as an instruction to check every such entry in a
+> sampled spec and to report how many were checked. Commit 84a85ce. That is what
+> makes this report retireable; `reports/2026-07-07-spec-audit.md` stays, for the
+> reason given above._
