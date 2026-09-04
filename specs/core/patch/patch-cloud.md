@@ -1,15 +1,12 @@
 # Patch Cloud and Patch-Projected Warp Maps
 
-**Status:** Proposed. Motivated by the `scripts/patch_crossval.py` exploration,
-which renders scale/orientation-normalized patches around matched keypoints by
-warping each source image through the keypoint's 2D affine shape. That works per
-image but is only a 2D approximation of a 3D surface element. This spec defines
-the `sfmtool-core` types and routine that let callers express the patch in **3D**
-— an oriented surfel — and render its appearance from any camera, so a track's
-observations become geometrically-consistent views of one world patch.
-
-Builds directly on `specs/core/camera/image-warping.md` (`WarpMap`, `remap_bilinear`,
-`remap_aniso`, `ImageU8Pyramid`) and the `CameraIntrinsics` ray API.
+Every image that observes a reconstructed 3D point sees the same little planar
+piece of surface, foreshortened, distorted and sampled differently in each view.
+A patch cloud carries that piece of surface explicitly — an oriented surface
+element in world space, one per point — and a warp map renders it from any
+camera onto a fixed square grid in the patch's own frame. A track's observations
+then become geometrically consistent views of one world patch rather than
+independently normalized crops.
 
 ## Motivation
 
@@ -49,12 +46,20 @@ shape. That has three limitations the 3D formulation removes:
 ## `OrientedPatch`
 
 A planar surface element (surfel) in world space. It and everything else in this
-section live in `sfmtool-core/src/patch/cloud.rs` — `PatchCloud` with its
-`from_reconstruction` / `from_tracks` constructors, the `PatchNormal` and
-`PatchExtent` policies, and the free `mean_viewing_normal` / `pca_plane_normal`
-helpers the policies are built from — except `WarpMap::from_patch`, which sits
-with the rest of the warp-map constructors. `OrientedPatch`, `PatchCloud` and
-`WarpMap.from_patch` are all exposed to Python.
+section live in [cloud.rs](../../../crates/sfmtool-core/src/patch/cloud.rs) —
+`PatchCloud` with its `from_reconstruction` / `from_tracks` constructors, the
+`PatchNormal` and `PatchExtent` policies, and the free `mean_viewing_normal` /
+`pca_plane_normal` helpers the policies are built from — except
+`WarpMap::from_patch`, which sits with the rest of the warp-map constructors in
+[warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs).
+`OrientedPatch`, `PatchCloud` and `WarpMap.from_patch` are all exposed to Python,
+as `sfmtool._sfmtool.patches.{OrientedPatch, PatchCloud}` and
+`sfmtool._sfmtool.flow.WarpMap.from_patch`
+([patches/](../../../crates/sfmtool-py/src/patches/),
+[flow/warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs)). The rendering
+machinery underneath — `WarpMap`, `remap_bilinear`, `remap_aniso`,
+`ImageU8Pyramid` — is [image-warping.md](../camera/image-warping.md)'s, and the
+projection itself is the `CameraIntrinsics` ray API.
 
 ```rust
 /// An oriented planar patch (surfel) in world space.
@@ -574,24 +579,22 @@ Notes:
   the surfel. `from_patch` itself does not cull — it has no occlusion model and
   renders whatever projects into frame.
 
-### Batch / convenience
+### One patch across many views
 
-Rendering a patch across the cameras that observe it is the common case, so a
-thin convenience composes the routine with `remap`:
-
-```rust
-/// One `WarpMap` per (camera, pose); pair with `remap_bilinear`/`remap_aniso`
-/// to produce the canonical patch image per view.
-pub fn warp_maps_for_patch(
-    patch: &OrientedPatch,
-    views: &[(CameraIntrinsics, RigidTransform)],
-    resolution: u32,
-) -> Vec<WarpMap>;
-```
+Rendering a patch across the cameras that observe it is the common case, and it
+is a loop over `WarpMap::from_patch` — one map per (camera, pose), each paired
+with `remap_bilinear` or `remap_aniso`. There is no batch helper: the per-view
+map is small and the loop is where a caller wants to make its own decisions
+about which views to skip (`OrientedPatch::is_front_facing`), which resolution
+to use, and whether to pay for `compute_svd`. The kernels that sweep a whole
+cloud — normal refinement, view selection, keypoint localization — do this
+inside `sfmtool-core` and never hand the maps back.
 
 ## Python bindings
 
-Mirror the Rust API in `flow/warp.rs` / the `patches/` binding modules:
+The bindings mirror the Rust API, in
+[flow/warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs) and the
+[patches/](../../../crates/sfmtool-py/src/patches/) modules:
 
 - `OrientedPatch(center, u_axis, v_axis, half_extent)` and
   `OrientedPatch.from_center_normal(center, normal, up_hint, half_extent)`.
