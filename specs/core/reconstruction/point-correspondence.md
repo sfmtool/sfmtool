@@ -1,14 +1,5 @@
 # Point correspondence and merging across reconstructions
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/reconstruction/point_correspondence.rs`, exposed to
-Python as `sfmtool._sfmtool.analysis.find_point_correspondences_py` /
-`merge_points_and_tracks_py` (`crates/sfmtool-py/src/analysis/core.rs`).
-Python wrappers: `src/sfmtool/_point_correspondence.py` (pairwise, used by
-`sfm align --method points`, `sfm compare`, and `sfm xform --align-to`) and
-`src/sfmtool/merge/correspondences.py` + `merge/reconstructions.py`
-(multi-way grouping and merging, used by `sfm merge`).
-
 ## Overview
 
 Several commands need to know that point `i` in one reconstruction and point
@@ -19,6 +10,17 @@ how those pairs are found and how corresponding points and their tracks are
 merged.
 
 ## Feature-index correspondence (`find_point_correspondences`)
+
+The kernel lives in
+[point_correspondence.rs](../../../crates/sfmtool-core/src/reconstruction/point_correspondence.rs),
+bound as `sfmtool._sfmtool.analysis.find_point_correspondences_py` and
+`merge_points_and_tracks_py`
+([analysis/core.rs](../../../crates/sfmtool-py/src/analysis/core.rs)). The Python
+side wraps it twice: [_point_correspondence.py](../../../src/sfmtool/_point_correspondence.py)
+for the pairwise finders, and
+[merge/correspondences.py](../../../src/sfmtool/merge/correspondences.py) plus
+[merge/reconstructions.py](../../../src/sfmtool/merge/reconstructions.py) for
+multi-way grouping and merging.
 
 The primary correspondence key is **shared feature observations**: if source
 image A and target image B are the same photograph, and both reconstructions

@@ -1,11 +1,14 @@
 # Patch-View Selection
 
-_Status: draft for review. The per-point **view-selection** algorithm used by the
-[sift-based → patch-based reconstruction pipeline](sift-to-patch-reconstruction.md):
-given a point with an oriented patch, it returns the views that *photometrically*
-see that patch. It is a standalone, separately-callable algorithm, parallel to
+Patch-view selection decides, for a single 3D point, which images actually see
+the small piece of surface that point sits on. Given the point and its oriented
+patch it returns the views that *photometrically* see that patch — the ones whose
+pixels agree with the rest on what the patch looks like, not merely the ones the
+geometry says it projects into. It is a standalone, separately-callable
+algorithm, used by the [sift-based → patch-based reconstruction
+pipeline](sift-to-patch-reconstruction.md) alongside
 [normal refinement](patch-normal-refinement.md) and
-[keypoint localization](patch-keypoint-localization.md)._
+[keypoint localization](patch-keypoint-localization.md).
 
 ## Problem
 
@@ -93,10 +96,13 @@ not how the bar is computed.
 
 ## Implementation
 
-Lives in `sfmtool-core::patch` (Rust), exposed through a PyO3 entry point. Reuses
-the patch render + `is_front_facing` for candidacy and the IRLS consensus +
-windowed ZNCC for the reference and scoring — the same machinery as normal
-refinement and keypoint localization.
+The selector is `select_patch_views` / `select_patch_cloud_views` in
+[view_selection.rs](../../../crates/sfmtool-core/src/patch/view_selection.rs),
+bound as `PatchCloud.select_views` and called per point by the pipeline in
+[_embed_patches.py](../../../src/sfmtool/_embed_patches.py). It reuses the patch
+render + `is_front_facing` for candidacy and the IRLS consensus + windowed ZNCC
+for the reference and scoring — the same machinery as normal refinement and
+keypoint localization.
 
 ### Affine candidate scoring (2026-07)
 
@@ -182,8 +188,8 @@ selection fixture: `Bilinear` 13.0 → 3.7 µs (3.5×), `BilinearMip` 25.4 → 3
 (6.8×) — the fast path's own cost is level-independent (one bilinear tap per
 support pixel either way, from a smaller and better-cached level).
 
-_Status: v1 implemented in `crates/sfmtool-core/src/patch/view_selection.rs`
-(`select_patch_views` / `select_patch_cloud_views`), exposed as
+### Implementation details
+
 `PatchCloud.select_views(recon, images, *, min_relative_zncc=0.7, …,
 min_self_agreement=0.3, point_indexes=None)`. The reference appearance is the
 IRLS-weighted consensus of the track views' z-normalized patch renders over a
@@ -202,8 +208,8 @@ expansion. The affine fast path covers `Sampler::Bilinear` and
 `Sampler::BilinearMip` (the default); `Sampler::Anisotropic` always takes the
 exact warp. A point whose valid track-view count is below `min_track_views`
 (default 2) likewise admits its track views verbatim. The render → z-normalize →
-robust-consensus primitives are shared with `normal_refine` (widened to
-`pub(super)`), not duplicated._
+robust-consensus primitives are shared with `normal_refine` (`pub(super)`), not
+duplicated.
 
 ## Future work (not v1)
 

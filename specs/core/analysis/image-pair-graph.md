@@ -1,12 +1,5 @@
 # Image pair graph: covisibility and frustum-intersection pairs
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/analysis/image_pair_graph.rs` (frustum geometry in
-`crates/sfmtool-core/src/camera/frustum.rs`), exposed to Python as
-`sfmtool._sfmtool.analysis.build_covisibility_pairs_py` /
-`build_frustum_intersection_pairs_py` and wrapped by
-`src/sfmtool/_image_pair_graph.py`.
-
 ## Overview
 
 Several pipelines need to know **which image pairs see the same part of the
@@ -31,6 +24,14 @@ from `compute_camera_directions`: for the canonical −Z-forward camera,
 `direction = R_world_from_cam · (0, 0, −1)`.
 
 ## Covisibility pairs (`build_covisibility_pairs`)
+
+Both builders live in
+[image_pair_graph.rs](../../../crates/sfmtool-core/src/analysis/image_pair_graph.rs),
+with the frustum geometry in
+[frustum.rs](../../../crates/sfmtool-core/src/camera/frustum.rs); they are
+bound as `sfmtool._sfmtool.analysis.build_covisibility_pairs_py` and
+`build_frustum_intersection_pairs_py`, and wrapped for Python callers by
+[_image_pair_graph.py](../../../src/sfmtool/_image_pair_graph.py).
 
 Input: per-observation `track_point_indexes` / `track_image_indexes` plus
 the image quaternions.

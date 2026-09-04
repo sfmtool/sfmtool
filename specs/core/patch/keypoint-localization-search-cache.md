@@ -1,50 +1,24 @@
 # Per-View Cache + SIMD Search for Keypoint Localization
 
-_Status: **implemented**. The render-once per-view cache (`ContextTile` /
-`render_context`, padded `cache_istride` rows) and the hand-rolled AVX2 search
-kernels (`compute_channel_grids_avx2` for the dense grid,
-`score_cell_one_channel_avx2` for the "+"-descent per-cell path) have landed in
-`sfmtool-core/src/patch/keypoint_localize.rs` (scalar fallbacks retained and
-runtime-dispatched). Accelerates the **integer** cross-view search in
-[patch-keypoint-localization.md](patch-keypoint-localization.md) (the congealing
-algorithm) — the step that dominates `sfm embed-patches`. Scope here is integer
-refinement only: the discrete search, view selection, and consensus. Its job is
-to land each keypoint **in the basin** (the right integer cell) — getting it to
-true sub-pixel is a **separate, independent algorithm**,
-[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), that consumes
-this one's output as a seed. The plan is the **regular full-resolution integer
-grid**, made cheap by SIMD — not a reduced-resolution search; a resolution
-multiplier exists as a knob but isn't the expected path (see "Search resolution
-multiplier"). Models its structure on the
-[fronto-parallel patch cache](fronto-parallel-patch-cache.md) ("render once,
-score many"). The kernel lives in
-`sfmtool-core/src/patch/keypoint_localize.rs`; opt-in phase timing is in
-`keypoint_localize/prof.rs`._
+Keypoint localization slides a small patch template over a window of each view
+and scores the match, and that discrete search is the single step that dominates
+`sfm embed-patches`. This spec covers the two things that make it cheap: a
+per-view context cache rendered **once** instead of once per congealing round,
+and hand-written AVX2 kernels that score the whole shift grid at full
+resolution. It models its structure on the
+[fronto-parallel patch cache](fronto-parallel-patch-cache.md) — render once,
+score many — and accelerates the congealing algorithm specified in
+[patch-keypoint-localization.md](patch-keypoint-localization.md).
 
-> _Already landed (branch `optimize-search-shift`): the per-candidate
-> extract→z-normalize→dot search was reformulated as **correlation
-> accumulation** — three maps per channel (`Σ kern·I`, `Σ w·I`, `Σ w·I²`) whose
-> inner loop is a contiguous SAXPY — proven equivalent to the per-candidate path
-> by `search_shift_ref` and the `search_shift_matches_reference*` tests. That
-> alone cut `search_shift` ~2.5× (602→241 µs/call) and `localize` wall ~2.1×.
-> This spec is the next step: a render-once per-view cache and a hand-rolled AVX2
-> kernel._
->
-> _**Phase 1 landed** (branch `keypoint-localization-cache`): the **per-view
-> render-once cache** (sized `R + 4·search`) plus **integer-tracked reads**. The
-> congealer now renders each view's frame-oriented cache once and every round
-> reads its core and scores its shift grid from that cache at the view's current
-> **integer** offset `iacc`; the parabolic sub-pixel residual is tracked alongside
-> (convergence + final keypoint) but never folded back into the read position, so
-> every cache read is exact. `render_context` collapses from per-(view, round) to
-> per-view. The `search_resolution_multiplier` knob (default `1.0`, a no-op) is in
-> place. _(The centered-`f32`/planar AVX2 kernel has since landed — see "Search
-> kernel" and the "+"-descent section below; the `i16` path was investigated and
-> dropped, see Stage 2.)_ The `search_shift` accumulation math is unchanged (the
-> `search_shift_matches_reference*` equivalence tests still pass, now also
-> asserting integer-argmax agreement). Integer-tracked reads build the consensus
-> from integer-aligned cores, a deliberate sub-px change from the
-> fractionally-rendered reference; the existing congealing tests pass unchanged._
+Its scope is the **integer** search only: the discrete search, view selection
+and consensus, whose job is to land each keypoint in the right integer cell (the
+basin). Getting from there to true sub-pixel is a separate, independent
+algorithm,
+[keypoint-subpixel-refinement.md](keypoint-subpixel-refinement.md), which
+consumes this one's output as a seed. The design is the regular full-resolution
+integer grid made cheap by SIMD, not a reduced-resolution search; a resolution
+multiplier exists as a knob but is not the expected path (see "Search resolution
+multiplier").
 
 ## Problem
 
@@ -102,6 +76,16 @@ fronto-cache-style affine approximation. (The accurate sub-pixel offset is then 
 separate algorithm — see "Sub-pixel hand-off" below.)
 
 ## The cache
+
+The cache (`ContextTile` / `render_context`, with padded `cache_istride` rows)
+lives in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs)
+and the AVX2 search kernels (`compute_channel_grids_avx2` for the dense grid,
+`score_cell_one_channel_avx2` for the "+"-descent per-cell path) in
+[keypoint_localize/kernels.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/kernels.rs),
+with scalar fallbacks retained and dispatched at runtime; opt-in phase timing is
+in
+[keypoint_localize/prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs).
 
 Per view, render once at the seed (`acc = 0`, i.e. centered on `project_i(X_p)`):
 

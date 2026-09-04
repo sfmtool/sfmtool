@@ -1,12 +1,5 @@
 # Staged bundle adjustment (shared camera)
 
-**Status:** Implemented —
-`crates/sfmtool-core/src/geometry/bundle_adjust.rs` (`bundle_adjust`,
-`BaSchedule`, `BundleAdjustment`; tests in `bundle_adjust/tests.rs`), PyO3
-binding in `crates/sfmtool-py/src/geometry/bundle_adjust.rs`
-(`sfmtool._sfmtool.geometry.bundle_adjust`), Python tests in
-`tests/rust_bindings/test_bundle_adjust_rust_bindings.py`.
-
 ## Purpose
 
 The staged robust bundle adjustment used by the cluster pinhole bootstrap
@@ -46,6 +39,11 @@ unobserved point comes back `NaN`, not unchanged (see step 1 below; the
 callers refill).
 
 ## The staged loop
+
+The kernel lives in
+[bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
+(`bundle_adjust`, `BaSchedule`, `BundleAdjustment`), bound as
+`sfmtool._sfmtool.geometry.bundle_adjust`.
 
 ```rust
 pub struct BaSchedule {
@@ -365,12 +363,11 @@ Python's point of view).
 
 ## Points at infinity
 
-**Status:** Implemented — same locations as the kernel above. There is one
-staged loop, not two: direction handling is a per-point branch inside it, so
-with nothing marked the loop *is* the finite-only solve. (It was originally a
-second mirrored copy of the whole kernel, entered only when a direction was
-marked; the copies were merged once the reduction was shown to hold bit for
-bit.)
+There is one staged loop, not two: direction handling is a per-point branch
+inside it, so with nothing marked the loop *is* the finite-only solve. (It was
+originally a second mirrored copy of the whole kernel, entered only when a
+direction was marked; the copies were merged once the reduction was shown to
+hold bit for bit.)
 
 A point at infinity is a pure direction: its observations depend on the
 observing image's rotation and the shared camera model, never on any
@@ -462,9 +459,6 @@ All other shapes, validation, and outputs are unchanged.
 - **Memory order and binding parity** as for the kernel above.
 
 ## Protected observations
-
-**Status:** Implemented — same locations as the kernel above; an absent or
-all-`false` mask reproduces the unprotected behavior bit for bit.
 
 Appearance-verified observations (e.g. photometric LOO-ZNCC consensus) can
 carry corrective long-range signal on a drifted reconstruction — but they

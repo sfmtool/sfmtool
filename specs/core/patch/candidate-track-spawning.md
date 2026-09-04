@@ -1,10 +1,5 @@
 # Candidate track spawning: congeal new tracks at patch-frame offsets
 
-**Status:** Implemented (2026-08-01). Core in `crates/sfmtool-core/src/patch/spawn.rs`,
-exposed to Python as `sfmtool._sfmtool.patches.spawn_candidate_tracks`.
-Bundled change: the `localize_keypoints` binding gains the core's existing
-`starting_keypoints` parameter (see below).
-
 ## Overview
 
 Given reconstructed points with patch frames, spawn **candidate tracks** at
@@ -78,6 +73,10 @@ Survivors report status `spawned`. Results are deterministic: the
 underlying kernels are deterministic and candidates are independent.
 
 ## API
+
+The primitive lives in
+[spawn.rs](../../../crates/sfmtool-core/src/patch/spawn.rs), bound as
+`sfmtool._sfmtool.patches.spawn_candidate_tracks`.
 
 ```rust
 pub struct SpawnParams {

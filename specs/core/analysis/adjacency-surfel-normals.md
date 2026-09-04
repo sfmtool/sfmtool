@@ -1,9 +1,5 @@
 # Adjacency surfel normals: robust plane fit over image-space neighbours
 
-**Status:** Implemented (2026-08-01) — core in
-`crates/sfmtool-core/src/analysis/adjacency_surfel_normals.rs`, exposed to
-Python as `sfmtool._sfmtool.analysis.estimate_adjacency_surfel_normals`.
-
 ## Overview
 
 Given a point cloud and its
@@ -100,6 +96,10 @@ unfitted points:
 - `determined` — bool per point.
 
 ## API
+
+The kernel lives in
+[adjacency_surfel_normals.rs](../../../crates/sfmtool-core/src/analysis/adjacency_surfel_normals.rs),
+bound as `sfmtool._sfmtool.analysis.estimate_adjacency_surfel_normals`.
 
 ```rust
 pub struct AdjacencySurfelParams {

@@ -1,11 +1,5 @@
 # Member-coherence validation: pairwise track agreement and the max-support block
 
-**Status:** Implemented (2026-08-04) — kernel in
-`crates/sfmtool-core/src/patch/member_coherence/`: the matrix construction in
-`matrix.rs`, the decision rule in `decide.rs`, and the params, types and
-`validate_*` entry points in `member_coherence.rs` itself. Exposed to Python as
-`PatchCloud.validate_member_coherence`.
-
 ## Overview
 
 A track's members are the observations of one 3D point. Some tracks are
@@ -479,6 +473,13 @@ the documented limit:
   this track adds the 261 above `0.97` on top.
 
 ## API
+
+The kernel lives under
+[member_coherence/](../../../crates/sfmtool-core/src/patch/member_coherence/) —
+the matrix construction in `matrix.rs`, the decision rule in `decide.rs`, and the
+params, types and `validate_*` entry points in
+[member_coherence.rs](../../../crates/sfmtool-core/src/patch/member_coherence.rs)
+itself — bound as `PatchCloud.validate_member_coherence`.
 
 ```rust
 pub struct MemberCoherenceParams {

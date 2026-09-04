@@ -1,9 +1,5 @@
 # Keypoint Reach Pairs
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/spatial/keypoint_reach.rs`, bound as
-`sfmtool._sfmtool.analysis.keypoint_pairs_within_reach`.
-
 One question, asked per image of a track set: which other keypoints lie inside
 this keypoint's own disk? Several rules read that neighbourhood and differ only
 in what they then test, so the enumeration is stated once and the tests stay
@@ -76,8 +72,12 @@ for themselves in NumPy; see [Open questions](#open-questions).
 
 ## Binding
 
-`keypoint_pairs_within_reach(image_of_row, xy_px, reach_px)` in the analysis
-module of the bindings: `image_of_row` an `(n,)` `int64` array, `xy_px` an
+The enumeration lives in
+[keypoint_reach.rs](../../../crates/sfmtool-core/src/spatial/keypoint_reach.rs),
+bound as `sfmtool._sfmtool.analysis.keypoint_pairs_within_reach`.
+
+The signature is `keypoint_pairs_within_reach(image_of_row, xy_px,
+reach_px)`: `image_of_row` an `(n,)` `int64` array, `xy_px` an
 `(n, 2)` `float64` array, `reach_px` an `(n,)` `float64` array. Returns
 `(i, j, d_px)` as three arrays in the defined order, the row indices `int64`
 and the distances `float64`. Arrays are accepted in either memory order and

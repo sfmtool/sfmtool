@@ -1,12 +1,14 @@
 # Patch Localizability (Keypoint Self-Similarity Score)
 
-_Status: **implemented** (v1). A per-point score of how well a patch pins its own
-keypoint — the curvature of the patch's ZNCC self-similarity surface, i.e. the
-classic structure tensor measured in the pipeline's own correlation metric. It
-grades the **conditioning** of a keypoint's localization (corner vs edge vs
-flat), independently of whether the views agree. Prototyped end-to-end on five
-datasets (see [Evidence](#evidence)); this spec is the design for the production
-crate function, Python binding, `xform` filter, and `embed-patches` cull._
+Patch localizability is a per-point score of how well a patch pins down its own
+keypoint. It measures the curvature of the patch's self-similarity surface — how
+sharply the patch's correlation with itself falls off as you slide it — which is
+the classic structure tensor, measured here in the pipeline's own correlation
+metric. It grades the **conditioning** of a keypoint's position (corner vs edge
+vs flat) independently of whether the views that see it happen to agree, and it
+is used to score and cull points whose keypoints are free to drift. One scorer
+serves a crate function, a Python binding, an `xform` filter, and an
+`embed-patches` cull.
 
 ## Problem
 
@@ -180,14 +182,19 @@ automatically.)
 
 ## Surfaces
 
+The scorer lives in
+[localizability/](../../../crates/sfmtool-core/src/patch/localizability/), bound
+as `PatchCloud.score_localizability`, with the reconstruction-level filter in
+[_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
+
 One scorer, three entry points (plus an internal consumer: the
 [cluster-patch refinement](cluster-patch-refinement.md) kernel gates each
 cluster member on the localizability of its own template-grid patch —
 `max_keypoint_uncertainty`, same default `τ`, status
-`rejected_unlocalizable`; added 2026-07-10):
+`rejected_unlocalizable`):
 
-1. **Crate function** (`crates/sfmtool-core/src/patch/localizability/`, a new
-   submodule sibling of `keypoint_localize` / `normal_refine`):
+1. **Crate function** (a submodule sibling of `keypoint_localize` /
+   `normal_refine`):
 
    ```
    fn patch_localizability(patch: &[f32] /* R×R×C consensus */, resolution, channels,
@@ -226,7 +233,7 @@ cluster member on the localizability of its own template-grid patch —
 
 `embed-patches` culls poorly-localized points **by default, early** — after the
 first round's localization + sub-pixel refine, before the multi-round refinement
-that dominates cost (see the [pipeline](../../src/sfmtool/_embed_patches.py)).
+that dominates cost (see the [pipeline](../../../src/sfmtool/_embed_patches.py)).
 
 **Why early culling is safe here.** Localizability is **intrinsic and per-point
 independent**: a point's score depends only on its own consensus appearance, and

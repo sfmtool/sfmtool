@@ -1,29 +1,15 @@
 # Epipolar Geometry from 2D-2D Correspondences (7-point + RANSAC + Bougnoux)
 
-**Status:** Implemented (2026-07-16) —
-`crates/sfmtool-core/src/geometry/epipolar_estimation.rs` (solvers +
-estimator, tests in `epipolar_estimation/tests.rs`), PyO3 bindings in
-`crates/sfmtool-py/src/geometry/epipolar_estimation.rs`
-(`sfmtool._sfmtool.geometry.estimate_fundamental` / `focal_from_fundamental`),
-Python tests in `tests/rust_bindings/test_epipolar_estimation_rust_bindings.py`.
-Estimates the fundamental matrix relating two views from pixel correspondences
-that may be contaminated by wrong matches, and extracts a focal-length estimate
-from it.
-
-The complementary direction — the fundamental matrix **of two known
-cameras**, for epipolar curve rendering — already exists in
-`crates/sfmtool-core/src/camera/epipolar.rs` (`compute_fundamental_matrix`,
-`compute_epipole`). This module is estimation from data; that one is
-derivation from poses. `compute_epipole`'s null-space extraction is shared.
-
 ## Purpose
 
-Given `N` pixel correspondences between two images, estimate the 3×3
-fundamental matrix `F` (rank 2, defined up to scale) with `x₂ᵀ F x₁ = 0`
-for true correspondences, robust to a contaminated set. A minimal-sample
-estimator succeeds whenever some all-inlier 7-point sample can be drawn,
-so verification stays viable at low inlier fractions where any full-set
-fit is hopeless.
+Recovers the epipolar geometry between two images from matched pixels
+alone — the fundamental matrix, robust to a match set that may be mostly
+wrong, plus the focal length it implies when the principal points are
+known. Formally: given `N` pixel correspondences, estimate the 3×3 matrix
+`F` (rank 2, defined up to scale) with `x₂ᵀ F x₁ = 0` for true
+correspondences. A minimal-sample estimator succeeds whenever some
+all-inlier 7-point sample can be drawn, so verification stays viable at
+low inlier fractions where any full-set fit is hopeless.
 
 The fundamental matrix additionally determines the cameras' focal lengths
 when the principal points are known (Bougnoux): each image pair then casts
@@ -36,6 +22,13 @@ Consumers: two-view geometric verification of feature matches (inlier
 masks over candidate matches), focal initialization by consensus over
 wide-baseline pairs, and relative-pose seeding wherever pairwise geometry
 is needed before any reconstruction exists.
+
+The complementary direction — the fundamental matrix **of two known
+cameras**, for epipolar curve rendering — lives in
+[epipolar.rs](../../../crates/sfmtool-core/src/camera/epipolar.rs)
+(`compute_fundamental_matrix`, `compute_epipole`). This module is
+estimation from data; that one is derivation from poses.
+`compute_epipole`'s null-space extraction is shared.
 
 ## Definitions
 
@@ -61,6 +54,11 @@ is needed before any reconstruction exists.
   scoring operates on pixels.
 
 ## The minimal solver (7-point)
+
+The solvers and the robust estimator live in
+[epipolar_estimation.rs](../../../crates/sfmtool-core/src/geometry/epipolar_estimation.rs),
+bound as `sfmtool._sfmtool.geometry.estimate_fundamental` and
+`focal_from_fundamental`.
 
 ```rust
 /// One to three fundamental matrices from seven correspondences.

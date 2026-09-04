@@ -1,13 +1,5 @@
 # Rotation-Locked Resection
 
-**Status:** Implemented (2026-07-18) —
-`crates/sfmtool-core/src/geometry/resect_translation.rs` (kernel, tests in
-`resect_translation/tests.rs`), PyO3 binding in
-`crates/sfmtool-py/src/geometry/resect_translation.rs`
-(`sfmtool._sfmtool.geometry.resect_translation`), Python tests in
-`tests/rust_bindings/test_resect_translation_rust_bindings.py`. Joins the
-geometry module beside `estimate_absolute_pose` / `refine_absolute_pose`.
-
 ## Purpose
 
 Solve a camera's translation against known world points when its rotation
@@ -66,6 +58,11 @@ Output: `t`, the surviving-observation mask, and the survivors' pixel
 residual norms.
 
 ## Binding
+
+The kernel lives in
+[resect_translation.rs](../../../crates/sfmtool-core/src/geometry/resect_translation.rs),
+bound as `sfmtool._sfmtool.geometry.resect_translation` by
+[resect_translation.rs](../../../crates/sfmtool-py/src/geometry/resect_translation.rs).
 
 ```python
 resect_translation(camera, rotation_wxyz, points, uv,

@@ -1,7 +1,5 @@
 # GPU Compute Shaders for DIS Optical Flow
 
-**Status:** Implemented — `crates/sfmtool-core/src/features/optical_flow/gpu/`.
-
 This document describes the wgpu compute shader implementation of the DIS optical
 flow pipeline in `sfmtool-core`. The CPU implementation is documented in
 [optical-flow.md](optical-flow.md); this spec covers the GPU-specific architecture.
@@ -26,6 +24,9 @@ high_quality preset, where finer pyramid levels have enough pixels to saturate
 GPU parallelism.
 
 ## Pipeline Architecture
+
+The pipelines and their shaders live in
+[optical_flow/gpu/](../../../crates/sfmtool-core/src/features/optical_flow/gpu).
 
 The DIS algorithm has 5 computational stages, running coarse-to-fine across
 pyramid levels:

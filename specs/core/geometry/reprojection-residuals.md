@@ -1,12 +1,5 @@
 # Batched reprojection residuals
 
-**Status:** Implemented —
-`crates/sfmtool-core/src/geometry/reprojection.rs` (`reprojection_residuals`,
-`inlier_fraction`; tests in `reprojection/tests.rs`), PyO3 bindings in
-`crates/sfmtool-py/src/geometry/reprojection.rs`
-(`sfmtool._sfmtool.geometry.reprojection_residuals` / `inlier_fraction`),
-Python tests in `tests/rust_bindings/test_reprojection_rust_bindings.py`.
-
 ## Purpose
 
 The forward reprojection model shared by resection scoring, acceptance gates,
@@ -71,6 +64,11 @@ input is `0.0`. This is the acceptance metric a resection or refinement caller
 thresholds a pose on.
 
 ## Bindings
+
+`reprojection_residuals` and `inlier_fraction` live in
+[reprojection.rs](../../../crates/sfmtool-core/src/geometry/reprojection.rs),
+bound under `sfmtool._sfmtool.geometry` by
+[reprojection.rs](../../../crates/sfmtool-py/src/geometry/reprojection.rs).
 
 ```python
 reprojection_residuals(

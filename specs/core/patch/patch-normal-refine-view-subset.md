@@ -1,27 +1,15 @@
 # Patch-normal refinement — view-subset selection (D-optimal refinement basis)
 
-> Status: **implemented (2026-07-05), on by default at K=8** —
-> `crates/sfmtool-core/src/patch/normal_refine/view_subset.rs`
-> (`select_refine_subset`), wired into
-> `refine_patch_normal_impl` via `NormalRefineParams::max_refine_views` (the
-> low-level default stays `0` = off, so non-embed callers are unaffected),
-> exposed as `PatchCloud.refine_normals(max_refine_views=…)` and
-> `sfm embed-patches --refine-max-views` (**pipeline default `8`**); validation
-> harness in `scripts/validate_refine_subset.py`. Design owner: profiling of
-> `embed-patches` on the 250-image Spain Soapmaker reconstruction (2026-07-04).
->
-> **Default K=8 (2026-07-05).** The Spain sweep (drop-fallback design) showed
-> R2 refine dropping 3.4–16.8× (K=10→3) and end-to-end ~29–37 %, with normal Δ
-> vs the all-views baseline growing as K shrinks (K=8 sits between the measured
-> K=5 median 6.4° / p95 36° and K=10 median 3.0° / p95 31°). The divergence is
-> **not** established as *error*: reprojection is blind to normals, and the
-> all-views normals are themselves not ground truth (visual inspection in SfM
-> Explorer shows the full-view consensus normals are not all accurate either).
-> K=8 is therefore adopted as a good speed/quality default **for further
-> exploration**, pending a proper normal-quality signal (`Φ_full` comparison or
-> visual) and the ZNCC-weighted selection follow-up.
-
 ## Motivation
+
+Refining a patch's surface normal photometrically means rendering that patch into
+every view that observes it and comparing the renders — cost that grows linearly
+with the number of views, while the quantity being estimated is only a
+two-degree-of-freedom direction. View-subset selection picks a small basis of
+views to refine against: a greedy D-optimal choice of the views that carry the
+most information about the normal, so refinement runs on a handful of views
+rather than dozens without loosening what constrains the answer. Every
+observation stays in the output — only the refinement basis shrinks.
 
 In `sfm embed-patches`, the round-2+ (fine-tuning) normal-refinement pass runs
 over the *expanded* view set produced by `select_views` — on the profiled
@@ -66,6 +54,14 @@ This is a D-optimal experimental-design problem: maximise the information the
 selected views carry about the 2-DOF normal.
 
 ## Algorithm — `select_refine_subset`
+
+`select_refine_subset` lives in
+[view_subset.rs](../../../crates/sfmtool-core/src/patch/normal_refine/view_subset.rs)
+and is applied inside `refine_patch_normal_impl` through
+`NormalRefineParams::max_refine_views`, exposed as
+`PatchCloud.refine_normals(max_refine_views=…)` and
+`sfm embed-patches --refine-max-views`; the validation harness is
+[validate_refine_subset.py](../../../scripts/validate_refine_subset.py).
 
 Per patch, given the incoming unit normal `n` (the patch's current normal, i.e.
 the previous round's result), the point position `X`, the observing camera
@@ -126,6 +122,18 @@ against the renders it saves.
   **disabled** (use all views; byte-for-byte the current behavior). `K ≥ 1` caps
   the refinement basis at `K`. Guard `K` up to at least `min_views` internally
   so a cap below the refine floor can't strand a patch.
+
+The pipeline sets `K = 8` (`embed_patches(max_refine_views=8)`,
+`sfm embed-patches --refine-max-views 8`), while the crate-level default stays
+`0` so non-`embed-patches` callers are unaffected. The Spain Soapmaker sweep
+measured round-2 refine dropping 3.4–16.8× from `K = 10` down to `K = 3`, and
+end-to-end wall ~29–37 %, with the normal difference against the all-views
+baseline growing as `K` shrinks (`K = 5`: median 6.4° / p95 36°; `K = 10`:
+median 3.0° / p95 31°). That divergence is not established as *error* —
+reprojection is blind to normals, and the all-views normals are themselves not
+ground truth — so `K = 8` is a speed/quality balance rather than a calibrated
+optimum; settling it needs a normal-quality signal (a `Φ_full` comparison, or
+visual inspection) and the ZNCC-weighted selection below.
 
 ## Where the subset restriction happens
 

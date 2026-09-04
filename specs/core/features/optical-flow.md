@@ -1,8 +1,5 @@
 # Optical Flow
 
-**Status:** Implemented — `crates/sfmtool-core/src/features/optical_flow/`
-(CPU + GPU), Python bindings in `sfmtool-py`.
-
 A pure-Rust DIS (Dense Inverse Search) optical flow implementation in sfmtool-core,
 with Python bindings via sfmtool-py and GPU acceleration via wgpu compute shaders.
 
@@ -177,6 +174,10 @@ per-pixel SIMD (SSE2 4-wide for interior rows).
 densification from sparse patch results.
 
 ### Public API
+
+The module lives in
+[optical_flow/](../../../crates/sfmtool-core/src/features/optical_flow), CPU and
+GPU paths side by side, and reaches Python as `sfmtool._sfmtool.flow` (below).
 
 The two main entry points are `compute_optical_flow` (zero initialization) and
 `compute_optical_flow_with_init` (starts from a provided flow estimate). Both accept

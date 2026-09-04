@@ -1,13 +1,14 @@
 # Tile-batched consensus atlas: bounded-memory panorama compositing
 
-**Status:** Implemented. Built on top of the existing
-[`PerSphericalTileSourceStack`], [`SphericalTileRig`], and the
-photometric RANSAC ([`refine_photometric_ransac`]) without changing any
-of their algorithms. The orchestrator lives in
-`crates/sfmtool-core/src/spherical/consensus_atlas.rs` (`render_consensus_atlas`),
-the PyO3 binding in `crates/sfmtool-py/src/patches/consensus_atlas.rs`, and
-`sfm panorama` (`src/sfmtool/rig/panorama.py`) consumes it for the production
-panorama render.
+Stitching a panorama from many source images means deciding, for every
+direction on the sphere, which of the images that see that direction agree with
+each other and what colour they agree on. Doing that for the whole sphere at
+once holds every image's contribution in memory simultaneously, which grows
+without bound as the capture gets larger. This orchestrator does the same work
+a tile-batch at a time — build the contributions for a slice of directions,
+reach consensus over them, write them into the output atlas, free them — so peak
+memory is set by the batch size rather than by the number of source images,
+while the atlas it produces is bit-for-bit what the all-at-once path produces.
 
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
 [`SphericalTileRig`]: spherical-tiles-rig.md
@@ -438,6 +439,14 @@ is ≈ 7.5 GB, and total peak ≈ `5.6 GB (images) + 7.5 GB (batch stack) +
 batch term again at `batch_size = 16`.
 
 ## API
+
+The orchestrator is `render_consensus_atlas` in
+[consensus_atlas.rs](../../../crates/sfmtool-core/src/spherical/consensus_atlas.rs),
+bound through
+[patches/consensus_atlas.rs](../../../crates/sfmtool-py/src/patches/consensus_atlas.rs);
+`sfm panorama` ([rig/panorama.py](../../../src/sfmtool/rig/panorama.py)) consumes
+it for the production panorama render. It composes [`PerSphericalTileSourceStack`],
+[`SphericalTileRig`] and [`refine_photometric_ransac`], using each unmodified.
 
 A single orchestration entry point, generic over the per-batch stack's
 storage type `T` (the caller picks `f16` / `f32` at the type level,

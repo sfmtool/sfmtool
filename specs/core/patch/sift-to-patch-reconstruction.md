@@ -1,22 +1,16 @@
 # Sift-Based → Patch-Based Reconstruction
 
-_Status: draft for review. The pipeline behind `sfm embed-patches` (see
-[embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md)): it converts an
-in-memory `SfmrReconstruction` whose observations reference external `.sift`
-features into one whose observations carry inline, patch-derived keypoints
-(`feature_source` `sift_files` → `embedded_patches`; the modes are defined in
-[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source"). The
-per-point keypoint refinement it calls is specified in
-[patch-keypoint-localization.md](patch-keypoint-localization.md)._
-
 ## Overview
 
 A `sift_files` reconstruction locates each observation by a reference into an
 external `.sift` file. An `embedded_patches` reconstruction instead carries each
 point's patch inline — a 3D patch frame (`(u, v)` half-vectors + normal) with a
 reference bitmap — plus a 2D keypoint per observation locating where each image
-sees that patch. This pipeline performs
-that change of representation on a loaded reconstruction: it builds an oriented
+sees that patch. This pipeline — the one behind `sfm embed-patches` — performs
+that change of representation on a loaded reconstruction (`feature_source`
+`sift_files` → `embedded_patches`; the two modes are defined in
+[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source"):
+it builds an oriented
 patch per point (the `(u, v)` frame + normal), then for each point expands its
 track with the other vetted views that see the surfel and, over **`rounds`
 alternating passes** (default `rounds = 2`), refines the patch normal and then
@@ -43,21 +37,14 @@ photometric steps of the pipeline below.
 
 ## Operating contract: surfel ops require `embedded_patches`
 
-> _Status: **shipped** (2026-06-25). **Done:** the keypoint-aware refine kernel
-> (`refine_normals(use_stored_keypoints=...)`), the `embed-patches` re-layer onto
-> `to_embedded_patches` with `use_stored_keypoints`, and the hard precondition
-> gating `sfm xform --refine-normals` and `sfm render-patches` to
-> `embedded_patches` (both reject `sift_files` with a `UsageError` naming the
-> fix). **Scoped out:** `compare --strips` is intentionally left ungated — it
-> stays a dual-source diagnostic that builds patch clouds from raw solves on the
-> fly (its strip montage is deeply `.sift`-tied; see
-> `specs/cli/reconstruction/compare-command.md`). See the bullets below._
-
 The gated surfel operations — `sfm xform --refine-normals` and `sfm
 render-patches` — **require** a `feature_source == "embedded_patches"`
 reconstruction and **reject** `sift_files` with an error naming the fix (run
 `sfm xform --to-embedded-patches` first). `compare --strips` is the deliberate
-exception (ungated, dual-source). The motivation is in the keypoint-source
+exception: it stays an ungated dual-source diagnostic that builds patch clouds
+from raw solves on the fly, because its strip montage is deeply `.sift`-tied
+(see
+[compare-command.md](../../cli/reconstruction/compare-command.md)). The motivation is in the keypoint-source
 experiments (`reports/exp/2026-06-21-mvs-normal-refinement.md`):
 an `embedded_patches` reconstruction *stores* a per-observation keypoint, so
 refinement can position each view on its real detected feature instead of the
@@ -160,9 +147,14 @@ thereafter (the per-round obliquity drop).
 
 ## Where it lives
 
-The producer is Python (`src/sfmtool/`) **orchestration** — the per-point loop,
-point culling, and compaction — over Rust kernels reached through the PyO3
-bindings:
+The pipeline is [_embed_patches.py](../../../src/sfmtool/_embed_patches.py),
+driven by `sfm embed-patches`
+([_commands/embed_patches.py](../../../src/sfmtool/_commands/embed_patches.py), a
+thin wrapper); the write/compaction tail `compact_to_embedded_patches` and the
+`image_file_hashes_from_sift` / `image_file_hashes_from_images` helpers live in
+[_patch_compaction.py](../../../src/sfmtool/_patch_compaction.py). The producer is
+Python **orchestration** — the per-point loop, point culling, and compaction —
+over Rust kernels reached through the PyO3 bindings:
 
 - The patch frame is built once by `SfmrReconstruction.to_embedded_patches`
   (mean-viewing seed, feature-size extent) and read back as the cloud via
@@ -230,13 +222,9 @@ input track, then is expanded with vetted views and filtered by drops.
   quality, waits on the format growing optional per-observation fields (out of v4
   scope today).
 
-## Open questions
+## Implementation notes
 
-- The discard gates (`min_relative_zncc`, `max_shift_px`) want tuning across the
-  four datasets before the defaults are fixed.
-
-_Status: **fully wired** in `src/sfmtool/_embed_patches.py`. `embed_patches(recon,
-images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
+`embed_patches(recon, images, *, min_relative_zncc, patch_size, max_shift_px, min_views, max_iters,
 search, resolution, search_resolution_multiplier, subpixel, rounds,
 max_obliquity_deg, obliquity_weight_power, fronto_prior_weight, max_refine_views,
 localize_search_strategy)` runs the whole pipeline (steps 0–7, iterated over
@@ -251,21 +239,21 @@ validity — with `subpixel=0` it runs render-only so the bitmaps/validity are
 still produced), and `compact_to_embedded_patches` (the write/compaction tail,
 given the original `recon` for geometry carry-over and `embedded.image_file_hashes`
 so there is no second `.sift` read; its `valid` mask drops the points with no
-consensus bitmap). The `sfm embed-patches` CLI
-(`src/sfmtool/_commands/embed_patches.py`) is a thin wrapper over it.
-`compact_to_embedded_patches` and the `image_file_hashes_from_sift` /
-`image_file_hashes_from_images` helpers live in
-`src/sfmtool/_patch_compaction.py`. The writer requires the patch frame for an `embedded_patches` file
-(`has_uv_frames = true`)._
+consensus bitmap). The writer requires the patch frame for an
+`embedded_patches` file (`has_uv_frames = true`).
 
-_Points at infinity flow through end to end (the kernels are first-class on them
-since the patch pipeline gained `w`-aware rendering/selection/localization), and
+Points at infinity flow through end to end — the kernels are first-class on them
+through the `w`-aware render/selection/localization paths — and
 `compact_to_embedded_patches` preserves their `w = 0` via `positions_xyzw`.
 Normal refinement remains finite-only (an infinity point keeps its fixed
-tangent-sphere frame), but the **reference bitmap no longer depends on it**: the
+tangent-sphere frame), but the **reference bitmap does not depend on it**: the
 sub-pixel keypoint refinement fuses every point's consensus bitmap — infinity
 points included, through the same `w`-aware render path — so a surviving
-infinity point carries a real texture (the former "zero `patch_bitmaps` row"
-limitation is fixed). The flip side is uniform: any point (finite or infinity)
-for which no valid consensus bitmap could be fused is **dropped** by the final
-compaction rather than kept with an all-black bitmap._
+infinity point carries a real texture rather than a zero `patch_bitmaps` row.
+The flip side is uniform: any point (finite or infinity) for which no valid consensus bitmap could be fused is **dropped** by the final
+compaction rather than kept with an all-black bitmap.
+
+## Open questions
+
+- The discard gates (`min_relative_zncc`, `max_shift_px`) want tuning across the
+  four datasets before the defaults are fixed.

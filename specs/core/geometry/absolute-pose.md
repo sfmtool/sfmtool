@@ -1,26 +1,10 @@
 # Absolute Pose from 2D-3D Correspondences (P3P + RANSAC)
 
-**Status:** Implemented (2026-07-14) —
-`crates/sfmtool-core/src/geometry/absolute_pose.rs` (solver + estimator,
-tests in `absolute_pose/tests.rs`), PyO3 bindings in
-`crates/sfmtool-py/src/geometry/absolute_pose.rs`
-(`sfmtool._sfmtool.geometry.p3p_solve` / `estimate_absolute_pose`), Python
-tests in `tests/rust_bindings/test_absolute_pose_rust_bindings.py`. Registers
-one camera against known 3D structure from bearing-vector / 3D-point
-correspondences that may be dominated by wrong matches.
-
-Pixel-reprojection refinement of an estimate is implemented in
-`crates/sfmtool-core/src/geometry/pose_refine.rs` (`refine_absolute_pose`,
-tests in `pose_refine/tests.rs`), bound as
-`sfmtool._sfmtool.geometry.refine_absolute_pose`
-(`crates/sfmtool-py/src/geometry/pose_refine.rs`), Python tests in
-`tests/rust_bindings/test_reprojection_rust_bindings.py`.
-
 ## Purpose
 
-Given `N` correspondences between observed image bearings and known 3D
-points, estimate the camera's rigid pose, robust to a heavily contaminated
-correspondence set. Iterative pose refits (robust losses, trimmed
+Registers one camera against known 3D structure: given image bearings
+paired with world points, most of which may be wrong matches, recover the
+camera's rigid pose. Iterative pose refits (robust losses, trimmed
 least-squares) need the true correspondences to be a substantial fraction
 of the set before their basin of attraction contains the answer; a
 minimal-sample estimator succeeds whenever *some* all-inlier 3-point
@@ -54,6 +38,13 @@ pairwise geometry.
   convert as `max_angular_error = atan(px / f)`.
 
 ## The minimal solver
+
+The solver and estimator live in
+[absolute_pose.rs](../../../crates/sfmtool-core/src/geometry/absolute_pose.rs),
+bound as `sfmtool._sfmtool.geometry.p3p_solve` and `estimate_absolute_pose`;
+the pixel-reprojection refiner is
+[pose_refine.rs](../../../crates/sfmtool-core/src/geometry/pose_refine.rs),
+bound as `refine_absolute_pose`.
 
 ```rust
 /// Up to four world-to-camera poses from three correspondences.

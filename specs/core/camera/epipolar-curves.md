@@ -1,12 +1,5 @@
 # Epipolar Curves for Non-Perspective Cameras
 
-**Status:** Implemented — `crates/sfmtool-core/src/camera/epipolar.rs`
-(`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
-exposed as `sfmtool._sfmtool.epipolar_curves` (`analysis/epipolar.rs`) and consumed
-by `sfm epipolar` via `visualization/_epipolar_display.py`. As shipped, the
-anchor depth is a **per-feature argument** (scalar / array), not an options
-field — the API blocks below reflect that.
-
 ## The Problem
 
 The epipolar constraint `p2ᵀ F p1 = 0` only holds when `p1`, `p2` are pixel
@@ -53,6 +46,13 @@ display code disappears (a polyline through the epipole needs no special
 handling).
 
 ## Rust API
+
+The curve sampling lives in
+[epipolar.rs](../../../crates/sfmtool-core/src/camera/epipolar.rs)
+(`plot_epipolar_curve`, `plot_epipolar_curves_batch`, `EpipolarCurveOptions`),
+bound as `sfmtool._sfmtool.epipolar_curves` and consumed by `sfm epipolar`
+through
+[_epipolar_display.py](../../../src/sfmtool/visualization/_epipolar_display.py).
 
 ```rust
 // crates/sfmtool-core/src/camera/epipolar.rs

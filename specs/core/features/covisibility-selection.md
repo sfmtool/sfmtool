@@ -1,20 +1,19 @@
 # Covisibility Selection: Displacement, Thinning, Reach
 
-**Status:** Implemented — extends `ClusterCovisibility`
-(`crates/sfmtool-core/src/features/cluster_match/covisibility.rs`, bound as
-`sfmtool._sfmtool.matching.ClusterCovisibility` in
-`crates/sfmtool-py/src/matching/covisibility.rs`).
-
 ## Purpose
 
-Callers working from cluster tracks need three selection primitives that
-today exist only as per-caller array code: how far apart two covisible
-images are in appearance (displacement), a redundancy-thinned working
-subset (thinning), and how much of a capture a chosen subset connects to
-(reach). All three are order-free — nothing depends on image ordering —
-and deterministic given a seed.
+Three queries over a set of images' shared-cluster counts: how far apart two
+covisible images are in appearance, which subset survives redundancy-thinning,
+and how much of the capture a chosen subset connects to. All three are
+order-free — nothing depends on image ordering — and deterministic given a
+seed.
 
 ## Construction
+
+The queries extend `ClusterCovisibility` in
+[cluster_match/covisibility.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility.rs),
+bound as `sfmtool._sfmtool.matching.ClusterCovisibility` by
+[matching/covisibility.rs](../../../crates/sfmtool-py/src/matching/covisibility.rs).
 
 `ClusterCovisibility` carries an optional per-observation position input.
 Core-side it arrives through the `from_clusters_with_positions`

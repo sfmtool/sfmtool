@@ -1,14 +1,5 @@
 # Intrinsics estimation over the focal vote
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/geometry/estimate_intrinsics.rs` (tests in
-`estimate_intrinsics/tests.rs`), bound as
-`sfmtool._sfmtool.geometry.estimate_intrinsics`
-(`crates/sfmtool-py/src/geometry/estimate_intrinsics.rs`, Python tests in
-`tests/rust_bindings/test_estimate_intrinsics_rust_bindings.py`). The
-`sfm estimate-intrinsics` command is its caller
-([estimate-intrinsics-command.md](../../cli/reconstruction/estimate-intrinsics-command.md)).
-
 ## Purpose
 
 `estimate_intrinsics` is the high-level face of the structure-free focal
@@ -26,6 +17,13 @@ API is pure compute over arrays, so it serves the CLI command, the seed
 pipeline, and tests identically.
 
 ## Rust interface
+
+The estimator lives in
+[estimate_intrinsics.rs](../../../crates/sfmtool-core/src/geometry/estimate_intrinsics.rs),
+bound as `sfmtool._sfmtool.geometry.estimate_intrinsics`; the
+`sfm estimate-intrinsics` command
+([estimate-intrinsics-command.md](../../cli/reconstruction/estimate-intrinsics-command.md))
+is its caller.
 
 ```rust
 pub struct IntrinsicsOptions {

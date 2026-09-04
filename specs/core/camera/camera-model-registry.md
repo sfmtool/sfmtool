@@ -1,11 +1,5 @@
 # The camera model registry
 
-**Status:** Implemented — the registry and both `SfmrCamera` conversions live in
-`crates/sfmtool-core/src/camera/intrinsics/registry.rs`; the
-[`CameraModel`](../../formats/sfmr-file-format.md#3-cameras-camerasmetadatajsonzst)
-enum and its accessors stay in `camera/intrinsics.rs`. Tests in
-`camera/intrinsics/tests.rs`.
-
 ## Purpose
 
 Two types describe a camera in this workspace, and there is exactly one place
@@ -70,8 +64,14 @@ governs how the code realizes it.
 
 ## The registry
 
-`camera/intrinsics/registry.rs` declares every model once, in a
-`camera_models!` invocation with two blocks:
+The registry and both `SfmrCamera` conversions live in
+[registry.rs](../../../crates/sfmtool-core/src/camera/intrinsics/registry.rs),
+while the `CameraModel` enum and its accessors stay in
+[intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs); the tests
+are in
+[intrinsics/tests.rs](../../../crates/sfmtool-core/src/camera/intrinsics/tests.rs).
+The registry declares every model once, in a `camera_models!` invocation with
+two blocks:
 
 ```rust
 camera_models! {

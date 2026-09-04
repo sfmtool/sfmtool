@@ -1,16 +1,5 @@
 # Reconstruction alignment: least-squares similarity fit + RANSAC outlier rejection
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/analysis/alignment/{least_squares.rs,ransac.rs,reconstructions.rs}`,
-with the two point-set estimators exposed to Python as
-`sfmtool._sfmtool.analysis.estimate_alignment_rs` / `ransac_alignment_rs`
-(`crates/sfmtool-py/src/analysis/core.rs`). Driven by
-`sfm align --method points` (`src/sfmtool/align/by_points.py`), by the
-`sfm xform` alignment operations `--align-to` / `--align-to-input`
-(`src/sfmtool/xform/_align_to.py`, `_align_to_input.py`), and — through the
-reconstruction-level entry point below — by the SfM Explorer's
-`Align to ▸ <node>`.
-
 ## Overview
 
 Aligning one reconstruction to another means estimating a **similarity
@@ -37,6 +26,18 @@ answering the same question differently; retargeting `sfm align` at the
 shared Rust one is open work.
 
 ## Aligning two reconstructions (`reconstructions.rs`)
+
+The alignment core lives in
+[least_squares.rs](../../../crates/sfmtool-core/src/analysis/alignment/least_squares.rs),
+[ransac.rs](../../../crates/sfmtool-core/src/analysis/alignment/ransac.rs) and
+[reconstructions.rs](../../../crates/sfmtool-core/src/analysis/alignment/reconstructions.rs),
+with the two point-set estimators bound as
+`sfmtool._sfmtool.analysis.estimate_alignment_rs` and `ransac_alignment_rs`.
+Python drives it from `sfm align --method points`
+([by_points.py](../../../src/sfmtool/align/by_points.py)) and the `sfm xform`
+operations `--align-to` / `--align-to-input`
+([_align_to.py](../../../src/sfmtool/xform/_align_to.py),
+[_align_to_input.py](../../../src/sfmtool/xform/_align_to_input.py)).
 
 The two estimators above fit *point sets*. `align_reconstructions(source,
 target, options) -> Result<AlignFit, String>` fits *reconstructions*: it

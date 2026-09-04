@@ -1,22 +1,10 @@
 # Displacement-Neighborhood Pose Verification
 
-**Status:** Implemented (2026-07-19) — the `DisplacementNeighborhood`
-substrate over `ClusterCovisibility`
-(`crates/sfmtool-core/src/features/cluster_match/covisibility/displacement.rs`;
-see specs/core/features/cluster-covisibility.md) plus the `verify_poses` /
-`repair_poses` kernels
-(`crates/sfmtool-core/src/geometry/pose_verification.rs`), bound
-under `sfmtool._sfmtool.geometry` (the kernels take the substrate's compact
-array serialization; the substrate queries and serialization live on the
-`ClusterCovisibility` pyclass). Depends on homography estimation
-(specs/core/geometry/focal-vote.md), batch registration
-(specs/core/geometry/reconstruction-growth.md), and absolute-pose refinement
-(specs/core/geometry/absolute-pose.md).
-
 ## Purpose
 
-Detect and repair misregistered cameras in a reconstruction without a
-reference solve, an image ordering, or a motion model. The ruler is a
+Find the cameras in a finished reconstruction whose poses are wrong, and
+put them back — using only the 2D tracks, with no reference solve, image
+ordering, or motion model to check against. The ruler is a
 2D structure computed once from the cluster tracks — which images are
 near-duplicate viewpoints of which, measured by keypoint displacement —
 and the tests hold the current poses against it. Because the substrate
@@ -126,6 +114,18 @@ plus re-triangulation of the segment is a separate concern). Rejected
 repairs leave the pose untouched and the flag standing.
 
 ## Inputs and outputs
+
+The kernels live in
+[pose_verification.rs](../../../crates/sfmtool-core/src/geometry/pose_verification.rs),
+bound under `sfmtool._sfmtool.geometry` as `verify_poses` and
+`repair_poses`; the displacement-neighborhood substrate they read is
+[displacement.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility/displacement.rs),
+whose queries and compact array serialization hang off the
+`ClusterCovisibility` pyclass
+([cluster-covisibility.md](../features/cluster-covisibility.md)). The
+kernels build on homography estimation ([focal-vote.md](focal-vote.md)),
+batch registration ([reconstruction-growth.md](reconstruction-growth.md)),
+and absolute-pose refinement ([absolute-pose.md](absolute-pose.md)).
 
 Kernels take the flat cluster-observation arrays, the shared camera, the
 current poses and points, and the substrate (or construct it on the

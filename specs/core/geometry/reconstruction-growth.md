@@ -1,15 +1,5 @@
 # Reconstruction Growth
 
-**Status:** Implemented — `grow_reconstruction` and `resect_images_batch`
-(`crates/sfmtool-core/src/geometry/reconstruction_growth.rs` and
-`crates/sfmtool-core/src/geometry/batch_resection.rs`, bound as
-`sfmtool._sfmtool.geometry.{grow_reconstruction, resect_images_batch}` in
-`crates/sfmtool-py/src/geometry/reconstruction_growth.rs`). Depends on
-absolute-pose estimation and refinement (specs/core/geometry/absolute-pose.md),
-batch triangulation (specs/core/reconstruction/batch-triangulation-api.md), the staged
-bundle adjustment (specs/core/geometry/bundle-adjustment.md), and cluster
-covisibility (specs/core/features/cluster-covisibility.md).
-
 ## Purpose
 
 Register the un-posed images of a cluster-track set against a seeded
@@ -147,6 +137,19 @@ residual norms at the final state (inf where invalid). `resect_images_batch`
 returns per-image poses, inlier fractions, and the accepted mask.
 
 ## Binding
+
+`grow_reconstruction` lives in
+[reconstruction_growth.rs](../../../crates/sfmtool-core/src/geometry/reconstruction_growth.rs)
+and `resect_images_batch` in
+[batch_resection.rs](../../../crates/sfmtool-core/src/geometry/batch_resection.rs),
+bound by
+[reconstruction_growth.rs](../../../crates/sfmtool-py/src/geometry/reconstruction_growth.rs).
+They build on absolute-pose estimation and refinement
+([absolute-pose.md](absolute-pose.md)), batch triangulation
+([batch-triangulation-api.md](../reconstruction/batch-triangulation-api.md)),
+the staged bundle adjustment ([bundle-adjustment.md](bundle-adjustment.md)),
+and cluster covisibility
+([cluster-covisibility.md](../features/cluster-covisibility.md)).
 
 `sfmtool._sfmtool.geometry.grow_reconstruction(cluster_indexes,
 image_indexes, positions_xy, camera, quaternions_wxyz, translations,

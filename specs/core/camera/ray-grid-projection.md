@@ -1,30 +1,31 @@
 # Affine Ray-Grid Projection for Patch Warps
 
-_Status: **landed** (branch `profile-embed-patches`). Splits
-[`WarpMap::from_patch`](image-warping.md) into a model-free geometry stage and a
-camera-owned projection stage, [`CameraIntrinsics::ray_to_pixel_grid`], so the
-per-pixel cost of rendering a patch into a view drops sharply. Motivated by
-profiling `sfm embed-patches`, where `from_patch` (via `render_context` in
-[patch-keypoint-localization.md](../patch/patch-keypoint-localization.md) and
-`cache_prerender` in [patch-normal-refinement.md](../patch/patch-normal-refinement.md))
-was the single largest cost. Code in
-`sfmtool-core/src/camera/distortion.rs` and `src/camera/warp_map.rs`._
+## Purpose
+
+Painting a small square of a 3D surface into a photograph means working out,
+for every sample of that square, where it lands in the image. The square is
+planar, so the map from its own coordinates to rays in the camera's frame is
+affine: the whole grid of rays follows from three vectors, and the camera model
+only ever has to turn rays into pixels. This spec describes that split — a
+model-free geometry stage owned by the patch warp, and a camera-owned stage that
+projects a whole ray grid at once — and the bound on the coarse-grid shortcut
+the expensive camera models take.
 
 ## Problem
 
 `WarpMap::from_patch` builds, for one (patch, view), the `r×r` grid of source-image
-coordinates where the patch's `(s, t) ∈ [-1, 1]²` samples project. The original
-implementation ran the **whole** projection chain per output pixel:
+coordinates where the patch's `(s, t) ∈ [-1, 1]²` samples project. The direct way
+to build it runs the **whole** projection chain per output pixel:
 
 ```
 (s,t) → corner_homogeneous → R·x + t  (pose) → ray_to_pixel (divide + distort + K)
 ```
 
 This is `r²` projections per render and, on `dino_dog_toy` (perspective,
-SIMPLE_RADIAL, 48×48 tiles, ~1.04M renders in localization alone), it dominated
-the phase — `render_project` was **52% of `localize_total`**. A hidden multiplier
-made it worse: `RigidTransform::transform_point_homogeneous` rebuilds the rotation
-**matrix from the quaternion on every call**, so the pose conversion ran once per
+SIMPLE_RADIAL, 48×48 tiles, ~1.04M renders in localization alone), that dominates
+the phase — `render_project` measured **52% of `localize_total`**. A hidden multiplier
+makes it worse: `RigidTransform::transform_point_homogeneous` rebuilds the rotation
+**matrix from the quaternion on every call**, so the pose conversion runs once per
 pixel (≈2,300× per render).
 
 ## The seam
@@ -56,6 +57,11 @@ domain, or outside the image rectangle) are written `(NaN, NaN)`, identical to
 `ray_to_pixel` + the in-frame test the warp callers applied before.
 
 ## `CameraIntrinsics::ray_to_pixel_grid`
+
+The projection stage lives in
+[ray_grid.rs](../../../crates/sfmtool-core/src/camera/distortion/ray_grid.rs);
+the geometry stage that feeds it is `WarpMap::from_patch` in
+[warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs).
 
 ```rust
 pub fn ray_to_pixel_grid(

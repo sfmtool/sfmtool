@@ -1,12 +1,5 @@
 # Relative Pose from Ray Correspondences
 
-**Status:** Implemented (2026-08-09) —
-`crates/sfmtool-core/src/geometry/relative_pose.rs`, tests in
-`relative_pose/tests.rs`; PyO3 bindings in
-`crates/sfmtool-py/src/geometry/relative_pose.rs`
-(`sfmtool._sfmtool.geometry.{estimate_essential_rays, fit_ray_rotation}`);
-Python tests in `tests/rust_bindings/test_relative_pose_rust_bindings.py`.
-
 ## Overview
 
 The setting: **two images of the same scene, taken with the same known
@@ -46,8 +39,14 @@ never `z > 0`.
 
 ## Inputs
 
-Both estimators take two equal-length slices of unit rays (the caller
-maps pixels to rays through its camera model) and an options struct:
+The estimators live in
+[relative_pose.rs](../../../crates/sfmtool-core/src/geometry/relative_pose.rs),
+bound as `sfmtool._sfmtool.geometry.estimate_essential_rays` and
+`fit_ray_rotation` by
+[relative_pose.rs](../../../crates/sfmtool-py/src/geometry/relative_pose.rs).
+
+Both take two equal-length slices of unit rays (the caller maps pixels to
+rays through its camera model) and an options struct:
 
 | Option | Both | Meaning |
 |---|---|---|

@@ -1,20 +1,17 @@
 # Batch Triangulation API with Observability Diagnostics
 
-**Status:** Implemented (all four migration phases below landed). The
-classifier thresholds (`inverse_depth_z` cutoff, condition-number pre-filter)
-remain provisional pending larger-dataset calibration — see Open questions.
-
-Consolidate the scattered triangulation code into one batch API in
-`sfmtool-core` (`reconstruction/triangulation.rs`) that returns each track's solved point
-**plus the observability diagnostics the solve already computes** (the normal
-matrix's spectrum, and an optional noise-calibrated depth uncertainty). The
-immediate driver was a classification bug: `find_points_at_infinity` and
-`classify_points_at_infinity` decided finite-vs-infinity from the *maximum
-pairwise viewing angle*, an extreme order statistic that is inflated by
-keypoint noise and **grows with view count**, so genuine points at infinity
-with many observations were misclassified as finite. The conditioning of the
-triangulation answers the finite-vs-infinity question directly; previously it
-was computed and thrown away.
+Triangulating a track means finding the 3D point that best fits the rays its
+observations cast, and the linear solve that does so also reveals how
+well-determined that point is — a track seen from one direction only pins down
+two of its three coordinates. This is one batch API over whole sets of tracks
+that returns each solved point **plus the observability diagnostics the solve
+already computes** (the normal matrix's spectrum, and an optional
+noise-calibrated depth uncertainty), so callers deciding whether a point is at a
+finite depth at all can read the answer off the conditioning instead of
+re-deriving it. The alternative they used before — deciding finite-vs-infinity
+from the *maximum pairwise viewing angle* — is an extreme order statistic that
+keypoint noise inflates and that **grows with view count**, so genuine points at
+infinity with many observations were misclassified as finite.
 
 Related: [the decision layer over this API](point-estimation.md), which judges a
 cluster against an angular floor, cheirality and a reprojection bar and returns
@@ -80,7 +77,10 @@ consumer of `max_viewing_angle`.
 
 ## Target Rust API
 
-New module `crates/sfmtool-core/src/reconstruction/triangulation.rs`. Tracks are flattened
+The solver lives in
+[triangulation.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation.rs),
+bound as `sfmtool._sfmtool.analysis.triangulate_batch` and, over a loaded
+reconstruction, as `SfmrReconstruction.triangulation_diagnostics`. Tracks are flattened
 CSR-style (the same shape as the reconstruction's `observation_offsets`): track
 `t` owns `dirs[offsets[t]..offsets[t+1]]` and the matching `centers`.
 

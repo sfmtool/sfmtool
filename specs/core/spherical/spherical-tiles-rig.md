@@ -1,13 +1,5 @@
 # Spherical tile rig: discretizing the sphere as a rig of pinhole tiles
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/spherical/tile_rig.rs` and exposed to Python as
-`sfmtool._sfmtool.spherical.SphericalTileRig`. The atlas → destination resampler is
-the Rust method `SphericalTileRig::resample_atlas` (also exposed as
-`SphericalTileRig.resample_atlas` in Python). A thin Python convenience
-wrapper at `src/sfmtool/rig/spherical_tile.py::resample_atlas_to_equirect`
-builds the equirectangular destination camera and forwards to it.
-
 ## Motivation
 
 For per-direction work on the sphere (infinity-consistency tests,
@@ -173,6 +165,14 @@ tile pixels `≈ n · patch_size² ≈ const · W²`. With these defaults
 about a 10% overdraw, which is the price of overlap.
 
 ### API
+
+The rig lives in
+[tile_rig.rs](../../../crates/sfmtool-core/src/spherical/tile_rig.rs), bound as
+`sfmtool._sfmtool.spherical.SphericalTileRig`. Its `resample_atlas` method turns
+per-tile atlases into a destination image;
+[rig/spherical_tile.py](../../../src/sfmtool/rig/spherical_tile.py) wraps it as
+`resample_atlas_to_equirect`, which builds the equirectangular destination
+camera and forwards to it.
 
 ```rust
 pub struct SphericalTileRig {

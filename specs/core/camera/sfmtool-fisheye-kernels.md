@@ -1,26 +1,31 @@
 # The `SFMTOOL_FISHEYE` kernels
 
-**Status:** Implemented.
-`crates/sfmtool-core/src/camera/distortion/bspline.rs` (basis evaluation and
-the monotonicity check), `crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`distort_ray_sfmtool_fisheye`, `sfmtool_fisheye_to_ray`,
-`recover_radial_bspline`, `sfmtool_fisheye_ray_jacobian`), the dispatch in
-`crates/sfmtool-core/src/camera/distortion.rs` and the classification arms in
-`crates/sfmtool-core/src/camera/intrinsics.rs`; tests in
-`camera/distortion/tests.rs`, `camera/intrinsics/tests.rs` and
-`tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py`.
-
 ## Summary
 
-The computation behind the `SFMTOOL_FISHEYE` camera model defined in
-[../../formats/sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md).
-This spec covers basis evaluation, forward projection, the inverse recovery of
+A fisheye camera whose radial map is a monotone cubic B-spline correction on top
+of the equidistant base, so a real lens can be calibrated past 90° without a
+polynomial that folds — these are the kernels that project, unproject and
+differentiate it. The model itself — its parameter list and its serialization —
+is defined in
+[sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md); this spec is
+the computation behind it, and covers basis evaluation, forward projection, the inverse recovery of
 the incidence angle, the analytic ray Jacobian, enforcement of the
 monotonicity invariant, and the model's classification flags. The bundle
 adjustment's `opt_bspline` release, which produces the coefficients, is
 specified in [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 
 ## Basis evaluation
+
+The kernels live in
+[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs)
+(`distort_ray_sfmtool_fisheye`, `sfmtool_fisheye_to_ray`,
+`recover_radial_bspline`, `sfmtool_fisheye_ray_jacobian`), with the B-spline
+basis in
+[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs);
+dispatch is in
+[distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs) and the
+classification arms in
+[intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
 
 The basis is arithmetic on a scalar radial coordinate `d` over `[0, d_max]`,
 so one implementation serves both sfmtool spline models; the fisheye hands it

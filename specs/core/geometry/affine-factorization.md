@@ -1,13 +1,5 @@
 # Affine Factorization
 
-**Status:** Implemented —
-`crates/sfmtool-core/src/geometry/affine_factorization.rs`, bindings in
-`crates/sfmtool-py/src/geometry/affine_factorization.rs`
-(`sfmtool._sfmtool.geometry.factorize_affine`). Promotes the
-alternating-least-squares affine factorization from the pinhole bootstrap
-experiments (`scripts/exp_pinhole_bootstrap.py`, notes in
-`cluster-pinhole-bootstrap.md`) into `sfmtool-core` and the bindings.
-
 ## Purpose
 
 Given 2D observations of clusters across a small group of images — with
@@ -119,8 +111,11 @@ image groups against a few thousand clusters).
 
 ## Rust API
 
-Module: `sfmtool_core::geometry::affine_factorization`. Core stays
-I/O-free: raw slices in, result structs out.
+The factorization and the metric upgrade live in
+[affine_factorization.rs](../../../crates/sfmtool-core/src/geometry/affine_factorization.rs)
+(module `sfmtool_core::geometry::affine_factorization`), bound as
+`sfmtool._sfmtool.geometry.factorize_affine`. Core stays I/O-free: raw
+slices in, result structs out.
 
 ```rust
 pub struct AffineFactorizationParams {

@@ -1,13 +1,5 @@
 # Photometric refinement via per-tile RANSAC subset partition
 
-**Status:** Implemented — `crates/sfmtool-core/src/spherical/photometric_ransac.rs`
-(`refine_photometric_ransac`, `RansacPhotometricParams`), with PyO3 bindings
-(`crates/sfmtool-py/src/patches/photometric_ransac.rs`). Consumed in production by the tile-batched
-consensus-atlas pipeline ([tile-batched-consensus-atlas.md](tile-batched-consensus-atlas.md)
-→ `spherical/consensus_atlas.rs`), which `sfm panorama` drives via `rig/panorama.py`.
-Originally a standalone draft; promoted to `specs/core/` once the production
-pipeline consumed its outputs, per its own graduation trigger.
-
 [`PerSphericalTileSourceStack`]: per-spherical-tile-source-stack.md
 [`SphericalTileRig`]: spherical-tiles-rig.md
 
@@ -86,6 +78,15 @@ Per-tile RANSAC is embarrassingly parallel — each tile depends only
 on its own rows.
 
 ## Inputs
+
+The kernel is `refine_photometric_ransac` (with `RansacPhotometricParams`) in
+[photometric_ransac.rs](../../../crates/sfmtool-core/src/spherical/photometric_ransac.rs),
+bound through
+[patches/photometric_ransac.rs](../../../crates/sfmtool-py/src/patches/photometric_ransac.rs).
+The production consumer is the tile-batched consensus atlas
+([tile-batched-consensus-atlas.md](tile-batched-consensus-atlas.md)), which
+`sfm panorama` drives via
+[rig/panorama.py](../../../src/sfmtool/rig/panorama.py).
 
 The algorithm consumes a flat row-major view over the stack at the
 chosen pyramid level. The bindings extract this from a

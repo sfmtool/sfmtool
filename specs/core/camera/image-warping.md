@@ -1,12 +1,5 @@
 # Image Warping for Distortion and Undistortion
 
-**Status:** Implemented — `camera/warp_map.rs` (`WarpMap`, `WarpMapSvd`,
-`from_cameras`, the pose-aware constructors below), `camera/remap.rs` (`ImageU8`,
-`ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`),
-`CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera
-model in the distortion module, with PyO3 bindings in `flow/warp.rs`. The
-GPU-acceleration question at the end remains open/deferred.
-
 ## Motivation
 
 The Rust codebase has complete implementations of `distort()` and `undistort()` for all 11
@@ -47,6 +40,16 @@ System Conventions" section of
 [`sfmr-file-format.md`](../../formats/sfmr-file-format.md).
 
 ## Warp Map
+
+The map and its SVD data live in
+[warp_map.rs](../../../crates/sfmtool-core/src/camera/warp_map.rs) (`WarpMap`,
+`WarpMapSvd`, `from_cameras` and the pose-aware constructors below) and the
+resamplers in [remap.rs](../../../crates/sfmtool-core/src/camera/remap.rs)
+(`ImageU8`, `ImageU8Pyramid`, `remap_bilinear`, `remap_aniso`), with
+`CameraIntrinsics::ray_to_pixel[_batch]` and the `Equirectangular` camera model
+in [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs); the
+PyO3 bindings are in
+[warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs).
 
 ### Data Structure
 

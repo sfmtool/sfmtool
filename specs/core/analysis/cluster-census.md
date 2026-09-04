@@ -1,15 +1,5 @@
 # Cluster Match Census
 
-_Status: **implemented** — `sfmtool_core::analysis::cluster_census`, bound as
-`sfmtool._sfmtool.analysis.cluster_census`. The score, the viewpoint groups,
-the per-pair stats, and `sat_pct` are native and at parity with the Python
-prototype (`scripts/seed_census.py`). The group-consistency companion
-(§ [Group consistency](#companion-group-consistency)) is behind the opt-in
-`compute_group_consistency`; unset, `CensusReport.group_consistency` is
-`None`. The `census_echo` seed confidence flag is wired into the seed
-finalization (`exp_pinhole_bootstrap._finalize_seed`) on the score alone; the
-coherence conjunct of the flag rule (§ [Callers](#callers)) is not applied._
-
 ## Problem
 
 A reconstruction can be internally consistent and wrong. Two failure shapes
@@ -41,6 +31,11 @@ cannot — both candidates fit their own tracks; only one fits the withheld
 cross-group evidence.
 
 ## Inputs
+
+The census lives in [cluster_census.rs](../../../crates/sfmtool-core/src/analysis/cluster_census.rs),
+with the § 6 companion in
+[group_consistency.rs](../../../crates/sfmtool-core/src/analysis/cluster_census/group_consistency.rs),
+and is bound as `sfmtool._sfmtool.analysis.cluster_census`.
 
 - The raw patch clusters of the workspace (`.matches` clusters backbone):
   flat observation arrays `(cluster, image, uv)`, plus a per-cluster

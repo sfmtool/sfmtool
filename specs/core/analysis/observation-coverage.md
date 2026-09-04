@@ -1,9 +1,5 @@
 # Observation coverage: which image pixels existing tracks already claim
 
-**Status:** Implemented (2026-08-01) — core in
-`crates/sfmtool-core/src/analysis/observation_coverage.rs`, exposed to
-Python as the `sfmtool._sfmtool.analysis.ObservationCoverage` class.
-
 ## Overview
 
 Several per-image decisions need to know **which parts of an image are
@@ -76,6 +72,10 @@ All queries are batch (parallel arrays in, array out) and read-only.
   cells with count ≥ 1, an overall claim summary.
 
 ## API surface
+
+The grids and their queries live in
+[observation_coverage.rs](../../../crates/sfmtool-core/src/analysis/observation_coverage.rs),
+bound as the `sfmtool._sfmtool.analysis.ObservationCoverage` class.
 
 Core: an `ObservationCoverage` struct owning the per-image grids, with the
 builder and the four queries as methods, plus read access to a grid

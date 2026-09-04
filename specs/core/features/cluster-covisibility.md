@@ -1,20 +1,10 @@
 # Cluster Covisibility
 
-**Status:** Implemented —
-`crates/sfmtool-core/src/features/cluster_match/covisibility.rs`, bindings in
-`crates/sfmtool-py/src/matching/covisibility.rs`
-(`sfmtool._sfmtool.matching.ClusterCovisibility`). Promotes the
-image-grouping-by-shared-clusters machinery from the pinhole bootstrap
-experiments (`scripts/exp_pinhole_bootstrap.py`, notes in
-`cluster-pinhole-bootstrap.md`) into `sfmtool-core` and the bindings.
-The selection queries layered on this type (pair displacement, banded
-thinning, reach) are specified separately in `covisibility-selection.md`,
-and the sparse displacement-neighborhood substrate
-(`DisplacementNeighborhood`: exhaustive per-pair displacement means with
-`nearest` / `farthest` / pair-stats queries and array serialization) in
-`pose-verification.md`.
-
 ## Purpose
+
+Cluster covisibility measures how many match clusters each pair of images
+shares, so a caller can pick mutually-overlapping image groups and rank
+candidate views before any reconstruction exists.
 
 Given the clusters of a `.matches` file (the `clusters/` section, optionally
 enriched with `cluster_patches/`), compute how many clusters each pair of
@@ -36,6 +26,14 @@ computed from match clusters. It is distinct from the post-reconstruction
 covisibility of shared 3D tracks in
 `sfmtool_core::analysis::image_pair_graph` (`sfm analyze --coviz`), which
 requires poses and points. The two must not share a name or type.
+
+**See also.** The selection queries layered on this type — pair displacement,
+banded thinning, reach — are specified in
+[covisibility-selection.md](covisibility-selection.md), and the sparse
+displacement-neighborhood substrate (`DisplacementNeighborhood`: exhaustive
+per-pair displacement means with `nearest` / `farthest` / pair-stats queries and
+array serialization) in
+[pose-verification.md](../geometry/pose-verification.md).
 
 ## Definition
 
@@ -106,9 +104,12 @@ construction cost by `d` and makes each mega-cluster vote on up to
 
 ## Rust API
 
-Module: `sfmtool_core::features::cluster_match::covisibility` (beside the
-matcher that produces the clusters). Core stays I/O-free: raw CSR slices in,
-following `refine_cluster_patches`.
+The counts and the grouping queries live in
+[covisibility.rs](../../../crates/sfmtool-core/src/features/cluster_match/covisibility.rs)
+— module `sfmtool_core::features::cluster_match::covisibility`, beside the
+matcher that produces the clusters — bound as
+`sfmtool._sfmtool.matching.ClusterCovisibility`. Core stays I/O-free: raw CSR
+slices in, following `refine_cluster_patches`.
 
 ```rust
 pub struct ClusterCovisibility { /* num_images, counts (private) */ }

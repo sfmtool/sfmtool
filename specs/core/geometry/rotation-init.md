@@ -1,25 +1,19 @@
 # Far-Field Rotation Initialization
 
-**Status:** Implemented — `rotation_init`
-(`crates/sfmtool-core/src/geometry/rotation_init.rs`, bound as
-`sfmtool._sfmtool.geometry.rotation_init` in
-`crates/sfmtool-py/src/geometry/rotation_init.rs`). Depends on
-`estimate_homography` (specs/core/geometry/focal-vote.md), rotation-locked
-resection (specs/core/geometry/rotation-locked-resection.md), and the staged
-bundle adjustment (specs/core/geometry/bundle-adjustment.md).
-
 ## Purpose
 
-Build an initial multi-camera reconstruction from cluster tracks by using
-the two point populations for what each observes: parallax-free
-(far-field) correspondences fix rotations between arbitrary image pairs
-through conjugate homographies `H = K R K⁻¹`, independent of baseline;
+Far-field rotation initialization poses a first handful of cameras on
+captures whose parallax is too weak to seed any other way, by letting the
+distant, parallax-free correspondences fix the rotations first and the near
+ones supply the metric frame afterwards. It builds that initial
+multi-camera reconstruction from cluster tracks by using the two point
+populations for what each observes: parallax-free (far-field)
+correspondences fix rotations between arbitrary image pairs through
+conjugate homographies `H = K R K⁻¹`, independent of baseline;
 parallax-bearing (near-field) correspondences then supply the metric
 side — a seed baseline, structure, and translation growth — with
 rotations held. The output is a posed core (rotations, translations,
-triangulated points) for a caller's refinement machinery; it succeeds
-precisely on captures whose windowed parallax is too weak for
-factorization-style seeding.
+triangulated points) for a caller's refinement machinery.
 
 ## Inputs
 
@@ -103,6 +97,15 @@ The far-field mask itself is internal: a caller that needs to know which
 clusters were held at infinity reads the unit rows off `points`.
 
 ## Binding
+
+`rotation_init` lives in
+[rotation_init.rs](../../../crates/sfmtool-core/src/geometry/rotation_init.rs),
+bound as `sfmtool._sfmtool.geometry.rotation_init` by
+[rotation_init.rs](../../../crates/sfmtool-py/src/geometry/rotation_init.rs).
+It builds on `estimate_homography` ([focal-vote.md](focal-vote.md)),
+rotation-locked resection
+([rotation-locked-resection.md](rotation-locked-resection.md)), and the
+staged bundle adjustment ([bundle-adjustment.md](bundle-adjustment.md)).
 
 ```python
 rotation_init(cluster_indexes, image_indexes, positions_xy,

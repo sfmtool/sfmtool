@@ -1,83 +1,11 @@
 # Photometric Subpixel Keypoint Refinement
 
-_Status: **MVP + analytic Jacobian + per-move consensus implemented + wired
-into `embed_patches`, on by default (1 sweep)** (Phases 2 and 3B). The
-forward-additive ECC Gauss–Newton refiner lives in
-`crates/sfmtool-core/src/patch/keypoint_subpixel.rs` (exposed to Python as
-`PatchCloud.refine_keypoints`). All three "Consensus refresh granularity"
-variants are wired so the trade-off is measurable: the single-pass-frozen
-variant (`max_outer_sweeps = 1`, the default), the per-sweep-refresh variant
-(`max_outer_sweeps > 1`, `consensus_refresh = "per_sweep"`, with
-mean-per-view-move early-exit), and the per-move (Gauss–Seidel) incremental
-variant (`consensus_refresh = "per_move"`, IRLS weights refreshed at the
-per-sweep boundary — the spec's two-frequency design). The sampler value+gradient
-interface (`remap_bilinear_with_grad`, `remap_aniso_with_grad`,
-`WarpMap::get_jacobian`) is implemented per the "Design details" section below,
-collapsing the per-GN-step gradient build from 5 renders (value + 4 FD) to 1
-(value + analytic gradient composed with the warp Jacobian). The
-`embed_patches` wiring exposes LK as an **integer `subpixel` kwarg** (and
-`--subpixel` CLI option): a per-round outer-sweep count where `0` disables the
-sub-pixel pass (the localizer's keypoints are used as is) and `N >= 1` runs the
-refiner with `max_outer_sweeps = N`. The pipeline always uses the per-sweep
-consensus variant (`consensus_refresh = "per_sweep"`); the per-move
-(Gauss–Seidel) variant is reachable only via the direct
-`PatchCloud.refine_keypoints(consensus_refresh="per_move")` binding, not through
-`embed_patches`. The supersampled grid is exposed in parallel via a new
-`search_resolution_multiplier` kwarg on `PatchCloud.localize_keypoints`
-(and pass-through on `embed_patches`). The production default is
-`subpixel=1` (one LK sweep per round — **on by default**),
-`search_resolution_multiplier=1.0`. `PatchCloud.refine_keypoints` and `PatchCloud.refine_normals`
-both default to seeding each view at that observation's inline
-stored keypoint when the recon carries them (an embedded_patches
-recon), with per-view fall-through to the reprojected center for views
-that have no inline observation (e.g. ones admitted by `select_views`
-beyond the SIFT track). The two functions diverge on what to do when
-the recon has no inline keypoints at all (a sift-files recon):
-`refine_keypoints` is a **local refiner — it strictly requires
-starting keypoints**, so a sift-files call without explicit
-`starting_keypoints` raises `ValueError` (the projection alone isn't
-a "real" keypoint for the purposes of a local refiner; convert the
-recon to embedded_patches first, or supply explicit per-point seeds).
-`refine_normals` is a normal optimizer that can legitimately anchor
-each view at the reprojected center, so its `use_stored_keypoints`
-flag stays a plain bool (default `True`): when set, anchor at the
-stored keypoint per view with per-view fall-through to the reprojected
-center; when explicitly `False`, anchor every view at the reprojected
-center regardless of recon kind (used by callers like
-`sfm compare --strips` and the cross-validation script that want a
-defined comparison reference independent of whether the recon
-carries inline keypoints). The refiner can additionally fuse each
-point's **representative bitmap** at the final keypoints
-(`render_bitmaps` — see "Outputs" below); `embed-patches` sources its
-stored `patch_bitmaps` and its culled-point drop signal from that,
-no longer from normal refinement. The remaining deferred work —
-leave-one-out consensus
-(measured-and-rejected; see below), inverse-compositional ECC, the joint
-bundle, and SIMD of the new sampler functions — is described in "Open
-questions" below._
-
-_**Per-move shared T (not LOO).** The "free with running sum" leave-one-out
-bonus the spec lists as the incremental variant's natural default was
-measured against the shared running consensus on `dino_dog_toy` (300 patches,
-1369 views): LOO yielded mean ECC **0.82** at 5 sweeps vs shared T's **0.87**
-— a clear regression at the small view counts of real tracks (3–5 views),
-where the chain of LOO updates amplifies drift more than the self-pollution it
-removes. The per-move path therefore uses shared `T`. This is recorded as the
-measured negative result; LOO remains a one-line cost change if a future
-measurement (large-N tracks?) shifts the verdict. See
-`crates/sfmtool-core/src/patch/keypoint_subpixel.rs::RunningConsensus`. On real
-data per-move (shared) matches per-sweep within noise (mean ECC 0.8725 vs
-0.8716 at 5 sweeps), with a small one-sweep convergence advantage (0.8610 vs
-0.8584). It lands as **opt-in** behind `consensus_refresh = "per_move"`; the
-default stays `per_sweep`._
-
-A **standalone** algorithm: given a keypoint that
-is **already close** to correct, refine it to sub-pixel by **local** continuous
-optimization of image photoconsistency (gradients, fractional sampling). It does
-no global search and no view selection. Its typical caller is keypoint
-localization, but it is specified independently and usable on any
-approximately-correct keypoint set.
-Intended module: `sfmtool-core/src/patch/keypoint_subpixel.rs`._
+Photometric subpixel keypoint refinement takes a keypoint that is already close
+to correct and moves it to sub-pixel accuracy, by locally optimizing how well the
+image content around it agrees across the views that see it — sampling each image
+at fractional positions and following its gradients. It does no global search and
+no view selection. Its typical caller is keypoint localization, but it is
+specified independently and usable on any approximately-correct keypoint set.
 
 This is the **high-accuracy** refinement: a continuous solve reaches the true
 optimum of the photometric objective, so it best approximates ground truth. A
@@ -88,6 +16,15 @@ is never whether to keep it, only when a cheaper approximation suffices instead.
 
 ## Contract and scope
 
+The refiner lives in
+[keypoint_subpixel.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs),
+bound as `PatchCloud.refine_keypoints`, and is driven from the pipeline in
+[_embed_patches.py](../../../src/sfmtool/_embed_patches.py) via
+`sfm embed-patches --subpixel`. The sampler value+gradient interface it needs
+(`remap_bilinear_with_grad`, `remap_aniso_with_grad`, `WarpMap::get_jacobian`) is
+described under "Design details" below; it collapses the per-Gauss-Newton-step
+gradient build from five renders (value + four finite differences) to one.
+
 This is a **local refiner**, and its guarantees hold only inside that scope:
 
 - **Precondition: the seed is close.** Each input keypoint must already lie within
@@ -95,6 +32,18 @@ This is a **local refiner**, and its guarantees hold only inside that scope:
   algorithm linearizes around the seed; a seed outside the basin can converge to a
   wrong local optimum or be rejected, not rescued. Putting the keypoint *in* the
   basin is the **caller's** job (e.g. a discrete search).
+- **Seeds come from the reconstruction.** `refine_keypoints` requires starting
+  keypoints. On an `embedded_patches` recon it seeds each view at that
+  observation's stored inline keypoint, with per-view fall-through to the
+  reprojected centre for views carrying no inline observation (ones `select_views`
+  admitted beyond the SIFT track). On a `sift_files` recon, which stores none, a
+  call without explicit `starting_keypoints` raises `ValueError` — a projection
+  alone is not a keypoint for a local refiner, so convert to `embedded_patches`
+  first or supply per-point seeds. (`refine_normals` is a normal optimizer rather
+  than a local refiner, so its `use_stored_keypoints` flag stays a plain bool
+  defaulting to `True`; explicit `False` anchors every view at the reprojected
+  centre regardless of recon kind, which is what `sfm compare --strips` and the
+  cross-validation script want as a defined comparison reference.)
 - **Scope: local only.** It searches no grid and visits no distant candidates; it
   takes a few Gauss–Newton steps from the seed. It will not recover a grossly
   mislocalized keypoint.
@@ -211,7 +160,7 @@ to finest:
   is the delta plus one renormalization — negligible next to sampling/gradients.
   **Bonus:** leave-one-out is then free — view `v`'s reference is
   `normalize(S − w_v·ẑ_v)`.
-  - _Measured outcome (see implementation status above): on dino_dog_toy
+  - _Measured outcome: on dino_dog_toy
     per-move matched per-sweep within noise at converged sweep counts; per-move
     at a single sweep narrowly beat single-pass-frozen at the same cost
     (ECC 0.8610 vs 0.8584). LOO regressed (0.82 vs 0.87 shared at 5 sweeps) at
@@ -220,6 +169,21 @@ to finest:
     treat the variant as "tighter within-sweep coupling" rather than a
     convergence-speed claim, and `N = 2` is not recommended (shared-`T`
     self-pollution dominates at the minimal view count)._
+
+_**Per-move shared T (not LOO).** The "free with running sum" leave-one-out
+bonus the spec lists as the incremental variant's natural default was
+measured against the shared running consensus on `dino_dog_toy` (300 patches,
+1369 views): LOO yielded mean ECC **0.82** at 5 sweeps vs shared T's **0.87**
+— a clear regression at the small view counts of real tracks (3–5 views),
+where the chain of LOO updates amplifies drift more than the self-pollution it
+removes. The per-move path therefore uses shared `T`. This is recorded as the
+measured negative result; LOO remains a one-line cost change if a future
+measurement (large-N tracks?) shifts the verdict. See `RunningConsensus` in
+[keypoint_subpixel.rs](../../../crates/sfmtool-core/src/patch/keypoint_subpixel.rs). On real
+data per-move (shared) matches per-sweep within noise (mean ECC 0.8725 vs
+0.8716 at 5 sweeps), with a small one-sweep convergence advantage (0.8610 vs
+0.8584). It is **opt-in** behind `consensus_refresh = "per_move"`; the
+default stays `per_sweep`._
 
 **Robustness with the incremental sum: two update frequencies.** A robust (IRLS)
 consensus couples every view's weight to all residuals, so one move perturbs them
@@ -378,7 +342,15 @@ estimate, so it is *not* validated by equivalence to one:
   optional: this algorithm only needs a patch, views, seeds, and a template.
 - **A consumer:** `sfm embed-patches` writes the refined keypoints as the
   per-observation `keypoints_xy` (the geometric anchor is defined in the v4
-  [sfmr-file-format.md](../../formats/sfmr-file-format.md)).
+  [sfmr-file-format.md](../../formats/sfmr-file-format.md)). It exposes the
+  refiner as an integer `subpixel` kwarg (`--subpixel` on the CLI): a per-round
+  outer-sweep count where `0` disables the sub-pixel pass and the localizer's
+  keypoints are used as is, and `N ≥ 1` runs the refiner with
+  `max_outer_sweeps = N`. The default is `1` — one sweep per round, on by
+  default. The pipeline always uses the per-sweep consensus variant
+  (`consensus_refresh = "per_sweep"`); the per-move (Gauss–Seidel) variant is
+  reachable only through the direct
+  `PatchCloud.refine_keypoints(consensus_refresh="per_move")` binding.
 
 ## Open questions
 

@@ -1,10 +1,5 @@
 # Flow-Based Feature Matching
 
-**Status:** Implemented — `feature_match/_flow_matching.py`
-(`flow_match_sequential`, production descriptor threshold L2 ≤ 250) on top of
-the Rust optical-flow module, driven by `sfm match --flow` / `sfm solve
---flow-match`; the `sfm flow` command provides the diagnostics described here.
-
 ## The Idea
 
 Traditional SfM feature matching compares SIFT descriptors between image pairs to find
@@ -71,6 +66,12 @@ matcher threshold chosen below is 250 — see Observations).
 ## Matching Pipeline Design
 
 ### Overview
+
+The matcher is
+[_flow_matching.py](../../../src/sfmtool/feature_match/_flow_matching.py)
+(`flow_match_sequential`), built on the Rust optical-flow module and driven by
+`sfm match --flow` and `sfm solve --flow-match`; `sfm flow` provides the
+diagnostics described here.
 
 The pipeline combines two stages:
 

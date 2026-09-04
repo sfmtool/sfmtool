@@ -1,13 +1,5 @@
 # SIFT
 
-> **Status: Implemented (Phase 1 — CPU + SIMD + multithread).** The pure-Rust
-> SIFT detector and descriptor ship in `crates/sfmtool-core/src/features/sift/`, with
-> PyO3 bindings (`sift/extract.rs`, `io/sift.rs`) and the `sfmtool` backend of
-> `sfm sift` / `ws init --feature-tool sfmtool`. Structured to mirror the
-> optical-flow implementation (`specs/core/features/optical-flow.md`). GPU remains
-> deferred to a later phase (a future `specs/core/features/gpu-sift.md`); the on-disk
-> incremental-extraction extensions below are likewise still future work.
-
 ## Motivation
 
 sfmtool relies on COLMAP and OpenCV for many of its algorithms; one of those is SIFT
@@ -515,8 +507,16 @@ COLMAP/OpenCV backends share the same queue unchanged (they return eager lists).
 
 ## Interface: split detection from description
 
-**Yes — split keypoint finding from descriptor creation.** Recommended public API in
-`crates/sfmtool-core/src/features/sift/`:
+The detector and descriptor live in
+[features/sift/](../../../crates/sfmtool-core/src/features/sift), bound as
+`sfmtool._sfmtool.sift` by
+[extract.rs](../../../crates/sfmtool-py/src/sift/extract.rs) and driven by the
+`sfmtool` backend of `sfm sift` and `ws init --feature-tool sfmtool`; the
+implementation is CPU-only, SIMD and rayon rather than compute shaders, and it
+mirrors the structure of the optical-flow module
+([optical-flow.md](optical-flow.md)).
+
+**Yes — split keypoint finding from descriptor creation.** The public API:
 
 ```rust
 // Stage 1: detect + localize + assign orientation(s). Cheap and small per

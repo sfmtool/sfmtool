@@ -1,9 +1,5 @@
 # Translation Averaging from Pairwise Baselines
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/geometry/translation_averaging.rs`, bound under
-`sfmtool._sfmtool.geometry`.
-
 With every frame's rotation known and the direction of the baseline between
 each connected pair read from correspondences
 ([baseline-direction.md](baseline-direction.md)), the camera centres of the
@@ -200,8 +196,11 @@ the same bytes.
 
 ## Binding
 
-Three functions in the geometry module of the bindings, taking NumPy arrays
-and returning NumPy arrays and a census dict:
+The operations live in
+[translation_averaging.rs](../../../crates/sfmtool-core/src/geometry/translation_averaging.rs)
+and are bound in the geometry module of the bindings, under
+`sfmtool._sfmtool.geometry`, as four functions taking NumPy arrays and
+returning NumPy arrays and a census dict:
 
 - `average_translations(edges, directions, weights, lengths=None,
   length_weights=None, *, n_frames, rounds=...)`: `edges` an `(m, 2)` frame

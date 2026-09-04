@@ -1,8 +1,5 @@
 # Source Clusters: What a Member's Admission Left Behind
 
-**Status:** Implemented in `crates/sfmtool-core/src/analysis/source_clusters.rs`,
-bound as `sfmtool._sfmtool.analysis.source_clusters` and `assign_bands`.
-
 A reconstruction member is drawn from a cluster selection and holds a subset of
 its clusters. The rest are not worse evidence; a smaller feature localizes
 better, and the reason it was left behind is that the selection the member was
@@ -80,6 +77,10 @@ runs the join once against the selection, then brings the candidates back one
 band at a time, coarsest first.
 
 ## The binding
+
+The kernel lives in
+[source_clusters.rs](../../../crates/sfmtool-core/src/analysis/source_clusters.rs),
+bound as `sfmtool._sfmtool.analysis.source_clusters` and `assign_bands`.
 
 ```python
 from sfmtool._sfmtool.analysis import assign_bands, source_clusters

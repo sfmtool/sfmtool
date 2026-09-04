@@ -1,22 +1,14 @@
 # The `SFMTOOL_PINHOLE` kernels
 
-**Status:** Implemented.
-`crates/sfmtool-core/src/camera/distortion/bspline.rs` (basis evaluation and
-the monotonicity check, shared with the fisheye sibling),
-`crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`distort_sfmtool_pinhole`, `undistort_sfmtool_pinhole`,
-`sfmtool_pinhole_radial_factor`, `sfmtool_pinhole_unfolded`,
-`recover_radial_bspline`), the dispatch in
-`crates/sfmtool-core/src/camera/distortion.rs` and the classification arms in
-`crates/sfmtool-core/src/camera/intrinsics.rs`; tests in
-`camera/distortion/tests.rs`, `camera/intrinsics/tests.rs` and
-`tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py`.
-
 ## Summary
 
-The computation behind the `SFMTOOL_PINHOLE` camera model defined in
-[../../formats/sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md).
-This spec covers forward projection, the inverse recovery of the image-plane
+A perspective camera whose radial distortion is a monotone cubic B-spline
+correction rather than a polynomial, so a wide lens can be calibrated without a
+fitted curve that folds back on itself — these are the kernels that project,
+unproject and differentiate it. The model itself — its parameter list and its
+serialization — is defined in
+[sfmtool-camera-models.md](../../formats/sfmtool-camera-models.md); this spec is
+the computation behind it, and covers forward projection, the inverse recovery of the image-plane
 radius, the analytic ray Jacobian, enforcement of the monotonicity invariant,
 and the model's classification flags. Basis evaluation is the shared machinery
 described in
@@ -26,6 +18,17 @@ read at the radial coordinate `ρ` on the domain `[0, ρ_max]` instead of `θ` o
 coefficients, is specified in [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 
 ## Forward projection
+
+The kernels live in
+[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs)
+(`distort_sfmtool_pinhole`, `undistort_sfmtool_pinhole`,
+`sfmtool_pinhole_radial_factor`, `sfmtool_pinhole_unfolded`,
+`recover_radial_bspline`), sharing the B-spline basis in
+[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs) with
+the fisheye sibling; dispatch is in
+[distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs) and the
+classification arms in
+[intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
 
 The map is the perspective family's: the optical-frame ray divides by `rz`,
 and the quotient's radius **is** the model's radial coordinate,

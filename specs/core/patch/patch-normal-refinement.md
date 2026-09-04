@@ -1,8 +1,5 @@
 # Photometric Patch-Normal Refinement
 
-**Status:** Builds on `specs/core/patch/patch-cloud.md`
-(`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
-
 ## Problem
 
 A reconstructed 3D point `X` is seen by cameras `{(Kᵢ, Tᵢ)}`. Its surface around
@@ -281,14 +278,17 @@ is the way to converge in one pass instead.
 
 ## Rust API
 
-Everything below lives in `sfmtool-core/src/patch/normal_refine/`, split across
+Everything below lives in
+[normal_refine/](../../../crates/sfmtool-core/src/patch/normal_refine/), split across
 `params` (the config and result types), `parameterization` (the sphere exp-map),
 `support` / `level` (window and per-level frozen support), `znorm` (render +
 z-normalize), `consensus` (`Φ`), `search` (the coarse-to-fine walk),
 `view_stack` (the multi-view render substrate the representative fuses),
 `view_subset` (the D-optimal basis cap), `obliquity` (the two priors) and
 `fronto_cache` (the candidate cache). The PyO3 binding is
-`PatchCloud.refine_normals`.
+`PatchCloud.refine_normals`. The patch primitives it renders through —
+`OrientedPatch`, `WarpMap::from_patch` and `remap_*` — are specified in
+[patch-cloud.md](patch-cloud.md).
 
 ```rust
 /// A fully-calibrated source camera: its intrinsics, its world-to-camera pose,

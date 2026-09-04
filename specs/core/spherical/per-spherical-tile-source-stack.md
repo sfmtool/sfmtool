@@ -1,17 +1,5 @@
 # Per-spherical-tile source patch stack
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/spherical/per_tile_source_stack.rs` (the
-rotation-only build) and exposed to Python as
-`sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`. The pose-aware variant
-described under "Pose-aware variant" is still future work.
-
-The build runs the outer source loop sequentially and parallelises across
-each source's kept tiles via rayon — each tile-task writes to its own
-unique CSR row in the per-level buffers, so the writes are race-free.
-The `BuildParams::max_in_flight_sources` knob is reserved for future
-parallel-source chunking; setting it has no effect today.
-
 ## Motivation
 
 Many algorithms operating on a `SphericalTileRig` need the same input:
@@ -170,6 +158,10 @@ The CSR layout supports three access patterns naturally:
   workloads want.
 
 ## API
+
+The stack lives in
+[per_tile_source_stack.rs](../../../crates/sfmtool-core/src/spherical/per_tile_source_stack.rs),
+bound as `sfmtool._sfmtool.spherical.PerSphericalTileSourceStack`.
 
 ```rust
 /// Pixel-element storage trait.
@@ -655,15 +647,14 @@ rotation-only warps. The output shape is identical — same pyramid
 structure, same valid-mask rule, same CSR layout; only the per-source
 warp construction differs.
 
-## Status / dependencies
+## Dependencies
 
-Depends on:
+The primitive rests on two things and nothing else:
 
-- `SphericalTileRig` (`specs/core/spherical/spherical-tiles-rig.md`) — DONE.
-  - `direction(t)`, `tile_rotation(t)`, `tile_camera()`,
-    `patch_size`. All shipped.
+- `SphericalTileRig` ([spherical-tiles-rig.md](spherical-tiles-rig.md)) for
+  `direction(t)`, `tile_rotation(t)`, `tile_camera()` and `patch_size`.
 - `WarpMap::from_cameras_with_rotation` and `WarpMap::remap_bilinear`
-  (`specs/core/camera/image-warping.md`, Pose-Aware Construction) — DONE.
+  ([image-warping.md](../camera/image-warping.md), Pose-Aware Construction).
 
 Independently testable; no external state beyond the rig + sources.
 

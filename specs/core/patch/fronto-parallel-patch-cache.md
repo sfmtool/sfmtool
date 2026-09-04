@@ -1,16 +1,15 @@
 # Fronto-Parallel Patch Cache for Normal Refinement
 
-**Status:** Phases 1 and 2 implemented, and **the cache is the default**
-(`CacheMode::FrontoParallel`, `cache_supersample = 2` — the quality-preserving
-operating point; `cache=off` / `quality=fine` opts back into the exact
-source-rendering path). The cache lives in
-`sfmtool-core/src/patch/normal_refine/fronto_cache.rs`, selected by
-`NormalRefineParams { cache: CacheMode, cache_supersample }`, exposed through
-`PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
-`sfm xform --refine-normals cache=…/quality=…`. The resample is runtime-dispatched
-to an AVX2 kernel with the scalar path as reference/fallback. Builds on
-`specs/core/patch/patch-normal-refinement.md` (the search this accelerates) and
-`specs/core/patch/patch-cloud.md` (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`).
+Photometric normal refinement picks a surfel's orientation by scoring candidate
+normals, and it scores each one by re-rendering the little patch of surface into
+every camera that sees it — which is where nearly all of its time goes. This
+cache renders one patch per view up front, oriented square-on to that camera,
+and obtains every candidate's rendering as a cheap affine warp of that stored
+patch, so the source images are read once per refinement instead of once per
+candidate. It is the default path for the search described in
+[patch-normal-refinement.md](patch-normal-refinement.md), and it renders through
+the patch primitives (`OrientedPatch`, `WarpMap::from_patch`, `remap_*`)
+specified in [patch-cloud.md](patch-cloud.md).
 
 ## Problem
 
@@ -189,7 +188,16 @@ runtime-R kernel.
 
 ## Implementation
 
-`fronto_cache.rs` holds the whole cache: `prerender` (the per-view base render,
+The cache lives in
+[fronto_cache.rs](../../../crates/sfmtool-core/src/patch/normal_refine/fronto_cache.rs),
+selected by `NormalRefineParams { cache: CacheMode, cache_supersample }` and
+reachable from `PatchCloud.refine_normals(cache=…, cache_supersample=…)` and
+`sfm xform --refine-normals cache=…/quality=…`. It is on by default
+(`CacheMode::FrontoParallel`, `cache_supersample = 2` — the quality-preserving
+operating point); `cache=off` / `quality=fine` opts back into the exact
+source-rendering path.
+
+That one file holds the whole cache: `prerender` (the per-view base render,
 the affine fit and its one-off inverse), the `FrontoCache` / `FrontoBase` /
 `Scratch` types, and `eval_phi` (the per-candidate composition, resample,
 z-normalize and consensus). `coarse_to_fine` calls `prerender` once per patch and

@@ -1,20 +1,12 @@
 # Structure-Free Focal Vote
 
-**Status:** Implemented (2026-07-27) —
-`crates/sfmtool-core/src/geometry/focal_vote.rs` (kernel + consensus) and
-`homography_estimation.rs` (4-point LO-RANSAC), tests in the respective
-`*/tests.rs`; PyO3 bindings in `crates/sfmtool-py/src/geometry/{focal_vote,
-homography_estimation}.rs` (`sfmtool._sfmtool.geometry.focal_vote` /
-`estimate_homography`); Python tests in
-`tests/rust_bindings/test_focal_vote_rust_bindings.py`.
-
 ## Overview
 
-`focal_vote` estimates a shared focal length from cluster-track observations
-without building any reconstruction. Image pairs vote independently through
-one of two estimators, chosen per pair by what the pair's geometry can
-observe, and the consensus focal is the median of the pooled votes from both
-families:
+The focal vote estimates a shared focal length from cluster-track
+observations before any reconstruction exists. Image pairs vote independently
+through one of two estimators, chosen per pair by what the pair's geometry
+can observe, and the consensus focal is the median of the pooled votes from
+both families:
 
 - **Epipolar votes** — pairs whose correspondences carry parallax vote the
   Bougnoux focal of a robustly estimated fundamental matrix. Both cameras
@@ -201,29 +193,21 @@ callers should expect the pool to be rotation-dominated).
 
 ## Camera-Model Columns (Equidistant Fisheye)
 
-**Status:** Implemented (2026-08-08) —
-`crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs` (the two
-scan cells, gates and certificates) and the column selection, arbitration
-and per-column diagnostics in `focal_vote.rs`; tests in
-`focal_vote/column_scan/tests.rs` and `focal_vote/tests.rs`; PyO3
-binding parameter `columns` in
-`crates/sfmtool-py/src/geometry/focal_vote.rs`, Python tests in
-`tests/rust_bindings/test_focal_vote_rust_bindings.py`. Validation
-coverage: two calibrated fisheye captures (one Insta360 lens family at
-two scales, 211° FOV) and two pinhole controls — model verdict correct
-on all four, pooled focal within 1.2% of the best-fit equidistant focal
-(kerry 138.3 px against 136.9; kp360 276.6 px against 273.5) — plus
-three uncalibrated OmniPhotos rotating-rig captures on a second Insta360
-One X body at 1920², all three arbitrated fisheye, voting 548–584 px
-(6.6% spread). Gate constants below are the prototype's data-derived
-values.
-
 Both estimator families generalize over the camera model through the
 pixel→ray map. A **column** is a camera model hypothesis supplying an
 invertible map from pixels to unit rays, parameterized by its own focal.
 (The two ray-space estimators the fisheye cells scan are also exposed as
 standalone single-camera primitives — see
 [relative-pose.md](relative-pose.md).)
+
+Validation coverage: two calibrated fisheye captures (one Insta360 lens
+family at two scales, 211° FOV) and two pinhole controls — the model
+verdict is correct on all four, and the pooled focal is within 1.2% of the
+best-fit equidistant focal (kerry 138.3 px against 136.9; kp360 276.6 px
+against 273.5) — plus three uncalibrated OmniPhotos rotating-rig captures
+on a second Insta360 One X body at 1920², all three arbitrated fisheye,
+voting 548–584 px (6.6% spread). The gate constants below are the
+data-derived values from those captures.
 
 - **Pinhole** — `ray ∝ ((x − cx)/f, (y − cy)/f, 1)`. The implemented
   kernel above is this column; its two cells (epipolar, rotation) have
@@ -414,6 +398,14 @@ not hand it to a consumer expecting another fisheye parameterization's
 focal.
 
 ## Binding
+
+The kernel and its consensus live in
+[focal_vote.rs](../../../crates/sfmtool-core/src/geometry/focal_vote.rs), the
+camera-model column scans in
+[column_scan.rs](../../../crates/sfmtool-core/src/geometry/focal_vote/column_scan.rs),
+and the 4-point LO-RANSAC homography in
+[homography_estimation.rs](../../../crates/sfmtool-core/src/geometry/homography_estimation.rs),
+bound as `sfmtool._sfmtool.geometry.focal_vote` and `estimate_homography`.
 
 `sfmtool._sfmtool.geometry.focal_vote(cluster_indexes, image_indexes,
 positions_xy, width, height, seed=0, epipolar_min_disp_frac=0.02,

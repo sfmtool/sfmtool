@@ -1,10 +1,5 @@
 # Baseline Direction from Ray Coplanarity
 
-**Status:** Implemented in
-`crates/sfmtool-core/src/geometry/baseline_direction.rs`, bound as
-`sfmtool._sfmtool.geometry.baseline_directions`. See "What consumes it" for
-the obligation the exactness of the directions places on a caller.
-
 With both frames' rotations known, the direction between their centres is
 readable from correspondences alone, with no depths and no translation solve.
 The baseline `b = c_j - c_i` is coplanar with every point's two world rays:
@@ -15,7 +10,9 @@ b . (u_i x u_j) = 0
 
 so `b` is the null space of the matrix whose rows are those normals, one row
 per shared point. Every edge of a graph is one such solve, and the whole graph
-is one call.
+is one call. The directions come back exact, and that exactness places an
+obligation on whatever consumes them — see
+[What consumes it](#what-consumes-it).
 
 ## A row is worth the baseline it saw
 
@@ -56,6 +53,11 @@ reported beside the direction, so a caller can see whether the vote was a
 majority or a coin toss.
 
 ## What comes back
+
+The solve lives in
+[baseline_direction.rs](../../../crates/sfmtool-core/src/geometry/baseline_direction.rs),
+bound as `sfmtool._sfmtool.geometry.baseline_directions`: one call takes the
+whole graph and returns one record per edge.
 
 Per edge: the unit direction, how many rows the edge was given and how many
 cleared the bound, the conditioning of the null space (the second-smallest

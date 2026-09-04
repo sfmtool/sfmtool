@@ -1,18 +1,5 @@
 # Projection Jacobian (ray-to-pixel derivatives)
 
-**Status:** Implemented (perspective family — `SfmtoolPinhole` included —
-plus `EquidistantFisheye`, `SimpleRadialFisheye` and `SfmtoolFisheye`) —
-`crates/sfmtool-core/src/camera/distortion.rs`
-(`CameraIntrinsics::ray_to_pixel_with_jacobian`, `CameraModel::distort_jacobian`),
-`crates/sfmtool-core/src/camera/distortion/kernels.rs`
-(`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`,
-`sfmtool_pinhole_radial_factor`) and
-`crates/sfmtool-core/src/camera/intrinsics.rs`
-(`CameraModel::supports_pixel_jacobian`); tests in
-`camera/distortion/tests.rs`. Core Rust only — no Python binding yet, as the
-current consumer is the native pose refinement (see
-[absolute-pose.md](../geometry/absolute-pose.md)).
-
 ## Purpose
 
 The analytic derivative of the forward projection, so gradient-based
@@ -52,6 +39,15 @@ to a finite difference. A caller checks `supports_pixel_jacobian` once per camer
 choose the analytic or fallback path.
 
 ## API
+
+`CameraIntrinsics::ray_to_pixel_with_jacobian` and
+`CameraModel::distort_jacobian` live in
+[distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs), the
+per-model kernels (`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`,
+`sfmtool_pinhole_radial_factor`) in
+[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs), and
+`CameraModel::supports_pixel_jacobian` in
+[intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
 
 ```rust
 /// Pixel (u, v) plus the 2×3 ∂(u, v)/∂ray, row-major.
@@ -184,3 +180,5 @@ Two limits on the optical axis, where `(ux, uy)` is undefined:
   [bundle-adjustment.md](../geometry/bundle-adjustment.md).)
 - Any optimizer or normal-equation assembly; this is the measurement
   derivative a solver consumes.
+- No Python binding — the consumer is the native pose refinement, see
+  [absolute-pose.md](../geometry/absolute-pose.md).

@@ -1,14 +1,14 @@
 # Cluster Warp Consistency (Weak-Perspective Factorization Residual)
 
-_Status: **implemented** (2026-07-10). A reconstruction-free per-member
-consistency signal for cluster patches: how well each member's refined
-affine warp agrees with a single jointly-fitted weak-perspective camera per
-image and one planar tangent frame per cluster. Computed during
-`sfm cluster-patches` (after [cluster-patch
-refinement](cluster-patch-refinement.md)) and stored as
-`cluster_patches/member_consistency_residual` in the `.matches` file — a
-**signal, not a gate**: consumers pick their own threshold, mirroring how
-`member_zncc` / `member_shift_px` enable re-vetting without re-running._
+A cluster groups SIFT detections across several images that are all believed to
+see one surface point, and cluster-patch refinement fits every member an affine
+warp carrying the reference member's image patch onto that member's image.
+Cluster warp consistency scores, per member, how well that warp agrees with the
+rest of the cluster — a purely geometric check that needs no camera poses and no
+reconstruction, so it can run before any solve exists. It is a signal rather
+than a gate: the residual is stored per member so each consumer picks its own
+threshold, the way `member_zncc` and `member_shift_px` already let consumers
+re-vet a cluster set without re-running the refinement.
 
 ## Problem
 
@@ -54,8 +54,12 @@ exploits, with local affine frames in place of tracked points.
 
 ## Algorithm
 
-`warp_consistency_residuals` in
-`crates/sfmtool-core/src/patch/cluster_refine/consistency.rs`:
+The kernel is `warp_consistency_residuals` in
+[consistency.rs](../../../crates/sfmtool-core/src/patch/cluster_refine/consistency.rs).
+It runs inside `refine_cluster_patches` (bound as
+`sfmtool._sfmtool.matching.refine_cluster_patches`), so `sfm cluster-patches`
+produces the residuals as a post-pass after
+[cluster-patch refinement](cluster-patch-refinement.md):
 
 1. **Fit set.** Per refinable cluster: the reference (`J = I`) plus every
    `Kept` member whose warp 2×2 clears `|det| ≥ 1e-6`; clusters with ≥ 2

@@ -1,9 +1,5 @@
 # Observation adjacency graph: image-space point neighbourhoods
 
-**Status:** Implemented (2026-08-01) — core in
-`crates/sfmtool-core/src/analysis/observation_adjacency.rs`, exposed to
-Python as `sfmtool._sfmtool.analysis.build_observation_adjacency`.
-
 ## Overview
 
 Several per-point operations need to know **which reconstructed points are
@@ -90,6 +86,10 @@ index)`, so the nearest surface neighbours come first and ordering is fully
 deterministic.
 
 ## API
+
+The builder lives in
+[observation_adjacency.rs](../../../crates/sfmtool-core/src/analysis/observation_adjacency.rs),
+bound as `sfmtool._sfmtool.analysis.build_observation_adjacency`.
 
 ```rust
 pub struct ObservationAdjacencyParams {

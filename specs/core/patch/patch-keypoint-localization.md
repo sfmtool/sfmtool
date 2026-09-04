@@ -1,14 +1,17 @@
 # Patch-Keypoint Localization (Congealing)
 
-_Status: draft for review. The per-point **keypoint position refinement**
-algorithm called by the [sift-based → patch-based reconstruction
-pipeline](sift-to-patch-reconstruction.md). Given one point's patch, a set of
-views, and a starting keypoint per view, it refines each keypoint to sub-pixel,
-**dropping views that won't co-register** so the rest register against a cleaner
-consensus, and returns which views it kept. The keypoints it produces are defined
+Patch-keypoint localization refines, for a single 3D point, exactly where that
+point's piece of surface appears in each image that sees it. Given the point's
+patch — a small oriented square of surface carrying a reference bitmap — a set of
+views, and a rough starting keypoint in each of them, it registers all the views
+against a shared consensus of the patch's appearance, moves every keypoint to
+sub-pixel, and **drops the views that will not co-register** so the rest agree
+against a cleaner consensus; it reports which views it kept. It is the per-point
+refinement step of the [sift-based → patch-based reconstruction
+pipeline](sift-to-patch-reconstruction.md). The keypoints it produces are defined
 geometrically in [sfmr-file-format.md](../../formats/sfmr-file-format.md)
 ("Observation source"); this spec is one way to obtain them, not part of their
-definition._
+definition.
 
 ## Problem
 
@@ -171,10 +174,13 @@ The algorithm returns:
 
 ## Implementation
 
-The refiner lives in `sfmtool-core::patch` (Rust), exposed through a PyO3 entry
-point the pipeline calls per point. It reuses the existing patch machinery:
+The refiner is `localize_patch_keypoints` / `localize_patch_cloud_keypoints` in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs),
+bound as `PatchCloud.localize_keypoints` and called per point by the pipeline in
+[_embed_patches.py](../../../src/sfmtool/_embed_patches.py). It reuses the
+existing patch machinery:
 
-- Patch rendering per view reuses `WarpMap::from_patch` / `warp_maps_for_patch`
+- Patch rendering per view reuses `WarpMap::from_patch`
   and the patch cloud ([patch-cloud.md](patch-cloud.md)) — already camera-model
   agnostic via `ray_to_pixel`.
 - The robust consensus reuses the IRLS template from patch-normal refinement.
@@ -201,12 +207,11 @@ point the pipeline calls per point. It reuses the existing patch machinery:
 The patch size is carried by the frame the algorithm is handed (the `(u, v)`
 half-vectors).
 
-_Status: v1 implemented in
-`crates/sfmtool-core/src/patch/keypoint_localize.rs`
-(`localize_patch_keypoints` / `localize_patch_cloud_keypoints`), exposed as
+## Implementation details
+
 `PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
-min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returning a per-point
+min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
 `{point_index, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
 **context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
 shift search slides without re-warping), z-normalizes the cores into a shared
@@ -223,10 +228,10 @@ views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
 order-preserving, and seeds default to the point's own projection (`acc = 0`); a
 supplied starting keypoint is unprojected onto the plane to initialize `acc`. The
 render → z-normalize → robust-consensus primitives are shared with `normal_refine`
-(widened to `pub(super)`), not duplicated. Defaults match the table above with
+(`pub(super)`), not duplicated. Defaults match the table above with
 `min_grazing_cos = 0.1`, `robust_iters = 3`, and `convergence_px = 0.05`. The
 starting-keypoint seed is a per-view `Option` parallel to the view set
 (`localize_patch_keypoints(..., starting_keypoints, ...)`, exposed on the PyO3
 binding as `starting_keypoints={point_index: [[x, y] | None, ...]}`): `None` for
 one view seeds that view at its projection while its siblings keep their explicit
-seeds, and an all-`None` list is bit-identical to supplying no seeds._
+seeds, and an all-`None` list is bit-identical to supplying no seeds.

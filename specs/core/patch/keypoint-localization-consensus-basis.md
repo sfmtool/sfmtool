@@ -1,17 +1,14 @@
 # Keypoint localization — consensus-basis cap (basis congealing + tail registration)
 
-> Status: **implemented (2026-07-26)** —
-> `crates/sfmtool-core/src/patch/keypoint_localize.rs` (orchestration) and
-> `keypoint_localize/basis.rs` (the ranking pick), exposed as
-> `PatchCloud.localize_keypoints(basis_max_views=…)`,
-> `sfm embed-patches --localize-basis-views` and
-> `sfm xform --localize-keypoints basis_max_views=…`. The default is **`8` at
-> every layer** (2026-07-27, adopted from the A/B + downstream ladder evidence
-> below — roughly halves embed wall; a point with `V ≤ 8` views takes the
-> uncapped path unchanged). Pass `0` for the uncapped, cleanest-error path,
-> preferred for ground-truth cleanup.
-
 ## Motivation
+
+Keypoint localization refines one 3D point's image position in every view that
+sees it, aligning those views against a shared consensus of what the point looks
+like. The consensus-basis cap bounds how many views take part in *building* that
+consensus — a small, well-chosen basis — and registers every remaining view once
+against the finished template. It exists because the cost of the consensus grows
+with the square of the view count while its quality stops improving after a
+modest number of well-matched views.
 
 Keypoint localization congeals **every** view of a point's view set against a
 leave-one-out consensus of all the others. Per congealing round that is
@@ -50,6 +47,16 @@ so a point with 20 raw views of which 10 survive the filters is uncapped at
 `K = 12`.
 
 ## Parameters
+
+The cap is orchestrated in
+[keypoint_localize.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize.rs)
+with the ranking pick in
+[basis.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/basis.rs),
+exposed as `PatchCloud.localize_keypoints(basis_max_views=…)`,
+`sfm embed-patches --localize-basis-views` and
+`sfm xform --localize-keypoints basis_max_views=…`. The default is `8` at every
+layer; `0` restores the uncapped path, which has the cleanest error and is the
+one to reach for when producing ground truth.
 
 New fields on `KeypointLocalizeParams` (mirrored as PyO3 kwargs):
 
