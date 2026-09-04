@@ -45,6 +45,7 @@
 use std::collections::{HashMap, HashSet};
 
 use nalgebra::Matrix3;
+use rayon::prelude::*;
 
 use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
@@ -733,6 +734,29 @@ pub fn focal_vote_with_options(
         ..Default::default()
     };
 
+    // Each candidate pair's estimators depend on nothing but that pair's own
+    // correspondences and the shared options — both `estimate_fundamental` and
+    // `estimate_homography` seed their sampler from `options.seed` alone, so no
+    // sampler state crosses pairs — and the pairs therefore run in parallel.
+    // The outcomes come back in pair order and are folded sequentially, so
+    // every counter, every pooled vote and every diagnostic entry lands exactly
+    // where the serial pass put it.
+    let outcomes: Vec<EpipolarPairOutcome> = epipolar_pairs
+        .par_iter()
+        .map(|&(a, b)| {
+            epipolar_pair_outcome(
+                &image_clusters,
+                &pair_accum,
+                a,
+                b,
+                pp,
+                max_wh,
+                &f_opts,
+                &h_opts,
+            )
+        })
+        .collect();
+
     // `bou` holds the pooled epipolar votes — one geometric-mean vote per
     // direction-consistent pair; `bou_detail` holds every in-band directional
     // focal (the diagnostic layer, independent of what pools).
@@ -744,63 +768,18 @@ pub fn focal_vote_with_options(
     let mut n_band_rejected = 0usize;
     let mut n_degenerate = 0usize;
     let mut n_inconsistent_pairs = 0usize;
-    for &(a, b) in &epipolar_pairs {
-        let (x1, x2) = pair_correspondences(&image_clusters, a as usize, b as usize);
-        if x1.len() < 8 {
-            n_estimator_failed += 1;
-            continue;
+    for outcome in outcomes {
+        if let Some(r) = outcome.ratio {
+            ratios.push(r);
         }
-        let Some(fest) = estimate_fundamental(&x1, &x2, &f_opts) else {
-            n_estimator_failed += 1;
-            continue;
-        };
-        let n_f = fest.inliers.iter().filter(|&&b| b).count();
-        let n_h = estimate_homography(&x1, &x2, &h_opts)
-            .map(|h| h.inliers.iter().filter(|&&b| b).count())
-            .unwrap_or(0);
-        if n_f >= RATIO_MIN_F_INLIERS {
-            ratios.push(n_h as f64 / n_f as f64);
-        }
-        // Homography-dominated: F is collapsing toward H, no epipolar vote.
-        if (n_h as f64) >= 16.0_f64.max(0.8 * n_f as f64) {
-            n_h_dominated += 1;
-            continue;
-        }
-        let acc = pair_accum[&(a, b)];
-        let mut in_band: Vec<f64> = Vec::with_capacity(2);
-        for (transposed, f_dir) in [(false, fest.f_matrix), (true, fest.f_matrix.transpose())] {
-            // A direction whose Bougnoux extraction is degenerate yields no
-            // value at all — separate from an out-of-band value.
-            let Some(v) = focal_from_fundamental(&f_dir, pp, pp) else {
-                n_degenerate += 1;
-                continue;
-            };
-            if v > FOCAL_BAND_LO * max_wh && v < FOCAL_BAND_HI * max_wh {
-                in_band.push(v);
-                bou_detail.push(EpipolarVote {
-                    image_a: a,
-                    image_b: b,
-                    shared_clusters: acc.count,
-                    mean_disp_px: acc.mean_disp(),
-                    n_f_inliers: n_f,
-                    n_h_inliers: n_h,
-                    transposed,
-                    focal_px: v,
-                });
-            } else {
-                n_band_rejected += 1;
-            }
-        }
-        // The two cameras share the focal, so the two directional focals are
-        // two measurements of the same quantity. Agreement certifies the pair;
-        // it then casts ONE vote, their geometric mean. A pair that disagrees
-        // (or has only one in-band direction) carries no consistent focal.
-        match in_band.as_slice() {
-            [f0, f1] if (f0.ln() - f1.ln()).abs() <= DIRECTION_AGREEMENT_BAND => {
-                bou.push((f0 * f1).sqrt());
-            }
-            [_, _] | [_] => n_inconsistent_pairs += 1,
-            _ => {}
+        n_estimator_failed += usize::from(outcome.estimator_failed);
+        n_h_dominated += usize::from(outcome.h_dominated);
+        n_degenerate += outcome.n_degenerate;
+        n_band_rejected += outcome.n_band_rejected;
+        n_inconsistent_pairs += usize::from(outcome.inconsistent);
+        bou_detail.extend(outcome.detail);
+        if let Some(v) = outcome.vote {
+            bou.push(v);
         }
     }
 
@@ -818,6 +797,53 @@ pub fn focal_vote_with_options(
         min_inliers: ROTATION_MIN_INLIERS,
         ..Default::default()
     };
+    // The images the scan visits, and each one's widest qualifying partner. The
+    // partner search reduces over the pair table under a total order (mean
+    // displacement descending, partner index ascending), so its answer does not
+    // depend on the table's iteration order and the images may be searched in
+    // parallel.
+    let scanned: Vec<usize> = (0..n_img).step_by(step).collect();
+    let widest: Vec<Option<(f64, u32)>> = scanned
+        .par_iter()
+        .map(|&i| widest_partner(&pair_accum, i))
+        .collect();
+
+    // Every visited image whose partner clears the displacement floor fits its
+    // homography and self-calibrates, in parallel and independently — each fit
+    // seeds its sampler from the shared options alone. A pair reached twice
+    // (two images that are each other's widest partner) is therefore computed
+    // twice and the second result discarded below, where the serial pass would
+    // have skipped the work: the surviving values are the same either way.
+    let candidates: Vec<Option<(f64, RotationVote)>> = scanned
+        .par_iter()
+        .zip(widest.par_iter())
+        .map(|(&i, best)| {
+            let &(dmean, j) = best.as_ref()?;
+            if dmean < ROTATION_MIN_DISP_FRAC * diag {
+                return None;
+            }
+            let (x1, x2) = pair_correspondences(&image_clusters, i, j as usize);
+            // Centre on the principal point: H = K R K⁻¹ has K at the origin.
+            let x1c: Vec<[f64; 2]> = x1.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
+            let x2c: Vec<[f64; 2]> = x2.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
+            let hest = estimate_homography(&x1c, &x2c, &rot_h_opts)?;
+            let fv = rotation_self_calib_focal(&hest.h_matrix, max_wh)?;
+            if fv <= FOCAL_BAND_LO * max_wh || fv >= FOCAL_BAND_HI * max_wh {
+                return None;
+            }
+            Some((
+                fv,
+                RotationVote {
+                    image: i as u32,
+                    partner: j,
+                    mean_disp_px: dmean,
+                    n_inliers: hest.inliers.iter().filter(|&&k| k).count(),
+                    focal_px: fv,
+                },
+            ))
+        })
+        .collect();
+
     let mut rot: Vec<f64> = Vec::new();
     let mut rot_detail: Vec<RotationVote> = Vec::new();
     let mut voted_pairs: HashSet<(u32, u32)> = HashSet::new();
@@ -826,57 +852,25 @@ pub fn focal_vote_with_options(
     // self-calibration accepted them.
     let mut rotation_pairs: Vec<(u32, u32)> = Vec::new();
     let mut rotation_seen: HashSet<(u32, u32)> = HashSet::new();
-    let mut i = 0usize;
-    while i < n_img {
-        let mut best: Option<(f64, u32)> = None;
-        for (&(a, b), acc) in &pair_accum {
-            let partner = if a as usize == i {
-                b
-            } else if b as usize == i {
-                a
-            } else {
-                continue;
-            };
-            if (acc.count as usize) < ROTATION_MIN_SHARED {
-                continue;
-            }
-            let dmean = acc.mean_disp();
-            let better = match best {
-                None => true,
-                Some((bd, bj)) => dmean > bd || (dmean == bd && partner < bj),
-            };
-            if better {
-                best = Some((dmean, partner));
-            }
+    for ((&i, best), candidate) in scanned.iter().zip(&widest).zip(candidates) {
+        let Some(&(dmean, j)) = best.as_ref() else {
+            continue;
+        };
+        if dmean < ROTATION_MIN_DISP_FRAC * diag {
+            continue;
         }
-        if let Some((dmean, j)) = best {
-            let key = ((i as u32).min(j), (i as u32).max(j));
-            if dmean >= ROTATION_MIN_DISP_FRAC * diag && rotation_seen.insert(key) {
-                rotation_pairs.push(key);
-            }
-            if dmean >= ROTATION_MIN_DISP_FRAC * diag && !voted_pairs.contains(&key) {
-                let (x1, x2) = pair_correspondences(&image_clusters, i, j as usize);
-                // Centre on the principal point: H = K R K⁻¹ has K at the origin.
-                let x1c: Vec<[f64; 2]> = x1.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
-                let x2c: Vec<[f64; 2]> = x2.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
-                if let Some(hest) = estimate_homography(&x1c, &x2c, &rot_h_opts) {
-                    if let Some(fv) = rotation_self_calib_focal(&hest.h_matrix, max_wh) {
-                        if fv > FOCAL_BAND_LO * max_wh && fv < FOCAL_BAND_HI * max_wh {
-                            rot.push(fv);
-                            voted_pairs.insert(key);
-                            rot_detail.push(RotationVote {
-                                image: i as u32,
-                                partner: j,
-                                mean_disp_px: dmean,
-                                n_inliers: hest.inliers.iter().filter(|&&k| k).count(),
-                                focal_px: fv,
-                            });
-                        }
-                    }
-                }
-            }
+        let key = ((i as u32).min(j), (i as u32).max(j));
+        if rotation_seen.insert(key) {
+            rotation_pairs.push(key);
         }
-        i += step;
+        if voted_pairs.contains(&key) {
+            continue;
+        }
+        if let Some((fv, vote)) = candidate {
+            rot.push(fv);
+            voted_pairs.insert(key);
+            rot_detail.push(vote);
+        }
     }
 
     // ── Consensus ────────────────────────────────────────────────────────────
@@ -988,6 +982,170 @@ pub fn focal_vote_with_options(
     }
 }
 
+/// Image `i`'s widest-displacement partner among the pairs sharing at least
+/// [`ROTATION_MIN_SHARED`] clusters, with that mean displacement.
+///
+/// The reduction is a maximum under a total order — mean displacement
+/// descending, partner index ascending — so it is independent of the pair
+/// table's iteration order.
+fn widest_partner(pair_accum: &HashMap<(u32, u32), PairAccum>, i: usize) -> Option<(f64, u32)> {
+    let mut best: Option<(f64, u32)> = None;
+    for (&(a, b), acc) in pair_accum {
+        let partner = if a as usize == i {
+            b
+        } else if b as usize == i {
+            a
+        } else {
+            continue;
+        };
+        if (acc.count as usize) < ROTATION_MIN_SHARED {
+            continue;
+        }
+        let dmean = acc.mean_disp();
+        let better = match best {
+            None => true,
+            Some((bd, bj)) => dmean > bd || (dmean == bd && partner < bj),
+        };
+        if better {
+            best = Some((dmean, partner));
+        }
+    }
+    best
+}
+
+/// One epipolar candidate pair's contribution to the closed-form pass.
+///
+/// The pair loop runs in parallel, so a pair reports what it found instead of
+/// mutating the accumulators directly; the driver folds these back in pair
+/// order, which is what keeps the parallel pass bit-identical to a serial one.
+struct EpipolarPairOutcome {
+    /// H/F inlier ratio, present only when the pair has enough F inliers to
+    /// count toward `parallax_poverty`.
+    ratio: Option<f64>,
+    /// Too few correspondences, or no usable fundamental matrix.
+    estimator_failed: bool,
+    /// Homography-dominated, so the pair casts no epipolar vote.
+    h_dominated: bool,
+    /// Directions whose Bougnoux extraction produced no value.
+    n_degenerate: usize,
+    /// Directional focals outside the plausibility band.
+    n_band_rejected: usize,
+    /// In-band directional focals, in direction order (`F` then `Fᵀ`).
+    detail: Vec<EpipolarVote>,
+    /// The pair's single pooled vote, the geometric mean of two agreeing
+    /// directional focals.
+    vote: Option<f64>,
+    /// The pair's two directions disagree, or only one was usable.
+    inconsistent: bool,
+}
+
+impl EpipolarPairOutcome {
+    /// A pair that produced nothing but the given failure flag.
+    fn failed() -> Self {
+        Self {
+            ratio: None,
+            estimator_failed: true,
+            h_dominated: false,
+            n_degenerate: 0,
+            n_band_rejected: 0,
+            detail: Vec::new(),
+            vote: None,
+            inconsistent: false,
+        }
+    }
+}
+
+/// The closed-form epipolar cell over one candidate pair: a robust fundamental
+/// matrix, the homography-domination gate on the same correspondences, and the
+/// two directional Bougnoux focals the pair's single vote is the geometric mean
+/// of.
+#[allow(clippy::too_many_arguments)]
+fn epipolar_pair_outcome(
+    image_clusters: &ImageClusters,
+    pair_accum: &HashMap<(u32, u32), PairAccum>,
+    a: u32,
+    b: u32,
+    pp: [f64; 2],
+    max_wh: f64,
+    f_opts: &FundamentalOptions,
+    h_opts: &HomographyOptions,
+) -> EpipolarPairOutcome {
+    let (x1, x2) = pair_correspondences(image_clusters, a as usize, b as usize);
+    if x1.len() < 8 {
+        return EpipolarPairOutcome::failed();
+    }
+    let Some(fest) = estimate_fundamental(&x1, &x2, f_opts) else {
+        return EpipolarPairOutcome::failed();
+    };
+    let n_f = fest.inliers.iter().filter(|&&b| b).count();
+    let n_h = estimate_homography(&x1, &x2, h_opts)
+        .map(|h| h.inliers.iter().filter(|&&b| b).count())
+        .unwrap_or(0);
+    let ratio = (n_f >= RATIO_MIN_F_INLIERS).then(|| n_h as f64 / n_f as f64);
+    // Homography-dominated: F is collapsing toward H, no epipolar vote.
+    if (n_h as f64) >= 16.0_f64.max(0.8 * n_f as f64) {
+        return EpipolarPairOutcome {
+            ratio,
+            estimator_failed: false,
+            h_dominated: true,
+            n_degenerate: 0,
+            n_band_rejected: 0,
+            detail: Vec::new(),
+            vote: None,
+            inconsistent: false,
+        };
+    }
+    let acc = pair_accum[&(a, b)];
+    let mut n_degenerate = 0usize;
+    let mut n_band_rejected = 0usize;
+    let mut detail: Vec<EpipolarVote> = Vec::with_capacity(2);
+    let mut in_band: Vec<f64> = Vec::with_capacity(2);
+    for (transposed, f_dir) in [(false, fest.f_matrix), (true, fest.f_matrix.transpose())] {
+        // A direction whose Bougnoux extraction is degenerate yields no value at
+        // all — separate from an out-of-band value.
+        let Some(v) = focal_from_fundamental(&f_dir, pp, pp) else {
+            n_degenerate += 1;
+            continue;
+        };
+        if v > FOCAL_BAND_LO * max_wh && v < FOCAL_BAND_HI * max_wh {
+            in_band.push(v);
+            detail.push(EpipolarVote {
+                image_a: a,
+                image_b: b,
+                shared_clusters: acc.count,
+                mean_disp_px: acc.mean_disp(),
+                n_f_inliers: n_f,
+                n_h_inliers: n_h,
+                transposed,
+                focal_px: v,
+            });
+        } else {
+            n_band_rejected += 1;
+        }
+    }
+    // The two cameras share the focal, so the two directional focals are two
+    // measurements of the same quantity. Agreement certifies the pair; it then
+    // casts ONE vote, their geometric mean. A pair that disagrees (or has only
+    // one in-band direction) carries no consistent focal.
+    let (vote, inconsistent) = match in_band.as_slice() {
+        [f0, f1] if (f0.ln() - f1.ln()).abs() <= DIRECTION_AGREEMENT_BAND => {
+            (Some((f0 * f1).sqrt()), false)
+        }
+        [_, _] | [_] => (None, true),
+        _ => (None, false),
+    };
+    EpipolarPairOutcome {
+        ratio,
+        estimator_failed: false,
+        h_dominated: false,
+        n_degenerate,
+        n_band_rejected,
+        detail,
+        vote,
+        inconsistent,
+    }
+}
+
 /// Build the scan candidates of one cell: each pair's full correspondence
 /// merge-join, centred on the principal point and capped. `cell_tag` separates
 /// the two cells' sampler streams so a pair reached by both draws different
@@ -1069,5 +1227,8 @@ fn model_verdict(diags: &[ColumnDiagnostics]) -> Option<CameraModel> {
         .map(|c| c.model)
 }
 
+// The synthetic captures here are the crate's fixtures for the vote, and
+// `geometry::estimate_intrinsics` reads its verdicts off the same ones rather
+// than growing a second copy of them.
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

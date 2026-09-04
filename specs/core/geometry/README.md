@@ -12,6 +12,7 @@ Pose estimation, epipolar geometry, and optimization. Implemented in
 | [rotation-locked-resection.md](rotation-locked-resection.md) | Translation-only resection with the rotation held fixed. |
 | [epipolar-estimation.md](epipolar-estimation.md) | Fundamental matrix from 2D-2D correspondences: 7-point with RANSAC, and Bougnoux focal recovery. |
 | [focal-vote.md](focal-vote.md) | Structure-free shared-focal estimation, where image pairs vote independently through per-pair estimators. |
+| [estimate-intrinsics.md](estimate-intrinsics.md) | One typed camera out of the focal vote: the model verdict, whether it is corroborated, the focal, and the votes behind them. |
 | [rotation-init.md](rotation-init.md) | Far-field, parallax-free correspondences fixing rotations before any translation is known. |
 | [reconstruction-growth.md](reconstruction-growth.md) | Registering the un-posed images of a cluster-track set against a seeded reconstruction, in batches. |
 | [bundle-adjustment.md](bundle-adjustment.md) | Staged bundle adjustment over a shared camera. |

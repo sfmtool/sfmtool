@@ -144,13 +144,7 @@ fn synthetic_pair(spec: &SceneSpec, rng: &mut Lcg) -> ScanCandidate {
         uv2.push(b);
     }
     assert_eq!(uv1.len(), spec.n, "scene generator starved");
-    ScanCandidate {
-        image_a: 0,
-        image_b: 1,
-        uv1,
-        uv2,
-        seed: 0xC0FFEE,
-    }
+    ScanCandidate::from_centred(0, 1, uv1, uv2, 0xC0FFEE)
 }
 
 fn max_wh() -> f64 {
@@ -377,8 +371,12 @@ fn one_sided_residuals_differ_where_a_symmetric_one_could_not() {
     );
     let n = cand.uv1.len();
     let model = CameraModel::EquidistantFisheye;
-    let r1: Vec<Vector3<f64>> = cand.uv1.iter().map(|&p| model.ray(p, F_FISH)).collect();
-    let r2: Vec<Vector3<f64>> = cand.uv2.iter().map(|&p| model.ray(p, F_FISH)).collect();
+    let r1: Vec<Vector3<f64>> = (0..n)
+        .map(|i| model.ray(cand.uv1[i], cand.rad1[i], F_FISH))
+        .collect();
+    let r2: Vec<Vector3<f64>> = (0..n)
+        .map(|i| model.ray(cand.uv2[i], cand.rad2[i], F_FISH))
+        .collect();
     // Some epipolar matrix of the pair (its exact value is irrelevant to the
     // symmetry being pinned).
     let rows: Vec<SVector<f64, 9>> = (0..n)
@@ -569,18 +567,18 @@ fn ray_maps_round_trip_and_scale() {
     let f = 200.0;
     for &r in &[1.0, 50.0, 180.0, 300.0] {
         let uv = [r * 0.6, r * 0.8];
-        let e = CameraModel::EquidistantFisheye.ray(uv, f);
+        let e = CameraModel::EquidistantFisheye.ray(uv, r, f);
         assert!((e.norm() - 1.0).abs() < 1e-12);
         // θ = r/f exactly.
         assert!((e.z.acos() - r / f).abs() < 1e-9, "r {r}");
-        assert!((CameraModel::EquidistantFisheye.scale(uv, f) - f).abs() < 1e-12);
+        assert!((CameraModel::EquidistantFisheye.scale(r, f) - f).abs() < 1e-12);
 
-        let p = CameraModel::Pinhole.ray(uv, f);
+        let p = CameraModel::Pinhole.ray(uv, r, f);
         assert!((p.norm() - 1.0).abs() < 1e-12);
         // Pinhole dr/dθ = f (1 + (r/f)²) = f sec²θ.
         let th = (r / f).atan();
         assert!(
-            (CameraModel::Pinhole.scale(uv, f) - f / (th.cos() * th.cos())).abs() < 1e-9,
+            (CameraModel::Pinhole.scale(r, f) - f / (th.cos() * th.cos())).abs() < 1e-9,
             "r {r}"
         );
     }

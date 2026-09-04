@@ -10,6 +10,7 @@ pub mod batch_resection;
 pub mod bundle_adjust;
 pub mod convention;
 pub mod epipolar_estimation;
+pub mod estimate_intrinsics;
 pub mod focal_vote;
 pub mod homography_estimation;
 pub(crate) mod numeric;
@@ -34,6 +35,7 @@ pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};
 pub use bundle_adjust::{
     bundle_adjust, BaSchedule, BundleAdjustment, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
+pub use estimate_intrinsics::{estimate_intrinsics, IntrinsicsEstimate, IntrinsicsOptions};
 pub use pose_refine::{refine_absolute_pose, PoseRefinement};
 pub use pose_verification::{
     repair_poses, verify_poses, PoseRepair, PoseVerification, RepairOptions, VerifyOptions,

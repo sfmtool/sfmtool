@@ -14,6 +14,7 @@ pub mod bundle_adjust;
 pub mod camera_intrinsics;
 pub mod convention;
 pub mod epipolar_estimation;
+pub mod estimate_intrinsics;
 pub mod focal_vote;
 pub mod homography_estimation;
 pub mod pose_refine;
@@ -45,6 +46,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     epipolar_estimation::register(m)?;
     homography_estimation::register(m)?;
     focal_vote::register(m)?;
+    estimate_intrinsics::register(m)?;
     reprojection::register(m)?;
     pose_refine::register(m)?;
     resect_translation::register(m)?;

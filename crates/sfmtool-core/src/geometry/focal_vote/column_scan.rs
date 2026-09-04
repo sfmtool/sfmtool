@@ -149,11 +149,15 @@ impl CameraModel {
     }
 
     /// Unit ray for a principal-point-centred pixel at candidate focal `f`.
-    fn ray(self, uv: [f64; 2], f: f64) -> Vector3<f64> {
+    ///
+    /// `r` is the pixel's radial distance `hypot(uv)`. It does not depend on the
+    /// candidate focal, so the scans precompute it once per pair
+    /// ([`ScanCandidate::rad1`]) instead of rebuilding it at each of the grid's
+    /// candidate focals.
+    fn ray(self, uv: [f64; 2], r: f64, f: f64) -> Vector3<f64> {
         match self {
             CameraModel::Pinhole => Vector3::new(uv[0] / f, uv[1] / f, 1.0).normalize(),
             CameraModel::EquidistantFisheye => {
-                let r = uv[0].hypot(uv[1]);
                 let th = r / f;
                 let s = if r > 1e-12 { th.sin() / r } else { 0.0 };
                 Vector3::new(uv[0] * s, uv[1] * s, th.cos())
@@ -161,14 +165,12 @@ impl CameraModel {
         }
     }
 
-    /// Local `dr/dθ` of the map at a pixel — the pixels-per-radian that turns a
-    /// keypoint localization tolerance into an angular consensus bound.
-    fn scale(self, uv: [f64; 2], f: f64) -> f64 {
+    /// Local `dr/dθ` of the map at radius `r` — the pixels-per-radian that turns
+    /// a keypoint localization tolerance into an angular consensus bound. Both
+    /// maps are radially symmetric, so the radius is all a pixel contributes.
+    fn scale(self, r: f64, f: f64) -> f64 {
         match self {
-            CameraModel::Pinhole => {
-                let r = uv[0].hypot(uv[1]);
-                f * (1.0 + (r / f) * (r / f))
-            }
+            CameraModel::Pinhole => f * (1.0 + (r / f) * (r / f)),
             CameraModel::EquidistantFisheye => f,
         }
     }
@@ -331,12 +333,42 @@ pub struct ScanCandidate {
     pub uv1: Vec<[f64; 2]>,
     /// Centred positions in image `b`.
     pub uv2: Vec<[f64; 2]>,
+    /// Radial distance of each `uv1` position from the principal point.
+    ///
+    /// Both pixel→ray maps are radially symmetric and the radius is not a
+    /// function of the candidate focal, so it is computed once here and read at
+    /// every grid point, in both cells and in both columns, rather than
+    /// rebuilt from the pixels 64 times per scan.
+    pub rad1: Vec<f64>,
+    /// Radial distance of each `uv2` position from the principal point.
+    pub rad2: Vec<f64>,
     /// Per-pair sampler seed (derived from the kernel seed and the pair's
     /// position in the candidate list).
     pub seed: u64,
 }
 
 impl ScanCandidate {
+    /// Build a candidate from correspondences already centred on the principal
+    /// point, filling in the focal-independent radii.
+    pub fn from_centred(
+        image_a: u32,
+        image_b: u32,
+        uv1: Vec<[f64; 2]>,
+        uv2: Vec<[f64; 2]>,
+        seed: u64,
+    ) -> Self {
+        let rad = |uv: &[[f64; 2]]| -> Vec<f64> { uv.iter().map(|p| p[0].hypot(p[1])).collect() };
+        Self {
+            image_a,
+            image_b,
+            rad1: rad(&uv1),
+            rad2: rad(&uv2),
+            uv1,
+            uv2,
+            seed,
+        }
+    }
+
     /// Build a candidate from a pair's full correspondence lists, centring on
     /// the principal point and capping the population at `SCAN_MAX_CORR` by a
     /// seeded selection that preserves input order.
@@ -364,19 +396,17 @@ impl ScanCandidate {
             k.sort_unstable();
             k
         };
-        Self {
+        Self::from_centred(
             image_a,
             image_b,
-            uv1: keep
-                .iter()
+            keep.iter()
                 .map(|&i| [x1[i][0] - pp[0], x1[i][1] - pp[1]])
                 .collect(),
-            uv2: keep
-                .iter()
+            keep.iter()
                 .map(|&i| [x2[i][0] - pp[0], x2[i][1] - pp[1]])
                 .collect(),
             seed,
-        }
+        )
     }
 }
 
@@ -643,7 +673,7 @@ fn scan_epipolar(
     side_two: bool,
 ) -> Option<EpipolarScan> {
     let n = cand.uv1.len();
-    let uv_side = if side_two { &cand.uv2 } else { &cand.uv1 };
+    let rad_side = if side_two { &cand.rad2 } else { &cand.rad1 };
     let mut costs = vec![f64::INFINITY; grid.len()];
     let mut masks: Vec<Option<Vec<bool>>> = vec![None; grid.len()];
     let mut r1 = vec![Vector3::zeros(); n];
@@ -656,9 +686,9 @@ fn scan_epipolar(
             continue;
         }
         for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], f);
-            r2[i] = model.ray(cand.uv2[i], f);
-            sin_tol[i] = (SCAN_TOL_PX / model.scale(uv_side[i], f)).min(1.0).sin();
+            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
+            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
+            sin_tol[i] = (SCAN_TOL_PX / model.scale(rad_side[i], f)).min(1.0).sin();
         }
         match fit_epipolar(&r1, &r2, &sin_tol, samples, side_two) {
             Some(fit) => {
@@ -779,9 +809,9 @@ fn freeze_rotation_support(
      -> Option<Vec<usize>> {
         let f = grid[k];
         for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], f);
-            r2[i] = model.ray(cand.uv2[i], f);
-            tol[i] = SCAN_TOL_PX / model.scale(cand.uv2[i], f);
+            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
+            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
+            tol[i] = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
         }
         let mask = rotation_support_at(r1, r2, tol, samples, min_support)?;
         Some((0..n).filter(|&i| mask[i]).collect())
@@ -896,9 +926,9 @@ fn scan_rotation(
     let mut tol = vec![0.0f64; n];
     let fill = |f: f64, r1: &mut [Vector3<f64>], r2: &mut [Vector3<f64>], tol: &mut [f64]| {
         for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], f);
-            r2[i] = model.ray(cand.uv2[i], f);
-            tol[i] = SCAN_TOL_PX / model.scale(cand.uv2[i], f);
+            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
+            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
+            tol[i] = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
         }
     };
 
@@ -913,8 +943,8 @@ fn scan_rotation(
     for &k in &valid {
         let f = grid[k];
         fill(f, &mut r1, &mut r2, &mut tol);
-        for (s, uv) in px_scale.iter_mut().zip(cand.uv2.iter()) {
-            *s = model.scale(*uv, f);
+        for (s, r) in px_scale.iter_mut().zip(cand.rad2.iter()) {
+            *s = model.scale(*r, f);
         }
         // The unfrozen variant re-derives the support at every candidate: a bad
         // focal then buys a low cost by keeping fewer points, and the scan pins
@@ -974,8 +1004,8 @@ pub(crate) fn draw_samples(state: &mut u64, n: usize, k: usize, count: usize) ->
 fn coverage_p90(cand: &ScanCandidate, members: impl Iterator<Item = usize>, half_diag: f64) -> f64 {
     let mut radii: Vec<f64> = Vec::new();
     for i in members {
-        radii.push(cand.uv1[i][0].hypot(cand.uv1[i][1]));
-        radii.push(cand.uv2[i][0].hypot(cand.uv2[i][1]));
+        radii.push(cand.rad1[i]);
+        radii.push(cand.rad2[i]);
     }
     if radii.is_empty() || half_diag <= 0.0 {
         return 0.0;
@@ -989,8 +1019,8 @@ fn coverage_p90(cand: &ScanCandidate, members: impl Iterator<Item = usize>, half
 fn pair_edge_radius(cand: &ScanCandidate) -> f64 {
     let mut radii: Vec<f64> = Vec::with_capacity(2 * cand.uv1.len());
     for i in 0..cand.uv1.len() {
-        radii.push(cand.uv1[i][0].hypot(cand.uv1[i][1]));
-        radii.push(cand.uv2[i][0].hypot(cand.uv2[i][1]));
+        radii.push(cand.rad1[i]);
+        radii.push(cand.rad2[i]);
     }
     if radii.is_empty() {
         return 0.0;

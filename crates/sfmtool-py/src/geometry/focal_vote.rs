@@ -9,11 +9,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::geometry::focal_vote::{
-    focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, ScanCell, ScanVote,
+    focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, FocalVoteResult,
+    ScanCell, ScanVote,
 };
 
 /// One column's `scan_votes` entry as a Python dict.
-fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
+pub(crate) fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item(
         "cell",
@@ -38,6 +39,71 @@ fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyD
     d.set_item("certified", v.certified)?;
     d.set_item("model_informative", v.model_informative)?;
     Ok(d)
+}
+
+/// The observation arrays every vote-shaped binding takes, validated and
+/// copied into the layout the kernel wants.
+pub(crate) struct VoteInputs {
+    /// Cluster id per observation, nondecreasing.
+    pub clusters: Vec<u32>,
+    /// Image id per observation.
+    pub images: Vec<u32>,
+    /// Full-pixel keypoint position per observation.
+    pub positions: Vec<[f64; 2]>,
+}
+
+/// Validate and unpack the three observation arrays.
+pub(crate) fn vote_inputs(
+    cluster_indexes: PyReadonlyArray1<'_, u32>,
+    image_indexes: PyReadonlyArray1<'_, u32>,
+    positions_xy: PyReadonlyArray2<'_, f64>,
+) -> PyResult<VoteInputs> {
+    if positions_xy.shape()[1] != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "positions_xy must have shape (n_obs, 2)",
+        ));
+    }
+    let n_obs = cluster_indexes.shape()[0];
+    if image_indexes.shape()[0] != n_obs || positions_xy.shape()[0] != n_obs {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "cluster_indexes, image_indexes, and positions_xy must share n_obs",
+        ));
+    }
+
+    let clusters = to_contiguous!(cluster_indexes);
+    let images = to_contiguous!(image_indexes);
+    let pos_flat = to_contiguous!(positions_xy);
+    let positions: Vec<[f64; 2]> = pos_flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+
+    // Cluster ids must be nondecreasing (contiguous runs).
+    if clusters.windows(2).any(|w| w[1] < w[0]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "cluster_indexes must be nondecreasing",
+        ));
+    }
+    Ok(VoteInputs {
+        clusters: clusters.into_owned(),
+        images: images.into_owned(),
+        positions,
+    })
+}
+
+/// Resolve the `columns` argument; `None` is the pinhole-only default.
+pub(crate) fn vote_columns(columns: Option<Vec<String>>) -> PyResult<Vec<CameraModel>> {
+    match columns {
+        None => Ok(vec![CameraModel::Pinhole]),
+        Some(names) => names
+            .iter()
+            .map(|n| {
+                CameraModel::from_str_name(n).ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "unknown camera-model column {n:?} (expected \"pinhole\" or \
+                         \"equidistant\")"
+                    ))
+                })
+            })
+            .collect(),
+    }
 }
 
 /// One [`ColumnDiagnostics`] as a Python dict.
@@ -172,54 +238,32 @@ pub fn focal_vote<'py>(
     epipolar_min_disp_frac: f64,
     columns: Option<Vec<String>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    if positions_xy.shape()[1] != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "positions_xy must have shape (n_obs, 2)",
-        ));
-    }
-    let n_obs = cluster_indexes.shape()[0];
-    if image_indexes.shape()[0] != n_obs || positions_xy.shape()[0] != n_obs {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "cluster_indexes, image_indexes, and positions_xy must share n_obs",
-        ));
-    }
-
-    let clusters = to_contiguous!(cluster_indexes);
-    let images = to_contiguous!(image_indexes);
-    let pos_flat = to_contiguous!(positions_xy);
-    let positions: Vec<[f64; 2]> = pos_flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
-
-    // Cluster ids must be nondecreasing (contiguous runs).
-    if clusters.windows(2).any(|w| w[1] < w[0]) {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "cluster_indexes must be nondecreasing",
-        ));
-    }
-
-    let models = match columns {
-        None => vec![CameraModel::Pinhole],
-        Some(names) => names
-            .iter()
-            .map(|n| {
-                CameraModel::from_str_name(n).ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "unknown camera-model column {n:?} (expected \"pinhole\" or \
-                         \"equidistant\")"
-                    ))
-                })
-            })
-            .collect::<PyResult<Vec<_>>>()?,
-    };
+    let inputs = vote_inputs(cluster_indexes, image_indexes, positions_xy)?;
     let options = FocalVoteOptions {
         seed,
         epipolar_min_disp_frac,
-        columns: models,
+        columns: vote_columns(columns)?,
     };
 
     let result = py.detach(move || {
-        focal_vote_with_options(&clusters, &images, &positions, width, height, &options)
+        focal_vote_with_options(
+            &inputs.clusters,
+            &inputs.images,
+            &inputs.positions,
+            width,
+            height,
+            &options,
+        )
     });
 
+    vote_dict(py, &result)
+}
+
+/// A [`FocalVoteResult`] as the Python dict the binding documents.
+pub(crate) fn vote_dict<'py>(
+    py: Python<'py>,
+    result: &FocalVoteResult,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("focal_px", result.focal_px)?;
     d.set_item("family", result.family.map(|f| f.as_str()))?;

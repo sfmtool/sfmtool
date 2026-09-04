@@ -5,8 +5,13 @@
 
 The CLI face of the structure-free focal vote (see
 `specs/cli/reconstruction/estimate-intrinsics-command.md` and
-`specs/core/geometry/focal-vote.md`): cluster tracks in, a shared focal and a
-camera-model verdict out, with no reconstruction in between.
+`specs/core/geometry/estimate-intrinsics.md`): cluster tracks in, a shared
+focal and a camera-model verdict out, with no reconstruction in between.
+
+The verdict semantics -- which column won, whether a fisheye verdict is
+corroborated, which votes are the evidence behind it -- belong to the
+`estimate_intrinsics` kernel, not to this module; the command reads them off
+its result and spends its own code on I/O, the report and the `.camrig`.
 
 Unlike its siblings the command is not wrapped in `timed_command` -- `--json`
 puts the vote result on stdout, and a trailing timing line would stop that
@@ -154,28 +159,6 @@ def _load_observations(matches_path: Path) -> dict:
     }
 
 
-def _column(result: dict, camera_model: str) -> dict | None:
-    """The requested column's diagnostics dict, if the vote ran that column."""
-    for column in result["columns"]:
-        if column["camera_model"] == camera_model:
-            return column
-    return None
-
-
-def _fisheye_confirmed(result: dict, model_option: str) -> bool | None:
-    """Whether a Fisheye verdict is corroborated by rotation-cell mass.
-
-    A wrong ray map cannot fake a pure rotation of rays, so an equidistant
-    verdict carrying no certified rotation votes is an arbitration artifact
-    rather than a lens. `None` means the question does not arise: the verdict
-    is not Fisheye, or `--model` named a single column so nothing arbitrated.
-    """
-    if model_option != "auto" or result["camera_model"] != _EQUIDISTANT:
-        return None
-    column = _column(result, _EQUIDISTANT)
-    return bool(column is not None and column["n_certified_rotation"] > 0)
-
-
 def _diagonal_fov_deg(
     camera_model: str | None, focal_px: float | None, width: int, height: int
 ) -> float | None:
@@ -201,13 +184,13 @@ def _num(value, digits: int = 4) -> str:
     return f"{value:.{digits}f}"
 
 
-def _report_lines(
-    result: dict, data: dict, model_option: str, confirmed: bool | None
-) -> list[str]:
+def _report_lines(estimate: dict, data: dict) -> list[str]:
     """The human-readable report: the answer first, the diagnostics under it."""
     width, height = data["width"], data["height"]
-    verdict = result["camera_model"]
-    focal = result["focal_px"]
+    result = estimate["vote"]
+    verdict = estimate["camera_model"]
+    focal = estimate["focal_px"]
+    confirmed = estimate["confirmed"]
 
     lines = [
         f"Images:        {len(data['image_names'])} @ {width}x{height}",
@@ -313,9 +296,8 @@ def _derive_pattern(image_names: list[str]) -> str:
 def _write_camrig(
     output_path: Path,
     pattern: str | None,
-    result: dict,
+    estimate: dict,
     data: dict,
-    confirmed: bool | None,
     force: bool,
 ) -> str:
     """Commit the estimate as a one-sensor `.camrig`; returns a summary line.
@@ -328,14 +310,14 @@ def _write_camrig(
     from ..camrig.create import CamrigCreateError, find_images, normalize_pattern
     from .._sfmtool.io import write_camrig
 
-    verdict = result["camera_model"]
-    focal = result["focal_px"]
+    verdict = estimate["camera_model"]
+    focal = estimate["focal_px"]
     if focal is None or verdict not in _CAMRIG_MODEL:
         raise click.ClickException(
             "no focal consensus to write: the vote produced no shared focal "
             "for this capture."
         )
-    if confirmed is False:
+    if estimate["confirmed"] is False:
         raise click.ClickException(
             "refusing to write an UNCONFIRMED Fisheye estimate. Re-run with "
             "`--model pinhole` to commit the pinhole estimate instead."
@@ -476,11 +458,11 @@ def estimate_intrinsics(
     """
     import json as json_module
 
-    from .._sfmtool.geometry import focal_vote
+    from .._sfmtool.geometry import estimate_intrinsics as estimate
 
     try:
         data = _load_observations(Path(input_path))
-        result = focal_vote(
+        result = estimate(
             data["cluster_indexes"],
             data["image_indexes"],
             data["positions"],
@@ -493,27 +475,32 @@ def estimate_intrinsics(
         raise
     except Exception as e:
         raise click.ClickException(str(e)) from None
-    confirmed = _fisheye_confirmed(result, model_option.lower())
 
     if as_json:
-        payload = dict(result)
-        payload["fisheye_confirmed"] = confirmed
-        equidistant = _column(result, _EQUIDISTANT)
+        # The vote's own dict stays at the top level, where it has always been;
+        # the estimate's verdict fields are the same values the vote reports, so
+        # nesting the vote under "vote" as well would duplicate every key. What
+        # the estimate adds beyond the vote is what gets added here.
+        vote = result["vote"]
+        payload = dict(vote)
+        payload["fisheye_confirmed"] = result["confirmed"]
+        equidistant = next(
+            (c for c in vote["columns"] if c["camera_model"] == _EQUIDISTANT), None
+        )
         payload["certified_rotation_mass"] = (
             None if equidistant is None else int(equidistant["n_certified_rotation"])
         )
         payload["diagonal_fov_deg"] = _diagonal_fov_deg(
             result["camera_model"], result["focal_px"], data["width"], data["height"]
         )
+        # The evidence behind THIS verdict, unlike the flat vote lists above,
+        # which always describe the pinhole closed-form kernel.
+        payload["verdict_votes"] = result["verdict_votes"]
         click.echo(json_module.dumps(payload, indent=2))
     else:
-        click.echo(
-            "\n".join(_report_lines(result, data, model_option.lower(), confirmed))
-        )
+        click.echo("\n".join(_report_lines(result, data)))
 
     if camrig_path is not None:
-        summary = _write_camrig(
-            Path(camrig_path), pattern, result, data, confirmed, force
-        )
+        summary = _write_camrig(Path(camrig_path), pattern, result, data, force)
         click.echo("")
         click.echo(summary)

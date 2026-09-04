@@ -39,8 +39,11 @@ sfm estimate-intrinsics -i MATCHES [OPTIONS...]
 
 The command reads the cluster tracks and image dimensions from the
 `.matches` file and hands them to the
-`sfmtool._sfmtool.geometry.focal_vote` binding with the column set implied
-by `--model`. The whole file's admission votes -- the vote is a referee over
+`sfmtool._sfmtool.geometry.estimate_intrinsics` binding
+([estimate-intrinsics.md](../../core/geometry/estimate-intrinsics.md)) with
+the column set implied by `--model`; the verdict, its confirmation and the
+focal are read off that result, and the raw vote it nests under `vote`
+supplies the report's diagnostics. The whole file's admission votes -- the vote is a referee over
 the capture's full pair graph, and restricting it is the caller's job (pass
 a smaller `.matches`), not this command's.
 
@@ -57,8 +60,9 @@ certified mass of model-informative scan votes) is reported together with a
 equidistant column carries nonzero certified rotation-cell mass. The rule is
 structural rather than a threshold -- a wrong ray map cannot fake a pure
 rotation of rays, so a fisheye verdict without rotation-cell mass is an
-arbitration artifact, not a lens. The confirmation is computed from the
-returned per-column certificate counts; the kernel is not re-run.
+arbitration artifact, not a lens. Both the verdict and its confirmation come
+from the estimate; the command holds no rule of its own and the kernel runs
+once.
 
 An unconfirmed Fisheye verdict still prints, marked UNCONFIRMED, and the
 report recommends treating the capture as pinhole.
@@ -82,8 +86,14 @@ the rejection counters (`n_h_dominated`, `n_estimator_failed`,
 or parallax-poor. No consensus is still exit code 0 -- the report is the
 product; only I/O failures and rejected inputs are errors.
 
-`--json` emits the binding's result dict verbatim (plus the confirmation
-fields the command derives), for scripting.
+`--json` emits the vote dict verbatim at the top level, for scripting, plus
+four keys the estimate supplies: `fisheye_confirmed`,
+`certified_rotation_mass`, `diagonal_fov_deg`, and `verdict_votes` (the
+winning column's certified scan votes -- the evidence behind this verdict,
+which the top-level `epipolar_votes` / `rotation_votes` are not, those always
+describing the pinhole closed-form kernel). The vote's keys stay at the top
+level rather than nesting under `vote` as the binding does: they are already
+the payload, and nesting them as well would duplicate every one.
 
 ### `--write-camrig`
 

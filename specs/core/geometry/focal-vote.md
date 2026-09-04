@@ -39,6 +39,12 @@ Because no structure is estimated, no bas-relief-type ambiguity can bias
 the result: the vote is an independent witness that callers can hold
 structure-based focal estimates against.
 
+This document describes the diagnostic layer. A caller that wants one
+camera rather than a table of columns and per-pair certificates calls
+[estimate-intrinsics.md](estimate-intrinsics.md), which composes this vote
+and returns the verdict, its corroboration, the focal and the votes that
+belong to that verdict.
+
 ## Inputs
 
 Flat observation arrays over track clusters (the same layout the patch and

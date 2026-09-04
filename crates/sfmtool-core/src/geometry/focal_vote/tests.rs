@@ -4,14 +4,14 @@
 use super::*;
 use nalgebra::Vector3;
 
-const W: u32 = 1000;
-const H: u32 = 1000;
-const F_TRUE: f64 = 800.0;
+pub(crate) const W: u32 = 1000;
+pub(crate) const H: u32 = 1000;
+pub(crate) const F_TRUE: f64 = 800.0;
 const CX: f64 = 500.0;
 const CY: f64 = 500.0;
 
 /// Deterministic LCG so fixtures need no `rand` and are bitwise-stable.
-struct Lcg(u64);
+pub(crate) struct Lcg(pub(crate) u64);
 
 impl Lcg {
     fn next_f64(&mut self) -> f64 {
@@ -40,7 +40,7 @@ fn rx(a: f64) -> Matrix3<f64> {
     Matrix3::new(1.0, 0.0, 0.0, 0.0, c, -s, 0.0, s, c)
 }
 
-struct Cam {
+pub(crate) struct Cam {
     r: Matrix3<f64>,
     t: Vector3<f64>,
 }
@@ -90,10 +90,10 @@ impl Cam {
 /// Accumulating builder for flat observation arrays (one span-2 cluster per
 /// emitted correspondence).
 #[derive(Default)]
-struct Obs {
-    cluster: Vec<u32>,
-    image: Vec<u32>,
-    pos: Vec<[f64; 2]>,
+pub(crate) struct Obs {
+    pub(crate) cluster: Vec<u32>,
+    pub(crate) image: Vec<u32>,
+    pub(crate) pos: Vec<[f64; 2]>,
     next: u32,
 }
 
@@ -179,7 +179,7 @@ fn emit_rotation_pair_f(
 }
 
 /// Baseline cameras along `+X`, all looking roughly `+Z`, for a parallax scene.
-fn baseline_cameras(n_img: usize, baseline: f64, rng: &mut Lcg) -> Vec<Cam> {
+pub(crate) fn baseline_cameras(n_img: usize, baseline: f64, rng: &mut Lcg) -> Vec<Cam> {
     (0..n_img)
         .map(|i| {
             let r = rx(rng.uniform(-0.03, 0.03)) * ry(rng.uniform(-0.03, 0.03));
@@ -230,7 +230,13 @@ fn emit_parallax_pair_f(
 /// `rot_n..rot_n + bl_n` a baseline track over finite structure imaged at
 /// `f_bl`. No cluster spans the two sub-captures, so each family votes from
 /// its own — the scene is how both families come to vote at once.
-fn two_subcapture_scene(rot_n: usize, bl_n: usize, f_rot: f64, f_bl: f64, seed: u64) -> Obs {
+pub(crate) fn two_subcapture_scene(
+    rot_n: usize,
+    bl_n: usize,
+    f_rot: f64,
+    f_bl: f64,
+    seed: u64,
+) -> Obs {
     let mut rng = Lcg(seed);
     let mut cams = rotation_cameras(rot_n, 0.24, &mut rng);
     cams.extend(baseline_cameras(bl_n, 0.35, &mut rng));
@@ -672,7 +678,7 @@ fn determinism_same_seed() {
 
 /// Planted equidistant focal on the 1000 px test sensor: `θ = r/f` puts the
 /// image corner at 89°, a ~179° field of view.
-const F_FISH: f64 = 320.0;
+pub(crate) const F_FISH: f64 = 320.0;
 
 /// Emit `m` span-2 clusters between cameras `ia`,`ib` of a pure-rotation rig,
 /// imaged through the equidistant fisheye map. Directions are drawn over a wide
@@ -709,7 +715,7 @@ fn emit_fisheye_rotation_pair(
 
 /// [`emit_fisheye_rotation_pair`] over finite structure instead: a baseline
 /// pair with genuine parallax, the epipolar cell's own ground.
-fn emit_fisheye_parallax_pair(
+pub(crate) fn emit_fisheye_parallax_pair(
     obs: &mut Obs,
     cams: &[Cam],
     ia: usize,
@@ -743,7 +749,7 @@ fn emit_fisheye_parallax_pair(
 /// cell has its own ground, exactly as [`two_subcapture_scene`] does for the
 /// pinhole kernel: images `0..8` are a pure-rotation rig panning across
 /// ±1.4 rad (far field), images `8..16` a baseline track over finite structure.
-fn fisheye_scene(seed: u64) -> Obs {
+pub(crate) fn fisheye_scene(seed: u64) -> Obs {
     let mut rng = Lcg(seed);
     let (rot_n, bl_n) = (8usize, 8usize);
     let mut cams = rotation_cameras(rot_n, 1.4, &mut rng);
