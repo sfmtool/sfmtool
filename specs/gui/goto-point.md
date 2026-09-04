@@ -1,10 +1,9 @@
 # Go to Point
 
-*Status: Implemented*
-
-This document specifies **Go to Point**: a dialog that takes a typed or pasted
-point index — or a whole `pt3d_<hash>_<index>` Point ID — and selects that
-point, switching the selected reconstruction when the ID names a different one.
+**Go to Point** is a dialog in the viewer for reaching a 3D point by naming it
+instead of finding it on screen. It takes a typed or pasted point index, or a
+whole portable point ID of the form `pt3d_<hash>_<index>`, and selects that
+point — switching the selected reconstruction when the ID names a different one.
 
 For the panel this most directly serves, see
 [point-track-detail.md](point-track-detail.md). For the ID format
@@ -195,7 +194,9 @@ did I land". Zoom-to-fit remains an explicit action.
 
 ## Implementation
 
-`crates/sfm-explorer/src/goto_point.rs`, with tests in `goto_point/tests.rs`.
+The dialog lives in [goto_point.rs](../../crates/sfm-explorer/src/goto_point.rs),
+with tests in
+[goto_point/tests.rs](../../crates/sfm-explorer/src/goto_point/tests.rs).
 
 The parse and the scene lookup are plain functions over the scene slice, so the
 interesting behaviour is testable without running a frame:

@@ -1,11 +1,11 @@
 # Viewport HUD
 
-**Status: implemented** in `viewer_3d/hud.rs`, tests in
-`viewer_3d/hud/tests.rs`. The display controls have left the menu bar, and the
-**View** menu is gone with them — **File** is now the only menu.
-
-This document specifies moving the 3D-viewport display controls out of the
-menu bar and onto a heads-up display drawn inside the viewport itself.
+The 3D viewport's display controls sit on a heads-up display drawn inside the
+viewport itself: a translucent, collapsible panel of toggles and sliders for
+what gets drawn (points, frustums, patches, the grid), how large it is drawn,
+and how the camera behaves. Keeping them over the scene they affect means a
+tune-until-it-looks-right adjustment never costs a round trip to the menu bar,
+and it leaves **File** as the window's only menu.
 
 ---
 
@@ -50,6 +50,9 @@ follow the panel-owns-its-controls rule and are not touched.
 ---
 
 ## Layout
+
+The HUD lives in [hud.rs](../../crates/sfm-explorer/src/viewer_3d/hud.rs), with
+tests in [hud/tests.rs](../../crates/sfm-explorer/src/viewer_3d/hud/tests.rs).
 
 The HUD is **open by default**. The controls are the point of the panel, and a
 viewport that starts by hiding them just trades a menu round-trip for a click.
@@ -275,7 +278,7 @@ arbitration proves harder than expected — it is the natural fallback.
 
 ## Implementation Status
 
-All of it is built (`viewer_3d/hud.rs`, tests in `viewer_3d/hud/tests.rs`).
+All of it is built.
 
 - [x] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
 - [x] `hud_rect` capture and the scroll/gesture exclusion

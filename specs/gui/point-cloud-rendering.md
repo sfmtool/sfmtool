@@ -370,11 +370,6 @@ does not write to it, allowing it to render with depth-aware transparency.
 
 ## Points at Infinity
 
-*(Folded in from the `gui-points-at-infinity.md` draft. **Status:**
-implemented, UI included — the size slider, the visibility toggle and the count
-readout all ship in the [viewport HUD](viewport-hud.md) and the scene-stats
-overlay. See [UI — shipped](#ui--shipped).)*
-
 Render `w = 0` points — directions, not locations — so a distant
 skyline/ridge/cloud track contributes to the visual reconstruction instead of
 being dropped or scattered to arbitrary far coordinates. The defining

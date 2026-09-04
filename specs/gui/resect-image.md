@@ -1,14 +1,5 @@
 # Resect Image
 
-*Status: implemented* — `sfmtool_core::geometry::resect_images`
-(`crates/sfmtool-core/src/geometry/resect_images.rs`), surfaced by
-`crates/sfm-explorer/src/resect.rs`, the image rows' context menu in
-`scene_graph/mod.rs`, and `AppState::resect_image`, and offline by the
-`sfmtool._sfmtool.geometry.resect_images` binding
-(`crates/sfmtool-py/src/geometry/resect_images.rs`), which names the target
-images and returns the derived reconstruction with the per-image reports and
-the set's totals as a dict.
-
 An action in the Scene Graph panel that re-estimates one image's pose against
 the rest of its reconstruction and shows the result as a new node beside the
 original. The original node is never modified; the derived node is an ordinary
@@ -61,10 +52,13 @@ The chosen path is remembered per source node for the session.
 
 ## Mechanism
 
-Everything below `## Invocation` lives in `sfmtool-core` as one function —
-`geometry::resect_images` — and the GUI adds the menu entries, the node
-bookkeeping, and the status line. The same function is what an offline caller
-uses, with as many targets as it wants to hold out.
+Everything below `## Invocation` lives in `sfmtool-core` as one function,
+`geometry::resect_images` in
+[resect_images.rs](../../crates/sfmtool-core/src/geometry/resect_images.rs); the
+GUI wraps it in [resect.rs](../../crates/sfm-explorer/src/resect.rs), which adds
+the menu entries, the node bookkeeping, and the status line. The same function is
+what an offline caller uses, with as many targets as it wants to hold out, through
+the `sfmtool._sfmtool.geometry.resect_images` binding.
 
 The function takes a **target set**: one or more images of the source, named as
 a set rather than resected one after another. Every step below is over that

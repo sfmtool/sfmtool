@@ -1,16 +1,11 @@
 # Scene Graph and Multi-Reconstruction Support
 
-*Status: implemented — typed refs, per-reconstruction renderer resources and
-picking, the feature itself (multi-load, the Scene Graph panel, per-node
-visibility and interactivity, the selected reconstruction), node transforms with
-`Align to…` / `Reset Transform`, and the comparison affordances (per-node tint,
-solo). See "Implementation Phases" at the end.*
-
-This document specifies multi-reconstruction support for SfM Explorer: loading
-several `.sfmr` files at once, organizing them as nodes in a scene graph, and a
-new **Scene Graph panel** — a tree view for browsing, toggling, and selecting
-what is loaded. The motivating use case is *comparison*: looking at two or more
-reconstructions of the same scene side by side in one 3D space.
+The viewer holds more than one reconstruction at a time. Several `.sfmr` files
+load together as nodes of a scene graph, and a **Scene Graph panel** — a tree
+view — is where they are browsed, toggled, transformed and selected. The point
+is comparison: two or more reconstructions of the same scene sharing one 3D
+space, each with its own transform, tint and visibility, so a reviewer can see
+where they agree and where they do not.
 
 Related specs: [architecture.md](architecture.md) (rendering pipeline
 this extends), [cross-panel-hover.md](cross-panel-hover.md) (selection

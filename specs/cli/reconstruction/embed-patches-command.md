@@ -1,22 +1,5 @@
 # `sfm embed-patches` Command
 
-_Status: implemented (`src/sfmtool/_commands/embed_patches.py`, orchestration in
-`src/sfmtool/_embed_patches.py::embed_patches`). Converts a reconstruction from
-`sift_files` to `embedded_patches` (the modes are specified in
-[sfmr-file-format.md](../../formats/sfmr-file-format.md), "Observation source").
-Pipeline and the per-point algorithms it calls:
-[sift-to-patch-reconstruction.md](../../core/patch/sift-to-patch-reconstruction.md)._
-
-> _**Re-layered (2026-06-25):** `embed-patches` remains the `sift_files` entry
-> point, but its first pipeline step is now a single call to the Rust
-> `SfmrReconstruction.to_embedded_patches` binding (the sole sift-consuming
-> step — it reads the `.sift` files for keypoints, frames, and image hashes);
-> normal refinement (anchored on the stored keypoints via
-> `use_stored_keypoints`), view selection, and keypoint localization then run as
-> `embedded_patches → embedded_patches` steps on its result. See the operating
-> contract in
-> [sift-to-patch-reconstruction.md](../../core/patch/sift-to-patch-reconstruction.md)._
-
 ## Overview
 
 Convert a `sift_files` reconstruction into an `embedded_patches` `.sfmr` — a
@@ -142,6 +125,10 @@ sfm embed-patches solve.sfmr out.sfmr \
 ```
 
 ## Module Layout
+
+The command lives in [embed_patches.py](../../../src/sfmtool/_commands/embed_patches.py)
+and its orchestration in [_embed_patches.py](../../../src/sfmtool/_embed_patches.py),
+which drives the Rust patch kernels through the `sfmtool._sfmtool` bindings.
 
 - `src/sfmtool/_commands/embed_patches.py` — the Click command (argument
   parsing, validation, default-output derivation, image load, write-out). The

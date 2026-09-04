@@ -1,10 +1,5 @@
 # Camera Intrinsics: Scene-Graph Node, Image Overlay, Detail Panel
 
-**Status:** implemented — phase 1 (vocabulary and data model), phase 2
-(`camera::report` and `parameter_names()`), phase 3 (the Scene Graph group),
-phase 4 (the Camera Intrinsics panel), phase 5 (the projection plot, with the
-trustworthy domain it needed) and phase 6 (the Image Detail overlay layer).
-
 The viewer can show you where a camera *is* and what it *saw*, but nothing in it
 tells you what the camera *is*: which intrinsic model, what focal length, how far
 the principal point sits from the image centre, how much the lens bends, how many

@@ -1,21 +1,5 @@
 # The sfmtool camera models
 
-**Status:** Both models are implemented. The variants and their serialization
-live in `crates/sfmtool-core/src/camera/intrinsics.rs`
-(`CameraModel::SfmtoolFisheye`, `CameraModel::SfmtoolPinhole`, sharing the
-`get_bspline` parameter reader) with the spline basis in
-`crates/sfmtool-core/src/camera/distortion/bspline.rs`; serialization tests in
-`camera/intrinsics/tests.rs`,
-`tests/rust_bindings/test_sfmtool_fisheye_rust_bindings.py` and
-`tests/rust_bindings/test_sfmtool_pinhole_rust_bindings.py`. The projection,
-inverse and Jacobian kernels are specified per model in
-[../core/camera/sfmtool-fisheye-kernels.md](../core/camera/sfmtool-fisheye-kernels.md) and
-[../core/camera/sfmtool-pinhole-kernels.md](../core/camera/sfmtool-pinhole-kernels.md).
-
-**Beta:** the parameterization may still change: the basis, the knot
-layout, and the parameter names. A `.sfmr` file carrying these models may
-therefore need to be regenerated across releases.
-
 ## Summary
 
 Two camera models that use a spline for radially symmetric distortion. Each
@@ -24,6 +8,10 @@ number of knots is selectable: `SFMTOOL_FISHEYE` on an equidistant base,
 `SFMTOOL_PINHOLE` on a pinhole base. Both bases have square pixels and are
 parametrized with one focal length. The spline is constrained to be strictly
 increasing so that the distortion is invertible.
+
+**Beta:** the parameterization may still change: the basis, the knot
+layout, and the parameter names. A `.sfmr` file carrying these models may
+therefore need to be regenerated across releases.
 
 ## Radially symmetric distortion
 
@@ -158,6 +146,12 @@ nothing. The contract covers exactly those three maps; pixel-radius sizing
 helpers agree to rounding, not bitwise.
 
 ## Parameters
+
+The two variants and their serialization live in
+[intrinsics.rs](../../crates/sfmtool-core/src/camera/intrinsics.rs)
+(`CameraModel::SfmtoolFisheye` and `CameraModel::SfmtoolPinhole`, sharing the
+`get_bspline` parameter reader), with the spline basis in
+[bspline.rs](../../crates/sfmtool-core/src/camera/distortion/bspline.rs).
 
 Each model's parameter list is a fixed-length head followed by the spline
 coefficients:

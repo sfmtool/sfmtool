@@ -1,14 +1,12 @@
 # `sfm xform --refine-normals` Design
 
-**Status:** Implemented (2026-06-13) in `src/sfmtool/xform/_refine_normals.py`
-(`RefineNormalsTransform`), wired through `xform/_arg_parser.py`
-(`parse_refine_normals_params`) and the `--refine-normals` Click option in
-`_commands/xform.py`. Surfaces the photometric patch-normal refinement
-(`specs/core/patch/patch-normal-refinement.md`, v1 implemented in
-`sfmtool-core/src/patch/normal_refine/` + the `PatchCloud.refine_normals`
-PyO3 binding) as an `sfm xform` operation that rewrites a reconstruction's
-per-point `normals` in place, and re-persists the refined patch cloud alongside
-them.
+The `sfm xform --refine-normals` operation surfaces the photometric
+patch-normal refinement described in
+[patch-normal-refinement.md](../../../core/patch/patch-normal-refinement.md) as
+a reconstruction transform: it rewrites each point's surface normal in place by
+rendering the point's patch into its observing views and maximizing their
+photometric agreement, then re-persists the refined patch cloud alongside the
+normals.
 
 ## Why this fits `xform` (and how)
 
@@ -64,6 +62,15 @@ reconstruction (`recon.patches`), calls
 and the refined cloud — back onto the points.
 
 ## Command syntax
+
+The operation is `RefineNormalsTransform` in
+[_refine_normals.py](../../../../src/sfmtool/xform/_refine_normals.py), wired
+through `parse_refine_normals_params` in
+[_arg_parser.py](../../../../src/sfmtool/xform/_arg_parser.py) and the
+`--refine-normals` Click option in
+[xform.py](../../../../src/sfmtool/_commands/xform.py); the refinement kernel
+is [normal_refine/](../../../../crates/sfmtool-core/src/patch/normal_refine/),
+reached through the `PatchCloud.refine_normals` PyO3 binding.
 
 ```
 sfm xform <input.sfmr> [<output.sfmr>] --refine-normals [<params>] [...]

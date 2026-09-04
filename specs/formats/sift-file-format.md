@@ -574,4 +574,4 @@ $ jq . content_hash.json
   `xxh128(feature_set_xxh128 ‖ descriptor_prefix_xxh128 ‖ described_count)`. Also requires
   `feature_options.image_to_gray`, a formula pinning the source-image→gray conversion. Version 1 files
   remain valid, and a fully-described version 2 file may be written in the version 1 layout
-  for consumers that want the plain single-array form. Status: draft.
+  for consumers that want the plain single-array form.

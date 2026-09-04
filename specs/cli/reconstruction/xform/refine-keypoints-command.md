@@ -1,12 +1,11 @@
 # `sfm xform --refine-keypoints` Design
 
-**Status:** Implemented (2026-07-05) in `src/sfmtool/xform/_refine_keypoints.py`
-(`RefineKeypointsTransform`), wired through `xform/_arg_parser.py`
-(`parse_refine_keypoints_params`) and the `--refine-keypoints` Click option in
-`_commands/xform.py`. Surfaces the subpixel keypoint refinement
-(`specs/core/patch/keypoint-subpixel-refinement.md`, implemented in the
-`PatchCloud.refine_keypoints` PyO3 binding) as an `sfm xform` operation that
-rewrites a reconstruction's per-observation `keypoints_xy` in place.
+The `sfm xform --refine-keypoints` operation surfaces the sub-pixel keypoint
+refinement described in
+[keypoint-subpixel-refinement.md](../../../core/patch/keypoint-subpixel-refinement.md)
+as a reconstruction transform: it rewrites each observation's stored 2D
+keypoint in place, moving it to the sub-pixel position that best agrees with
+the point's other views.
 
 ## What it does
 
@@ -45,6 +44,14 @@ Because the refinement is photometric it reads the workspace source images
 image (or unresolvable workspace) is a hard error (`FileNotFoundError`).
 
 ## Command syntax
+
+The operation is `RefineKeypointsTransform` in
+[_refine_keypoints.py](../../../../src/sfmtool/xform/_refine_keypoints.py),
+wired through `parse_refine_keypoints_params` in
+[_arg_parser.py](../../../../src/sfmtool/xform/_arg_parser.py) and the
+`--refine-keypoints` Click option in
+[xform.py](../../../../src/sfmtool/_commands/xform.py); the refinement itself
+is the `PatchCloud.refine_keypoints` PyO3 binding.
 
 ```
 sfm xform <input.sfmr> [<output.sfmr>] --refine-keypoints [<params>] [...]

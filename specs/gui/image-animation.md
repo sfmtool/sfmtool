@@ -1,10 +1,12 @@
 # Image Animation & Playback
 
-**Status:** Implemented — `AnimationState` / `PlayDirection` and the keyboard
-controls live in `image_browser.rs`, the minibar transport (play/pause button
-+ FPS label) in `dock.rs`, with camera-view fly-through via
-`request_camera_switch`. The "Implementation Plan" section below is retained
-as the as-built step breakdown.
+The image browser can play a reconstruction's images in sequence, like video.
+A transport in the browser's navigation minibar and a small set of keyboard
+shortcuts start, stop, step and re-speed the playback; each frame it advances
+becomes the window's selected image, so the 3D viewport and the detail panels
+follow along. Reconstructions built from video are the common case, and
+watching the sequence run is how continuity problems — a jump, a drift, a
+stretch of bad tracking — announce themselves.
 
 ## Problem
 
@@ -19,6 +21,12 @@ Animation playback is particularly useful for:
 - Comparing camera view mode backgrounds across the sequence
 
 ## Design
+
+`AnimationState` and `PlayDirection`, together with the keyboard handling, live
+with the browser panel in
+[image_browser.rs](../../crates/sfm-explorer/src/image_browser.rs); the minibar
+transport — the play/pause button and the FPS label — is drawn in
+[dock.rs](../../crates/sfm-explorer/src/dock.rs).
 
 ### Playback State
 

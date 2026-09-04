@@ -1,18 +1,16 @@
 # Finding points at infinity in an existing solve
 
-**Status:** Implemented. Adds a new `sfm xform` operation that *discovers*
-points at infinity (and near-infinite distant points) in an already-solved
-`.sfmr` by clustering the world-space directions of keypoints across all
-images and confirming clusters with SIFT descriptors. Complements the existing
-[`classify_points_at_infinity`](../../../formats/sfmr-file-format.md), which only
-*reclassifies* points that the solve already triangulated. The clustering /
-matching / classification core lives in `crates/sfmtool-core/src/analysis/infinity/discover.rs`,
-exposed via the PyO3 method `SfmrReconstruction.find_points_at_infinity`; the
-CLI surface is `sfm xform --find-points-at-infinity` (plus
-`--classify-points-at-infinity` and `--max-features`), wired through the thin
-Python transforms in `src/sfmtool/xform/_find_points_at_infinity.py`.
+The `sfm xform --find-points-at-infinity` operation discovers points at
+infinity — and near-infinite distant points — in a reconstruction that has
+already been solved. It un-projects every untracked keypoint to the world
+direction it would have if it were infinitely far away, clusters those
+directions on the unit sphere, confirms each cluster with SIFT descriptors,
+and appends the surviving tracks to the reconstruction as new points. It
+complements the companion `--classify-points-at-infinity` operation, which
+only *reclassifies* points the solve already triangulated and so finds nothing
+new.
 
-[v2 model]: ../formats/sfmr-file-format.md
+[v2 model]: ../../../formats/sfmr-file-format.md
 
 ## Motivation
 
@@ -174,6 +172,12 @@ Rust next to the existing descriptor matchers, and avoids the prototype's
 memory-hungry global edge arrays on the larger solves.
 
 ## CLI surface
+
+The clustering, matching and classification live in
+[discover.rs](../../../../crates/sfmtool-core/src/analysis/infinity/discover.rs),
+exposed as the PyO3 method `SfmrReconstruction.find_points_at_infinity` and
+driven by the thin Python transforms in
+[_find_points_at_infinity.py](../../../../src/sfmtool/xform/_find_points_at_infinity.py).
 
 Fits `sfm xform` as an ordered operation, consistent with the existing
 filtering/optimisation ops:

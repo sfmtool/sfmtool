@@ -1,14 +1,11 @@
 # Multi-Panel GUI with Image Browser and Detail Pane
 
-**Status:** Implemented — the `egui_dock` layout (`dock.rs`), `ImageBrowser`
-(`image_browser.rs`), `ImageDetail` (`image_detail/`), and
-`PointTrackDetail` (`point_track_detail/`) panels all shipped; cross-panel
-selection state lives in `AppState` (`state.rs`).
-
 ## Overview
 
-An `egui_dock`-based multi-panel layout, replacing the original single
-`CentralPanel` with a dockable tab system. Four panel types:
+The viewer's window is a dockable, tabbed workspace rather than a single
+full-window 3D view: panels can be resized, re-tabbed and dragged into new
+splits, and they stay in step with one another through a shared selection.
+Four panel types:
 
 1. **3D Viewer** — the existing viewport (point cloud, frustums, navigation)
 2. **Image Browser** — bottom strip of 128×128 thumbnails for browsing the image sequence
@@ -227,6 +224,15 @@ tracks array to find the observation range, read a handful of `(image_index,
 feature_index)` pairs. This runs every frame but costs negligible time.
 
 ## Architecture
+
+The `egui_dock` layout lives in
+[dock.rs](../../crates/sfm-explorer/src/dock.rs) and the three non-viewport
+panels beside it —
+[image_browser.rs](../../crates/sfm-explorer/src/image_browser.rs),
+[image_detail/](../../crates/sfm-explorer/src/image_detail),
+[point_track_detail/](../../crates/sfm-explorer/src/point_track_detail) — while
+the cross-panel selection state they share is `AppState` in
+[state.rs](../../crates/sfm-explorer/src/state.rs).
 
 ### Tab Model
 

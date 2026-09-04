@@ -1,11 +1,12 @@
 # Cross-Panel Hover Tracking
 
-*Status: Implemented*
-
-This document specifies the cross-panel hover feedback system for the sfmtool
-GUI. It extends the selection model (click-to-select) with transient hover
-highlighting that propagates across the 3D Viewer, Image Browser, and
-Image Detail panels.
+Resting the pointer on something in one panel of the viewer highlights the same
+thing wherever else it appears: hover a 3D point and the thumbnails of the images
+that observe it light up; hover a thumbnail and that camera's frustum brightens in
+the 3D view. The highlight is transient — it follows the cursor and leaves nothing
+behind — so it sits alongside click-to-select rather than replacing it, and lets
+someone explore how the images and the structure relate before committing to a
+selection.
 
 ## Motivation
 

@@ -1,12 +1,11 @@
 # `sfm xform --localize-keypoints` Design
 
-**Status:** Implemented (2026-07-05) in `src/sfmtool/xform/_localize_keypoints.py`
-(`LocalizeKeypointsTransform`), wired through `xform/_arg_parser.py`
-(`parse_localize_keypoints_params`) and the `--localize-keypoints` Click option
-in `_commands/xform.py`. Surfaces the discrete cross-view keypoint localization
-(`specs/core/patch/patch-keypoint-localization.md`, implemented in the
-`PatchCloud.localize_keypoints` PyO3 binding) as an `sfm xform` operation that
-**rebuilds** a reconstruction from the views that co-register.
+The `sfm xform --localize-keypoints` operation surfaces the discrete
+cross-view keypoint localization described in
+[patch-keypoint-localization.md](../../../core/patch/patch-keypoint-localization.md)
+as a reconstruction transform: it re-locates each observation's 2D keypoint by
+registering a point's views against one another, and **rebuilds** the
+reconstruction from the views that co-register.
 
 ## What it does
 
@@ -69,6 +68,14 @@ Because the search is photometric it reads the workspace source images
 (`FileNotFoundError`).
 
 ## Command syntax
+
+The operation is `LocalizeKeypointsTransform` in
+[_localize_keypoints.py](../../../../src/sfmtool/xform/_localize_keypoints.py),
+wired through `parse_localize_keypoints_params` in
+[_arg_parser.py](../../../../src/sfmtool/xform/_arg_parser.py) and the
+`--localize-keypoints` Click option in
+[xform.py](../../../../src/sfmtool/_commands/xform.py); the localization itself
+is the `PatchCloud.localize_keypoints` PyO3 binding.
 
 ```
 sfm xform <input.sfmr> [<output.sfmr>] --localize-keypoints [<params>] [...]

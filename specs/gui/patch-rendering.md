@@ -1,9 +1,8 @@
 # Patch (Surfel) Rendering in the 3D Viewport
 
-**Status:** Implemented (v1). The SfM Explorer renders **embedded patches** as
-small textured, oriented quads ("surfels") in the 3D viewport, one per
-reconstruction 3D point that carries a patch frame. See
-[Implementation Status](#implementation-status).
+The SfM Explorer renders **embedded patches** as small textured, oriented quads
+("surfels") in the 3D viewport, one per reconstruction 3D point that carries a
+patch frame.
 
 The point-splat renderer draws each 3D point as a camera-facing round billboard
 (see [point-cloud-rendering.md](point-cloud-rendering.md)). A patch adds

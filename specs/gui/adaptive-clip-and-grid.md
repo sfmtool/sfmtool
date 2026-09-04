@@ -1,6 +1,13 @@
 # Adaptive Clip Planes and Ground Grid
 
-**Status**: Implemented (2026-04-05)
+Reconstructions come out at whatever scale the scene happened to have: one may
+span half a unit, the next five thousand, and no single pair of hardcoded clip
+planes serves both without clipping geometry away or filling it with depth
+artifacts. The 3D viewer therefore sizes its view volume and its ground grid
+from the loaded scene — a reversed-Z projection with an infinite far plane
+removes the far plane as a concern entirely, while the near plane and the grid
+spacing are recomputed each frame from where the camera is and how large the
+scene around it is.
 
 ## Problem
 

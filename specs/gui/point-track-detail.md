@@ -1,10 +1,10 @@
 # Point Track Detail Panel
 
-*Status: Implemented*
-
-This document specifies the Point Track Detail panel for the sfmtool GUI. It
-provides a focused view of a selected 3D point and its track — the set of 2D
-feature observations across images that were triangulated to produce it.
+The Point Track Detail panel is where the viewer shows one 3D point up close,
+together with its track — the 2D feature observations, one per image, that were
+triangulated into it. It lists those observations with the numbers that say how
+well each one agrees with the point, so a suspect point can be judged
+observation by observation rather than as a dot in a cloud.
 
 For the existing panels this integrates with, see
 [multi-panel-image-browser.md](multi-panel-image-browser.md). For the
