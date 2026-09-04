@@ -10,6 +10,8 @@
 //!
 //! Each format crate owns its own schema, validation rules and error type;
 //! this crate owns only the container primitives they share.
+//!
+//! See `specs/formats/archive-container.md` for the container contract.
 
 #[cfg(not(target_endian = "little"))]
 compile_error!(

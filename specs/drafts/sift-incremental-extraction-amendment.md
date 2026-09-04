@@ -245,7 +245,7 @@ features/descriptors.1001-4095.128.uint8.zst  # keypoints 1001..=4095
 ```
 
 The leading `{start}-{end}` token replaces the row-count dimension of the
-[extension shape convention](../formats/sift-file-format.md#format-design-principles): the row count is `end - start + 1`,
+[extension shape convention](../formats/archive-container.md#entry-names-encode-shape-and-type): the row count is `end - start + 1`,
 so an entry must contain `(end - start + 1) * 128 * 1` uncompressed bytes. The remaining
 `.128.uint8` is the descriptor dimension and dtype as usual. Constraints:
 

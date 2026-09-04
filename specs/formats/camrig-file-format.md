@@ -16,26 +16,13 @@ the same way, and tooling that consumes rigs does not branch on rig type.
 
 ## Format design principles
 
-These mirror the `.sift`, `.matches`, and `.sfmr` formats; see
-`sift-file-format.md` for the original statement.
-
-1. The file is a [ZIP file](https://en.wikipedia.org/wiki/ZIP_(file_format))
-   using the STORE method (no ZIP-level compression). Any member can be
-   located and its start read without decompressing the rest.
-2. Every member is compressed with [zstandard](https://en.wikipedia.org/wiki/Zstd)
-   and carries a `.zst` extension.
-3. Metadata that occurs once per file is stored as JSON, compact (no
-   pretty-printing).
-4. Tables are stored columnar — one file per field, one primitive type per
-   file.
-5. Numeric data is little-endian raw binary in C/row-major order.
-6. Data-file extensions encode the tensor shape and primitive type. E.g.
-   `.100000.4.float64` is a tensor of shape `(100000, 4)` of 64-bit IEEE
-   floats, and the file must hold `100000 * 4 * 8` bytes.
-7. While writing, a hash summarising the whole file is computed and stored,
-   so references to a `.camrig` file can use the content hash held inside it.
-8. Member names, JSON field names, and table field names are chosen to be
-   self-documenting.
+A `.camrig` file is an archive-container file, like `.sift`, `.matches` and
+`.sfmr`: a ZIP archive of individually zstd-compressed members, compact JSON for
+metadata, little-endian columnar binary for tables, and XXH128 hashes over the
+uncompressed bytes so a reference to a `.camrig` file can use the content hash
+held inside it. [archive-container.md](archive-container.md) specifies that
+container — the member layout, the shape-and-type naming of data members, and
+how the hashes are composed. Only what is specific to `.camrig` is below.
 
 The format is designed so that a 100 000-sensor rig stays small: sensors
 that share intrinsics reference a single shared camera (see *Cameras* below),
@@ -111,8 +98,8 @@ be recorded in `rig_attributes` as a hint; see *Rig type and attributes*.)
 
 ## Specification
 
-A `.camrig` file is a ZIP archive (STORE method) containing exactly the
-following members. `{S}` denotes `sensor_count`.
+A `.camrig` file is an [archive-container](archive-container.md) file containing
+exactly the following members. `{S}` denotes `sensor_count`.
 
 ```
 metadata.json.zst
@@ -126,8 +113,8 @@ content_hash.json.zst
 
 ### `metadata.json.zst`
 
-Compact JSON, zstd-compressed. Fields (consumers ignore unknown fields, for
-forward-compatible extension):
+JSON. Fields (consumers ignore unknown fields, for forward-compatible
+extension):
 
 * `version`: (integer) Format version. `1` or `2` (see
   [Versioning and migration](#versioning-and-migration)).
@@ -144,8 +131,7 @@ forward-compatible extension):
 
 ### `cameras/metadata.json.zst`
 
-Compact JSON, zstd-compressed: a JSON **array** of exactly `camera_count`
-camera objects. Each object has the same shape as a `.sfmr` camera:
+A JSON **array** of exactly `camera_count` camera objects. Each object has the same shape as a `.sfmr` camera:
 
 * `model`: (string) COLMAP camera model name, e.g. `"PINHOLE"`,
   `"OPENCV_FISHEYE"`, `"EQUIRECTANGULAR"`.
@@ -162,7 +148,7 @@ available.
 
 ### `sensors/image_file_patterns.json.zst`
 
-Compact JSON, zstd-compressed: a JSON **array** of strings.
+A JSON **array** of strings.
 
 * If the array has `sensor_count` entries, entry `i` is sensor `i`'s image
   file pattern — the path pattern identifying that sensor's images in a
@@ -180,28 +166,24 @@ A non-empty array of the wrong length is invalid.
 
 ### `sensors/camera_indexes.{S}.uint32.zst`
 
-zstd-compressed little-endian `uint32` array of length `S`. Entry `i` is the
-index in `[0, camera_count)` of sensor `i`'s camera in the pool.
+A `uint32` array of length `S`. Entry `i` is the index in `[0, camera_count)`
+of sensor `i`'s camera in the pool.
 
 ### `sensors/quaternions_wxyz.{S}.4.float64.zst`
 
-zstd-compressed little-endian `float64` array of shape `(S, 4)`. Row `i` is
-the WXYZ unit quaternion of sensor `i`'s `sensor_from_rig` rotation.
+A `float64` array of shape `(S, 4)`. Row `i` is the WXYZ unit quaternion of sensor `i`'s `sensor_from_rig` rotation.
 
 ### `sensors/translations_xyz.{S}.3.float64.zst`
 
-zstd-compressed little-endian `float64` array of shape `(S, 3)`. Row `i` is
-the XYZ translation of sensor `i`'s `sensor_from_rig`.
+A `float64` array of shape `(S, 3)`. Row `i` is the XYZ translation of sensor `i`'s `sensor_from_rig`.
 
 ### `content_hash.json.zst`
 
-Compact JSON, zstd-compressed. Fields:
+JSON. Fields:
 
-* `metadata_xxh128`: XXH128 hex digest of the uncompressed `metadata.json`
-  bytes.
-* `content_xxh128`: XXH128 hex digest of the concatenation of the XXH128
-  digests (each as 16 big-endian bytes) of the following uncompressed
-  members, in order:
+* `metadata_xxh128`: digest of the uncompressed `metadata.json` bytes.
+* `content_xxh128`: the whole-file digest. Every member is its own one-member
+  section, and the sections contribute in this order:
   1. `metadata.json`
   2. `cameras/metadata.json`
   3. `sensors/image_file_patterns.json`
@@ -209,9 +191,8 @@ Compact JSON, zstd-compressed. Fields:
   5. `sensors/quaternions_wxyz.{S}.4.float64`
   6. `sensors/translations_xyz.{S}.3.float64`
 
-All hashes are 32-character lowercase hex strings. XXH128 is fast and
-non-cryptographic but has strong collision resistance; it matches the other
-sfmtool formats.
+See [archive-container.md](archive-container.md) for how those digests are taken
+and combined, and for the hex encoding.
 
 ## Data ordering and constraints
 

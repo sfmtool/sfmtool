@@ -47,7 +47,12 @@ selects.
 
 ## Design Principles
 
-See the [.sfmr file format](sfmr-file-format.md) for design principles behind this format.
+A `.matches` file is an [archive-container](archive-container.md) file, like
+`.sift`, `.sfmr` and `.camrig`: a ZIP archive of individually zstd-compressed
+entries, compact JSON for metadata, little-endian columnar binary for the tables
+(entry names carry their shape and data type), and XXH128 hashes over the
+uncompressed bytes. That spec covers the container; everything here is what
+`.matches` puts in it.
 
 This format largely adopts the semantics of the [COLMAP Database Format](https://colmap.github.io/database.html)
 as the basis for image pairs and two view geometries. It uses indexes that are always a
@@ -253,29 +258,24 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 }
 ```
 
-**Field descriptions:**
-- `metadata_xxh128`: Hash of uncompressed `metadata.json.zst` content bytes
-- `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially
-  into a streaming XXH128 hasher in lexicographic path order
-- `image_pairs_xxh128`: Hash of all image pairs data files' uncompressed contents, fed sequentially
-  into a streaming XXH128 hasher in lexicographic path order. Present exactly when the file
-  stores the pairwise backbone.
-- `clusters_xxh128`: Hash of all clusters data files' uncompressed contents, fed sequentially
-  into a streaming XXH128 hasher in lexicographic path order. Present exactly when the file
-  stores the cluster backbone.
-- `cluster_patches_xxh128`: (Optional) Hash of all cluster patches data files' uncompressed
-  contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order.
-  Present only when the cluster patches section exists.
-- `two_view_geometries_xxh128`: (Optional) Hash of all TVG data files' uncompressed contents,
-  fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only
-  when the two-view geometries section exists.
-- `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian
-  digests in order: metadata, images, pairs, clusters, cluster_patches, two_view_geometries
-  (each only if present). A pairwise file's byte stream is identical to the pre-version-3
-  layout, so version ≤ 2 hashes verify unchanged.
+**Field descriptions.** Each section hash covers that section's data files in
+lexicographic path order; see [archive-container.md](archive-container.md) for how
+a section digest is taken and how the digests combine.
 
-**Note**: All hashes are computed on uncompressed content bytes. For JSON files, hash the raw
-bytes after decompression, NOT re-serialized JSON.
+- `metadata_xxh128`: Hash of the uncompressed `metadata.json.zst` content bytes
+- `images_xxh128`: The `images/` section hash
+- `image_pairs_xxh128`: The `image_pairs/` section hash. Present exactly when the
+  file stores the pairwise backbone.
+- `clusters_xxh128`: The `clusters/` section hash. Present exactly when the file
+  stores the cluster backbone.
+- `cluster_patches_xxh128`: (Optional) The `cluster_patches/` section hash. Present
+  only when the cluster patches section exists.
+- `two_view_geometries_xxh128`: (Optional) The two-view geometries section hash.
+  Present only when that section exists.
+- `content_xxh128`: The whole-file digest over all present section hashes, in the
+  order metadata, images, pairs, clusters, cluster_patches, two_view_geometries
+  (each only if present). A pairwise file's byte stream is identical to the
+  pre-version-3 layout, so version ≤ 2 hashes verify unchanged.
 
 ### 3. Images
 
@@ -995,12 +995,6 @@ answer once a cluster-patches pass has produced one, so consumers stop
 branching on which stage they were handed. Descriptors stay out: the matcher
 consumed them and nothing downstream re-matches from a `.matches` file.
 
-### Why ZIP with STORE + zstd?
-
-Same rationale as `.sift` and `.sfmr`: random access to individual files (read just pair
-counts without loading all match data), standard tooling, efficient compression of binary
-arrays.
-
 ### Why columnar storage for matches?
 
 The flat concatenated layout with per-pair counts (same pattern as tracks in `.sfmr`) enables:
@@ -1010,23 +1004,18 @@ The flat concatenated layout with per-pair counts (same pattern as tracks in `.s
 
 ## Compression Details
 
-Same as `.sift` and `.sfmr`:
-- **Container**: ZIP archive using STORE method (no ZIP-level compression)
-- **Compression**: zstandard on each entry, default level 3
-- **JSON files**: Compact encoding (no pretty-printing)
-- **Binary files**: Direct compression of raw byte stream
+Every entry of a `.matches` file is written at the same zstandard level:
+`write_matches` takes it as its `zstd_level` argument, which the Python binding
+defaults to 3. The rest is the container's; see
+[archive-container.md](archive-container.md).
 
 ## Integrity Verification
 
-### Hash Computation
-
-1. **Metadata hash**: XXH128 of uncompressed `metadata.json.zst` content bytes
-2. **Section hashes** (images, pairs, clusters, cluster_patches, two_view_geometries):
-   Feed all files' uncompressed content bytes into a streaming XXH128 hasher in
-   lexicographic path order
-3. **Overall hash**: Concatenate all present section hashes as raw 16-byte big-endian digests
-   in order (metadata, images, pairs, clusters, cluster_patches, two_view_geometries —
-   each only if present), then compute XXH128
+The hashes are the ones described under
+[Content Hash](#2-content-hash-content_hashjsonzst): a `metadata_xxh128`, one
+digest per present section over its data files in lexicographic path order, and a
+`content_xxh128` over those in the order metadata, images, pairs, clusters,
+cluster_patches, two_view_geometries.
 
 ### Verification Process
 

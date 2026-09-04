@@ -2,18 +2,17 @@
 
 ## Overview
 
-The `.sfmr` file format provides a portable, self-contained format for storing Structure from Motion (SfM) reconstructions. It follows the same design principles as the `.sift` file format, using ZIP archives with zstandard compression, columnar binary storage, and content hashing for integrity.
+The `.sfmr` file format provides a portable, self-contained format for storing Structure from Motion (SfM) reconstructions. It is tool agnostic — any SfM solver (COLMAP, GLOMAP, OpenMVG, …) can produce one — and it holds a whole reconstruction, from camera intrinsics and poses through the 3D points to the observations that link them, in a single file.
 
 ## Design Principles
 
-1. **ZIP file with no compression** - Uses ZIP's STORE method for random access to individual files
-2. **Zstandard compression** - All data files have `.zst` extension and use zstandard compression
-3. **JSON metadata** - Human-readable metadata in JSON format
-4. **Content hash verification** - XXH128 hashes for integrity checking
-5. **Columnar storage** - One file per field, enabling selective loading
-6. **Self-documenting filenames** - Include tensor shapes and data types (e.g., `positions_xyzw.2107.4.float64.zst`)
-7. **Little-endian binary** - All numeric data in C/row-major order
-8. **Tool agnostic** - Works with any SfM solver (COLMAP, GLOMAP, OpenMVG, etc.)
+A `.sfmr` file is an [archive-container](archive-container.md) file, like `.sift`,
+`.matches` and `.camrig`: a ZIP archive of individually zstd-compressed entries,
+compact JSON for metadata, little-endian columnar binary for the tables — one
+entry per field, its shape and data type in its name — and XXH128 hashes over the
+uncompressed bytes for integrity and identity. That spec covers the container:
+the entry layout, the naming convention, and how a section digest and the
+whole-file digest are composed. Everything below is what `.sfmr` puts in it.
 
 This format largely adopts the semantics of the [COLMAP Output Format](https://colmap.github.io/format.html)
 as the basis for a reconstruction. It uses indexes that are always a
@@ -109,6 +108,12 @@ boundary, so that in-memory and on-disk `.sfmr` data is always canonical. In
 particular, COLMAP interop (binary models, databases, pycolmap objects) must
 convert on import and on export; a COLMAP pose or point must never be copied
 verbatim into a `.sfmr`.
+
+The in-memory side of that boundary is
+[`SfmrReconstruction`](../../crates/sfmtool-core/src/reconstruction/data.rs) in
+`sfmtool-core`: it holds a file's contents as nalgebra geometric types, and its
+`conversion` child owns the round trip to the raw columnar representation the
+entries below describe. Everything it holds is already canonical.
 
 For COLMAP (+Z-forward, Y-down cameras; arbitrary world orientation), with the
 camera-frame flip `S = diag(1, −1, −1)` and the fixed world rotation
@@ -380,21 +385,22 @@ XXH128 hashes for integrity verification:
 }
 ```
 
-**Field descriptions:**
+**Field descriptions.** Each section hash covers that section's data files in
+lexicographic path order; see [archive-container.md](archive-container.md) for how
+a section digest is taken and how the digests combine into `content_xxh128`.
+
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
-- `rigs_xxh128`: (Optional) Hash of all rigs data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `rigs/` section exists.
-- `frames_xxh128`: (Optional) Hash of all frames data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Present only when `frames/` section exists.
-- `images_xxh128`: Hash of all image data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
-- `points3d_xxh128`: Hash of all points3d data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
-- `tracks_xxh128`: Hash of all tracks data files' uncompressed contents, fed sequentially into a streaming XXH128 hasher in lexicographic path order. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
-- `content_xxh128`: Hash of all present section hashes concatenated as raw 16-byte big-endian digests in order: metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
+- `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
+- `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
+- `images_xxh128`: The `images/` section hash (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
+- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
+- `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
+- `content_xxh128`: The whole-file digest over all present section hashes, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
 **Note**: Per-section metadata files (`images/metadata.json.zst`, `points3d/metadata.json.zst`, `tracks/metadata.json.zst`) are included in their respective section hashes.
 
 **Note**: The `metadata_xxh128` includes the workspace configuration, so changing workspace paths will invalidate the hash. This is intentional - the workspace context is part of the reconstruction's identity.
-
-**Note**: All hashes are computed on the uncompressed content bytes. For JSON files, this is the compact JSON bytes (no pretty-printing) as originally written. Implementations verifying hashes MUST hash the raw bytes read from the archive after decompression, NOT re-serialized JSON, to avoid floating-point formatting differences across languages.
 
 ### 3. Cameras (`cameras/metadata.json.zst`)
 
@@ -1374,38 +1380,28 @@ frame is per point (not per observation), two views of the same point share
 
 ## Compression Details
 
-All `.zst` files use zstandard compression:
-
-- **Compression level**: Default (level 3, configurable)
-- **Strategy**: Optimize for compression ratio vs speed based on file size
-- **JSON files**: Compact encoding (no pretty-printing)
-- **Binary files**: Direct compression of raw byte stream
+Every entry of a `.sfmr` file is written at the same zstandard level, which
+defaults to 3 (`sfmr_format::WriteOptions::zstd_level`, and the `zstd_level`
+argument of the `write_sfmr` binding). The rest is the container's; see
+[archive-container.md](archive-container.md).
 
 ## File Naming Convention
 
-Binary files use self-documenting names:
+Binary entry names follow the container's
+`{field_name}.{dim1}.{dim2}...{dtype}.zst` convention:
 
-**Format**: `{field_name}.{dim1}.{dim2}...{dtype}.zst`
-
-**Examples**:
 - `positions_xyzw.2107.4.float64.zst` → 2107 points, 4 homogeneous coordinates, float64
 - `camera_indexes.18.uint32.zst` → 18 images, uint32 indices
 - `quaternions_wxyz.18.4.float64.zst` → 18 images, 4 components, float64
 
-**Supported dtypes**:
-- `uint8`, `uint16`, `uint32`, `uint64`
-- `int8`, `int16`, `int32`, `int64`
-- `float32`, `float64`
-- `uint128` (for XXH128 hashes, 16 bytes)
+A `.sfmr` file uses `uint8`, `uint32`, `float32`, `float64`, and `uint128` (a raw
+16-byte XXH128 digest per element).
 
 ## Integrity Verification
 
 ### Hash Computation
 
-1. **Metadata hash**: XXH128 of the uncompressed `metadata.json.zst` content bytes
-2. **Cameras hash**: XXH128 of the uncompressed `cameras/metadata.json.zst` content bytes
-3. **Section hashes** (images, points3d, tracks): For each section, feed all files' uncompressed content bytes into a streaming XXH128 hasher in lexicographic path order. The final digest is the section hash. The points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present. The images and tracks sections include only the files present for the file's `feature_source` mode (see [Observation source](#observation-source-version-4)).
-4. **Overall hash**: Concatenate all present section hashes as raw 16-byte big-endian digests (metadata, cameras, rigs if present, frames if present, images, points3d, tracks), then compute XXH128 of the concatenation. Each 128-bit hash digest is serialized as 16 bytes in big-endian (most significant byte first) order before concatenation.
+The hashes are the ones described under [Content Hash](#2-content-hash-content_hashjsonzst): a `metadata_xxh128` and a `cameras_xxh128` over their two JSON entries, one digest per present section over its data files in lexicographic path order, and a `content_xxh128` over those in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. Two conditional details worth restating here: the points3d section includes the optional per-point patch-frame files (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`) when present, and the images and tracks sections include only the files present for the file's `feature_source` mode (see [Observation source](#observation-source-version-4)).
 
 ### Verification Process
 
@@ -1548,35 +1544,6 @@ reconstruction.sfmr (single ZIP file)
 2. **Content hashing**: .sfmr adds `content_hash.json.zst` for integrity
 3. **Random access**: .sfmr uses ZIP STORE for efficient partial loading
 4. **File distribution**: Single .sfmr file is easier to share and archive
-
-## Design Rationale
-
-### Why ZIP with STORE?
-
-- Enables random access to individual files without full decompression
-- Standard format with wide tooling support
-- Self-contained single file for easy distribution
-
-### Why Zstandard compression?
-
-- Better compression ratio than gzip (typically 15-30% smaller)
-- Faster decompression speed
-- Configurable compression levels
-- Industry standard (used by Facebook, Linux kernel, etc.)
-
-### Why columnar storage?
-
-- Load only needed data (e.g., just positions, not colors)
-- Better compression (similar data together)
-- Easy to extend with new fields
-- Efficient for large reconstructions
-
-### Why XXH128 hashes?
-
-- Extremely fast (GB/s throughput)
-- 128-bit provides collision resistance
-- Non-cryptographic (speed over security)
-- Used consistently with .sift format
 
 ## Point ID: Portable 3D Point References
 

@@ -1,28 +1,29 @@
 # The SIFT file format
 
+A `.sift` file holds the local image features extracted from one image — the
+keypoints, their descriptors, and enough metadata to say which image they came
+from and exactly which tool and settings produced them — plus a small thumbnail
+of the source image. One file per image, written once and never modified, so a
+pipeline can extract features once and every later stage can find them, check
+that the image behind them has not changed, and read only the columns it needs.
+
 ## Format design principles
 
-Here are the basic principles used to create the format:
+A `.sift` file is an archive-container file, the same container `.matches`,
+`.sfmr` and `.camrig` use: a zip file with no zip-level compression, whose
+entries are each compressed with zstandard, holding compact JSON for metadata and
+little-endian columnar binary for tables, with XXH128 hashes taken over the
+uncompressed bytes. [archive-container.md](archive-container.md) specifies it —
+the entry layout, the naming that puts a table's shape and data type in its entry
+name, and how the hashes are composed and verified. Two things about how `.sift`
+uses that container are its own:
 
-1. The format is a zip file with no compression. With a zip file, you can access
-    any file and read the start of the file without reading all data.
-2. All data is compressed with zstandard. Each file in the zip has a `.zst` extension.
-3. Metadata that occurs just once for the file is stored in JSON format.
-4. Metadata about the tool is separated from metadata about the input image file
-   and the features produced.
-5. While writing the file, a hash summarizing the full contents of the file is created,
-   and placed in a content metadata file. References to a .sift file can therefore use
-   the content hash stored in the file itself. Additionally, a hash summarizing just the
-   feature tool is included.
-6. Tables are stored as one file per field. Each of these files
-    contains only one primitive data type.
-7. Numeric data is stored in little-endian raw binary format, using C/row-major order.
-8. Data file extensions contain the tensor shape and primitive data type. E.g.
-    `.1044.2.2.float32` means a tensor with shape (1044, 2, 2) and 32-bit IEEE
-    floating point data. The file must contain 1044 * 2 * 2 * 4 = 16704 bytes.
-9. File names in the zip, field names in the JSON, and field names in tables are
-   all selected with an attempt to be self-documenting. Someone encountering a `.sift`
-   file without seeing this specification will have an easier time understanding it.
+1. Metadata about the tool is separated from metadata about the input image file
+   and the features produced, so a reader can identify the extraction
+   configuration without reading anything about the image.
+2. Besides the whole-file content hash — which lets a reference to a `.sift` file
+   use the hash stored inside it — the file carries a hash summarizing just the
+   feature tool.
 
 SIFT features are always derived from an image, and if an image is unchanged from when
 they were calculated before, it's nice to avoid re-computing the features. The `sfmtool`
@@ -72,14 +73,12 @@ implementation-defined.
 
 ## Specification
 
-A `.sift` file is a [zip file](https://en.wikipedia.org/wiki/ZIP_(file_format)) using the STORE
-method (no ZIP-level compression). It contains the entries below, all of which are
-required.
+A `.sift` file is an [archive-container](archive-container.md) file. It contains
+the entries below, all of which are required.
 
 ### `feature_tool_metadata.json.zst`
 
-This is JSON data compressed with [zstd](https://en.wikipedia.org/wiki/Zstd). It contains
-the following fields (ignore additional fields for future backwards-compatible extension):
+JSON. It contains the following fields (ignore additional fields for future backwards-compatible extension):
 
 * `feature_tool`: (string) The tool used to extract features, e.g. `"colmap"`, `"opencv"`.
 * `feature_type`: (string) The type of feature, e.g. `"sift"`. Future feature types
@@ -102,8 +101,7 @@ the following fields (ignore additional fields for future backwards-compatible e
 
 ### `metadata.json.zst`
 
-This is JSON data compressed with zstd. It should contain
-the following fields (ignore additional fields for future backwards-compatible extension):
+JSON. It should contain the following fields (ignore additional fields for future backwards-compatible extension):
 
 * `version`: (integer) The format version number — `1` (see
   [Format versions](#format-versions)).
@@ -119,32 +117,34 @@ is immutable once written.
 
 ### `content_hash.json.zst`
 
-This is JSON data compressed with zstd, that contains the following fields:
+JSON, containing the following fields:
 
 * `metadata_xxh128`: XXH128 hash of the uncompressed `metadata.json` content bytes.
 * `feature_tool_xxh128`: Hash identifying the feature extraction configuration, derived from
   `feature_tool`, `feature_type`, and `feature_options`. Computed once during workspace
   initialization and propagated from there.
   See [Feature tool hash computation](#feature-tool-hash-computation).
-* `content_xxh128`: Hash of hashes. XXH128 hash of the concatenation of the
-    xxh128 binary hash digests (each serialized as 16 bytes in big-endian order) of the
-    following entries, in order:
-    1. `feature_tool_metadata.json` (uncompressed)
-    2. `metadata.json` (uncompressed)
-    3. `features/positions_xy.{feature_count}.2.float32` (uncompressed)
-    4. `features/affine_shapes.{feature_count}.2.2.float32` (uncompressed)
-    5. `features/descriptors.{feature_count}.128.uint8` (uncompressed)
-    6. `thumbnail_y_x_rgb.128.128.3.uint8` (uncompressed)
+* `content_xxh128`: the whole-file digest. Every entry is its own one-entry
+  section, and the sections contribute in this order:
+    1. `feature_tool_metadata.json`
+    2. `metadata.json`
+    3. `features/positions_xy.{feature_count}.2.float32`
+    4. `features/affine_shapes.{feature_count}.2.2.float32`
+    5. `features/descriptors.{feature_count}.128.uint8`
+    6. `thumbnail_y_x_rgb.128.128.3.uint8`
+
+  See [archive-container.md](archive-container.md) for how those digests are
+  taken over the uncompressed bytes and combined.
 
 ### `features/positions_xy.{feature_count}.2.float32.zst`
 
-This is a zstd-compressed little-endian array of `feature_count` (x, y) coordinate pairs as 32-bit IEEE floating point.
+An array of `feature_count` (x, y) coordinate pairs as 32-bit IEEE floating point.
 The format follows COLMAP convention that the pixel center of the upper-left pixel is (0.5, 0.5). To convert
 to the OpenCV convention of (0, 0) for the center of the upper-left pixel, subtract 0.5 from each coordinate.
 
 ### `features/affine_shapes.{feature_count}.2.2.float32.zst`
 
-This is a zstd-compressed little-endian array of `feature_count` [[a11, a12], [a21, a22]] affine shape matrices
+An array of `feature_count` [[a11, a12], [a21, a22]] affine shape matrices
 as 32-bit IEEE floating point. See the [colmap/feature/types.h](https://github.com/colmap/colmap/blob/main/src/colmap/feature/types.h)
 file for details including:
 
@@ -168,7 +168,7 @@ determined by the `feature_tool` and `feature_options` values — for example, w
 descriptors use the original SIFT formulation or domain size pooling depends on the
 `domain_size_pooling` field in `feature_options`.
 
-All `feature_count` descriptors live in one zstd-compressed entry,
+All `feature_count` descriptors live in one entry,
 `features/descriptors.{feature_count}.128.uint8.zst`, in the same row order as
 `positions_xy` and `affine_shapes`.
 
