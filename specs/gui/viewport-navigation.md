@@ -181,12 +181,6 @@ Zooming moves the camera toward or away from the target point:
 - Scroll delta is multiplied by 0.1 to get a smooth zoom factor
 - Zoom follows exponential scaling (multiply/divide by factor)
 
-### Zoom-to-Cursor (Planned)
-
-Zoom toward the point under the cursor rather than toward the target:
-- Uses the existing GPU depth readback (same as Alt+click target picking)
-- Useful for focusing on specific areas without explicitly setting the target
-
 ### FOV Zoom
 
 A separate zoom operation that adjusts the camera's field of view instead of
@@ -624,48 +618,27 @@ in Houdini (Space+Z), CloudCompare (Pick Rotation Center), and Potree/RealityCap
   Fog falloff distance = `target_indicator_fog_multiplier` × `length_scale`
   (tunable, experiment to find a good default)
 
-## Implementation Status
+## Non-goals
 
-### Implemented
+Five navigation affordances are deliberately absent. None is blocked on
+anything; each is listed with what it would cost or what it would need decided.
 
-- [x] Orbit around target point (spherical coordinates)
-- [x] Pan (Shift+drag / middle-drag) with correct drag direction
-- [x] Scroll wheel zoom toward/away from target
-- [x] Trackpad two-finger orbit, Shift+two-finger pan, pinch-to-zoom
-- [x] Ctrl+two-finger drag zoom (Blender convention)
-- [x] Zoom to Fit (Z key) — percentile-based framing preserving view angle
-- [x] Reset View (currently Home, moving to Shift+Home)
-- [x] Near-plane clipping for grid and axis lines
-- [x] Windows precision touchpad integration via DirectManipulation
-- [x] Target control (Alt mode):
-  - [x] Alt+drag nodal pan (dual orbit)
-  - [x] Alt+scroll target push/pull
-  - [x] Alt+click depth-pick to set target
-  - [x] Alt hold / double-tap to reveal target indicator
-  - [x] Target indicator with supernova lighting (see [point-cloud-rendering.md](point-cloud-rendering.md#target-indicator))
-
-### Future Enhancements
-
-- [x] Remap Zoom to Fit from F to Z key
-- [x] Remap keys: Home→Shift+Home for Reset View, Home for Level Horizon
-- [x] Orbit and nodal pan use `world_up` (no longer hardcoded to Z-up)
-- [x] Camera view sets `world_up` to match the camera's actual up direction
-- [x] Dolly / fly navigation (WASD + R/F + Shift sprint)
-- [x] Tilt / roll (`world_up` modification via Q/E)
-- [x] FOV based on shorter viewport dimension (see [FOV and aspect ratio](#fov-and-aspect-ratio))
-- [x] View through selected camera (Z with frustum selected)
-- [x] Image navigation (`,`/`.` to step through images: switches viewed camera in camera view mode, otherwise just moves the selection)
-- [ ] Mouse-drag binding for tilt/roll (open question — Ctrl+drag? See [Tilt / Roll](#tilt--roll))
-- [x] Animated target transitions (slerp + ease-in/ease-out over ~200ms on Alt+click)
-- [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [Activation and Visual Feedback](#activation-and-visual-feedback))
-- [x] FOV zoom in camera view mode (all zoom controls adjust FOV; see [FOV Zoom](#fov-zoom))
-- [ ] FOV zoom gesture binding for free navigation (see [FOV Zoom](#fov-zoom))
-- [ ] Configurable sensitivity settings
-- [ ] Zoom-to-cursor (depth readback to zoom toward point under cursor)
-- [ ] Inertial scrolling / smooth animation
-- [ ] Save/restore camera positions
-
----
+- **Zoom-to-cursor.** Zoom always moves along the view axis toward the target,
+  never toward whatever is under the pointer. Zooming to the cursor would reuse
+  the GPU depth readback that Alt+click target picking already performs, so the
+  machinery exists; what it changes is the invariant that the target is the only
+  thing zoom converges on.
+- **A tilt/roll mouse-drag binding.** Tilt and roll are keyboard-only (Q/E).
+  Every plausible drag modifier is already taken by orbit, pan, nodal pan or
+  dolly — see [Tilt / Roll](#tilt--roll) for the unresolved binding question.
+- **A dedicated FOV-zoom gesture in free navigation.** FOV zoom exists in camera
+  view mode, where every zoom control adjusts FOV; outside it, FOV is reached
+  through the HUD slider. [FOV Zoom](#fov-zoom) surveys why other 3D
+  applications treat FOV as a camera property rather than a viewport gesture.
+- **Configurable sensitivity.** The orbit, pan and zoom sensitivities are
+  constants; there is no settings surface for them.
+- **Inertial scrolling and saved camera positions.** Gestures stop when the
+  input stops, and no viewpoint bookmarking exists.
 
 ## Windows Precision Touchpad Support
 

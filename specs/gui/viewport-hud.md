@@ -5,7 +5,7 @@ viewport itself: a translucent, collapsible panel of toggles and sliders for
 what gets drawn (points, frustums, patches, the grid), how large it is drawn,
 and how the camera behaves. Keeping them over the scene they affect means a
 tune-until-it-looks-right adjustment never costs a round trip to the menu bar,
-and it leaves **File** as the window's only menu.
+and it leaves the window's menu bar with no View menu at all.
 
 ---
 
@@ -219,27 +219,21 @@ adjustments to existing ones.
 | `hud_open`, `hud_rect` | `Viewer3D` | Per-viewport UI state, same place as `camera_view` and `hover_pixel` |
 | Per-section collapsed flags | egui's own `CollapsingState` memory, under the stable ids from `hud::section_id` | Already exactly session-scoped, with per-section defaults via `load_with_default_open`; duplicating it into `Viewer3D` fields would only add a sync step. The explicit ids keep it addressable from outside the HUD |
 
-Nothing is persisted across runs; the HUD opens collapsed each launch.
+Nothing is persisted across runs; the HUD opens expanded each launch
+(`Viewer3D::hud_open` starts `true`).
 
 ---
 
-## Staging
+## Why the View menu is gone rather than repurposed
 
-Two commits, so the risky part lands on its own.
-
-**Phase 1** — *done.* HUD shell with Layers, Size, Patches, and Camera
-sections, plus the full input-arbitration rule set. The View menu is
-**retained as a duplicate** through this phase, so a HUD regression cannot make
-the controls unreachable.
-
-**Phase 2** — *done.* Fold in Advanced and Debug (including the diagnostics
-move and the overlay toggles) and delete the View menu outright, leaving File
-as the only menu.
-
-Phase 2 first repurposed View to dock-panel visibility rather than deleting it.
-That was dropped after live use: the panels could not be closed at the time, so
-the menu existed only to justify itself. Panel visibility came back later, on
-its own terms and under its own name — [panel-layout.md](panel-layout.md).
+The obvious move, once the controls had a home in the viewport, was to keep the
+View menu and give it dock-panel visibility instead. That was tried and dropped:
+the panels could not be closed at the time, so the menu existed only to justify
+itself. Panel visibility came back later on its own terms and under its own name,
+in the **Panels** menu — [panel-layout.md](panel-layout.md) — beside **File** and
+**Go**. The Advanced section is also the first and only surface for
+`edl_line_thickness`, `frustum_size_multiplier`, `target_size_multiplier` and
+`target_fog_multiplier`, none of which the View menu ever exposed.
 
 ---
 
@@ -273,27 +267,3 @@ Rejected because it consumes vertical viewport space permanently, does not
 scale to ~18 controls in one row, and breaks the full-bleed viewport that the
 UX spec treats as a design principle. Worth revisiting if the input
 arbitration proves harder than expected — it is the natural fallback.
-
----
-
-## Implementation Status
-
-All of it is built.
-
-- [x] HUD shell: `Area`, viewport-relative anchoring, collapsed/expanded gear
-- [x] `hud_rect` capture and the scroll/gesture exclusion
-- [x] Drag/click layer arbitration (verified against egui 0.34 and again on
-      0.36 — layering holds, no geometric fallback needed)
-- [x] `egui_wants_keyboard_input` gate on fly keys and viewport shortcuts
-- [x] Layers / Size / Patches / Camera sections
-- [x] Advanced section (exposes `edl_line_thickness`, `frustum_size_multiplier`,
-      `target_size_multiplier`, `target_fog_multiplier` for the first time)
-- [x] Debug section: diagnostics move, controls-help and fps toggles
-- [x] "Show points at infinity" toggle + count readout
-      ([point-cloud-rendering.md](point-cloud-rendering.md#ui--shipped))
-- [x] Remove the View menu outright, leaving File as the only menu
-
-Still open, and deliberately so: everything under
-[Open questions](#open-questions) — auto-hide during navigation, where Length
-Scale belongs, a docked variant, and keyboard shortcuts for the visibility
-toggles.

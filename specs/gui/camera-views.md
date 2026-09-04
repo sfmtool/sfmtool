@@ -359,7 +359,7 @@ pub struct AppState {
 
 ---
 
-## Image Textures in Frustums (Step 3)
+## Image Textures in Frustums
 
 ### Concept
 
@@ -440,15 +440,13 @@ length_scale / frustum_size_multiplier changes (same as frustum wireframes).
 
 ---
 
-## Full-Resolution Image Loading Enhancements (future)
+## Full-Resolution Image Loading
 
-The basic synchronous full-resolution loader (`upload_bg_image()`) is
-implemented. Future enhancements:
-
-1. Implement LRU texture cache with memory budget.
-2. Load full-res images on demand for nearby/selected cameras.
-3. Swap thumbnail with full-res texture when ready.
-4. Async thumbnail loading on a background thread.
+`upload_bg_image()` loads the selected camera's full-resolution image
+synchronously, decoding from disk and creating the GPU texture in one call, and
+`clear_bg_image()` releases it on leaving camera view. Exactly one full-res
+texture is resident at a time; there is no cache, no prefetch and no background
+decode — see [Non-goals](#non-goals).
 
 ---
 
@@ -475,7 +473,7 @@ behavior differs depending on whether the viewport is already in camera view.
 2. **Set `target_distance`** to the median depth of points visible to this
    camera, computed from the per-image depth histogram stored in the `.sfmr`
 3. **Set FOV** to `best_fit_fov()` for perspective cameras; leave unchanged
-   for fisheye cameras (see [Step 9 FOV handling](#fov-handling-on-enter))
+   for fisheye cameras (see [FOV handling on enter](#fov-handling-on-enter))
 4. **Set camera view mode** — stores the camera's `image_index` and
    world-from-camera rotation
 5. **Trigger full-res image load** for camera N (via `upload_bg_image()`)
@@ -485,7 +483,7 @@ behavior differs depending on whether the viewport is already in camera view.
 1. **Keep the current FOV** unchanged
 2. **Compute the relative orientation** of the viewport with respect to the
    outgoing SfM camera, then apply it to the new SfM camera (see
-   [Step 9 camera-to-camera transitions](#camera-to-camera-transitions))
+   [Camera-to-camera transitions](#camera-to-camera-transitions))
 3. **Set the viewport position** to the new camera's center
 4. **Set `target_distance`** from the new camera's median depth
 5. **Transform `world_up`** through the same relative rotation
@@ -519,8 +517,8 @@ fitting a rectangle inside another rectangle: match the constraining axis.
 The best-fit FOV is evaluated on entry (from the viewport aspect at that
 moment) and stored; it is **not** re-evaluated per frame. After entry the FOV
 is under user control (slider, zoom). See
-[Step 9 FOV handling](#fov-handling-while-in-camera-view) for the history of
-why the former per-frame override was removed.
+[FOV handling while in camera view](#fov-handling-while-in-camera-view) for why
+a per-frame override cannot coexist with that.
 
 The viewport has its own aspect ratio (`viewport_width / viewport_height`).
 For a given vertical FOV, the viewport's horizontal FOV is determined by:
@@ -568,19 +566,19 @@ thumbnail used for frustum far-plane textures).
 `upload_bg_image()` on `SceneRenderer` handles full-resolution image loading.
 Only one full-res image is loaded at a time (the viewed camera). The loader
 is synchronous — it decodes the image from disk and creates the GPU texture
-in the same frame. This is simple and works well for typical image sizes;
-async loading may be added later for very large images (see
-[enhancements](#full-resolution-image-loading-enhancements-future)).
+in the same frame. This is simple and works well for typical image sizes; on a
+very large image the decode is visible as a stalled frame, which is the cost of
+having no async path (see [Non-goals](#non-goals)).
 
 The loader state:
 
 ```
 bg_image_texture: Option<Texture>       // GPU texture with full-res image
-bg_image_loaded_index: Option<usize>    // which camera index is loaded
+bg_image_loaded: Option<ImageRef>       // which image is loaded
 ```
 
 When viewing camera N:
-- If `bg_image_loaded_index == Some(N)`: texture is already loaded, skip
+- If `bg_image_loaded` already names this image: texture is loaded, skip
 - Otherwise: load from disk, decode to RGBA, create GPU texture at full
   resolution, rebuild bind group
 
@@ -728,8 +726,9 @@ image detail panel without the viewport jumping around.
 Camera view exits when navigation moves the camera center — orbiting, panning,
 dolly zoom, or WASD fly movement. Orientation-only navigation (nodal pan /
 free-look, tilt, FOV changes, target distance changes) keeps camera view
-active. See [Step 9](#step-9-persistent-camera-view-with-free-look-navigation)
-for the full specification of which inputs keep vs exit camera view.
+active. See
+[Which navigation keeps camera view](#which-navigation-keeps-camera-view) for the
+full input table.
 
 When camera view exits, the mode flag is cleared and the image background is
 hidden. The camera's pose and FOV are kept as-is. Navigation continues
@@ -1465,127 +1464,25 @@ see more or less of the image at once.
 
 This differs from perspective cameras, where `best_fit_fov()` is computed
 once on entry so the background image fills the viewport exactly. See
-[Step 9 FOV handling](#fov-handling-on-enter) for details.
+[FOV handling on enter](#fov-handling-on-enter) for details.
 
 ---
 
-## Implementation Status
+## Persistent camera view and free-look navigation
 
-### Step 1: Frustum wireframe rendering — DONE
+Camera view is persistent: the background image stays up through
+orientation-only navigation, so the user can free-look around a fisheye image
+with a viewport FOV narrower than the lens.
 
-1. ✓ `SfmrImage::camera_to_world_rotation_flat()` helper
-2. ✓ `SfmrCamera::pinhole_params()` helper (handles both focal length conventions)
-3. ✓ Frustum edge buffer upload (`upload_frustums()` on `SceneRenderer`)
-4. ✓ `frustum.wgsl` shader (ribbon-quad expansion with per-edge color)
-5. ✓ Frustum render pipeline with three color targets + hw depth
-6. ✓ Hooked into render pass (Pass 1b, after points)
-7. ✓ EDL shader updated for frustum-only pixels (`color.a` check)
-8. ✓ Re-upload on `length_scale` or `frustum_size_multiplier` change
+That rests on one BG mesh for every camera model. Mesh vertices are unit ray
+directions from `pixel_to_ray`, transformed to world space by the
+camera-to-world rotation at mesh-generation time — the same convention frustum
+wireframes and image quads use — so the BG shader takes the same
+`view_proj = projection * view` transform as every other pipeline, with `w = 0`
+so only the view rotation reaches the directions. That is what supports fisheye
+cameras at and beyond 180° FOV.
 
-### Step 2: Pick buffer + selection + hover overlay — DONE
-
-1. ✓ `R32Uint` pick texture (created/resized in `ensure_size()`)
-2. ✓ Cleared to 0 (`PICK_TAG_NONE`) at frame start
-3. ✓ `@location(2)` pick ID output in both `frustum.wgsl` and `points.wgsl`
-4. ✓ Points write `PICK_TAG_POINT | instance_index` via `@builtin(instance_index)`
-5. ✓ Unified 5×5 readback — shared staging buffers for hover + click
-6. ✓ Decode tag + index; select/deselect frustum on click
-7. ✓ Selection highlighting via per-edge `color_packed` on re-upload
-8. ✓ Hover overlay: bottom-left text shows entity under cursor
-   - Point: "Point3D #N | depth: X.XXXX"
-   - Frustum: "Camera: image_name"
-   - Background with depth: "depth: X.XXXX"
-
-### Step 3: Image textures on frustums — DONE
-
-1. ✓ `ImageQuadInstance` data type (4 corners + frustum_index, 64 bytes)
-2. ✓ `image_quad.wgsl` shader (bilinear corner interpolation, texture array atlas sampling)
-3. ✓ Image quad pipeline (opaque, depth test ON, depth write ON)
-4. ✓ Thumbnail loading (`upload_thumbnails` — reads embedded thumbnails from `.sfmr`, multi-page texture array atlas)
-5. ✓ Instance generation in `upload_frustums` (one quad per camera)
-6. ✓ Hooked into render pass (Pass 1c, after frustum wireframes)
-7. ✓ Pick ID output matches frustum wireframes (same `PICK_TAG_FRUSTUM | index`)
-
-### Step 4: Full-resolution image loading — DONE
-
-1. ✓ Single-image texture loader (`upload_bg_image()` on `SceneRenderer`)
-2. ✓ Synchronous image load (decodes from disk, creates GPU texture at full resolution)
-3. ✓ Skip reload if same image index already loaded (`bg_image_loaded_index` check)
-4. ✓ `clear_bg_image()` releases texture when leaving camera view
-
-### Step 5: View through a camera — DONE
-
-1. ✓ `CameraViewMode` struct with `image_index` and `best_fit_fov()` method
-2. ✓ `ViewportCamera::vertical_fov()` helper for min-dimension FOV convention
-3. ✓ Z key enters camera view when frustum selected (sets pose, target_distance, intrinsic FOVs)
-4. ✓ Best-fit FOV computed once on entry from intrinsic FOVs and viewport aspect
-   (perspective cameras only; not re-evaluated per frame — see Step 9)
-5. ✓ Camera view exits on any navigation input (drag, scroll, gesture, Home key)
-6. ✓ Full-resolution image background display
-7. ✓ `,`/`.` keys to navigate to previous/next camera image in camera view mode
-
-### Step 6: Background image rendering — DONE
-
-1. ✓ Background mesh pipeline (tessellated unit-sphere mesh, `bg_image_distorted.wgsl`)
-2. ✓ Background render pass (Pass 0: clear `BG_COLOR`, draw mesh)
-3. ✓ `view_proj` uniform projects unit-sphere ray directions to clip space
-4. ✓ EDL pass conditional `LoadOp` (`Load` in camera view, `Clear(BG_COLOR)` otherwise)
-5. ✓ EDL shader `discard` for empty pixels (replaces `return vec4(BG_COLOR, 1.0)`)
-6. ✓ Bind group for background mesh (uniforms + image texture + sampler)
-7. ✓ Integration in `render()` — pass `camera_view` state to control Pass 0 and EDL LoadOp
-
-### Step 7: Distorted frustum rendering — DONE
-
-1. ✓ `CameraModel::has_distortion()` for pinhole fast-path detection
-2. ✓ `undistort_point()` with iterative solving for SIMPLE_RADIAL, RADIAL, OPENCV
-3. ✓ `compute_distorted_frustum_grid()` for tessellated N×N grid
-4. ✓ `DistortedQuadVertex` GPU type and `distorted_quad.wgsl` shader
-5. ✓ Mixed pinhole (instanced) + distorted (indexed) rendering in Pass 1c
-6. ✓ Distorted background image rendering (`bg_image_distorted.wgsl`)
-7. ✓ Pinhole fast path: cameras without distortion use untessellated pipeline
-
-### Step 8: Fisheye camera rendering — DONE
-
-All 7 COLMAP fisheye models share the same equidistant base projection and
-need the same spherical far-surface fix. The work is:
-
-1. ✓ Add all fisheye `CameraModel` variants to the enum (currently only
-       `OpenCVFisheye` exists):
-       `SimpleFisheye`, `Fisheye`, `SimpleRadialFisheye`, `RadialFisheye`,
-       `ThinPrismFisheye`, `RadTanThinPrismFisheye`
-2. ✓ Implement `distort`/`undistort` for each new variant (the distortion
-       formulas operate in theta-space; the equidistant base mapping
-       `FisheyeFromNormal`/`NormalFromFisheye` is shared)
-3. ✓ `CameraModel::is_fisheye()` detection method (matches all 7 variants)
-4. ✓ Spherical far-surface in `compute_distorted_frustum_grid()` for fisheye
-5. ✓ Higher subdivision count for fisheye frustums (N=17 vs N=5)
-6. ✓ `pixel_to_ray` API on `CameraIntrinsics` — converts pixel coordinates
-       to unit ray directions without the `tan(theta)` singularity, supporting
-       fisheye FOV at and beyond 180 degrees
-7. ✓ Frustum grid and BG mesh both use `pixel_to_ray` for vertex placement
-8. ✓ Unified BG mesh pipeline — all camera models (pinhole, distorted,
-       fisheye) use the same tessellated unit-sphere mesh and shader. Removed
-       the separate pinhole quad pipeline (`bg_image.wgsl`)
-9. ✓ BG mesh projected through `view_proj` matrix (prepared for free-look)
-10. ✓ Higher subdivision count for fisheye background mesh (N=65 vs N=33)
-
-### Step 9: Persistent camera view with free-look navigation — DONE
-
-Before this step, camera view mode exited on any navigation input. This step
-makes the background image persist during orientation-only navigation, enabling
-the user to free-look around a fisheye image with a narrower viewport FOV.
-
-#### Background: unit-sphere BG mesh (prerequisite, done)
-
-The background image mesh was unified into a single pipeline for all camera
-models. Mesh vertices are unit ray directions computed via `pixel_to_ray`
-and transformed to world space by the camera-to-world rotation during mesh
-generation. This matches the coordinate convention of frustum wireframes and
-image quads, so the BG shader uses the same `view_proj = projection * view`
-transform pipeline. The shader uses `w=0` so only the view rotation affects
-the directions. This supports fisheye cameras with FOV at and beyond 180°.
-
-#### Design: which navigation keeps camera view
+### Which navigation keeps camera view
 
 Camera view stays active for any input that does **not** move the camera
 center. The background image remains visible and the `CameraViewMode` struct
@@ -1623,7 +1520,7 @@ For gesture events (Windows DirectManipulation), the same swapped logic applies:
 unmodified pan gesture calls `nodal_pan` (keeps camera view), Alt+pan gesture
 calls `orbit` (exits), zoom gestures call `zoom_fov` (keeps camera view), etc.
 
-#### FOV handling on enter
+### FOV handling on enter
 
 When entering camera view, the FOV behavior depends on the camera model:
 
@@ -1635,17 +1532,16 @@ When entering camera view, the FOV behavior depends on the camera model:
   best-fit is not meaningful. The user sees a perspective window into the
   fisheye sphere and can free-look to explore the full field of view.
 
-#### FOV handling while in camera view
+### FOV handling while in camera view
 
-`camera.fov` is no longer overridden every frame. Previously `best_fit_fov()`
-was recomputed per-frame to handle window resizes; with persistent camera view
-the user may have changed the FOV via the slider or zoom, so the per-frame
-override had to go.
+`camera.fov` is not overridden per frame. Recomputing `best_fit_fov()` every
+frame would handle window resizes, but it cannot coexist with a persistent camera
+view: the user may have changed the FOV with the slider or a zoom control, and a
+per-frame override would undo it. So the FOV is set once on entry from
+non-camera-view — perspective cameras only, as above — and is under user control
+after that.
 
-For the initial enter from non-camera-view, the FOV is set once (perspective
-cameras only, as described above). After that, the FOV is under user control.
-
-#### Camera-to-camera transitions
+### Camera-to-camera transitions
 
 When switching from one camera view to another (`,`/`.` keys, double-click
 on image in the strip or viewport), the transition preserves the user's
@@ -1682,7 +1578,7 @@ When entering camera view from non-camera-view (Z key, first double-click),
 the current behavior is preserved: set the viewport pose to exactly match
 the SfM camera, set FOV to best-fit (perspective only), etc.
 
-#### BG mesh view_proj update
+### BG mesh view_proj update
 
 Because BG mesh vertices are pre-rotated to world space during mesh
 generation (same convention as frustum wireframes), the BG uniform's
@@ -1702,9 +1598,7 @@ The `CameraViewMode` struct stores the SfM camera's `r_world_from_cam`
 rotation for the camera-to-camera transition math (not for the BG
 uniform computation).
 
-#### Changes to `CameraViewMode`
-
-Add fields to support the new behavior:
+### `CameraViewMode`
 
 ```rust
 pub struct CameraViewMode {
@@ -1715,36 +1609,31 @@ pub struct CameraViewMode {
 }
 ```
 
-The `vfov_cam` and `hfov_cam` fields are removed since the FOV is no longer
-force-updated per frame. The `best_fit_fov()` method moves to a standalone
-function used only at initial entry.
+It carries no FOV of its own — there is no `vfov_cam`/`hfov_cam`, because the FOV
+is not force-updated per frame — and `best_fit_fov()` is a standalone function
+used only at entry. Camera view exit is decided per action rather than by a
+blanket clear: only the center-moving operations in the table above drop the
+mode.
 
-#### Implementation tasks
+## Non-goals
 
-1. ✓ Store `r_world_from_cam` in `CameraViewMode`; removed `vfov_cam`/`hfov_cam`
-2. ✓ On enter from non-camera-view: set pose, set FOV (perspective only),
-   set `world_up`, load BG image
-3. ✓ On camera-to-camera transition: compute relative orientation, apply to new
-   camera, keep FOV, transform `world_up`, load BG image
-4. ✓ Stopped per-frame FOV override (removed the `best_fit_fov` call in
-   `handle_3d_panel`)
-5. ✓ Per-action camera view exit: blanket `self.camera_view = None` replaced
-   with per-action checks (only exit for center-moving operations)
-6. ✓ `update_bg_image_uniforms` uses standard `projection * view`
-   (BG mesh vertices are pre-rotated to world space during generation)
-7. ✓ Tested: free-look with unmodified drag rotates the BG image; Alt-drag
-   orbits and exits camera view with 3D points aligned at the optical axis
-8. ✓ Tested: navigating between cameras with `,`/`.` keeps a stable relative view
-9. ✓ Tested: FOV slider in camera view scales the BG image correctly
-10. ✓ Tested: Q/E tilt in camera view rotates BG and horizon together
-
-### Future Enhancements
-
-- [ ] Camera up indicator on frustum wireframes (see [open question](#gpu-data-layout-for-frustum-wireframes))
-- [ ] Async thumbnail loading
-- [ ] FULL_OPENCV distortion model (rational radial)
-- [ ] Compressed textures (BC7/ASTC) for thumbnail memory reduction
-- [ ] Fisheye viewport projection (equidistant shader to show full fisheye FOV without perspective re-projection)
+- **No camera up indicator on the frustum wireframes.** A frustum's roll is
+  legible only from the image texture on its far plane; see the
+  [GPU data layout](#gpu-data-layout-for-frustum-wireframes) open question for
+  what an indicator would cost in the per-edge vertex format.
+- **Thumbnail loading is synchronous**, on the upload path, and so is the
+  full-resolution background image (`upload_bg_image()`). There is no background
+  decode thread, no LRU texture cache with a memory budget, no speculative load
+  of the cameras near the selected one, and no thumbnail-to-full-res swap when a
+  load completes. A large reconstruction pays the decode cost at load time.
+- **No `FULL_OPENCV` (rational radial) distortion model** in the frustum and
+  background meshes.
+- **Textures are uncompressed `Rgba8`.** BC7/ASTC would cut the thumbnail atlas
+  roughly fourfold at 10K cameras; nothing does that today.
+- **The viewport projection is always perspective**, so a fisheye camera's full
+  field of view cannot be shown at once. An equidistant viewport shader would
+  show it without the perspective re-projection; free-look plus a narrower FOV is
+  the current answer.
 
 ---
 

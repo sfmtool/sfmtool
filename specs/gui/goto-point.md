@@ -56,7 +56,7 @@ non-resizable, matching the existing *Load Demo Data* dialog:
 
 ```
 +--------------------------------------------------+
-|  Go to Point                                 [x] |
+|  Go to Point                                 [×] |
 +--------------------------------------------------+
 |  Point index, or full ID with hash:              |
 |  [ ▓pt3d_a1b2c3d4_4821▓                       ]  |

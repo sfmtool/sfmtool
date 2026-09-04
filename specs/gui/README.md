@@ -27,9 +27,8 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | [image-animation.md](image-animation.md) | Image animation playback: play through image sequence with keyboard/UI controls, camera view fly-through. |
 | [architecture.md](architecture.md) | Technology stack (Rust, wgpu, egui, egui_dock, winit, PyO3), crate structure, multi-pass rendering pipeline, build system, and performance design. |
 
-## Planning and Reference
+## Reference
 
 | Document | Description |
 |----------|-------------|
-| [plan.md](plan.md) | Roadmap, milestone definitions, and current implementation status. |
 | [blender-viewport-navigation-implementation-overview.md](blender-viewport-navigation-implementation-overview.md) | Reference analysis of how Blender implements precision touchpad navigation on Windows via DirectManipulation. Used during development of our own touchpad support. |

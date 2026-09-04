@@ -22,15 +22,17 @@ Animation playback is particularly useful for:
 
 ## Design
 
-`AnimationState` and `PlayDirection`, together with the keyboard handling, live
-with the browser panel in
-[image_browser.rs](../../crates/sfm-explorer/src/image_browser.rs); the minibar
-transport — the play/pause button and the FPS label — is drawn in
-[dock.rs](../../crates/sfm-explorer/src/dock.rs).
+`AnimationState` and `PlayDirection`, the keyboard handling, and the minibar
+transport — the play/pause button and the FPS label — all live with the browser
+panel in
+[image_browser.rs](../../crates/sfm-explorer/src/image_browser.rs). What
+[dock.rs](../../crates/sfm-explorer/src/dock.rs) owns is the other end: it reads
+`request_camera_switch` off the browser's response and performs the camera
+switch.
 
 ### Playback State
 
-Add an `AnimationState` to the image browser that tracks:
+The image browser holds an `AnimationState` that tracks:
 - Whether playback is active (`playing: bool`)
 - Playback direction (`direction: PlayDirection` — Forward / Backward)
 - Frames per second (`fps: f32`, default 10.0, range 1-60)
@@ -88,12 +90,12 @@ the navigation minibar (no width reduction of the barcode):
 
 ### Integration Points
 
-- `ImageBrowser` gains an `animation: AnimationState` field
+- `ImageBrowser` carries the `animation: AnimationState` field
 - Animation advances are reported through the existing `selection_changed: Option<Option<usize>>`
-  field on `ImageBrowserResponse` (no new field needed — reuses the same data path as click
-  selection, which already triggers auto-scroll and camera view updates in `app.rs`)
-- `ImageBrowserResponse` gains `request_camera_switch: Option<usize>` — when playing in camera
-  view mode, signals `app.rs` to call `switch_camera_view()` (instant, non-animated)
+  field on `ImageBrowserResponse` (no separate field — it reuses the same data path as click
+  selection, which already triggers auto-scroll and camera view updates)
+- `ImageBrowserResponse` also carries `request_camera_switch: Option<usize>` — when playing in
+  camera view mode it signals the instant, non-animated `switch_camera_view()`
 - Keyboard handling lives inside `ImageBrowser::show()`, matching the existing pattern where
   each panel reads from egui's global input queue in its own `show()` method
 - When playing, `ui.ctx().request_repaint()` is called to ensure continuous rendering
@@ -104,34 +106,8 @@ When camera view mode is active and animation is playing, each frame advance tri
 camera switch via `switch_camera_view()` (the non-animated path used by `,`/`.` key navigation).
 This produces a flipbook effect with smooth visual continuity from sequential camera positions.
 
-The `request_camera_switch` response field (distinct from `request_camera_view` which triggers
-animated entry into camera view mode) signals `app.rs` to call the instant switch path.
-
-## Implementation Plan
-
-### Step 1: AnimationState and playback logic
-Add `AnimationState` struct and `PlayDirection` enum to `image_browser.rs`.
-Add `animation` field to `ImageBrowser`.
-In `show()`, after input handling and before rendering, check animation state:
-- Track time via `ui.input(|i| i.time)` stored as `last_time: f64`
-- Compute next image index, emit through `selection_changed`
-- Call `request_repaint()` while playing
-- Reset animation on cache invalidation
-
-### Step 2: Keyboard controls
-Add Space, Arrow, and Bracket key handling inside `ImageBrowser::show()`.
-Space toggles `animation.playing`. Arrows step and pause. Brackets adjust fps.
-Pause on any `selection_changed` from non-animation sources (click, minibar).
-
-### Step 3: Minibar play controls
-Draw play/pause button and fps label as painter shapes overlaid on the left edge of the minibar.
-Click on the play button area toggles playback.
-
-### Step 4: Camera view sync
-Add `request_camera_switch: Option<usize>` to `ImageBrowserResponse`.
-In `app.rs`, when this field is set and camera view is active, call the instant
-`switch_camera_view()` method (the same path used by `,`/`.` keys, which calls
-`compute_switch_camera_view` without animation).
+The `request_camera_switch` response field — distinct from `request_camera_view`, which triggers
+animated entry into camera view mode — is what selects the instant switch path.
 
 ## Non-Goals
 

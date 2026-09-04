@@ -45,7 +45,7 @@ Key facts that shape the design:
 - **`u`/`v` are present-or-absent together.** Bitmaps require the frame but are
   independent of it: a reconstruction can carry frames with **no** bitmaps (e.g.
   a `to-embedded-patches` result before `refine_normals(render_bitmaps=True)`).
-  See [Textured vs. flat surfels](#textured-vs-flat-surfels).
+  See [What gets drawn](#what-gets-drawn-by-what-the-reconstruction-carries).
 - **Four corners are trivial:** `center ± u_halfvec ± v_halfvec`. This is exactly
   `OrientedPatch::to_world(±1, ±1)` (`patch/cloud.rs:92-98`), and the `(s, t) ∈
   [-1, 1]²` patch frame maps to bitmap UV identically to the existing camera
@@ -237,21 +237,20 @@ correctness requirement.
 
 ---
 
-## Textured vs. flat surfels
+## What gets drawn, by what the reconstruction carries
 
-Two cases, by which `Option`s are present:
+Patches are drawn only when the reconstruction has **both** the per-point frame
+and `patch_bitmaps_y_x_rgba`. That is the textured case specified above, and it
+is the only one the renderer handles: `upload_patches` returns early when the
+bitmaps are absent, the Patches section of the HUD is hidden, and the
+Show-patches toggle is greyed in Layers.
 
-- **Frame + bitmaps** (`patch_bitmaps_y_x_rgba` present): the primary case —
-  textured quads as specified above.
-- **Frame only** (no bitmaps): render the same oriented quad **flat-shaded** —
-  fill with the point color, optionally Lambert-shaded by the normal against a
-  fixed key light — so orientation is still visible without a texture. This is a
-  small shader variant (skip the atlas sample); worth including in v1 since
-  `to-embedded-patches` produces frames without bitmaps. If descoped, the
-  Show-patches toggle simply stays disabled until bitmaps exist.
-
-Reconstructions with **neither** frame nor bitmaps (the common `sift_files`
-case) show no patches and disable the control entirely.
+So a **frame-only** reconstruction — which is what `sfm xform
+--to-embedded-patches` produces before any bitmap render — shows no patches,
+exactly like a `sift_files` reconstruction that has no frames either. Drawing
+those patches flat-shaded, so their orientation is legible without a texture, is
+proposed in
+[`../drafts/patch-rendering-flat-shaded-amendment.md`](../drafts/patch-rendering-flat-shaded-amendment.md).
 
 ---
 
@@ -314,67 +313,3 @@ Known limitations (inherited or minor, not yet addressed):
   clipping cleanly. A per-instance cull on the center direction would fix it.
 
 ---
-
-## Implementation sketch (v1)
-
-Ordered, each step compiles:
-
-1. `shaders/patch.wgsl` — copy `image_quad.wgsl`; corner expansion from
-   `center/u/v` (+ `w` branch); front-face cull (facing test); UV from
-   `(s, t)`; alpha-cutoff discard; MRT outputs (linear depth `0.0`, pick
-   `PICK_TAG_POINT | point_index`).
-2. `scene_renderer/pipelines/patch.rs` — copy `image_quad.rs`; same 3-target MRT
-   + `Depth32Float`/`Greater`, `cull_mode: None` (culling is done in the shader).
-   Register in `pipelines/mod.rs` and `SceneRenderer::ensure_pipelines`
-   (`mod.rs:270-333`).
-3. `gpu_types.rs` — add `PatchInstance` (and its vertex-buffer layout) + a
-   `PatchUniforms` (view_proj, atlas grid, size/opacity/cutoff, `camera_pos`).
-4. `SceneRenderer` fields (`mod.rs:37-158`) + `new()` init — pipeline, instance
-   buffer, patch atlas texture/view/sampler, bind group, patch count.
-5. `scene_renderer/upload/patches.rs::upload_patches` — mirror `upload_thumbnails`; build
-   atlas + instances from the three reconstruction arrays; skip when `None`.
-6. `scene_renderer/render.rs` — draw block in Pass 1 near the image-quad draw
-   (`render.rs:270-283`), gated on `show_patches`.
-7. `app.rs::prepare_uploads` — call `upload_patches`; add `show_patches`,
-   `patch_opacity`, `patch_size_log2`, `alpha_cutoff` to state + uniforms.
-8. UI — controls in the point-cloud panel section; disable when no patch frame.
-9. (optional) flat-shaded variant for frame-without-bitmap reconstructions.
-
-Picking, hover, and selection require **no** new work — they ride the point
-pick tag.
-
----
-
-## Implementation Status
-
-### Implemented
-
-- [x] Patch instance + atlas upload from `recon.patch_*` arrays
-      (`scene_renderer/upload/patches.rs::upload_patches`, page-grid packed
-      `texture_2d_array`, atlas byte size logged)
-- [x] `patch.wgsl` textured oriented-quad pipeline in Pass 1
-      (`pipelines/patch.rs`, premultiplied alpha)
-- [x] Front-face-only culling via a vertex-shader facing test
-      (`dot(u × v, camera_pos − center) ≤ 0`; infinity patches always render)
-- [x] Bitmap `v` texture coordinate flipped in the vertex shader (rows are baked
-      along `−v`, so `uv.y = (1 − t) / 2`) — keeps the textured quad un-mirrored
-- [x] Real HW depth / `0.0` linear depth / `PICK_TAG_POINT` targets
-- [x] Points-at-infinity `w = 0` corner path (direction transform +
-      `INF_DEPTH` bias, matching the infinity point splats)
-- [x] Show-patches / opacity / size / edge-cutoff UI (viewport HUD: the
-      Patches section, hidden unless frames **and** bitmaps exist, with the
-      Show-patches toggle greyed in Layers)
-
-### Planned (v1)
-
-- [ ] Flat-shaded fallback for frame-without-bitmap patches (descoped from
-      the first cut: `upload_patches` returns early without bitmaps and the
-      Show-patches controls stay disabled until bitmaps exist)
-
-### Future
-
-- [ ] EDL-on-patches toggle
-- [ ] Point auto-hide where patches exist
-- [ ] Back-face dim/tint (culling is done — this is the softer alternative)
-- [ ] LOD / atlas streaming / distance culling for large patch clouds
-- [ ] Order-independent transparency for soft patch edges

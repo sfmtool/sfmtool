@@ -445,40 +445,27 @@ transform.
   `point_size_log2` slider. The 1–16 px range proved fine in practice; the
   carried-over open question is resolved.
 
----
+## Non-goals
 
-## Implementation Status
+- **Point colouring and filtering by quality.** Points carry their RGB colour and
+  nothing else; there is no mode that colours the cloud by reprojection error,
+  track length or triangulation angle, and no filter over those metrics. The
+  equivalent per-feature overlays exist on the Image Detail panel instead, where
+  a metric can be read against the image it came from.
+- **Level of detail.** Every point in a loaded reconstruction is uploaded and
+  drawn every frame. Nothing decimates the cloud at distance, so the practical
+  ceiling is what one instanced draw sustains rather than what an LOD scheme
+  could.
+- **Distance attenuation of point size.** A point's world-unit size is constant;
+  splats shrink on screen only through perspective.
+- **A `length_scale` that tracks the camera.** It is computed once from the
+  scene bounds on upload (see [Length Scale](#length-scale)) and does not adapt as
+  you navigate into a dense corner of a large scene.
 
-### Implemented
+## Open questions
 
-- [x] GPU point splat rendering (billboard quads, instanced)
-- [x] Per-point RGB color
-- [x] Auto point sizing from the trimmed median nearest-neighbor distance
-- [x] User-adjustable point size (log2 slider)
-- [x] EDL post-processing (8-neighbor, two-radius sampling)
-- [x] EDL line thickness plumbed through `AppState` to the shader uniforms,
-      with a slider in the viewport HUD's Advanced section
-- [x] Three render targets (color + linear depth + pick ID)
-- [x] Target indicator (originally a rotating wireframe octahedron; later
-      redesigned into the 3D compass — see the redesign entry below and
-      [3D Shape](#3d-shape-rotating-compass))
-- [x] Depth-aware transparency with color shift
-- [x] Supernova lighting effect with inverse-square falloff and radiating waves
-- [x] Smooth activation/deactivation fade
-- [x] Points-at-infinity rendering (`w = 0` direction transform, screen-space
-      splats, depth bias, EDL passthrough, data-pipeline exclusions — see
-      [Points at Infinity](#points-at-infinity))
-- [x] "Show points at infinity" toggle and `N points (M at infinity)` count
-      readout (see [UI — shipped](#ui--shipped))
-- [x] "EDL Line Thickness" slider exposing the already-plumbed
-      `edl_line_thickness` (viewport HUD, Advanced section)
-
-### Future Enhancements
-
-- [ ] Adaptive `length_scale` that updates as you navigate to different parts of the scene
-- [x] Target indicator redesign: 3D compass shape with filled star rose showing `world_up` (see [3D Shape](#3d-shape-rotating-compass))
-- [ ] Target indicator visibility over bright backgrounds (see [open question](#glow-effect))
-- [ ] Color points by reprojection error, track length, or triangulation angle
-- [ ] Filter points by quality metrics
-- [ ] LOD (level of detail) for 10M+ point performance
-- [ ] Point size attenuation with distance
+- **Target-indicator visibility over bright backgrounds.** The additive glow
+  described under [Glow Effect](#glow-effect) disappears against bright regions
+  of the cloud. Outline or contrast edge, colour inversion, and luminance-driven
+  switching between additive and subtractive blending are all plausible; none has
+  been tried.

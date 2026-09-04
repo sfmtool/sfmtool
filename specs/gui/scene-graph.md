@@ -1051,47 +1051,16 @@ three against the *old* id.
 
 ---
 
-## Implementation Phases
-
-1. **Typed refs, single recon** *(done)* (mechanical, no behavior change):
-   introduce `ReconId`/`ImageRef`/`PointRef`, `Vec<SceneNode>` with the
-   invariant len ≤ 1, re-key all caches, route panels through the selected
-   reconstruction. Everything still loads/replaces as today.
-2. **Renderer bundles + picking** *(done)*: `ReconResources`, per-recon uniform
-   block with model matrix and pick bases, new pick encoding, per-recon draws.
-   Still one node loaded — but the machinery is multi-ready and covered by
-   noop-backend tests. The model matrix is identity and `pickable` is always 1
-   until phases 3–4 supply the node transform and the interaction toggle;
-   `tint_color` is carried but not yet read by any shader (phase 5).
-3. **Multi-load + Scene Graph panel** *(done)*: append-on-open, multi-select
-   dialog, multi-path CLI, node close/reload, the Scene tab with tree, per-node
-   eye and interaction-cursor toggles, selected-reconstruction handling,
-   window title and stats overlay. The feature is on.
-4. **Transforms + alignment** *(done)*: the per-recon model matrix exercised
-   end to end, `Align to…` (by cameras and by points), `Reset Transform`,
-   status feedback.
-5. **Comparison affordances** *(done)*: per-node tint palette and solo mode —
-   the last display-side pieces of the original design, and what makes two
-   aligned reconstructions readable once they occupy the same space.
-
-The transform editor, "Save Aligned Copy…" and multi-way align were briefly
-folded into phase 5 and have been returned to Future Directions: each is new
-capability rather than a finishing touch, and the export in particular would
-break the invariant every phase has held — that a node transform is view state
-that never touches the reconstruction or the disk.
-
-Phases 1–2 are refactors shippable behind unchanged UX; the feature turns on
-in phase 3.
-
----
-
 ## Future Directions
 
 - **Transform tooling beyond `Align to…`**: a numeric transform editor
   (inspect/tweak the fitted `Se3Transform`), a "Save Aligned Copy…" export
   that bakes `node.transform` through the `sfm xform` machinery, and multi-way
   alignment (align every node to one reference in a single action, mirroring
-  `sfm align`'s multi-way mode).
+  `sfm align`'s multi-way mode). The export is the one that needs a decision
+  rather than just work: it would break the invariant everything here holds to,
+  that a node transform is view state and never touches the reconstruction or
+  the disk.
 - **Cross-reconstruction correspondence**: images with the same name/path in
   two nodes are "the same photo" — hover/selection echo across nodes
   (highlight the sibling frustum), side-by-side pose deltas, per-camera
