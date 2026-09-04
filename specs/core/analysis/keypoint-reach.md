@@ -60,24 +60,19 @@ each row's candidates in the sorted-column order of its run. Batching is a
 work grain and not a threshold: the pairs are the same pairs in the same order
 at any batch size, and the output is sized to the pairs rather than to the
 runs. Both images and the batches of rows within one image are independent and
-may be enumerated in parallel -- the callers hand over one image at a time, so
-parallelism that stopped at the image boundary would be no parallelism at all.
-The parts are concatenated in the order the sequential enumeration would have
-produced them, so the result does not depend on the scheduling.
+may be enumerated in parallel -- the intended calling pattern is one image at a
+time, and parallelism that stopped at the image boundary would leave such a call
+with none at all. The parts are concatenated in the order the sequential
+enumeration would have produced them, so the result does not depend on the
+scheduling.
 
 ## What consumes it
 
-- **Retiring coarse observations a finer feature covers.** Reach = the row's
-  drawn footprint; the caller keeps the pairs at least one radius band apart
-  and retires the coarse side.
-- **Reconciling points that rest on one measurement.** Reach = a fraction of
-  the row's refined unit scale; the caller keeps the pairs whose radii agree
-  and joins their points into one tangle.
-
-Both callers' verdicts are exact functions of the pair set, so the enumeration
-carries their determinism: the same rows give the same pairs in the same
-order, and the callers' masks are byte-identical to what the reference
-enumeration produced.
+Nothing in the pipeline, today. The enumeration's only callers are its own
+tests (`spatial/keypoint_reach/tests.rs`) and the Python binding below, through
+`tests/rust_bindings/test_keypoint_reach_rust_bindings.py`. It was extracted
+from two rules that ask this question, and both still expand the neighbourhood
+for themselves in NumPy; see [Open questions](#open-questions).
 
 ## Binding
 
@@ -105,7 +100,23 @@ the documented "asks nothing" value, not an error.
   identical with and without parallelism.
 - **Refusals.** Mismatched lengths and a negative reach are refused, and the
   refusal names the offending row.
-- **Caller parity.** The two consuming rules reproduce their reference masks
-  byte for byte on stored members. Both rules and both the members the
-  reconciliation's tolerance was drawn from were checked this way when the
-  enumeration moved off its NumPy reference.
+
+## Open questions
+
+**Whether the two rules this was extracted from should migrate onto it.** Both
+ask the same question of the same rows and differ only in what they then test,
+which is why the enumeration was stated once:
+
+- *Retiring coarse observations a finer feature covers* would set the reach to
+  the row's drawn footprint, keep the pairs at least one radius band apart, and
+  retire the coarse side.
+- *Reconciling points that rest on one measurement* would set the reach to a
+  fraction of the row's refined unit scale, keep the pairs whose radii agree,
+  and join their points into one tangle.
+
+Each verdict would be an exact function of the pair set, so the enumeration
+would carry its determinism. What a migration has to establish, and what nothing
+asserts today, is that each rule's mask comes out byte for byte identical to
+what its NumPy expansion produces now — including on the members the
+reconciliation's tolerance was drawn from. Until that parity is measured neither
+rule is a consumer of this module.
