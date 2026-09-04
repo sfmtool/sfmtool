@@ -20,6 +20,29 @@ triangulated points) for a caller's refinement machinery.
 The flat cluster-observation arrays (as in `focal_vote`), the shared
 image size, a focal `f0` (typically a focal-vote consensus), and a seed.
 
+## Frame convention
+
+Every rotation this kernel takes in or hands back is in the **canonical camera
+frame**: the camera looks along `−Z`, with `+Y` up, which is the frame the
+`.sfmr` format stores and the rest of the codebase works in. The returned
+`quaternions_wxyz` and `translations` are world-to-camera in that frame.
+
+The conjugate homography does not live there. `H = K R K⁻¹` is a relation
+between *pixel* coordinates, and the pixel frame is the optical one — `+X`
+right, `+Y` **down**, looking along `+Z` — so the rotation that comes out of
+`K⁻¹ H K` is expressed optically. The two frames differ by a flip of the last
+two axes, so the conversion is a conjugation by
+
+```
+S = diag(1, −1, −1),      R_canonical = S · R_optical · S
+```
+
+which is its own inverse (`S² = I`). This is applied once, at the boundary where
+an edge is built: nothing downstream of `build_edges` sees an optical-frame
+rotation, and nothing upstream of it sees a canonical one. Getting it wrong is
+silent — `S R S` is still a rotation matrix, of the same angle — so it shows up
+only as a reconstruction that is mirrored about the horizontal axis.
+
 ## Mechanism
 
 ### 1. Rotation edge graph
@@ -41,7 +64,8 @@ homography over the pair's shared-cluster correspondences (centred
 coordinates); require at least 12 inliers; validate as a conjugate
 rotation at `f0` by the orthogonality residual (`< 0.12`; a finite-plane
 homography never passes). A validated edge stores `R_ij` — the
-polar-orthogonalized `K⁻¹ H K` — and its inlier partition: H-inliers are
+polar-orthogonalized `K⁻¹ H K`, conjugated by `S` into the canonical frame (see
+[Frame convention](#frame-convention)) — and its inlier partition: H-inliers are
 the edge's far field, H-outliers its near field.
 
 ### 2. Global rotations

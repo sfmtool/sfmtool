@@ -33,10 +33,10 @@ distant stars anchor a sextant. Near points fix translation and scale; far
 points stiffen rotation. Recovering the far points lets them **complement** the
 well-triangulated near ones.
 
-We recently updated the `.sfmr` format to store [homogeneous points][v2 model],
-so it can represent points at infinity. This document is about how to
-efficiently search for points at infinity in an existing reconstruction, using a
-spatial data structure over all the keypoints.
+The `.sfmr` format stores [homogeneous points][v2 model], so it can represent a
+point at infinity directly. This document is about how the operation searches an
+existing reconstruction for them, using one spatial data structure over all the
+untracked keypoints.
 
 ## The geometric insight
 
@@ -72,57 +72,54 @@ ray_cam   = camera.pixel_to_ray(u, v)     # unit ray in camera frame, all models
 dir_world = R_iᵀ · ray_cam                # camera→world; unit because R is orthonormal
 ```
 
-`CameraIntrinsics::pixel_to_ray` already handles every camera model including
-fisheye beyond 180° (needed for the kerry_park rig), and `pixel_to_ray_batch`
-is the vectorised form. `KdTree3d` is already exposed to Python. So the
-machinery exists; this proposal is mostly about the clustering policy on top.
+`CameraIntrinsics::pixel_to_ray` handles every camera model including fisheye
+beyond 180° (needed for the kerry_park rig), and `pixel_to_ray_batch` is the
+vectorised form; `KdTree3d` is exposed to Python. The un-projection is therefore
+shared machinery, and what is particular to this operation is the clustering
+policy on top of it.
 
 ### "Distant" is the same query with a looser radius
 
-The angular radius `ε` we cluster within is not just numerical slack. It is a
+The angular radius `ε` the operation clusters within is not numerical slack. It
+is a
 **physical knob for how distant a point must be to count as "at infinity."** A
 finite point at distance `d`, viewed by two cameras separated by baseline `B`,
 has parallax `≈ B/d`. Clustering directions within `ε` therefore captures the
 points with parallax `≤ ε`, i.e. `d ≳ B/ε`. Tightening `ε` raises the distance
 cutoff toward true infinity; loosening it sweeps in the "finite but distant"
-points. They are the same search, and `ε` slides between them. (The prototype
-prints `B_max/ε` next to each `ε` to make this cutoff concrete; see the findings
-below.)
+points. They are the same search, and `ε` slides between them; the calibration
+below reports `B_max/ε` beside each `ε` to make the cutoff concrete.
 
 This also tells us what to *do* with a cluster once found. By construction its
 members agree in direction to within `ε`. If their parallax is below the
 keypoint-localisation noise floor, the depth is unrecoverable and the point is
 genuinely `w = 0`. If `ε` is loose enough that a track's parallax clears the
-floor, we triangulate it and decide per cluster from the triangulation's
-observability diagnostics: emit `w = 0` when the depth is still unresolvable,
-otherwise a finite distant point (see Decisions).
+floor, the cluster is triangulated and decided from the triangulation's
+observability diagnostics: `w = 0` when the depth is still unresolvable, a finite
+distant point otherwise (see Decisions).
 
 ## Approach
 
-Build one KD-tree over all keypoint directions across all images, with a
-parallel index array mapping each entry back to `(image_index, feature_index)`.
-For each direction, query neighbours within the chord radius corresponding to
-`ε`, keep neighbour pairs that (a) come from *different* images and (b) pass a
-SIFT descriptor test, and assemble the surviving pairs into tracks. Assign each
-track a direction by the bearing mean `normalise(Σ rᵢ)` (the same rule
-`analysis/infinity/convert.rs` already uses) and emit it as a `w = 0` point with a new track.
+One KD-tree holds every keypoint direction across every image, with a parallel
+index array mapping each entry back to `(image_index, feature_index)`. For each
+direction the operation queries neighbours within the chord radius corresponding
+to `ε`, keeps neighbour pairs that (a) come from *different* images and (b) pass
+a SIFT descriptor test, and assembles the surviving pairs into tracks. Each track
+takes its direction from the bearing mean `normalise(Σ rᵢ)` — the same rule
+`analysis/infinity/convert.rs` uses — and becomes a `w = 0` point with a new
+track.
 
-This needs only one global structure, `O(N log N)` to build and near-linear to
-query, with no need to enumerate image pairs, and it naturally finds tracks
-spanning many images at once. It reuses `pixel_to_ray_batch`, `KdTree3d`, the
-descriptor L2 in `features/feature_match/descriptor.rs`, and the bearing-mean from
+That needs one global structure, `O(N log N)` to build and near-linear to query,
+with no image-pair enumeration, and it naturally finds tracks spanning many
+images at once. It reuses `pixel_to_ray_batch`, `KdTree3d`, the descriptor L2 in
+`features/feature_match/descriptor.rs`, and the bearing mean from
 `analysis/infinity/convert.rs`.
 
-Tests show that mutual descriptor agreement and **at most one feature per image**
-per track (a single infinite point cannot appear twice in one image) turn the
-loose neighbour set into a clean cross-image track; without them, direction
+Two guardrails turn the loose neighbour set into clean cross-image tracks: mutual
+descriptor agreement, and **at most one feature per image** per track, since a
+single infinite point cannot appear twice in one image. Without them, direction
 coincidence is cheap enough that naive transitive grouping (union-find) chains
-unrelated keypoints into runaway mega-clusters (see findings).
-
-Other idea, not pursued here: exposing the existing
-`classify_points_at_infinity` as its own `xform` flag is a cheap, composable
-complement, but it only reclassifies already-triangulated points and finds
-nothing new.
+unrelated keypoints into runaway mega-clusters — measured below.
 
 ## Algorithm
 
@@ -165,11 +162,12 @@ nothing new.
    reuses a feature an existing point already owns — a 2D feature still observes
    exactly one 3D point, which COLMAP export and bundle adjustment require.
 
-Heavy lifting (steps 3–6) belongs in `sfmtool-core` behind a PyO3 entry point.
-The prototype implements this policy in vectorised NumPy and it works, but the
-final per-image-pair mutual matching is easier to get right (and parallelise) in
-Rust next to the existing descriptor matchers, and avoids the prototype's
-memory-hungry global edge arrays on the larger solves.
+Steps 3–6 run in `sfmtool-core` behind a PyO3 entry point rather than in Python.
+The policy is expressible in vectorised NumPy — the calibration below was
+measured that way — but the per-image-pair mutual matching is easier to get right
+and to parallelise in Rust next to the existing descriptor matchers, and Rust
+avoids the memory-hungry global edge arrays a NumPy form needs on larger
+solves.
 
 ## CLI surface
 
@@ -179,8 +177,8 @@ exposed as the PyO3 method `SfmrReconstruction.find_points_at_infinity` and
 driven by the thin Python transforms in
 [_find_points_at_infinity.py](../../../../src/sfmtool/xform/_find_points_at_infinity.py).
 
-Fits `sfm xform` as an ordered operation, consistent with the existing
-filtering/optimisation ops:
+It is an ordered `sfm xform` operation, consistent with the existing
+filtering and optimisation ops:
 
 ```
 sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<min_views>[,<noise_floor_px>]]]
@@ -189,27 +187,33 @@ sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<
 e.g. `--find-points-at-infinity 0.1,200,2` (defaults: `desc_thresh` 200,
 `min_views` 2, `noise_floor_px` 1.0 — the keypoint-localisation noise the
 classifier converts to per-ray angular noise).
-A `--max-features <N>` flag (the
-standard cap many commands carry, taking each image's largest features) bounds
-the per-image keypoint set: it caps memory and runtime on dense or many-image
-solves, and the largest-scale features tend to be the most repeatable across the
-wide viewpoint changes a distant point is seen under. The prototype caps at
-2000/image. Optionally a companion `--classify-points-at-infinity
-<noise_floor_px>` flag (reclassify existing points), which composes naturally
-before or after. The operation is *additive*: it appends new points and tracks
-via the `Transform.apply(recon) -> recon` protocol. It emits both kinds of point
-on its own (per the classify step): a tight `ε` yields all `w = 0`, a looser `ε`
-lets some tracks triangulate into finite distant points.
+`--max-features <N>` — the standard cap many commands carry, taking each image's
+largest features — bounds the per-image keypoint set. It caps memory and runtime
+on dense or many-image solves, and the largest-scale features tend to be the most
+repeatable across the wide viewpoint changes a distant point is seen under.
+Uncapped by default; `2000` is the value the calibration below used. The flag
+applies to this operation alone and is rejected when no
+`--find-points-at-infinity` is present.
 
-## Prototype findings
+The companion `--classify-points-at-infinity <noise_floor_px>` reclassifies
+points the solve already triangulated, and composes naturally before or after
+this one.
 
-`tmp/infinity_search_prototype.py` (gitignored) runs **two** clustering policies
-head-to-head so the false-positive cost is measurable:
+The operation is *additive*: it appends new points and tracks through the
+`Transform.apply(recon) -> recon` protocol. It emits both kinds of point on its
+own, per the classify step — a tight `ε` yields all `w = 0`, a looser `ε` lets
+some tracks triangulate into finite distant points.
+
+## Calibration
+
+The two guardrails above are what separate this from a much simpler policy, and
+their cost was measured by running both head to head over the four in-tree
+datasets:
 
 - **NAIVE**: every cross-image neighbour pair under the descriptor threshold is
-  an edge; transitive union-find. (The strawman.)
-- **REFINED**: the recommended policy, per-image descriptor-best + Lowe ratio
-  test + **mutual** match + **one-feature-per-image** tracks.
+  an edge; transitive union-find. The strawman.
+- **REFINED**: the shipped policy — per-image descriptor-best, Lowe ratio test,
+  **mutual** match, **one-feature-per-image** tracks.
 
 Both load all keypoints (capped 2000/image), un-project, share one `KdTree3d`,
 and cross-check candidates against the existing solve: **%new** = tracks with no
@@ -270,9 +274,10 @@ What the numbers say:
 - **Close-object scenes are the hazard, and the guardrails handle it.**
   `dino_dog_toy` (turntable, nothing actually distant) is where naive
   over-merges worst. Refined still produces 0 dirty tracks, but consistency
-  caps at ~76%, so the operation should default to a **tight `ε`** (≈0.05–0.1°)
-  and reward `min_views ≥ 3` to suppress the residual false positives on scenes
-  with no real distant content.
+  caps at ~76%. `ε` has no default — it is the operation's one required
+  argument — and this is why: on a scene with no genuinely distant content, a
+  **tight `ε`** (≈0.05–0.1°) together with `min_views ≥ 3` is what suppresses the
+  residual false positives.
 - **`ε` is a distance dial, as predicted.** `~min dist = B_max/ε`: ≈5500–10000
   world units at `ε = 0.1°` (effectively infinite) down to ~1100–2000 at
   `ε = 0.5°` (merely "distant"). The "finite but distant" case is covered by
@@ -290,16 +295,18 @@ What the numbers say:
   by this classifier when the batch triangulation API landed.)
 - **Mutual-match scope.** Per-image descriptor-best + ratio test + mutual edge,
   then transitive closure through mutual edges with a one-per-image constraint
-  (validated by the prototype: 0 dirty tracks, higher consistency). When closure
+  (0 dirty tracks and higher consistency, measured below). When closure
   pulls two same-image features into one component via a chain, **split** rather
   than drop: keep the best feature per image, so a near miss does not discard an
   otherwise-good track.
 - **Implementation.** The clustering, matching, and classification live in
   `sfmtool-core` Rust behind a PyO3 entry point, next to the existing descriptor
   matchers; the `xform` is a thin Python wrapper.
-- **Out of `solve` for now.** Ship as an `xform`-only op. A later follow-up could
-  run it as a supplementary augmentation pass after `solve`, recovering the
-  low-parallax tracks the solve's own filters dropped.
+- **Out of `solve`.** It is an `xform`-only operation. Running it as a
+  supplementary augmentation pass inside `solve`, to recover the low-parallax
+  tracks the solve's own filters dropped, would be a larger change: `solve`
+  drives pycolmap, and the discovery would have to fit between the mapper's
+  passes rather than after them.
 
 ## Reuse map
 
