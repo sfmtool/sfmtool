@@ -533,12 +533,9 @@ def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     assert "17 @ 270x480" in out.output
     assert "Camera model:  Pinhole (SIMPLE_PINHOLE)" in out.output
     assert "UNCONFIRMED" not in out.output
-    # The pinhole vote was weak enough that both columns ran, and the report
-    # says so before listing them.
-    assert "the camera-model columns ran" in out.output
-    assert "EquidistantFisheye" in out.output
+    report = out.output
 
-    focal = float(re.search(r"Focal length:\s+([\d.]+) px", out.output).group(1))
+    focal = float(re.search(r"Focal length:\s+([\d.]+) px", report).group(1))
     # Not pinned to a value, and bounded only by the kernel's own plausibility
     # band (0.3x to 3x the max dimension): the fixture's matches come from a
     # fresh SIFT extraction, whose floating point differs across platforms,
@@ -556,11 +553,22 @@ def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):
     assert payload["focal_px"] == pytest.approx(focal, abs=0.01)
     assert payload["fisheye_confirmed"] is None
     assert payload["n_pool"] >= 2
-    # `--model auto` on this capture: the pinhole vote is weak (the pool is a
-    # handful of votes), so the kernel paid for the camera-model columns and
-    # records why. Which reasons fire is not pinned -- the fixture's matches
-    # come from a fresh SIFT extraction whose pool differs across platforms.
-    assert payload["escalation"], "the columns ran, so a weak-vote reason fired"
+    # `--model auto` on this capture: whether the pinhole vote is weak enough
+    # to pay for the camera-model columns is not pinned either -- the same
+    # platform-dependent pool decides it (Windows escalates on a thin pool;
+    # Linux and macOS read a vote that stands). What is pinned is that the
+    # kernel made the call and the text report agrees with it.
+    escalation = payload["escalation"]
+    assert isinstance(escalation, list)
+    if escalation:
+        assert "the camera-model columns ran" in report
+        assert ", ".join(escalation) in report
+        assert "Columns:" in report
+        assert "EquidistantFisheye" in report
+    else:
+        assert "Arbitration:   not run" in report
+        assert "Columns:" not in report
+        assert "EquidistantFisheye" not in report
 
     # Committing the estimate to a rig.
     workspace_dir = cluster_matches_file.parent.parent
