@@ -22,29 +22,33 @@ REFINE_RADIUS = 8.0
 
 
 def _selection(clusters):
-    """``(starts, images, features, affines)`` from ``(image, feature, scale)``."""
-    starts, images, features, affines = [0], [], [], []
+    """``(starts, images, features, positions, shapes)`` from
+    ``(image, feature, scale)``."""
+    starts, images, features, positions, shapes = [0], [], [], [], []
     for rows in clusters:
         for img, feat, scale in rows:
             images.append(img)
             features.append(feat)
-            affines.append([[scale, 0.0, 100.0 + feat], [0.0, scale, 200.0 + feat]])
+            positions.append([100.0 + feat, 200.0 + feat])
+            shapes.append([[scale, 0.0], [0.0, scale]])
         starts.append(len(images))
     return (
         np.array(starts, np.uint32),
         np.array(images, np.uint32),
         np.array(features, np.uint32),
-        np.array(affines, float),
+        np.array(positions, float),
+        np.array(shapes, float),
     )
 
 
 def _join(clusters, obs, frames, n_images=4, edges=EDGES):
-    starts, images, features, affines = _selection(clusters)
+    starts, images, features, positions, shapes = _selection(clusters)
     return source_clusters(
         starts,
         images,
         features,
-        affines,
+        positions,
+        shapes,
         REFINE_RADIUS,
         n_images,
         np.array([o[0] for o in obs], np.uint32),
@@ -136,12 +140,13 @@ def test_an_empty_admission_has_no_floor():
 
 
 def test_the_join_is_checked():
-    starts, images, features, affines = _selection(CLUSTERS)
+    starts, images, features, positions, shapes = _selection(CLUSTERS)
     good = dict(
         cluster_starts=starts,
         member_images=images,
         member_features=features,
-        member_affines=affines,
+        member_positions=positions,
+        member_affine_shapes=shapes,
         refine_radius=REFINE_RADIUS,
         n_images=4,
         obs_image=np.zeros(1, np.uint32),
@@ -155,8 +160,10 @@ def test_the_join_is_checked():
 
     with pytest.raises(ValueError, match="same length"):
         call(member_features=features[:-1])
-    with pytest.raises(ValueError, match="member_affines must have shape"):
-        call(member_affines=affines[:, :, :2])
+    with pytest.raises(ValueError, match="member_positions must have shape"):
+        call(member_positions=positions[:, :1])
+    with pytest.raises(ValueError, match="member_affine_shapes must have shape"):
+        call(member_affine_shapes=shapes[:, :, :1])
     with pytest.raises(ValueError, match="obs_image and obs_feature"):
         call(obs_feature=np.zeros(2, np.uint32))
     with pytest.raises(ValueError, match="at least one boundary"):

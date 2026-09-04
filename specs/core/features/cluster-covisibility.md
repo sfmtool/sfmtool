@@ -72,8 +72,8 @@ entire integration point for prioritization and filtering:
   | photometric quality | `member_zncc` | drop weakly-correlated members |
   | geometric consistency | `member_consistency_residual` | drop members that misfit their cluster's joint weak-perspective geometry |
   | feature size (ordinal) | `member_features` row index — `.sift` rows are scale-sorted descending | restrict to larger features |
-  | image radius | `member_affines[:, :, 2]` + `images/image_dims` (both v4) | restrict by distance from the image center |
-  | feature extent | `member_affines[:, :, :2]` column norms (v5) | restrict by detected feature size |
+  | image radius | `clusters/member_positions` + `images/image_dims` | restrict by distance from the image center |
+  | feature extent | `clusters/member_affine_shapes` column norms | restrict by feature size |
 
 ## Complexity and bounds
 

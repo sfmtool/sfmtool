@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 import numpy as np
+import numpy.testing as npt
 import pytest
 from click.testing import CliRunner
 
@@ -417,8 +418,8 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
 
     The same construction `tests/patch/test_cluster_patches.py` uses: the input
     is produced the way users produce it, so the command is exercised against a
-    real cluster backbone with no `cluster_patches/` enrichment (positions come
-    from the `.sift` files the matcher indexed).
+    real cluster backbone with no `cluster_patches/` enrichment (positions are
+    the backbone's own detections).
     """
     workspace_dir = isolated_seoul_bull_17_images[0].parent
     out = workspace_dir / "matches" / "clusters.matches"
@@ -443,6 +444,38 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
     assert result.exit_code == 0, result.output
     assert out.exists()
     return out
+
+
+def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
+    """The file states its members' positions, so the vote reads them straight
+    off the selection -- no `.sift` file is opened, and there is no other path
+    to take."""
+    from sfmtool._sfmtool.io import MatchesFile
+
+    assert not hasattr(ei, "_positions_from_sift"), (
+        "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
+    )
+    data = ei._load_observations(cluster_matches_file)
+    assert len(data["positions"]) == len(data["cluster_indexes"]) > 0
+    assert np.isfinite(data["positions"]).all()
+
+    selection = MatchesFile(cluster_matches_file).select_clusters()
+    npt.assert_array_equal(
+        data["positions"], np.asarray(selection.member_positions(), dtype=np.float64)
+    )
+
+
+def test_an_unreadable_matches_file_is_a_clean_cli_error(tmp_path):
+    """Whatever the reader refuses -- a version <= 5 cluster file included,
+    whose refusal names `sfm match --cluster` (see the `matches-format` version
+    tests) -- reaches the user as a message, not a traceback."""
+    bad = tmp_path / "not-a-matches.matches"
+    bad.write_bytes(b"PK\x03\x04not really a zip")
+
+    result = CliRunner().invoke(main, ["estimate-intrinsics", "-i", str(bad)])
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "Error" in result.output
 
 
 def test_estimate_intrinsics_end_to_end(cluster_matches_file: Path):

@@ -3,33 +3,37 @@
 
 use super::*;
 
-/// A selection row: `(image, feature, scale)`. The affine is a scaled identity,
+/// A selection row: `(image, feature, scale)`. The shape is a scaled identity,
 /// so the row's radius is `refine_radius * scale`.
-fn rows(spec: &[(u32, u32, f64)]) -> (Vec<u32>, Vec<u32>, Vec<f64>) {
+fn rows(spec: &[(u32, u32, f64)]) -> (Vec<u32>, Vec<u32>, Vec<f64>, Vec<f64>) {
     let mut img = Vec::new();
     let mut feat = Vec::new();
-    let mut aff = Vec::new();
+    let mut pos = Vec::new();
+    let mut shp = Vec::new();
     for (k, &(i, f, s)) in spec.iter().enumerate() {
         img.push(i);
         feat.push(f);
-        // [[s, 0, u], [0, s, v]] with a distinguishable pixel per row.
-        aff.extend_from_slice(&[s, 0.0, k as f64, 0.0, s, 10.0 + k as f64]);
+        // Shape [[s, 0], [0, s]] with a distinguishable pixel per row.
+        pos.extend_from_slice(&[k as f64, 10.0 + k as f64]);
+        shp.extend_from_slice(&[s, 0.0, 0.0, s]);
     }
-    (img, feat, aff)
+    (img, feat, pos, shp)
 }
 
 fn selection<'a>(
     starts: &'a [u32],
     img: &'a [u32],
     feat: &'a [u32],
-    aff: &'a [f64],
+    pos: &'a [f64],
+    shp: &'a [f64],
     n_images: usize,
 ) -> SourceSelection<'a> {
     SourceSelection {
         cluster_starts: starts,
         member_images: img,
         member_features: feat,
-        member_affines: aff,
+        member_positions: pos,
+        member_affine_shapes: shp,
         refine_radius: 6.0,
         n_images,
     }
@@ -41,7 +45,7 @@ const EDGES: [f64; 4] = [f64::INFINITY, 1.0, 0.5, 0.25];
 #[test]
 fn a_cluster_the_member_holds_is_not_a_candidate() {
     // Cluster 0 is the member's own; clusters 1 and 2 are not.
-    let (img, feat, aff) = rows(&[
+    let (img, feat, pos, shp) = rows(&[
         (0, 10, 1.0),
         (1, 11, 1.0),
         (0, 20, 0.5),
@@ -51,7 +55,7 @@ fn a_cluster_the_member_holds_is_not_a_candidate() {
     ]);
     let starts = [0u32, 2, 4, 6];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 2),
+        selection(&starts, &img, &feat, &pos, &shp, 2),
         MemberIdentity {
             obs_image: &[0, 1],
             obs_feature: &[10, 11],
@@ -69,7 +73,7 @@ fn a_cluster_the_member_holds_is_not_a_candidate() {
 
 #[test]
 fn a_cluster_only_one_placed_frame_sees_is_not_a_candidate() {
-    let (img, feat, aff) = rows(&[
+    let (img, feat, pos, shp) = rows(&[
         (0, 10, 1.0),
         (1, 11, 1.0),
         // Cluster 1 lives entirely on image 2, which is not placed.
@@ -81,7 +85,7 @@ fn a_cluster_only_one_placed_frame_sees_is_not_a_candidate() {
     ]);
     let starts = [0u32, 2, 4, 6];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 3),
+        selection(&starts, &img, &feat, &pos, &shp, 3),
         MemberIdentity {
             obs_image: &[0, 1],
             obs_feature: &[10, 11],
@@ -95,7 +99,7 @@ fn a_cluster_only_one_placed_frame_sees_is_not_a_candidate() {
 
 #[test]
 fn the_selected_rows_are_the_candidates_own_rows_on_placed_frames() {
-    let (img, feat, aff) = rows(&[
+    let (img, feat, pos, shp) = rows(&[
         (0, 10, 1.0),
         (1, 11, 1.0),
         (0, 20, 0.5),
@@ -104,7 +108,7 @@ fn the_selected_rows_are_the_candidates_own_rows_on_placed_frames() {
     ]);
     let starts = [0u32, 2, 5];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 3),
+        selection(&starts, &img, &feat, &pos, &shp, 3),
         MemberIdentity {
             obs_image: &[0, 1],
             obs_feature: &[10, 11],
@@ -124,10 +128,10 @@ fn the_selected_rows_are_the_candidates_own_rows_on_placed_frames() {
 
 #[test]
 fn a_clusters_radius_is_its_widest_members() {
-    let (img, feat, aff) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 20, 0.2), (1, 21, 0.9)]);
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 20, 0.2), (1, 21, 0.9)]);
     let starts = [0u32, 2, 4];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 2),
+        selection(&starts, &img, &feat, &pos, &shp, 2),
         MemberIdentity {
             obs_image: &[0, 1],
             obs_feature: &[10, 11],
@@ -152,10 +156,10 @@ fn the_bands_are_half_open_and_the_top_one_is_open_above_the_floor() {
 fn a_member_row_takes_the_first_selection_row_carrying_its_key() {
     // The same (image, feature) appears in cluster 0 and again in cluster 1.
     // The member's row admits the first, and cluster 1 stays a candidate.
-    let (img, feat, aff) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 10, 0.5), (1, 12, 0.5)]);
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 10, 0.5), (1, 12, 0.5)]);
     let starts = [0u32, 2, 4];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 2),
+        selection(&starts, &img, &feat, &pos, &shp, 2),
         MemberIdentity {
             obs_image: &[0],
             obs_feature: &[10],
@@ -170,10 +174,10 @@ fn a_member_row_takes_the_first_selection_row_carrying_its_key() {
 
 #[test]
 fn a_member_row_the_selection_does_not_carry_matches_nothing() {
-    let (img, feat, aff) = rows(&[(0, 10, 1.0), (1, 11, 1.0)]);
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0)]);
     let starts = [0u32, 2];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 2),
+        selection(&starts, &img, &feat, &pos, &shp, 2),
         MemberIdentity {
             obs_image: &[0, 0],
             obs_feature: &[10, 99],
@@ -186,10 +190,10 @@ fn a_member_row_the_selection_does_not_carry_matches_nothing() {
 
 #[test]
 fn an_empty_admission_has_no_floor() {
-    let (img, feat, aff) = rows(&[(0, 10, 1.0), (1, 11, 1.0)]);
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0)]);
     let starts = [0u32, 2];
     let out = source_clusters(
-        selection(&starts, &img, &feat, &aff, 2),
+        selection(&starts, &img, &feat, &pos, &shp, 2),
         MemberIdentity {
             obs_image: &[],
             obs_feature: &[],
@@ -207,7 +211,7 @@ fn an_empty_admission_has_no_floor() {
 
 #[test]
 fn the_join_repeats_itself() {
-    let (img, feat, aff) = rows(&[
+    let (img, feat, pos, shp) = rows(&[
         (0, 10, 1.0),
         (1, 11, 1.0),
         (0, 20, 0.5),
@@ -216,7 +220,7 @@ fn the_join_repeats_itself() {
         (1, 31, 0.3),
     ]);
     let starts = [0u32, 2, 4, 6];
-    let sel = selection(&starts, &img, &feat, &aff, 2);
+    let sel = selection(&starts, &img, &feat, &pos, &shp, 2);
     let m = MemberIdentity {
         obs_image: &[0, 1],
         obs_feature: &[10, 11],

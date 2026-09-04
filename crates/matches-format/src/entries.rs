@@ -207,6 +207,42 @@ pub(crate) fn clusters_member_features(member_count: impl std::fmt::Display) -> 
     format!("clusters/member_features.{member_count}.uint32.zst")
 }
 
+/// `clusters/member_positions` — the keypoint position per member, at
+/// whatever stage the file is at.
+pub(crate) fn clusters_member_positions(member_count: impl std::fmt::Display) -> String {
+    format!(
+        "{}{member_count}.2.float32.zst",
+        clusters_member_positions_prefix()
+    )
+}
+
+/// The `clusters/member_positions` name up to and including the dot before
+/// its count.
+///
+/// `verify` tests for this entry's *presence* — it is mandatory from version 6
+/// and forbidden before it — without knowing `member_count`, so it matches on
+/// this prefix, for the reason spelled out on
+/// [`images_image_dims_prefix`].
+pub(crate) fn clusters_member_positions_prefix() -> &'static str {
+    "clusters/member_positions."
+}
+
+/// `clusters/member_affine_shapes` — the affine shape per member, at
+/// whatever stage the file is at.
+pub(crate) fn clusters_member_affine_shapes(member_count: impl std::fmt::Display) -> String {
+    format!(
+        "{}{member_count}.2.2.float32.zst",
+        clusters_member_affine_shapes_prefix()
+    )
+}
+
+/// The `clusters/member_affine_shapes` name up to and including the dot
+/// before its count, matched on by `verify` like
+/// [`clusters_member_positions_prefix`].
+pub(crate) fn clusters_member_affine_shapes_prefix() -> &'static str {
+    "clusters/member_affine_shapes."
+}
+
 /// `cluster_patches/metadata.json.zst` — cluster-patch metadata.
 pub(crate) fn cluster_patches_metadata() -> &'static str {
     "cluster_patches/metadata.json.zst"
@@ -223,11 +259,6 @@ pub(crate) fn cluster_patches_reference_members(cluster_count: impl std::fmt::Di
 /// `cluster_patches/member_status` — per-member refinement status code.
 pub(crate) fn cluster_patches_member_status(member_count: impl std::fmt::Display) -> String {
     format!("cluster_patches/member_status.{member_count}.uint8.zst")
-}
-
-/// `cluster_patches/member_affines` — the 2×3 affine per member.
-pub(crate) fn cluster_patches_member_affines(member_count: impl std::fmt::Display) -> String {
-    format!("cluster_patches/member_affines.{member_count}.2.3.float64.zst")
 }
 
 /// `cluster_patches/member_zncc` — ZNCC against the reference per member.

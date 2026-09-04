@@ -60,6 +60,17 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         dict.set_item("cluster_starts", clusters.cluster_starts.into_pyarray(py))?;
         dict.set_item("member_images", clusters.member_images.into_pyarray(py))?;
         dict.set_item("member_features", clusters.member_features.into_pyarray(py))?;
+        // The backbone's stage geometry; present for every version-6+ file
+        // (the writer requires it), absent for a version <= 5 file.
+        if let Some(member_positions) = clusters.member_positions {
+            dict.set_item("member_positions", member_positions.into_pyarray(py))?;
+        }
+        if let Some(member_affine_shapes) = clusters.member_affine_shapes {
+            dict.set_item(
+                "member_affine_shapes",
+                member_affine_shapes.into_pyarray(py),
+            )?;
+        }
         dict.set_item(
             "matcher_options",
             serde_to_py(py, &clusters.matcher_options)?,
@@ -72,7 +83,6 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
         dict.set_item("has_cluster_patches", true)?;
         dict.set_item("reference_members", cp.reference_members.into_pyarray(py))?;
         dict.set_item("member_status", cp.member_status.into_pyarray(py))?;
-        dict.set_item("member_affines", cp.member_affines.into_pyarray(py))?;
         dict.set_item("member_zncc", cp.member_zncc.into_pyarray(py))?;
         dict.set_item("member_shift_px", cp.member_shift_px.into_pyarray(py))?;
         dict.set_item(
@@ -163,12 +173,32 @@ pub fn write_matches(
             get_item(data, "member_features")?.extract()?;
         let matcher_options: serde_json::Value =
             py_to_serde(py, &get_item(data, "matcher_options")?)?;
+        // The backbone's stage geometry, mandatory since format version 6.
+        // Extracted optionally so a dict read back from a version <= 5 file
+        // reaches `write_matches`' own message naming the regeneration, rather
+        // than a bare KeyError.
+        let member_positions = match get_optional_item(data, "member_positions")? {
+            Some(v) => {
+                let arr: PyReadonlyArray2<f32> = v.extract()?;
+                Some(arr.as_array().as_standard_layout().into_owned())
+            }
+            None => None,
+        };
+        let member_affine_shapes = match get_optional_item(data, "member_affine_shapes")? {
+            Some(v) => {
+                let arr: PyReadonlyArray3<f32> = v.extract()?;
+                Some(arr.as_array().as_standard_layout().into_owned())
+            }
+            None => None,
+        };
         (
             None,
             Some(ClustersData {
                 cluster_starts: cluster_starts.as_array().as_standard_layout().into_owned(),
                 member_images: member_images.as_array().as_standard_layout().into_owned(),
                 member_features: member_features.as_array().as_standard_layout().into_owned(),
+                member_positions,
+                member_affine_shapes,
                 matcher_options,
             }),
         )
@@ -205,7 +235,6 @@ pub fn write_matches(
         let reference_members: PyReadonlyArray1<u32> =
             get_item(data, "reference_members")?.extract()?;
         let member_status: PyReadonlyArray1<u8> = get_item(data, "member_status")?.extract()?;
-        let member_affines: PyReadonlyArray3<f64> = get_item(data, "member_affines")?.extract()?;
         let member_zncc: PyReadonlyArray1<f32> = get_item(data, "member_zncc")?.extract()?;
         let member_shift_px: PyReadonlyArray1<f32> =
             get_item(data, "member_shift_px")?.extract()?;
@@ -219,7 +248,6 @@ pub fn write_matches(
                 .as_standard_layout()
                 .into_owned(),
             member_status: member_status.as_array().as_standard_layout().into_owned(),
-            member_affines: member_affines.as_array().as_standard_layout().into_owned(),
             member_zncc: member_zncc.as_array().as_standard_layout().into_owned(),
             member_shift_px: member_shift_px.as_array().as_standard_layout().into_owned(),
             member_consistency_residual: member_consistency_residual

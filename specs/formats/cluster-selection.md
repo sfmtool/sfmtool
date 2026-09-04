@@ -41,7 +41,11 @@ Applied in order:
    selected images.
 5. Surviving clusters and members are densely renumbered in source order
    (cluster order and within-cluster member order are preserved), and
-   `reference_members` global indexes are remapped accordingly.
+   `reference_members` global indexes are remapped accordingly. Every
+   member-parallel array is gathered by the same survival mask — the
+   backbone's `member_positions` / `member_affine_shapes` included — so a
+   selection is itself a writable cluster file whose members keep the values,
+   and the stage, the source gave them.
 6. When image-restricted, the image table becomes **exactly** the requested
    set, in source file order: requested images keep their row even if no
    member references them, all other images are dropped, and every parallel
@@ -129,10 +133,11 @@ derived file. Consumers needing it return to the source named by
 Alongside the selection, the reader exposes the derived quantities consumers
 otherwise re-implement:
 
-- member absolute positions — the `member_affines` last column
-- member absolute shapes — the `member_affines` leading 2×2 block; the
+- member positions and member affine shapes — the backbone's own arrays, whose
+  content is the file's stage (detections in a matcher output, the refinement's
+  answer where its cascade measured in a cluster-patches one). The
   reference→member warp, where needed, is `S·S_ref⁻¹` via the cluster's
-  reference row
+  reference member's shape
 - per-cluster worst consistency — the maximum finite
   `member_consistency_residual` over each cluster's members (`inf` when no
   member has a finite residual)

@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Round-trip tests for cluster-bearing `.matches` files through the
-`sfmtool._sfmtool.io` bindings (format version 5: `clusters/` +
+`sfmtool._sfmtool.io` bindings (format version 6: `clusters/` +
 `cluster_patches/` sections, pairs-or-clusters backbone, per-image dims, and
-fully absolute member_affines — absolute affine shape in the leading 2x2,
-absolute keypoint position in the last column)."""
+the backbone's own per-member geometry -- one position and one shape per
+member, whose content is the file's stage)."""
 
 import numpy as np
 import numpy.testing as npt
@@ -66,6 +66,16 @@ def _cluster_data() -> dict:
         "cluster_starts": np.array([0, 3, 5], dtype=np.uint32),
         "member_images": np.array([0, 1, 2, 0, 2], dtype=np.uint32),
         "member_features": np.array([0, 1, 2, 5, 10], dtype=np.uint32),
+        # The backbone's stage geometry. This fixture is a matcher output, so
+        # these stand for the .sift detections the feature indexes name; one
+        # distinguishable row each.
+        "member_positions": np.array(
+            [[10.5, 20.25], [11.5, 21.25], [12.5, 22.25], [13.5, 23.25], [14.5, 24.25]],
+            dtype=np.float32,
+        ),
+        "member_affine_shapes": np.array(
+            [[[2.0 + k, 0.5], [0.25, 1.5 + k]] for k in range(5)], dtype=np.float32
+        ),
         "matcher_options": {"d": 8, "alpha": 1.2, "min_size": 2, "preset": "default"},
         "has_cluster_patches": False,
         "has_two_view_geometries": False,
@@ -78,28 +88,33 @@ def _cluster_patch_data() -> dict:
     data = _cluster_data()
     data["metadata"]["has_cluster_patches"] = True
     data["has_cluster_patches"] = True
-    affines = np.zeros((5, 2, 3), dtype=np.float64)
-    # Reference: S_ref | x_ref -- the reference feature's own detector affine
-    # shape (non-singular, deliberately not the identity) and position.
+    # An enriched file's stage is refinement: the members the cascade measured
+    # (0 reference, 1 kept, 2 rejected on ZNCC) carry its answer, and the ones
+    # it never fitted (3, 4) keep the detections _cluster_data set.
+    statuses = np.array([0, 1, 2, 5, 5], dtype=np.uint8)
+    positions = data["member_positions"].copy()
+    shapes = data["member_affine_shapes"].copy()
+    # The reference is refined against itself: its own detector affine shape
+    # (non-singular, deliberately not the identity) and its own position.
     s_ref = np.array([[2.0, 0.5], [0.25, 1.5]])
-    affines[0] = [[s_ref[0, 0], s_ref[0, 1], 12.5], [s_ref[1, 0], s_ref[1, 1], 20.25]]
-    # Kept: leading 2x2 is the absolute shape S = W @ S_ref for the relative
-    # warp W; last column is the refined absolute keypoint position.
+    shapes[0] = s_ref
+    positions[0] = [12.5, 20.25]
+    # Kept: the absolute shape S = W @ S_ref for the relative warp W, and its
+    # refined absolute keypoint position.
     w_kept = np.array([[1.1, -0.05], [0.03, 0.95]])
-    s_kept = w_kept @ s_ref
-    affines[1] = [
-        [s_kept[0, 0], s_kept[0, 1], 42.5],
-        [s_kept[1, 0], s_kept[1, 1], 17.25],
-    ]
-    # Rejected, shape + position retained.
-    affines[2] = [[1.0, 0.0, 13.0], [0.0, 1.0, 21.0]]
+    shapes[1] = w_kept @ s_ref
+    positions[1] = [42.5, 17.25]
+    # Rejected on ZNCC: measured, so it keeps its own refined values.
+    shapes[2] = np.eye(2)
+    positions[2] = [13.0, 21.0]
     data.update(
         {
+            "member_positions": positions,
+            "member_affine_shapes": shapes,
             "reference_members": np.array(
                 [0, np.iinfo(np.uint32).max], dtype=np.uint32
             ),
-            "member_status": np.array([0, 1, 2, 5, 5], dtype=np.uint8),
-            "member_affines": affines,
+            "member_status": statuses,
             "member_zncc": np.array(
                 [1.0, 0.93, 0.41, np.nan, np.nan], dtype=np.float32
             ),
@@ -150,7 +165,7 @@ def test_clusters_round_trip(tmp_path):
     assert valid, f"verification failed: {errors}"
 
     loaded = read_matches(path)
-    assert loaded["metadata"]["version"] == 5
+    assert loaded["metadata"]["version"] == 6
     assert loaded["metadata"]["has_clusters"] is True
     assert loaded["metadata"]["has_cluster_patches"] is False
     assert loaded["metadata"]["cluster_count"] == 2
@@ -166,6 +181,12 @@ def test_clusters_round_trip(tmp_path):
     npt.assert_array_equal(loaded["cluster_starts"], data["cluster_starts"])
     npt.assert_array_equal(loaded["member_images"], data["member_images"])
     npt.assert_array_equal(loaded["member_features"], data["member_features"])
+    # Stage geometry: same float32 bits in, same bits out.
+    npt.assert_array_equal(loaded["member_positions"], data["member_positions"])
+    npt.assert_array_equal(loaded["member_affine_shapes"], data["member_affine_shapes"])
+    assert loaded["member_positions"].dtype == np.float32
+    assert loaded["member_affine_shapes"].dtype == np.float32
+    assert loaded["member_affine_shapes"].shape == (5, 2, 2)
     assert loaded["matcher_options"] == data["matcher_options"]
 
     # Cluster files carry no pairwise keys.
@@ -196,7 +217,10 @@ def test_cluster_patches_round_trip(tmp_path):
 
     npt.assert_array_equal(loaded["reference_members"], data["reference_members"])
     npt.assert_array_equal(loaded["member_status"], data["member_status"])
-    npt.assert_array_equal(loaded["member_affines"], data["member_affines"])
+    # The refinement's geometry rides the backbone, not this section.
+    npt.assert_array_equal(loaded["member_positions"], data["member_positions"])
+    npt.assert_array_equal(loaded["member_affine_shapes"], data["member_affine_shapes"])
+    assert "member_affines" not in loaded
     # assert_array_equal treats NaN positions as equal.
     npt.assert_array_equal(loaded["member_zncc"], data["member_zncc"])
     npt.assert_array_equal(loaded["member_shift_px"], data["member_shift_px"])
@@ -206,7 +230,6 @@ def test_cluster_patches_round_trip(tmp_path):
     assert loaded["member_consistency_residual"].dtype == np.float32
     assert loaded["refine_options"] == data["refine_options"]
 
-    assert loaded["member_affines"].dtype == np.float64
     assert loaded["member_zncc"].dtype == np.float32
     assert loaded["member_status"].dtype == np.uint8
     assert loaded["reference_members"].dtype == np.uint32
@@ -219,7 +242,7 @@ def test_cluster_patches_round_trip(tmp_path):
     write_matches(path2, loaded)
     reloaded = read_matches(path2)
     npt.assert_array_equal(reloaded["member_zncc"], loaded["member_zncc"])
-    npt.assert_array_equal(reloaded["member_affines"], loaded["member_affines"])
+    npt.assert_array_equal(reloaded["member_positions"], loaded["member_positions"])
     npt.assert_array_equal(reloaded["cluster_starts"], loaded["cluster_starts"])
 
 
@@ -278,33 +301,45 @@ def test_write_requires_image_dims(tmp_path):
         write_matches(tmp_path / "bad.matches", data)
 
 
-def test_write_rejects_singular_reference_row(tmp_path):
+def test_write_requires_member_geometry(tmp_path):
+    """A cluster file must state its members' geometry (format version 6)."""
+    import pytest
+
+    for key in ("member_positions", "member_affine_shapes"):
+        data = _cluster_data()
+        del data[key]
+        with pytest.raises(OSError, match="mandatory since format version 6"):
+            write_matches(tmp_path / "bad.matches", data)
+
+
+def test_write_rejects_singular_reference_shape(tmp_path):
     import pytest
 
     data = _cluster_patch_data()
     # Make S_ref rank-1: the reference->member warp S @ S_ref^-1 could not be
     # recovered from it.
-    data["member_affines"][0, 1, :2] = 2.0 * data["member_affines"][0, 0, :2]
-    with pytest.raises(OSError, match="singular leading 2x2"):
+    data["member_affine_shapes"][0, 1] = 2.0 * data["member_affine_shapes"][0, 0]
+    with pytest.raises(OSError, match="is singular"):
         write_matches(tmp_path / "bad.matches", data)
 
 
-def test_relative_warp_recovers_from_reference_row(tmp_path):
-    """The version-5 contract: absolute shapes on disk, relative warp on
-    demand as W = S @ S_ref^-1 through the cluster's reference row."""
+def test_relative_warp_recovers_from_reference_member(tmp_path):
+    """Absolute shapes on disk, relative warp on demand as W = S @ S_ref^-1
+    through the cluster's reference member."""
     data = _cluster_patch_data()
     path = tmp_path / "shapes.matches"
     write_matches(path, data)
     loaded = read_matches(path)
 
-    aff = loaded["member_affines"]
+    shapes = np.asarray(loaded["member_affine_shapes"], dtype=np.float64)
     ref = int(loaded["reference_members"][0])
-    s_ref = aff[ref, :, :2]
-    w = aff[1, :, :2] @ np.linalg.inv(s_ref)
-    npt.assert_allclose(w, [[1.1, -0.05], [0.03, 0.95]], atol=1e-12)
+    w = shapes[1] @ np.linalg.inv(shapes[ref])
+    # atol is the float32 storage's, not the arithmetic's.
+    npt.assert_allclose(w, [[1.1, -0.05], [0.03, 0.95]], atol=1e-6)
 
     # Absolute extent needs no reference lookup at all.
     extent = 0.5 * (
-        np.hypot(aff[1, 0, 0], aff[1, 1, 0]) + np.hypot(aff[1, 0, 1], aff[1, 1, 1])
+        np.hypot(shapes[1, 0, 0], shapes[1, 1, 0])
+        + np.hypot(shapes[1, 0, 1], shapes[1, 1, 1])
     )
     assert extent > 0.0

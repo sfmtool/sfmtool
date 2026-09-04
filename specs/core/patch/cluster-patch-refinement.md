@@ -55,11 +55,12 @@ pub struct FeatureGeometry<'a> {
 }
 
 pub struct ClusterRefineResult {
-    pub reference_members: Vec<u32>,       // (C,)
-    pub member_status: Vec<MemberStatus>,  // (M,)
-    pub member_affines: Array3<f64>,       // (M, 2, 3) = (S | p)
-    pub member_zncc: Vec<f32>,             // (M,), NaN if not evaluated
-    pub member_shift_px: Vec<f32>,         // (M,), NaN if not evaluated
+    pub reference_members: Vec<u32>,          // (C,)
+    pub member_status: Vec<MemberStatus>,     // (M,)
+    pub member_positions: Array2<f64>,        // (M, 2) = p
+    pub member_affine_shapes: Array3<f64>,    // (M, 2, 2) = S
+    pub member_zncc: Vec<f32>,                // (M,), NaN if not evaluated
+    pub member_shift_px: Vec<f32>,            // (M,), NaN if not evaluated
 }
 
 pub fn refine_cluster_patches(
@@ -79,7 +80,7 @@ pub fn warp_consistency_residuals(
     member_images: &[u32],
     member_status: &[MemberStatus],
     reference_members: &[u32],
-    member_affines: ArrayView3<'_, f64>,
+    member_affine_shapes: ArrayView3<'_, f64>,  // (M, 2, 2)
     n_images: usize,
 ) -> Vec<f32>;
 ```
@@ -127,9 +128,10 @@ let out = refine_cluster_patches(
 
 // Member 1's image-space extent and refined position, if it survived vetting.
 if out.member_status[1] == MemberStatus::Kept {
-    let row = out.member_affines.index_axis(ndarray::Axis(0), 1);
-    let extent = (row[[0, 0]].hypot(row[[1, 0]]), row[[0, 1]].hypot(row[[1, 1]]));
-    let position = [row[[0, 2]], row[[1, 2]]];
+    let s = out.member_affine_shapes.index_axis(ndarray::Axis(0), 1);
+    let extent = (s[[0, 0]].hypot(s[[1, 0]]), s[[0, 1]].hypot(s[[1, 1]]));
+    let p = out.member_positions.index_axis(ndarray::Axis(0), 1);
+    let position = [p[0], p[1]];
     let _ = (extent, position);
 }
 ```
@@ -271,21 +273,31 @@ sharing an image the highest ZNCC wins, ties to the lowest member index, and the
 rest become `DuplicateImage` — as does any member sharing the reference's own
 image, which is marked before it is ever refined.
 
-### What is stored, and why it is absolute
+### What is returned, and why it is absolute
 
-The working unknown is the relative warp `W = (I + D)·M₀`, but each member row
-stores the **absolute affine shape** `S = W · A_ref` in the leading 2×2 and the
-member's **refined absolute keypoint position** `p = pos_mem + t` in the last
-column. `S` is literally the matrix the winning evaluation sampled with, so the
-stored shape is the shape that was measured, and because it maps the detector's
-canonical unit frame onto that member's image pixels, its column norms are the
-member's image-space extent: a consumer reads extent and position from one row
-with no `.sift` file open. The reference row is its own `S_ref | x_ref`, so the
-relative warp stays recoverable as `W = S · S_ref⁻¹`, after which
+The working unknown is the relative warp `W = (I + D)·M₀`, but the result
+reports the **absolute affine shape** `S = W · A_ref` and the member's
+**refined absolute keypoint position** `p = pos_mem + t`. `S` is literally the
+matrix the winning evaluation sampled with, so the reported shape is the shape
+that was measured, and because it maps the detector's canonical unit frame onto
+that member's image pixels, its column norms are the member's image-space
+extent: a consumer reads extent and position per member with no `.sift` file
+open. The reference member's own entries are `A_ref` and its detected position,
+so the relative warp stays recoverable as `W = S · S_ref⁻¹`, after which
 `x_mem = W·(x − x_ref) + p`. That inversion is what keeps a *derived* file — one
 whose reference member has been filtered out — meaningful: absolute shapes and
 positions stay valid regardless, and only the relative reading needs the
-reference row.
+reference.
+
+The two arrays are member-parallel but not member-complete: a member the
+cascade never fitted (`NotEvaluated`, `RejectedUnlocalizable`, and a
+`DuplicateImage` that shared the reference's image) has an all-zero entry, and
+`member_status` is what says so. The `.matches` writer reads that: it stores
+the refinement's values for the measured members and leaves the input's
+detections in place for the rest, so the file it writes has no holes (see
+[`matches-file-format.md`](../../formats/matches-file-format.md), Member
+geometry). Nothing about the geometry is stored in `cluster_patches/`, which
+carries the vetting evidence alone.
 
 ### After refinement
 
@@ -445,10 +457,10 @@ are data, not errors, and reach the caller as `not_evaluated`. Pyramids are buil
 through `patches::views::build_pyramids_from_image_list`, and the kernel runs
 under `py.detach`.
 
-The returned dict is member-parallel and maps 1:1 onto the `cluster_patches/`
-section: `reference_members` `(C,)` uint32 (`0xFFFFFFFF` = unrefinable),
-`member_status` `(M,)` uint8, `member_affines` `(M, 2, 3)` float64,
-`member_zncc` `(M,)` float32, `member_shift_px` `(M,)` float32, and
+The returned dict is member-parallel: `reference_members` `(C,)` uint32
+(`0xFFFFFFFF` = unrefinable), `member_status` `(M,)` uint8,
+`member_positions` `(M, 2)` float64, `member_affine_shapes` `(M, 2, 2)`
+float64, `member_zncc` `(M,)` float32, `member_shift_px` `(M,)` float32, and
 `member_consistency_residual` `(M,)` float32 — the warp-consistency signal,
 computed inside the same call.
 
@@ -460,9 +472,9 @@ out = refine_cluster_patches(
     cluster_starts, member_images, member_features,
     radius=6.0, min_zncc=0.85,
 )
-kept = out["member_status"] == 1                 # 1 == kept
-shapes = out["member_affines"][kept, :, :2]      # absolute 2x2 shapes
-points = out["member_affines"][kept, :, 2]       # refined positions
+kept = out["member_status"] == 1                    # 1 == kept
+shapes = out["member_affine_shapes"][kept]          # absolute 2x2 shapes
+points = out["member_positions"][kept]              # refined positions
 ```
 
 ## Testing
@@ -470,7 +482,7 @@ points = out["member_affines"][kept, :, 2]       # refined positions
 `cluster_refine/tests.rs` covers the kernel: **synthetic recovery** across the
 calibrated warp range (scale 0.8–1.5×, rotation ≤ 20°, shear ≤ 0.15) with the
 seed perturbed by the experiment-observed noise (`|Δlog s|` 0.07, `|Δrot|` 4°,
-1 px shift), recovering `W = S·S_ref⁻¹` through the reference row exactly as a
+1 px shift), recovering `W = S·S_ref⁻¹` through the reference member exactly as a
 consumer would and asserting a support-grid RMSE around 0.3 px; **one test per
 gate** (flat member image → `RejectedLowZncc`; seed drifted past `max_shift_px`
 → `RejectedShift`; support out of frame → `NotEvaluated`; an unlocalizable

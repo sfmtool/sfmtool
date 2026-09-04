@@ -78,31 +78,47 @@ pub struct WorkspaceMetadata {
 /// Current `.matches` format version. [`crate::write_matches`] always writes
 /// this version; [`crate::read_matches`] accepts any version up to it.
 ///
-/// Version 5 makes the file self-contained for SIZE as well as position: the
-/// leading 2×2 block of `cluster_patches/member_affines` changes meaning from
-/// the reference→member warp `W` to the member's **absolute affine shape**
-/// `S = W·S_ref`, the map from the detector's canonical unit frame onto the
-/// member's image pixels (reference rows become `S_ref | x_ref`, the reference
-/// feature's own detector shape). A consumer that wants the member's
-/// image-space extent reads `S`'s column norms with no `.sift` read; a
-/// consumer that wants the relative warp recovers `W = S·S_ref⁻¹` through the
-/// cluster's reference row. Version ≤ 4 files that carry a `cluster_patches/`
-/// section are rejected — recovering `S` needs the reference feature's `.sift`
-/// shape, which the reader does not have, so those files must be regenerated
-/// with `sfm cluster-patches`.
+/// Version 6 gives the cluster backbone one place for its members' geometry:
+/// `clusters/` gains a mandatory `member_positions.{K}.2.float32` and
+/// `member_affine_shapes.{K}.2.2.float32` pair, and
+/// `cluster_patches/member_affines.{K}.2.3.float64` is **removed**. There is
+/// now exactly one keypoint position and one affine shape per member in a
+/// cluster file, and its **content is the file's stage**: a matcher output
+/// holds the detections, copied verbatim from the `.sift` rows
+/// `member_features` names; a `sfm cluster-patches` output holds the
+/// refinement, downcast to `f32` at the write boundary, for every member the
+/// cascade measured, and the untouched detection for every member it never
+/// fitted. Nothing is `NaN`:
+/// [`ClusterPatchData::member_status`] is the sole authority on what a row
+/// means and on exclusion, and the rejected-but-measured members keep their
+/// measurement so a consumer can re-gate without re-running.
 ///
-/// Version 4 makes the file self-contained for geometric consumers: the
-/// images section gains a mandatory per-image dimensions array
-/// (`images/image_dims.{N}.2.uint32`), and the last column of
-/// `cluster_patches/member_affines` changes meaning from the affine
-/// translation `t` to the member's refined absolute keypoint position
-/// `p = A·x_ref + t` (reference rows become identity | x_ref; `t` stays
-/// recoverable as `t = p − A·x_ref`). Version ≤ 3 files load with
-/// `image_dims` absent ([`MatchesData::image_dims`] is `None`); files that
-/// carry a `cluster_patches/` section are rejected — the stored translation
-/// column cannot be upgraded to the absolute-position semantics without the
-/// referenced `.sift` positions, so those files must be regenerated with
-/// `sfm cluster-patches`.
+/// `cluster_patches/` therefore holds the vetting evidence and nothing else —
+/// statuses, ZNCC, shift and the warp-consistency residual — while the
+/// geometry it produced is read through
+/// [`MatchesData::member_positions`] / [`MatchesData::member_affine_shapes`],
+/// the same accessors a bare backbone answers.
+///
+/// The `f32` storage is deliberate: the refinement's fit precision is on the
+/// order of 0.01 px, an `f32` position quantizes to 1.5e-5..6.1e-5 px on real
+/// captures, and the structure-free focal vote cannot distinguish the
+/// downcast from its own seed-to-seed spread. The kernel still computes in
+/// `f64`; only the write boundary rounds.
+///
+/// **A cluster-backbone file below version 6 is refused on read.** Its
+/// geometry lives only in the `.sift` files, which this crate does not open,
+/// so there is nothing to upgrade from: regenerate the backbone with
+/// `sfm match --cluster` (and re-run `sfm cluster-patches` if it was
+/// enriched). Pairwise files are untouched by the bump and keep their own
+/// version compatibility.
+///
+/// Version 5 gave `cluster_patches/member_affines` its absolute affine shape,
+/// and version 4 gave it the absolute keypoint position and added the
+/// mandatory `images/image_dims.{N}.2.uint32` array. Both of those affine
+/// semantics are now history — version 6 removed the member they described,
+/// and every cluster file below version 6 is refused. What survives for a
+/// **pairwise** file is `image_dims`: version ≤ 3 pairwise files load with
+/// [`MatchesData::image_dims`] as `None`.
 ///
 /// Version 3 introduced the cluster backbone: a file stores exactly one of
 /// the `image_pairs/` or `clusters/` sections as its correspondence backbone,
@@ -117,7 +133,7 @@ pub struct WorkspaceMetadata {
 /// or renamed. Version 1 files hold COLMAP-convention relative poses and are
 /// upgraded on load by S-conjugation ([`s_conjugate_relative_pose`]); the
 /// pixel-space F/E/H matrices are identical in both versions.
-pub const MATCHES_FORMAT_VERSION: u32 = 5;
+pub const MATCHES_FORMAT_VERSION: u32 = 6;
 
 /// Conjugate a relative camera pose (`cam2_from_cam1`) with the camera-frame
 /// flip `S = diag(1, −1, −1)`: `R' = S·R·S`, `t' = S·t`.
@@ -364,6 +380,30 @@ pub struct ClustersData {
     pub member_images: Array1<u32>,
     /// `(M,)` feature index in that image's `.sift` file per member.
     pub member_features: Array1<u32>,
+    /// `(M, 2)` the member's keypoint position in source-image pixels **at
+    /// this file's stage**: the detection, copied verbatim (same `f32` bits,
+    /// no dtype round trip) from row `member_features[k]` of its image's
+    /// `.sift` `features/positions_xy`, in a matcher output; the refined
+    /// absolute position in a `sfm cluster-patches` output — for the members
+    /// its cascade measured, with the detection left in place for those it
+    /// never fitted. Never `NaN`: [`ClusterPatchData::member_status`] is what
+    /// says which a row is, and which members stand.
+    ///
+    /// Mandatory since format version 6 — [`crate::write_matches`] requires
+    /// it, and a cluster file below version 6 is refused on read — so `None`
+    /// only for a pairwise file or a [`MatchesData`] built in memory. Present
+    /// exactly when [`Self::member_affine_shapes`] is: the two are one
+    /// member's geometry and are written and read together.
+    pub member_positions: Option<Array2<f32>>,
+    /// `(M, 2, 2)` the member's affine shape at the same stage as
+    /// [`Self::member_positions`], under the same rules — the map from the
+    /// detector's canonical unit frame onto the member's image pixels, so its
+    /// column norms are the member's image-space extent. The detector's own
+    /// shape (verbatim from `features/affine_shapes`) at the detection stage;
+    /// the refined absolute shape `S = W·S_ref` where the cascade measured
+    /// one, with the reference member's own row holding `S_ref`, so the
+    /// reference→member warp is recoverable as `W = S·S_ref⁻¹`.
+    pub member_affine_shapes: Option<Array3<f32>>,
     /// Matcher options recorded in `clusters/metadata.json.zst`
     /// (e.g. `d`, `alpha`, `min_size`, `preset`).
     pub matcher_options: serde_json::Value,
@@ -455,26 +495,25 @@ impl fmt::Display for ClusterMemberStatus {
 
 /// Optional cluster-patch enrichment (`cluster_patches/` section; requires
 /// the cluster backbone). Arrays parallel the clusters' member arrays.
+///
+/// This section is the vetting evidence — which member is each cluster's
+/// reference, what became of every other, and the signals behind those
+/// verdicts. The geometry the refinement produced is not here: it goes into
+/// the backbone's [`ClustersData::member_positions`] /
+/// [`ClustersData::member_affine_shapes`], which a cluster file carries at
+/// every stage, so there is one position and one shape per member in a file
+/// and [`Self::member_status`] says what each one means.
 #[derive(Debug)]
 pub struct ClusterPatchData {
     /// `(C,)` global member index of each cluster's reference member;
     /// [`CLUSTER_REFERENCE_UNREFINABLE`] when the cluster could not be
     /// refined.
     pub reference_members: Array1<u32>,
-    /// `(M,)` [`ClusterMemberStatus`] discriminants.
+    /// `(M,)` [`ClusterMemberStatus`] discriminants — the authority on what
+    /// each of the backbone's geometry rows means: `Reference`, `Kept`,
+    /// `RejectedLowZncc` and `RejectedShift` rows are the refinement's own
+    /// measurement, and the rest are the detection it never displaced.
     pub member_status: Array1<u8>,
-    /// `(M, 2, 3)` fully absolute affines in pixel coordinates: the leading
-    /// 2×2 block `S` is the member's **absolute affine shape** — the map from
-    /// the detector's canonical unit frame onto the member's image pixels,
-    /// `S = W·S_ref` for the refined reference→member warp `W` and the
-    /// reference feature's detector shape `S_ref` — and the last column
-    /// stores `p`, the member's refined absolute keypoint position. Extent
-    /// consumers read `S`'s column norms directly; the relative warp is
-    /// recoverable as `W = S·S_ref⁻¹` and then reads
-    /// `x_member = W·(x − x_ref) + p`, with `S_ref | x_ref` the cluster's
-    /// reference row. All-zeros where not evaluated (the status array is the
-    /// discriminator).
-    pub member_affines: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (NaN where not
     /// evaluated).
     pub member_zncc: Array1<f32>,

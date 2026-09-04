@@ -125,13 +125,18 @@ def _write_cluster_matches(path, with_patches):
         "cluster_starts": FILE_STARTS,
         "member_images": FILE_IMAGES,
         "member_features": FILE_FEATURES,
+        # The backbone's member geometry (format version 6); covisibility does
+        # not read it, so placeholder values suffice.
+        "member_positions": np.zeros((len(FILE_IMAGES), 2), dtype=np.float32),
+        "member_affine_shapes": np.tile(
+            np.eye(2, dtype=np.float32), (len(FILE_IMAGES), 1, 1)
+        ).copy(),
         "matcher_options": {"d": 10, "alpha": 0.8, "min_size": 2},
         "has_cluster_patches": with_patches,
         "has_two_view_geometries": False,
     }
     if with_patches:
         m = len(FILE_IMAGES)
-        affines = np.zeros((m, 2, 3), dtype=np.float64)
         reference_members = []
         for c in range(len(FILE_STARTS) - 1):
             lo, hi = int(FILE_STARTS[c]), int(FILE_STARTS[c + 1])
@@ -142,14 +147,15 @@ def _write_cluster_matches(path, with_patches):
             reference_members.append(ref)
             for k in range(lo, hi):
                 if FILE_STATUS[k] in (0, 1, 2, 3):
-                    affines[k] = [[1.0, 0.0, 5.0], [0.0, 1.0, 5.0]]
+                    # Measured: the refinement's own values.
+                    data["member_positions"][k] = [5.0, 5.0]
                 if FILE_STATUS[k] != 0:
-                    affines[k, 0, 0] = 1.01  # a shape distinct from the reference's
+                    # A shape distinct from the reference's.
+                    data["member_affine_shapes"][k, 0, 0] = 1.01
         data.update(
             {
                 "reference_members": np.array(reference_members, dtype=np.uint32),
                 "member_status": FILE_STATUS,
-                "member_affines": affines,
                 "member_zncc": np.ones(m, dtype=np.float32),
                 "member_shift_px": np.zeros(m, dtype=np.float32),
                 "member_consistency_residual": np.full(m, np.nan, dtype=np.float32),

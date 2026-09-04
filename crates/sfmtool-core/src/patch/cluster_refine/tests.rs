@@ -192,7 +192,10 @@ fn run_recovery_case(
         [a_r[1][0] as f32 as f64, a_r[1][1] as f32 as f64],
     ];
     let ref_row = result
-        .member_affines
+        .member_affine_shapes
+        .index_axis(ndarray::Axis(0), ref_k as usize);
+    let ref_pos = result
+        .member_positions
         .index_axis(ndarray::Axis(0), ref_k as usize);
     assert_eq!(
         [
@@ -210,21 +213,24 @@ fn run_recovery_case(
         "reference row must carry the reference feature's own detector shape"
     );
     assert_eq!(
-        [ref_row[[0, 2]], ref_row[[1, 2]]],
+        [ref_pos[0], ref_pos[1]],
         pos_r_stored,
-        "reference row's last column must be its own keypoint position"
+        "the reference's own position must be its keypoint position"
     );
 
-    // The stored leading 2×2 is the member's ABSOLUTE affine shape
-    // `S = W·S_ref`; recover the reference→member warp `W = S·S_ref⁻¹`
-    // through the reference row, exactly as a consumer does, and evaluate
-    // that against the ground-truth warp.
-    let rec = result.member_affines.index_axis(ndarray::Axis(0), other);
+    // The stored shape is the member's ABSOLUTE affine shape `S = W·S_ref`;
+    // recover the reference→member warp `W = S·S_ref⁻¹` through the
+    // reference's shape, exactly as a consumer does, and evaluate that
+    // against the ground-truth warp.
+    let rec = result
+        .member_affine_shapes
+        .index_axis(ndarray::Axis(0), other);
+    let rec_p = result.member_positions.index_axis(ndarray::Axis(0), other);
     let s_mem = [[rec[[0, 0]], rec[[0, 1]]], [rec[[1, 0]], rec[[1, 1]]]];
     let w_rec = mul2(&s_mem, &inv2(&a_r_stored));
     let rec_row = [
-        [w_rec[0][0], w_rec[0][1], rec[[0, 2]]],
-        [w_rec[1][0], w_rec[1][1], rec[[1, 2]]],
+        [w_rec[0][0], w_rec[0][1], rec_p[0]],
+        [w_rec[1][0], w_rec[1][1], rec_p[1]],
     ];
     let res = params.resolution as usize;
     let step = 2.0 * params.radius / res as f64;
@@ -570,8 +576,12 @@ fn determinism_bit_identical_across_runs() {
     assert_eq!(a.reference_members, b.reference_members);
     assert_eq!(a.member_status, b.member_status);
     assert_eq!(
-        a.member_affines.as_slice().unwrap(),
-        b.member_affines.as_slice().unwrap()
+        a.member_positions.as_slice().unwrap(),
+        b.member_positions.as_slice().unwrap()
+    );
+    assert_eq!(
+        a.member_affine_shapes.as_slice().unwrap(),
+        b.member_affine_shapes.as_slice().unwrap()
     );
     let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
     assert_eq!(bits(&a.member_zncc), bits(&b.member_zncc));

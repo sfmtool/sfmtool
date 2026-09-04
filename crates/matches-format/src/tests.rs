@@ -172,6 +172,30 @@ fn make_cluster_test_data() -> MatchesData {
         cluster_starts: Array1::from_vec(vec![0, 3, 5]),
         member_images: Array1::from_vec(vec![0, 1, 2, 0, 2]),
         member_features: Array1::from_vec(vec![0, 1, 2, 5, 10]),
+        // The backbone's stage geometry (detections, this being a matcher
+        // output): one distinguishable row each, so a mis-gathered subset
+        // shows up as a wrong value rather than a wrong length.
+        member_positions: Some(
+            Array2::from_shape_vec(
+                (5, 2),
+                vec![
+                    10.5, 20.25, 11.5, 21.25, 12.5, 22.25, 13.5, 23.25, 14.5, 24.25,
+                ],
+            )
+            .unwrap(),
+        ),
+        member_affine_shapes: Some(
+            Array3::from_shape_vec(
+                (5, 2, 2),
+                (0..5)
+                    .flat_map(|k| {
+                        let k = k as f32;
+                        vec![2.0 + k, 0.5, 0.25, 1.5 + k]
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        ),
         matcher_options: serde_json::json!({
             "d": 8, "alpha": 1.2, "min_size": 2, "preset": "default"
         }),
@@ -218,33 +242,34 @@ fn mat2_inv(a: &[[f64; 2]; 2]) -> [[f64; 2]; 2] {
 fn make_cluster_patch_test_data() -> MatchesData {
     let mut data = make_cluster_test_data();
     data.metadata.has_cluster_patches = true;
-    let mut member_affines = Array3::zeros((5, 2, 3));
-    // Reference row: `S_ref | x_ref` — the reference feature's own detector
-    // affine shape (deliberately NOT the identity, so anything that still
-    // assumes version-4 reference rows shows up) and absolute position.
-    for r in 0..2 {
-        for c in 0..2 {
-            member_affines[[0, r, c]] = CP_S_REF[r][c];
+    // The enriched stage: the backbone geometry becomes the refinement's for
+    // the members the cascade measured (0 reference, 1 kept, 2 rejected on
+    // ZNCC) and keeps the detections `make_cluster_test_data` set for the
+    // ones it never fitted (3, 4).
+    let clusters = data.clusters.as_mut().expect("cluster backbone");
+    let positions = clusters.member_positions.as_mut().expect("detections");
+    let shapes = clusters.member_affine_shapes.as_mut().expect("detections");
+    let set = |m: &mut Array3<f32>, k: usize, v: [[f64; 2]; 2]| {
+        for r in 0..2 {
+            for c in 0..2 {
+                m[[k, r, c]] = v[r][c] as f32;
+            }
         }
-    }
-    member_affines[[0, 0, 2]] = 12.5;
-    member_affines[[0, 1, 2]] = 20.25;
+    };
+    // The reference is refined against itself: its shape is its own detector
+    // shape `S_ref` (deliberately NOT the identity) and its position its own.
+    set(shapes, 0, CP_S_REF);
+    positions[[0, 0]] = 12.5;
+    positions[[0, 1]] = 20.25;
     // Kept member: absolute shape S = W·S_ref for the relative warp
-    // `CP_W_KEPT`; the last column is the member's refined absolute keypoint
-    // position.
-    let s_kept = mat2_mul(&CP_W_KEPT, &CP_S_REF);
-    for r in 0..2 {
-        for c in 0..2 {
-            member_affines[[1, r, c]] = s_kept[r][c];
-        }
-    }
-    member_affines[[1, 0, 2]] = 42.5;
-    member_affines[[1, 1, 2]] = 17.25;
-    // Rejected member: still carries its refined shape + position.
-    member_affines[[2, 0, 0]] = 1.0;
-    member_affines[[2, 0, 2]] = 13.0;
-    member_affines[[2, 1, 1]] = 1.0;
-    member_affines[[2, 1, 2]] = 21.0;
+    // `CP_W_KEPT`, and its refined absolute keypoint position.
+    set(shapes, 1, mat2_mul(&CP_W_KEPT, &CP_S_REF));
+    positions[[1, 0]] = 42.5;
+    positions[[1, 1]] = 17.25;
+    // Rejected on ZNCC: measured, so it keeps its own refined values.
+    set(shapes, 2, [[1.0, 0.0], [0.0, 1.0]]);
+    positions[[2, 0]] = 13.0;
+    positions[[2, 1]] = 21.0;
     data.cluster_patches = Some(ClusterPatchData {
         reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE]),
         member_status: Array1::from_vec(vec![
@@ -254,7 +279,6 @@ fn make_cluster_patch_test_data() -> MatchesData {
             ClusterMemberStatus::NotEvaluated as u8,
             ClusterMemberStatus::NotEvaluated as u8,
         ]),
-        member_affines,
         member_zncc: Array1::from_vec(vec![1.0, 0.93, 0.41, f32::NAN, f32::NAN]),
         member_shift_px: Array1::from_vec(vec![0.0, 1.25, 0.8, f32::NAN, f32::NAN]),
         member_consistency_residual: Array1::from_vec(vec![0.02, 0.05, 0.31, f32::NAN, f32::NAN]),
@@ -406,7 +430,15 @@ fn test_round_trip_clusters_with_patches() {
     let orig = data.cluster_patches.as_ref().unwrap();
     assert_eq!(cp.reference_members, orig.reference_members);
     assert_eq!(cp.member_status, orig.member_status);
-    assert_eq!(cp.member_affines, orig.member_affines);
+    // The refinement's geometry rides the backbone, not this section.
+    assert_eq!(
+        loaded.member_positions().unwrap(),
+        data.member_positions().unwrap()
+    );
+    assert_eq!(
+        loaded.member_affine_shapes().unwrap(),
+        data.member_affine_shapes().unwrap()
+    );
     assert_f32_bits_eq(&cp.member_zncc, &orig.member_zncc);
     assert_f32_bits_eq(&cp.member_shift_px, &orig.member_shift_px);
     assert_f32_bits_eq(
@@ -708,24 +740,25 @@ fn test_write_validation_reference_row_singular() {
     let mut data = make_cluster_patch_test_data();
     // Member 0 is cluster 0's reference; make its S_ref rank-1 (row 1 a
     // multiple of row 0), which would make the warp recovery impossible.
-    let cp = data.cluster_patches.as_mut().unwrap();
-    cp.member_affines[[0, 1, 0]] = 2.0 * cp.member_affines[[0, 0, 0]];
-    cp.member_affines[[0, 1, 1]] = 2.0 * cp.member_affines[[0, 0, 1]];
-    expect_write_error(
-        "matches_test_cp_ref_singular",
-        &data,
-        "singular leading 2x2",
-    );
+    let shapes = data
+        .clusters
+        .as_mut()
+        .unwrap()
+        .member_affine_shapes
+        .as_mut()
+        .unwrap();
+    shapes[[0, 1, 0]] = 2.0 * shapes[[0, 0, 0]];
+    shapes[[0, 1, 1]] = 2.0 * shapes[[0, 0, 1]];
+    expect_write_error("matches_test_cp_ref_singular", &data, "is singular");
 }
 
 #[test]
 fn test_write_validation_reference_row_non_identity_ok() {
-    // The version-5 reference row is the reference feature's own detector
-    // shape, so a non-identity leading 2×2 must WRITE (the version-4 rule
-    // rejected exactly this).
+    // A cluster's reference member carries its own detector shape, so a
+    // non-identity 2×2 must WRITE.
     let data = make_cluster_patch_test_data();
-    let s_ref = &data.cluster_patches.as_ref().unwrap().member_affines;
-    assert_ne!(s_ref[[0, 0, 0]], 1.0, "fixture reference row is identity");
+    let s_ref = data.member_affine_shapes().unwrap();
+    assert_ne!(s_ref[[0, 0, 0]], 1.0, "fixture reference shape is identity");
     let dir = std::env::temp_dir().join("matches_test_cp_ref_non_identity_ok");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("out.matches");
@@ -940,8 +973,14 @@ fn set_u32(bytes: &mut [u8], index: usize, value: u32) {
 }
 
 /// Overwrite the f64 at `index` in a little-endian float64 entry.
+#[allow(dead_code)]
 fn set_f64(bytes: &mut [u8], index: usize, value: f64) {
     bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Overwrite the f32 at `index` in a little-endian float32 entry.
+fn set_f32(bytes: &mut [u8], index: usize, value: f32) {
+    bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 /// Write entries to a `.matches` archive with a freshly recomputed
@@ -1036,8 +1075,10 @@ fn rebuild_matches_archive(entries: &[(String, Vec<u8>)], dst: &std::path::Path)
 
 /// Copy a written `.matches` archive, rewriting `metadata.json.zst` so its
 /// `version` field reads `version` (dropping the version-3 metadata fields
-/// for `version <= 2` and the version-4 `images/image_dims` entry for
-/// `version <= 3`, matching what old writers produced), then recomputing the
+/// for `version <= 2`, the version-4 `images/image_dims` entry for
+/// `version <= 3` and the version-6 `clusters/member_positions` /
+/// `clusters/member_affine_shapes` entries for `version <= 5`, matching what
+/// old writers produced), then recomputing the
 /// stored hashes so the result is an internally consistent file of that
 /// version — for authoring old- or future-version fixture bytes.
 fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version: u32) {
@@ -1054,6 +1095,12 @@ fn rewrite_matches_version(src: &std::path::Path, dst: &std::path::Path, version
     });
     if version <= 3 {
         entries.retain(|(n, _)| !n.starts_with("images/image_dims."));
+    }
+    if version <= 5 {
+        entries.retain(|(n, _)| {
+            !n.starts_with("clusters/member_positions.")
+                && !n.starts_with("clusters/member_affine_shapes.")
+        });
     }
     rebuild_matches_archive(&entries, dst);
 }
@@ -1250,17 +1297,17 @@ fn test_verify_rejects_reference_row_singular() {
         |entries| {
             mutate_entry(
                 entries,
-                "cluster_patches/member_affines.5.2.3.float64.zst",
+                "clusters/member_affine_shapes.5.2.2.float32.zst",
                 |bytes| {
-                    // Reference row S_ref = [[a, b], [c, d]] laid out as
-                    // f64 slots 0..2 (row 0) and 3..5 (row 1); make row 1 a
+                    // The reference's shape S_ref = [[a, b], [c, d]] is f32
+                    // slots 0..2 (row 0) and 2..4 (row 1); make row 1 a
                     // multiple of row 0 so det == 0.
-                    set_f64(bytes, 3, 2.0 * CP_S_REF[0][0]);
-                    set_f64(bytes, 4, 2.0 * CP_S_REF[0][1]);
+                    set_f32(bytes, 2, 2.0 * CP_S_REF[0][0] as f32);
+                    set_f32(bytes, 3, 2.0 * CP_S_REF[0][1] as f32);
                 },
             )
         },
-        "singular leading 2x2",
+        "is singular",
     );
 }
 
@@ -1370,97 +1417,194 @@ fn test_version_2_loads_without_pose_conjugation() {
 }
 
 #[test]
-fn test_version_3_clusters_load_without_image_dims() {
-    // A version-3 cluster-backbone file (no image_dims, no cluster_patches)
-    // verifies and loads unchanged; image_dims comes back None.
+fn test_clusters_member_geometry_round_trip() {
+    // The backbone's geometry survives write → verify → read with the same
+    // f32 bits it went in with: in a matcher output the values are verbatim
+    // copies of `.sift` rows, so a dtype round trip would corrupt them.
     let data = make_cluster_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v3_clusters_load");
+    let (dir, path) = write_to_temp("matches_test_member_geometry", &data);
+
+    let (valid, errors) = verify_matches(&path).unwrap();
+    assert!(valid, "verification failed: {errors:?}");
+
+    let loaded = read_matches(&path).unwrap();
+    let orig = data.clusters.as_ref().unwrap();
+    let got = loaded.clusters.as_ref().unwrap();
+    let (o_pos, g_pos) = (
+        orig.member_positions.as_ref().unwrap(),
+        got.member_positions.as_ref().unwrap(),
+    );
+    let (o_shp, g_shp) = (
+        orig.member_affine_shapes.as_ref().unwrap(),
+        got.member_affine_shapes.as_ref().unwrap(),
+    );
+    assert_eq!(g_pos.shape(), [5, 2]);
+    assert_eq!(g_shp.shape(), [5, 2, 2]);
+    for (a, b) in g_pos.iter().zip(o_pos.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+    for (a, b) in g_shp.iter().zip(o_shp.iter()) {
+        assert_eq!(a.to_bits(), b.to_bits());
+    }
+
+    // The accessors read the backbone.
+    assert_eq!(loaded.member_positions().unwrap(), o_pos);
+    assert_eq!(loaded.member_affine_shapes().unwrap(), o_shp);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_enriched_geometry_is_the_refinement_where_it_measured() {
+    // The enriched fixture's stage: the members the cascade measured carry
+    // its answer, the ones it never fitted keep the detection they came in
+    // with, and nothing is NaN — member_status is what tells them apart.
+    let bare = make_cluster_test_data();
+    let data = make_cluster_patch_test_data();
+    let (dir, path) = write_to_temp("matches_test_enriched_geometry", &data);
+    let loaded = read_matches(&path).unwrap();
+
+    let detected = bare.member_positions().unwrap();
+    let positions = loaded.member_positions().unwrap();
+    let shapes = loaded.member_affine_shapes().unwrap();
+    let status = &loaded.cluster_patches.as_ref().unwrap().member_status;
+    for k in 0..5 {
+        // reference, kept, rejected_low_zncc, rejected_shift.
+        let measured = matches!(status[k], 0..=3);
+        assert!(positions[[k, 0]].is_finite() && shapes[[k, 0, 0]].is_finite());
+        if !measured {
+            for c in 0..2 {
+                assert_eq!(
+                    positions[[k, c]].to_bits(),
+                    detected[[k, c]].to_bits(),
+                    "unfitted member {k} must keep its detection"
+                );
+            }
+        }
+    }
+    // Member 2 was rejected on ZNCC but measured, so it keeps its own value.
+    assert_ne!(positions[[2, 0]].to_bits(), detected[[2, 0]].to_bits());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_version_5_cluster_file_refused_on_read() {
+    // Version 6 moved every cluster file's geometry into the backbone, and an
+    // older cluster file's is only in the `.sift` files — so it is refused,
+    // with the regeneration named. Its stored bytes still verify.
+    for (label, data, wants_patches) in [
+        ("bare", make_cluster_test_data(), false),
+        ("enriched", make_cluster_patch_test_data(), true),
+    ] {
+        let dir = std::env::temp_dir().join(format!("matches_test_v5_refused_{label}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let current_path = dir.join("current.matches");
+        let v5_path = dir.join("v5.matches");
+
+        write_matches(&current_path, &data, 3).unwrap();
+        rewrite_matches_version(&current_path, &v5_path, 5);
+        assert_eq!(read_matches_metadata(&v5_path).unwrap().version, 5);
+
+        let (valid, errors) = verify_matches(&v5_path).unwrap();
+        assert!(valid, "{label} v5 fixture failed verification: {errors:?}");
+
+        let msg = format!("{}", read_matches(&v5_path).err().unwrap());
+        assert!(msg.contains("version 5 cluster-backbone file"), "{msg}");
+        assert!(
+            msg.contains("regenerate with `sfm match --cluster`"),
+            "{msg}"
+        );
+        assert_eq!(
+            msg.contains("then re-run `sfm cluster-patches`"),
+            wants_patches,
+            "{label}: the enrichment step is named exactly when it applies"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn test_pairwise_version_compatibility_is_untouched() {
+    // The version-6 cluster refusal is scoped to the cluster backbone: a
+    // version-3 pairwise file still loads (without dims, as before).
+    let data = make_test_data();
+    let dir = std::env::temp_dir().join("matches_test_v3_pairwise_loads");
     std::fs::create_dir_all(&dir).unwrap();
     let current_path = dir.join("current.matches");
     let v3_path = dir.join("v3.matches");
 
     write_matches(&current_path, &data, 3).unwrap();
     rewrite_matches_version(&current_path, &v3_path, 3);
-    assert_eq!(read_matches_metadata(&v3_path).unwrap().version, 3);
 
     let (valid, errors) = verify_matches(&v3_path).unwrap();
-    assert!(valid, "v3 fixture failed verification: {errors:?}");
+    assert!(valid, "v3 pairwise fixture failed verification: {errors:?}");
 
     let loaded = read_matches(&v3_path).unwrap();
     assert_eq!(loaded.metadata.version, MATCHES_FORMAT_VERSION);
     assert_eq!(loaded.image_dims, None);
-    let clusters = loaded.clusters.as_ref().unwrap();
-    let orig = data.clusters.as_ref().unwrap();
-    assert_eq!(clusters.cluster_starts, orig.cluster_starts);
-    assert_eq!(clusters.member_images, orig.member_images);
-    assert_eq!(clusters.member_features, orig.member_features);
+    let pairs = loaded.image_pairs.as_ref().unwrap();
+    let orig = data.image_pairs.as_ref().unwrap();
+    assert_eq!(pairs.image_index_pairs, orig.image_index_pairs);
+    assert_eq!(pairs.match_feature_indexes, orig.match_feature_indexes);
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn test_version_3_cluster_patches_rejected_on_read() {
-    // A version-3 cluster-patch file stores the affine translation in the
-    // member_affines last column — not upgradable without the .sift
-    // positions, so read_matches refuses it (with regeneration guidance)
-    // while verify_matches still validates its stored bytes.
-    let data = make_cluster_patch_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v3_patches_rejected");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v3_path = dir.join("v3.matches");
+fn test_write_validation_missing_member_geometry() {
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().member_positions = None;
+    data.clusters.as_mut().unwrap().member_affine_shapes = None;
+    expect_write_error(
+        "matches_test_missing_member_geometry",
+        &data,
+        "mandatory since format version 6",
+    );
+}
 
-    write_matches(&current_path, &data, 3).unwrap();
-    rewrite_matches_version(&current_path, &v3_path, 3);
-
-    let (valid, errors) = verify_matches(&v3_path).unwrap();
-    assert!(valid, "v3 patch fixture failed verification: {errors:?}");
-
-    let err = read_matches(&v3_path).err().unwrap();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("regenerate with `sfm cluster-patches`"),
-        "{msg}"
+#[test]
+fn test_write_validation_member_geometry_wrong_lengths() {
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().member_positions = Some(Array2::zeros((4, 2)));
+    expect_write_error(
+        "matches_test_member_positions_len",
+        &data,
+        "member_positions shape [4, 2] != [5, 2]",
     );
 
-    std::fs::remove_dir_all(&dir).unwrap();
-}
-
-#[test]
-fn test_version_4_cluster_patches_rejected_on_read() {
-    // A version-4 cluster-patch file stores the reference-relative warp in
-    // the member_affines leading 2×2 — not upgradable to the version-5
-    // absolute shape without the reference feature's .sift affine shape, so
-    // read_matches refuses it (with regeneration guidance) while
-    // verify_matches still validates its stored bytes.
-    let data = make_cluster_patch_test_data();
-    let dir = std::env::temp_dir().join("matches_test_v4_patches_rejected");
-    std::fs::create_dir_all(&dir).unwrap();
-    let current_path = dir.join("current.matches");
-    let v4_path = dir.join("v4.matches");
-
-    write_matches(&current_path, &data, 3).unwrap();
-    rewrite_matches_version(&current_path, &v4_path, 4);
-
-    let (valid, errors) = verify_matches(&v4_path).unwrap();
-    assert!(valid, "v4 patch fixture failed verification: {errors:?}");
-
-    let err = read_matches(&v4_path).err().unwrap();
-    let msg = format!("{err}");
-    assert!(msg.contains("absolute affine shape"), "{msg}");
-    assert!(
-        msg.contains("regenerate with `sfm cluster-patches`"),
-        "{msg}"
+    let mut data = make_cluster_test_data();
+    data.clusters.as_mut().unwrap().member_affine_shapes = Some(Array3::zeros((6, 2, 2)));
+    expect_write_error(
+        "matches_test_member_shapes_len",
+        &data,
+        "member_affine_shapes shape [6, 2, 2] != [5, 2, 2]",
     );
-
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
-fn test_relative_warp_recovered_from_reference_row() {
-    // The version-5 payoff and its cost: a member's absolute shape is read
-    // straight off its own row, and the reference→member warp survives a
-    // write/read round trip as `W = S·S_ref⁻¹` through the reference row.
+fn test_verify_rejects_wrong_member_geometry_lengths() {
+    expect_verify_error(
+        "matches_test_verify_member_positions_len",
+        &make_cluster_test_data(),
+        |entries| {
+            for (name, bytes) in entries.iter_mut() {
+                if name.starts_with("clusters/member_positions.") {
+                    bytes.truncate(8);
+                }
+            }
+        },
+        "member_positions byte length 8 != expected 40",
+    );
+}
+
+#[test]
+fn test_relative_warp_recovered_from_reference_member() {
+    // A member's absolute shape is read straight off the backbone, and the
+    // reference→member warp survives a write/read round trip as
+    // `W = S·S_ref⁻¹` through the cluster's reference member.
     let data = make_cluster_patch_test_data();
     let dir = std::env::temp_dir().join("matches_test_warp_recovery");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1472,12 +1616,13 @@ fn test_relative_warp_recovered_from_reference_row() {
     // Cluster 0's reference is member 0; member 1 is the kept member.
     let r = cp.reference_members[0] as usize;
     assert_eq!(r, 0);
-    let shapes = cp.member_shapes();
+    let stored = loaded.member_affine_shapes().unwrap();
+    let shapes = stored.mapv(f64::from);
     let s_ref = [
         [shapes[[r, 0, 0]], shapes[[r, 0, 1]]],
         [shapes[[r, 1, 0]], shapes[[r, 1, 1]]],
     ];
-    assert_eq!(s_ref, CP_S_REF, "reference row is S_ref | x_ref");
+    assert_eq!(s_ref, CP_S_REF, "the reference member carries S_ref");
 
     let s_kept = [
         [shapes[[1, 0, 0]], shapes[[1, 0, 1]]],
@@ -1487,11 +1632,14 @@ fn test_relative_warp_recovered_from_reference_row() {
     let extent_u = (s_kept[0][0].powi(2) + s_kept[1][0].powi(2)).sqrt();
     assert!(extent_u > 0.0);
 
+    // Tolerance is the f32 storage's, not the arithmetic's: the shapes go to
+    // disk at float32, so a warp recovered from two of them carries ~1e-9
+    // relative quantization -- far below the refinement's own ~0.01 px fit.
     let w = mat2_mul(&s_kept, &mat2_inv(&s_ref));
     for r in 0..2 {
         for c in 0..2 {
             assert!(
-                (w[r][c] - CP_W_KEPT[r][c]).abs() < 1e-12,
+                (w[r][c] - CP_W_KEPT[r][c]).abs() < 1e-6,
                 "recovered warp[{r}][{c}] = {} != {}",
                 w[r][c],
                 CP_W_KEPT[r][c]
@@ -1501,7 +1649,8 @@ fn test_relative_warp_recovered_from_reference_row() {
 
     // The warp composes with the positions exactly as the format states:
     // x_member = W·(x − x_ref) + p. At x = x_ref that is p.
-    let positions = cp.member_positions();
+    let stored_p = loaded.member_positions().unwrap();
+    let positions = stored_p.mapv(f64::from);
     let x_ref = [positions[[r, 0]], positions[[r, 1]]];
     let p = [positions[[1, 0]], positions[[1, 1]]];
     let mapped = [
@@ -1661,31 +1810,53 @@ fn make_select_test_data() -> MatchesData {
         cluster_starts: Array1::from_vec(vec![0, 4, 6, 9, 12]),
         member_images: Array1::from_vec(vec![0, 1, 2, 3, 1, 2, 0, 1, 1, 2, 3, 0]),
         member_features: Array1::from_vec(vec![7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]),
+        // Distinctive stage geometry, so a gather mistake in the backbone
+        // arrays is observable as a wrong value.
+        member_positions: Some(
+            Array2::from_shape_vec(
+                (12, 2),
+                (0..12)
+                    .flat_map(|k| [k as f32 + 0.25, k as f32 + 0.75])
+                    .collect(),
+            )
+            .unwrap(),
+        ),
+        member_affine_shapes: Some(
+            Array3::from_shape_vec(
+                (12, 2, 2),
+                (0..12)
+                    .flat_map(|k| {
+                        let k = k as f32;
+                        [2.0 + k, 0.5, 0.25, 1.5 + k]
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        ),
         matcher_options: serde_json::json!({"d": 8, "min_size": 2}),
     });
-    let mut affines = Array3::zeros((12, 2, 3));
-    for k in 0..12 {
-        // Distinctive rows so gather mistakes are observable.
-        for r in 0..2 {
-            for c in 0..3 {
-                affines[[k, r, c]] = (100 * k + 10 * r + c) as f64 + 0.5;
-            }
-        }
-    }
-    // Reference rows (members 0, 7, 9): `S_ref | x_ref`. Non-identity and
-    // non-singular, so the selection is exercised against real version-5
-    // reference shapes rather than a value that happens to be the identity.
-    for &k in &[0usize, 7, 9] {
-        for r in 0..2 {
-            for c in 0..2 {
-                affines[[k, r, c]] = CP_S_REF[r][c];
+    // Reference members (0, 7, 9) carry `S_ref`: non-identity and
+    // non-singular, so the selection is exercised against a real reference
+    // shape rather than a value that happens to be the identity.
+    {
+        let shapes = data
+            .clusters
+            .as_mut()
+            .unwrap()
+            .member_affine_shapes
+            .as_mut()
+            .unwrap();
+        for &k in &[0usize, 7, 9] {
+            for r in 0..2 {
+                for c in 0..2 {
+                    shapes[[k, r, c]] = CP_S_REF[r][c] as f32;
+                }
             }
         }
     }
     data.cluster_patches = Some(ClusterPatchData {
         reference_members: Array1::from_vec(vec![0, CLUSTER_REFERENCE_UNREFINABLE, 7, 9]),
         member_status: Array1::from_vec(vec![0, 1, 1, 2, 5, 5, 1, 0, 4, 0, 1, 1]),
-        member_affines: affines,
         member_zncc: Array1::from_vec(vec![
             1.0,
             0.9,
@@ -1743,15 +1914,24 @@ fn assert_members_gathered(sel: &MatchesData, src: &MatchesData, src_members: &[
     assert_eq!(o_cl.member_features.len(), src_members.len());
     for (k, &m) in src_members.iter().enumerate() {
         assert_eq!(o_cl.member_features[k], s_cl.member_features[m]);
-        assert_eq!(o_cp.member_status[k], s_cp.member_status[m]);
+        // The backbone's stage geometry rides the same survival mask.
+        let (s_pos, o_pos) = (
+            s_cl.member_positions.as_ref().unwrap(),
+            o_cl.member_positions.as_ref().unwrap(),
+        );
+        let (s_shp, o_shp) = (
+            s_cl.member_affine_shapes.as_ref().unwrap(),
+            o_cl.member_affine_shapes.as_ref().unwrap(),
+        );
+        for c in 0..2 {
+            assert_eq!(o_pos[[k, c]].to_bits(), s_pos[[m, c]].to_bits());
+        }
         for r in 0..2 {
-            for c in 0..3 {
-                assert_eq!(
-                    o_cp.member_affines[[k, r, c]],
-                    s_cp.member_affines[[m, r, c]]
-                );
+            for c in 0..2 {
+                assert_eq!(o_shp[[k, r, c]].to_bits(), s_shp[[m, r, c]].to_bits());
             }
         }
+        assert_eq!(o_cp.member_status[k], s_cp.member_status[m]);
         assert_eq!(o_cp.member_zncc[k].to_bits(), s_cp.member_zncc[m].to_bits());
         assert_eq!(
             o_cp.member_shift_px[k].to_bits(),
@@ -1823,7 +2003,14 @@ fn test_select_clusters_default_round_trip() {
     let l_cp = loaded.cluster_patches.as_ref().unwrap();
     assert_eq!(l_cp.reference_members, cp.reference_members);
     assert_eq!(l_cp.member_status, cp.member_status);
-    assert_eq!(l_cp.member_affines, cp.member_affines);
+    assert_eq!(
+        loaded.member_positions().unwrap(),
+        sel.member_positions().unwrap()
+    );
+    assert_eq!(
+        loaded.member_affine_shapes().unwrap(),
+        sel.member_affine_shapes().unwrap()
+    );
     assert_f32_bits_eq(&l_cp.member_zncc, &cp.member_zncc);
     assert_f32_bits_eq(&l_cp.member_shift_px, &cp.member_shift_px);
     assert_f32_bits_eq(
@@ -2242,21 +2429,21 @@ fn test_cluster_patch_accessors() {
     let data = make_select_test_data();
     let cp = data.cluster_patches.as_ref().unwrap();
 
-    // member_positions = affine last column; member_shapes = leading 2x2
-    // (the member's ABSOLUTE affine shape, copied verbatim).
-    let pos = cp.member_positions();
-    let shapes = cp.member_shapes();
-    assert_eq!(pos.shape(), [12, 2]);
-    assert_eq!(shapes.shape(), [12, 2, 2]);
-    for k in 0..12 {
-        assert_eq!(pos[[k, 0]], cp.member_affines[[k, 0, 2]]);
-        assert_eq!(pos[[k, 1]], cp.member_affines[[k, 1, 2]]);
-        for r in 0..2 {
-            for c in 0..2 {
-                assert_eq!(shapes[[k, r, c]], cp.member_affines[[k, r, c]]);
-            }
-        }
-    }
+    // The geometry accessors read the backbone, not this section.
+    let clusters = data.clusters.as_ref().unwrap();
+    assert_eq!(
+        data.member_positions().unwrap(),
+        clusters.member_positions.as_ref().unwrap()
+    );
+    assert_eq!(
+        data.member_affine_shapes().unwrap(),
+        clusters.member_affine_shapes.as_ref().unwrap()
+    );
+    assert_eq!(data.member_positions().unwrap().shape(), [12, 2]);
+    assert_eq!(data.member_affine_shapes().unwrap().shape(), [12, 2, 2]);
+    // A pairwise file has no member geometry to give.
+    assert!(make_test_data().member_positions().is_none());
+    assert!(make_test_data().member_affine_shapes().is_none());
 
     // refine_radius: patch_size (full edge) halves; legacy radius passes
     // through; neither -> None.
@@ -2429,6 +2616,29 @@ fn entry_names_are_pinned() {
         e::clusters_member_features(29),
         "clusters/member_features.29.uint32.zst"
     );
+    assert_eq!(
+        e::clusters_member_positions(29),
+        "clusters/member_positions.29.2.float32.zst"
+    );
+    assert_eq!(
+        e::clusters_member_affine_shapes(29),
+        "clusters/member_affine_shapes.29.2.2.float32.zst"
+    );
+    // `verify` matches these two on their prefixes alone (mandatory from
+    // version 6, forbidden before it); keep the spellings tied so a rename
+    // cannot turn those checks into silent no-ops.
+    assert_eq!(
+        e::clusters_member_positions_prefix(),
+        "clusters/member_positions."
+    );
+    assert!(e::clusters_member_positions(29).starts_with(e::clusters_member_positions_prefix()));
+    assert_eq!(
+        e::clusters_member_affine_shapes_prefix(),
+        "clusters/member_affine_shapes."
+    );
+    assert!(
+        e::clusters_member_affine_shapes(29).starts_with(e::clusters_member_affine_shapes_prefix())
+    );
 
     // Cluster patches. `reference_members` is per-cluster; the rest per-member.
     assert_eq!(
@@ -2438,10 +2648,6 @@ fn entry_names_are_pinned() {
     assert_eq!(
         e::cluster_patches_member_status(29),
         "cluster_patches/member_status.29.uint8.zst"
-    );
-    assert_eq!(
-        e::cluster_patches_member_affines(29),
-        "cluster_patches/member_affines.29.2.3.float64.zst"
     );
     assert_eq!(
         e::cluster_patches_member_zncc(29),
@@ -2511,7 +2717,6 @@ fn archive_entry_names_pin_call_sites() {
             "cluster_patches",
             make_cluster_patch_test_data(),
             &[
-                "cluster_patches/member_affines.5.2.3.float64.zst",
                 "cluster_patches/member_consistency_residual.5.float32.zst",
                 "cluster_patches/member_shift_px.5.float32.zst",
                 "cluster_patches/member_status.5.uint8.zst",
@@ -2519,8 +2724,10 @@ fn archive_entry_names_pin_call_sites() {
                 "cluster_patches/metadata.json.zst",
                 "cluster_patches/reference_members.2.uint32.zst",
                 "clusters/cluster_starts.3.uint32.zst",
+                "clusters/member_affine_shapes.5.2.2.float32.zst",
                 "clusters/member_features.5.uint32.zst",
                 "clusters/member_images.5.uint32.zst",
+                "clusters/member_positions.5.2.float32.zst",
                 "clusters/metadata.json.zst",
                 "content_hash.json.zst",
                 "images/feature_counts.3.uint32.zst",

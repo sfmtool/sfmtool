@@ -187,21 +187,6 @@ impl PyMatchesFile {
             .unbind())
     }
 
-    /// `(M, 2, 3)` float64 absolute affines: the leading 2x2 is the member's
-    /// absolute affine shape ``S = W·S_ref`` (detector canonical unit frame
-    /// -> member pixels) and the last column its refined absolute keypoint
-    /// position. Reference rows are ``S_ref | x_ref``; the reference->member
-    /// warp is ``W = S·S_ref**-1`` through that row.
-    #[getter]
-    fn member_affines<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
-        Ok(self
-            .cluster_patches()?
-            .member_affines
-            .to_pyarray(py)
-            .into_any()
-            .unbind())
-    }
-
     /// `(M,)` float32 achieved windowed ZNCC vs the reference (NaN where
     /// not evaluated).
     #[getter]
@@ -252,29 +237,27 @@ impl PyMatchesFile {
         Ok(self.cluster_patches()?.refine_radius())
     }
 
-    /// `(M, 2)` float64 member absolute keypoint positions (the affine last
-    /// column).
-    fn member_positions<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
-        Ok(self
-            .cluster_patches()?
+    /// `(M, 2)` float32 per-member keypoint positions, at THIS file's stage:
+    /// the detections in a matcher output; in a cluster-patches output the
+    /// refined absolute position for every member its cascade measured, and
+    /// the detection for the rest. Never NaN -- `member_status` says which
+    /// reading a row carries and which members stand. None for a pairwise
+    /// file.
+    fn member_positions<'py>(&self, py: Python<'py>) -> Option<Py<PyAny>> {
+        self.inner
             .member_positions()
-            .to_pyarray(py)
-            .into_any()
-            .unbind())
+            .map(|p| p.to_pyarray(py).into_any().unbind())
     }
 
-    /// `(M, 2, 2)` float64 member absolute affine shapes (the affine leading
-    /// 2x2 block, ``S = W·S_ref``): the map from the detector's canonical unit
-    /// frame onto the member's image pixels, so a member's image-space extent
-    /// is its column norms. Recover the reference->member warp as
-    /// ``S·S_ref**-1`` using the cluster's reference row.
-    fn member_shapes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
-        Ok(self
-            .cluster_patches()?
-            .member_shapes()
-            .to_pyarray(py)
-            .into_any()
-            .unbind())
+    /// `(M, 2, 2)` float32 per-member affine shapes, at the same stage and
+    /// under the same reading as `member_positions`. Each shape maps the
+    /// detector's canonical unit frame onto that member's image pixels, so a
+    /// member's image-space extent is its column norms; the reference->member
+    /// warp is ``S·S_ref**-1`` through the cluster's reference member.
+    fn member_affine_shapes<'py>(&self, py: Python<'py>) -> Option<Py<PyAny>> {
+        self.inner
+            .member_affine_shapes()
+            .map(|s| s.to_pyarray(py).into_any().unbind())
     }
 
     /// `(C,)` float64 per-cluster worst (maximum) finite warp-consistency

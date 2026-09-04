@@ -40,14 +40,17 @@ pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesErro
 /// the file), so integrity verification is unaffected by the in-memory
 /// upgrade; a re-written file is a new current-version file with new hashes.
 ///
-/// Version ≤ 3 files never store `images/image_dims`, so they load with
-/// [`MatchesData::image_dims`] as `None`. A version ≤ 4 file that carries a
-/// `cluster_patches/` section is rejected: neither its `member_affines` last
-/// column (the affine translation `t` before version 4) nor its leading 2×2
-/// block (the reference-relative warp `W` before version 5) can be upgraded
-/// to the current absolute semantics without the referenced `.sift`
-/// positions and affine shapes — regenerate the file with
-/// `sfm cluster-patches` from its cluster backbone source.
+/// **A cluster-backbone file below version 6 is rejected.** Version 6 moved
+/// every member's geometry into `clusters/` and dropped
+/// `cluster_patches/member_affines`, and neither the older layout's semantics
+/// nor the geometry itself can be recovered here — it lives in the referenced
+/// `.sift` files, which this crate does not open. The error names the fix:
+/// regenerate with `sfm match --cluster`, then `sfm cluster-patches` if the
+/// file was enriched.
+///
+/// Pairwise-backbone files keep their full version compatibility; version ≤ 3
+/// ones never store `images/image_dims`, so they load with
+/// [`MatchesData::image_dims`] as `None`.
 pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let file = std::fs::File::open(path).map_err(|e| MatchesError::IoPath {
         operation: "Failed to open file",
@@ -90,30 +93,23 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
                 .into(),
         ));
     }
-    // Version ≤ 3 cluster-patch files store the affine translation `t` in
-    // the member_affines last column; version 4 stores the absolute refined
-    // keypoint position `p = A·x_ref + t`. The upgrade needs the referenced
-    // `.sift` positions, which the reader does not have — refuse the file
-    // (its cluster-backbone source still loads; regenerate the enrichment).
-    if metadata.version < 4 && metadata.has_cluster_patches {
+    // Version 6 moved every cluster file's member geometry into the backbone
+    // and dropped `cluster_patches/member_affines`. An older cluster file's
+    // geometry is only in the `.sift` files this crate does not open, and its
+    // affines carry semantics no longer in the format, so it cannot be
+    // upgraded on load — refuse it and name the regeneration. Pairwise files
+    // are unaffected.
+    if metadata.version < 6 && metadata.has_clusters {
         return Err(MatchesError::InvalidFormat(format!(
-            "version {} cluster-patch file: member_affines stores the affine translation, not \
-             the absolute keypoint position introduced in version 4, and cannot be upgraded on \
-             load — regenerate with `sfm cluster-patches` from the cluster backbone file",
-            metadata.version
-        )));
-    }
-    // Version 4 cluster-patch files store the reference→member warp `W` in
-    // the member_affines leading 2×2; version 5 stores the member's absolute
-    // affine shape `S = W·S_ref`. The upgrade needs the reference feature's
-    // `.sift` affine shape, which the reader does not have — refuse the file
-    // (its cluster-backbone source still loads; regenerate the enrichment).
-    if metadata.version < 5 && metadata.has_cluster_patches {
-        return Err(MatchesError::InvalidFormat(format!(
-            "version {} cluster-patch file: member_affines stores the reference-relative warp, \
-             not the absolute affine shape introduced in version 5, and cannot be upgraded on \
-             load — regenerate with `sfm cluster-patches` from the cluster backbone file",
-            metadata.version
+            "version {} cluster-backbone file: member geometry moved into clusters/ in version \
+             6 and cannot be reconstructed on load (it lives in the referenced `.sift` files) — \
+             regenerate with `sfm match --cluster`{}",
+            metadata.version,
+            if metadata.has_cluster_patches {
+                ", then re-run `sfm cluster-patches`"
+            } else {
+                ""
+            }
         )));
     }
     let needs_convention_upgrade = metadata.version < 2;
@@ -363,10 +359,32 @@ fn read_clusters_section<R: std::io::Read + Seek>(
     )?;
     let member_features = Array1::from_vec(member_features_vec);
 
+    // The members' geometry, mandatory since version 6 (older cluster files
+    // are refused before this point).
+    let positions_vec: Vec<f32> = read_binary_array(
+        archive,
+        &entries::clusters_member_positions(member_count),
+        member_count * 2,
+    )?;
+    let member_positions = Array2::from_shape_vec((member_count, 2), positions_vec)
+        .map_err(|e| MatchesError::ShapeMismatch(format!("member_positions reshape: {e}")))?;
+
+    let shapes_vec: Vec<f32> = read_binary_array(
+        archive,
+        &entries::clusters_member_affine_shapes(member_count),
+        member_count * 4,
+    )?;
+    let member_affine_shapes = Array3::from_shape_vec((member_count, 2, 2), shapes_vec)
+        .map_err(|e| MatchesError::ShapeMismatch(format!("member_affine_shapes reshape: {e}")))?;
+    let (member_positions, member_affine_shapes) =
+        (Some(member_positions), Some(member_affine_shapes));
+
     Ok(ClustersData {
         cluster_starts,
         member_images,
         member_features,
+        member_positions,
+        member_affine_shapes,
         matcher_options,
     })
 }
@@ -411,14 +429,6 @@ fn read_cluster_patches_section<R: std::io::Read + Seek>(
     )?;
     let member_status = Array1::from_vec(member_status_vec);
 
-    let member_affines_vec: Vec<f64> = read_binary_array(
-        archive,
-        &entries::cluster_patches_member_affines(member_count),
-        member_count * 6,
-    )?;
-    let member_affines = Array3::from_shape_vec((member_count, 2, 3), member_affines_vec)
-        .map_err(|e| MatchesError::ShapeMismatch(format!("member_affines reshape: {e}")))?;
-
     let member_zncc_vec: Vec<f32> = read_binary_array(
         archive,
         &entries::cluster_patches_member_zncc(member_count),
@@ -443,7 +453,6 @@ fn read_cluster_patches_section<R: std::io::Read + Seek>(
     Ok(ClusterPatchData {
         reference_members,
         member_status,
-        member_affines,
         member_zncc,
         member_shift_px,
         member_consistency_residual,

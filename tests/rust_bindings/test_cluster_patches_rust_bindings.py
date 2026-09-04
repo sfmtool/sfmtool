@@ -64,7 +64,8 @@ class TestRefineClusterPatches:
         assert set(result.keys()) == {
             "reference_members",
             "member_status",
-            "member_affines",
+            "member_positions",
+            "member_affine_shapes",
             "member_zncc",
             "member_shift_px",
             "member_consistency_residual",
@@ -73,8 +74,10 @@ class TestRefineClusterPatches:
         assert result["reference_members"].shape == (1,)
         assert result["member_status"].dtype == np.uint8
         assert result["member_status"].shape == (2,)
-        assert result["member_affines"].dtype == np.float64
-        assert result["member_affines"].shape == (2, 2, 3)
+        assert result["member_positions"].dtype == np.float64
+        assert result["member_positions"].shape == (2, 2)
+        assert result["member_affine_shapes"].dtype == np.float64
+        assert result["member_affine_shapes"].shape == (2, 2, 2)
         assert result["member_zncc"].dtype == np.float32
         assert result["member_shift_px"].dtype == np.float32
         assert result["member_consistency_residual"].dtype == np.float32
@@ -87,26 +90,26 @@ class TestRefineClusterPatches:
         assert result["reference_members"][0] == 0
         assert result["member_status"][0] == STATUS_REFERENCE
         assert result["member_zncc"][0] == pytest.approx(1.0)
-        # Reference row: S_ref | x_ref -- the reference feature's own detector
-        # affine shape (3*I here) and its keypoint position.
+        # The reference is refined against itself: its own detector affine
+        # shape (3*I here) and its own keypoint position.
         s_ref = np.array([[3.0, 0.0], [0.0, 3.0]])
-        np.testing.assert_allclose(
-            result["member_affines"][0], [[3, 0, 48], [0, 3, 48]]
-        )
+        np.testing.assert_allclose(result["member_affine_shapes"][0], s_ref)
+        np.testing.assert_allclose(result["member_positions"][0], [48, 48])
 
         # The member is a pure translation of the reference: kept, so its
-        # ABSOLUTE shape is S = W @ S_ref with W ~ I, and the last column is
-        # the member's refined absolute keypoint position (the reference's
-        # position moved by the true shift).
+        # ABSOLUTE shape is S = W @ S_ref with W ~ I, and its position is the
+        # refined absolute one (the reference's, moved by the true shift).
         assert result["member_status"][1] == STATUS_KEPT
         assert result["member_zncc"][1] > 0.95
-        a = result["member_affines"][1]
-        np.testing.assert_allclose(a[:, :2], s_ref, atol=0.06)
+        shape = result["member_affine_shapes"][1]
+        np.testing.assert_allclose(shape, s_ref, atol=0.06)
         ref = np.array([48.0, 48.0])
-        np.testing.assert_allclose(a[:, 2], ref + np.array([2.0, 1.0]), atol=0.15)
+        np.testing.assert_allclose(
+            result["member_positions"][1], ref + np.array([2.0, 1.0]), atol=0.15
+        )
 
         # ... and the relative warp recovers as S @ S_ref^-1.
-        w = a[:, :2] @ np.linalg.inv(result["member_affines"][0][:, :2])
+        w = shape @ np.linalg.inv(result["member_affine_shapes"][0])
         np.testing.assert_allclose(w, np.eye(2), atol=0.02)
 
     def test_out_of_range_feature_is_not_evaluated(self):

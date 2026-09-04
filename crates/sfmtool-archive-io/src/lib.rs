@@ -171,6 +171,21 @@ pub fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]> {
     }
 }
 
+/// [`raw_to_u32`] for `f32` entries (4-byte alignment fallback included).
+pub fn raw_to_f32(raw: &[u8]) -> Cow<'_, [f32]> {
+    let size = std::mem::size_of::<f32>();
+    let n = raw.len() / size;
+    let trimmed = &raw[..n * size];
+    match bytemuck::try_cast_slice::<u8, f32>(trimmed) {
+        Ok(slice) => Cow::Borrowed(slice),
+        Err(_) => {
+            let mut out = vec![0f32; n];
+            bytemuck::cast_slice_mut::<f32, u8>(&mut out).copy_from_slice(trimmed);
+            Cow::Owned(out)
+        }
+    }
+}
+
 /// [`raw_to_u32`] for `f64` entries (8-byte alignment fallback included).
 pub fn raw_to_f64(raw: &[u8]) -> Cow<'_, [f64]> {
     let size = std::mem::size_of::<f64>();

@@ -30,9 +30,12 @@ pub struct SourceSelection<'a> {
     pub member_images: &'a [u32],
     /// `n_member` feature index per selection row.
     pub member_features: &'a [u32],
-    /// `n_member * 6`, each row's absolute 2x3 affine in row-major order: the
-    /// leading 2x2 is the feature's shape and the last column its pixel.
-    pub member_affines: &'a [f64],
+    /// `n_member * 2`, each row's absolute keypoint position in pixels.
+    pub member_positions: &'a [f64],
+    /// `n_member * 4`, each row's absolute 2x2 affine shape in row-major
+    /// order — the map from the detector's canonical unit frame onto that
+    /// member's image pixels, so its column norms are the member's extent.
+    pub member_affine_shapes: &'a [f64],
     /// The refine radius the selection's shapes are expressed against.
     pub refine_radius: f64,
     /// How many images the selection's table names.
@@ -100,9 +103,14 @@ pub fn source_clusters(
         "member_images/member_features mismatch"
     );
     assert_eq!(
-        sel.member_affines.len(),
-        n_member * 6,
-        "member_affines must be n_member * 6"
+        sel.member_positions.len(),
+        n_member * 2,
+        "member_positions must be n_member * 2"
+    );
+    assert_eq!(
+        sel.member_affine_shapes.len(),
+        n_member * 4,
+        "member_affine_shapes must be n_member * 4"
     );
     assert_eq!(
         member.obs_image.len(),
@@ -112,7 +120,7 @@ pub fn source_clusters(
     let n_cl = sel.cluster_starts.len().saturating_sub(1);
 
     let row_cluster = cluster_of_row(sel.cluster_starts, n_member);
-    let row_radius = radius_of_row(sel.member_affines, sel.refine_radius);
+    let row_radius = radius_of_row(sel.member_affine_shapes, sel.refine_radius);
 
     // Cluster radius: the widest of its own members', so "radius" means here
     // what it meant when the admission was drawn.
@@ -189,10 +197,8 @@ pub fn source_clusters(
         obs_cluster.push(row_cluster[r]);
         obs_image.push(sel.member_images[r]);
         obs_feature.push(sel.member_features[r]);
-        let a = &sel.member_affines[r * 6..r * 6 + 6];
-        obs_uv.push(a[2]);
-        obs_uv.push(a[5]);
-        obs_shape.extend_from_slice(&[a[0], a[1], a[3], a[4]]);
+        obs_uv.extend_from_slice(&sel.member_positions[r * 2..r * 2 + 2]);
+        obs_shape.extend_from_slice(&sel.member_affine_shapes[r * 4..r * 4 + 4]);
     }
 
     SourceClusters {
@@ -247,13 +253,14 @@ fn cluster_of_row(cluster_starts: &[u32], n_member: usize) -> Vec<u32> {
 /// Each selection row's feature radius: half the refine radius times the sum of
 /// the stored affine's two column norms, which is the refine radius times their
 /// mean.
-fn radius_of_row(affines: &[f64], refine_radius: f64) -> Vec<f64> {
+fn radius_of_row(shapes: &[f64], refine_radius: f64) -> Vec<f64> {
     let half = 0.5 * refine_radius;
-    affines
-        .par_chunks_exact(6)
+    shapes
+        .par_chunks_exact(4)
         .map(|a| {
-            let c0 = (a[0] * a[0] + a[3] * a[3]).sqrt();
-            let c1 = (a[1] * a[1] + a[4] * a[4]).sqrt();
+            // Column norms of the row-major 2x2 [a0 a1; a2 a3].
+            let c0 = (a[0] * a[0] + a[2] * a[2]).sqrt();
+            let c1 = (a[1] * a[1] + a[3] * a[3]).sqrt();
             half * (c0 + c1)
         })
         .collect()

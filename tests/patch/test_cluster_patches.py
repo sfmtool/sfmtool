@@ -132,6 +132,127 @@ def test_cluster_patches_end_to_end(cluster_matches_file: Path):
     assert not finite[(statuses != STATUS_REFERENCE) & (statuses != STATUS_KEPT)].any()
 
 
+def test_matcher_output_states_the_detections(cluster_matches_file: Path):
+    """The matcher's own file carries its members' detected geometry, copied
+    bit-for-bit from the `.sift` rows their feature indexes name."""
+    from sfmtool._sfmtool.io import read_matches, read_sift_partial
+
+    data = read_matches(cluster_matches_file)
+    assert data["metadata"]["version"] == 6
+    positions = data["member_positions"]
+    shapes = data["member_affine_shapes"]
+    assert positions.dtype == np.float32 and shapes.dtype == np.float32
+    assert positions.shape == (data["metadata"]["cluster_member_count"], 2)
+    assert shapes.shape == (data["metadata"]["cluster_member_count"], 2, 2)
+    assert np.isfinite(positions).all() and np.isfinite(shapes).all()
+
+    workspace_dir = cluster_matches_file.parent.parent
+    prefix = data["metadata"]["workspace"]["contents"]["feature_prefix_dir"]
+    member_images = np.asarray(data["member_images"])
+    member_features = np.asarray(data["member_features"])
+    for i, name in enumerate(data["image_names"]):
+        on_image = member_images == i
+        feats = member_features[on_image]
+        if not len(feats):
+            continue
+        rel = Path(name)
+        sift = read_sift_partial(
+            str(workspace_dir / rel.parent / prefix / f"{rel.name}.sift"),
+            int(feats.max()) + 1,
+        )
+        # tobytes(), not allclose: these are verbatim copies, not conversions.
+        assert sift["positions_xy"][feats].tobytes() == positions[on_image].tobytes()
+        assert sift["affine_shapes"][feats].tobytes() == shapes[on_image].tobytes()
+
+
+#: The statuses whose rows the refinement cascade measured. Everything else
+#: (duplicate_image, not_evaluated, rejected_unlocalizable) it never fitted.
+MEASURED_STATUSES = (0, 1, 2, 3)
+
+
+def test_enriched_output_states_the_refinement(cluster_matches_file: Path):
+    """The refined file's geometry is the refinement's, exactly: the kernel's
+    float64 answer downcast for every member it measured, and the input's own
+    detection -- byte for byte -- for every member it never fitted."""
+    import cv2
+
+    from sfmtool._sfmtool.io import read_matches
+    from sfmtool._sfmtool.matching import refine_cluster_patches
+
+    result = CliRunner().invoke(
+        main, ["cluster-patches", "-i", str(cluster_matches_file), "--resolution", "16"]
+    )
+    assert result.exit_code == 0, result.output
+    src = read_matches(cluster_matches_file)
+    data = read_matches(cluster_matches_file.with_name("clusters-patches.matches"))
+
+    statuses = data["member_status"]
+    positions = data["member_positions"]
+    shapes = data["member_affine_shapes"]
+    assert positions.dtype == np.float32 and shapes.dtype == np.float32
+    # No NaN anywhere: every member has a real position and shape, and the
+    # status alone says which reading it is.
+    assert np.isfinite(positions).all() and np.isfinite(shapes).all()
+    assert "member_affines" not in data
+
+    measured = np.isin(statuses, MEASURED_STATUSES)
+    assert measured.any() and (~measured).any()
+    # An unfitted member keeps the detection it came in with, bit for bit.
+    assert (
+        positions[~measured].tobytes() == src["member_positions"][~measured].tobytes()
+    )
+    assert (
+        shapes[~measured].tobytes() == src["member_affine_shapes"][~measured].tobytes()
+    )
+
+    # A measured member's value is the kernel's own float64 answer under the
+    # defined downcast -- re-run the kernel on the same seeds and compare.
+    workspace_dir = cluster_matches_file.parent.parent
+    images, seed_pos, seed_shp = [], [], []
+    member_images = np.asarray(src["member_images"])
+    member_features = np.asarray(src["member_features"])
+    for i, name in enumerate(src["image_names"]):
+        images.append(
+            np.ascontiguousarray(
+                cv2.imread(str(workspace_dir / name), cv2.IMREAD_COLOR)
+            )
+        )
+        count = int(src["feature_counts"][i])
+        p = np.zeros((count, 2), dtype=np.float32)
+        a = np.zeros((count, 2, 2), dtype=np.float32)
+        on_image = member_images == i
+        feats = member_features[on_image]
+        p[feats] = src["member_positions"][on_image]
+        a[feats] = src["member_affine_shapes"][on_image]
+        seed_pos.append(p)
+        seed_shp.append(a)
+    kernel = refine_cluster_patches(
+        images,
+        seed_pos,
+        seed_shp,
+        src["cluster_starts"],
+        src["member_images"],
+        src["member_features"],
+        radius=6.0,
+        resolution=16,
+    )
+    np.testing.assert_array_equal(kernel["member_status"], statuses)
+    np.testing.assert_array_equal(
+        positions[measured], kernel["member_positions"][measured].astype(np.float32)
+    )
+    np.testing.assert_array_equal(
+        shapes[measured], kernel["member_affine_shapes"][measured].astype(np.float32)
+    )
+
+    # A reference member is refined against itself, so its refined shape and
+    # position are exactly the detections the matcher's file states.
+    refs = data["reference_members"]
+    refs = refs[refs != 0xFFFFFFFF]
+    assert len(refs) > 0
+    np.testing.assert_array_equal(shapes[refs], src["member_affine_shapes"][refs])
+    np.testing.assert_array_equal(positions[refs], src["member_positions"][refs])
+
+
 def test_cluster_patches_rejects_existing_output_and_enriched_input(
     cluster_matches_file: Path,
 ):

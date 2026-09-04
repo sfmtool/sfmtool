@@ -46,7 +46,7 @@ mod tests;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ndarray::Array3;
+use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
 use crate::camera::remap::ImageU8Pyramid;
@@ -876,7 +876,8 @@ pub fn refine_cluster_patches(
     let mut result = ClusterRefineResult {
         reference_members: vec![REFERENCE_UNREFINABLE; c_count],
         member_status: vec![MemberStatus::NotEvaluated; m],
-        member_affines: Array3::zeros((m, 2, 3)),
+        member_positions: Array2::zeros((m, 2)),
+        member_affine_shapes: Array3::zeros((m, 2, 2)),
         member_zncc: vec![f32::NAN; m],
         member_shift_px: vec![f32::NAN; m],
     };
@@ -888,10 +889,13 @@ pub fn refine_cluster_patches(
             result.member_status[k] = mo.status;
             result.member_zncc[k] = mo.zncc;
             result.member_shift_px[k] = mo.shift;
+            // The 2×3 the cascade carries splits into the two arrays the
+            // format stores: leading 2×2 the absolute shape, last column the
+            // absolute position.
             for (r, row) in mo.affine.iter().enumerate() {
-                for (cc, &v) in row.iter().enumerate() {
-                    result.member_affines[[k, r, cc]] = v;
-                }
+                result.member_affine_shapes[[k, r, 0]] = row[0];
+                result.member_affine_shapes[[k, r, 1]] = row[1];
+                result.member_positions[[k, r]] = row[2];
             }
         }
     }

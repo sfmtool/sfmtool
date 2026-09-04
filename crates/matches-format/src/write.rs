@@ -26,7 +26,9 @@ use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entr
 /// `two_view_geometries` requires `image_pairs`. The metadata `has_*` flags
 /// and summary counts must be consistent with the supplied sections.
 /// `image_dims` is mandatory (format version 4): `(N, 2)` width/height with
-/// every value ≥ 1.
+/// every value ≥ 1. A cluster-backbone file additionally requires the
+/// members' detections (format version 6): `member_positions` `(M, 2)` and
+/// `member_affine_shapes` `(M, 2, 2)`.
 pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result<(), MatchesError> {
     let image_count = data.metadata.image_count as usize;
 
@@ -206,6 +208,20 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
             &mut clusters_hasher,
         )?;
 
+        // clusters/member_affine_shapes (mandatory since format version 6;
+        // validated Some by validate_dimensions)
+        let member_affine_shapes = clusters
+            .member_affine_shapes
+            .as_ref()
+            .expect("validated Some");
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::clusters_member_affine_shapes(member_count),
+            bytemuck::cast_slice(member_affine_shapes.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
         // clusters/member_features
         write_binary_entry_hashed(
             &mut zip,
@@ -220,6 +236,16 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
             &mut zip,
             &entries::clusters_member_images(member_count),
             bytemuck::cast_slice(clusters.member_images.as_slice().unwrap()),
+            zstd_level,
+            &mut clusters_hasher,
+        )?;
+
+        // clusters/member_positions (mandatory since format version 6)
+        let member_positions = clusters.member_positions.as_ref().expect("validated Some");
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::clusters_member_positions(member_count),
+            bytemuck::cast_slice(member_positions.as_slice().unwrap()),
             zstd_level,
             &mut clusters_hasher,
         )?;
@@ -250,15 +276,6 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
         let cluster_count = cp.reference_members.len();
         let member_count = cp.member_status.len();
         let mut cp_hasher = Xxh3::new();
-
-        // cluster_patches/member_affines
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::cluster_patches_member_affines(member_count),
-            bytemuck::cast_slice(cp.member_affines.as_slice().unwrap()),
-            zstd_level,
-            &mut cp_hasher,
-        )?;
 
         // cluster_patches/member_consistency_residual
         write_binary_entry_hashed(
@@ -671,6 +688,34 @@ fn validate_dimensions(data: &MatchesData, image_count: usize) -> Result<(), Mat
                 clusters.member_features.len()
             )
         );
+        // The members' detections, mandatory since format version 6. A file
+        // that predates them cannot gain them here: they live in the `.sift`
+        // rows `member_features` names, which this crate never opens.
+        let (Some(member_positions), Some(member_affine_shapes)) =
+            (&clusters.member_positions, &clusters.member_affine_shapes)
+        else {
+            return Err(MatchesError::ShapeMismatch(
+                "clusters.member_positions and clusters.member_affine_shapes are required \
+                 (mandatory since format version 6): supply the members' detected keypoint \
+                 positions (M, 2) and affine shapes (M, 2, 2), copied from the referenced \
+                 `.sift` files, or re-run `sfm match --cluster` to regenerate the file"
+                    .into(),
+            ));
+        };
+        check!(
+            member_positions.shape() == [member_count, 2],
+            format!(
+                "member_positions shape {:?} != [{member_count}, 2]",
+                member_positions.shape()
+            )
+        );
+        check!(
+            member_affine_shapes.shape() == [member_count, 2, 2],
+            format!(
+                "member_affine_shapes shape {:?} != [{member_count}, 2, 2]",
+                member_affine_shapes.shape()
+            )
+        );
     }
 
     // Cluster patches
@@ -690,13 +735,6 @@ fn validate_dimensions(data: &MatchesData, image_count: usize) -> Result<(), Mat
             format!(
                 "member_status len {} != cluster_member_count {member_count}",
                 cp.member_status.len()
-            )
-        );
-        check!(
-            cp.member_affines.shape() == [member_count, 2, 3],
-            format!(
-                "member_affines shape {:?} != [{member_count}, 2, 3]",
-                cp.member_affines.shape()
             )
         );
         check!(
@@ -1004,18 +1042,22 @@ fn validate_cluster_patches_constraints(
                     ClusterMemberStatus::Reference as u8
                 )));
             }
-            // Reference rows are `S_ref | x_ref`: the reference feature's own
-            // detector affine shape and absolute position. Neither value is
-            // checkable without the `.sift` data, but `S_ref` must be
-            // invertible — every consumer that wants the reference-relative
-            // warp recovers it as `W = S·S_ref⁻¹` through this row.
+            // A cluster's reference member carries `S_ref`, its own detector
+            // affine shape, in the backbone's shape array. The value is not
+            // checkable without the `.sift` data, but it must be invertible:
+            // every consumer that wants a reference-relative warp recovers it
+            // as `W = S·S_ref⁻¹` through that member's shape.
             let k = reference as usize;
-            let det = cp.member_affines[[k, 0, 0]] * cp.member_affines[[k, 1, 1]]
-                - cp.member_affines[[k, 0, 1]] * cp.member_affines[[k, 1, 0]];
+            let shapes = clusters
+                .member_affine_shapes
+                .as_ref()
+                .expect("validated Some");
+            let det = f64::from(shapes[[k, 0, 0]]) * f64::from(shapes[[k, 1, 1]])
+                - f64::from(shapes[[k, 0, 1]]) * f64::from(shapes[[k, 1, 0]]);
             if !det.is_finite() || det == 0.0 {
                 return Err(MatchesError::InvalidFormat(format!(
-                    "member_affines[{k}] (cluster {c}'s reference row) has a singular leading \
-                     2x2 block (det {det})"
+                    "member_affine_shapes[{k}] (cluster {c}'s reference member) is singular \
+                     (det {det})"
                 )));
             }
         }

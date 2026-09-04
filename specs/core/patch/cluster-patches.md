@@ -142,15 +142,17 @@ cluster_patches/
 ├── metadata.json.zst                    # refinement options (below) + summary counts
 ├── reference_members.{C}.uint32.zst     # global member index of each cluster's reference
 ├── member_status.{M}.uint8.zst          # enum, see below
-├── member_affines.{M}.2.3.float64.zst   # (2x2 absolute shape S | refined absolute
-│                                        # position p), pixel coords (COLMAP convention);
-│                                        # S = W·S_ref, so the member's extent is S's column
-│                                        # norms and x_member = W·(x − x_ref) + p with
-│                                        # W = S·S_ref⁻¹; S_ref|x_ref for the reference row;
-│                                        # zeros where not evaluated
 ├── member_zncc.{M}.float32.zst          # achieved windowed ZNCC vs reference (NaN if n/a)
 └── member_shift_px.{M}.float32.zst      # translation drift from the SIFT seed (NaN if n/a)
 ```
+
+The refined geometry is not in this section. It goes into the backbone's
+`clusters/member_positions` and `clusters/member_affine_shapes`, which a
+cluster file carries at every stage: the refinement's absolute position `p` and
+absolute shape `S = W·S_ref` for every member its cascade measured, and the
+detection the input carried for every member it did not. `member_status` says
+which. The reference member's shape is `S_ref`, so the reference→member warp is
+`W = S·S_ref⁻¹` and `x_member = W·(x − x_ref) + p`.
 
 `member_status` values: `0 reference`, `1 kept`, `2 rejected_low_zncc`,
 `3 rejected_shift`, `4 duplicate_image` (a kept member already covers this

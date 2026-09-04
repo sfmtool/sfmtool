@@ -122,11 +122,14 @@ pub(super) fn correspondences(
             }
             for &m in &mine {
                 let feature = member_features[m];
-                if let Some(p) = patches {
-                    positions.insert(
-                        feature,
-                        [p.member_affines[[m, 0, 2]], p.member_affines[[m, 1, 2]]],
-                    );
+                // Only a refined file supplies positions here; a bare
+                // backbone's detections are not what this join wants. The
+                // refined values live in the backbone's own geometry arrays
+                // (this member is kept, so the refinement measured it).
+                if patches.is_some() {
+                    if let Some(p) = &clusters.member_positions {
+                        positions.insert(feature, [f64::from(p[[m, 0]]), f64::from(p[[m, 1]])]);
+                    }
                 }
                 for &o in &theirs {
                     rows.push((

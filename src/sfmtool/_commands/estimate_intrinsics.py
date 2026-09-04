@@ -75,43 +75,6 @@ def _resolve_dimensions(image_dims, image_names: list[str]) -> tuple[int, int]:
     return int(distinct[0][0]), int(distinct[0][1])
 
 
-def _positions_from_sift(mfile, selection, matches_path: Path, image_names: list[str]):
-    """Member keypoint positions read from the images' `.sift` files.
-
-    The cluster backbone stores feature INDEXES; only the `cluster_patches/`
-    enrichment carries positions. A file straight out of `sfm match --cluster`
-    therefore has to go back to the features the matcher indexed, which is what
-    this does -- one `.sift` read per image, capped at the highest index that
-    image contributes.
-    """
-    import numpy as np
-
-    from .._cluster_patches import _resolve_workspace
-    from .._sfmtool.io import read_sift_partial
-
-    ws_meta = mfile.metadata["workspace"]
-    workspace_dir = _resolve_workspace(matches_path, ws_meta)
-    prefix = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
-
-    member_images = np.asarray(selection.member_images, dtype=np.int64)
-    member_features = np.asarray(selection.member_features, dtype=np.int64)
-    positions = np.zeros((len(member_features), 2), dtype=np.float64)
-    for image_index in np.unique(member_images):
-        on_image = member_images == image_index
-        features = member_features[on_image]
-        rel = Path(image_names[int(image_index)])
-        sift_path = workspace_dir / rel.parent / prefix / f"{rel.name}.sift"
-        if not sift_path.exists():
-            raise click.UsageError(
-                f"SIFT file not found: {sift_path}. The .matches file names "
-                "features by index, so the vote needs the .sift files that "
-                "matching ran on."
-            )
-        xy = read_sift_partial(sift_path, int(features.max()) + 1)["positions_xy"]
-        positions[on_image] = np.asarray(xy, dtype=np.float64)[features]
-    return positions
-
-
 def _load_observations(matches_path: Path) -> dict:
     """Flat cluster-contiguous observation arrays for the whole `.matches` file.
 
@@ -138,12 +101,15 @@ def _load_observations(matches_path: Path) -> dict:
         np.arange(len(starts) - 1, dtype=np.uint32), np.diff(starts)
     )
     image_indexes = np.asarray(selection.member_images, dtype=np.uint32)
-    if selection.has_cluster_patches:
-        positions = np.ascontiguousarray(
-            np.asarray(selection.member_positions(), dtype=np.float64)
-        )
-    else:
-        positions = _positions_from_sift(mfile, selection, matches_path, image_names)
+    # The backbone states its members' positions, whatever stage the file is
+    # at: the detections of a matcher output, or the refinement's own answer
+    # once `sfm cluster-patches` has run. The default selection has already
+    # dropped the members the refinement excluded, by status -- which is the
+    # only exclusion rule there is; the values themselves are always real.
+    # Stored float32, widened here because the vote solves in float64.
+    positions = np.ascontiguousarray(
+        np.asarray(selection.member_positions(), dtype=np.float64)
+    )
     if len(cluster_indexes) == 0:
         raise click.UsageError(
             f"{matches_path} holds no cluster observations to vote on"

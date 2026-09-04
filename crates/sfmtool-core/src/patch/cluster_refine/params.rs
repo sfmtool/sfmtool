@@ -6,7 +6,7 @@
 //! per-member [`MemberStatus`], and the member-parallel
 //! [`ClusterRefineResult`].
 
-use ndarray::{Array3, ArrayView2, ArrayView3};
+use ndarray::{Array2, Array3, ArrayView2, ArrayView3};
 
 use crate::patch::normal_refine::PatchWindow;
 
@@ -130,23 +130,33 @@ pub struct FeatureGeometry<'a> {
 }
 
 /// Member-parallel result of
-/// [`refine_cluster_patches`](super::refine_cluster_patches); the arrays map
-/// 1:1 onto the `cluster_patches/` section of the `.matches` format.
+/// [`refine_cluster_patches`](super::refine_cluster_patches).
+///
+/// The geometry arrays are the refinement's answer for the members it
+/// measured — the reference, every kept member, and the ZNCC/shift-rejected
+/// ones, which keep their measurement so a consumer can re-gate. A member the
+/// cascade never fitted (`NotEvaluated`, `RejectedUnlocalizable`, and a
+/// `DuplicateImage` that shared the reference's image) has an all-zero row:
+/// [`Self::member_status`] is what says which, and a caller writing a
+/// `.matches` file leaves those members' detections in place rather than
+/// storing a zero.
 pub struct ClusterRefineResult {
     /// `(C,)` global member index of each cluster's reference, or
     /// [`REFERENCE_UNREFINABLE`].
     pub reference_members: Vec<u32>,
     /// `(M,)` per-member statuses.
     pub member_status: Vec<MemberStatus>,
-    /// `(M, 2, 3)` fully absolute affines in pixel coordinates: the leading
-    /// 2×2 is the member's absolute affine SHAPE `S = W·S_ref` (the map from
-    /// the detector's canonical unit frame onto that member's image pixels,
-    /// so its column norms are the member's image-space extent) and the last
-    /// column is `p`, the member's refined absolute keypoint position. The
+    /// `(M, 2)` the member's refined absolute keypoint position `p` in source
+    /// image pixels. All-zeros where the member was never fitted; the
+    /// reference's own row is its detected position.
+    pub member_positions: Array2<f64>,
+    /// `(M, 2, 2)` the member's absolute affine SHAPE `S = W·S_ref` — the map
+    /// from the detector's canonical unit frame onto that member's image
+    /// pixels, so its column norms are the member's image-space extent. The
     /// reference→member warp is `W = S·S_ref⁻¹` and then reads
-    /// `x_member = W·(x − x_ref) + p`, with `S_ref | x_ref` the reference
-    /// row. All-zeros where not evaluated.
-    pub member_affines: Array3<f64>,
+    /// `x_member = W·(x − x_ref) + p`, with the reference's own row holding
+    /// `S_ref` (its detected shape). All-zeros where never fitted.
+    pub member_affine_shapes: Array3<f64>,
     /// `(M,)` achieved windowed ZNCC vs the reference (`NaN` if not
     /// evaluated).
     pub member_zncc: Vec<f32>,

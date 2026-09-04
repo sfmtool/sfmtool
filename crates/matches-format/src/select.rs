@@ -130,14 +130,20 @@ impl MatchesData {
     ///    outside the restriction), the derived entry is
     ///    [`CLUSTER_REFERENCE_UNREFINABLE`] — in a derived file that
     ///    sentinel means "reference not present in this selection"; the
-    ///    kept members still carry their absolute positions and absolute
-    ///    shapes, which stay valid without the reference — only the
-    ///    reference-relative warp (`S·S_ref⁻¹`) becomes unrecoverable.
+    ///    kept members keep their absolute positions and shapes, which stay
+    ///    valid without the reference — only the reference-relative warp
+    ///    (`S·S_ref⁻¹`) becomes unrecoverable.
     /// 6. When image-restricted, the image table shrinks to exactly the
     ///    requested images (file order preserved, images with zero members
     ///    included) and all parallel image arrays plus `member_images` are
     ///    renumbered. A cluster-id restriction alone leaves the image table
     ///    untouched.
+    ///
+    /// Every member-parallel array is gathered by the same survival mask, the
+    /// backbone's geometry
+    /// ([`ClustersData::member_positions`] / `member_affine_shapes`)
+    /// included, so a selection is itself a writable cluster file whose
+    /// members keep the values — and the stage — the source gave them.
     ///
     /// The output metadata carries the derivation provenance in
     /// `matching_options["cluster_selection"]` (source `content_xxh128` +
@@ -306,16 +312,32 @@ impl MatchesData {
             .iter()
             .map(|&m| member_features[m as usize])
             .collect();
-
-        let out_cluster_patches = cp.map(|cp| {
-            let mut affines = Array3::zeros((n_out_members, 2, 3));
-            for (k, &m) in kept_members.iter().enumerate() {
-                for r in 0..2 {
-                    for col in 0..3 {
-                        affines[[k, r, col]] = cp.member_affines[[m as usize, r, col]];
+        // The members' detections ride along on the same survival mask, so a
+        // selection stays a self-describing cluster file. Absent together
+        // for a version ≤ 5 source, which never stored them.
+        let out_member_positions: Option<Array2<f32>> =
+            clusters.member_positions.as_ref().map(|src| {
+                let mut out = Array2::zeros((n_out_members, 2));
+                for (k, &m) in kept_members.iter().enumerate() {
+                    out[[k, 0]] = src[[m as usize, 0]];
+                    out[[k, 1]] = src[[m as usize, 1]];
+                }
+                out
+            });
+        let out_member_affine_shapes: Option<Array3<f32>> =
+            clusters.member_affine_shapes.as_ref().map(|src| {
+                let mut out = Array3::zeros((n_out_members, 2, 2));
+                for (k, &m) in kept_members.iter().enumerate() {
+                    for r in 0..2 {
+                        for c in 0..2 {
+                            out[[k, r, c]] = src[[m as usize, r, c]];
+                        }
                     }
                 }
-            }
+                out
+            });
+
+        let out_cluster_patches = cp.map(|cp| {
             let gather_f32 = |src: &Array1<f32>| -> Array1<f32> {
                 Array1::from_iter(kept_members.iter().map(|&m| src[m as usize]))
             };
@@ -324,7 +346,6 @@ impl MatchesData {
                 member_status: Array1::from_iter(
                     kept_members.iter().map(|&m| cp.member_status[m as usize]),
                 ),
-                member_affines: affines,
                 member_zncc: gather_f32(&cp.member_zncc),
                 member_shift_px: gather_f32(&cp.member_shift_px),
                 member_consistency_residual: gather_f32(&cp.member_consistency_residual),
@@ -426,11 +447,34 @@ impl MatchesData {
                 cluster_starts: Array1::from_vec(out_starts),
                 member_images: Array1::from_vec(out_member_images),
                 member_features: Array1::from_vec(out_member_features),
+                member_positions: out_member_positions,
+                member_affine_shapes: out_member_affine_shapes,
                 matcher_options: clusters.matcher_options.clone(),
             }),
             cluster_patches: out_cluster_patches,
             two_view_geometries: None,
         })
+    }
+
+    /// `(M, 2)` the file's per-member keypoint positions, at whatever stage
+    /// it is at: detections in a matcher output; in a cluster-patches output
+    /// the refined position for every member its cascade measured, and the
+    /// detection for the rest. `None` for a pairwise file.
+    ///
+    /// The values are never `NaN`.
+    /// [`ClusterPatchData::member_status`] — present exactly when the file is
+    /// refined — is what says which reading a row carries and which members
+    /// stand.
+    pub fn member_positions(&self) -> Option<&Array2<f32>> {
+        self.clusters.as_ref()?.member_positions.as_ref()
+    }
+
+    /// `(M, 2, 2)` the file's per-member affine shapes, at the same stage and
+    /// under the same reading as [`Self::member_positions`]. Each shape maps
+    /// the detector's canonical unit frame onto that member's image pixels,
+    /// so its column norms are the member's image-space extent.
+    pub fn member_affine_shapes(&self) -> Option<&Array3<f32>> {
+        self.clusters.as_ref()?.member_affine_shapes.as_ref()
     }
 
     /// Per-cluster worst (maximum) finite `member_consistency_residual` over
@@ -459,38 +503,6 @@ impl MatchesData {
 }
 
 impl ClusterPatchData {
-    /// `(M, 2)` member absolute keypoint positions — the last column of
-    /// `member_affines` (`p`; the reference row's own position for reference
-    /// members; zeros where not evaluated).
-    pub fn member_positions(&self) -> Array2<f64> {
-        let m = self.member_affines.shape()[0];
-        let mut out = Array2::zeros((m, 2));
-        for k in 0..m {
-            out[[k, 0]] = self.member_affines[[k, 0, 2]];
-            out[[k, 1]] = self.member_affines[[k, 1, 2]];
-        }
-        out
-    }
-
-    /// `(M, 2, 2)` member absolute affine shapes — the leading 2×2 block of
-    /// `member_affines` (`S = W·S_ref`, mapping the detector's canonical unit
-    /// frame onto the member's image pixels; the reference feature's own
-    /// `S_ref` for reference rows; zeros where not evaluated). A consumer
-    /// wanting the reference→member warp recovers `W = S·S_ref⁻¹` through the
-    /// cluster's reference row.
-    pub fn member_shapes(&self) -> Array3<f64> {
-        let m = self.member_affines.shape()[0];
-        let mut out = Array3::zeros((m, 2, 2));
-        for k in 0..m {
-            for r in 0..2 {
-                for c in 0..2 {
-                    out[[k, r, c]] = self.member_affines[[k, r, c]];
-                }
-            }
-        }
-        out
-    }
-
     /// The refinement patch half-width in pixels, normalized across the
     /// `refine_options` key generations: `patch_size` (the full patch edge,
     /// current) divided by 2, or the legacy `radius` (already a half-width)

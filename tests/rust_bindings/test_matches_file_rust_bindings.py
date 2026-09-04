@@ -20,14 +20,21 @@ def _cluster_patch_dict() -> dict:
     Cluster 1 = members 3..5 on images (1, 2): unrefinable.
     Cluster 2 = members 5..8 on images (2, 3, 0): reference 5, kept, kept.
     """
-    affines = np.zeros((8, 2, 3), dtype=np.float64)
-    for k in range(8):
-        affines[k] = [[1.1, 0.05, 10.0 + k], [0.02, 0.9, 20.0 + k]]
-    # Reference rows: `S_ref | x_ref` -- the reference feature's own detector
-    # affine shape (non-singular, and deliberately not the identity, so a
-    # consumer still assuming version-4 reference rows shows up).
+    # The backbone's geometry -- one position and one shape per member. This
+    # fixture is a cluster-patches output, so the members the cascade measured
+    # carry its answer; members 3 and 4 were never fitted and keep the
+    # detections they came in with (distinct values, so a mix-up shows).
+    statuses = np.array([0, 1, 1, 5, 5, 0, 1, 1], dtype=np.uint8)
+    member_positions = np.array(
+        [[10.0 + k, 20.0 + k] for k in range(8)], dtype=np.float32
+    )
+    member_affine_shapes = np.array(
+        [[[1.1, 0.05], [0.02, 0.9]] for _ in range(8)], dtype=np.float32
+    )
+    # A cluster's reference member carries `S_ref`, its own detector affine
+    # shape -- non-singular and deliberately not the identity.
     for ref in (0, 5):
-        affines[ref][:, :2] = [[2.0, 0.5], [0.25, 1.5]]
+        member_affine_shapes[ref] = [[2.0, 0.5], [0.25, 1.5]]
     return {
         "metadata": {
             "version": 4,
@@ -64,11 +71,12 @@ def _cluster_patch_dict() -> dict:
         "cluster_starts": np.array([0, 3, 5, 8], dtype=np.uint32),
         "member_images": np.array([0, 1, 2, 1, 2, 2, 3, 0], dtype=np.uint32),
         "member_features": np.array([0, 1, 2, 5, 10, 11, 12, 13], dtype=np.uint32),
+        "member_positions": member_positions,
+        "member_affine_shapes": member_affine_shapes,
         "matcher_options": {"d": 8, "min_size": 2},
         "has_cluster_patches": True,
         "reference_members": np.array([0, UNREFINABLE, 5], dtype=np.uint32),
-        "member_status": np.array([0, 1, 1, 5, 5, 0, 1, 1], dtype=np.uint8),
-        "member_affines": affines,
+        "member_status": statuses,
         "member_zncc": np.array(
             [1.0, 0.9, 0.8, np.nan, np.nan, 1.0, 0.95, 0.88], dtype=np.float32
         ),
@@ -103,7 +111,6 @@ def test_accessors_match_source_arrays(matches_path):
     npt.assert_array_equal(mf.member_features, src["member_features"])
     npt.assert_array_equal(mf.reference_members, src["reference_members"])
     npt.assert_array_equal(mf.member_status, src["member_status"])
-    npt.assert_array_equal(mf.member_affines, src["member_affines"])
     npt.assert_array_equal(mf.member_zncc, src["member_zncc"])
     npt.assert_array_equal(
         mf.member_consistency_residual, src["member_consistency_residual"]
@@ -113,17 +120,22 @@ def test_accessors_match_source_arrays(matches_path):
     assert mf.metadata["cluster_count"] == 3
     assert len(mf.content_xxh128) == 32
 
-    # Decode accessors: positions/shapes slice the affines; refine_radius
-    # halves the full patch edge; worst consistency is the per-cluster max
-    # finite residual (inf when none).
-    npt.assert_array_equal(mf.member_positions(), src["member_affines"][:, :, 2])
-    npt.assert_array_equal(mf.member_shapes(), src["member_affines"][:, :, :2])
+    # The geometry accessors read the backbone, at its stored float32; every
+    # row carries a real value, and member_status says what it means.
+    npt.assert_array_equal(mf.member_positions(), src["member_positions"])
+    npt.assert_array_equal(mf.member_affine_shapes(), src["member_affine_shapes"])
+    assert mf.member_positions().dtype == np.float32
+    assert mf.member_affine_shapes().dtype == np.float32
+    assert np.isfinite(mf.member_positions()).all()
 
-    # The shapes are ABSOLUTE (version 5); the reference->member warp comes
-    # back by inverting the cluster's own reference row.
-    s_ref = mf.member_shapes()[int(mf.reference_members[0])]
-    w = mf.member_shapes()[1] @ np.linalg.inv(s_ref)
-    npt.assert_allclose(w @ s_ref, mf.member_shapes()[1], atol=1e-12)
+    # The shapes are ABSOLUTE; the reference->member warp comes back by
+    # inverting the cluster's own reference member's.
+    shapes = np.asarray(mf.member_affine_shapes(), dtype=np.float64)
+    s_ref = shapes[int(mf.reference_members[0])]
+    w = shapes[1] @ np.linalg.inv(s_ref)
+    npt.assert_allclose(w @ s_ref, shapes[1], atol=1e-12)
+    # refine_radius halves the full patch edge; worst consistency is the
+    # per-cluster max finite residual (inf when none).
     assert mf.refine_radius == 6.0
     npt.assert_array_equal(
         mf.cluster_worst_consistency(),
@@ -158,7 +170,8 @@ def test_select_clusters_restriction_and_save(matches_path, tmp_path):
     assert valid, errors
     reread = MatchesFile(out)
     npt.assert_array_equal(reread.cluster_starts, sel.cluster_starts)
-    npt.assert_array_equal(reread.member_affines, sel.member_affines)
+    npt.assert_array_equal(reread.member_positions(), sel.member_positions())
+    npt.assert_array_equal(reread.member_affine_shapes(), sel.member_affine_shapes())
     npt.assert_array_equal(reread.reference_members, sel.reference_members)
 
 

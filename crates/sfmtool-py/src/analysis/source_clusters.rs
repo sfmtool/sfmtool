@@ -4,7 +4,10 @@
 //! Python bindings for the source-cluster join: which clusters of a selection a
 //! member's admission never held, banded by feature radius.
 
-use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3, PyUntypedArrayMethods};
+use numpy::{
+    PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -31,7 +34,8 @@ use sfmtool_core::analysis::source_clusters::{
 ///     cluster_starts: (n_cluster + 1,) uint32 CSR boundaries.
 ///     member_images: (n_member,) uint32 image index per selection row.
 ///     member_features: (n_member,) uint32 feature index per selection row.
-///     member_affines: (n_member, 2, 3) float64 absolute affines.
+///     member_positions: (n_member, 2) float64 absolute keypoint positions.
+///     member_affine_shapes: (n_member, 2, 2) float64 absolute affine shapes.
 ///     refine_radius: The radius the shapes are expressed against.
 ///     n_images: How many images the selection's table names.
 ///     obs_image: (n_obs,) uint32 image index per member observation.
@@ -54,7 +58,8 @@ use sfmtool_core::analysis::source_clusters::{
     cluster_starts,
     member_images,
     member_features,
-    member_affines,
+    member_positions,
+    member_affine_shapes,
     refine_radius,
     n_images,
     obs_image,
@@ -68,7 +73,8 @@ pub fn source_clusters<'py>(
     cluster_starts: PyReadonlyArray1<'py, u32>,
     member_images: PyReadonlyArray1<'py, u32>,
     member_features: PyReadonlyArray1<'py, u32>,
-    member_affines: PyReadonlyArray3<'py, f64>,
+    member_positions: PyReadonlyArray2<'py, f64>,
+    member_affine_shapes: PyReadonlyArray3<'py, f64>,
     refine_radius: f64,
     n_images: usize,
     obs_image: PyReadonlyArray1<'py, u32>,
@@ -82,9 +88,14 @@ pub fn source_clusters<'py>(
             "member_images and member_features must share the same length",
         ));
     }
-    if member_affines.shape() != [n_member, 2, 3] {
+    if member_positions.shape() != [n_member, 2] {
         return Err(PyValueError::new_err(
-            "member_affines must have shape (n_member, 2, 3)",
+            "member_positions must have shape (n_member, 2)",
+        ));
+    }
+    if member_affine_shapes.shape() != [n_member, 2, 2] {
+        return Err(PyValueError::new_err(
+            "member_affine_shapes must have shape (n_member, 2, 2)",
         ));
     }
     if obs_image.shape()[0] != obs_feature.shape()[0] {
@@ -101,7 +112,8 @@ pub fn source_clusters<'py>(
     let starts = to_contiguous!(cluster_starts);
     let mimg = to_contiguous!(member_images);
     let mfeat = to_contiguous!(member_features);
-    let aff = to_contiguous!(member_affines);
+    let mpos = to_contiguous!(member_positions);
+    let mshp = to_contiguous!(member_affine_shapes);
     let oimg = to_contiguous!(obs_image);
     let ofeat = to_contiguous!(obs_feature);
     let fr = to_contiguous!(frames);
@@ -128,7 +140,8 @@ pub fn source_clusters<'py>(
                 cluster_starts: &starts,
                 member_images: &mimg,
                 member_features: &mfeat,
-                member_affines: &aff,
+                member_positions: &mpos,
+                member_affine_shapes: &mshp,
                 refine_radius,
                 n_images,
             },

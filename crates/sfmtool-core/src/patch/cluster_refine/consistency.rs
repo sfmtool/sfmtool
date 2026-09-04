@@ -156,11 +156,9 @@ fn sub(a: &Mat2, b: &Mat2) -> Mat2 {
 }
 
 /// Compute the per-member warp-consistency residuals for a refined cluster
-/// set (see the module docs). `member_affines` / `member_status` /
+/// set (see the module docs). `member_affine_shapes` / `member_status` /
 /// `reference_members` are the [`refine_cluster_patches`] outputs
-/// (member-parallel; `(M, 2, 3)` — only the leading 2×2 blocks enter the fit;
-/// the last column, the member's absolute refined keypoint position, is never
-/// read). The stored block is the member's ABSOLUTE affine shape
+/// (member-parallel; `(M, 2, 2)`). Each row is the member's ABSOLUTE affine shape
 /// `S = W·S_ref`, so each cluster's reference row is inverted once to recover
 /// the reference-relative warps `W = S·S_ref⁻¹` the factorization is
 /// parameterized on; a cluster whose `S_ref` is singular is skipped whole.
@@ -176,7 +174,7 @@ pub fn warp_consistency_residuals(
     member_images: &[u32],
     member_status: &[MemberStatus],
     reference_members: &[u32],
-    member_affines: ArrayView3<'_, f64>,
+    member_affine_shapes: ArrayView3<'_, f64>,
     n_images: usize,
 ) -> Vec<f32> {
     let m_total = member_status.len();
@@ -200,8 +198,14 @@ pub fn warp_consistency_residuals(
         // whole cluster out of the fit.
         let rk = ref_k as usize;
         let s_ref: Mat2 = [
-            [member_affines[[rk, 0, 0]], member_affines[[rk, 0, 1]]],
-            [member_affines[[rk, 1, 0]], member_affines[[rk, 1, 1]]],
+            [
+                member_affine_shapes[[rk, 0, 0]],
+                member_affine_shapes[[rk, 0, 1]],
+            ],
+            [
+                member_affine_shapes[[rk, 1, 0]],
+                member_affine_shapes[[rk, 1, 1]],
+            ],
         ];
         let s_ref_det = s_ref[0][0] * s_ref[1][1] - s_ref[0][1] * s_ref[1][0];
         if s_ref_det.abs() < MIN_ABS_DET || !s_ref_det.is_finite() {
@@ -214,8 +218,14 @@ pub fn warp_consistency_residuals(
                 [[1.0, 0.0], [0.0, 1.0]]
             } else if member_status[k] == MemberStatus::Kept {
                 let s: Mat2 = [
-                    [member_affines[[k, 0, 0]], member_affines[[k, 0, 1]]],
-                    [member_affines[[k, 1, 0]], member_affines[[k, 1, 1]]],
+                    [
+                        member_affine_shapes[[k, 0, 0]],
+                        member_affine_shapes[[k, 0, 1]],
+                    ],
+                    [
+                        member_affine_shapes[[k, 1, 0]],
+                        member_affine_shapes[[k, 1, 1]],
+                    ],
                 ];
                 mul2(&s, &s_ref_inv)
             } else {

@@ -314,21 +314,49 @@ def _write_clusters_matches(
     verification fails. `image_names` must be in corpus order (the order
     `member_images` indexes).
     """
+    from concurrent.futures import ThreadPoolExecutor
     from importlib.metadata import version as get_version
 
-    from .._sfmtool.io import read_sift_metadata, write_matches
+    from .._sfmtool.io import read_sift_metadata, read_sift_partial, write_matches
 
     cluster_count = len(clusters.cluster_starts) - 1
     member_count = len(clusters.member_images)
+    member_images = np.asarray(clusters.member_images)
+    member_features = np.asarray(clusters.member_features)
 
-    # Per-image feature counts as used to build the corpus: the .sift file's
-    # count capped at max_feature_count, so member_features indices line up.
-    feature_counts = np.zeros(len(sift_paths), dtype=np.uint32)
-    for i, sift_path in enumerate(sift_paths):
+    def _read_one(i: int, sift_path: Path):
+        """That image's feature count as used to build the corpus, and its
+        members' detected geometry gathered from the `.sift` rows their
+        feature indexes name."""
         n = int(read_sift_metadata(str(sift_path))["metadata"]["feature_count"])
         if max_feature_count:
             n = min(n, max_feature_count)
-        feature_counts[i] = n
+        on_image = member_images == i
+        feats = member_features[on_image]
+        if len(feats) == 0:
+            return n, on_image, None, None
+        sift = read_sift_partial(str(sift_path), int(feats.max()) + 1)
+        # Gathered, never converted: the arrays are already float32 and the
+        # backbone stores the same bits the .sift holds.
+        return n, on_image, sift["positions_xy"][feats], sift["affine_shapes"][feats]
+
+    # Decode through a thread pool (the .sift reader releases the GIL).
+    with ThreadPoolExecutor() as pool:
+        per_image = list(pool.map(_read_one, range(len(sift_paths)), sift_paths))
+
+    # Per-image feature counts as used to build the corpus: the .sift file's
+    # count capped at max_feature_count, so member_features indices line up.
+    feature_counts = np.array([n for n, _, _, _ in per_image], dtype=np.uint32)
+    # The backbone's stage geometry. A matcher output's stage is detection,
+    # so these are the .sift values the feature indexes stand for; a consumer
+    # reads a member's position and extent without opening a .sift file.
+    member_positions = np.zeros((member_count, 2), dtype=np.float32)
+    member_affine_shapes = np.zeros((member_count, 2, 2), dtype=np.float32)
+    for _, on_image, positions, affine_shapes in per_image:
+        if positions is None:
+            continue
+        member_positions[on_image] = positions
+        member_affine_shapes[on_image] = affine_shapes
 
     matching_options = dict(matcher_options)
     if max_feature_count:
@@ -337,7 +365,7 @@ def _write_clusters_matches(
     out_abs = Path(os.path.abspath(out_path))
     data = {
         "metadata": {
-            "version": 4,
+            "version": 6,
             "matching_method": "cluster",
             "matching_tool": "sfmtool",
             "matching_tool_version": get_version("sfmtool"),
@@ -368,6 +396,8 @@ def _write_clusters_matches(
         "cluster_starts": clusters.cluster_starts,
         "member_images": clusters.member_images,
         "member_features": clusters.member_features,
+        "member_positions": member_positions,
+        "member_affine_shapes": member_affine_shapes,
         "matcher_options": matching_options,
         "has_cluster_patches": False,
         "has_two_view_geometries": False,

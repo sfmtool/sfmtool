@@ -88,7 +88,8 @@ out = source_clusters(
     cluster_starts,    # (n_cluster + 1,) uint32 CSR boundaries
     member_images,     # (n_member,) uint32
     member_features,   # (n_member,) uint32
-    member_affines,    # (n_member, 2, 3) float64
+    member_positions,     # (n_member, 2) float64
+    member_affine_shapes, # (n_member, 2, 2) float64
     refine_radius,     # float
     n_images,          # int
     obs_image,         # (n_obs,) uint32, the member's own

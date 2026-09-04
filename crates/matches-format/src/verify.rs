@@ -9,7 +9,7 @@ use xxhash_rust::xxh3::Xxh3;
 
 use crate::entries;
 use crate::types::*;
-use sfmtool_archive_io::{format_hash, raw_to_f64, raw_to_u32, read_zst_entry};
+use sfmtool_archive_io::{format_hash, raw_to_f32, raw_to_u32, read_zst_entry};
 
 /// Check the backbone rule and metadata flag / summary-count / zip-entry
 /// consistency. Returns the errors found; when non-empty the caller reports
@@ -48,6 +48,32 @@ fn structure_errors(metadata: &MatchesMetadata, entry_names: &[String]) -> Vec<S
             "version {} file contains images/image_dims (introduced in version 4)",
             metadata.version
         ));
+    }
+
+    // The cluster backbone's member detections are mandatory from version 6
+    // and never stored before it.
+    for (prefix, name) in [
+        (
+            entries::clusters_member_positions_prefix(),
+            "member_positions",
+        ),
+        (
+            entries::clusters_member_affine_shapes_prefix(),
+            "member_affine_shapes",
+        ),
+    ] {
+        let present = has_prefix(prefix);
+        if metadata.has_clusters && metadata.version >= 6 && !present {
+            errors.push(format!(
+                "version 6+ cluster file is missing clusters/{name} (mandatory since version 6)"
+            ));
+        }
+        if metadata.version < 6 && present {
+            errors.push(format!(
+                "version {} file contains clusters/{name} (introduced in version 6)",
+                metadata.version
+            ));
+        }
     }
 
     if metadata.has_clusters {
@@ -387,6 +413,19 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         )?;
         clusters_hasher.update(&starts_raw);
 
+        // clusters/member_affine_shapes (version 6+ only; structure_errors
+        // gated presence)
+        let member_shapes_raw = if metadata.version >= 6 {
+            let raw = read_zst_entry(
+                &mut archive,
+                &entries::clusters_member_affine_shapes(member_count),
+            )?;
+            clusters_hasher.update(&raw);
+            Some(raw)
+        } else {
+            None
+        };
+
         // clusters/member_features
         let member_features_raw = read_zst_entry(
             &mut archive,
@@ -398,6 +437,18 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         let member_images_raw =
             read_zst_entry(&mut archive, &entries::clusters_member_images(member_count))?;
         clusters_hasher.update(&member_images_raw);
+
+        // clusters/member_positions (version 6+ only)
+        let member_positions_raw = if metadata.version >= 6 {
+            let raw = read_zst_entry(
+                &mut archive,
+                &entries::clusters_member_positions(member_count),
+            )?;
+            clusters_hasher.update(&raw);
+            Some(raw)
+        } else {
+            None
+        };
 
         // clusters/metadata.json
         let clusters_meta_raw = read_zst_entry(&mut archive, entries::clusters_metadata())?;
@@ -461,6 +512,25 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             ));
             clusters_ok = false;
         }
+        // (M, 2) and (M, 2, 2) float32: 8 and 16 bytes per member.
+        for (name, raw, expected) in [
+            ("member_positions", &member_positions_raw, member_count * 8),
+            (
+                "member_affine_shapes",
+                &member_shapes_raw,
+                member_count * 16,
+            ),
+        ] {
+            if let Some(raw) = raw {
+                if raw.len() != expected {
+                    errors.push(format!(
+                        "{name} byte length {} != expected {expected}",
+                        raw.len()
+                    ));
+                    clusters_ok = false;
+                }
+            }
+        }
 
         let starts = raw_to_u32(&starts_raw);
         let member_images = raw_to_u32(&member_images_raw);
@@ -523,13 +593,6 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
         // === Cluster patches (optional, lexicographic path order) ===
         if metadata.has_cluster_patches {
             let mut cp_hasher = Xxh3::new();
-
-            // cluster_patches/member_affines
-            let affines_raw = read_zst_entry(
-                &mut archive,
-                &entries::cluster_patches_member_affines(member_count),
-            )?;
-            cp_hasher.update(&affines_raw);
 
             // cluster_patches/member_consistency_residual
             let consistency_raw = read_zst_entry(
@@ -610,7 +673,6 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
             // === Structural validation on raw cluster-patch data ===
             let mut cp_ok = true;
             for (name, raw_len, expected) in [
-                ("member_affines", affines_raw.len(), member_count * 48),
                 (
                     "member_consistency_residual",
                     consistency_raw.len(),
@@ -665,23 +727,23 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
                             ));
                             break;
                         }
-                        // Version 5+: reference rows are `S_ref | x_ref`, the
-                        // reference feature's own detector affine shape and
-                        // position. Neither value is checkable without the
-                        // `.sift` data, but `S_ref` must be invertible — the
+                        // A cluster's reference member carries `S_ref`, its
+                        // own detector affine shape, in the backbone's shape
+                        // array. The value is not checkable without the
+                        // `.sift` data, but it must be invertible — the
                         // relative warp `W = S·S_ref⁻¹` is recovered through
-                        // it. Version ≤ 4 cluster-patch files (identity
-                        // reference rows) are already rejected by the reader;
-                        // verification leaves them untouched.
-                        if metadata.version >= 5 {
-                            let affines = raw_to_f64(&affines_raw);
-                            let base = reference as usize * 6;
-                            let det = affines[base] * affines[base + 4]
-                                - affines[base + 1] * affines[base + 3];
+                        // it. Only version 6+ files reach here with the array
+                        // present; older cluster files carry other semantics
+                        // and are refused by the reader.
+                        if let Some(raw) = &member_shapes_raw {
+                            let shapes = raw_to_f32(raw);
+                            let base = reference as usize * 4;
+                            let det = f64::from(shapes[base]) * f64::from(shapes[base + 3])
+                                - f64::from(shapes[base + 1]) * f64::from(shapes[base + 2]);
                             if !det.is_finite() || det == 0.0 {
                                 errors.push(format!(
-                                    "member_affines[{reference}] (cluster {c}'s reference row) \
-                                     has a singular leading 2x2 block (det {det})"
+                                    "member_affine_shapes[{reference}] (cluster {c}'s reference \
+                                     member) is singular (det {det})"
                                 ));
                                 break;
                             }

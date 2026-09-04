@@ -6,7 +6,7 @@ use super::*;
 use ndarray::Array3;
 
 /// `(cluster_starts, member_images, member_status, reference_members,
-/// member_affines)` — the [`warp_consistency_residuals`] inputs.
+/// member_affine_shapes)` — the [`warp_consistency_residuals`] inputs.
 type SyntheticScene = (Vec<u32>, Vec<u32>, Vec<MemberStatus>, Vec<u32>, Array3<f64>);
 
 /// Build a synthetic scene: `n_images` scaled-orthographic cameras and
@@ -42,7 +42,7 @@ fn synthetic(n_images: usize, n_clusters: usize, members_per_cluster: usize) -> 
     let mut member_images = Vec::with_capacity(m);
     let mut status = Vec::with_capacity(m);
     let mut refs = Vec::with_capacity(n_clusters);
-    let mut affines = Array3::<f64>::zeros((m, 2, 3));
+    let mut affines = Array3::<f64>::zeros((m, 2, 2));
     for c in 0..n_clusters {
         // Random tangent frame with a definite out-of-plane component.
         let t: Mat3x2 = [

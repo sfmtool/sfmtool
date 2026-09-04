@@ -126,10 +126,14 @@ The write refuses -- with the report still printed -- when:
   binding wants cluster-contiguous observation arrays
   (`cluster_indexes` nondecreasing), which is the order the selection
   handle's `cluster_starts` / `member_images` arrays already deliver.
-- Keypoint positions come from the file's `member_positions()` where the
-  patch enrichment carries them; a bare cluster backbone stores feature
-  indexes only, so the command then resolves the workspace and reads each
-  image's `.sift` once to look the positions up.
+- Keypoint positions come from the file's `member_positions()` — the backbone's
+  own array, whose content is whatever stage the file is at: the detections of
+  a matcher output, the refinement's answer in a cluster-patches one. There is
+  no other source and no fallback; a `.matches` file predating format version 6
+  is refused by the reader, naming its regeneration. The values are stored
+  float32 and widened here because the vote solves in float64. Member exclusion
+  is the default selection's job, by status — the same rule the refined path
+  has always used.
 - An explicit `--model pinhole` runs no scan, so its result carries no
   per-column block (the closed-form kernel is the whole answer); the
   report's Columns section appears only where a column actually scanned.

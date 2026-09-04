@@ -112,12 +112,13 @@ match-output-file.matches (ZIP archive)
 │   ├── metadata.json.zst                          # cluster_count, member_count, matcher options
 │   ├── cluster_starts.{C+1}.uint32.zst            # CSR offsets: cluster c owns members starts[c]..starts[c+1]
 │   ├── member_images.{K}.uint32.zst               # Index into images/names.json.zst per member
-│   └── member_features.{K}.uint32.zst             # Feature index in that image's .sift per member
+│   ├── member_features.{K}.uint32.zst             # Feature index in that image's .sift per member
+│   ├── member_positions.{K}.2.float32.zst         # Keypoint position per member, at this file's stage
+│   └── member_affine_shapes.{K}.2.2.float32.zst   # Affine shape per member, at this file's stage
 ├── cluster_patches/                               # (Optional section, requires clusters/)
 │   ├── metadata.json.zst                          # Refinement options + summary counts
 │   ├── reference_members.{C}.uint32.zst           # Global member index of each cluster's reference
 │   ├── member_status.{K}.uint8.zst                # ClusterMemberStatus enum per member
-│   ├── member_affines.{K}.2.3.float64.zst         # (2x2 A | refined absolute position p), pixel coords
 │   ├── member_consistency_residual.{K}.float32.zst # Warp-consistency residual (NaN if not fitted)
 │   ├── member_shift_px.{K}.float32.zst            # Translation drift from the SIFT seed (NaN if n/a)
 │   └── member_zncc.{K}.float32.zst                # Achieved windowed ZNCC vs reference (NaN if n/a)
@@ -154,7 +155,7 @@ always store the pairwise backbone.
 
 ```json
 {
-  "version": 4,
+  "version": 6,
   "matching_method": "sequential",
   "matching_tool": "colmap",
   "matching_tool_version": "4.02",
@@ -203,7 +204,7 @@ A cluster-bearing file replaces the pairwise summary fields with cluster counts:
 ```
 
 **Field descriptions:**
-- `version`: Format version number. `1` through `4` (see
+- `version`: Format version number. `1` through `6` (see
   [Versioning and Migration](#versioning-and-migration))
 - `matching_method`: Type of matching used to produce these matches
   - `"exhaustive"`: Exhaustive pairwise matching
@@ -409,9 +410,9 @@ backbone: raw feature correspondences grouped per image pair.
 
 Present exactly when `has_clusters` is true. Stores the cluster matcher's primary
 artifact **in place of** the `image_pairs/` section: groups of SIFT features across
-images that are likely co-observations of one surface point, in CSR layout (identical
-to the in-memory `ClusterSet`). Cluster `c` owns members
-`cluster_starts[c]..cluster_starts[c+1]` of the member-parallel arrays.
+images that are likely co-observations of one surface point, in CSR layout. Cluster
+`c` owns members `cluster_starts[c]..cluster_starts[c+1]` of the member-parallel
+arrays, which name each member's image and feature index and state its geometry.
 
 **Pairs are a derived view.** The canonical expansion is `clusters_to_pair_matches`
 (every within-cluster cross-image member pair, grouped and sorted per the
@@ -470,14 +471,100 @@ rationale.
 - Feature index in that image's `.sift` file per member
 - **Constraint**: `member_features[k] < feature_counts[member_images[k]]`
 
+#### Member geometry: one position, one shape, and the file's stage
+
+A cluster file holds exactly **one** keypoint position and **one** affine
+shape per member, in the two arrays below. They are mandatory: every version 6
+cluster file carries them, and a cluster file below version 6 is refused (see
+[Versioning and Migration](#versioning-and-migration)). What they *mean* is the
+stage the file is at:
+
+- A **matcher output** (`sfm match --cluster`) is at the detection stage: the
+  arrays hold the detector's own values, copied verbatim — the same `float32`
+  bits, gathered rather than converted — from row `member_features[k]` of the
+  `.sift` `features/positions_xy` and `features/affine_shapes` arrays of image
+  `member_images[k]`. See the [.sift file format](sift-file-format.md).
+- A **cluster-patches output** (`sfm cluster-patches`) is at the refinement
+  stage: for every member the refinement's cascade **measured** the arrays hold
+  its answer, and for every member it never fitted they hold the detection the
+  input carried, untouched. The refinement writes a **new** file (the
+  write-once workflow), so the matcher's own file keeps its detections beside
+  it.
+
+**No value is ever `NaN`, and `member_status` is the sole authority.** Every
+row holds a real position and a real shape, so a consumer that only wants
+geometry needs no join; a consumer that wants to know which reading a row
+carries, or which members the vet admitted, reads
+`cluster_patches/member_status`. The members whose rows the cascade measured
+are those with status `reference`, `kept`, `rejected_low_zncc` or
+`rejected_shift` — the two rejected ones keep their measurement so a consumer
+can re-gate without re-running. `duplicate_image`, `not_evaluated` and
+`rejected_unlocalizable` were never fitted, and their rows are the detections.
+
+The refinement's geometry lives **only** here: `cluster_patches/` carries the
+vetting evidence — the reference structure, the statuses, the ZNCC, the shift
+and the consistency residual — and no geometry of its own, so one file never
+holds two answers for one member.
+
+**Why `float32`.** The refinement's fit precision is on the order of 0.01 px,
+while an `float32` position quantizes to 1.5e-5..6.1e-5 px on real captures,
+and the structure-free focal vote cannot distinguish the downcast from its own
+seed-to-seed spread. The refinement kernel still computes in `float64`; only
+the write boundary rounds. Detected values are never rounded at all — they are
+`float32` in the `.sift` file and are copied bit-for-bit.
+
+#### `clusters/member_positions.{K}.2.float32.zst`
+
+- **Shape**: `(K, 2)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Each row is the member's `(x, y)` keypoint position in source-image pixels
+  (COLMAP pixel convention, pixel centers at `+0.5`), at this file's stage
+- Detected values are **bit-for-bit** the referenced `.sift` row: a writer
+  gathers them, it does not round-trip them through another dtype
+- A refined position is the same quantity moved: `p = detected + t` for the
+  refinement's translation, whose magnitude is
+  `cluster_patches/member_shift_px`. A cluster's reference member is refined
+  against itself, so its refined position **is** its detected one
+- **Constraint**: Never `NaN`; mandatory in every version 6 cluster file,
+  alongside `member_affine_shapes`
+
+#### `clusters/member_affine_shapes.{K}.2.2.float32.zst`
+
+- **Shape**: `(K, 2, 2)` where K = cluster_member_count
+- **Data type**: `float32` (little-endian)
+- Each member's affine shape: the map from the detector's canonical unit frame
+  onto that member's image pixels, so the member's image-space extent is the
+  matrix's column norms and its radius is `sqrt(|det|)`
+- At the detection stage this is the `.sift` `affine_shapes` row verbatim. A
+  refined shape is `S = W · S_ref`, the refined reference→member warp `W`
+  composed onto the reference member's detected shape `S_ref` — the shape the
+  refinement actually sampled with. A cluster's reference member is refined
+  against itself, so its refined shape **is** its detected shape, which is why
+  the reference→member warp is recoverable as `W = S · S_ref⁻¹` through that
+  member's row
+- Because the composition runs through `S_ref`, a refined shape is a shape in
+  the cluster's shared reference frame, not an independently re-measured
+  ellipse for that one member
+- **Constraint**: Never `NaN`; mandatory in every version 6 cluster file,
+  alongside `member_positions`
+- **Constraint**: A cluster's reference member's shape is non-singular — every
+  consumer that wants a reference-relative warp inverts it
+
 ### 6. Cluster Patches (Optional Section)
 
-Written by the cluster-patches operation into a **new** file that copies the source
-file's images and clusters sections (write-once workflow, same as adding TVGs).
+Written by the cluster-patches operation into a **new** file that carries the source
+file's images and clusters sections over (write-once workflow, same as adding TVGs).
 Requires the cluster backbone. Arrays parallel the clusters' member arrays: for each
-cluster, a reference member plus, for every other member, a photometrically refined
-absolute affine (shape and keypoint position; the reference→member warp is
-recoverable via the reference row), with vetting statuses and signals.
+cluster, which member is its photometric reference, what became of every other, and
+the signals behind those verdicts.
+
+**The refinement's geometry is not here.** It is in the backbone's
+`clusters/member_positions` and `clusters/member_affine_shapes`, which a
+cluster file carries at every stage (see
+[Member geometry](#member-geometry-one-position-one-shape-and-the-files-stage)),
+so a consumer reads a member's position and extent from one place regardless of
+the file it was handed. This section is what says which of those rows the
+refinement measured and which members stand.
 
 #### `cluster_patches/metadata.json.zst`
 
@@ -539,34 +626,6 @@ recoverable via the reference row), with vetting statuses and signals.
   re-filtering)
 - **Constraint**: Every value is a valid discriminant (`0..=6`)
 - **Constraint**: At most one member with status `0` or `1` per (cluster, image)
-
-#### `cluster_patches/member_affines.{K}.2.3.float64.zst`
-
-- **Shape**: `(K, 2, 3)` where K = cluster_member_count
-- **Data type**: `float64` (little-endian)
-- Fully absolute affine in pixel coordinates (COLMAP pixel convention): the leading
-  2×2 block `S` is the member's **absolute affine shape** — the map from the
-  detector's canonical unit frame onto the member's image pixels, `S = W·S_ref`,
-  where `W` is the photometrically refined reference→member warp and `S_ref` is the
-  reference feature's detector affine shape — and the last column stores `p`, the
-  member's **refined absolute keypoint position**. Every member is self-contained:
-  its image-space extent is `S`'s column norms and its position is `p`, with no
-  `.sift` read and no reference lookup
-- The reference→member warp stays recoverable: `W = S·S_ref⁻¹`, with `S_ref` read
-  from the cluster's reference row; the warp then reads
-  `x_member = W·(x − x_ref) + p`, with `x_ref` from the reference row's last column.
-  In a derived file whose reference member is absent (`0xFFFFFFFF`), the relative
-  warp is unrecoverable, but every kept member's absolute shape and position remain
-  valid
-- Reference rows are `S_ref | x_ref` — the reference feature's own detector affine
-  shape and absolute position; not-evaluated rows stay all-zeros (the status array,
-  not the affine, is the discriminator — some evaluated-but-rejected rows carry
-  refined values while `duplicate_image` rows that shared the reference's image stay
-  zero)
-- **Constraint**: When `reference_members[c]` is not `0xFFFFFFFF`, that member's
-  leading 2×2 block MUST be non-singular (like the last column, its value — the
-  reference feature's own detector shape — is not verifiable without the `.sift`
-  data)
 
 #### `cluster_patches/member_zncc.{K}.float32.zst`
 
@@ -787,15 +846,18 @@ the backbone — a file never carries both sets.
 2. **Minimum size**: Every cluster has ≥ 2 members
 3. **Member bounds**: `member_images[k] < image_count` and
    `member_features[k] < feature_counts[member_images[k]]`
-4. **Cluster patches parallel**: The `cluster_patches/` arrays have lengths `C`
+4. **Member geometry present**: `member_positions` `(K, 2)` and
+   `member_affine_shapes` `(K, 2, 2)` are both present, member-parallel to the
+   arrays above, and free of `NaN`
+5. **Cluster patches parallel**: The `cluster_patches/` arrays have lengths `C`
    (`reference_members`) and `K` (member arrays) matching the clusters section
-5. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
+6. **Statuses valid**: Every `member_status` value is a valid discriminant (`0..=6`);
    `reference_members[c]` is `0xFFFFFFFF` or lies in cluster `c`'s member range with
    status `0`; at most one status-`0`-or-`1` member per (cluster, image)
-6. **Reference rows non-singular**: For every refinable cluster, the reference
-   member's `member_affines` leading 2×2 block is non-singular (its value is the
-   reference feature's detector affine shape; its last column the reference
-   keypoint's own absolute position, `S_ref | x_ref`)
+7. **Reference shapes non-singular**: For every refinable cluster, the reference
+   member's `member_affine_shapes` entry is non-singular — its value is that
+   feature's own detector affine shape `S_ref`, which every reference-relative
+   warp is recovered through
 
 ### No required ordering within a pair
 
@@ -919,9 +981,19 @@ The `.sift` file may contain 23,000 features, but matching may have used only th
 
 ### Why not store features directly?
 
-Features live in `.sift` files. The `.matches` file references them by index and verifies
+Descriptors live in `.sift` files. The `.matches` file references them by index and verifies
 integrity via `sift_content_hashes`. This avoids duplication and keeps the `.matches` file
 focused on correspondences.
+
+The cluster backbone does store one thing per member beyond the index: its
+keypoint position and affine shape. That pair is a hundredth of a descriptor's
+size, and it is what nearly every downstream consumer of a cluster file
+actually wants from the `.sift` files — a member's location and extent, not
+its descriptor. Storing it turns a scattered read of every referenced `.sift`
+file into a column read, and it lets the same arrays state the refinement's
+answer once a cluster-patches pass has produced one, so consumers stop
+branching on which stage they were handed. Descriptors stay out: the matcher
+consumed them and nothing downstream re-matches from a `.matches` file.
 
 ### Why ZIP with STORE + zstd?
 
@@ -1086,40 +1158,58 @@ modifying an existing file.
 
 ## Versioning and Migration
 
-The format has four released versions (`1` through `4`). The format is versioned
+The format has six released versions (`1` through `6`). The format is versioned
 (`metadata.json` `version`) precisely so that changes like the ones below can upgrade
 on load instead of breaking old files. Writers always emit the current version;
-readers accept any version up to it.
+readers accept any version up to it, with one exception — a cluster-backbone
+file below version 6, which is refused.
 
-### Version 3 → Version 4
+### Version 5 → Version 6
 
-Version 4 makes the file self-contained for geometric consumers, with two changes:
+Version 6 gives a cluster file **one** place for its members' geometry.
+`clusters/` gains a mandatory `member_positions.{K}.2.float32` and
+`member_affine_shapes.{K}.2.2.float32` pair, and
+`cluster_patches/member_affines.{K}.2.3.float64` is **removed**. There is now
+exactly one keypoint position and one affine shape per member, and its content
+is the file's stage: the `.sift` detections, verbatim, in a matcher output; the
+refinement's own answer for every member its cascade measured, and the
+untouched detection for every member it never fitted, in a cluster-patches
+output. Nothing is `NaN`; `cluster_patches/member_status` is the sole authority
+on what a row means and on exclusion. See
+[Member geometry](#member-geometry-one-position-one-shape-and-the-files-stage).
 
-1. **Per-image dimensions.** The images section gains a mandatory
-   `image_dims.{N}.2.uint32` array (width, height per image, sourced from the same
-   `.sift` metadata the writers already read for hashes and feature counts).
-2. **Absolute keypoint positions in `member_affines`.** The last column of
-   `cluster_patches/member_affines` changes meaning: it stores the member's refined
-   absolute keypoint position `p = A·x_ref + t` instead of the affine translation `t`.
-   Reference rows become identity | x_ref (previously identity | 0). The translation
-   is recoverable (`t = p − A·x_ref`, with `x_ref` from the reference row), so no
-   information is lost; consumers now read refined positions without opening the
-   referenced `.sift` files. No member is added, removed, or renamed by this change —
-   it is purely semantic.
+The change is what removes the duplication two earlier versions had grown: a
+consumer no longer branches on whether the enrichment is present, no longer
+opens the `.sift` files the feature indexes name, and can no longer be handed
+two answers for one member. It also halves the geometry's storage, which the
+`float32` note in that section explains. A pairwise file's entries are
+unchanged — only its metadata `version` moves.
 
-**Version ≤ 3 files load with one exception.** They never stored `image_dims`, so
-readers expose no dimensions for them (in-memory `image_dims` is absent/None); all
-other data loads with unchanged semantics. The exception is a version ≤ 3 file that
-carries a `cluster_patches/` section: its `member_affines` last column holds `t`,
-which cannot be converted to the absolute-position semantics on load without the
-referenced `.sift` keypoint positions, so readers **reject** such files with guidance
-to regenerate the enrichment (`sfm cluster-patches`) from the cluster backbone file —
-which itself still loads fine. Integrity verification (`verify_matches`) remains
-version-aware and continues to pass structurally sound version ≤ 3 files, including
-cluster-patch ones (hashes cover the stored bytes). Only cluster-patch producers and
-consumers existed at the time of the bump and cluster-patch files are cheap,
-regenerable derivatives, which is why re-generation was preferred over carrying dual
-semantics forward.
+**A cluster-backbone file below version 6 is refused on read**, bare or
+enriched. Its geometry is only in the referenced `.sift` files, which the
+format layer does not open, and its `member_affines` carries semantics the
+format no longer has, so there is nothing to upgrade from. The error names the
+migration: regenerate the backbone with `sfm match --cluster`, then re-run
+`sfm cluster-patches` if the file was enriched. Pairwise-backbone
+compatibility is untouched, and integrity verification stays version-aware —
+it requires the geometry pair at version 6+, forbids it before, and continues
+to pass structurally sound older files.
+
+### Versions 3 → 4 → 5
+
+Version 4 added the mandatory `images/image_dims.{N}.2.uint32` array and gave
+`cluster_patches/member_affines`' last column the member's absolute refined
+keypoint position; version 5 gave its leading 2×2 the member's absolute affine
+shape. Both of those affine semantics are history: version 6 removed the member
+they described, and every cluster file below version 6 is refused, so no reader
+carries them.
+
+What survives for a **pairwise** file is `image_dims`: version ≤ 3 pairwise
+files never stored it and load with no dimensions (in-memory `image_dims` is
+absent/None); everything else loads with unchanged semantics. Integrity
+verification (`verify_matches`) remains version-aware and continues to pass
+structurally sound older files of every version, cluster ones included — hashes
+cover the stored bytes.
 
 ### Version 2 → Version 3
 
@@ -1168,19 +1258,25 @@ for the invariant and the `S`/`W` conversion math.
 
 ## Version History
 
-- **Version 5**: Absolute affine shapes — the `member_affines` leading 2×2 block
-  stores the member's absolute affine shape `S = W·S_ref` (reference rows
-  `S_ref | x_ref`, previously identity | x_ref); the reference→member warp is
-  recoverable as `S·S_ref⁻¹` via the reference row. Members are self-contained for
-  extent as well as position, so size consumers stop reading `.sift` files. Version
-  ≤ 4 cluster-patch files are rejected (regenerate with `sfm cluster-patches`);
-  pairwise files load unchanged.
+- **Version 6**: One geometry per member — `clusters/` gains a mandatory
+  `member_positions` / `member_affine_shapes` pair and
+  `cluster_patches/member_affines` is removed, so a cluster file holds exactly
+  one keypoint position and one affine shape per member and its content is the
+  file's stage: the `.sift` detections verbatim in a matcher output; the
+  refinement's answer where its cascade measured, the untouched detection where
+  it did not, in a cluster-patches output. Nothing is `NaN` and
+  `member_status` is the sole authority. Cluster-backbone files below version 6
+  are refused (regenerate with `sfm match --cluster`, then `sfm cluster-patches`
+  if enriched); pairwise files are unchanged.
+- **Version 5**: Absolute affine shapes — `cluster_patches/member_affines`'
+  leading 2×2 became the member's absolute affine shape `S = W·S_ref` rather
+  than the reference-relative warp. Superseded by version 6, which removed the
+  member; the shape definition itself survives in
+  `clusters/member_affine_shapes`.
 - **Version 4**: Self-contained geometry — mandatory per-image dimensions
-  (`images/image_dims`), and `cluster_patches/member_affines` stores the member's
-  refined absolute keypoint position `p = A·x_ref + t` in its last column (reference
-  rows identity | x_ref; `t = p − A·x_ref` recoverable). Version ≤ 3 files load
-  without dims; version ≤ 3 cluster-patch files are rejected (regenerate with
-  `sfm cluster-patches`).
+  (`images/image_dims`, still current), and `cluster_patches/member_affines`'
+  last column became the member's refined absolute keypoint position rather
+  than the affine translation. Superseded by version 6 as above.
 - **Version 3**: Cluster backbone — the `clusters/` section (CSR cluster
   membership, the cluster matcher's primary artifact) becomes the alternative
   correspondence backbone to `image_pairs/` (exactly one per file), and the optional

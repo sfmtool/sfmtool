@@ -301,11 +301,13 @@ pub fn clusters_to_pair_matches(
 /// Returns:
 ///     A dict mapping 1:1 onto the ``cluster_patches/`` section:
 ///     ``reference_members`` (C,) uint32 (0xFFFFFFFF = unrefinable),
-///     ``member_status`` (M,) uint8, ``member_affines`` (M, 2, 3) float64
-///     (leading 2x2 the member's absolute affine shape ``S = W·S_ref``, last
-///     column its refined absolute keypoint position ``p``; reference rows
-///     are ``S_ref | x_ref``, and ``W = S·S_ref**-1`` recovers the
-///     reference->member warp), ``member_zncc`` (M,) float32,
+///     ``member_status`` (M,) uint8, ``member_positions`` (M, 2) float64
+///     (the member's refined absolute keypoint position ``p``),
+///     ``member_affine_shapes`` (M, 2, 2) float64 (its absolute affine shape
+///     ``S = W·S_ref``; the reference member's own row is ``S_ref``, and
+///     ``W = S·S_ref**-1`` recovers the reference->member warp). Both are
+///     all-zero for a member the cascade never fitted -- ``member_status``
+///     says which. ``member_zncc`` (M,) float32,
 ///     ``member_shift_px`` (M,) float32, ``member_consistency_residual``
 ///     (M,) float32 — the member's relative misfit against a joint
 ///     weak-perspective factorization of all cluster warps (lower = more
@@ -438,7 +440,7 @@ pub fn refine_cluster_patches<'py>(
             &m_images,
             &result.member_status,
             &result.reference_members,
-            result.member_affines.view(),
+            result.member_affine_shapes.view(),
             n_images,
         );
         (result, consistency)
@@ -451,7 +453,11 @@ pub fn refine_cluster_patches<'py>(
     )?;
     let status_u8: Vec<u8> = result.member_status.iter().map(|&s| s as u8).collect();
     dict.set_item("member_status", status_u8.into_pyarray(py))?;
-    dict.set_item("member_affines", result.member_affines.into_pyarray(py))?;
+    dict.set_item("member_positions", result.member_positions.into_pyarray(py))?;
+    dict.set_item(
+        "member_affine_shapes",
+        result.member_affine_shapes.into_pyarray(py),
+    )?;
     dict.set_item("member_zncc", result.member_zncc.into_pyarray(py))?;
     dict.set_item("member_shift_px", result.member_shift_px.into_pyarray(py))?;
     dict.set_item("member_consistency_residual", consistency.into_pyarray(py))?;

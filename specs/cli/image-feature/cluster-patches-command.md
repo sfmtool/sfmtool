@@ -58,26 +58,35 @@ photometrically yet cannot pin a 2D position.
    original clusters file instead). Reject when the output path exists.
 2. **Locate inputs.** Resolve the workspace directory from the file's
    workspace reference (relative path first, then absolute, then an ancestor
-   search — each candidate must hold `.sfm-workspace.json`). Locate each
-   image's `.sift` as
-   `{workspace}/{image_parent}/{feature_prefix_dir}/{basename}.sift`, verify
-   the `sift_content_hashes`, and read `positions_xy` / `affine_shapes`
-   capped at `feature_counts[i]` (the count used during matching, so member
-   feature indices line up).
-3. **Refine.** Load the images with cv2 (color) and the `.sift` geometry in
-   images-section order — decoded through a thread pool (cv2 releases the
-   GIL; the embed-patches pattern), results collected in submission order —
+   search — each candidate must hold `.sfm-workspace.json`), and read the
+   images from there. The seed geometry is the input's own: an accepted input
+   is a matcher output, so its `clusters/member_positions` and
+   `clusters/member_affine_shapes` are the members' detections
+   ([`matches-file-format.md`](../../formats/matches-file-format.md), Member
+   geometry). No `.sift` file is opened. The kernel wants per-image feature
+   arrays and reads only the rows its members name, so the member values are
+   scattered back to those rows, sized by `feature_counts[i]` — which presents
+   them exactly as a `.sift` read would.
+3. **Refine.** Load the images with cv2 (color) — decoded through a thread
+   pool (cv2 releases the GIL; the embed-patches pattern), results collected
+   in submission order — present the seed geometry from step 2 in
+   images-section order,
    and call `_sfmtool.matching.refine_cluster_patches` (the
    `patch::cluster_refine` kernel — per-member localizability gate,
    reference selection by largest SIFT scale, Gaussian-windowed-ZNCC shift →
    similarity → affine Nelder-Mead cascade seeded from the SIFT affine
    shapes, vetting, one kept member per image), with a `ProgressCounter`
    poller reporting per-cluster progress.
-4. **Write.** A new `.matches` file: images + clusters sections copied
-   verbatim (with `image_dims` populated from the hash-verified `.sift`
-   metadata rather than the input file, so a version-3 cluster backbone —
-   which stored no dims — still enriches into a self-contained version-4
-   file), `cluster_patches/` from the kernel output — including the
+4. **Write.** A new `.matches` file at the current format version: the images
+   and clusters sections carried over, with the backbone's geometry advanced
+   to this file's stage. For every member the cascade **measured** — status
+   `reference`, `kept`, `rejected_low_zncc` or `rejected_shift` —
+   `member_positions` and `member_affine_shapes` take the kernel's absolute
+   position and absolute shape, downcast to float32; every other member keeps
+   the detection the input carried, unchanged. Nothing is NaN, and
+   `member_status` is what tells the two readings apart (the stage semantics of
+   [`matches-file-format.md`](../../formats/matches-file-format.md)'s Member
+   geometry section). `cluster_patches/` comes from the kernel output — including the
    per-member warp-consistency residual
    ([`cluster-warp-consistency.md`](../../core/patch/cluster-warp-consistency.md), a
    stored signal computed in the same kernel call, no CLI knobs) —

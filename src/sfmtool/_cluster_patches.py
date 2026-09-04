@@ -56,7 +56,7 @@ def _run_cluster_patches(
     import numpy as np
 
     from ._progress import _poll_progress
-    from ._sfmtool.io import read_matches, read_sift, read_sift_metadata, write_matches
+    from ._sfmtool.io import read_matches, write_matches
     from ._sfmtool.matching import refine_cluster_patches as _refine
 
     data = read_matches(in_path)
@@ -83,7 +83,6 @@ def _run_cluster_patches(
     ws_meta = metadata["workspace"]
     image_names = list(data["image_names"])
     workspace_dir = _resolve_workspace(in_path, ws_meta)
-    feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
     cluster_count = int(metadata["cluster_count"])
     member_count = int(metadata["cluster_member_count"])
     click.echo(f"Workspace: {workspace_dir}")
@@ -92,64 +91,56 @@ def _run_cluster_patches(
         f"members: {member_count}"
     )
 
-    # Locate each image's .sift via the images section + workspace reference,
-    # verify content hashes, and read the feature geometry (capped at the
-    # feature count used during matching, so member indices line up).
     feature_counts = data["feature_counts"]
-    sift_hashes = data["sift_content_hashes"]
+    member_images = np.asarray(data["member_images"])
+    member_features = np.asarray(data["member_features"])
+    image_dims = np.ascontiguousarray(data["image_dims"], dtype=np.uint32)
+    # The input is a matcher output (an already-enriched file is refused
+    # above), so its backbone geometry is the members' detections: the seeds
+    # the cascade starts from, already in the file. No `.sift` file is opened
+    # here at all.
+    detected_positions = np.asarray(data["member_positions"], dtype=np.float32)
+    detected_shapes = np.asarray(data["member_affine_shapes"], dtype=np.float32)
 
-    def _read_one(i: int, name: str):
+    def _read_one(name: str):
         img_path = workspace_dir / name
         img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
         if img is None:
             raise FileNotFoundError(f"Image not found or unreadable: {img_path}")
+        return np.ascontiguousarray(img)
 
-        rel = Path(name)
-        sift_path = workspace_dir / rel.parent / feature_prefix_dir / f"{rel.name}.sift"
-        if not sift_path.exists():
-            raise FileNotFoundError(f"SIFT file not found: {sift_path}")
-        sift_meta = read_sift_metadata(sift_path)
-        actual = bytes.fromhex(sift_meta["content_hash"]["content_xxh128"])
-        if actual != bytes(sift_hashes[i]):
-            raise RuntimeError(
-                f"{sift_path}: content hash differs from the .matches images "
-                "section (features re-extracted since matching?)"
-            )
-        sift = read_sift(sift_path)
-        count = int(feature_counts[i])
-        return (
-            np.ascontiguousarray(img),
-            np.ascontiguousarray(sift["positions_xy"][:count], dtype=np.float32),
-            np.ascontiguousarray(sift["affine_shapes"][:count], dtype=np.float32),
-            (
-                int(sift_meta["metadata"]["image_width"]),
-                int(sift_meta["metadata"]["image_height"]),
-            ),
-        )
-
-    click.echo("Reading images and .sift features...")
-    # Decode in a thread pool (cv2 and the .sift reader release the GIL),
-    # collecting results in submission order so the lists stay parallel to
-    # `image_names` (the embed-patches pattern).
+    click.echo("Reading images...")
+    # Decode in a thread pool (cv2 releases the GIL), collecting results in
+    # submission order so the list stays parallel to `image_names` (the
+    # embed-patches pattern).
     with ThreadPoolExecutor() as pool:
-        futures = [
-            pool.submit(_read_one, i, name) for i, name in enumerate(image_names)
-        ]
-        images, positions, affine_shapes = [], [], []
-        image_dims = np.zeros((len(image_names), 2), dtype=np.uint32)
+        futures = [pool.submit(_read_one, name) for name in image_names]
+        images = []
         try:
-            for i, future in enumerate(futures):
-                img, pos, aff, dims = future.result()
-                images.append(img)
-                positions.append(pos)
-                affine_shapes.append(aff)
-                image_dims[i] = dims
+            for future in futures:
+                images.append(future.result())
         except BaseException:
             # Fail fast: without this, the pool's __exit__ would finish
             # decoding every queued image before the error surfaces.
             for f in futures:
                 f.cancel()
             raise
+
+    # The kernel takes per-image feature arrays and reads only the rows its
+    # members name, so scattering the file's member geometry back to those
+    # rows presents it exactly as a `.sift` read would — same values, same row
+    # count, same out-of-range behaviour. Untouched rows are never read.
+    positions, affine_shapes = [], []
+    for i in range(len(image_names)):
+        count = int(feature_counts[i])
+        pos = np.zeros((count, 2), dtype=np.float32)
+        aff = np.zeros((count, 2, 2), dtype=np.float32)
+        on_image = member_images == i
+        feats = member_features[on_image]
+        pos[feats] = detected_positions[on_image]
+        aff[feats] = detected_shapes[on_image]
+        positions.append(pos)
+        affine_shapes.append(aff)
 
     click.echo(f"Refining {cluster_count} clusters...")
     with _poll_progress(click.echo, cluster_count) as counter:
@@ -179,7 +170,20 @@ def _run_cluster_patches(
     n_skip = int((statuses == 5).sum())
     n_unloc = int((statuses == 6).sum())
 
-    # New file: images + clusters sections copied verbatim, cluster_patches
+    # The output's stage is refinement, so the backbone's geometry becomes the
+    # refinement's — for the members the cascade measured. Those are exactly
+    # the reference, the kept, and the two rejected-with-a-measurement
+    # statuses; the members it never fitted (duplicate_image, not_evaluated,
+    # rejected_unlocalizable) keep the detection they came in with, so every
+    # row holds a real position and shape and member_status alone says which
+    # reading it is.
+    measured = np.isin(statuses, (0, 1, 2, 3))
+    out_positions = detected_positions.copy()
+    out_shapes = detected_shapes.copy()
+    out_positions[measured] = result["member_positions"][measured].astype(np.float32)
+    out_shapes[measured] = result["member_affine_shapes"][measured].astype(np.float32)
+
+    # New file: images + clusters sections carried over, cluster_patches
     # from the kernel output, metadata updated.
     out_meta = dict(metadata)
     out_meta["has_cluster_patches"] = True
@@ -196,19 +200,17 @@ def _run_cluster_patches(
         "feature_tool_hashes": data["feature_tool_hashes"],
         "sift_content_hashes": data["sift_content_hashes"],
         "feature_counts": data["feature_counts"],
-        # From the hash-verified .sift metadata rather than the input file,
-        # so a version-3 cluster backbone (which stored no dims) still
-        # enriches into a self-contained version-4 file.
         "image_dims": image_dims,
         "has_clusters": True,
         "cluster_starts": data["cluster_starts"],
         "member_images": data["member_images"],
         "member_features": data["member_features"],
+        "member_positions": out_positions,
+        "member_affine_shapes": out_shapes,
         "matcher_options": data["matcher_options"],
         "has_cluster_patches": True,
         "reference_members": result["reference_members"],
         "member_status": result["member_status"],
-        "member_affines": result["member_affines"],
         "member_zncc": result["member_zncc"],
         "member_shift_px": result["member_shift_px"],
         "member_consistency_residual": result["member_consistency_residual"],
