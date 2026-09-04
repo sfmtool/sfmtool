@@ -245,6 +245,15 @@ disagreement**, with nothing telling a reader which wins:
 > `image_detail/intrinsics/axes.rs:18-19,435-443`,
 > `intrinsics_detail/derived.rs:88-97` and `image_detail/intrinsics/field.rs:36`
 > quote or argue with spec wording that this pass replaced._
+>
+> _Status (2026-09-03): Done — `cluster-patch-refinement.md`'s seven blocks, the
+> last of the set, are gone with the wholesale rewrite of Top priority 3, along
+> with the two dated blocks under other labels this section counted separately
+> (`Addition (2026-07-10)`, `Revision (2026-07-11)`). The `sigma` contradiction
+> this section cites is resolved in the code's favour: the spec's only statement
+> of the window default is now `GaussianDisk { sigma: 0.5 }`, in the Parameters
+> table and in the Theory paragraph that explains the unit. Sixteen blocks in
+> eleven specs remain, listed above._
 
 **b. Imperative construction language and phase headings.** `## Prior state
 (before this change)` and `## Consumers & migration`
@@ -260,6 +269,15 @@ Phase 1/2 (`fronto-parallel-patch-cache.md:191-241`); Steps 1–9 each suffixed
 presented as live: `cluster-patch-refinement.md:567-571` says `sfm match
 --cluster` "does not yet write cluster-bearing files", but
 `tests/patch/test_cluster_patches.py:42-43` shells out to exactly that.
+
+> _Status (2026-09-03): Partially done — the two items this section pins on
+> `cluster-patch-refinement.md` are gone with its rewrite: the `New module …`
+> line at `:137` (which was also wrong about the module's file list), and the
+> settled "does not yet write cluster-bearing files" claim, whose whole §5 test
+> sketch went with it. The rewritten `Open questions` carries two genuinely
+> undecided items — the localizability threshold's resolution dependence and the
+> reference-selection policy. The other five `New module …` lines and the phase
+> headings named above are untouched._
 
 **c. Dead references.** Three cited artifacts do not exist and, per `git log`,
 never did: `scripts/exp_pinhole_bootstrap.py` (`cluster-covisibility.md:8,216`),
@@ -283,6 +301,19 @@ never did: `scripts/exp_pinhole_bootstrap.py` (`cluster-covisibility.md:8,216`),
 > `sift-to-patch-reconstruction.md:61`'s
 > `reports/exp/2026-06-21-mvs-normal-refinement.md` — `reports/exp/` is not a
 > directory in this repo._
+>
+> _Status (2026-09-03): Done for this spec — the rewrite drops both citations
+> inside `cluster-patch-refinement.md` (`scripts/exp_cluster_patch_clusters.py`
+> "the behavioral reference" at `:14`, and
+> `reports/2026-07-09-exp-pairwise-sift-warp.md` at `:10` and `:600`) together
+> with the "cross-check with the prototype" test item they made unrunnable. The
+> spec no longer refers to a prototype at all; the measured calibration those
+> citations stood in for is stated where it is used, and the design-level numbers
+> stay in `cluster-patches.md`. One more sentence of the same family went from
+> `cluster-patches.md:220` ("The experiment scripts stay as the behavioral
+> reference until the Rust kernel lands"), which named no file but pointed at the
+> same phantoms. Still open: `cluster-covisibility.md`'s
+> `scripts/exp_pinhole_bootstrap.py` and `sift-to-patch-reconstruction.md:61`._
 
 Also dangling: `specs/.../cluster-pinhole-bootstrap.md` and the symbol
 `MAX_CLUSTERS`, neither of which exists anywhere in the repo.
@@ -479,6 +510,31 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** `cluster_refine/mod.rs:4-37` (34 doc lines) re-derives the algorithm, mip-level rule and the `S = W·A_ref` convention — that one earns its place as the module entry point. `params.rs:76-95,112-119` re-derives the Performance tuning rationale duplicating spec:436-451 and **should shrink** to the pointer it already names. The CLI help text (`_commands/cluster_patches.py:38-43,71-79`) is a third statement, alongside `cluster-patches-command.md:36-52`.
 **Recommendation:** update spec — rewrite as present-tense description of what shipped: fold the seven dated blocks into the prose they correct, delete the reuse map / AVX2 plan / §3–§5 imperative bullets, refresh line refs and the format version, and fix `--patch-size` here and `--resolution` in the CLI spec. F1 proposed opening: "Cluster-patch refinement turns a `.matches` file's SIFT feature clusters into patch clusters: per cluster it picks a reference member and fits a photometrically vetted affine warp from the reference's patch onto every other member, so downstream stages read each member's absolute shape and refined position without a `.sift` lookup."
 **Unclear / incorrect / suspicious:** `:14` calls a file that is not in the repo and has no git history "the behavioral reference" — either it was never committed (delete both citations and the cross-check item) or it lived outside version control and the spec should say so. Worth a decision rather than a silent carry: `:258-263` documents that the localizability gate's `0.35` threshold is **not** resolution-invariant (1,913 → 372 rejections as resolution goes 15 → 31) while the CLI ships `--resolution` as a freely tunable knob — the gate's strength moves with an unrelated option, recorded as a known defect with no owner.
+
+> _Status (2026-09-03): Done — rewritten wholesale against the code, 616 lines to
+> 525, present tense throughout. Every inconsistency above is closed. The seven
+> dated blocks and the two under other labels are gone; so are the reuse map with
+> its eight stale line references, the imperative AVX2 plan (the shipped
+> fused-channel pair-load kernel is described as what it is), the §3–§5
+> construction bullets, the `New module …` line, the "Still open — derived pairs"
+> block and its wrong migration-site list, and the settled `sfm match --cluster`
+> open question. The `sigma` contradiction resolves to `0.5`, the
+> `MATCHES_FORMAT_VERSION` bullet is replaced by a pointer to
+> `matches-file-format.md`, which owns the sections and the three version gates
+> normatively, and the §3 return keys now list `member_consistency_residual`. The
+> `--patch-size 12.0` and `--resolution 25` corrections of commit 7ddbe97 are
+> preserved in a Parameters table checked against `params.rs` and the Click
+> defaults, which also publishes three constants no spec carried before
+> (`MIN_ABS_DET`, `SIGMA_CLAMP`, `LOCALIZABILITY_SIGMA_NOISE`) and the four
+> cascade-tuning knobs the binding does not expose. The finding's two asks that
+> were not mechanical are answered: F1's proposed opening is the new first
+> paragraph in substance, and the spec now carries a worked Rust call and a worked
+> Python call. The `0.35` resolution-dependence, which the finding wanted decided
+> rather than silently carried, is stated as an open question with its
+> dino_dog_toy numbers and the fix it implies (re-express the threshold in
+> keypoint-frame or source px), not as a defect note buried in an algorithm step.
+> `params.rs:76-95,112-119` still re-derives the tuning rationale and should still
+> shrink to the pointer it names; that is a code edit and stays open._
 
 ### specs/core/patch/member-coherence-validation.md
 **Summary:** Decides which cluster members genuinely image the same surface patch. Substantively accurate — every default, constant, verdict branch, tie-break and Python dict key checks out, and it is the **only sampled spec with no work-order residue at all**. Its problems are structural: a 683-line derivation with the API at 71%, no example call, and ~120 lines of its argument re-derived in `decide.rs`.
@@ -688,6 +744,26 @@ a new document.
 > "Status": ten more blocks of the identical shape are spelled `Deviation`,
 > `Note` or `Correction`, including the `focal-vote.md` one this finding
 > itself cites. The full inventory and what is left is under §5a below._
+>
+> _Status (2026-09-03): Done — `cluster-patch-refinement.md` is rewritten
+> wholesale from the code, 616 lines to 525, and the seven blocks this finding
+> held back are gone with it (plus two more of the same shape under `Addition`
+> and `Revision` labels). The rewrite follows `TEMPLATE.md`'s shape — purpose,
+> Rust API with its rationale and a worked call, theory, implementation notes
+> that carry only what the code cannot — and is present tense throughout: no
+> status blocks, no `New module`, no phase or migration language, no dead
+> citations, and a Parameters table checked against `params.rs` and the Click
+> defaults. Content the sibling specs own is now a pointer rather than a copy:
+> the `.matches` sections and their version gates to `matches-file-format.md`,
+> the motivation and warp-family calibration to `cluster-patches.md`, the
+> localizability score to `patch-localizability.md`, the residual to
+> `cluster-warp-consistency.md`. Two cross-references that the rewrite would
+> otherwise have broken are fixed in place —
+> `cluster-patches-command.md`'s "§1" citation and `cluster-patches.md`'s
+> description of what this spec contains — and the `specs/core/patch/README.md`
+> row now says what the document is. Per-spec detail under
+> `specs/core/patch/cluster-patch-refinement.md` above; §5a, §5b and §5c carry
+> the items this closes for them._
 
 4. **Decide the `**Status:**`-line convention and write it into `specs/TEMPLATE.md`
    either way.** 61% of the corpus opens with one, in every case before any
