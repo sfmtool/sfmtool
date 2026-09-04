@@ -22,7 +22,11 @@ instead. What survives any rearrangement is small, because it is about the reade
 rather than the subject:
 
 - **The plain-English opening** (see Purpose). Every subject can be introduced to
-  someone who has not read the other specs. No exceptions to this one.
+  someone who has not read the other specs. No exceptions to this one. It is also
+  a rule about position: **the opening paragraph is the first prose in the file**,
+  under the title and nothing else. No status line, no dated errata block, no
+  inventory of paths, no "see also" — those either belong further down or do not
+  belong at all.
 - **Present tense, describing what the code is.** Not a work order: no "new
   module X", no "declare `pub mod` in lib.rs", no "phase 2", no "prior state
   (before this change)". If a section only makes sense to someone who was in the
@@ -30,9 +34,39 @@ rather than the subject:
   Write the proposal in `specs/drafts/` and convert it before filing.
 - **A caller can find out what to call.** Whether that is a Rust API section, an
   entry table, or a set of flags depends on what the thing is — but it should not
-  be buried under a derivation.
+  be buried under a derivation. **It is also where the code pointer lives** — see
+  Rust API below.
 - **Implementation notes carry what the code cannot.** Never a transcription of
   the body.
+
+**Drafts and standing specs.** Location encodes lifecycle, so nothing in the
+document has to.
+
+- **A standing spec is anything under `specs/` outside `specs/drafts/`.** It
+  describes what exists, in the present tense, and **carries no `**Status:**`
+  line.** Being filed is the status.
+- **`specs/drafts/` holds proposals.** A draft opens with `**Status:** Draft`
+  followed by what is decided and what is not; it may use future tense and
+  construction language freely, because it is addressed to the people deciding.
+- **Filing a draft** means three edits: delete the Status line, move the purpose
+  paragraph to the top, and convert the whole document to the present tense.
+  Then move the file and add its row to the area's `README.md`.
+
+**Partial implementation is expressed by an amendment draft, never by an inline
+marker.** Do not annotate a standing spec with "not yet implemented", a phase
+list, or a dated note. Say in the present tense what the code does not do, and
+link the proposal that would change that:
+
+  Non-goals: GPU evaluation. The kernels are CPU-only; a GPU path is proposed in
+  [foo-gpu-amendment.md](../../drafts/foo-gpu-amendment.md).
+
+The draft opens by naming and linking the spec it amends. When it ships, its
+content folds into the standing spec and the draft is deleted.
+
+**A non-goal is not a draft.** A non-goal is a fact — one present-tense sentence,
+no draft, no link ("does not support rolling shutter; use X"). A draft is an
+intention someone means to build. Do not raise a non-goal into an amendment draft
+just to have somewhere to point.
 -->
 
 ## Purpose
@@ -70,6 +104,16 @@ obvious alternative is not good enough, who the consumers are.
 **Near the top, and before the theory.** The public interface as a caller sees
 it: the types, the signatures, the errors. Elide bodies — `;` on a function is
 right, `{ /* … */ }` is noise.
+
+**This section leads with the code pointer** — one sentence saying where the
+thing lives and what it is bound as, e.g. "The kernels live in
+[foo.rs](../../../crates/sfmtool-core/src/geometry/foo.rs), bound as
+`sfmtool._sfmtool.geometry.foo`." Not a stamp at the top of the file: a reader
+who has not decided to call anything does not need it yet. Write every repo path
+as a relative Markdown link, so it is clickable on GitHub and in an editor and so
+a moved file shows up as a broken link; binding names are code spans, not links,
+because they are not files. A CLI or GUI spec does the same in the section that
+names its command or module.
 
 Then the part that earns the section: **why it is shaped this way.** Why these
 are the arguments; why the output is one struct and not three returns; why the
@@ -145,7 +189,12 @@ degenerate inputs, the determinism guarantees. Name the test module.
 ## Non-goals
 
 <!--
-What this deliberately does not do, and the nearest thing that does.
+What this deliberately does not do, and the nearest thing that does. One
+present-tense sentence each.
+
+This is also where an unbuilt part goes: state it as a fact and link the
+amendment draft that proposes it (see "Drafts and standing specs" above). A
+non-goal nobody intends to build needs no draft and no link.
 -->
 
 ## Open questions

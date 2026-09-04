@@ -14,6 +14,13 @@ paragraph reads for someone who has read no other spec, a caller can find out
 what to call without wading through a derivation, and a spec describes what the
 code *is* — write a change proposal in `drafts/` and convert it before filing.
 
+Location encodes lifecycle, so a standing spec carries no `**Status:**` line: a
+draft in `drafts/` opens with `**Status:** Draft`, and everything else opens with
+its purpose paragraph. A part that is specified but unbuilt is a present-tense
+sentence in the standing spec plus an amendment draft it links, never an inline
+marker. The pointer at the implementing code lives in the spec's interface
+section, with repo paths written as relative Markdown links.
+
 | Directory | Describes | Organized by |
 |-----------|-----------|--------------|
 | [cli/](cli/README.md) | Every `sfm` subcommand — flags, behaviour, output | the `--help` category the command is registered under in `cli.py` |

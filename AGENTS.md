@@ -104,7 +104,13 @@ deleting the lines.
   without wading through a derivation, and that a spec describes what the code
   **is**, in the present tense — write a change proposal in `specs/drafts/` and
   convert it before filing, so no standing spec says "new module X" or "prior
-  state (before this change)". The `audit-specs` skill audits a sample of specs
+  state (before this change)". Location encodes lifecycle, so a standing spec
+  carries no `**Status:**` line and opens with its purpose paragraph; only a
+  draft in `specs/drafts/` opens with `**Status:** Draft`. A specified-but-unbuilt
+  part is a present-tense sentence in the standing spec plus an amendment draft it
+  links both ways, never an inline "not yet implemented" marker. The pointer at
+  the implementing code belongs in the spec's interface section, with repo paths
+  written as relative Markdown links. The `audit-specs` skill audits a sample of specs
   against the template on each run, for those invariants rather than for
   conformance. Subdirs mirror the code they describe:
   - `cli/` — one file per command, grouped by the `--help` category the command
