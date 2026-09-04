@@ -311,5 +311,3 @@ Known limitations (inherited or minor, not yet addressed):
   infinity patch straddling the camera's side plane (only reachable at large
   `patch_size_log2`) can smear toward screen center for a frame instead of
   clipping cleanly. A per-instance cull on the center direction would fix it.
-
----
