@@ -196,6 +196,39 @@ non-negotiable, and it is the cheapest fix in the report — the purpose sentenc
 usually already exists a few lines below. Replacement first sentences drafted by
 the deep pass are in the per-spec sections.
 
+> _Status (2026-09-03): Done — every lifecycle stamp outside `specs/drafts/` is
+> gone, from 75 specs. The convention chosen is not the one Top priority 4
+> proposed: rather than sanctioning Status as a metadata line below the opening,
+> **a standing spec carries no Status line at all** — location encodes lifecycle,
+> and `specs/TEMPLATE.md` now says so. See the Top priority 4 annotation for the
+> rule and the wording._
+>
+> _Three corrections to this section's own numbers, all in the direction of "more
+> than it says". First, the count. §4 says 74 of 121; the pattern it grepped —
+> `**Status:**` at column 0 — matches **52** files today, and 121 specs is now
+> 138. The gap is spelling: the same stamp is also written `**Status**:` (colon
+> outside the bold), `**Status: implemented** in …` (label inside the bold),
+> `*Status: Implemented*`, `_Status: **implemented** — …_`, and as a `> Status:`
+> blockquote. Counting all of them: **75 specs**, and three of those carry a
+> second or third stamp mid-file (`bundle-adjustment.md` ×2, `focal-vote.md`,
+> `patch-keypoint-localization.md`, `patch-view-selection.md`,
+> `sift-to-patch-reconstruction.md` ×3). A future grep should be
+> `-iE '^[_*>| ]*[_*]*status[:*]'`, not `^\*\*Status:\*\*`._
+>
+> _Second, "in all 74 that line is the first prose in the document" is right, and
+> understates the damage in a subset: in eleven specs the stamp was the **only**
+> statement of what the thing is, so deleting it left nothing and a purpose
+> paragraph had to be written from scratch. They are listed in the Top priority 4
+> annotation._
+>
+> _Third, the section reads the Status line as pure overhead. About two-thirds of
+> them carried something worth keeping — the pointer at the implementing code,
+> and in a handful of cases a real behavioural fact (`epipolar-curves.md`'s
+> per-feature anchor depth, `bundle-adjustment.md`'s "one staged loop, not two",
+> `viewport-hud.md`'s **File** being the only menu). Those are kept, in the
+> section where they belong. Four stamps also pointed at code that had moved or
+> never existed; see the Top priority 4 annotation for the list._
+
 ### 5. Work-order residue
 
 Two patterns, both explicitly prohibited by `TEMPLATE.md` ("Present tense,
@@ -430,6 +463,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — purpose opening, a real Rust interface block (including `d_span` and the `(d, converged)` return) plus one call through `CameraIntrinsics`, fix the `basis_at` attribution, present-tense the testing section.
 **Unclear / incorrect / suspicious:** The B-spline basis is shared machinery for two models but specced under one, with `sfmtool-pinhole-kernels.md:24-30` deferring here — the code has the cleaner split (`bspline.rs` is its own module), so that section wants its own spec. `distortion.rs:952` wraps an already-`Option` return in `Some(...)`, giving `Option<Option<_>>` unwrapped at `:966`; correct, but not what "None from both, together" prepares a reader for.
 > _Status (2026-09-03): Partially done — `bspline.rs`'s module header is 30 lines to 24, and `bspline_is_monotone`'s doc no longer re-derives the two-stage argument, commit c11c885. The re-derivation was not the only problem there: the file — and nothing else in `camera/distortion/` — carried **no** spec pointer at all, which is the likeliest reason its header grew into a standalone derivation. It now names this spec for the basis and the monotonicity invariant, and `formats/sfmtool-camera-models.md` for why the gauge is anchored at the centre. `kernels.rs:1088-1330` and `intrinsics.rs:170-215` are untouched, as is every finding against the spec itself._
+>
+> _Status (2026-09-03): Done for F1 — the `## Summary` opening is this section's proposed sentence, verbatim, and the six-line file inventory that was the Status line is now the lead of `## Basis evaluation` as relative links, commit 1883d2d. The sentence that followed leaned on a link to parse ("The computation behind the `SFMTOOL_FISHEYE` camera model defined in …"); it now names the model spec as where the parameterization lives and says this one is the computation. F2 and the six inconsistencies remain open._
 
 ### specs/core/features/cluster-covisibility.md
 **Summary:** The shared-cluster count matrix `W[i,j]`, its acceptance mask, dense storage bound, seed-group iterator and ranking. The algorithm, complexity and determinism content is accurate and earns its place; the scaffolding around it is residue from the promotion-from-experiments change it was written for.
@@ -447,6 +482,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — purpose opening, delete the three dead references, correct `from_arrays` and the `counts` error claim, add `next_seed_group` and one example call.
 **Unclear / incorrect / suspicious:** The Complexity section's empirical numbers ("mean span ≈ 3.3 across three campaign datasets") came from the deleted `exp_pinhole_bootstrap.py` and are unreproducible. Keep the bound, drop the constants.
 
+> _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, commit 1883d2d. The Status line went with it, and with it the "Promotes the image-grouping-by-shared-clusters machinery from the pinhole bootstrap experiments" framing and its two dead citations (`scripts/exp_pinhole_bootstrap.py`, `cluster-pinhole-bootstrap.md`). The two cross-references it carried are worth keeping and are now a **See also** paragraph at the end of the opening section rather than the first thing a reader meets. The code pointer is the lead of `## Rust API`, as links. Still open: the third dead citation in `## Validation`, the `cov.counts` error claim, the missing `next_seed_group`, and the absent example call._
+
 ### specs/core/features/covisibility-selection.md
 **Summary:** Three queries layered on the same type — sampled pair displacement, banded thinning, and reach. Correct against the code, but it cannot be read cold and its only signature block is wrong.
 **Implementing code:** `features/cluster_match/covisibility/selection.rs` (`sweep_order :19`, `thin_in_order :42`, `thin :70`, `thin_to :78`, `reach :127`); sampling pass `covisibility.rs:248-305`; bindings `py:222,239,341,358,372`.
@@ -461,6 +498,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** The `[tau/8, tau)` band rationale appears three times (spec:52-56, `selection.rs:64-69`, `py:333-337`); the sampled pass four times (spec:42-44, `:199-204`, `:270-272`, `py:118-123`). Both docstrings should shrink to signature-level facts plus the pointer.
 **Recommendation:** discuss — this spec and `cluster-covisibility.md` describe one module's queries across two documents, and this one cannot stand alone. Either fold it in as a "Selection queries" section, or give it a self-contained opening and a real Rust interface block.
 **Unclear / incorrect / suspicious:** Both spec (`:63`) and code (`selection.rs:74-77`) assert the kept count grows monotonically with `tau`, and `thin_to`'s binary search depends on it — but both band edges move with `tau` (`selection.rs:56`), so it is not obvious and may not hold. The code hedges by tracking the closest-so-far candidate across all 25 iterations rather than trusting the bisection, which suggests the author did not fully believe it either. Worth verifying or restating as a heuristic.
+
+> _Status (2026-09-03): Done for F1 — both halves. The opening no longer rests on `ClusterCovisibility`, a symbol from another spec: the Status line is gone and `## Purpose` opens with this section's proposed sentence, verbatim. The paragraph that described the world before the change ("three selection primitives that today exist only as per-caller array code") is gone with it, keeping the true half — all three are order-free and deterministic given a seed. The code pointer is the lead of `## Construction`, as links. Commit 1883d2d. F2 — no `rust` interface block — and the four factual findings remain open._
 
 ### specs/core/geometry/absolute-pose.md
 **Summary:** P3P (Lambda Twist) plus a LO-RANSAC estimator and a trimmed pose-only refiner. Accurate on the algorithm, option semantics and every binding default; three concrete claims have drifted and the interface sections are transcriptions.
@@ -477,6 +516,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
     > _Status (2026-09-03): Partially done — the two 2026-07-14 `Deviation` blocks, which §5a's grep missed, are folded and deleted. `p3p_solve`'s published signature is the real `-> Vec<(UnitQuaternion<f64>, Vector3<f64>)>`, with the reason kept in the "pure function" paragraph: a plain `Vec` reserved once for four poses, because the workspace carries no `arrayvec` dependency. The Kabsch degeneracy paragraph now says the collinearity test reads the **second** singular value against the first (`σ₁ < KABSCH_RANK_EPS · σ₀`, `1e-9`), not the third — three points are always coplanar, so the third vanishes for every triple and its direction is fixed by the determinant correction. The section's other findings are untouched. Two follow-ons: `absolute_pose.rs:28-32`'s module-doc deviation note now contradicts the spec it cites, and `absolute_pose.rs:47-50` documents `KABSCH_RANK_EPS` as the "smallest" singular value where the code (correctly) uses the second — the in-body comment at `:284-288` has it right._
 **Unclear / incorrect / suspicious:** `absolute_pose.rs:505-506`'s comment reads "Keep the refined pose only if it did not shrink the consensus", but the branch it sits in is taken on `new_count <= count` and *discards* the refit — the comment describes behaviour the code does not have (the sibling `local_optimize_f` comment is correct). F1: purpose is stranded at line 8; proposed opening — "Registers one camera against known 3D structure: given image bearings paired with world points, most of which may be wrong matches, recover the camera's rigid pose."
 > _Status (2026-09-03): Done for the "Third copies" item — `absolute_pose.rs:4-32` is 29 lines to 17, keeping the −Z bearing convention, the world-to-camera pose convention and the bit-stability contract, commit c11c885. The "Deviation from the spec (2026-07-14)" note inside it, whose premise the spec no longer holds, is now the plain rationale it always was: a plain `Vec` reserved once for four poses, because the workspace carries no `arrayvec` dependency. The follow-on this section's 2026-09-03 annotation named is fixed too — `KABSCH_RANK_EPS`'s doc said "smallest" singular value where the code (correctly) tests the second against the first, commit 7d4d3a4. `pose_refine.rs:6-19`, the spec's transcribed declarations, and the `local_optimize` comment at `:505-506` this paragraph flags are untouched._
+>
+> _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, commit 1883d2d. Both Status paragraphs are gone, and the pointer they carried (`absolute_pose.rs` and `pose_refine.rs`, with the three binding names) is the lead of `## The minimal solver` — chosen over `## Bindings`, which sits 180 lines further down past the theory, on the rule that the pointer belongs where a caller first meets a signature. The five stale factual claims this section lists remain open._
 
 ### specs/core/geometry/epipolar-estimation.md
 **Summary:** 7- and 8-point fundamental solvers, Sampson gating, LO-RANSAC and the Bougnoux focal. Solver descriptions, the Sampson definition, the Bougnoux formula and every default match exactly. The failures are a false cross-reference, a contract the code does not implement, and an overtaken Non-goals list.
@@ -494,6 +535,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
     > _Status (2026-09-03): Partially done — the two 2026-07-16 `Deviation` blocks, which §5a's grep missed, are folded and deleted. "Focal length" now lists the three rejection checks in the order the code applies them: a non-finite entry or a Frobenius norm below `ZERO_F_EPS = 1e-12` **before** the rescaling, because that is what rotation-only zero-baseline motion produces and the normalized direction of such a matrix is pure round-off the `f₁² ≤ 0` sign test does not catch; then `|den| < BOUGNOUX_DEN_EPS = 1e-12`, whose value is set by the denominator's inherent near-cancellation (order `1e-8` at unit Frobenius norm); then the sign test. The Contamination sweep testing bullet states both floors and why they differ — `w⁷` sampling needs ~5×10⁵ trials for 0.999 confidence at `w = 0.2`, so the in-crate sweep floors at 0.35 and the 0.2 end runs against the release-built extension in `test_epipolar_estimation_rust_bindings.py`. The `compute_epipole` sentence, the overtaken non-goals, the `local_optimize_f` refit claim and the post-loop rescoring remain open. Follow-on: `epipolar_estimation/tests.rs:433`'s "See the spec's deviation note" now dangles and should point at Testing requirements → Contamination sweep._
 **Unclear / incorrect / suspicious:** `epipolar_estimation.rs:224-225`'s comment ("A rank-deficient design ... leaves the null direction ambiguous — reject when the largest eigenvalue is ~0") is a non sequitur papering over the missing check. F1: proposed opening — "Recovers the epipolar geometry between two images from matched pixels alone — the fundamental matrix, robust to a match set that may be mostly wrong, plus the focal length it implies when the principal points are known."
 > _Status (2026-09-03): Done for the dangling pointer — `epipolar_estimation/tests.rs:433`'s "See the spec's deviation note" now reads "See the spec's Testing requirements → Contamination sweep", which is where the two floors and the reason they differ ended up, commit 7d4d3a4. `epipolar_estimation.rs:4-26`'s re-derivation was not in Top priority 5's eight-block list and is untouched, as are the spec findings still open above._
+>
+> _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, followed by the old opening's precise statement as a "Formally: …" clause, commit 1883d2d. Deleting the Status block would have promoted the `compute_fundamental_matrix` paragraph to the top of the file, which the new convention forbids, so it moved to the end of Purpose with its path as a link. The code pointer leads `## The minimal solver (7-point)`. The `compute_epipole` sharing claim and the overtaken Non-goals list remain open._
 
 ### specs/core/geometry/focal-vote.md
 **Summary:** Estimates focal length from feature tracks before any reconstruction exists. Technically accurate — **every one of 24 documented thresholds matches the code exactly**, the cleanest constants table audited this run — but it is 487 lines of unbroken prose with zero code fences, and it never names the Rust entry points.
@@ -509,6 +552,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — rewrite "Pair tables" to the exhaustive pass and delete the deviation note; purpose opening; add one `rust` fence with `FocalVoteOptions` + a `focal_vote_with_options` call, and one Python one-liner.
 **Unclear / incorrect / suspicious:** `PairAccum`'s doc (`:425`) still says "from the sampled pass: how many clusters sampled this pair" — stale against its own field, which is a true covisibility count. `focal_vote.rs:765` hardcodes `16.0_f64.max(0.8 * n_f)` rather than naming `RATIO_MIN_F_INLIERS` / `ROTATION_DOMINATION_FRAC` — a code nit.
 > _Status (2026-09-03): Done — both code items this section names are fixed, commit 7d4d3a4. `PairAccum`'s doc (`:425`) no longer says "sampled pass": it describes the exhaustive per-cluster pass, and a count that is the pair's true shared-cluster covisibility. The in-body comment at `:647` pointed at the deviation note #351 deleted and now names the spec's "Pair tables" section, which carries the same argument. Separately the module doc `:4-43` is 40 lines to 23 (c11c885), keeping the log-focal median convention and the column and determinism contracts. `column_scan.rs:44-112`, the 72-line binding docstring, and the `16.0_f64.max(0.8 * n_f)` code nit are untouched._
+>
+> _Status (2026-09-03): Done for the openings — this section had no drafted replacement, but `## Overview` opened on the bare symbol `focal_vote`, which the template's opening rule disallows, and now reads "The focal vote estimates a shared focal length from cluster-track observations before any reconstruction exists." The top Status block is gone and the pointer (`focal_vote.rs`, `focal_vote/column_scan.rs`, `homography_estimation.rs`) leads `## Binding`. **The mid-spec `**Status:** Implemented (2026-08-08)` stamp this section flags at `:203-218` is gone too**: its validation numbers are kept as a present-tense paragraph, moved to sit after the paragraph that defines what a column is rather than before it, and "the prototype's data-derived values" becomes "the data-derived values from those captures". Commit 1883d2d. F2/F3 — still no `rust` fence, `FocalVoteOptions` still unnamed, still no example call — remain open._
 
 ### specs/core/geometry/pose-verification.md
 **Summary:** Finds cameras in a finished reconstruction whose poses are wrong and repairs them, using only 2D tracks. Substantively correct and well argued, but its two query signatures are stale, seven of nine tunables are undocumented, and its 135 lines are shadowed by a 45-line module doc.
@@ -525,6 +570,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — fold errata (1)–(5) into the body and delete the block, purpose opening, correct the `nearest`/`farthest` signatures and the `displacement.rs` path, table all twelve defaults, add one `verify_poses` call; then cut `pose_verification.rs:4-48`.
 **Unclear / incorrect / suspicious:** "Testing requirements" (`:114-127`) is phrased as requirements ("construction cost linear in observations under the span cap") and **no test asserts that linearity claim**. The focal-vote spec's parallel section is present tense and is the better model.
 > _Status (2026-09-03): Done for the "Third copies" item, this section's dominant finding — `pose_verification.rs:4-48` is 45 lines to 21, commit c11c885. What it keeps is what the spec does not: the canonical −Z frame and the world-to-camera pose convention, and — because those are what make it necessary — the `S = diag(1, −1, −1)` conjugation of Screen B's optical-frame `K⁻¹HK`. Both screens at length, both load-bearing properties and the repair acceptance rule are now the spec's alone, which states all of them after the errata folding. The 58-line binding docstring is deliberately left; nothing in it was found false._
+>
+> _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, commit 1883d2d. The 12-line Status block is gone: its dependency list is a short "builds on" clause with relative links, and its code pointer leads `## Inputs and outputs`. This section's path-drift finding needed no fix — by the time of this pass the Status line already named `covisibility/displacement.rs` correctly. The `verify_poses` signature, the missing example call and the "Testing requirements" phrasing remain open._
 
 ### specs/core/geometry/translation-averaging.md
 **Summary:** Solves camera centres from pairwise translation directions, with the constellation as the form's own null space. Spec and code landed together in d99b19c, so the physics, gauges, null-space rule, rank tolerance and reweighting all match exactly. The gaps are interface-shaped.
@@ -559,6 +606,8 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — fold both notes into the present-tense body (fixing §1's table claim and §4's gates), correct the keyword-only signature, add the pose convention and the cluster-run input contract.
 **Unclear / incorrect / suspicious:** Note (2) chains a *second* note ("see the 2026-08-11 status below"), so a reader must reconcile the body against two errata. Notes (1)–(2) are now largely reflected in the body, making the blocks more stale than the text they annotate. F1: proposed opening — "Far-field rotation initialization poses a first handful of cameras on captures whose parallax is too weak to seed any other way, by letting the distant, parallax-free correspondences fix the rotations first and the near ones supply the metric frame afterwards."
 > _Status (2026-09-03): Partially done — `rotation_init.rs:4-44` is 41 lines to 20, commit c11c885. The four Mechanism stages go to the spec, which carries them in full after the folding pass, and the doc names the four private helpers in their running order instead. **The −Z frame convention and the `S = diag(1,−1,−1)` boundary conjugation stay in the doc in full**: this section asks that they move *into* the spec, and after #351 `rotation-init.md` contains neither string, so deleting them from the code would have lost them outright. That half of the finding is still open, with `H_MAX_ERROR_PX`, the cluster-run input contract, the pose convention and the BA budget._
+>
+> _Status (2026-09-03): Done for F1 — `## Purpose` opens with this section's proposed sentence, verbatim, and the paragraph that follows keeps its two-populations argument while dropping the trailing "it succeeds precisely on captures whose windowed parallax is too weak…", which the new opening now says. The Status line and its three-item dependency list are gone; the pointer plus a short "builds on" clause leads `## Binding`. Commit 1883d2d. The −Z frame and `S = diag(1,−1,−1)` conjugation still are not in this spec, so the code doc still carries them; that half of Top priority 5 stays open._
 
 ### specs/core/patch/cluster-patch-refinement.md
 **Summary:** Turns a `.matches` file's SIFT clusters into patch clusters. All five numbered steps are genuinely shipped and the kernel, binding, CLI and every `ClusterRefineParams` default match. But the document is still shaped as a work order — the most drifted spec found this run, and the highest-churn module in the repo since the last audit.
@@ -843,6 +892,112 @@ a new document.
    paragraph, and move the purpose sentence — which usually already exists a few
    lines down — to the top. Replacement first sentences for the ten sampled
    failures are in the per-spec sections above.
+
+> _Status (2026-09-03): Done — decided the other way, and written into
+> `specs/TEMPLATE.md`, `specs/README.md` and `AGENTS.md`. **A standing spec —
+> anything under `specs/` outside `specs/drafts/` — carries no `**Status:**` line
+> at all.** Location encodes lifecycle: a draft in `specs/drafts/` opens with
+> `**Status:** Draft` and may use future tense freely; being filed *is* the
+> status, so a filed spec describes what exists, in the present tense, purpose
+> paragraph first. Filing a draft is three edits — delete the Status line, lift
+> the purpose paragraph to the top, convert to present tense — and this gives an
+> audit one mechanical check with no judgement in it: no lifecycle stamp outside
+> `specs/drafts/`._
+>
+> _Two rules go with it. **Partial implementation is an amendment draft, never an
+> inline marker**: the standing spec says in the present tense that X is not
+> implemented and links the proposal in `specs/drafts/`; the draft opens by naming
+> and linking the spec it amends; when it ships, its content folds in and the
+> draft is deleted. A **non-goal** is distinguished from a draft — one
+> present-tense sentence, no draft, no link ("does not support rolling shutter") —
+> so the corpus does not sprout amendment drafts for things nobody means to build.
+> And **the code pointer moves into the interface section**, as its lead sentence,
+> with repo paths written as relative Markdown links so a moved file shows up as a
+> broken link. Binding names stay code spans; they are not files. The template's
+> one absolute rule also gains the enforcement it lacked: the opening paragraph is
+> the first prose in the file, under the title and nothing else._
+>
+> _The sweep: **75 specs**, in commits 1883d2d (55 under `specs/core/`), 89c381d
+> (19 under `specs/cli/`, `specs/gui/`, `specs/formats/`) and bcacb91
+> (`patch-cloud.md`). Nine of the ten drafted replacement first sentences were
+> used, six verbatim: `sfmtool-fisheye-kernels.md`, `cluster-covisibility.md`,
+> `covisibility-selection.md`, `absolute-pose.md`, `epipolar-estimation.md`,
+> `pose-verification.md` and `rotation-init.md`. `focal-vote.md` had no drafted
+> sentence but its opening led with the bare symbol `focal_vote` and was rewritten;
+> `cluster-patch-refinement.md`'s was already applied by the Top priority 3
+> rewrite; `observation-coverage.md` and `keypoint-reach.md` needed none (§4
+> already acquits them)._
+>
+> _**Eleven specs needed a purpose paragraph written from scratch**, because the
+> Status line was the only description of what the thing was:
+> `find-points-at-infinity.md`, `fronto-parallel-patch-cache.md`,
+> `cluster-warp-consistency.md`, `keypoint-localization-search-cache.md`,
+> `keypoint-subpixel-refinement.md`, `patch-localizability.md`,
+> `patch-normal-refine-view-subset.md`, `ray-grid-projection.md`,
+> `adaptive-clip-and-grid.md`, `image-animation.md`, `cross-panel-hover.md`.
+> Another nine had an opening that described the change rather than the thing
+> ("This document specifies **moving** the display controls…", "replacing the
+> original single `CentralPanel`", "Callers … need three primitives that **today
+> exist only as per-caller array code**") and were rewritten in place:
+> `viewport-hud.md`, `multi-panel-image-browser.md`, `point-track-detail.md`,
+> `scene-graph.md`, `goto-point.md`, `covisibility-selection.md`,
+> `batch-triangulation-api.md`, `tile-batched-consensus-atlas.md`,
+> `sfmtool-pinhole-kernels.md`._
+>
+> _**Four code pointers were wrong**, which is the argument for making them links:
+> `ray-grid-projection.md` put `ray_to_pixel_grid` in `camera/distortion.rs` (it is
+> in the `distortion/ray_grid.rs` submodule); `keypoint-localization-search-cache.md`
+> put the AVX2 kernels in `patch/keypoint_localize.rs` (they are in
+> `keypoint_localize/kernels.rs`); `patch-localizability.md` named
+> `patch/localizability.rs`, which is a directory; `patch-normal-refinement.md`
+> gave a crate-relative rather than repo-relative path. Three cited artifacts that
+> have never existed went with the lines that carried them —
+> `scripts/exp_pinhole_bootstrap.py` and `cluster-pinhole-bootstrap.md` (§5c's
+> first item, now closed), and `scripts/seed_census.py` in `cluster-census.md`.
+> `cluster-covisibility.md`'s and `affine-factorization.md`'s **second** citations
+> of `exp_pinhole_bootstrap.py`, in their `## Validation` sections, are outside
+> this edit and still open._
+>
+> _Link check: 696 relative `](…)` targets across all 138 specs resolve, the only
+> two failures being `TEMPLATE.md`'s deliberately fictional `foo.rs` /
+> `foo-gpu-amendment.md` examples. Two pre-existing broken links were fixed in
+> passing: `find-points-at-infinity.md`'s `[v2 model]` reference definition and
+> `patch-localizability.md`'s `_embed_patches.py`. `zensical.toml` publishes only
+> `docs/`, so `docs-build` does not cover `specs/` and was not run._
+>
+> _**No amendment draft was created, and one was considered.** `patch-cloud.md`
+> said `**Status:** Proposed` while everything it specifies ships — the only
+> symbol that does not exist is `warp_maps_for_patch`, a four-line batch
+> convenience the spec's own Open questions already deferred "until a caller needs
+> it". That is a non-goal by the rule above, not an intention someone means to
+> build, so the section states in the present tense that there is no batch helper
+> and why, and `patch-keypoint-localization.md` stops citing the function
+> (bcacb91). **Three genuine amendment-draft candidates surfaced and are left for
+> a follow-up**, because each needs a decision this pass was not asked to make:
+> `sift.md`'s `## Phasing` (Phase 2 GPU SIFT, and the on-disk incremental-extraction
+> extension); `patch-rendering.md`'s `### Planned (v1)` flat-shaded fallback; and
+> `sift-file-format.md`'s `**Version 2 (draft)**` chunked-descriptor layout. Under
+> the new rule each is a present-tense Non-goals sentence plus a draft, not a
+> heading inside the standing spec._
+>
+> _**The residue this pass deliberately did not touch**, and the next coherent
+> piece of work: nine specs still carry an `## Implementation Status` /
+> `## Implementation Plan` / `## Implementation phases` / `## Staging` /
+> `## Phasing` section — a checkbox list or a numbered plan, usually with every
+> item ticked or suffixed `— DONE` — which is the same convention violation the
+> Status *line* was, one heading further down.
+> `track-cluster-matching.md`, `camera-views.md`, `patch-rendering.md`,
+> `plan.md`, `point-cloud-rendering.md`, `viewport-hud.md`,
+> `viewport-navigation.md`, `image-animation.md`, `multi-panel-image-browser.md`
+> (whose `### Phase B: Evaluation and Refinement — NOT STARTED` is the only one
+> that is not merely stale), plus `camera-intrinsics.md`'s six `— *done.*` phases,
+> `scene-graph.md`'s five, `keypoint-localization-consensus-basis.md`'s and
+> `patch-normal-refine-view-subset.md`'s `## Plumbing` work orders and their
+> `## Task-completion checks (from AGENTS.md)` sections, and
+> `batch-triangulation-api.md`'s `## Prior state (before this change)` /
+> `## Consumers & migration`. §5b names four of these; the real count is
+> fifteen-plus. This is now the largest remaining work-order residue in the
+> corpus._
 
 5. **Shrink the module docs that re-derive their specs, and fix the one spec whose
    consumers are fiction.** Eight doc blocks totalling ~420 lines re-derive their
