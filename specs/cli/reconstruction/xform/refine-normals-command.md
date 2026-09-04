@@ -384,22 +384,22 @@ Unlike `scripts/patch_crossval.py`, the CLI op refines the **whole** cloud (no
 
 ## Integration points
 
-- New module `src/sfmtool/xform/_refine_normals.py` with
-  `RefineNormalsTransform` (image loading + workspace resolution mirroring
-  `RemoveLargeFeaturesFilter`, normal scatter-write).
-- Export it from `xform/__init__.py`; add the `--refine-normals` branch to
-  `xform/_arg_parser.py` (`key=value` parsing) and a Click
-  `@click.option("--refine-normals", is_flag=False, flag_value="",
-  multiple=True, …)` to `_commands/xform.py` for `--help` / unknown-option
-  rejection.
-- Add a short **Optimization** subsection to `specs/cli/reconstruction/xform/xform-command.md`
-  linking here (the pattern used by `--find-points-at-infinity` and
-  `--include-by-distribution`).
-- Tests: a pytest over the real 17-image seoul_bull reconstruction asserting
-  the point count is unchanged, normals change for finite points, infinity
-  points pass through, and mean Φ does not decrease (mirrors the existing
-  `refine_normals` integration test); plus arg-parser unit tests for the
-  `key=value` grammar and error cases.
+The transform is `RefineNormalsTransform` in
+[`_refine_normals.py`](../../../../src/sfmtool/xform/_refine_normals.py) — image
+loading and workspace resolution mirroring `RemoveLargeFeaturesFilter`, then a
+normal scatter-write. It is exported from `xform/__init__.py`, parsed out of the
+`key=value` string by `xform/_arg_parser.py`, and declared on the CLI in
+[`_commands/xform.py`](../../../../src/sfmtool/_commands/xform.py) as
+`@click.option("--refine-normals", is_flag=False, flag_value="", multiple=True,
+…)`, which is what gives it a `--help` entry and unknown-option rejection.
+[xform-command.md](xform-command.md)'s Optimization subsection links here, the
+pattern `--find-points-at-infinity` and `--include-by-distribution` use.
+
+[`tests/xform/test_refine_normals.py`](../../../../tests/xform/test_refine_normals.py)
+runs it over the real 17-image seoul_bull reconstruction and asserts the point
+count is unchanged, normals change for finite points, infinity points pass
+through, and mean Φ does not decrease; the arg-parser grammar and its error cases
+are unit-tested alongside.
 
 ## Open questions
 

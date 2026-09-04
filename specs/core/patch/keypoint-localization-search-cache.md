@@ -136,29 +136,29 @@ each round:
    survivor-only template)
 ```
 
-> _Incremental LOO consensus (2026-07-06): the per-view leave-one-out template
-> was previously rebuilt from scratch per (view, round) — copy the other
-> views' z-normalized rows into a compacted stack, run the IRLS, build the
-> unit template (3.59M calls / 170s CPU / 29.5% of localize on dino). The IRLS
-> recursion touches the pixel data only through inner products, so the loop
-> now computes **one shared per-round accumulation** — the live-view Gram
-> matrix `G[a][b] = ⟨x_a, x_b⟩` (f64) — and runs each holdout's IRLS entirely
-> in Gram space (`r_u² = G[u][u] − 2(Gw)_u + wᵀGw`, then the exact shared
-> Tukey/MAD reweight); only the final unit template is materialized in pixel
-> space, skipping the held-out row in place (no holdout-stack copy).
-> Real-arithmetic semantics are identical (same uniform init, same iteration
-> count, same degenerate early-out); float output differs only at
-> accumulation-order level, bounded by the
-> `incremental_loo_template_matches_reference` test._
->
-> _Convergence fix (2026-07-06): the loop originally summed `|δ_int + δ_sub|`
-> per round — the **absolute** search output, whose freshly recomputed
-> parabolic `δ_sub` never feeds back into the read position and so keeps a
-> ~0.1–0.5 grid-px floor. The test could never fire and every point ran all
-> `max_iters` rounds (measured 5.00 avg rounds/point on dino). The metric is
-> now the round-over-round **change** of each live view's refined position
-> `iacc + residual` (scaled to patch-grid px at `m ≠ 1`); a view with no
-> scorable window contributes 0 (its position did not move)._
+**The leave-one-out consensus is built in Gram space.** The direct form —
+copy the other views' z-normalized rows into a compacted stack per (view,
+round), run the IRLS over pixels, build the unit template — dominates the round
+loop (3.59M calls, 170 s CPU, 29.5% of `localize` on dino). The IRLS recursion
+touches the pixel data only through inner products, so the loop instead makes
+**one shared per-round accumulation**, the live-view Gram matrix
+`G[a][b] = ⟨x_a, x_b⟩` in f64 (`build_loo_gram`), and runs every holdout's IRLS
+entirely in that space: `r_u² = G[u][u] − 2(Gw)_u + wᵀGw`, then the exact shared
+Tukey/MAD reweight. Only the final unit template is materialized in pixel space,
+skipping the held-out row in place, with no holdout stack copied. In real
+arithmetic this is the same computation as the per-holdout form — same uniform
+init, same iteration count, same degenerate early-out — and the float output
+differs only at accumulation order, which the
+`incremental_loo_template_matches_reference` test bounds.
+
+**Convergence is a round-over-round change, not an absolute search output.** The
+tracked quantity is each live view's refined position `iacc + residual`, scaled
+to patch-grid pixels when the supersampling factor `m ≠ 1`; a view with no
+scorable window contributes `0`, because its position did not move. Summing the
+absolute `|δ_int + δ_sub|` per round instead would never fire: the parabolic
+`δ_sub` is recomputed from scratch each round and never feeds back into the read
+position, so it holds a ~0.1–0.5 grid-px floor and every point runs all
+`max_iters` rounds (5.00 average rounds per point on dino).
 
 Both the consensus-core read and the search candidates are at **integer** cache
 positions (`iacc`, `iacc + d`), so they are mutually aligned and exact. `δ_sub`

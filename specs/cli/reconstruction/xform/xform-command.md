@@ -324,13 +324,13 @@ per-point patch textures so the output is self-contained, and `bitmaps=false`
 skips that render. The optional value is a comma-separated `key=value` string;
 with no value it runs the v1 defaults.
 
+The operation requires an `embedded_patches` reconstruction and rejects
+`sift_files`, so the canonical chain is `--to-embedded-patches
+--refine-normals`: convert first, then refine, so the refinement positions its
+views on the stored per-observation keypoints.
+
 See [refine-normals-command.md](refine-normals-command.md) for the
 full parameter list and semantics.
-
-> _**Precondition — shipped (2026-06-25):** `--refine-normals` requires an
-> `embedded_patches` reconstruction and rejects `sift_files`, so the canonical
-> chain is `--to-embedded-patches --refine-normals` (convert first, then refine —
-> the refine then positions views on the stored keypoints)._
 
 ```bash
 --refine-normals

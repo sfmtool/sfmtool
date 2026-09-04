@@ -28,4 +28,4 @@ section, with repo paths written as relative Markdown links.
 | [formats/](formats/README.md) | The on-disk file formats | one file per format crate |
 | [gui/](gui/README.md) | The SfM Explorer viewer (`sfm-explorer`) | flat |
 | [workspace/](workspace/README.md) | Workspace layout and its config files | flat |
-| `drafts/` | Scratch space for specs not yet ready to file | — |
+| [drafts/](drafts/README.md) | Proposals, and the specified-but-unbuilt parts of standing specs | flat; an amendment draft names the spec it amends |

@@ -306,36 +306,41 @@ oracle the matcher validates against; the forest is what carries the approach to
 realistic corpus sizes. See `specs/core/features/randomized-kdtree-forest.md` for the
 index design.
 
-> _Performance pass (2026-07-11), measured on DinoLedge (1196 images ×
-> 8192 features = 9.7M descriptors; 1.7M clusters, 317K candidate pairs,
-> i9-14900HX): `sfm match --cluster` 212 s → 118 s (1.8×), with every
-> deterministic output identical (clusters, pairs, match feature indexes,
-> descriptor distances; the pycolmap TVG inlier sets vary ~0.001% between
-> *identical* runs — inherent multithreaded-RANSAC nondeterminism, verified
-> by back-to-back runs of the same build). `SFMTOOL_CLUSTER_TIMING=1` prints
-> the matcher's stage split. The changes:_
->
-> - _**Orchestration** (the larger half): the COLMAP database used only for
->   geometric verification no longer stores descriptors (verification reads
->   keypoints + matches; the descriptor rows dominated the DB write);
->   `.sift` descriptor reads go through a thread pool; and the per-match
->   Python loop that recomputed descriptor distances after verification is
->   now a per-pair vectorized gather + batched norm (exact — squared-u8 sums
->   stay below 2²⁴, so f32 accumulation is order-independent)._
-> - _**Forest build** −26%: construction reuses per-tree scratch (partition
->   class tags + reorder buffer, median values, variance sums) instead of
->   allocating three `Vec`s per node — same arithmetic, same RNG consumption,
->   bit-identical trees._
-> - _**Query** −16%: the self-join batch is processed in the forest's
->   descriptor-space `locality_order` (tree 0's leaf layout), so consecutive
->   queries check heavily overlapping, cache-resident point rows; results are
->   scattered back to query order (per-query results are order-independent,
->   so the output is unchanged)._
->
-> _Remaining: pycolmap verification (~50 s) is the largest single phase —
-> the planned native TVG verifier would also remove the matches round-trip
-> through sqlite; the k-NN query (~31 s) is memory-latency-bound on corpus
-> row gathers._
+### Where the time actually goes
+
+Measured on DinoLedge — 1196 images × 8192 features = 9.7M descriptors, 1.7M
+clusters, 317K candidate pairs, on an i9-14900HX — `sfm match --cluster` takes
+about 118 s end to end. `SFMTOOL_CLUSTER_TIMING=1` prints the stage split.
+
+Three things carry that number, and each is a constraint on how the matcher may
+be changed:
+
+- **Orchestration is the larger half, and most of it is I/O.** The COLMAP
+  database the matcher opens exists only for geometric verification, so it stores
+  keypoints and matches but **not** descriptors — the descriptor rows dominated
+  the write. `.sift` descriptor reads go through a thread pool, and the descriptor
+  distances that accompany the verified matches are recomputed as a per-pair
+  vectorized gather plus a batched norm rather than a per-match Python loop. That
+  gather is exact, not approximate: squared u8 sums stay below 2²⁴, so f32
+  accumulation is order-independent.
+- **Forest build** reuses per-tree scratch — partition class tags plus reorder
+  buffer, median values, variance sums — instead of allocating three `Vec`s per
+  node. Same arithmetic, same RNG consumption, bit-identical trees.
+- **The k-NN query** processes the self-join batch in the forest's
+  descriptor-space `locality_order` (tree 0's leaf layout), so consecutive queries
+  touch heavily overlapping, cache-resident corpus rows; results are scattered
+  back to query order, which is safe because per-query results are
+  order-independent. It remains memory-latency-bound on those gathers (~31 s).
+
+The largest single remaining phase is pycolmap verification (~50 s); a native
+two-view-geometry verifier would also remove the matches round-trip through
+sqlite.
+
+Every deterministic output of the matcher — clusters, pairs, match feature
+indexes, descriptor distances — is stable across runs. The pycolmap
+two-view-geometry inlier sets vary by about 0.001% between *identical* runs,
+which is inherent multithreaded-RANSAC nondeterminism, verified by back-to-back
+runs of one build.
 
 ## Parameters
 
@@ -356,6 +361,34 @@ Global-threshold alternative (§"Alternatives considered"):
 | `t_scale`     | 1.0       | multiply `T_base`; higher = larger clusters; ~1.25 with otsu/gmm |
 | `refine`      | 0         | mean-shift centroid steps (re-query at cluster mean); 1 usually suffices |
 | `prefilter`   | off       | drop isolated points up front (falls out for free under the floor) |
+
+### Choosing `d`
+
+The default background rank is `d = 10`. The Python prototype the empirical
+sections above are drawn from tuned `d = 28`; sweeping the production matcher at
+`d ∈ {6, 7, 8, 9, 10, 14, 20, 28}` across all four datasets (match + seeded
+incremental solve per point) showed the wide floor was paying for itself in
+solve time, not quality. Findings:
+
+- Registration is full (17/17, 26/26, 48/48, 85/85) at every `d ≥ 8`;
+  kerry_park drops to 46/48 at `d ∈ {6, 7}`, locating the cliff just below 8.
+- Smaller `d` is faster end to end — mostly in the *solve*, which scales with
+  the candidate matches a wider floor admits (kerry 55 s at `d = 8` vs 108 s at
+  28; dino 99 s vs 147 s total).
+- Mean reprojection error *improves* monotonically as `d` shrinks on every
+  dataset (e.g. seoul 0.47 px at 8 vs 0.58 px at 28): the extra matches a wide
+  floor admits are disproportionately the weak ones.
+- Total points dip on the small scenes (seoul −20%, kerry −15% at `d = 10` vs
+  28) but the lost points are mostly 2-view: the fraction of points with ≥ 3
+  observations is far higher at small `d` (92–97% vs 77–84%), and dino's point
+  count actually rises (32,181 vs 29,657).
+
+`d = 10` was chosen as the default: measured directly on all four datasets,
+two ranks of margin above the kerry_park registration cliff, ~1.5–2.4×
+end-to-end speedup vs 28, better reprojection everywhere. The original `d = 28`
+remains a reasonable choice for unusually high-covisibility collections
+(features co-observed in tens of images), where a small rank could read the
+floor inside the track itself; pass `--cluster-d` to raise it.
 
 ## Limitations
 
@@ -385,6 +418,9 @@ Global-threshold alternative (§"Alternatives considered"):
 - **Exact NN does not scale**; in production use the forest, which trades a few
   points of recall (absorbed downstream by geometric verification + track
   redundancy).
+- **There is no `sfm solve --cluster` shortcut.** The matcher is reached through
+  `sfm match --cluster`, which writes a `.matches` file; `sfm solve` then takes
+  that file like any other match set.
 
 ## Relationship to Existing Pipeline
 
@@ -415,66 +451,28 @@ free (only image pairs that share a cluster are verified) does the same job the
 vocabulary tree does for COLMAP — avoiding `O(N²)` pair enumeration — but folded
 into the matching step instead of a separate retrieval stage.
 
-## Implementation Status
-
-The approach was validated end to end by a Python prototype over the in-tree
-`sfmtool.KdForest` index — the empirical results above are from it. The production
-form is a `sfmtool-core` matcher over the kd-tree forest, exposed as a matching
-method in `features/feature_match/` and selectable from `sfm match` / `sfm solve`; the
-per-point background floor is the recommended membership rule, and its production
-API is specified in [Production Implementation](#production-implementation) below.
-
-The production implementation is **done** as specified: the Rust matcher lives in
-`crates/sfmtool-core/src/features/cluster_match/`, the PyO3 bindings in
-`crates/sfmtool-py/src/matching/cluster.rs` (exposed as
-`sfmtool.background_floor_clusters` / `sfmtool.clusters_to_pair_matches`), the
-Python matcher layer in `src/sfmtool/feature_match/_cluster_matching.py` with the
-`_run_cluster_matching` orchestration in `feature_match/_run.py`, and the CLI as
-`sfm match --cluster` (see `specs/cli/image-feature/match-command.md`). A `sfm solve --cluster`
-shortcut remains future work.
-
-The production matcher reproduces the prototype's end-to-end results: run
-through `sfm match --cluster` + seeded incremental `sfm solve -i` on all four
-datasets (cluster corpus at each dataset's full extraction budget), every image
-registers, `sfm compare` against the baseline rates all four VERY SIMILAR, and
-the point clouds land where the table above predicts — seoul_bull 17/17 at
-1,550 points, seattle_backyard 26/26 at 4,980, kerry_park 48/48 at 3,153,
-dino_dog_toy 85/85 at 29,644.
-
-**Default `d` lowered 28 → 10 after a production sweep (2026-06-10).** The
-prototype tuned `d = 28`; sweeping the production matcher at
-`d ∈ {6, 7, 8, 9, 10, 14, 20, 28}` across all four datasets (match + seeded
-incremental solve per point) showed the wide floor was paying for itself in
-solve time, not quality. Findings:
-
-- Registration is full (17/17, 26/26, 48/48, 85/85) at every `d ≥ 8`;
-  kerry_park drops to 46/48 at `d ∈ {6, 7}`, locating the cliff just below 8.
-- Smaller `d` is faster end to end — mostly in the *solve*, which scales with
-  the candidate matches a wider floor admits (kerry 55 s at `d = 8` vs 108 s at
-  28; dino 99 s vs 147 s total).
-- Mean reprojection error *improves* monotonically as `d` shrinks on every
-  dataset (e.g. seoul 0.47 px at 8 vs 0.58 px at 28): the extra matches a wide
-  floor admits are disproportionately the weak ones.
-- Total points dip on the small scenes (seoul −20%, kerry −15% at `d = 10` vs
-  28) but the lost points are mostly 2-view: the fraction of points with ≥ 3
-  observations is far higher at small `d` (92–97% vs 77–84%), and dino's point
-  count actually rises (32,181 vs 29,657).
-
-`d = 10` was chosen as the default: measured directly on all four datasets,
-two ranks of margin above the kerry_park registration cliff, ~1.5–2.4×
-end-to-end speedup vs 28, better reprojection everywhere. The original `d = 28`
-remains a reasonable choice for unusually high-covisibility collections
-(features co-observed in tens of images), where a small rank could read the
-floor inside the track itself; pass `--cluster-d` to raise it.
-
 ## Production Implementation
 
-This section specifies the production form of the **background-floor** matcher
-across three layers — a Rust matcher in `sfmtool-core`, its PyO3 binding, and the
-`sfm match` CLI wiring — in enough detail for a fresh implementation. The
-algorithm and its justification are above; this section pins down the API and data
-flow, centred on
+The **background-floor** matcher spans three layers: a Rust matcher in
+[`features/cluster_match/`](../../../crates/sfmtool-core/src/features/cluster_match/mod.rs),
+its PyO3 binding in
+[`matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs)
+(bound under `sfmtool._sfmtool.matching`), and the Python matcher layer in
+[`_cluster_matching.py`](../../../src/sfmtool/feature_match/_cluster_matching.py),
+orchestrated by `_run_cluster_matching` in
+[`_run.py`](../../../src/sfmtool/feature_match/_run.py) and reached from the CLI
+as `sfm match --cluster` (see
+[match-command.md](../../cli/image-feature/match-command.md)). The algorithm and
+its justification are above; this section is the API and data flow, centred on
 [§2 Per-point threshold: the background floor](#2-per-point-threshold-the-background-floor).
+
+It reproduces the prototype's end-to-end results. Run through `sfm match
+--cluster` plus a seeded incremental `sfm solve -i` on all four datasets (cluster
+corpus at each dataset's full extraction budget), every image registers, `sfm
+compare` against the baseline rates all four VERY SIMILAR, and the point clouds
+land where the table above predicts — seoul_bull 17/17 at 1,550 points,
+seattle_backyard 26/26 at 4,980, kerry_park 48/48 at 3,153, dino_dog_toy 85/85 at
+29,644.
 
 ### What the matcher does (one paragraph)
 
@@ -505,9 +503,8 @@ computing the background floor and the radius test.** Distances written to
 
 #### Location
 
-New module `crates/sfmtool-core/src/features/cluster_match/` with `mod.rs`; declare
-`pub mod cluster_match;` in `crates/sfmtool-core/src/lib.rs`. Optionally re-export
-the public types from `lib.rs` alongside the other `pub use` lines.
+[`crates/sfmtool-core/src/features/cluster_match/`](../../../crates/sfmtool-core/src/features/cluster_match/mod.rs),
+declared as `pub mod cluster_match;` in `crates/sfmtool-core/src/lib.rs`.
 
 #### Public types
 
@@ -723,11 +720,11 @@ Run `pixi run cargo test -p sfmtool-core cluster_match` and
 
 #### Location
 
-New file `crates/sfmtool-py/src/matching/cluster.rs`; registered via the
-file's own `pub fn register`, chained into `matching::register`, which
-`crates/sfmtool-py/src/lib.rs`'s `#[pymodule]` installs as the
-`_sfmtool.matching` submodule (`__name__ == "sfmtool.matching"`) through
-`helpers::install_submodule`.
+[`crates/sfmtool-py/src/matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs),
+registered via the file's own `pub fn register`, chained into
+`matching::register`, which `crates/sfmtool-py/src/lib.rs`'s `#[pymodule]`
+installs as the `_sfmtool.matching` submodule (`__name__ ==
+"sfmtool.matching"`) through `helpers::install_submodule`.
 
 #### Functions
 
@@ -780,15 +777,14 @@ Map `ClusterMatchError` to `PyValueError::new_err(...)`. Validate
 
 #### Python package surface
 
-`KdForest` is re-exported as `sfmtool.KdForest` (see `src/sfmtool/__init__.py`).
-Re-export both functions the same way so callers can `from sfmtool import
-background_floor_clusters, clusters_to_pair_matches` (they live in
-`sfmtool._sfmtool.matching`).
+Both functions live in `sfmtool._sfmtool.matching` and are imported from there.
+Unlike `KdForest`, which `src/sfmtool/__init__.py` re-exports as
+`sfmtool.KdForest`, they are not lifted to the package top level.
 
-#### Rebuild + tests
+#### Tests
 
-After the Rust edits, **`pixi run maturin develop --release`** (the `.so` does
-not auto-rebuild). Add `tests/rust_bindings/test_cluster_match_rust_bindings.py`:
+[`tests/rust_bindings/test_cluster_match_rust_bindings.py`](../../../tests/rust_bindings/test_cluster_match_rust_bindings.py)
+covers the binding surface:
 
 - A tiny hand-built corpus (numpy) with a couple of planted cross-image points;
   assert the cluster arrays have the documented shapes/dtypes and CSR validity
@@ -953,14 +949,6 @@ the deliverable.
 | distance  | Euclidean L2 | all                 | sqrt of the forest's squared distances             |
 | TVG       | embedded     | py/cli              | matcher runs geometric verification; `.matches` carries two-view geometry |
 
-These are the tuned values from the empirical sections above (`d` re-tuned by
-the 2026-06-10 production sweep — see Implementation Status); do not change them
+These are the tuned values from the empirical sections above, with `d` re-tuned
+by the production sweep in [Choosing `d`](#choosing-d); do not change them
 without re-running the membership-rule bench and the end-to-end reconstructions.
-
-### Implementation order (suggested)
-
-1. Rust `cluster_match` module + unit tests → `cargo test`/`clippy`/`fmt`.
-2. PyO3 binding + `maturin develop --release` + `tests/rust_bindings/...`.
-3. `_cluster_matching.py` + `_run.py` orchestrator + Python unit test.
-4. `sfm match --cluster` wiring + integration test + `specs/cli` note.
-5. `fmt && check`, full `pixi run test`, update this section if anything diverged.

@@ -99,16 +99,17 @@ centers `cᵢ` for the `m` views in the current set, and a cap `K`
    all-views returns are the no-op cases in step 1, and the degenerate case where
    no view is front-facing).
 
-   > **Design history.** v1 fell back to all views when
-   > `λ_min(M_S) < γ·λ_min(M_full)`. That was doubly wrong: (a) information is
-   > *additive across views* (`M = Σ wᵢwᵢᵀ`), so the ratio was ≈ `K/m` and fired
-   > for essentially every point with `m ≳ 2K` regardless of conditioning — 57 %
-   > of eligible points on the Spain sweep, leaving only 22 % actually capped and
-   > making `K=5` a net ~4 % *slower*; and (b) more fundamentally, falling back to
-   > all views does not improve conditioning on a genuinely degenerate point, so
-   > the fallback had no correct form — it was removed. Photometric **robustness**
-   > (the real reason a many-view consensus beats a 5-view one) is an orthogonal
-   > axis, deferred to the ZNCC-weighting follow-up below.
+   The obvious fallback — inflate back to all views when
+   `λ_min(M_S) < γ·λ_min(M_full)` — has no correct form, and it is worth saying
+   why, because it is the first thing a reader will reach for. Information is
+   *additive across views* (`M = Σ wᵢwᵢᵀ`), so that ratio is ≈ `K/m` and fires for
+   essentially every point with `m ≳ 2K` regardless of conditioning: on the Spain
+   sweep it tripped on 57 % of eligible points, left only 22 % actually capped,
+   and made `K = 5` a net ~4 % *slower* than no cap at all. More fundamentally,
+   even when it fires on a genuinely degenerate point, all views are no
+   better conditioned than the best `K`. Photometric **robustness** — the real
+   reason a many-view consensus beats a five-view one — is an orthogonal axis,
+   and is what the ZNCC-weighted pick would address.
 
 The function returns the selected view **indices** (into the caller's `views`
 slice), or all indices for the step-1 no-op cases (and the no-front-facing-view
@@ -155,56 +156,44 @@ the seed search:
 Since the default is `0`, **all existing callers** (`select_views`,
 inspect/compare strips, tests) are unaffected.
 
-## Plumbing
+## Where it lives
 
-1. **`crates/sfmtool-core`**
-   - New module `patch/normal_refine/view_subset.rs`: `select_refine_subset(...)`
-     + the constant, with unit tests. Reuse `parameterization::tangent_basis`.
-   - `params.rs`: add `max_refine_views: u32` to `NormalRefineParams`
-     (`Default = 0`), documented.
-   - `mod.rs`: wire the subset restriction into `refine_patch_normal_impl` as
-     above; add `mod view_subset;`.
-   - `prof.rs` (optional, nice-to-have): a counter for how many patches used the
-     subset vs. fell back, reported in the profile summary.
-2. **`crates/sfmtool-py`** (`patches/`)
-   - `refine_normals`: add kwarg `max_refine_views=0`; set
-     `params.max_refine_views`. Document it in the method docstring.
-3. **Python** (`src/sfmtool/_embed_patches.py`)
-   - `embed_patches(...)`: `max_refine_views: int = 8` (the pipeline default);
-     passed to the round-2..N `cloud_r.refine_normals(...)` call **only** (leave
-     round 1 — the raw-track pass — untouched). One-line progress note when
-     active.
-4. **CLI** (`src/sfmtool/_commands/embed_patches.py`)
-   - `--refine-max-views` (int, default `8`, `IntRange(min=0)`), forwarded to
-     `embed_patches(max_refine_views=...)`. Document: `0` = use all views
-     (disables the cap); `N` caps the round-2+ normal-refinement basis at the `N`
-     most normal-informative views (D-optimal), leaving all observations in the
-     output.
-5. **Specs**
-   - Update `specs/cli/reconstruction/embed-patches-command.md` with the new flag.
-   - Cross-link `specs/core/patch/patch-normal-refinement.md` to this file.
+The selection is
+[`view_subset.rs`](../../../crates/sfmtool-core/src/patch/normal_refine/view_subset.rs)
+(`select_refine_subset`, on the tangent basis from `parameterization::tangent_basis`),
+driven by `NormalRefineParams::max_refine_views` in
+[`params.rs`](../../../crates/sfmtool-core/src/patch/normal_refine/params.rs) and
+applied inside `refine_patch_normal_impl` in
+[`mod.rs`](../../../crates/sfmtool-core/src/patch/normal_refine/mod.rs).
+`prof.rs` counts the patches whose basis was capped and those where a cap was
+requested but no anchor was available, and gives the selection its own
+`view_subset` profiling phase.
 
-## Follow-up — ZNCC-weighted selection (quality-critical, not optional)
+The binding is `PatchCloud.refine_normals(max_refine_views=…)`
+([`refine_normals.rs`](../../../crates/sfmtool-py/src/patches/refine_normals.rs),
+default `0`). The pipeline reaches it through
+`embed_patches(max_refine_views=8)`
+([`_embed_patches.py`](../../../src/sfmtool/_embed_patches.py)), which applies the
+cap to the round-2-and-later `refine_normals` calls only, leaving round 1 — the
+raw-track pass — uncapped, and logs one line when the cap is active. The CLI flag
+is `sfm embed-patches --refine-max-views` (int, default `8`, `IntRange(min=0)`);
+see [embed-patches-command.md](../../cli/reconstruction/embed-patches-command.md).
 
-- **ZNCC-weighted selection.** Weight each view's information contribution
-  `wᵢ wᵢᵀ` by its per-view ZNCC-to-consensus (SNR), so the D-optimal pick
-  discriminates among already-vetted views by photometric quality too. This is
-  now understood to be **on the critical path for quality, not a nice-to-have**:
-  geometry-only D-optimal deliberately selects the *most oblique* views (highest
-  normal information), which are also the photometrically *noisiest* (most
-  foreshortening / aliasing / partial occlusion). That is the most likely driver
-  of the large per-point normal divergence seen when subsetting (Spain sweep:
-  normal Δ p95 ≫ median). Without ZNCC weighting, any geometric subset trades
-  robustness for observability. Blocked on persisting `select_views`'s per-view
-  `scores` (currently discarded in `_embed_patches.py`) through the per-round
-  compaction (point indices are renumbered each round). Ties into the separate
-  "persist select_views scores" analysis work.
+## Non-goals
 
-## Validation harness (required — the risk is under-constraining)
+The pick is **geometric only**: a view's information contribution `wᵢ wᵢᵀ` is not
+weighted by how well that view actually matches the consensus. Weighting it by
+per-view ZNCC is proposed in
+[`../../drafts/patch-normal-refine-zncc-weighted-selection-amendment.md`](../../drafts/patch-normal-refine-zncc-weighted-selection-amendment.md),
+and it matters more than a refinement usually would: geometry-only D-optimal
+deliberately picks the *most oblique* views, which are also the photometrically
+noisiest, so an unweighted subset trades robustness for observability.
 
-Add `scripts/validate_refine_subset.sh` (or a small Python driver) that runs
-`embed-patches` on a given `.sfmr` with `--refine-max-views ∈ {0, 3, 5, 8}`
-(0 = baseline), each under `SFMTOOL_PROFILE=1`, and reports:
+## Validation harness
+
+[`scripts/validate_refine_subset.py`](../../../scripts/validate_refine_subset.py)
+runs `sfm embed-patches` on a given `.sfmr` once per `--refine-max-views` value
+(`0` = the all-views baseline), each under `SFMTOOL_PROFILE=1`, and reports:
 
 - **Wall time** per pass (parsed from the profile blocks) and end-to-end.
 - **Normal agreement vs. the `0` baseline**: per-surviving-point angular Δ
@@ -218,8 +207,7 @@ Add `scripts/validate_refine_subset.sh` (or a small Python driver) that runs
 Acceptance target: at `K = 5`, round-2 `refine_normals` wall time drops
 substantially (aim ≥ 2×) while median normal Δ vs. baseline stays small (order a
 degree) and reproj-error p95 does not regress. The harness output is the
-evidence for choosing a default `K` (and eventually flipping the default from
-`0`).
+evidence for choosing `K`.
 
 ## Tests
 
@@ -229,8 +217,9 @@ evidence for choosing a default `K` (and eventually flipping the default from
     few oblique views spread in azimuth → the greedy pick includes the oblique,
     azimuthally-complementary views (not just the highest-`cosθ` cluster).
   - Anchor is the least-oblique view.
-  - Fallback: an all-near-frontal view set (no parallax) → conditioning floor
-    trips → returns all views.
+  - A degenerate single-azimuth-arc view set returns the best `K` rather than
+    falling back to all views.
+  - Back-facing views are never selected.
   - Determinism: same inputs → same selection.
 - **Rust** (`normal_refine/tests.rs`): `refine_patch_cloud_normals` with
   `max_refine_views = K` on a small synthetic cloud produces normals close to
@@ -241,12 +230,3 @@ evidence for choosing a default `K` (and eventually flipping the default from
   5` on the seoul_bull fixture succeeds and produces an `embedded_patches` recon
   with the same point/observation counts as the default run (lossless), within
   tolerance.
-
-## Task-completion checks (from AGENTS.md)
-
-- Rust: `pixi run cargo fmt && pixi run cargo clippy --workspace`.
-- Rebuild bindings (this touches code re-exported through `sfmtool-py`):
-  `pixi run -e test maturin develop --release`.
-- Python: `pixi run fmt && pixi run check`, then `pixi run test -- <modules>`.
-- Rust tests: `pixi run cargo test --workspace` (llvm-cov excludes `sfmtool-py`).
-</content>

@@ -11,20 +11,17 @@ registered image and composites them onto the source frame.
 This is a qualitative aid for visually inspecting a reconstruction's geometry
 and patches.
 
-> _**Precondition — shipped (2026-06-25):** `render-patches` now **requires** a
-> `feature_source == "embedded_patches"` reconstruction (which carries real
-> per-point patch frames and reference bitmaps) and **rejects** `sift_files` with
-> a `UsageError` pointing at `sfm xform --to-embedded-patches` (the gate runs in
-> the command right after load, before any rendering)._
-
 ## Command Syntax
 
 ```bash
 sfm render-patches <RECONSTRUCTION.sfmr> --output <DIR> [OPTIONS...]
 ```
 
-The reconstruction must be `embedded_patches` (it carries the per-point patch
-frames). Produce one with:
+The reconstruction must have `feature_source == "embedded_patches"` — the only
+source that carries per-point patch frames and reference bitmaps. A `sift_files`
+reconstruction is rejected with a `UsageError` naming
+`sfm xform --to-embedded-patches`; the check runs right after load, before any
+rendering. Produce a suitable input with:
 
 ```bash
 sfm xform in.sfmr out.sfmr --to-embedded-patches

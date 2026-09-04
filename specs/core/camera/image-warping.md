@@ -559,7 +559,7 @@ HxWx3, or HxWx4, dtype `uint8`) and return a numpy array of the same shape.
 
 ## Module Organization
 
-New files in `sfmtool-core`:
+In `sfmtool-core`:
 
 ```
 crates/sfmtool-core/src/camera/
@@ -567,44 +567,15 @@ crates/sfmtool-core/src/camera/
 ├── remap.rs             # remap_bilinear(), remap_aniso(), ImageU8, ImageU8Pyramid
 ```
 
-New file in `sfmtool-py`:
+In `sfmtool-py`:
 
 ```
 crates/sfmtool-py/src/
 ├── flow/warp.rs       # PyWarpMap Python wrapper
 ```
 
-Add `ray_to_pixel` / `distort_ray` to the existing `CameraIntrinsics` / `CameraModel`
-in `crates/sfmtool-core/src/camera/distortion.rs`.
-
-## Implementation Order
-
-1. **`Equirectangular` camera model** — New `CameraModel` variant with `pixel_to_ray`,
-   `ray_to_pixel`, identity `distort`/`undistort`, serialization. Test round-trip at
-   center, edges, and poles. Test full-sphere construction.
-
-2. **`ray_to_pixel`** — New method on `CameraIntrinsics`, the inverse of
-   `pixel_to_ray`. Test round-trip:
-   `ray_to_pixel(pixel_to_ray(u, v))` recovers `(u, v)` for all 12 camera models
-   (11 existing + equirectangular).
-   Test fisheye at wide angles (80°, 89°, 91°) where `project(unproject(...))` would
-   fail. Expose through Python bindings.
-
-3. **`WarpMap` and `from_cameras`** — The core data structure and map generation.
-   Test by verifying that identity cameras produce identity maps, and that
-   round-tripping (undistort map composed with re-distort map) recovers pixel
-   coordinates.
-
-4. **`ImageU8` and `remap_bilinear`** — Multi-channel bilinear resampling. Test
-   against known transforms (identity, pure translation, known distortion models
-   with pycolmap as reference).
-
-5. **`remap_aniso`** — Anisotropic filtering: Jacobian SVD, `ImageU8` pyramid, and
-   multi-sample along the major axis. Test on fisheye cameras where peripheral
-   aliasing is visible with bilinear alone.
-
-6. **Python bindings** — `PyWarpMap` wrapper. Test `to_numpy()` interop with
-   `cv2.remap()`.
+`ray_to_pixel` and `distort_ray` are methods on `CameraIntrinsics` /
+`CameraModel` in `crates/sfmtool-core/src/camera/distortion.rs`.
 
 ## Testing Strategy
 

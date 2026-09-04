@@ -48,34 +48,27 @@ So the fix and the refactor are the same change: make the triangulation a
 reusable batch operation that returns its conditioning, and have the
 classifiers decide on that.
 
-## Prior state (before this change)
+## Relationship to the max-track-angle statistic
 
-Before this refactor there was no `reconstruction/triangulation.rs` and no batch API.
-Triangulation lived in three disconnected places, none sharing a result type,
-none batched, none exposed to Python:
+The older signal for the same question is `max_viewing_angle`
+([`geometry/viewing_angle.rs`](../../../crates/sfmtool-core/src/geometry/viewing_angle.rs)):
+the widest pairwise angle between a track's rays, computed against the *stored*
+point with no solve at all. The GUI presents it as "High = well-triangulated, low
+= unreliable", and for genuinely finite points with real parallax that is
+accurate — a wide max angle does mean a well-conditioned depth — so it is the
+right overlay for the bulk of the cloud.
 
-| Site | Method | Returns | Diagnostics | Used by |
-|---|---|---|---|---|
-| `features/feature_match/geometric_filter.rs` `triangulate_point_dlt` | 2-view DLT (SVD) | `Option<[f64;3]>` (drops `w≈0`) | none | two-view in-front-of-camera check during matching |
-| `analysis/infinity/discover.rs` `classify_track` (inline) | N-view midpoint | `(Point3, w)` | builds `A`, `det` (gated loosely, then discarded) | `find_points_at_infinity` |
-| GUI: `point_track_detail/`, `image_detail/` | **no solve** — max pairwise angle to the *stored* point | `f32` degrees | — | "Max Track Angle" overlay (`state.rs`), point/feature detail |
-
-The GUI never triangulates; it reuses the same `max_viewing_angle` statistic (a
-third copy of it) and presents it as "High = well-triangulated, low =
-unreliable" (`state.rs:29-31`). For genuinely finite points with real parallax
-this is an accurate quality signal — a wide max angle does mean a
-well-conditioned depth — so the overlay is fine for the bulk of the cloud. It
-misleads only in the distant / near-infinity regime, where the parallax is
-dominated by localization noise and the *max* statistic inflates with view
+It misleads in one regime, the distant and near-infinity one, where the parallax
+is dominated by localization noise and a *maximum* statistic inflates with view
 count: a far point seen by many cameras reads as "well-triangulated" while its
-depth is in fact unconstrained. The proposed condition-number / inverse-depth
-diagnostic agrees with the angle on finite points and additionally gets that
-regime right, so it belongs alongside the angle overlay as a complementary view
-rather than a replacement for it.
-`classify_points_at_infinity` (`analysis/infinity/convert.rs`) was a fourth
-consumer of `max_viewing_angle`.
+depth is in fact unconstrained. The condition-number and inverse-depth
+diagnostics agree with the angle on finite points and additionally get that
+regime right, so they sit **alongside** the angle rather than replacing it.
+`max_viewing_angle` also still backs `xform --remove-narrow-tracks` through
+`compute_narrow_track_mask`, as a fast pre-filter; what it stopped being is the
+*classification* signal.
 
-## Target Rust API
+## Rust API
 
 The solver lives in
 [triangulation.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation.rs),
@@ -284,41 +277,29 @@ diag = recon.triangulation_diagnostics(noise_px=1.0)  # dict of arrays incl.
 The GUI (`sfm-explorer`, Rust) consumes the core functions directly; the binding
 is for the CLI/inspect/analyze/notebook paths.
 
-## Consumers & migration
+## Consumers
 
-Phased so the API lands before any behavior changes:
+**Points at infinity.** `analysis/infinity/discover.rs::classify_track` and
+`analysis/infinity/convert.rs::classify_points_at_infinity` share
+`classify_rays_at_infinity`, which decides finite-versus-infinity on
+`inverse_depth_z` with `condition_number` as a cheap geometric pre-filter. The
+thresholds — `DEFAULT_INVERSE_DEPTH_Z_CUTOFF = 4.0` and
+`CONDITION_NUMBER_PREFILTER = 1e4` — live in
+[`analysis/infinity/convert.rs`](../../../crates/sfmtool-core/src/analysis/infinity/convert.rs)
+and are provisional; calibrating them against larger datasets is an open question
+below. The noise floor reaches the CLI as the fourth component of
+`--find-points-at-infinity`
+(`eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]`).
 
-1. **Phase 1 — core. (done)** Added `reconstruction/triangulation.rs` (struct +
-   `triangulate_batch` + `depth_uncertainty_batch`) with unit tests. The
-   midpoint solve was extracted out of `classify_track` into it. No behavior
-   change.
-2. **Phase 2 — the fix. (done)** `analysis/infinity/discover.rs::classify_track` and
-   `analysis/infinity/convert.rs::classify_points_at_infinity` now share `classify_rays_at_infinity`,
-   which decides finite-vs-∞ on `inverse_depth_z` (with `condition_number` as a
-   cheap pre-filter) instead of `alpha_max·f_max` and the loose `det` gate. The
-   provisional thresholds (`DEFAULT_INVERSE_DEPTH_Z_CUTOFF = 4.0`,
-   `CONDITION_NUMBER_PREFILTER = 1e4`) live in `analysis/infinity/convert.rs`; final calibration
-   is deferred to larger-dataset evaluation (see Open questions). The noise
-   floor is exposed on the `--find-points-at-infinity` CLI as a 4th component
-   (`eps_deg[,desc_thresh[,min_views[,noise_floor_px]]]`).
-3. **Phase 3 — bindings + reports. (done)** PyO3 `triangulate_batch` (free fn,
-   dict of arrays) and `recon.triangulation_diagnostics(noise_px)`; per-point
-   depth reliability surfaced in `sfm inspect --verbose` and a new
-   `sfm analyze --depth-reliability` mode.
-4. **Phase 4 — GUI. (done)** The "Max Track Angle" overlay
-   (`compute_max_pairwise_angle` / `compute_max_track_angle_deg`,
-   `colormap.rs`) is left in place — it is an accurate quality signal for finite
-   points. Two new overlay modes back onto the new diagnostics: "Depth
-   Reliability" driven by `inverse_depth_z` (low = near-infinity / unconstrained
-   depth), and "Condition Number" (log scale). They compute the per-point
-   diagnostics via `triangulate_batch` / `depth_uncertainty_batch`
-   (`point_track_detail::compute_point_diagnostics`), and the same numbers
-   appear in the point-track header and the image-detail tooltip next to the max
-   angle. Additive — no GUI code removed.
+**Reports.** Per-point depth reliability appears in `sfm inspect --verbose` and in
+`sfm analyze --depth-reliability`, both through the PyO3 surface below.
 
-**Left in place:** `geometry/viewing_angle.rs::max_viewing_angle` stays — it still backs
-`xform --remove-narrow-tracks` (`compute_narrow_track_mask`) as a fast
-pre-filter. It simply stops being the *classification* signal.
+**The GUI** consumes the core functions directly. Two overlay modes back onto
+these diagnostics — "Depth Reliability", driven by `inverse_depth_z` (low =
+near-infinity, unconstrained depth), and "Condition Number" on a log scale —
+computed per point by `point_track_detail::compute_point_diagnostics` via
+`triangulate_batch` / `depth_uncertainty_batch`. The same numbers appear in the
+point-track header and in the Image Detail tooltip, next to the max track angle.
 
 ## Decisions
 
@@ -376,4 +357,4 @@ pre-filter. It simply stops being the *classification* signal.
 | max pairwise angle (pre-filter only) | `geometry/viewing_angle.rs::max_viewing_angle` |
 | existing 2-view algebraic triangulation | `features/feature_match/geometric_filter.rs::triangulate_point_dlt` |
 | bearing-mean fallback for `w = 0` | `analysis/infinity/convert.rs` (`normalise(Σ rᵢ)`) |
-| per-track observation slices (CSR) | `observation_offsets` / `observations_for_point` |
+| per-track observation slices (CSR) | `observation_offsets`, indexed directly |

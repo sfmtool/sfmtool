@@ -151,29 +151,28 @@ first).
   round 1, already faced both gates — so `N_TAIL_NO_BASIS` reports how many tail
   views took it (244 of 475,645 on the capture measured below).
 
-## Plumbing
+## How the ranking inputs reach the kernel
 
-1. **`crates/sfmtool-core`** — `keypoint_localize/params.rs`: the three new
-   fields + `BasisPick`. `keypoint_localize.rs`: basis pick before the render
-   loop; phase-B registration after the round loop. Basis ranking helper with
-   unit tests. Prof taps: a `basis_pick` phase, a `tail_register` phase, and
-   `N_TAIL` / `N_BASIS` counters.
-2. **`crates/sfmtool-py`** — `localize_keypoints`: kwargs `basis_max_views=0`,
-   `basis_force_track_views=True`, `basis_pick="top_score"`, plus optional
-   `view_scores` / `track_view_counts` inputs parallel to `view_sets`.
-   `select_views` reports `track_view_count` per patch (how many leading
-   `admitted` entries are track views), which is what feeds
-   `track_view_counts`.
-3. **Python pipeline** — `_embed_patches.py`: keep `selections[i]["scores"]`
-   and the track-view counts (currently discarded) and pass both to
-   `localize_keypoints`; `embed_patches(localize_basis_views=…)`.
-4. **CLI** — `sfm embed-patches --localize-basis-views N` and
-   `sfm xform --localize-keypoints` `basis_max_views=N` (both default `8`;
-   `0` = uncapped).
-   Update `specs/cli/reconstruction/embed-patches-command.md` and the xform spec row.
-5. **Cross-links** — `specs/core/patch/patch-keypoint-localization.md` and
-   `specs/core/patch/keypoint-localization-search-cache.md` reference this file where
-   they describe the consensus membership and cache sizing.
+The pick needs two things the kernel cannot derive for itself: a per-view score
+to rank by, and how many of a point's views are its own track views (so those can
+be reserved). Both are optional inputs carried down from view selection.
+
+`PatchCloud.localize_keypoints`
+([localize_keypoints.rs](../../../crates/sfmtool-py/src/patches/localize_keypoints.rs))
+takes `basis_max_views`, `basis_force_track_views` and `basis_pick` alongside two
+optional maps parallel to `view_sets`: `view_scores`, a `point_index -> [score,
+…]` mapping, and `track_view_counts`, a `point_index -> t` mapping. `select_views`
+supplies both — it reports a `track_view_count` per patch, the number of leading
+`admitted` entries that are track views — and
+[`_embed_patches.py`](../../../src/sfmtool/_embed_patches.py) threads them
+through from the selection it already holds. With no scores the ranking falls
+back to grazing angle, which is why an empty score slice and no scores at all
+must rank identically.
+
+`SFMTOOL_PROFILE` reports the cap's own cost and reach: `basis_pick` and
+`tail_register` are separate profiling phases, and `N_BASIS` / `N_TAIL` /
+`N_TAIL_NO_BASIS` count the views that took each path
+([prof.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/prof.rs)).
 
 ## Validation (A/B, required before changing the pipeline default)
 
@@ -341,9 +340,9 @@ Readings:
 - Between the capped arms, `K=16` beats `K=8` on every downstream metric
   (small margins) — the sharper-template internal reading of small `K` did
   not cash out downstream on this capture.
-- Decision (2026-07-27): the default is **`K=8`** at every layer —
-  the small-`K` end of the validated band, taking the halved wall and the
-  extra yield at the measured +3–4 % median-reproj cost. The `K=8` / `K=16`
+- The default is **`K=8`** at every layer — the small-`K` end of the validated
+  band, taking the halved wall and the extra yield at the measured +3–4 %
+  median-reproj cost. The `K=8` / `K=16`
   downstream margins (1.365 vs 1.351 med, 4.25 vs 4.08 % rogue on the common
   subset) are small; `K=8` congeals the sharpest template and does the least
   work. `K=0` (`--localize-basis-views 0`) remains the choice where error
@@ -374,10 +373,3 @@ Readings:
   most points take the uncapped path outright); `xform --localize-keypoints`
   with `basis_max_views` round-trips; and a whole-cloud `view_scores` map drives
   chunked `point_indexes` calls to the same result as one shot.
-
-## Task-completion checks (from AGENTS.md)
-
-- Rust: `pixi run cargo fmt && pixi run cargo clippy --workspace`.
-- Bindings rebuilt for Python tests: `pixi run -e test maturin develop --release`.
-- Python: `pixi run fmt && pixi run check`, then `pixi run test -- <modules>`.
-- Rust tests: `pixi run cargo test --workspace`.

@@ -53,12 +53,14 @@ The detector operates on a single-channel float image `I`, and several parameter
 that value domain — notably the contrast threshold (`|D(x̂)| < 0.03`, assuming pixels in
 `[0, 1]`). The mapping from the source image to `I` therefore changes both the features and
 the meaning of those thresholds, so it must be pinned, not left to whatever the decoder
-happens to do. It is recorded in the `.sift` metadata as a formula over the normalized
-colour channels — `feature_options.image_to_gray = { "formula": "0.2126*R + 0.7152*G +
-0.0722*B" }` by default, matching COLMAP's `Bitmap::CloneAsGrey` (so it participates in
-`feature_tool_xxh128`). See
-[`../../formats/sift-file-format.md`](../../formats/sift-file-format.md) §"Image-to-gray
-conversion" for the formula grammar and channel definitions.
+happens to do. It is recorded in the `.sift` metadata as a formula over the normalized colour
+channels — `feature_options.gray_formula = "0.2126*R + 0.7152*G + 0.0722*B"`,
+BT.709 luma, matching COLMAP's `Bitmap::CloneAsGrey` — so it participates in
+`feature_tool_xxh128` and two conversions land in different `features/`
+subdirectories. The structured `image_to_gray` object that would replace the
+plain string, with a formula grammar the reader can evaluate, is part of the
+proposed `.sift` version 2; see
+[`../../drafts/sift-incremental-extraction-amendment.md`](../../drafts/sift-incremental-extraction-amendment.md).
 
 ### 1. Scale-space pyramid
 
@@ -205,27 +207,25 @@ the retained set; a final truncation after orientation enforces the cap as a har
 limit (orientation can emit several keypoints per candidate). On images that detect fewer
 than `max_num_features` candidates the cap is a no-op.
 
-> _Revision (2026-07-11): **cap-aware coarse-to-fine detection.** The cap's
-> "keep the largest scales" semantics make fine-octave detection provably dead
-> work once the coarser octaves have filled the cap: octave scale ranges are
-> disjoint and ordered (octave `o`'s localized candidates span
-> `σ·k^[0.5, s+0.5]·2^o` strictly, by the localizer's layer clamp and
-> `|offset| < 0.5` bound). `detect_keypoints` therefore builds only the
-> pyramid *chain* (levels `0..=s` per octave — the decimation skeleton) up
-> front, then walks octaves coarse→fine, lazily extending each octave to its
-> full `s+3` levels right before scanning it, orienting each octave's
-> surviving candidates as they are admitted, and stopping when either the
-> cap-th largest keypoint scale or the full candidate pool's minimum scale
-> strictly clears the next octave's `max_scale_bound` (a margin-guarded
-> strict upper bound; the theoretical f32 seam collision falls back to a
-> merged re-selection and re-orientation, so the output is always the full
-> scan's). A skipped octave saves its whole detection scan **and its last two
-> Gaussian levels**. On 4K images with the default cap this skips octaves 0
-> and 1 — ~94% of the pyramid's detection pixels with `double_image` — with
-> byte-identical output (validated over 1196 DinoLedge frames). Small images
-> that never fill the cap detect every octave, exactly as before. Together
-> with the Tier 1.5 blur fusion this took `sfm sift --extract` over those
-> 1196 frames from 300 s to 141 s (2.1×) on a 24-core i9-14900HX._
+**Cap-aware coarse-to-fine detection.** The cap's "keep the largest scales"
+semantics make fine-octave detection provably dead work once the coarser octaves
+have filled it. Octave scale ranges are disjoint and ordered — octave `o`'s
+localized candidates span `σ·k^[0.5, s+0.5]·2^o` strictly, by the localizer's
+layer clamp and its `|offset| < 0.5` bound — so `detect_keypoints` builds only
+the pyramid *chain* up front (levels `0..=s` per octave, the decimation
+skeleton), then walks octaves coarse→fine, lazily extending each octave to its
+full `s+3` levels right before scanning it, orienting each octave's surviving
+candidates as they are admitted, and stopping when either the cap-th largest
+keypoint scale or the full candidate pool's minimum scale strictly clears the
+next octave's `max_scale_bound` — a margin-guarded strict upper bound, whose
+theoretical f32 seam collision falls back to a merged re-selection and
+re-orientation, so the output is always the full scan's. A skipped octave saves
+its whole detection scan **and its last two Gaussian levels**. On 4K images with
+the default cap this skips octaves 0 and 1, about 94% of the pyramid's detection
+pixels with `double_image`, with byte-identical output (validated over 1196
+DinoLedge frames); small images that never fill the cap detect every octave.
+Together with the Tier 1.5 blur fusion this takes `sfm sift --extract` over those
+1196 frames from 300 s to 141 s (2.1×) on a 24-core i9-14900HX.
 
 ### Parameters
 
@@ -298,7 +298,7 @@ two gaussians with **bit-identical** f32 arithmetic (`a − b` is one IEEE
 subtraction whether done by `subps`, `subss`, or scalar `-`), and the DoG pyramid
 need never exist as a stored array.
 
-#### Tier 1 — fuse DoG into detection, tiled in row stripes (implemented)
+#### Tier 1 — fuse DoG into detection, tiled in row stripes
 
 Stop materializing `Octave::dogs` entirely. `detect_and_localize` parallelizes
 over **`(octave, row-stripe)`** instead of `(octave, level)`. Each stripe task,
@@ -333,7 +333,7 @@ What Tier 1 does **not** touch: the blur chain still materializes the gaussians 
 RAM (they must persist for orientation/description), so `base`/`blur`/`decimate`
 are unchanged.
 
-#### Tier 1.5 — fuse each blur's two passes into stripes (implemented 2026-07-11)
+#### Tier 1.5 — fuse each blur's two passes into stripes
 
 Each individual Gaussian blur is itself stripe-fused: a stripe computes the
 horizontal pass for its output rows plus a `radius`-row halo into a small
@@ -352,7 +352,7 @@ recomputing them per comparison — both output-identical. Measured together
 with the cap-aware walk (4K, defaults): chain build 97 → 72 ms/image, detect
 240 → 13 ms, sort 7 → 2 ms.
 
-#### Tier 2 — fuse the blur chain into the stripe (future)
+#### Tier 2 — fuse the blur chain into the stripe
 
 Keep the gaussians cache-resident too, fusing blur → DoG → detect per stripe so a
 stripe is read from RAM once (octave base) and only keypoints come out. Two
@@ -368,8 +368,8 @@ obstacles make this a separate, larger effort with a narrower margin:
   to 20–40%. The trade (redundant blur compute for saved bandwidth) is far less
   clearly positive than Tier 1's ~1-row halo.
 
-So Tier 2 is deferred until Tier 1 is measured and (if pursued) tackled together
-with folding orientation/description into the tiled pass.
+So Tier 2 is not implemented, and would only be worth taking together with
+folding orientation and description into the same tiled pass.
 
 ### Diagnostics (environment variables)
 
@@ -635,105 +635,11 @@ later). For very large images the pyramid can be rebuilt per-octave on demand, o
 cached representation narrowed to per-level gradients, if the memory cost outweighs the
 recompute savings — an implementation detail to settle with benchmarks.
 
-### On-disk incremental extraction (`.sift` format extension)
-
-Lazy descriptor fill must survive **across CLI commands** — one command detects the
-keypoint pool, later commands describe more of it on demand — so the working state lives
-on disk, not just in memory. We extend the `.sift` archive itself into a **growable**
-container rather than adding a sidecar. The design rests on one structural choice:
-
-**The `.sift` format already stores features sorted by descending size** (the existing
-backends do this), and the incremental design depends on that ordering. Coarse-to-fine
-always wants the largest keypoints first, so the set of *described* keypoints is always a
-dense **prefix** `[0, M)` of the keypoint list. That
-means we never need a sparse coverage mask — coverage is a single integer `M`
-(`described_count`), and descriptors are stored as contiguous **range chunks** that tile
-that prefix. (Sort ties broken deterministically — e.g. by response, then octave, then
-`(y, x)` — so the order is reproducible.)
-
-**Descriptor chunks as range-named tensor entries.** Instead of one `descriptors`
-array, the archive holds a sequence of append-only chunk entries named by their
-inclusive keypoint-index range:
-
-```
-descriptors.0-100.128.uint8       # first describe-batch: keypoints 0..=100  (101 rows)
-descriptors.101-1000.128.uint8    # later batch appended:  keypoints 101..=1000 (900 rows)
-descriptors.1001-4095.128.uint8   # ...
-```
-
-Chunks are contiguous and gap-free (`next.start == prev.end + 1`) because coverage only
-ever grows as a prefix. Reading the full descriptor block = concatenate chunks in order;
-reading the top-K (coarse-to-fine) = read only the chunks covering `[0, K)`, the natural
-extension of `read_sift_partial`.
-
-**Append data, rewrite two small files.** Each describe-batch:
-
-1. **Appends** one new immutable `descriptors.<a>-<b>.128.uint8` entry to the ZIP. Bulk
-   data is strictly append-only and never rewritten.
-2. **Rewrites the two small mutable JSON entries** — `features/descriptors_metadata.json`
-   (the coverage count `described_count`) and `content_hash.json` (hashes only).
-   `metadata.json` and the keypoint/thumbnail arrays stay immutable, so the stable
-   `feature_set_xxh128` and `metadata_xxh128` never change. Both rewritten files are tiny.
-
-The integrity model evolves but stays verifiable. Today's `content_xxh128` is already a
-*digest of digests* (it hashes the concatenation of each array's xxh128). We keep that
-structure: `content_hash.json.zst` lists the per-entry digests, including one per
-descriptor chunk, and `content_xxh128` is the hash of the concatenated digest list.
-Appending a chunk therefore only appends one digest and rehashes the small digest list —
-**no rehashing of existing data**. At every point the archive is fully verifiable; the
-contract changes from "exactly `N` keypoints each with a descriptor" to "`N` keypoints
-with descriptors for a verified prefix of length `described_count ∈ [0, N]`."
-
-**Lifecycle / CLI flow** (proposed — `--detect` / `--describe` / `--top-k` are
-not yet implemented; today `sfm sift --extract` writes a fully-described file):
-
-```
-sfm sift --detect images        # writes keypoints sorted by size; described_count = 0
-sfm sift --describe -i images --top-k 1000   # appends descriptors.0-999; described_count = 1000
-sfm match ...                   # triggers describe-on-demand for the keypoints it needs,
-                                # appending further chunks; reuses any already on disk
-```
-
-A later command reads `described_count`, computes only the still-missing descriptors
-(rebuilding the `ScaleSpace` from the source image — deterministic given params and the
-`image_file_xxh128` already recorded), and appends them. The pyramid rebuild is the
-price of cross-process laziness; it is paid only when new descriptors are actually
-needed, and amortizes when a batch describes many keypoints at once.
-
-**External consumers.** Tools that need a complete dense block (COLMAP export, bulk
-matching) require `described_count == feature_count`, i.e. describe-all. Once fully
-described, a v2 file can simply be written in the v1 layout (a single descriptors array) for
-those consumers — that is an ordinary format conversion, not a special operation.
-
-**Referential stability.** Appending descriptors changes the file's whole-file
-`content_xxh128`, which would break any `.sfmr`/`.matches`/workspace reference that pinned
-the `.sift` by that hash — even though the expanded file is a strict superset. The format
-solves this with a **stable** `feature_set_xxh128` (over the immutable image + keypoints +
-tool config, excluding descriptors) that references should use instead. Descriptor-dependent
-consumers (matches) additionally verify the immutable `[0, M)` descriptor prefix they relied
-on. Full definitions in [`../../formats/sift-file-format.md`](../../formats/sift-file-format.md).
-This implies updating the `.sfmr`, `.matches`, and workspace specs to reference
-`feature_set_xxh128`.
-
-**Concurrency.** Appending to one ZIP plus rewriting its metadata is a single-writer
-critical section. Wrap describe-and-append in an advisory file lock on the `.sift`
-(monotonic prefix growth makes the lock window short and conflicts rare). Concurrent
-*readers* are unaffected: they read `described_count` and the chunks present.
-
-**Open implementation details to validate.**
-
-- ZIP append mechanics with the `zip` crate: appending data entries is cheap (rewrites
-  only the central directory), but *replacing* the two mutable JSON entries
-  (`features/descriptors_metadata.json.zst`, `content_hash.json.zst`) needs either
-  duplicate-name-last-wins or a central-directory rewrite — pick and pin the reader's
-  resolution rule.
-- This is a `.sift` **format version bump**; `read_sift` must handle both the legacy
-  single-`descriptors` layout and the new chunked layout (legacy = one implicit
-  `0-(N-1)` chunk with `described_count = N`).
-- The normative on-disk definition (chunk naming grammar, `described_count`, the
-  `component_xxh128` digest cache and recompute rule, concurrency) lives in
-  [`../../formats/sift-file-format.md`](../../formats/sift-file-format.md) under "Incremental
-  descriptor extraction (version 2)"; this section is the design rationale.
+All of this is in-memory and lives inside one process: a `.sift` file on disk
+always carries a descriptor for every keypoint it holds. Extending the archive
+into a growable container, so the pool can be detected by one command and
+described by later ones, is proposed in
+[`../../drafts/sift-incremental-extraction-amendment.md`](../../drafts/sift-incremental-extraction-amendment.md).
 
 ### Module structure
 
@@ -761,14 +667,6 @@ existing `sift-format` path. The affine shapes pass straight through — no conv
 unlike the OpenCV backend, which derives them from its `KeyPoint`s via
 `opencv_keypoint_to_affine_shape`.
 
-## Phasing
-
-1. **Phase 1 (this spec): CPU + SIMD + multithread.** Scale space, DoG, detection,
-   localization, orientation, descriptor; SSE2 + rayon. Cross-validate against OpenCV
-   SIFT on the test datasets.
-2. **Phase 2 (future):** GPU compute shaders (separable blur, DoG, extrema, descriptor),
-   reusing the wgpu infrastructure — documented in a future `specs/core/features/gpu-sift.md`.
-
 ## Testing & validation
 
 - **Cross-validation against OpenCV** (`cv2.SIFT_create`) on the checked-in datasets
@@ -787,7 +685,21 @@ unlike the OpenCV backend, which derives them from its `KeyPoint`s via
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/sift.rs`): pyramid build,
   detection, descriptor, end-to-end — same structure as `benches/optical_flow.rs`.
 
+## Non-goals
+
+The implementation is CPU-only — scalar, SSE2 and AVX2 kernels parallelized with
+rayon. A GPU backend for the dense stages is proposed in
+[`../../drafts/sift-gpu-amendment.md`](../../drafts/sift-gpu-amendment.md).
+
+Lazy descriptor fill does not survive the process: `sfm sift --extract` writes a
+fully described `.sift` file, there are no `--detect` / `--describe` /
+`--top-k` flags, and the `.sift` container has one version, which stores every
+descriptor in a single array. Making the archive growable so a keypoint pool can
+be detected once and described across several invocations is proposed in
+[`../../drafts/sift-incremental-extraction-amendment.md`](../../drafts/sift-incremental-extraction-amendment.md).
+
 ## Dependencies
 
-No new crate dependencies anticipated: `rayon` for parallelism, the existing
-`sift-format` crate for I/O, `criterion` (dev) for benchmarks. SIMD via `std::arch`.
+The implementation adds no crate dependencies of its own: `rayon` for
+parallelism, the `sift-format` crate for I/O, `criterion` (dev) for benchmarks,
+and SIMD through `std::arch`.

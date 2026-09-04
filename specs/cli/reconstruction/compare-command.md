@@ -123,13 +123,15 @@ the right. Each tile is the point's oriented surfel projected into one observing
 clean column means the solve placed a real, photoconsistent surface point there. The point
 normals are refined for cross-view photoconsistency first (`--strips-no-refine` to skip).
 
-> _**Precondition — left ungated (2026-06-25):** unlike `--refine-normals` and `render-patches`
-> (which now require `embedded_patches`), `compare --strips` is **intentionally not gated**. It
-> remains a dual-source diagnostic that builds patch clouds from raw solves on the fly: the strip
-> montage is deeply `.sift`-tied (its frame sizing and ranking metrics read feature scales), and
-> as a comparison/inspection tool it is most useful directly on solves without a conversion step.
-> The diagnostic `_solve_strips` engine and the `scripts/exp_*`/`cmp_*` probes likewise keep
-> calling the low-level `PatchCloud.from_reconstruction` directly._
+Unlike `sfm xform --refine-normals` and `sfm render-patches`, which require an
+`embedded_patches` reconstruction, `--strips` is deliberately ungated. It is a
+dual-source diagnostic: given a solve that carries no stored patch frame it
+builds one on the fly through the low-level `PatchCloud.from_reconstruction`,
+which stays dual-mode
+([`_solve_strips.py`](../../../src/sfmtool/_solve_strips.py)). The montage is
+deeply `.sift`-tied — its frame sizing and its ranking metrics read feature
+scales — and as a comparison tool it earns its keep directly on solves, with no
+conversion step in the way.
 
 The strip view always puts points in correspondence by keypoint coordinate (the robust choice
 across SIFT backends), independent of the `--by-coordinate`/`--by-feature-index` choice used for
