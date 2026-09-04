@@ -60,6 +60,18 @@ call gets a `TypeError`, or worse, passes `positions_xy` into the
 > wording was off (the `member_accepted` slot number, and the count of the
 > `MATCHES_FORMAT_VERSION` gates). The methodology note for the next run — key
 > the check on spec → owning command → parameter, not the bare name — stands._
+>
+> _A seventh drift, found later and outside the check's reach:
+> `core/patch/patch-cloud.md:221-222` put `PatchExtent::default()` and the
+> binding's `extent_value` at `5.0`; `patch/cloud.rs:933` and
+> `sfmtool-py/src/patches/cloud.rs:65,127` are both **2.5**. Corrected in commit
+> 7d4d3a4, with the missing distinction the 5.0 came from: `factor` is a
+> half-extent multiplier, so the full patch edge is 5× the projected feature size
+> and that is what the CLI's `--extent-value` states before halving it. **A
+> second methodology note**, then: this value is stated in a `//` comment inside
+> a ` ```rust ` fence rather than in a parameter table, so the scan never saw it.
+> A future run should also read declared defaults out of fenced code, not only
+> out of tables._
 
 ### 2. Duplicate prose between a spec and its implementing code
 
@@ -103,6 +115,27 @@ The third copy is usually a PyO3 binding docstring (`focal_vote.rs:85-160`, 72
 lines; `pose_verification.rs:100-180`, 58 lines). Those mostly earn their length —
 a REPL user cannot click into `specs/` — but they should be reference, not
 rationale.
+
+> _Status (2026-09-03): Done for the eight-row table — 420 lines of
+> re-derivation come down to 177, commit c11c885. Per-block before → after:
+> `decide.rs`'s `decide_member_coherence` 123 → 46, `bspline.rs`'s module header
+> 30 → 24 (plus `bspline_is_monotone`'s two-stage derivation),
+> `pose_verification.rs` 44 → 21, `focal_vote.rs` 40 → 23, `rotation_init.rs`
+> 41 → 20, `translation_averaging.rs` 35 → 18, `absolute_pose.rs` 29 → 17,
+> `observation_coverage.rs` 17 → 8. Each keeps what the code alone cannot say —
+> frame conventions, the `S = diag(1,−1,−1)` conjugation, the log-focal median
+> convention, the center-anchored gauge, identity and panic contracts, the
+> mechanism in the order the code runs it — and points at the spec for the
+> rationale. `decide.rs:4-10`, the exception this section names, now links its
+> spec. The finding's premise that every block already carried a pointer is
+> wrong in one case: `bspline.rs` carried none, and nothing else in
+> `camera/distortion/` does either._
+>
+> _The PyO3 docstrings are deliberately left: nothing in them was found false,
+> and the "reference, not rationale" trim is a separate pass. The two `covisibility`
+> third copies this section's per-spec siblings name (`covisibility.rs:10-13`,
+> `selection.rs:64-69`) are also untouched — they were not in the eight-row
+> table._
 
 ### 3. Spec shape
 
@@ -246,6 +279,33 @@ disagreement**, with nothing telling a reader which wins:
 > `intrinsics_detail/derived.rs:88-97` and `image_detail/intrinsics/field.rs:36`
 > quote or argue with spec wording that this pass replaced._
 >
+> _Status (2026-09-03): Done — every comment this paragraph lists is fixed,
+> commit 7d4d3a4. `focal_vote.rs:647` names the spec's "Pair tables" section;
+> `epipolar_estimation/tests.rs:433` names Testing requirements → Contamination
+> sweep; `absolute_pose.rs:28-32`'s deviation note is now the plain rationale for
+> the plain `Vec` (in the module-doc shrink, c11c885); and the four `sfm-explorer`
+> comments state what the spec now states rather than disputing it — radial
+> models keep the axes straight and bunch the ticks, the tick ladder takes the
+> finest step that clears the spacing, and the distortion maximum bounds its own
+> domain._
+>
+> _Four more of the same family, found while doing it and fixed in the same
+> commit, since the paragraph's inventory was not complete. `focal_vote.rs:425`'s
+> `PairAccum` doc still described "the sampled pass" and "how many clusters
+> sampled this pair", against a field that has been a true shared-cluster
+> covisibility count since the tables went exhaustive. `absolute_pose.rs:47-50`
+> documented `KABSCH_RANK_EPS` as a test on the **smallest** singular value; the
+> code tests the second against the first, and the in-body comment at `:284-288`
+> already said why. `patch/normal_refine/mod.rs:71-72` and `params.rs:229-231`
+> both said the input `u_axis` is reprojected onto the candidate plane with
+> `v = n × u` — `repose_patch` passes `base.v_axis` as `from_center_normal`'s
+> `up_hint`, so it is `v` that is reprojected and `u = v × n` that follows. And
+> `params.rs:196-198` promised `max_refine_views` a "conditioning fallback" that
+> `view_subset.rs:104-112` and `patch-normal-refine-view-subset.md:95-113` both
+> say does not exist and explain why not; the code is right and the doc now
+> matches it, naming the two cases where the subset genuinely does widen back to
+> every view (a point at infinity, and no front-facing view to anchor on)._
+>
 > _Status (2026-09-03): Done — `cluster-patch-refinement.md`'s seven blocks, the
 > last of the set, are gone with the wholesale rewrite of Top priority 3, along
 > with the two dated blocks under other labels this section counted separately
@@ -354,6 +414,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** `observation_coverage.rs:6-18` reproduces spec:12-22 essentially verbatim (13 lines), `:35-41` restates 26-34, `py:17-22` is a third rendering. **The Rust module doc should shrink** to one sentence plus its existing pointer at `:20`; keep the struct doc (a `grid()` caller needs the cell geometry) and the Python docstring.
 **Recommendation:** update spec — add an errors/limits subsection, fix the `grid` signature, list the accessors, add one worked call; then trim `:6-18`.
 **Unclear / incorrect / suspicious:** The Rust-degrades / Python-raises split looks deliberate but is stated nowhere as a decision. `DEFAULT_CELL_PX`'s doc ("The spec's default cell size") points authority at the spec, which is backwards for a standing constant. Nothing outside tests uses `ObservationCoverage`, so its three motivating consumers are still hypothetical.
+> _Status (2026-09-03): Done for the "Third copies" item — `observation_coverage.rs:6-18` is one sentence plus its existing pointer, the module doc going 17 lines to 8, commit c11c885. The struct doc at `:35-41` is deliberately kept: a `grid()` caller needs the cell geometry. `DEFAULT_CELL_PX`'s doc still points authority at the spec, and this section's other findings are untouched._
 
 ### specs/core/camera/sfmtool-fisheye-kernels.md
 **Summary:** The fisheye model whose radial map is a monotone cubic B-spline correction on the equidistant base. Technically accurate — basis gauge, fold gate, safeguarded Newton, two-stage monotonicity and the bit-identity short-circuit table all match. It also doubles as the home for the B-spline basis that `SFMTOOL_PINHOLE` defers to.
@@ -368,6 +429,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** The largest overlap found. `bspline.rs` carries 95 doc lines in a 247-line file re-deriving the center-anchored gauge, the `N ≥ 2` argument, the held-constant tail and two-stage monotonicity in the spec's own words; `kernels.rs:1088-1330` adds 63 more; `intrinsics.rs:170-215` adds 39 more. `specs/formats/sfmtool-camera-models.md:186-201` is a fourth statement of the projection equation. **Shrink `bspline.rs`'s module header** to the shape of the data plus a spec pointer.
 **Recommendation:** update spec — purpose opening, a real Rust interface block (including `d_span` and the `(d, converged)` return) plus one call through `CameraIntrinsics`, fix the `basis_at` attribution, present-tense the testing section.
 **Unclear / incorrect / suspicious:** The B-spline basis is shared machinery for two models but specced under one, with `sfmtool-pinhole-kernels.md:24-30` deferring here — the code has the cleaner split (`bspline.rs` is its own module), so that section wants its own spec. `distortion.rs:952` wraps an already-`Option` return in `Some(...)`, giving `Option<Option<_>>` unwrapped at `:966`; correct, but not what "None from both, together" prepares a reader for.
+> _Status (2026-09-03): Partially done — `bspline.rs`'s module header is 30 lines to 24, and `bspline_is_monotone`'s doc no longer re-derives the two-stage argument, commit c11c885. The re-derivation was not the only problem there: the file — and nothing else in `camera/distortion/` — carried **no** spec pointer at all, which is the likeliest reason its header grew into a standalone derivation. It now names this spec for the basis and the monotonicity invariant, and `formats/sfmtool-camera-models.md` for why the gauge is anchored at the centre. `kernels.rs:1088-1330` and `intrinsics.rs:170-215` are untouched, as is every finding against the spec itself._
 
 ### specs/core/features/cluster-covisibility.md
 **Summary:** The shared-cluster count matrix `W[i,j]`, its acceptance mask, dense storage bound, seed-group iterator and ranking. The algorithm, complexity and determinism content is accurate and earns its place; the scaffolding around it is residue from the promotion-from-experiments change it was written for.
@@ -414,6 +476,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec — fix the Jacobian model list, the allocation and "best refit" claims, reconcile `w=0.05` with `max_iterations`, and replace the copied declarations with rationale plus one real call.
     > _Status (2026-09-03): Partially done — the two 2026-07-14 `Deviation` blocks, which §5a's grep missed, are folded and deleted. `p3p_solve`'s published signature is the real `-> Vec<(UnitQuaternion<f64>, Vector3<f64>)>`, with the reason kept in the "pure function" paragraph: a plain `Vec` reserved once for four poses, because the workspace carries no `arrayvec` dependency. The Kabsch degeneracy paragraph now says the collinearity test reads the **second** singular value against the first (`σ₁ < KABSCH_RANK_EPS · σ₀`, `1e-9`), not the third — three points are always coplanar, so the third vanishes for every triple and its direction is fixed by the determinant correction. The section's other findings are untouched. Two follow-ons: `absolute_pose.rs:28-32`'s module-doc deviation note now contradicts the spec it cites, and `absolute_pose.rs:47-50` documents `KABSCH_RANK_EPS` as the "smallest" singular value where the code (correctly) uses the second — the in-body comment at `:284-288` has it right._
 **Unclear / incorrect / suspicious:** `absolute_pose.rs:505-506`'s comment reads "Keep the refined pose only if it did not shrink the consensus", but the branch it sits in is taken on `new_count <= count` and *discards* the refit — the comment describes behaviour the code does not have (the sibling `local_optimize_f` comment is correct). F1: purpose is stranded at line 8; proposed opening — "Registers one camera against known 3D structure: given image bearings paired with world points, most of which may be wrong matches, recover the camera's rigid pose."
+> _Status (2026-09-03): Done for the "Third copies" item — `absolute_pose.rs:4-32` is 29 lines to 17, keeping the −Z bearing convention, the world-to-camera pose convention and the bit-stability contract, commit c11c885. The "Deviation from the spec (2026-07-14)" note inside it, whose premise the spec no longer holds, is now the plain rationale it always was: a plain `Vec` reserved once for four poses, because the workspace carries no `arrayvec` dependency. The follow-on this section's 2026-09-03 annotation named is fixed too — `KABSCH_RANK_EPS`'s doc said "smallest" singular value where the code (correctly) tests the second against the first, commit 7d4d3a4. `pose_refine.rs:6-19`, the spec's transcribed declarations, and the `local_optimize` comment at `:505-506` this paragraph flags are untouched._
 
 ### specs/core/geometry/epipolar-estimation.md
 **Summary:** 7- and 8-point fundamental solvers, Sampson gating, LO-RANSAC and the Bougnoux focal. Solver descriptions, the Sampson definition, the Bougnoux formula and every default match exactly. The failures are a false cross-reference, a contract the code does not implement, and an overtaken Non-goals list.
@@ -430,6 +493,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Recommendation:** update spec **and code** — fix `fundamental_8pt`'s rank guard to match the documented `None` contract, delete the `compute_epipole` sentence, retire the two overtaken non-goals.
     > _Status (2026-09-03): Partially done — the two 2026-07-16 `Deviation` blocks, which §5a's grep missed, are folded and deleted. "Focal length" now lists the three rejection checks in the order the code applies them: a non-finite entry or a Frobenius norm below `ZERO_F_EPS = 1e-12` **before** the rescaling, because that is what rotation-only zero-baseline motion produces and the normalized direction of such a matrix is pure round-off the `f₁² ≤ 0` sign test does not catch; then `|den| < BOUGNOUX_DEN_EPS = 1e-12`, whose value is set by the denominator's inherent near-cancellation (order `1e-8` at unit Frobenius norm); then the sign test. The Contamination sweep testing bullet states both floors and why they differ — `w⁷` sampling needs ~5×10⁵ trials for 0.999 confidence at `w = 0.2`, so the in-crate sweep floors at 0.35 and the 0.2 end runs against the release-built extension in `test_epipolar_estimation_rust_bindings.py`. The `compute_epipole` sentence, the overtaken non-goals, the `local_optimize_f` refit claim and the post-loop rescoring remain open. Follow-on: `epipolar_estimation/tests.rs:433`'s "See the spec's deviation note" now dangles and should point at Testing requirements → Contamination sweep._
 **Unclear / incorrect / suspicious:** `epipolar_estimation.rs:224-225`'s comment ("A rank-deficient design ... leaves the null direction ambiguous — reject when the largest eigenvalue is ~0") is a non sequitur papering over the missing check. F1: proposed opening — "Recovers the epipolar geometry between two images from matched pixels alone — the fundamental matrix, robust to a match set that may be mostly wrong, plus the focal length it implies when the principal points are known."
+> _Status (2026-09-03): Done for the dangling pointer — `epipolar_estimation/tests.rs:433`'s "See the spec's deviation note" now reads "See the spec's Testing requirements → Contamination sweep", which is where the two floors and the reason they differ ended up, commit 7d4d3a4. `epipolar_estimation.rs:4-26`'s re-derivation was not in Top priority 5's eight-block list and is untouched, as are the spec findings still open above._
 
 ### specs/core/geometry/focal-vote.md
 **Summary:** Estimates focal length from feature tracks before any reconstruction exists. Technically accurate — **every one of 24 documented thresholds matches the code exactly**, the cleanest constants table audited this run — but it is 487 lines of unbroken prose with zero code fences, and it never names the Rust entry points.
@@ -444,6 +508,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** Three. `focal_vote.rs:4-43` (40 lines) re-derives the Overview, the degeneracy argument, log-median rationale and bimodality rule sentence for sentence; `column_scan.rs:44-112` restates each constant's spec rationale verbatim; `py:85-160` (72 lines) re-describes the whole result dict. The theory should stay in the spec; **the Output table and Binding section should point at the pyfunction docstring** rather than duplicating it.
 **Recommendation:** update spec — rewrite "Pair tables" to the exhaustive pass and delete the deviation note; purpose opening; add one `rust` fence with `FocalVoteOptions` + a `focal_vote_with_options` call, and one Python one-liner.
 **Unclear / incorrect / suspicious:** `PairAccum`'s doc (`:425`) still says "from the sampled pass: how many clusters sampled this pair" — stale against its own field, which is a true covisibility count. `focal_vote.rs:765` hardcodes `16.0_f64.max(0.8 * n_f)` rather than naming `RATIO_MIN_F_INLIERS` / `ROTATION_DOMINATION_FRAC` — a code nit.
+> _Status (2026-09-03): Done — both code items this section names are fixed, commit 7d4d3a4. `PairAccum`'s doc (`:425`) no longer says "sampled pass": it describes the exhaustive per-cluster pass, and a count that is the pair's true shared-cluster covisibility. The in-body comment at `:647` pointed at the deviation note #351 deleted and now names the spec's "Pair tables" section, which carries the same argument. Separately the module doc `:4-43` is 40 lines to 23 (c11c885), keeping the log-focal median convention and the column and determinism contracts. `column_scan.rs:44-112`, the 72-line binding docstring, and the `16.0_f64.max(0.8 * n_f)` code nit are untouched._
 
 ### specs/core/geometry/pose-verification.md
 **Summary:** Finds cameras in a finished reconstruction whose poses are wrong and repairs them, using only 2D tracks. Substantively correct and well argued, but its two query signatures are stale, seven of nine tunables are undocumented, and its 135 lines are shadowed by a 45-line module doc.
@@ -459,6 +524,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** The dominant finding. `pose_verification.rs:4-48` is a 45-line module doc covering Purpose, both screens, both load-bearing properties and Repair in the spec's own words. Exact matches: *"estimate the homography over the pair's shared-cluster correspondences,"*; *"rotation. The per-image score is the **median** angular discrepancy over"*; *"registered neighbours — chordal mean of their rotations, mean of their"*. A dozen more match at 0.76–0.99. A fourth copy is the 58-line binding docstring (`py:100-180`). **The module doc should shrink** to a two-line pointer plus what the code alone can say.
 **Recommendation:** update spec — fold errata (1)–(5) into the body and delete the block, purpose opening, correct the `nearest`/`farthest` signatures and the `displacement.rs` path, table all twelve defaults, add one `verify_poses` call; then cut `pose_verification.rs:4-48`.
 **Unclear / incorrect / suspicious:** "Testing requirements" (`:114-127`) is phrased as requirements ("construction cost linear in observations under the span cap") and **no test asserts that linearity claim**. The focal-vote spec's parallel section is present tense and is the better model.
+> _Status (2026-09-03): Done for the "Third copies" item, this section's dominant finding — `pose_verification.rs:4-48` is 45 lines to 21, commit c11c885. What it keeps is what the spec does not: the canonical −Z frame and the world-to-camera pose convention, and — because those are what make it necessary — the `S = diag(1, −1, −1)` conjugation of Screen B's optical-frame `K⁻¹HK`. Both screens at length, both load-bearing properties and the repair acceptance rule are now the spec's alone, which states all of them after the errata folding. The 58-line binding docstring is deliberately left; nothing in it was found false._
 
 ### specs/core/geometry/translation-averaging.md
 **Summary:** Solves camera centres from pairwise translation directions, with the constellation as the form's own null space. Spec and code landed together in d99b19c, so the physics, gauges, null-space rule, rank tolerance and reweighting all match exactly. The gaps are interface-shaped.
@@ -474,6 +540,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** `translation_averaging.rs:4-38` (~35 lines) re-derives the objective, the `P_ij` projector, the null-space-is-the-constellation argument, the colinear-path example and the loose-frame rule near-verbatim against spec:27-84 — and already carries `See specs/...` at `:38`. `py:110-124` is a third telling. **Shrink the core module doc** to one paragraph plus the link.
 **Recommendation:** update spec — fix "Three functions", substitute real defaults for the `...`, add a Rust interface and one example call, name the orientation census keys.
 **Unclear / incorrect / suspicious:** Spec:172-174 asserts batch triangulation returns "the minimum-norm point in the observable subspace where those rays are exactly parallel, so no point drops out of the vote" — a load-bearing claim this spec states but does not own; if `triangulate_batch` changes, the parallel-ray points silently vote. `spectrum` (`:449`) does a dense `SymmetricEigen` of a `3n × 3n` matrix inside the reweighting loop, so the solve is O(rounds · n³); the Determinism section discusses eigenvector sign but never the cost, and no frame-count ceiling is stated.
+> _Status (2026-09-03): Done for the "Third copies" item — `translation_averaging.rs:4-38` is 35 lines to 18, commit c11c885. The objective, the `P_ij` projector, the two gauges and the null-space-is-the-constellation argument all go to the spec, which states them at length; what stays is what the module offers and why the two side operations sit beside the solve. `py:110-124` is untouched, and every finding against the spec itself remains open._
 
 ### specs/core/geometry/rotation-init.md
 **Summary:** Far-field rotation initialization for captures whose parallax is too weak to seed any other way. All thirteen tuning constants still match. The problem is structural: two dated status notes occupy 30 of 142 lines between the title and "## Purpose", one still correcting the body below it.
@@ -491,6 +558,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** `rotation_init.rs:4-44` (~40 lines) restates Purpose and all four Mechanism stages, the opening near-verbatim against spec:45-54. The binding doc (`py:14-48`) is a third copy. **Shrink the core module doc** — but it uniquely carries the −Z frame and the `S` conjugation, which must move *into* the spec rather than be deleted.
 **Recommendation:** update spec — fold both notes into the present-tense body (fixing §1's table claim and §4's gates), correct the keyword-only signature, add the pose convention and the cluster-run input contract.
 **Unclear / incorrect / suspicious:** Note (2) chains a *second* note ("see the 2026-08-11 status below"), so a reader must reconcile the body against two errata. Notes (1)–(2) are now largely reflected in the body, making the blocks more stale than the text they annotate. F1: proposed opening — "Far-field rotation initialization poses a first handful of cameras on captures whose parallax is too weak to seed any other way, by letting the distant, parallax-free correspondences fix the rotations first and the near ones supply the metric frame afterwards."
+> _Status (2026-09-03): Partially done — `rotation_init.rs:4-44` is 41 lines to 20, commit c11c885. The four Mechanism stages go to the spec, which carries them in full after the folding pass, and the doc names the four private helpers in their running order instead. **The −Z frame convention and the `S = diag(1,−1,−1)` boundary conjugation stay in the doc in full**: this section asks that they move *into* the spec, and after #351 `rotation-init.md` contains neither string, so deleting them from the code would have lost them outright. That half of the finding is still open, with `H_MAX_ERROR_PX`, the cluster-run input contract, the pose convention and the BA budget._
 
 ### specs/core/patch/cluster-patch-refinement.md
 **Summary:** Turns a `.matches` file's SIFT clusters into patch clusters. All five numbered steps are genuinely shipped and the kernel, binding, CLI and every `ClusterRefineParams` default match. But the document is still shaped as a work order — the most drifted spec found this run, and the highest-churn module in the repo since the last audit.
@@ -549,6 +617,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** The corpus's worst. The five exactly-matching lines are all spec↔`decide.rs` (spec:203-204 = `:195-196`; spec:227 = `:213`; spec:241 = `:108`; spec:300 = `:250`; spec:308 = `:257`), and they are residue of a much larger overlap: `decide_member_coherence`'s doc (`decide.rs:182-304`, **123 lines**) is a near-complete restatement of spec §§201-352, with the same calibration numbers and the same four-step tightening list. **The doc comment should shrink** to the mechanism (~35 lines) plus the spec link. `decide.rs:4-10` is the only module doc here that does *not* point at the spec — `member_coherence.rs:6` and `matrix.rs` both do — likely why it grew into a standalone essay.
 **Recommendation:** update code — fix `member_coherence.rs:381` to "first (finest) coarse grid scale", shrink `decide.rs:182-304`, add the spec link to `decide.rs:4-10`. Optionally move spec:431-479 below the API and add a three-line worked call.
 **Unclear / incorrect / suspicious:** none.
+> _Status (2026-09-03): Done for both code items — `decide_member_coherence`'s doc is 123 lines to 46, and `decide.rs:4-10` gains the spec link it was the only module doc in this directory to lack. Commit c11c885. What survives is the mechanism as six numbered steps in the order the code runs them, with the `effective_bar` / `effective_margin_gate` formulas, the once-only tightening, the inert conditions for each term, and the scored-members rule; the calibration numbers, the circularity argument, the exoneration asymmetry and the one-halving justification are the spec's, which states all of them. The optional spec edits this section suggests — moving `:431-479` below the API, adding a worked call — are untouched._
 
 ### specs/core/analysis/keypoint-reach.md
 **Summary:** Per-image enumeration of which keypoints fall inside another keypoint's own reach disk. Faithful on semantics — directedness, the self pair, non-finite reach, the sorted-column run, batch invariance. But it documents a Python binding for a crate whose Rust surface it never names, and two of its sections describe callers that do not exist.
@@ -563,6 +632,7 @@ Next: `patch/normal_refine` (28), `patch/keypoint_localize` (20),
 **Third copies:** Mild and healthy. `keypoint_reach.rs:4-27` (24 lines) restates the opening, directedness and mechanism but ends with the spec pointer and stops short of the rationale. The PyO3 doc (`py:20-52`) restates the contract for `help()`, which is its job. **No copy needs to shrink; the spec needs to grow.**
 **Recommendation:** update spec — add the Rust interface with `KeypointRows` / `ReachPairs` / `pairs_within_reach` and a two-line call, state the image-ascending output order, fold in the no-FMA note, and demote §"What consumes it" and the "Caller parity" bullet to what they are (the rules this was extracted from, still on their NumPy expansions) until the callers are migrated.
 **Unclear / incorrect / suspicious:** The spec sits in `specs/core/analysis/` while the code sits in `crates/sfmtool-core/src/spatial/` — deliberate (the source points back, and the README row is filed there), but it is the only `core/` spec whose directory does not mirror its module.
+> _Status (2026-09-03): Done for the demotion — re-verified first: `pairs_within_reach` and `keypoint_pairs_within_reach` still have no caller outside `spatial/keypoint_reach/tests.rs`, the binding's own registration, and `tests/rust_bindings/test_keypoint_reach_rust_bindings.py`. "What consumes it" now says exactly that and names those as the only callers; the two rules move to a new `Open questions` item, written as a migration that could happen and carrying the byte-parity such a migration would have to establish rather than claiming it as tested. The "Caller parity" testing bullet goes with them, and Mechanism no longer justifies intra-image parallelism by what "the callers" do. Commit 93eb19d. The rest of this section — the missing Rust interface, the unstated image-ascending output order, the no-FMA note — is open. `keypoint_reach.rs:4-27` was already correctly sized and is untouched._
 
 ---
 
@@ -786,6 +856,35 @@ a new document.
    consumers and a byte-parity test in the present tense that **do not exist**
    (verified: zero non-test callers); demote those sections until the NumPy
    callers are migrated.
+
+> _Status (2026-09-03): Done — all eight blocks shrunk (commit c11c885) and
+> `keypoint-reach.md` demoted (93eb19d), plus the Rust doc-comment follow-ons
+> the §5a annotation had inventoried (7d4d3a4). Module-doc line counts before →
+> after: `observation_coverage.rs` 17 → 8, `bspline.rs` 30 → 24,
+> `pose_verification.rs` 44 → 21, `focal_vote.rs` 40 → 23, `rotation_init.rs`
+> 41 → 20, `translation_averaging.rs` 35 → 18, `absolute_pose.rs` 29 → 17; and
+> `decide_member_coherence`'s function doc 123 → 46, kept as the six-step
+> mechanism in the order the code runs it. 420 lines of re-derivation → 177, and
+> `decide.rs`'s module doc gains the spec link it was the only one in its
+> directory to lack. No behaviour change; the rustdoc gate and the `sfmtool-core`
+> doctests pass._
+>
+> _Three corrections to the finding's premise, found while doing it. First, not
+> every block "already carried a `See specs/...` pointer": `bspline.rs` had none
+> at all, nor did any other file in `camera/distortion/`, which is the likeliest
+> reason its header grew — it now names `sfmtool-fisheye-kernels.md` for the
+> basis and `formats/sfmtool-camera-models.md` for the gauge. Second,
+> `rotation_init.rs`'s −Z frame and `S = diag(1,−1,−1)` conjugation are still
+> **not** in `rotation-init.md` after the #351 folding pass, so the doc keeps
+> them in full rather than pointing; the finding's "must move into the spec"
+> remains open. Third, `bspline.rs`'s re-derivation is not confined to the module
+> header — `bspline_is_monotone`'s doc re-derived the two-stage test, and is
+> shrunk with it._
+>
+> _One item of the finding is deliberately untouched: the PyO3 binding
+> docstrings (`sfmtool-py/src/geometry/focal_vote.rs`, `pose_verification.rs`)
+> earn their length, since a REPL user cannot click into `specs/`. Nothing in
+> them was found false._
 
 ---
 
