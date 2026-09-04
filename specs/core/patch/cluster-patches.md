@@ -214,10 +214,9 @@ Defaults (from the experiment calibration):
 The kernel belongs in `sfmtool-core` (a `patch::cluster_refine` sibling of
 the existing keypoint kernels — it reuses the same ZNCC/rendering machinery),
 exposed through `sfmtool-py`; the CLI command is thin orchestration, per the
-repo's pattern. The full production design — Rust signatures, algorithm,
-bindings, format I/O changes, reuse map, AVX2 plan, tests — is specified in
-[cluster-patch-refinement.md](cluster-patch-refinement.md). The experiment
-scripts stay as the behavioral reference until the Rust kernel lands.
+repo's pattern. The kernel itself — Rust signatures, algorithm, bindings,
+numerics and tests — is specified in
+[cluster-patch-refinement.md](cluster-patch-refinement.md).
 
 ## Consumers (future work, out of scope here)
 

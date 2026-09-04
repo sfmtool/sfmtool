@@ -36,7 +36,7 @@ across views, and everything refined on top of it. Implemented in
 | Document | Description |
 |----------|-------------|
 | [cluster-patches.md](cluster-patches.md) | Promoting SIFT clusters to patch clusters. |
-| [cluster-patch-refinement.md](cluster-patch-refinement.md) | The production cluster-patch refinement pipeline. |
+| [cluster-patch-refinement.md](cluster-patch-refinement.md) | The refinement kernel: a windowed-ZNCC affine cascade from the reference member's patch onto every other member. |
 | [cluster-warp-consistency.md](cluster-warp-consistency.md) | A reconstruction-free per-member consistency signal: the weak-perspective factorization residual. |
 | [member-coherence-validation.md](member-coherence-validation.md) | Pairwise track agreement and the max-support block that decides which members belong. |
 | [candidate-track-spawning.md](candidate-track-spawning.md) | Congealing new candidate tracks at offsets from an existing patch frame. |
