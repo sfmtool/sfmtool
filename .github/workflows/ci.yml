@@ -520,10 +520,99 @@ jobs:
             !target/**/incremental/**
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
 
+  # Linux accessibility UI tests. The same xa11y-driven suite as the Windows
+  # and macOS jobs, but Linux is where the accessibility API has to be *stood
+  # up* rather than merely used: AT-SPI2 is a pair of D-Bus services, and a
+  # bare runner has neither them, nor a session bus to put them on, nor a
+  # display to open a window on. setup-a11y installs and starts all of that.
+  # `setup-window-manager` is off by default and turned on here as insurance
+  # rather than a proven need: the action's docs flag egui/AccessKit as a
+  # toolkit whose tree can depend on a window being mapped and activated, but
+  # this viewer publishes its whole tree under a bare Xvfb and the suite passes
+  # without a WM. Starting fluxbox costs a second, so it stays on.
+  #
+  # `mesa-vulkan-drivers` is ours to add rather than the action's: the viewer's
+  # wgpu build carries only the Vulkan backend on Linux (see sfm-explorer's
+  # Cargo.toml), so with the loader present but no ICD behind it every launch
+  # panics on `Failed to create wgpu surface` before there is a window to read
+  # a tree from. lavapipe, which this package carries, renders the suite fine.
+  ui-test-linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: prefix-dev/setup-pixi@v0.9.6
+        with:
+          environments: ui
+          cache: true
+      - name: Cache cargo home
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
+          # unchanged lockfile — no per-run resave of this bulk — and refreshed
+          # only when dependencies change. Shared across all same-OS jobs.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-home-
+      - name: Restore Rust target
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          # The exact key never matches (run_id), so restore always falls back via
+          # restore-keys to the latest cache — which is only ever written on main
+          # (see the Save step). Caches are branch-scoped: a main-saved cache is
+          # the one every PR can read, so PRs restore a warm target for free.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-
+            ${{ runner.os }}-cargo-ui-target-
+
+      - name: Set up accessibility environment
+        uses: xa11y/setup-a11y@v1
+        with:
+          setup-window-manager: true
+          extra-packages: mesa-vulkan-drivers
+
+      # DISPLAY, the session bus and the AT-SPI daemons are live in the job env
+      # by now, so the `scripts/a11y_env.sh` wrapper the Linux `ui-test` task
+      # goes through finds everything already running and is a passthrough.
+      - name: UI tests
+        run: pixi run -e ui ui-test
+
+      - name: Save Rust target
+        # Save only on main: branch scoping means PR-written caches help nobody
+        # else, so PR runs skip the save entirely. run_id keeps the key unique so
+        # each main push refreshes the cache instead of freezing on an
+        # already-existing key.
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
   ci-ok:
-    needs: [changes, lint, msrv, test-linux, test-os, ui-test-windows, ui-test-macos]
+    needs:
+      [
+        changes,
+        lint,
+        msrv,
+        test-linux,
+        test-os,
+        ui-test-windows,
+        ui-test-macos,
+        ui-test-linux,
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:

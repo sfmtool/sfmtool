@@ -132,7 +132,9 @@ deleting the lines.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `suggest-next-steps`). See "Quality reports" below.
 - `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
-  Windows and macOS run the same suites without instrumentation; pixi env and
+  Windows and macOS run the same suites without instrumentation; the windowed
+  `ui_basic` suite gets a job per platform — `ui-test-windows`,
+  `ui-test-macos`, `ui-test-linux`; pixi env and
   Rust build are cached), `docs.yml`, `publish_to_pypi.yml`.
 
 ## CLI
@@ -191,14 +193,27 @@ backlog and keep them honest as findings get addressed:
 - `pixi run test-rust` excludes `sfmtool-py` and `sfm-explorer` (llvm-cov
   limitations). Use `pixi run cargo test --workspace` to cover those.
   `sfm-explorer` splits in two: its `ui_basic` integration tests need a real
-  window (Windows/macOS only, `pixi run ui-test`), while its **lib** tests are
-  headless — `scene_renderer/upload/tests.rs` drives real `wgpu` uploads on the
-  `noop` backend and `point_track_detail/tests.rs` runs whole egui frames
-  through `Context::run_ui`, so `cargo test -p sfm-explorer --lib` needs
-  neither a GPU nor a window and runs anywhere. In CI
-  they execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but
-  does not run them, to keep uninstrumented artifacts out of the coverage
-  job's target dir.
+  window (`pixi run ui-test`, on all three desktop platforms), while its **lib**
+  tests are headless — `scene_renderer/upload/tests.rs` drives real `wgpu`
+  uploads on the `noop` backend and `point_track_detail/tests.rs` runs whole
+  egui frames through `Context::run_ui`, so `cargo test -p sfm-explorer --lib`
+  needs neither a GPU nor a window and runs anywhere. In CI those lib tests
+  execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but does
+  not run them, to keep uninstrumented artifacts out of the coverage job's
+  target dir. `ui_basic` has a job per platform instead
+  (`ui-test-{windows,macos,linux}`).
+- **`pixi run ui-test` on Linux needs an accessibility stack, and says nothing
+  when it is missing.** xa11y reads the viewer's tree over AT-SPI2, which is a
+  pair of D-Bus services rather than part of the OS, so a headless box needs a
+  display, a session bus and those daemons before there is a tree at all — and
+  a query without them returns an *empty* tree, not an error, so every widget
+  assertion fails while the launch looks healthy. The Linux `ui-test` task
+  routes through `scripts/a11y_env.sh`, which starts only what is missing and
+  is a passthrough on a real desktop; CI uses `xa11y/setup-a11y` for the same
+  thing. The viewer also needs a Vulkan ICD (`mesa-vulkan-drivers` for
+  lavapipe): Vulkan is the only wgpu backend compiled in for Linux, so without
+  one it panics at surface creation. See `specs/gui/architecture.md` §
+  "Testing".
 - Rustdoc warnings are **errors**, via `[workspace.lints.rustdoc]` in the root
   `Cargo.toml` (each crate opts in with `[lints] workspace = true`). That means
   a plain `cargo doc` fails on a broken intra-doc link, not just `pixi run doc`.

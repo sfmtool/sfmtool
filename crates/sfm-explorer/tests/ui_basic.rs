@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(any(windows, target_os = "macos"))]
+#![cfg(any(windows, target_os = "macos", target_os = "linux"))]
 
 use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, Once};
@@ -64,7 +64,11 @@ fn launch_with(args: &[&str]) -> Child {
     // idle window can be inspected before the tree is fully published. Only
     // needed on macOS; Windows attaches to a window that already repaints
     // enough, and forcing ControlFlow::Poll there would disturb its
-    // DirectManipulation timer.
+    // DirectManipulation timer. Linux needs it as little as Windows does, for
+    // a different reason: AccessKit's Unix adapter pushes the tree onto the
+    // AT-SPI bus, where it stays readable after the viewer goes idle, and an
+    // action arriving back over that bus wakes the loop for the frame that
+    // answers it — the suite passes there with the viewer idling.
     #[cfg(target_os = "macos")]
     cmd.env("SFMTOOL_EXPLORER_FORCE_REPAINT", "1");
     cmd.spawn().expect("failed to spawn sfm-explorer")
@@ -165,10 +169,14 @@ fn attach_app(_child: &Child) -> App {
     .expect("sfm-explorer window did not appear")
 }
 
-/// On macOS a process is a single AXApplication whose name is the executable,
-/// not the window title, so `by_pid` resolves the right root directly — and a
-/// title-based `find` would just burn the full timeout before any fallback.
-#[cfg(target_os = "macos")]
+/// Everywhere else a process has exactly one accessibility root and the pid
+/// resolves it directly, so `by_pid` is both correct and cheap — a title-based
+/// `find` would just burn the full timeout before any fallback. On macOS that
+/// root is the AXApplication, named after the executable rather than the
+/// window; on Linux it is the AT-SPI `application` the AccessKit adapter
+/// registers for the process. Being pid-addressed also makes the MCP tests'
+/// `[MCP :port]` title suffix a non-issue on both.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn attach_app(child: &Child) -> App {
     App::by_pid(child.id(), ATTACH_TIMEOUT).expect("sfm-explorer did not appear")
 }
@@ -544,8 +552,8 @@ fn a_saved_default_layout_is_loaded_at_startup() {
 /// A viewer with its MCP endpoint live, and the address it printed.
 struct McpViewer {
     /// Held for its `Drop`, which kills the viewer and releases the
-    /// serialization lock. Read only on macOS, where the accessibility root is
-    /// found by pid.
+    /// serialization lock. Read on macOS and Linux, where the accessibility
+    /// root is found by pid.
     #[allow(dead_code)]
     guard: Guard,
     address: String,
@@ -606,7 +614,7 @@ impl McpViewer {
             })
             .expect("sfm-explorer window did not appear")
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             App::by_pid(self.guard.child().id(), ATTACH_TIMEOUT)
                 .expect("sfm-explorer did not appear")

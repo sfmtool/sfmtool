@@ -1912,10 +1912,11 @@ argument arriving as a JSON-RPC error instead, and a foreign `Origin` getting
 the case that matters most: `--mcp scene.sfmr` must not eat the path as a port.
 
 **`screenshot` is the one tool with a real frame behind it**, so it also has
-tests in `ui_basic` (Windows/macOS, `pixi run ui-test`), which launch a viewer
-with `--mcp 0`, read the endpoint off its stdout and speak the same hand-written
-HTTP to it. Those assert the size and decodability of the PNG rather than its
-pixels, since what a frame *looks* like is not a stable thing to assert: a
+tests in `ui_basic` (`pixi run ui-test`, on all three desktop platforms), which
+launch a viewer with `--mcp 0`, read the endpoint off its stdout and speak the
+same hand-written HTTP to it. Those assert the size and decodability of the PNG
+rather than its pixels, since what a frame *looks* like is not a stable thing
+to assert: a
 `screenshot` with no arguments decodes to the window's `inner_size`, one of a
 panel decodes smaller in both axes, `max_dimension` bounds the longer side, the
 render target is inside the `viewer_3d` crop and within a body margin of it, and

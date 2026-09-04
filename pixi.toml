@@ -60,6 +60,18 @@ ui-test = "cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
 # this must run in an environment that has one — `lint` and `test` both do.
 doc = "cargo doc --workspace --no-deps --document-private-items"
 
+# The same UI suite on Linux, wrapped in the accessibility stack it reads the
+# viewer's tree through. Windows and macOS have theirs running as part of the
+# desktop; on Linux AT-SPI2 is a set of D-Bus services that a headless box — a
+# container, a CI runner, an SSH session — simply does not have, and a missing
+# one shows up as an empty tree rather than an error. The wrapper starts only
+# what the environment lacks, so on a real desktop (or under `xa11y/setup-a11y`
+# in CI) it is a passthrough. Target-scoped tasks override the workspace-wide
+# one of the same name, so `pixi run ui-test` is the command on all three
+# platforms.
+[target.linux-64.tasks]
+ui-test = "bash scripts/a11y_env.sh cargo test -p sfm-explorer --test ui_basic -- --test-threads=1"
+
 # Linting: ruff plus a Python interpreter. clippy doesn't link libpython, but the
 # PyO3 build script for sfmtool-py needs an interpreter at compile time.
 [feature.lint.dependencies]
@@ -80,6 +92,21 @@ ruff = ">=0.16.6, <0.17"
 [feature.lint-tasks.tasks]
 fmt = "ruff format src tests"
 check = "ruff check src tests"
+
+# xa11y's Linux backend links libxkbcommon (its Wayland input path), and on
+# Linux the linker is the conda toolchain out of the environment, which searches
+# its own prefix and sysroot rather than /usr/lib. An apt `libxkbcommon-dev` is
+# invisible to it, so `cargo test -p sfm-explorer --test ui_basic` fails at link
+# with `unable to find library -lxkbcommon` however complete the system is —
+# and putting /usr/lib on the linker's search path is not the fix, because it
+# then takes the system glibc's startup objects too and fails on the
+# `__libc_csu_init` that glibc dropped in 2.34.
+#
+# `ui` is the one environment that builds that target on Linux and the one
+# stripped down enough to lack the library; every other Linux environment
+# already pulls it in transitively through pycolmap's Qt stack.
+[feature.ui-linux.target.linux-64.dependencies]
+libxkbcommon = ">=1.13.2,<2"
 
 [feature.test.dependencies]
 cargo-llvm-cov = ">=0.9.0,<0.10"
@@ -150,7 +177,7 @@ pycolmap = { version = ">=4.2.0,<5", build = "cuda*" }
 [environments]
 default = { features = ["runtime", "editable", "cpu"], solve-group = "default" }
 lint = { features = ["lint", "lint-tasks", "cpu"], solve-group = "default" }
-ui = { features = ["cpu"], solve-group = "default" }
+ui = { features = ["ui-linux", "cpu"], solve-group = "default" }
 test = { features = ["runtime", "editable", "lint", "test", "test-tasks", "cpu"], solve-group = "default" }
 # Same packages as `test` but without the editable self-install, so `pixi
 # install` does no Rust build. CI installs this and compiles the extension

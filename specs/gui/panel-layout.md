@@ -1008,11 +1008,11 @@ is `show_panel` / `hide_panel`, tested directly against `is_panel_open` and the
 resulting `Layout` — synthesizing a pointer press at a widget rect would test
 egui's checkbox rather than anything this spec decides.
 
-`crates/sfm-explorer/tests/ui_basic.rs` (Windows/macOS) covers the one thing no
-headless test can: a small default-layout file written to the home directory,
-the viewer launched *without* `--no-default-layout`, and the panel that file
-named found in the accessibility tree — the startup load end to end, through a
-real window. It puts the developer's own file back afterwards. Every other test
+`crates/sfm-explorer/tests/ui_basic.rs` (Windows, macOS and Linux) covers the
+one thing no headless test can: a small default-layout file written to the home
+directory, the viewer launched *without* `--no-default-layout`, and the panel
+that file named found in the accessibility tree — the startup load end to end,
+through a real window. It puts the developer's own file back afterwards. Every other test
 there passes `--no-default-layout`, so a saved layout on the machine running the
 suite cannot make its panel assertions fail.
 

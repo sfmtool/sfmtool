@@ -129,18 +129,23 @@ windows-core = "0.62"
 [build-dependencies]
 winres = "0.1"
 
+[dev-dependencies]
 # The `noop` backend gives the upload tests a real `wgpu::Device` with no GPU:
 # wgpu-core still does its full validation (limits, texture extents, copy sizes,
 # pipeline/shader checks) while wgpu-hal stubs out the actual driver calls. As a
 # dev-dependency the feature is unified only into test builds, so the shipped
 # binary is unaffected.
-[dev-dependencies]
 wgpu = { version = "30", features = ["noop"] }
 
-# UI tests drive the accessibility tree, which xa11y exposes on Windows (UI
-# Automation) and macOS (AXUIElement). Linux (AT-SPI) is intentionally left out:
-# the headless CI display lacks the AT-SPI bridge the tree needs.
-[target.'cfg(any(windows, target_os = "macos"))'.dev-dependencies]
+# UI tests drive the accessibility tree, which xa11y reads on all three desktop
+# platforms: Windows (UI Automation), macOS (AXUIElement), Linux (AT-SPI2 over
+# D-Bus). Linux is the one whose API has to be brought up rather than merely
+# used: AT-SPI2 is a pair of D-Bus services, so a headless box needs a display,
+# a session bus and those daemons started before there is any tree to read, and
+# a missing piece reads as an empty tree rather than an error.
+# `scripts/a11y_env.sh` stands that up locally; `xa11y/setup-a11y` does it in
+# CI. Not target-gated: `ui_basic` is `cfg`'d to those three targets, so a
+# fourth compiles it away and never reaches this dependency.
 xa11y = "0.12"
 # `ui_basic`'s MCP screenshot tests speak the wire to a real viewer and decode
 # the PNG a real frame produced. An integration test sees only dev-dependencies,

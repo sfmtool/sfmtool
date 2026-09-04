@@ -424,7 +424,73 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 - Trackpad gestures via native NSEvent / egui's built-in `zoom_delta`
 - Metal backend via wgpu
 
-### Linux (Planned)
+### Linux
 
-- Vulkan backend via wgpu
-- Touchpad support via libinput (through winit)
+- **Graphics backend**: Vulkan via wgpu, on X11 or Wayland through winit. It is
+  the only backend the crate compiles in for this platform (`wgpu`'s features
+  in `crates/sfm-explorer/Cargo.toml` name `dx12`, `vulkan` and `metal`), so
+  there is nothing to fall back to: a machine carrying the Vulkan loader with
+  no ICD behind it — a bare CI runner is the usual one — panics on
+  `Failed to create wgpu surface` at startup rather than degrading to software
+  GL. Mesa's lavapipe is enough to run the viewer, and is what the
+  `ui-test-linux` CI job installs.
+- **Accessibility**: AT-SPI2 over D-Bus, published by AccessKit's Unix adapter.
+  Unlike UI Automation and the AX API, this is not part of the OS: the tree
+  exists only where a session bus and the `at-spi-bus-launcher` /
+  `at-spi2-registryd` daemons are running, and a client that queries without
+  them gets an empty tree rather than an error. The tree is pushed to the bus
+  rather than pulled from the process, so it stays readable while the viewer
+  idles, and an action arriving back over the bus wakes the event loop for the
+  frame that answers it. This is what makes `ui_basic` a three-platform suite;
+  see "Testing" below.
+- **Touchpad gestures**: none of their own. The precision-touchpad handling
+  under Windows is DirectManipulation-specific, and Linux gets whatever winit
+  reports as scroll and egui's built-in pinch handling.
+
+## Testing
+
+The crate's tests split by what they need underneath them. The **lib** tests
+are headless and run anywhere: `scene_renderer/upload/tests.rs` drives real
+`wgpu` uploads on the `noop` backend, which validates in wgpu-core while
+stubbing the driver, and `point_track_detail/tests.rs` runs whole egui frames
+through `Context::run_ui`. Everything decidable without an OS is decided there,
+because it is decidable in milliseconds and on every platform.
+
+The **`ui_basic`** integration tests are the other half: a real window, a real
+GPU surface, and the app's own accessibility tree read back out of the OS by
+[xa11y](https://xa11y.dev). They exist for the defects that live below egui and
+that nothing above the window can see — a menu item wired to a command the
+event loop never reads, a HUD checkbox that never reaches the tree, a
+`screenshot` of a frame that was actually presented. They run on all three
+desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
+mutex, so a plain `cargo test` behaves like `--test-threads=1`).
+
+What differs per platform is how the suite reaches the tree, and what has to
+exist before there is one to reach:
+
+| | Accessibility API | Root the suite attaches to | What the environment must provide |
+|---|---|---|---|
+| Windows | UI Automation | the window, found **by title** — a process owns several top-level windows and `by_pid` lands on a winit helper | nothing; UIA is always live |
+| macOS | AXUIElement | the AXApplication, found **by pid** | the Accessibility (TCC) grant, on the exact test binary |
+| Linux | AT-SPI2 (D-Bus) | the `application` node, found **by pid** | a display, a session bus, and the AT-SPI daemons on it |
+
+Linux is the platform where the API has to be stood up rather than merely used,
+and the failure is silent — a query against a missing bus returns an empty tree
+rather than an error, so the viewer looks like it has no UI. Two wrappers do
+that setup, and both are no-ops once the pieces are already running (a real
+desktop, or an outer harness): `scripts/a11y_env.sh`, which the Linux
+`ui-test` task goes through, and the `xa11y/setup-a11y` action, which the
+`ui-test-linux` CI job uses. A window manager is started alongside the display
+for fidelity to a real desktop rather than out of need: this viewer publishes
+its whole tree under a bare Xvfb.
+
+Two things beyond the tree are platform-bound. The `--mcp` screenshot tests
+speak hand-written HTTP to a viewer's own endpoint and decode the PNG a real
+frame produced, which needs a working GPU surface — on Linux that means a
+Vulkan ICD, per "Linux" above. And the right-click test is Windows-only by
+construction: it drives synthetic mouse input to catch a `WM_POINTER` routing
+defect that exists only there.
+
+In CI the three suites are three jobs — `ui-test-windows`, `ui-test-macos`,
+`ui-test-linux` — separate from the coverage job, which excludes `sfm-explorer`
+entirely so that uninstrumented artifacts never land in its target directory.
