@@ -479,16 +479,16 @@ fn a_fixed_column_set_never_escalates() {
 /// A parsed `.matches` value carrying a synthetic capture as its cluster
 /// backbone, at the given per-image dimensions.
 ///
-/// The member arrays ARE the capture's observation arrays -- the file's layout
-/// and the vote's are the same layout -- with the positions narrowed to the
-/// `f32` a file stores, so the entry's widening is exercised on values that
-/// round-trip exactly.
+/// The member arrays ARE the capture's observation arrays -- the file's layout,
+/// the vote's layout and the vote's element type are all the same -- so the
+/// from-matches entry and the array entry see identical values with nothing
+/// converted between them.
 fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
     let n_members = obs.image.len();
     let mut positions = ndarray::Array2::<f32>::zeros((n_members, 2));
     for (row, p) in obs.pos.iter().enumerate() {
-        positions[[row, 0]] = p[0] as f32;
-        positions[[row, 1]] = p[1] as f32;
+        positions[[row, 0]] = p[0];
+        positions[[row, 1]] = p[1];
     }
     let mut image_dims = ndarray::Array2::<u32>::zeros((dims.len(), 2));
     for (row, &(w, h)) in dims.iter().enumerate() {
@@ -550,16 +550,6 @@ fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
     }
 }
 
-/// The same capture the file carries, read back as the array entry sees it:
-/// the file's `f32` positions widened, which is what the from-matches entry
-/// does once.
-fn widened(obs: &Obs) -> Vec<[f64; 2]> {
-    obs.pos
-        .iter()
-        .map(|p| [f64::from(p[0] as f32), f64::from(p[1] as f32)])
-        .collect()
-}
-
 #[test]
 fn the_from_matches_entry_is_the_array_entry() {
     let obs = fisheye_scene(2718);
@@ -569,7 +559,7 @@ fn the_from_matches_entry_is_the_array_entry() {
 
     let from_file =
         estimate_intrinsics_from_matches(&matches_of(&obs, &dims), &options).expect("readable");
-    let from_arrays = estimate_intrinsics(&obs.starts, &obs.image, &widened(&obs), W, H, &options);
+    let from_arrays = estimate_intrinsics(&obs.starts, &obs.image, &obs.pos, W, H, &options);
 
     assert_eq!(from_file.camera_model, from_arrays.camera_model);
     assert_eq!(from_file.confirmed, from_arrays.confirmed);

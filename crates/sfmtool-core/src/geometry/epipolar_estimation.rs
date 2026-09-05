@@ -323,13 +323,15 @@ fn score_f(
     thresh2: f64,
     mask: &mut [bool],
 ) -> usize {
-    let mut count = 0;
-    for i in 0..x1.len() {
-        let inlier = sampson_sq(f, x1[i], x2[i]) <= thresh2;
-        mask[i] = inlier;
-        count += inlier as usize;
-    }
-    count
+    crate::geometry::focal_vote::prof::SCORE_F.time(|| {
+        let mut count = 0;
+        for i in 0..x1.len() {
+            let inlier = sampson_sq(f, x1[i], x2[i]) <= thresh2;
+            mask[i] = inlier;
+            count += inlier as usize;
+        }
+        count
+    })
 }
 
 /// Refit `F` on its inliers with the 8-point solver, rescore, and repeat while

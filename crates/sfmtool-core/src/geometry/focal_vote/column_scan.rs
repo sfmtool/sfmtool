@@ -40,6 +40,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use rayon::prelude::*;
 
+use crate::geometry::focal_vote::prof;
 use crate::geometry::numeric::splitmix64;
 
 // ── Scan configuration (see the spec's Camera-Model Columns section) ─────────
@@ -427,6 +428,20 @@ fn quantile(vals: &[f64], p: f64) -> f64 {
     quantile_sorted(&v, p)
 }
 
+/// Whether `idx[..len]` is the consecutive run `idx[0] .. idx[0] + len`.
+///
+/// Every index list this module hands a residual kernel is **strictly
+/// increasing** — it is `0..n`, or a filter over it — and a strictly
+/// increasing run of `len` values spans at least `len - 1`, with equality only
+/// when it steps by one throughout. So the first and last entries settle it,
+/// and the vectorized dispatch does not scan six hundred indices at each of
+/// the hundreds of thousands of calls to find out whether it may run.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn consecutive_run(idx: &[usize], len: usize) -> bool {
+    len > 0 && idx.len() >= len && idx[len - 1] == idx[0] + len - 1
+}
+
 /// Smallest eigenvector of `AᵀA` over the selected rows, reshaped row-major
 /// into a `3×3` matrix. `None` for a design that carries no constraint.
 pub(crate) fn null_from_rows(
@@ -500,6 +515,475 @@ pub(crate) fn singular_values_desc(m: &Matrix3<f64>) -> [f64; 3] {
     let mut s = [sv[0], sv[1], sv[2]];
     s.sort_by(|a, b| b.total_cmp(a));
     s
+}
+
+// ── Single-precision residual arm ────────────────────────────────────────────
+//
+// Both cells spend most of their time scoring RANSAC hypotheses against every
+// correspondence, and both residuals survive single precision: the epipolar
+// one is a directly computed sine ratio whose `f32` error (~1e-7) sits five
+// orders below its ~1e-2 threshold, and the rotation one is measured through
+// the NORM OF THE CROSS PRODUCT rather than the arccosine of the dot, which is
+// what keeps a small angle in its own leading digits (see
+// `crate::geometry::numeric::asin_poly_scalar_f32`).
+//
+// The epipolar cell's `f32` path is the DEFAULT (`SFMTOOL_FOCAL_VOTE_F64_EPI`
+// is its diagnostic restore); the rotation cell's stays opt-in
+// (`SFMTOOL_FOCAL_VOTE_F32_ROT`) -- measured performance-neutral, the extra
+// cross product costs what the lane doubling saves. When a cell's `f32` path
+// is on, its rays are narrowed to `f32` **and the `f64` buffers hold the
+// widened narrowed value**, so the residual measures exactly the ray the
+// elimination rows and `kabsch` consumed. Two ray truths would make the fit
+// and its score disagree about the geometry.
+
+/// One side's rays at a candidate focal, structure-of-arrays in `f32`.
+///
+/// Three separate arrays, not packed triples: a lane load is then one
+/// `loadu_ps` with no transpose, where the `f64` kernels pay four shuffle µops
+/// per four points to keep their rays in the `Vec<Vector3<f64>>` layout their
+/// other callers share.
+pub(crate) struct RaysF32 {
+    x: Vec<f32>,
+    y: Vec<f32>,
+    z: Vec<f32>,
+}
+
+impl RaysF32 {
+    fn zeros(n: usize) -> Self {
+        Self {
+            x: vec![0.0; n],
+            y: vec![0.0; n],
+            z: vec![0.0; n],
+        }
+    }
+
+    /// Store ray `i` narrowed, and hand back the widened value for the `f64`
+    /// buffer — the one call that keeps the two representations one ray.
+    #[inline]
+    fn set(&mut self, i: usize, v: Vector3<f64>) -> Vector3<f64> {
+        let (x, y, z) = (v.x as f32, v.y as f32, v.z as f32);
+        self.x[i] = x;
+        self.y[i] = y;
+        self.z[i] = z;
+        Vector3::new(f64::from(x), f64::from(y), f64::from(z))
+    }
+}
+
+/// The `f32` mirror of one cell's per-candidate-focal scoring state: the two
+/// ray sets, the per-point consensus bound, and the residual output. Present
+/// only while that cell's switch is on.
+pub(crate) struct F32Cell {
+    r1: RaysF32,
+    r2: RaysF32,
+    tol: Vec<f32>,
+    resid: Vec<f32>,
+}
+
+impl F32Cell {
+    fn new(n: usize) -> Self {
+        Self {
+            r1: RaysF32::zeros(n),
+            r2: RaysF32::zeros(n),
+            tol: vec![0.0; n],
+            resid: vec![0.0; n],
+        }
+    }
+
+    /// The epipolar cell's mirror -- the default path, absent the
+    /// `SFMTOOL_FOCAL_VOTE_F64_EPI` diagnostic restore.
+    fn epipolar(n: usize) -> Option<Self> {
+        crate::geometry::simd::f32_epipolar_enabled().then(|| Self::new(n))
+    }
+
+    /// The rotation cell's mirror, when `SFMTOOL_FOCAL_VOTE_F32_ROT` is set.
+    fn rotation(n: usize) -> Option<Self> {
+        crate::geometry::simd::f32_rotation_enabled().then(|| Self::new(n))
+    }
+
+    /// Store ray pair `i` and its bound, returning the widened rays.
+    #[inline]
+    fn set(
+        &mut self,
+        i: usize,
+        a: Vector3<f64>,
+        b: Vector3<f64>,
+        tol: f64,
+    ) -> (Vector3<f64>, Vector3<f64>) {
+        self.tol[i] = tol as f32;
+        (self.r1.set(i, a), self.r2.set(i, b))
+    }
+}
+
+/// Store ray pair `i` and its bound through `cell` when it is present, and
+/// hand back the rays the `f64` buffers take — the narrowed-and-widened pair
+/// under the `f32` arm, the values themselves otherwise.
+#[inline]
+fn cell_rays(
+    cell: Option<&mut F32Cell>,
+    i: usize,
+    a: Vector3<f64>,
+    b: Vector3<f64>,
+    tol: f64,
+) -> (Vector3<f64>, Vector3<f64>) {
+    match cell {
+        Some(c) => c.set(i, a, b, tol),
+        None => (a, b),
+    }
+}
+
+/// Correspondences whose residual is under their own bound, read from
+/// whichever precision this cell scored in.
+#[inline]
+fn cell_n_below(resid: &[f64], tol: &[f64], cell: Option<&F32Cell>) -> usize {
+    match cell {
+        Some(c) => (0..tol.len()).filter(|&i| c.resid[i] < c.tol[i]).count(),
+        None => (0..tol.len()).filter(|&i| resid[i] < tol[i]).count(),
+    }
+}
+
+/// [`cell_n_below`] written into an existing mask.
+#[inline]
+fn cell_mark_below(resid: &[f64], tol: &[f64], cell: Option<&F32Cell>, out: &mut [bool]) {
+    match cell {
+        Some(c) => {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = c.resid[i] < c.tol[i];
+            }
+        }
+        None => {
+            for (i, o) in out.iter_mut().enumerate() {
+                *o = resid[i] < tol[i];
+            }
+        }
+    }
+}
+
+/// [`cell_n_below`] as a fresh mask.
+#[inline]
+fn cell_collect_below(resid: &[f64], tol: &[f64], cell: Option<&F32Cell>) -> Vec<bool> {
+    match cell {
+        Some(c) => (0..tol.len()).map(|i| c.resid[i] < c.tol[i]).collect(),
+        None => (0..tol.len()).map(|i| resid[i] < tol[i]).collect(),
+    }
+}
+
+/// One epipolar hypothesis's residuals, into whichever buffer this cell scores
+/// from.
+#[inline]
+fn cell_epipolar_residuals(
+    e: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    side_two: bool,
+    resid: &mut [f64],
+    cell: Option<&mut F32Cell>,
+) {
+    match cell {
+        Some(c) => {
+            epipolar_residuals_f32(e, &c.r1, &c.r2, side_two, &mut c.resid);
+            if prof::audit_enabled() {
+                epipolar_residuals(e, r1, r2, side_two, resid);
+                for (a, b) in c.resid.iter().zip(resid.iter()).take(r1.len()) {
+                    prof::AUDIT_EPI.record(f64::from(*a) - *b);
+                }
+            }
+        }
+        None => epipolar_residuals(e, r1, r2, side_two, resid),
+    }
+}
+
+/// One rotation hypothesis's residuals, into whichever buffer this cell scores
+/// from.
+#[inline]
+fn cell_rotation_residuals(
+    rot: &Matrix3<f64>,
+    r1: &[Vector3<f64>],
+    r2: &[Vector3<f64>],
+    idx: &[usize],
+    resid: &mut [f64],
+    cell: Option<&mut F32Cell>,
+) {
+    match cell {
+        Some(c) => {
+            rotation_residuals_f32(rot, &c.r1, &c.r2, idx, &mut c.resid);
+            if prof::audit_enabled() {
+                rotation_residuals(rot, r1, r2, idx, resid);
+                for (a, b) in c.resid.iter().zip(resid.iter()).take(idx.len()) {
+                    prof::AUDIT_ROT.record(f64::from(*a) - *b);
+                }
+            }
+        }
+        None => rotation_residuals(rot, r1, r2, idx, resid),
+    }
+}
+
+/// [`epipolar_residuals`] at single precision (see the section header).
+///
+/// Dispatches to an 8-lane AVX2 kernel where the CPU has it;
+/// `epipolar_residuals_f32_scalar` is both the fallback and its op-for-op
+/// twin.
+fn epipolar_residuals_f32(
+    e: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    side_two: bool,
+    out: &mut [f32],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let n = r1.x.len();
+        if crate::geometry::simd::avx2_enabled() && r2.x.len() >= n && out.len() >= n {
+            // SAFETY: avx2 confirmed available, and both ray sets and `out`
+            // cover the `n` points the kernel reads and writes.
+            unsafe { epipolar_residuals_f32_avx2(e, r1, r2, side_two, out) };
+            return;
+        }
+    }
+    epipolar_residuals_f32_scalar(e, r1, r2, side_two, out);
+}
+
+/// The `3×3` matrix the one-sided residual multiplies its source rays by,
+/// narrowed and row-major: `E` for side two, `Eᵀ` for side one.
+fn side_matrix_f32(e: &Matrix3<f64>, side_two: bool) -> [[f32; 3]; 3] {
+    let at = |r: usize, c: usize| {
+        if side_two {
+            e[(r, c)] as f32
+        } else {
+            e[(c, r)] as f32
+        }
+    };
+    [
+        [at(0, 0), at(0, 1), at(0, 2)],
+        [at(1, 0), at(1, 1), at(1, 2)],
+        [at(2, 0), at(2, 1), at(2, 2)],
+    ]
+}
+
+/// Scalar twin of [`epipolar_residuals_f32`].
+fn epipolar_residuals_f32_scalar(
+    e: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    side_two: bool,
+    out: &mut [f32],
+) {
+    let m = side_matrix_f32(e, side_two);
+    let (src, other) = if side_two { (r1, r2) } else { (r2, r1) };
+    for (i, o) in out.iter_mut().enumerate().take(src.x.len()) {
+        let (sx, sy, sz) = (src.x[i], src.y[i], src.z[i]);
+        let nx = (m[0][0] * sx + m[0][1] * sy) + m[0][2] * sz;
+        let ny = (m[1][0] * sx + m[1][1] * sy) + m[1][2] * sz;
+        let nz = (m[2][0] * sx + m[2][1] * sy) + m[2][2] * sz;
+        let nn = ((nx * nx + ny * ny) + nz * nz).sqrt().max(1e-15);
+        let d = (nx * other.x[i] + ny * other.y[i]) + nz * other.z[i];
+        *o = (d.abs() / nn).min(1.0);
+    }
+}
+
+/// Eight correspondences per iteration of [`epipolar_residuals_f32`].
+///
+/// # Safety
+/// Requires the `avx2` target feature, ray sets covering `r1.x.len()` points
+/// and an `out` of at least that length (all guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn epipolar_residuals_f32_avx2(
+    e: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    side_two: bool,
+    out: &mut [f32],
+) {
+    use crate::geometry::simd::{dot3_ps, row3_ps};
+    use std::arch::x86_64::*;
+
+    let n = r1.x.len();
+    let (src, other) = if side_two { (r1, r2) } else { (r2, r1) };
+    let m = {
+        let s = side_matrix_f32(e, side_two);
+        let b = |r: usize, c: usize| _mm256_set1_ps(s[r][c]);
+        [
+            [b(0, 0), b(0, 1), b(0, 2)],
+            [b(1, 0), b(1, 1), b(1, 2)],
+            [b(2, 0), b(2, 1), b(2, 2)],
+        ]
+    };
+    let floor = _mm256_set1_ps(1e-15);
+    let one = _mm256_set1_ps(1.0);
+    // `andnot` against the sign bit is what `f32::abs` compiles to.
+    let sign = _mm256_set1_ps(-0.0);
+
+    let blocks = n / 8;
+    for b in 0..blocks {
+        let k = b * 8;
+        let sx = _mm256_loadu_ps(src.x.as_ptr().add(k));
+        let sy = _mm256_loadu_ps(src.y.as_ptr().add(k));
+        let sz = _mm256_loadu_ps(src.z.as_ptr().add(k));
+        let ox = _mm256_loadu_ps(other.x.as_ptr().add(k));
+        let oy = _mm256_loadu_ps(other.y.as_ptr().add(k));
+        let oz = _mm256_loadu_ps(other.z.as_ptr().add(k));
+
+        let nx = row3_ps(&m[0], sx, sy, sz);
+        let ny = row3_ps(&m[1], sx, sy, sz);
+        let nz = row3_ps(&m[2], sx, sy, sz);
+
+        // Value first in both `max` and `min`, matching `f32::max`/`f32::min`.
+        let nn = _mm256_max_ps(_mm256_sqrt_ps(dot3_ps(nx, ny, nz, nx, ny, nz)), floor);
+        let d = _mm256_andnot_ps(sign, dot3_ps(nx, ny, nz, ox, oy, oz));
+        let r = _mm256_min_ps(_mm256_div_ps(d, nn), one);
+        _mm256_storeu_ps(out.as_mut_ptr().add(k), r);
+    }
+
+    for (i, o) in out.iter_mut().enumerate().take(n).skip(blocks * 8) {
+        let s = side_matrix_f32(e, side_two);
+        let (sx, sy, sz) = (src.x[i], src.y[i], src.z[i]);
+        let nx = (s[0][0] * sx + s[0][1] * sy) + s[0][2] * sz;
+        let ny = (s[1][0] * sx + s[1][1] * sy) + s[1][2] * sz;
+        let nz = (s[2][0] * sx + s[2][1] * sy) + s[2][2] * sz;
+        let nn = ((nx * nx + ny * ny) + nz * nz).sqrt().max(1e-15);
+        let d = (nx * other.x[i] + ny * other.y[i]) + nz * other.z[i];
+        *o = (d.abs() / nn).min(1.0);
+    }
+}
+
+/// [`rotation_residuals`] at single precision, through the cross-product-norm
+/// form: `θ = asin|R r₁ × r₂|`, folded to `π − θ` where the dot is negative.
+///
+/// The dot alone cannot carry the answer in `f32` — at the inlier band's
+/// `1e-4..1e-3` radians, `cos θ = 1 − θ²/2` differs from `1` by less than
+/// single-precision epsilon and the recovered angle is worthless (measured
+/// median error 38%). The cross-product norm IS `sin θ`, so the small angle
+/// arrives in its own leading digits.
+///
+/// Dispatches to an 8-lane AVX2 kernel over consecutive `idx` runs — the hot
+/// shape, since the RANSAC scoring loops pass all `n` points at every one of
+/// the ~128 minimal samples; the arbitrary-subset callers and the ragged tail
+/// take the scalar twin.
+fn rotation_residuals_f32(
+    rot: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    idx: &[usize],
+    out: &mut [f32],
+) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let len = out.len().min(idx.len());
+        if crate::geometry::simd::avx2_enabled()
+            && consecutive_run(idx, len)
+            && idx[0] + len <= r1.x.len().min(r2.x.len())
+        {
+            // SAFETY: avx2 confirmed available, and the consecutive run
+            // `idx[0] .. idx[0] + len` lies inside both ray sets while `out`
+            // covers `len` elements.
+            unsafe { rotation_residuals_f32_avx2(rot, r1, r2, idx[0], &mut out[..len]) };
+            return;
+        }
+    }
+    rotation_residuals_f32_scalar(rot, r1, r2, idx, out);
+}
+
+/// The rotation narrowed to `f32`, row-major.
+fn rot_f32(rot: &Matrix3<f64>) -> [[f32; 3]; 3] {
+    let b = |r: usize, c: usize| rot[(r, c)] as f32;
+    [
+        [b(0, 0), b(0, 1), b(0, 2)],
+        [b(1, 0), b(1, 1), b(1, 2)],
+        [b(2, 0), b(2, 1), b(2, 2)],
+    ]
+}
+
+/// One point's angle under [`rotation_residuals_f32`], the scalar arithmetic
+/// the vector kernel repeats lane for lane.
+#[inline]
+fn rotation_angle_f32(m: &[[f32; 3]; 3], a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
+    let px = (m[0][0] * a.0 + m[0][1] * a.1) + m[0][2] * a.2;
+    let py = (m[1][0] * a.0 + m[1][1] * a.1) + m[1][2] * a.2;
+    let pz = (m[2][0] * a.0 + m[2][1] * a.1) + m[2][2] * a.2;
+    let c = (px * b.0 + py * b.1) + pz * b.2;
+    let cx = py * b.2 - pz * b.1;
+    let cy = pz * b.0 - px * b.2;
+    let cz = px * b.1 - py * b.0;
+    let s = ((cx * cx + cy * cy) + cz * cz).sqrt().min(1.0);
+    let ang = crate::geometry::numeric::asin_poly_scalar_f32(s);
+    if c < 0.0 {
+        std::f32::consts::PI - ang
+    } else {
+        ang
+    }
+}
+
+/// Scalar twin of [`rotation_residuals_f32`].
+fn rotation_residuals_f32_scalar(
+    rot: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    idx: &[usize],
+    out: &mut [f32],
+) {
+    let m = rot_f32(rot);
+    for (o, &i) in out.iter_mut().zip(idx.iter()) {
+        *o = rotation_angle_f32(&m, (r1.x[i], r1.y[i], r1.z[i]), (r2.x[i], r2.y[i], r2.z[i]));
+    }
+}
+
+/// Eight correspondences per iteration of [`rotation_residuals_f32`], starting
+/// at `base`.
+///
+/// # Safety
+/// Requires the `avx2` target feature, and both ray sets must cover
+/// `base .. base + out.len()` (all guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn rotation_residuals_f32_avx2(
+    rot: &Matrix3<f64>,
+    r1: &RaysF32,
+    r2: &RaysF32,
+    base: usize,
+    out: &mut [f32],
+) {
+    use crate::geometry::simd::{asin_ps, broadcast_mat3_ps, dot3_ps, row3_ps};
+    use std::arch::x86_64::*;
+
+    let n = out.len();
+    let m = broadcast_mat3_ps(rot);
+    let one = _mm256_set1_ps(1.0);
+    let pi = _mm256_set1_ps(std::f32::consts::PI);
+    let zero = _mm256_setzero_ps();
+
+    let blocks = n / 8;
+    for blk in 0..blocks {
+        let k = base + blk * 8;
+        let ax = _mm256_loadu_ps(r1.x.as_ptr().add(k));
+        let ay = _mm256_loadu_ps(r1.y.as_ptr().add(k));
+        let az = _mm256_loadu_ps(r1.z.as_ptr().add(k));
+        let bx = _mm256_loadu_ps(r2.x.as_ptr().add(k));
+        let by = _mm256_loadu_ps(r2.y.as_ptr().add(k));
+        let bz = _mm256_loadu_ps(r2.z.as_ptr().add(k));
+
+        let px = row3_ps(&m[0], ax, ay, az);
+        let py = row3_ps(&m[1], ax, ay, az);
+        let pz = row3_ps(&m[2], ax, ay, az);
+
+        let c = dot3_ps(px, py, pz, bx, by, bz);
+        let cx = _mm256_sub_ps(_mm256_mul_ps(py, bz), _mm256_mul_ps(pz, by));
+        let cy = _mm256_sub_ps(_mm256_mul_ps(pz, bx), _mm256_mul_ps(px, bz));
+        let cz = _mm256_sub_ps(_mm256_mul_ps(px, by), _mm256_mul_ps(py, bx));
+        // Value first, matching `f32::min`: a NaN norm yields `1.0`.
+        let s = _mm256_min_ps(_mm256_sqrt_ps(dot3_ps(cx, cy, cz, cx, cy, cz)), one);
+        let ang = asin_ps(s);
+        // `asin` covers `[0, π/2]`; the obtuse half is `π − asin|sin θ|`, and
+        // the sign of the dot is what says which half a point is in.
+        let neg = _mm256_cmp_ps(c, zero, _CMP_LT_OQ);
+        let r = _mm256_blendv_ps(ang, _mm256_sub_ps(pi, ang), neg);
+        _mm256_storeu_ps(out.as_mut_ptr().add(blk * 8), r);
+    }
+
+    let m = rot_f32(rot);
+    for (j, o) in out.iter_mut().enumerate().skip(blocks * 8) {
+        let i = base + j;
+        *o = rotation_angle_f32(&m, (r1.x[i], r1.y[i], r1.z[i]), (r2.x[i], r2.y[i], r2.z[i]));
+    }
 }
 
 // ── Cost curves ──────────────────────────────────────────────────────────────
@@ -704,26 +1188,28 @@ fn fit_epipolar(
     sin_tol: &[f64],
     samples: &[usize],
     side_two: bool,
+    mut cell: Option<&mut F32Cell>,
 ) -> Option<EpipolarFit> {
     let n = r1.len();
-    let rows = epipolar_rows(r1, r2);
+    let rows = prof::EPI_ROWS.time(|| epipolar_rows(r1, r2));
 
     let mut resid = vec![0.0f64; n];
     let mut best_count = 0usize;
     let mut best_e: Option<Matrix3<f64>> = None;
     let mut best_mask = vec![false; n];
     for s in samples.as_chunks::<EPI_SAMPLE>().0 {
-        let Some(e) = null_from_minimal_sample(&rows, s) else {
+        let Some(e) = prof::MINSOLVE.time(|| null_from_minimal_sample(&rows, s)) else {
             continue;
         };
-        epipolar_residuals(&e, r1, r2, side_two, &mut resid);
-        let count = (0..n).filter(|&i| resid[i] < sin_tol[i]).count();
+        prof::EPI_RESID.time(|| {
+            cell_epipolar_residuals(&e, r1, r2, side_two, &mut resid, cell.as_deref_mut())
+        });
+        let count = prof::EPI_MASK.time(|| cell_n_below(&resid, sin_tol, cell.as_deref()));
         if count > best_count {
             best_count = count;
             best_e = Some(e);
-            for i in 0..n {
-                best_mask[i] = resid[i] < sin_tol[i];
-            }
+            prof::EPI_MASK
+                .time(|| cell_mark_below(&resid, sin_tol, cell.as_deref(), &mut best_mask));
         }
     }
     if best_count < EPI_MIN_INLIERS {
@@ -732,10 +1218,14 @@ fn fit_epipolar(
     let mut e = best_e?;
     let mut inliers = best_mask;
     for _ in 0..LO_ROUNDS {
-        let refit = null_from_rows(&rows, (0..n).filter(|&i| inliers[i]))?;
+        let refit =
+            prof::EPI_REFIT.time(|| null_from_rows(&rows, (0..n).filter(|&i| inliers[i])))?;
         e = refit;
-        epipolar_residuals(&e, r1, r2, side_two, &mut resid);
-        let new: Vec<bool> = (0..n).map(|i| resid[i] < sin_tol[i]).collect();
+        prof::EPI_RESID.time(|| {
+            cell_epipolar_residuals(&e, r1, r2, side_two, &mut resid, cell.as_deref_mut())
+        });
+        let new: Vec<bool> =
+            prof::EPI_MASK.time(|| cell_collect_below(&resid, sin_tol, cell.as_deref()));
         if new.iter().filter(|&&b| b).count() < EPI_MIN_INLIERS {
             break;
         }
@@ -748,7 +1238,7 @@ fn fit_epipolar(
     if inliers.iter().filter(|&&b| b).count() < EPI_MIN_INLIERS {
         return None;
     }
-    let s = singular_values_desc(&e);
+    let s = prof::EPI_SVD.time(|| singular_values_desc(&e));
     let denom = s[0] + s[1];
     if denom <= 0.0 || !denom.is_finite() {
         return None;
@@ -783,18 +1273,23 @@ fn scan_epipolar(
     let mut r1 = vec![Vector3::zeros(); n];
     let mut r2 = vec![Vector3::zeros(); n];
     let mut sin_tol = vec![0.0f64; n];
+    let mut cell = F32Cell::epipolar(n);
     let mut best_consensus = 0usize;
     for (k, &f) in grid.iter().enumerate() {
         if !model.admits(f, r_hi) {
             costs[k] = f64::NAN;
             continue;
         }
-        for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
-            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
-            sin_tol[i] = (SCAN_TOL_PX / model.scale(rad_side[i], f)).min(1.0).sin();
-        }
-        match fit_epipolar(&r1, &r2, &sin_tol, samples, side_two) {
+        prof::RAYS.time(|| {
+            for i in 0..n {
+                let a = model.ray(cand.uv1[i], cand.rad1[i], f);
+                let b = model.ray(cand.uv2[i], cand.rad2[i], f);
+                let t = (SCAN_TOL_PX / model.scale(rad_side[i], f)).min(1.0).sin();
+                (r1[i], r2[i]) = cell_rays(cell.as_mut(), i, a, b, t);
+                sin_tol[i] = t;
+            }
+        });
+        match fit_epipolar(&r1, &r2, &sin_tol, samples, side_two, cell.as_mut()) {
             Some(fit) => {
                 costs[k] = fit.cost;
                 best_consensus = best_consensus.max(fit.inliers.iter().filter(|&&b| b).count());
@@ -825,6 +1320,10 @@ fn scan_epipolar(
 /// [`rotation_support_at`] and [`crate::geometry::relative_pose`] pass all `n`
 /// points at every one of the ~128 minimal samples, while the arbitrary-subset
 /// callers ([`fit_rotation`]'s trimmed support) run three times per grid point.
+///
+/// `idx` must be strictly increasing, which is what lets [`consecutive_run`]
+/// settle that dispatch in constant time; every caller builds it as `0..n` or
+/// as a filter over `0..n`.
 pub(crate) fn rotation_residuals(
     rot: &Matrix3<f64>,
     r1: &[Vector3<f64>],
@@ -836,8 +1335,7 @@ pub(crate) fn rotation_residuals(
     {
         let len = out.len().min(idx.len());
         if crate::geometry::simd::avx2_enabled()
-            && !idx.is_empty()
-            && idx.iter().enumerate().all(|(j, &i)| i == idx[0] + j)
+            && consecutive_run(idx, len)
             && idx[0] + len <= r1.len().min(r2.len())
         {
             // SAFETY: avx2 confirmed available, and the consecutive run
@@ -951,6 +1449,7 @@ fn rotation_support_at(
     tol: &[f64],
     samples: &[usize],
     min_support: usize,
+    mut cell: Option<&mut F32Cell>,
 ) -> Option<Vec<bool>> {
     let n = r1.len();
     let all: Vec<usize> = (0..n).collect();
@@ -958,14 +1457,15 @@ fn rotation_support_at(
     let mut best_count = 0usize;
     let mut best: Option<Vec<bool>> = None;
     for s in samples.as_chunks::<ROT_SAMPLE>().0 {
-        let Some(rot) = kabsch(r1, r2, s) else {
+        let Some(rot) = prof::KABSCH.time(|| kabsch(r1, r2, s)) else {
             continue;
         };
-        rotation_residuals(&rot, r1, r2, &all, &mut resid);
-        let count = (0..n).filter(|&i| resid[i] < tol[i]).count();
+        prof::ROT_RESID
+            .time(|| cell_rotation_residuals(&rot, r1, r2, &all, &mut resid, cell.as_deref_mut()));
+        let count = prof::ROT_MASK.time(|| cell_n_below(&resid, tol, cell.as_deref()));
         if count > best_count {
             best_count = count;
-            best = Some((0..n).map(|i| resid[i] < tol[i]).collect());
+            best = Some(prof::ROT_MASK.time(|| cell_collect_below(&resid, tol, cell.as_deref())));
         }
     }
     let mut inl = best?;
@@ -974,9 +1474,11 @@ fn rotation_support_at(
     }
     for _ in 0..LO_ROUNDS {
         let idx: Vec<usize> = (0..n).filter(|&i| inl[i]).collect();
-        let rot = kabsch(r1, r2, &idx)?;
-        rotation_residuals(&rot, r1, r2, &all, &mut resid);
-        let new: Vec<bool> = (0..n).map(|i| resid[i] < tol[i]).collect();
+        let rot = prof::KABSCH.time(|| kabsch(r1, r2, &idx))?;
+        prof::ROT_RESID
+            .time(|| cell_rotation_residuals(&rot, r1, r2, &all, &mut resid, cell.as_deref_mut()));
+        let new: Vec<bool> =
+            prof::ROT_MASK.time(|| cell_collect_below(&resid, tol, cell.as_deref()));
         if new.iter().filter(|&&b| b).count() < min_support {
             return None;
         }
@@ -1019,27 +1521,33 @@ fn freeze_rotation_support(
     let mut r1 = vec![Vector3::zeros(); n];
     let mut r2 = vec![Vector3::zeros(); n];
     let mut tol = vec![0.0f64; n];
+    let mut cell = F32Cell::rotation(n);
     let valid: Vec<usize> = (0..grid.len())
         .filter(|&k| model.admits(grid[k], r_hi))
         .collect();
     let consensus_at = |k: usize,
                         r1: &mut [Vector3<f64>],
                         r2: &mut [Vector3<f64>],
-                        tol: &mut [f64]|
+                        tol: &mut [f64],
+                        cell: &mut Option<F32Cell>|
      -> Option<Vec<usize>> {
         let f = grid[k];
-        for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
-            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
-            tol[i] = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
-        }
-        let mask = rotation_support_at(r1, r2, tol, samples, min_support)?;
+        prof::RAYS.time(|| {
+            for i in 0..n {
+                let a = model.ray(cand.uv1[i], cand.rad1[i], f);
+                let b = model.ray(cand.uv2[i], cand.rad2[i], f);
+                let t = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
+                (r1[i], r2[i]) = cell_rays(cell.as_mut(), i, a, b, t);
+                tol[i] = t;
+            }
+        });
+        let mask = rotation_support_at(r1, r2, tol, samples, min_support, cell.as_mut())?;
         Some((0..n).filter(|&i| mask[i]).collect())
     };
 
     let mut best: Option<(usize, usize, Vec<usize>)> = None; // (position, count, support)
     for (pos, &k) in valid.iter().enumerate().step_by(ROT_SUPPORT_STRIDE) {
-        if let Some(idx) = consensus_at(k, &mut r1, &mut r2, &mut tol) {
+        if let Some(idx) = consensus_at(k, &mut r1, &mut r2, &mut tol, &mut cell) {
             if best.as_ref().is_none_or(|(_, b, _)| idx.len() > *b) {
                 best = Some((pos, idx.len(), idx));
             }
@@ -1054,7 +1562,7 @@ fn freeze_rotation_support(
         if p % ROT_SUPPORT_STRIDE == 0 {
             continue;
         }
-        if let Some(idx) = consensus_at(k, &mut r1, &mut r2, &mut tol) {
+        if let Some(idx) = consensus_at(k, &mut r1, &mut r2, &mut tol, &mut cell) {
             if best.as_ref().is_none_or(|(_, b, _)| idx.len() > *b) {
                 best = Some((p, idx.len(), idx));
             }
@@ -1080,30 +1588,53 @@ fn fit_rotation(
     r2: &[Vector3<f64>],
     px_scale: &[f64],
     support: &[usize],
+    mut cell: Option<&mut F32Cell>,
 ) -> Option<RotationFit> {
     let n_keep = ROT_MIN_SUPPORT.max((ROT_TRIM_Q * support.len() as f64).round() as usize);
     let n_keep = n_keep.min(support.len());
     let mut keep: Vec<usize> = support.to_vec();
-    let mut rot = kabsch(r1, r2, &keep)?;
+    let mut rot = prof::KABSCH.time(|| kabsch(r1, r2, &keep))?;
     let mut resid = vec![0.0f64; support.len()];
+    // The trimming reads residual `j` of the support, wherever it was written;
+    // under the `f32` arm that is the cell's own buffer.
+    let at = |resid: &[f64], cell: Option<&F32Cell>, j: usize| -> f64 {
+        match cell {
+            Some(c) => f64::from(c.resid[j]),
+            None => resid[j],
+        }
+    };
     for _ in 0..ROT_TRIM_ROUNDS {
-        rotation_residuals(&rot, r1, r2, support, &mut resid);
+        prof::ROT_RESID.time(|| {
+            cell_rotation_residuals(&rot, r1, r2, support, &mut resid, cell.as_deref_mut())
+        });
+        keep = prof::ROT_TRIM.time(|| {
+            let mut order: Vec<usize> = (0..support.len()).collect();
+            order.sort_by(|&a, &b| {
+                at(&resid, cell.as_deref(), a).total_cmp(&at(&resid, cell.as_deref(), b))
+            });
+            order[..n_keep].iter().map(|&j| support[j]).collect()
+        });
+        rot = prof::KABSCH.time(|| kabsch(r1, r2, &keep))?;
+    }
+    prof::ROT_RESID
+        .time(|| cell_rotation_residuals(&rot, r1, r2, support, &mut resid, cell.as_deref_mut()));
+    let (sq_px, sq_rad) = prof::ROT_TRIM.time(|| {
         let mut order: Vec<usize> = (0..support.len()).collect();
-        order.sort_by(|&a, &b| resid[a].total_cmp(&resid[b]));
-        keep = order[..n_keep].iter().map(|&j| support[j]).collect();
-        rot = kabsch(r1, r2, &keep)?;
-    }
-    rotation_residuals(&rot, r1, r2, support, &mut resid);
-    let mut order: Vec<usize> = (0..support.len()).collect();
-    order.sort_by(|&a, &b| resid[a].total_cmp(&resid[b]));
-    let mut sq_px = 0.0;
-    let mut sq_rad = 0.0;
-    for &j in &order[..n_keep] {
-        let e = resid[j];
-        sq_rad += e * e;
-        let s = e * px_scale[support[j]];
-        sq_px += s * s;
-    }
+        order.sort_by(|&a, &b| {
+            at(&resid, cell.as_deref(), a).total_cmp(&at(&resid, cell.as_deref(), b))
+        });
+        let mut sq_px = 0.0;
+        let mut sq_rad = 0.0;
+        for &j in &order[..n_keep] {
+            // The cost is a reduction, not a residual: accumulating the
+            // widened `f32` angles keeps the curve's own precision `f64`.
+            let e = at(&resid, cell.as_deref(), j);
+            sq_rad += e * e;
+            let s = e * px_scale[support[j]];
+            sq_px += s * s;
+        }
+        (sq_px, sq_rad)
+    });
     let m = n_keep as f64;
     Some(RotationFit {
         cost_px: (sq_px / m).sqrt(),
@@ -1144,12 +1675,21 @@ fn scan_rotation(
     let mut r1 = vec![Vector3::zeros(); n];
     let mut r2 = vec![Vector3::zeros(); n];
     let mut tol = vec![0.0f64; n];
-    let fill = |f: f64, r1: &mut [Vector3<f64>], r2: &mut [Vector3<f64>], tol: &mut [f64]| {
-        for i in 0..n {
-            r1[i] = model.ray(cand.uv1[i], cand.rad1[i], f);
-            r2[i] = model.ray(cand.uv2[i], cand.rad2[i], f);
-            tol[i] = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
-        }
+    let mut cell = F32Cell::rotation(n);
+    let fill = |f: f64,
+                r1: &mut [Vector3<f64>],
+                r2: &mut [Vector3<f64>],
+                tol: &mut [f64],
+                cell: &mut Option<F32Cell>| {
+        prof::RAYS.time(|| {
+            for i in 0..n {
+                let a = model.ray(cand.uv1[i], cand.rad1[i], f);
+                let b = model.ray(cand.uv2[i], cand.rad2[i], f);
+                let t = SCAN_TOL_PX / model.scale(cand.rad2[i], f);
+                (r1[i], r2[i]) = cell_rays(cell.as_mut(), i, a, b, t);
+                tol[i] = t;
+            }
+        });
     };
 
     // One pass over a coarse sub-grid fixes the pair's far-field support: the
@@ -1162,17 +1702,19 @@ fn scan_rotation(
     let mut px_scale = vec![0.0f64; n];
     for &k in &valid {
         let f = grid[k];
-        fill(f, &mut r1, &mut r2, &mut tol);
-        for (s, r) in px_scale.iter_mut().zip(cand.rad2.iter()) {
-            *s = model.scale(*r, f);
-        }
+        fill(f, &mut r1, &mut r2, &mut tol, &mut cell);
+        prof::RAYS.time(|| {
+            for (s, r) in px_scale.iter_mut().zip(cand.rad2.iter()) {
+                *s = model.scale(*r, f);
+            }
+        });
         // The unfrozen variant re-derives the support at every candidate: a bad
         // focal then buys a low cost by keeping fewer points, and the scan pins
         // at the top of the grid instead of showing an interior minimum.
         let sup = if freeze_support {
             frozen.clone()
         } else {
-            match rotation_support_at(&r1, &r2, &tol, samples, ROT_MIN_SUPPORT) {
+            match rotation_support_at(&r1, &r2, &tol, samples, ROT_MIN_SUPPORT, cell.as_mut()) {
                 Some(mask) => (0..n).filter(|&i| mask[i]).collect(),
                 None => continue,
             }
@@ -1180,7 +1722,7 @@ fn scan_rotation(
         if sup.len() < ROT_MIN_SUPPORT {
             continue;
         }
-        if let Some(fit) = fit_rotation(&r1, &r2, &px_scale, &sup) {
+        if let Some(fit) = fit_rotation(&r1, &r2, &px_scale, &sup, cell.as_mut()) {
             costs[k] = fit.cost_px;
             costs_rad[k] = fit.cost_rad;
         }

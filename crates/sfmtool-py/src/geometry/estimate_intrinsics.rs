@@ -5,7 +5,7 @@
 //! (``sfmtool._sfmtool.geometry.estimate_intrinsics``; see
 //! ``specs/core/geometry/estimate-intrinsics.md``).
 
-use numpy::{PyReadonlyArray1, PyReadonlyArray2};
+use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
@@ -44,8 +44,11 @@ use super::focal_vote::{
 ///         closing at the member count.
 ///     member_images: (n_members,) uint32 image id per member. Omitted in the
 ///         ``MatchesFile`` form.
-///     member_positions: (n_members, 2) float64 full-pixel keypoint
-///         positions. Omitted in the ``MatchesFile`` form.
+///     member_positions: (n_members, 2) float32 full-pixel keypoint positions
+///         -- the width the ``.matches`` backbone stores them at. A float64
+///         array is accepted and cast, which is exact for the
+///         ``f32``-originated values a caller reads out of such a file.
+///         Omitted in the ``MatchesFile`` form.
 ///     width: Shared image width; the principal point is the image centre.
 ///         Omitted in the ``MatchesFile`` form.
 ///     height: Shared image height. Omitted in the ``MatchesFile`` form.
@@ -117,7 +120,7 @@ pub fn estimate_intrinsics<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
     member_images: Option<PyReadonlyArray1<'py, u32>>,
-    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    member_positions: Option<Bound<'py, PyAny>>,
     width: Option<u32>,
     height: Option<u32>,
     seed: u64,

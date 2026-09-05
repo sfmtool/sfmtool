@@ -93,7 +93,10 @@ pub(crate) struct Obs {
     /// CSR offsets, one entry longer than the member arrays' cluster count.
     pub(crate) starts: Vec<u32>,
     pub(crate) image: Vec<u32>,
-    pub(crate) pos: Vec<[f64; 2]>,
+    /// Positions at the width the kernel takes them at: the synthetic
+    /// projections below are computed in `f64` and stored narrowed, exactly as
+    /// a `.matches` file stores what a detector measured.
+    pub(crate) pos: Vec<[f32; 2]>,
 }
 
 impl Default for Obs {
@@ -109,10 +112,11 @@ impl Default for Obs {
 
 impl Obs {
     fn push_pair(&mut self, ia: u32, pa: [f64; 2], ib: u32, pb: [f64; 2]) {
+        let narrow = |p: [f64; 2]| [p[0] as f32, p[1] as f32];
         self.image.push(ia);
-        self.pos.push(pa);
+        self.pos.push(narrow(pa));
         self.image.push(ib);
-        self.pos.push(pb);
+        self.pos.push(narrow(pb));
         self.starts.push(self.image.len() as u32);
     }
     fn run(&self, seed: u64) -> FocalVoteResult {
@@ -419,11 +423,17 @@ fn parallax_scene_pools_an_epipolar_majority() {
     let n = 8;
     let cams = baseline_cameras(n, 0.35, &mut rng);
     let mut obs = Obs::default();
+    // 120 correspondences a pair, not the 45 the other scenes use: the
+    // Bougnoux focal is the most ill-conditioned quantity in this module, and
+    // at 45 noisy correspondences its population scatters by ±14% in log space
+    // with one pair sitting on the `f₁² ≤ 0` sign test. That is a fixture too
+    // weak to pin a 3% consensus on, whichever way the boundary pair happens
+    // to fall.
     for i in 0..n - 1 {
-        emit_parallax_pair(&mut obs, &cams, i, i + 1, 45, &mut rng);
+        emit_parallax_pair(&mut obs, &cams, i, i + 1, 120, &mut rng);
     }
     for i in 0..n - 2 {
-        emit_parallax_pair(&mut obs, &cams, i, i + 2, 45, &mut rng);
+        emit_parallax_pair(&mut obs, &cams, i, i + 2, 120, &mut rng);
     }
     let res = obs.run(0);
     // 7 candidate pairs survive the homography gate and all 7 are

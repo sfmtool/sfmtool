@@ -51,6 +51,41 @@ pub(crate) fn avx2_enabled() -> bool {
     !*FOCAL_VOTE_NO_SIMD && std::is_x86_feature_detected!("avx2")
 }
 
+/// Whether the focal vote's epipolar cell computes its residuals in `f32`
+/// — the default, with `SFMTOOL_FOCAL_VOTE_F64_EPI` as the diagnostic
+/// restore of the double-precision path (the forensics convention of
+/// `SFMTOOL_FOCAL_VOTE_LIBM_ACOS` and `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE`).
+///
+/// Unlike [`avx2_enabled`], this is **not** a pure performance switch: the
+/// residual is a different arithmetic and the rays it measures are narrowed to
+/// `f32` (widened back for the elimination rows, so a cell has one ray truth
+/// rather than two). Positions are stored `f32`, keypoint noise is three
+/// orders above `f32` resolution, and the fleet measured every verdict,
+/// confirmation and escalation invariant with consensus focals within 7e-6 —
+/// while the kernel runs 2.7-3.2x and the escalated vote 12-19% faster.
+static F32_EPI: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_FOCAL_VOTE_F64_EPI").is_none());
+
+/// Whether the focal vote's rotation cell computes its residuals in `f32`
+/// through the cross-product-norm form (`SFMTOOL_FOCAL_VOTE_F32_ROT`). The
+/// sibling of [`F32_EPI`], and equally not a pure performance switch: the
+/// angle comes from `asin|r₁ × r₂|` folded by the sign of the dot, where the
+/// `f64` path takes `acos` of the dot.
+static F32_ROT: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("SFMTOOL_FOCAL_VOTE_F32_ROT").is_some());
+
+/// See [`F32_EPI`].
+#[inline]
+pub(crate) fn f32_epipolar_enabled() -> bool {
+    *F32_EPI
+}
+
+/// See [`F32_ROT`].
+#[inline]
+pub(crate) fn f32_rotation_enabled() -> bool {
+    *F32_ROT
+}
+
 /// `Vector3<f64>` is three `f64` with no padding, which is what lets the ray
 /// kernels reinterpret a `&[Vector3<f64>]` as a flat `*const f64` and load four
 /// consecutive rays as twelve contiguous doubles.
@@ -258,6 +293,116 @@ pub(crate) unsafe fn acos_pd(d: std::arch::x86_64::__m256d) -> std::arch::x86_64
     let neg = _mm256_cmp_pd(d, _mm256_setzero_pd(), _CMP_LT_OQ);
     let res_big = _mm256_blendv_pd(two_r, _mm256_sub_pd(pi, two_r), neg);
     _mm256_blendv_pd(res_small, res_big, big)
+}
+
+// ── Single-precision kernels (the f32 residual arms) ─────────────────────────
+//
+// These read rays held **structure-of-arrays** (`x`, `y`, `z` in three
+// separate `Vec<f32>`), so a lane load is one `loadu_ps` and there is no
+// transpose at all — the `f64` kernels pay four shuffle µops per four points
+// to keep their rays in `Vec<Vector3<f64>>`, which several other callers
+// share. Nothing here has a bit-identical relationship to the `f64` forms;
+// each has a scalar twin performing the same `f32` operations in the same
+// order, and that is the only identity claimed.
+
+/// One row of a `3×3` matvec, eight points at a time: `(a₀·x + a₁·y) + a₂·z`.
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+pub(crate) unsafe fn row3_ps(
+    a: &[std::arch::x86_64::__m256; 3],
+    x: std::arch::x86_64::__m256,
+    y: std::arch::x86_64::__m256,
+    z: std::arch::x86_64::__m256,
+) -> std::arch::x86_64::__m256 {
+    use std::arch::x86_64::*;
+    _mm256_add_ps(
+        _mm256_add_ps(_mm256_mul_ps(a[0], x), _mm256_mul_ps(a[1], y)),
+        _mm256_mul_ps(a[2], z),
+    )
+}
+
+/// Length-3 dot product, eight points at a time: `(ax·bx + ay·by) + az·bz`.
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn dot3_ps(
+    ax: std::arch::x86_64::__m256,
+    ay: std::arch::x86_64::__m256,
+    az: std::arch::x86_64::__m256,
+    bx: std::arch::x86_64::__m256,
+    by: std::arch::x86_64::__m256,
+    bz: std::arch::x86_64::__m256,
+) -> std::arch::x86_64::__m256 {
+    use std::arch::x86_64::*;
+    _mm256_add_ps(
+        _mm256_add_ps(_mm256_mul_ps(ax, bx), _mm256_mul_ps(ay, by)),
+        _mm256_mul_ps(az, bz),
+    )
+}
+
+/// Broadcast every entry of an `f64` `3×3` matrix, narrowed to `f32`,
+/// row-major, for [`row3_ps`].
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn broadcast_mat3_ps(
+    m: &nalgebra::Matrix3<f64>,
+) -> [[std::arch::x86_64::__m256; 3]; 3] {
+    use std::arch::x86_64::*;
+    let b = |r: usize, c: usize| _mm256_set1_ps(m[(r, c)] as f32);
+    [
+        [b(0, 0), b(0, 1), b(0, 2)],
+        [b(1, 0), b(1, 1), b(1, 2)],
+        [b(2, 0), b(2, 1), b(2, 2)],
+    ]
+}
+
+/// `asin` over `[0, 1]`, eight lanes at a time — the vector twin of
+/// [`crate::geometry::numeric::asin_poly_scalar_f32`].
+///
+/// Same coefficient table ([`crate::geometry::numeric::ACOS_POLY_F32`], the
+/// narrowed [`crate::geometry::numeric::ACOS_POLY`]), same operations in the
+/// same order, with the scalar form's branch as a compare and two blends.
+///
+/// # Safety
+/// Requires the `avx2` target feature (guarded by the caller).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn asin_ps(s: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
+    use crate::geometry::numeric::ACOS_POLY_F32 as A;
+    use std::arch::x86_64::*;
+
+    let half = _mm256_set1_ps(0.5);
+    let one = _mm256_set1_ps(1.0);
+    let pi_2 = _mm256_set1_ps(std::f32::consts::FRAC_PI_2);
+
+    let big = _mm256_cmp_ps(s, half, _CMP_GT_OQ);
+    let z = _mm256_blendv_ps(
+        _mm256_mul_ps(s, s),
+        _mm256_mul_ps(_mm256_sub_ps(one, s), half),
+        big,
+    );
+    let base = _mm256_blendv_ps(s, _mm256_sqrt_ps(z), big);
+
+    let mut p = _mm256_set1_ps(A[13]);
+    let mut k = 13usize;
+    while k > 0 {
+        k -= 1;
+        p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(A[k]));
+    }
+    let r = _mm256_add_ps(base, _mm256_mul_ps(_mm256_mul_ps(base, z), p));
+    let two_r = _mm256_add_ps(r, r);
+    _mm256_blendv_ps(r, _mm256_sub_ps(pi_2, two_r), big)
 }
 
 #[cfg(all(test, target_arch = "x86_64"))]

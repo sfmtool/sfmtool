@@ -78,6 +78,54 @@ pub(crate) const ACOS_POLY: [f64; 14] = [
     0.03238761648605816,
 ];
 
+/// [`ACOS_POLY`] at single precision, for the `f32` residual arms of the focal
+/// vote — the same table, narrowed once, never a second fit.
+///
+/// The coefficients past `A[9]` are interpolation artifacts that compensate one
+/// another; at `z ≤ 0.25` they contribute below `f32` epsilon, so narrowing
+/// them changes nothing the evaluation can see.
+pub(crate) static ACOS_POLY_F32: [f32; 14] = {
+    let mut out = [0.0f32; 14];
+    let mut k = 0;
+    while k < 14 {
+        out[k] = ACOS_POLY[k] as f32;
+        k += 1;
+    }
+    out
+};
+
+/// `asin(s)` for `s ∈ [0, 1]` at single precision, the scalar twin of the AVX2
+/// `asin_ps` in `crate::geometry::simd`.
+///
+/// The same asin core [`acos_poly_scalar`] evaluates, read forwards instead of
+/// through `acos`: for `s ≤ 0.5`, `z = s²` and `asin(s) = s + s·z·P(z)`; for
+/// `s > 0.5`, `w = (1 − s)/2`, `t = √w`, and `asin(s) = π/2 − 2·(t + t·w·P(w))`.
+/// Both branches evaluate `P` on `[0, 0.25]`, which is the range
+/// [`ACOS_POLY`] was fitted on.
+///
+/// This exists because the rotation cell's `f32` arm measures the angle
+/// between two unit rays through the **norm of their cross product** rather
+/// than the arccosine of their dot: near zero the dot is `1 − θ²/2`, whose
+/// `f32` rounding swamps `θ` itself, while `|r₁ × r₂| = sin θ` carries the
+/// small angle in its own leading digits.
+pub(crate) fn asin_poly_scalar_f32(s: f32) -> f32 {
+    let big = s > 0.5;
+    let z = if big { (1.0 - s) * 0.5 } else { s * s };
+    let base = if big { z.sqrt() } else { s };
+    let mut p = ACOS_POLY_F32[13];
+    let mut k = 13usize;
+    while k > 0 {
+        k -= 1;
+        p = p * z + ACOS_POLY_F32[k];
+    }
+    let r = base + (base * z) * p;
+    if big {
+        std::f32::consts::FRAC_PI_2 - (r + r)
+    } else {
+        r
+    }
+}
+
 /// `acos(d)` for `d ∈ [−1, 1]` by polynomial evaluation, the scalar twin of
 /// the AVX2 `acos_pd` in `crate::geometry::simd`.
 ///

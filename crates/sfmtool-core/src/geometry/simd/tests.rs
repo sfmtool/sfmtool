@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::geometry::numeric::{acos_poly_scalar, splitmix64};
+use crate::geometry::numeric::{acos_poly_scalar, asin_poly_scalar_f32, splitmix64};
 use nalgebra::Vector3;
 
 /// The `AoS → SoA` transposes are pure lane shuffles, so an exact element
@@ -102,4 +102,79 @@ fn acos_vector_and_scalar_agree_bit_for_bit() {
             "acos({d:?}): simd {got:?} vs scalar {want:?}"
         );
     }
+}
+
+/// The `f32` `asin` behind the rotation cell's single-precision arm carries the
+/// same scalar/vector contract as its `f64` sibling: the vector body and the
+/// scalar twin that serves the ragged tail have to be the *same* arithmetic, or
+/// a slice length that is not a multiple of eight would change a consensus
+/// count.
+#[test]
+fn asin_f32_vector_and_scalar_agree_bit_for_bit() {
+    if !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+    let mut inputs = vec![
+        0.0f32,
+        0.5,
+        1.0,
+        f32::EPSILON,
+        0.5 + f32::EPSILON,
+        1.0 - f32::EPSILON,
+    ];
+    let mut state = 0x51ed_2701u64;
+    for _ in 0..4_000 {
+        let u = (splitmix64(&mut state) >> 40) as f32 / (1u32 << 24) as f32;
+        inputs.push(u);
+        // Crowd both ends: the small branch's `s` and the big branch's `√w`.
+        inputs.push(u * u * u);
+        inputs.push(1.0 - u * u * u);
+    }
+    while inputs.len() % 8 != 0 {
+        inputs.push(0.25);
+    }
+    let mut out = vec![0.0f32; inputs.len()];
+    for b in 0..inputs.len() / 8 {
+        // SAFETY: avx2 confirmed above; eight readable/writable `f32` at `b * 8`.
+        unsafe {
+            let v = std::arch::x86_64::_mm256_loadu_ps(inputs.as_ptr().add(b * 8));
+            std::arch::x86_64::_mm256_storeu_ps(out.as_mut_ptr().add(b * 8), asin_ps(v));
+        }
+    }
+    for (s, got) in inputs.iter().zip(out.iter()) {
+        let want = asin_poly_scalar_f32(*s);
+        assert_eq!(
+            got.to_bits(),
+            want.to_bits(),
+            "asin({s:?}): simd {got:?} vs scalar {want:?}"
+        );
+    }
+}
+
+/// What the `f32` `asin` is worth as an approximation, stated as a number
+/// rather than asserted loosely: the residual arm reads it at small angles,
+/// where the answer has to be good to single-precision epsilon *relative* to
+/// the angle, and the tolerance below is where the measured error sits.
+#[test]
+fn asin_f32_tracks_the_reference_to_single_precision() {
+    let mut state = 0xdead_beefu64;
+    let mut worst_abs = 0.0f64;
+    let mut worst_rel_small = 0.0f64;
+    for _ in 0..200_000 {
+        let u = (splitmix64(&mut state) >> 11) as f64 / (1u64 << 53) as f64;
+        for s in [u, u * u * u, 1.0 - u * u * u] {
+            let got = f64::from(asin_poly_scalar_f32(s as f32));
+            let want = (s as f32 as f64).asin();
+            worst_abs = worst_abs.max((got - want).abs());
+            // Below 0.1 rad is the band the consensus bounds live in.
+            if want > 0.0 && want < 0.1 {
+                worst_rel_small = worst_rel_small.max((got - want).abs() / want);
+            }
+        }
+    }
+    assert!(worst_abs < 3e-7, "worst absolute asin error {worst_abs:e}");
+    assert!(
+        worst_rel_small < 3e-7,
+        "worst relative asin error under 0.1 rad {worst_rel_small:e}"
+    );
 }

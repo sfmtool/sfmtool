@@ -41,6 +41,7 @@ use crate::geometry::homography_estimation::{estimate_homography, HomographyOpti
 use crate::numeric::median;
 
 pub mod column_scan;
+pub(crate) mod prof;
 
 pub use column_scan::{CameraModel, ColumnScan, ScanCell, ScanVote};
 
@@ -447,6 +448,14 @@ fn pair_correspondences(
     a: usize,
     b: usize,
 ) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
+    prof::CORR.time(|| pair_correspondences_inner(image_clusters, a, b))
+}
+
+fn pair_correspondences_inner(
+    image_clusters: &ImageClusters,
+    a: usize,
+    b: usize,
+) -> (Vec<[f64; 2]>, Vec<[f64; 2]>) {
     let (la, lb) = (&image_clusters[a], &image_clusters[b]);
     let mut x1 = Vec::new();
     let mut x2 = Vec::new();
@@ -608,9 +617,10 @@ pub struct MatchesObservations<'a> {
     pub cluster_starts: Cow<'a, [u32]>,
     /// One image id per member, borrowed on the same terms.
     pub member_images: Cow<'a, [u32]>,
-    /// One full-pixel keypoint position per member, widened from the file's
-    /// `f32`. The widening is exact, so it moves no arithmetic.
-    pub member_positions: Vec<[f64; 2]>,
+    /// One full-pixel keypoint position per member, borrowed from the file's
+    /// own `f32` pairs — the vote takes them at the width the file stores them
+    /// at and widens each one where it reads it.
+    pub member_positions: Cow<'a, [[f32; 2]]>,
     /// The width every image of the file shares.
     pub width: u32,
     /// The height every image of the file shares.
@@ -636,11 +646,12 @@ impl<'a> MatchesObservations<'a> {
         Ok(MatchesObservations {
             cluster_starts: contiguous(&clusters.cluster_starts),
             member_images: contiguous(&clusters.member_images),
-            member_positions: positions
-                .rows()
-                .into_iter()
-                .map(|p| [f64::from(p[0]), f64::from(p[1])])
-                .collect(),
+            member_positions: match positions.as_slice() {
+                // `(K, 2)` in standard layout is `K` consecutive pairs, so the
+                // pair view is the file's own bytes.
+                Some(flat) => Cow::Borrowed(flat.as_chunks::<2>().0),
+                None => Cow::Owned(positions.rows().into_iter().map(|p| [p[0], p[1]]).collect()),
+            },
             width,
             height,
         })
@@ -734,13 +745,15 @@ pub fn focal_vote_from_matches(
 /// backbone stores: `cluster_starts` holds `n_clusters + 1` offsets into the
 /// member arrays (opening at `0`, nondecreasing, closing at the member count),
 /// and `member_images` / `member_positions` carry one image id and one
-/// full-pixel keypoint position per member. The principal point is the image
-/// centre `(width/2, height/2)`. Input that breaks that contract votes
-/// nothing and comes back as the empty result.
+/// full-pixel keypoint position per member. Positions are `f32` because that
+/// is the width the `.matches` backbone stores them at; each one is widened
+/// exactly where the pair-table pass reads it, and everything downstream is
+/// `f64`. The principal point is the image centre `(width/2, height/2)`. Input
+/// that breaks that contract votes nothing and comes back as the empty result.
 pub fn focal_vote(
     cluster_starts: &[u32],
     member_images: &[u32],
-    member_positions: &[[f64; 2]],
+    member_positions: &[[f32; 2]],
     width: u32,
     height: u32,
     seed: u64,
@@ -763,7 +776,7 @@ pub fn focal_vote(
 pub fn focal_vote_with_min_disp(
     cluster_starts: &[u32],
     member_images: &[u32],
-    member_positions: &[[f64; 2]],
+    member_positions: &[[f32; 2]],
     width: u32,
     height: u32,
     seed: u64,
@@ -794,7 +807,36 @@ pub fn focal_vote_with_min_disp(
 pub fn focal_vote_with_options(
     cluster_starts: &[u32],
     member_images: &[u32],
-    member_positions: &[[f64; 2]],
+    member_positions: &[[f32; 2]],
+    width: u32,
+    height: u32,
+    options: &FocalVoteOptions,
+) -> FocalVoteResult {
+    if prof::enabled() {
+        prof::reset();
+    }
+    let result = prof::TOTAL.time(|| {
+        focal_vote_impl(
+            cluster_starts,
+            member_images,
+            member_positions,
+            width,
+            height,
+            options,
+        )
+    });
+    if prof::enabled() {
+        prof::report();
+    }
+    result
+}
+
+/// The vote itself; [`focal_vote_with_options`] wraps it in the opt-in phase
+/// timing of [`mod@prof`].
+fn focal_vote_impl(
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f32; 2]],
     width: u32,
     height: u32,
     options: &FocalVoteOptions,
@@ -853,34 +895,40 @@ pub fn focal_vote_with_options(
     // Each cluster is one `cluster_starts` window; the merge-join below keys on
     // the window's position, so an empty cluster contributes nothing and costs
     // only its index.
-    for (run_idx, window) in cluster_starts.windows(2).enumerate() {
-        let (run_start, run_end) = (window[0] as usize, window[1] as usize);
-        let run_idx = run_idx as u32;
+    prof::PAIRTABLE.time(|| {
+        for (run_idx, window) in cluster_starts.windows(2).enumerate() {
+            let (run_start, run_end) = (window[0] as usize, window[1] as usize);
+            let run_idx = run_idx as u32;
 
-        // Per-image dedupe (last member wins, mirroring the reference's
-        // (cluster, image) row map) for the correspondence lists.
-        let mut last_seen: HashMap<u32, [f64; 2]> = HashMap::new();
-        for r in run_start..run_end {
-            last_seen.insert(member_images[r], member_positions[r]);
-        }
-        let mut members: Vec<(u32, [f64; 2])> = last_seen.into_iter().collect();
-        members.sort_by_key(|m| m.0);
-        for &(img, pos) in &members {
-            image_clusters[img as usize].push((run_idx, pos));
-        }
+            // Per-image dedupe (last member wins, mirroring the reference's
+            // (cluster, image) row map) for the correspondence lists.
+            let mut last_seen: HashMap<u32, [f64; 2]> = HashMap::new();
+            for r in run_start..run_end {
+                // The one place the file's `f32` positions are read. Everything
+                // downstream is `f64`, and the widening is exact, so narrowing the
+                // interface moved no arithmetic.
+                let p = member_positions[r];
+                last_seen.insert(member_images[r], [f64::from(p[0]), f64::from(p[1])]);
+            }
+            let mut members: Vec<(u32, [f64; 2])> = last_seen.into_iter().collect();
+            members.sort_by_key(|m| m.0);
+            for &(img, pos) in &members {
+                image_clusters[img as usize].push((run_idx, pos));
+            }
 
-        // Every covisible member pair (a < b) of this cluster.
-        for a in 0..members.len() {
-            for b in (a + 1)..members.len() {
-                let (ia, pa) = members[a];
-                let (ib, pb) = members[b];
-                let d = (pa[0] - pb[0]).hypot(pa[1] - pb[1]);
-                let e = pair_accum.entry((ia, ib)).or_default();
-                e.count += 1.0;
-                e.disp_sum += d;
+            // Every covisible member pair (a < b) of this cluster.
+            for a in 0..members.len() {
+                for b in (a + 1)..members.len() {
+                    let (ia, pa) = members[a];
+                    let (ib, pb) = members[b];
+                    let d = (pa[0] - pb[0]).hypot(pa[1] - pb[1]);
+                    let e = pair_accum.entry((ia, ib)).or_default();
+                    e.count += 1.0;
+                    e.disp_sum += d;
+                }
             }
         }
-    }
+    });
 
     // ── Epipolar votes ───────────────────────────────────────────────────────
     // Candidate pairs: shared-cluster count >= min_shared (30, relaxing to 16
@@ -1022,8 +1070,8 @@ pub fn focal_vote_with_options(
             // Centre on the principal point: H = K R K⁻¹ has K at the origin.
             let x1c: Vec<[f64; 2]> = x1.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
             let x2c: Vec<[f64; 2]> = x2.iter().map(|p| [p[0] - pp[0], p[1] - pp[1]]).collect();
-            let hest = estimate_homography(&x1c, &x2c, &rot_h_opts)?;
-            let fv = rotation_self_calib_focal(&hest.h_matrix, max_wh)?;
+            let hest = prof::EST_H.time(|| estimate_homography(&x1c, &x2c, &rot_h_opts))?;
+            let fv = prof::ORTHO.time(|| rotation_self_calib_focal(&hest.h_matrix, max_wh))?;
             if fv <= FOCAL_BAND_LO * max_wh || fv >= FOCAL_BAND_HI * max_wh {
                 return None;
             }
@@ -1270,11 +1318,12 @@ fn epipolar_pair_outcome(
     if x1.len() < 8 {
         return EpipolarPairOutcome::failed();
     }
-    let Some(fest) = estimate_fundamental(&x1, &x2, f_opts) else {
+    let Some(fest) = prof::EST_F.time(|| estimate_fundamental(&x1, &x2, f_opts)) else {
         return EpipolarPairOutcome::failed();
     };
     let n_f = fest.inliers.iter().filter(|&&b| b).count();
-    let n_h = estimate_homography(&x1, &x2, h_opts)
+    let n_h = prof::EST_H
+        .time(|| estimate_homography(&x1, &x2, h_opts))
         .map(|h| h.inliers.iter().filter(|&&b| b).count())
         .unwrap_or(0);
     let ratio = (n_f >= RATIO_MIN_F_INLIERS).then(|| n_h as f64 / n_f as f64);
@@ -1299,7 +1348,7 @@ fn epipolar_pair_outcome(
     for (transposed, f_dir) in [(false, fest.f_matrix), (true, fest.f_matrix.transpose())] {
         // A direction whose Bougnoux extraction is degenerate yields no value at
         // all — separate from an out-of-band value.
-        let Some(v) = focal_from_fundamental(&f_dir, pp, pp) else {
+        let Some(v) = prof::BOUGNOUX.time(|| focal_from_fundamental(&f_dir, pp, pp)) else {
             n_degenerate += 1;
             continue;
         };
@@ -1363,7 +1412,7 @@ fn scan_candidates(
             let pair_seed = seed
                 ^ (k as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ cell_tag.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            column_scan::ScanCandidate::new(a, b, &x1, &x2, pp, pair_seed)
+            prof::SCAN_CAND.time(|| column_scan::ScanCandidate::new(a, b, &x1, &x2, pp, pair_seed))
         })
         .collect()
 }

@@ -253,7 +253,7 @@ pub struct IntrinsicsEstimate {
 /// // One two-member cluster, seen in images 0 and 1.
 /// let cluster_starts = [0u32, 2];
 /// let member_images = [0u32, 1];
-/// let member_positions = [[120.0, 240.0], [131.5, 238.0]];
+/// let member_positions = [[120.0f32, 240.0], [131.5, 238.0]];
 /// let estimate = estimate_intrinsics(
 ///     &cluster_starts,
 ///     &member_images,
@@ -269,7 +269,7 @@ pub struct IntrinsicsEstimate {
 pub fn estimate_intrinsics(
     cluster_starts: &[u32],
     member_images: &[u32],
-    member_positions: &[[f64; 2]],
+    member_positions: &[[f32; 2]],
     width: u32,
     height: u32,
     options: &IntrinsicsOptions,

@@ -52,7 +52,7 @@ pub(crate) struct VoteArrays {
     /// Image id per member.
     pub member_images: Vec<u32>,
     /// Full-pixel keypoint position per member.
-    pub member_positions: Vec<[f64; 2]>,
+    pub member_positions: Vec<[f32; 2]>,
     /// Shared image width.
     pub width: u32,
     /// Shared image height.
@@ -64,8 +64,8 @@ pub(crate) struct VoteArrays {
 ///
 /// Both forms reach the same kernel; the object form hands the whole file to
 /// the core's own `from_matches` entry rather than taking the file apart here,
-/// so the reading (the `f32 → f64` widening, the shared-dimensions rule) has
-/// exactly one implementation and both languages get it.
+/// so the reading (the member arrays, the shared-dimensions rule) has exactly
+/// one implementation and both languages get it.
 pub(crate) enum VoteSource<'a> {
     /// A `.matches` file, read by the core entry point.
     Matches(&'a MatchesData),
@@ -82,7 +82,7 @@ pub(crate) enum VoteSource<'a> {
 pub(crate) fn vote_source<'a, 'py>(
     source: &'a Bound<'py, PyAny>,
     member_images: Option<PyReadonlyArray1<'py, u32>>,
-    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    member_positions: Option<Bound<'py, PyAny>>,
     width: Option<u32>,
     height: Option<u32>,
 ) -> PyResult<VoteSource<'a>> {
@@ -129,31 +129,15 @@ pub(crate) fn vote_source<'a, 'py>(
 fn vote_arrays(
     cluster_starts: PyReadonlyArray1<'_, u32>,
     member_images: PyReadonlyArray1<'_, u32>,
-    member_positions: PyReadonlyArray2<'_, f64>,
+    member_positions: Bound<'_, PyAny>,
     width: u32,
     height: u32,
 ) -> PyResult<VoteArrays> {
-    if member_positions.shape()[1] != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "member_positions must have shape (n_members, 2)",
-        ));
-    }
     let n_members = member_images.shape()[0];
-    if member_positions.shape()[0] != n_members {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "member_images and member_positions must share n_members",
-        ));
-    }
+    let positions = member_positions_f32(&member_positions, n_members)?;
 
     let starts = to_contiguous!(cluster_starts);
     let images = to_contiguous!(member_images);
-    let pos_flat = to_contiguous!(member_positions);
-    let positions: Vec<[f64; 2]> = pos_flat
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|c| [c[0], c[1]])
-        .collect();
 
     if starts.first() != Some(&0) {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -178,6 +162,53 @@ fn vote_arrays(
         width,
         height,
     })
+}
+
+/// The `member_positions` argument as the `f32` pairs the kernel takes.
+///
+/// `float32` is the array's own width and is taken as it lies. `float64` is
+/// accepted and cast, because a caller holding positions read out of a
+/// `.matches` file has `f32`-originated values in a `float64` array and the
+/// cast is exact for every one of them; a caller that has genuinely computed
+/// in double precision loses the bits below `f32` here, which is what the
+/// kernel would do at its own read anyway.
+fn member_positions_f32(obj: &Bound<'_, PyAny>, n_members: usize) -> PyResult<Vec<[f32; 2]>> {
+    let shape_err = || {
+        pyo3::exceptions::PyValueError::new_err("member_positions must have shape (n_members, 2)")
+    };
+    let count_err = || {
+        pyo3::exceptions::PyValueError::new_err(
+            "member_images and member_positions must share n_members",
+        )
+    };
+    if let Ok(a) = obj.extract::<PyReadonlyArray2<'_, f32>>() {
+        if a.shape()[1] != 2 {
+            return Err(shape_err());
+        }
+        if a.shape()[0] != n_members {
+            return Err(count_err());
+        }
+        let flat = to_contiguous!(a);
+        return Ok(flat.as_chunks::<2>().0.to_vec());
+    }
+    let a: PyReadonlyArray2<'_, f64> = obj.extract().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(
+            "member_positions must be a (n_members, 2) float32 or float64 array",
+        )
+    })?;
+    if a.shape()[1] != 2 {
+        return Err(shape_err());
+    }
+    if a.shape()[0] != n_members {
+        return Err(count_err());
+    }
+    let flat = to_contiguous!(a);
+    Ok(flat
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| [c[0] as f32, c[1] as f32])
+        .collect())
 }
 
 /// Map a core matches-reading refusal onto the Python exception the caller
@@ -266,8 +297,11 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 ///         closing at the member count.
 ///     member_images: (n_members,) uint32 image id per member. Omitted in the
 ///         ``MatchesFile`` form.
-///     member_positions: (n_members, 2) float64 full-pixel keypoint
-///         positions. Omitted in the ``MatchesFile`` form.
+///     member_positions: (n_members, 2) float32 full-pixel keypoint positions
+///         -- the width the ``.matches`` backbone stores them at. A float64
+///         array is accepted and cast, which is exact for the
+///         ``f32``-originated values a caller reads out of such a file.
+///         Omitted in the ``MatchesFile`` form.
 ///     width: Shared image width; the principal point is the image centre.
 ///         Omitted in the ``MatchesFile`` form.
 ///     height: Shared image height. Omitted in the ``MatchesFile`` form.
@@ -343,7 +377,7 @@ pub fn focal_vote<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
     member_images: Option<PyReadonlyArray1<'py, u32>>,
-    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    member_positions: Option<Bound<'py, PyAny>>,
     width: Option<u32>,
     height: Option<u32>,
     seed: u64,

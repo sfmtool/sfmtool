@@ -107,7 +107,7 @@ pub fn escalation_reasons(
 pub fn estimate_intrinsics(
     cluster_starts: &[u32],
     member_images: &[u32],
-    member_positions: &[[f64; 2]],
+    member_positions: &[[f32; 2]],
     width: u32,
     height: u32,
     options: &IntrinsicsOptions,

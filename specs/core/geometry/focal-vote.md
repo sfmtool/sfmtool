@@ -46,9 +46,14 @@ backbone stores, so a file's own arrays are the vote's arguments:
 |---|---|---|
 | `cluster_starts` | `u32 [n_clusters + 1]` | CSR offsets into the member arrays: opens at `0`, nondecreasing, closes at `n_members` |
 | `member_images` | `u32 [n_members]` | Image id per member |
-| `member_positions` | `f64 [n_members, 2]` | Full-pixel keypoint position per member |
+| `member_positions` | `f32 [n_members, 2]` | Full-pixel keypoint position per member |
 | `width`, `height` | `u32` | Shared image size; the principal point is the image centre |
 | `seed` | `u64` | RANSAC seed; identical inputs and seed reproduce identical output |
+
+Positions arrive at `f32` because that is the width the `.matches` backbone
+stores them at, so a file's array is the argument with nothing converted in
+between. The pair-table pass widens each one exactly where it reads it and
+every computation below is `f64`.
 
 Cluster `c` owns members `cluster_starts[c]..cluster_starts[c+1]`. The index
 is validated up front in `O(n_clusters)` — the four conditions above, plus
@@ -61,9 +66,15 @@ empty cluster, which occupies an index and contributes nothing.
 Observations must reference at least two images. Clusters with fewer than
 two member images contribute nothing.
 
-Positions are `f64`. A `.matches` file stores `f32` and the widening is
-exact, so the file's numbers and the kernel's arithmetic are the same
-numbers.
+The epipolar cell's residual loop computes in `f32` by default (eight
+lanes, `sqrt`/`div` in single precision): the residual is a directly
+computed sine ratio, well conditioned at small values, and its `f32`
+error (~1e-7) sits four orders under the consensus threshold.
+`SFMTOOL_FOCAL_VOTE_F64_EPI` restores the double-precision path for
+forensics, in the convention of the other two restore flags. The
+rotation cell stays `f64`: recovering a small angle from its cosine is
+ill-conditioned in `f32`, and the well-conditioned cross-product form
+costs its lane advantage back.
 
 ### From a `.matches` file
 

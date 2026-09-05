@@ -45,6 +45,10 @@ pub fn homography_4pt(x1: &[[f64; 2]; 4], x2: &[[f64; 2]; 4]) -> Option<Matrix3<
 /// `None` for `N < 4`, non-finite input, a coincident point set, or a
 /// rank-deficient design.
 pub fn homography_dlt(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>> {
+    crate::geometry::focal_vote::prof::H_DLT.time(|| homography_dlt_timed(x1, x2))
+}
+
+fn homography_dlt_timed(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>> {
     let n = x1.len();
     if n < 4 || x2.len() != n {
         return None;
@@ -229,6 +233,16 @@ fn draw4(state: &mut u64, n: usize) -> [usize; 4] {
 /// has it (see [`crate::geometry::simd`]); `score_h_scalar` is both the fallback
 /// and the reference the parity tests compare against.
 fn score_h(
+    h: &Matrix3<f64>,
+    x1: &[[f64; 2]],
+    x2: &[[f64; 2]],
+    thresh2: f64,
+    mask: &mut [bool],
+) -> usize {
+    crate::geometry::focal_vote::prof::SCORE_H.time(|| score_h_timed(h, x1, x2, thresh2, mask))
+}
+
+fn score_h_timed(
     h: &Matrix3<f64>,
     x1: &[[f64; 2]],
     x2: &[[f64; 2]],

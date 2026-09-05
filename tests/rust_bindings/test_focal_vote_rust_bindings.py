@@ -403,6 +403,25 @@ def test_focal_vote_seed_reproducibility():
     assert a["rotation_votes"] == b["rotation_votes"]
 
 
+def test_focal_vote_takes_float32_positions_natively():
+    """float32 is the width the .matches backbone stores positions at, and the
+    float64 form is the same call once cast -- exactly, for values that came
+    out of such a file."""
+    starts, im, pos = _rotation_scene(2024)
+    narrowed = pos.astype(np.float32)
+    a = focal_vote(starts, im, narrowed, W, H, seed=0)
+    b = focal_vote(starts, im, narrowed.astype(np.float64), W, H, seed=0)
+    assert a["focal_px"] == b["focal_px"]
+    assert a["n_pool"] == b["n_pool"]
+    assert a["pool_spread"] == b["pool_spread"]
+
+
+def test_focal_vote_rejects_a_non_float_position_array():
+    starts, im, pos = _rotation_scene(2024)
+    with pytest.raises(TypeError, match="float32 or float64"):
+        focal_vote(starts, im, pos.astype(np.int32), W, H, seed=0)
+
+
 def test_focal_vote_noncontiguous_input():
     starts, im, pos = _rotation_scene(2024)
     pos_nc = np.repeat(pos, 2, axis=1)[:, ::2]
