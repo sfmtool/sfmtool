@@ -137,7 +137,7 @@ pub fn read_uint128_array<R: Read + Seek>(
         )));
     }
     let mut hashes = Vec::with_capacity(count);
-    for chunk in bytes.chunks_exact(16) {
+    for chunk in bytes.as_chunks::<16>().0 {
         let mut hash = [0u8; 16];
         hash.copy_from_slice(chunk);
         hashes.push(hash);

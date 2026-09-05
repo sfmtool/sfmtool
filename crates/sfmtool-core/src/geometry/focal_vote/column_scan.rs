@@ -712,7 +712,7 @@ fn fit_epipolar(
     let mut best_count = 0usize;
     let mut best_e: Option<Matrix3<f64>> = None;
     let mut best_mask = vec![false; n];
-    for s in samples.chunks_exact(EPI_SAMPLE) {
+    for s in samples.as_chunks::<EPI_SAMPLE>().0 {
         let Some(e) = null_from_minimal_sample(&rows, s) else {
             continue;
         };
@@ -957,7 +957,7 @@ fn rotation_support_at(
     let mut resid = vec![0.0f64; n];
     let mut best_count = 0usize;
     let mut best: Option<Vec<bool>> = None;
-    for s in samples.chunks_exact(ROT_SAMPLE) {
+    for s in samples.as_chunks::<ROT_SAMPLE>().0 {
         let Some(rot) = kabsch(r1, r2, s) else {
             continue;
         };

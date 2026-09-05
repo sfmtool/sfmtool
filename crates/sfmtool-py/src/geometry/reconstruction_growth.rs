@@ -29,7 +29,9 @@ pub(crate) fn read_rows<const W: usize>(
     }
     let flat = to_contiguous!(arr);
     Ok(flat
-        .chunks_exact(W)
+        .as_chunks::<W>()
+        .0
+        .iter()
         .map(|c| {
             let mut row = [0.0; W];
             row.copy_from_slice(c);

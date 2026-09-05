@@ -1002,7 +1002,7 @@ fn resample_atlas_multi_channel_rgb() {
     let dst = equirect_camera(48, 24);
     let out = rig.resample_atlas(&atlas, 3, &dst, &RotQuaternion::identity(), 1);
     assert_eq!(out.len(), 48 * 24 * 3);
-    for px in out.chunks_exact(3) {
+    for px in out.as_chunks::<3>().0 {
         assert!((px[0] - 0.1).abs() < 1e-5);
         assert!((px[1] - 0.5).abs() < 1e-5);
         assert!((px[2] - 0.9).abs() < 1e-5);

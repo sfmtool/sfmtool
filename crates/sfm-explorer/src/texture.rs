@@ -30,7 +30,7 @@ use ndarray::ArrayView3;
 /// callers derive both from one source rather than naming a size twice.
 pub(crate) fn rgb_to_color_image(rgb: &[u8], [width, height]: [usize; 2]) -> egui::ColorImage {
     let mut rgba = Vec::with_capacity(width * height * 4);
-    for pixel in rgb.chunks_exact(3) {
+    for pixel in rgb.as_chunks::<3>().0.iter() {
         rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
     }
     egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba)

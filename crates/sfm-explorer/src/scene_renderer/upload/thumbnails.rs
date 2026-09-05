@@ -75,7 +75,7 @@ impl SceneRenderer {
         for i in 0..image_count_clamped as usize {
             let rgb_slice = recon.thumbnails_y_x_rgb.index_axis(ndarray::Axis(0), i);
             let mut rgba_data = Vec::with_capacity((THUMBNAIL_SIZE * THUMBNAIL_SIZE * 4) as usize);
-            for pixel in rgb_slice.as_slice().unwrap().chunks_exact(3) {
+            for pixel in rgb_slice.as_slice().unwrap().as_chunks::<3>().0.iter() {
                 rgba_data.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
 

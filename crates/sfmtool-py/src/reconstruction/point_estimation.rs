@@ -237,7 +237,7 @@ pub fn estimate_points<'py>(
         // The core takes the rotations as given rather than renormalizing, so a
         // caller holding a unit quaternion gets its own rotation back; one that
         // is not unit would silently scale every ray.
-        for (i, c) in qq.chunks_exact(4).enumerate() {
+        for (i, c) in qq.as_chunks::<4>().0.iter().enumerate() {
             let n = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2] + c[3] * c[3]).sqrt();
             if !(n - 1.0).abs().le(&1e-9) {
                 return Err(PyValueError::new_err(format!(

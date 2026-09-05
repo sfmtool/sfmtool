@@ -80,9 +80,16 @@ impl PyObservationCoverage {
             )));
         }
 
-        let sizes: Vec<[u32; 2]> = sizes_data.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        let sizes: Vec<[u32; 2]> = sizes_data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| [c[0], c[1]])
+            .collect();
         let keypoints: Vec<[f64; 2]> = keypoints_data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| [c[0], c[1]])
             .collect();
 

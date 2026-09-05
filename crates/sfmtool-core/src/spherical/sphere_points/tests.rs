@@ -1,7 +1,7 @@
 use super::*;
 
 fn assert_unit_norm(points: &[f32], tol: f32) {
-    for chunk in points.chunks_exact(3) {
+    for chunk in points.as_chunks::<3>().0 {
         let norm = (chunk[0] * chunk[0] + chunk[1] * chunk[1] + chunk[2] * chunk[2]).sqrt();
         assert!((norm - 1.0).abs() < tol, "point not unit norm: norm={norm}");
     }
@@ -30,7 +30,7 @@ fn random_points_cover_sphere() {
     // A simple smoke check: octant occupancy should be roughly balanced.
     let points = random_sphere_points(8000, None);
     let mut counts = [0usize; 8];
-    for chunk in points.chunks_exact(3) {
+    for chunk in points.as_chunks::<3>().0 {
         let i = (chunk[0] >= 0.0) as usize
             | (((chunk[1] >= 0.0) as usize) << 1)
             | (((chunk[2] >= 0.0) as usize) << 2);

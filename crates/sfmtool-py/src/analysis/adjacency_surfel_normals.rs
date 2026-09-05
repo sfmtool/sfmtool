@@ -37,7 +37,7 @@ fn extras_to_csr(extras: &Bound<'_, PyDict>, n_points: usize) -> PyResult<ExtraN
             )));
         }
         let data = to_contiguous!(block);
-        rows[p].extend(data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]));
+        rows[p].extend(data.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]));
     }
 
     let mut out = ExtraNeighbours {
@@ -170,11 +170,15 @@ pub fn estimate_adjacency_surfel_normals(
     }
 
     let point_positions: Vec<[f64; 3]> = positions_data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| [c[0], c[1], c[2]])
         .collect();
     let point_view_dirs: Vec<[f64; 3]> = view_data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| [c[0], c[1], c[2]])
         .collect();
 

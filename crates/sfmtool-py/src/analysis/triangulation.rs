@@ -46,11 +46,15 @@ pub fn triangulate_batch(
     let offsets_data = to_contiguous!(offsets);
 
     let dirs_vec: Vec<Vector3<f64>> = dirs_data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| Vector3::new(c[0], c[1], c[2]))
         .collect();
     let centers_vec: Vec<Point3<f64>> = centers_data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| Point3::new(c[0], c[1], c[2]))
         .collect();
 

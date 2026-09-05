@@ -512,7 +512,9 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     if let Some(kp_raw) = &keypoints_raw {
         if kp_raw.len() == observation_count * KEYPOINT_ROW_BYTES {
             let floats: Vec<f32> = kp_raw
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
             let kp = ndarray::Array2::from_shape_vec((observation_count, 2), floats).unwrap();

@@ -370,7 +370,11 @@ fn unpad(
         out.extend_from_slice(&data[start..start + unpadded]);
     }
     if swizzle {
-        for pixel in out.chunks_exact_mut(BYTES_PER_PIXEL as usize) {
+        for pixel in out
+            .as_chunks_mut::<{ BYTES_PER_PIXEL as usize }>()
+            .0
+            .iter_mut()
+        {
             pixel.swap(0, 2);
         }
     }

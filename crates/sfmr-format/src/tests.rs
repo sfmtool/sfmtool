@@ -757,7 +757,7 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
             // 4 little-endian f64 values (24 of every 32 bytes).
             let xyzw = zstd::stream::decode_all(&compressed[..]).unwrap();
             let mut xyz = Vec::with_capacity(xyzw.len() / 4 * 3);
-            for row in xyzw.chunks_exact(32) {
+            for row in xyzw.as_chunks::<32>().0 {
                 xyz.extend_from_slice(&row[..24]);
             }
             let v1_name = name

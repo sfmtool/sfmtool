@@ -136,7 +136,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # Only the pixi binary is needed; `pixi exec` builds the throwaway MSRV
-      # environment. Installing a project environment would just pull the 1.97
+      # environment. Installing a project environment would just pull the 1.98
       # toolchain this job exists to avoid.
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:

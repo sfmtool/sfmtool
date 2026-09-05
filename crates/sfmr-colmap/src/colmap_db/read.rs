@@ -452,8 +452,8 @@ fn blob_to_matrix_3x3(blob: &Option<Vec<u8>>) -> [f64; 9] {
     match blob {
         Some(b) if b.len() == 72 => {
             let mut m = [0.0; 9];
-            for (i, chunk) in b.chunks_exact(8).enumerate() {
-                m[i] = f64::from_le_bytes(chunk.try_into().unwrap());
+            for (i, chunk) in b.as_chunks::<8>().0.iter().enumerate() {
+                m[i] = f64::from_le_bytes(*chunk);
             }
             m
         }
@@ -466,8 +466,8 @@ fn blob_to_quat(blob: &Option<Vec<u8>>) -> [f64; 4] {
     match blob {
         Some(b) if b.len() == 32 => {
             let mut q = [0.0; 4];
-            for (i, chunk) in b.chunks_exact(8).enumerate() {
-                q[i] = f64::from_le_bytes(chunk.try_into().unwrap());
+            for (i, chunk) in b.as_chunks::<8>().0.iter().enumerate() {
+                q[i] = f64::from_le_bytes(*chunk);
             }
             q
         }
@@ -480,8 +480,8 @@ fn blob_to_tvec(blob: &Option<Vec<u8>>) -> [f64; 3] {
     match blob {
         Some(b) if b.len() == 24 => {
             let mut t = [0.0; 3];
-            for (i, chunk) in b.chunks_exact(8).enumerate() {
-                t[i] = f64::from_le_bytes(chunk.try_into().unwrap());
+            for (i, chunk) in b.as_chunks::<8>().0.iter().enumerate() {
+                t[i] = f64::from_le_bytes(*chunk);
             }
             t
         }

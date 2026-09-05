@@ -90,7 +90,7 @@ fn every_rule_off_is_the_batch_triangulation_solve() {
         -0.3, 0.1, -1.0,
     ];
     let mut unit_dirs = Vec::new();
-    for c in dirs.chunks_exact(3) {
+    for c in dirs.as_chunks::<3>().0 {
         let n = (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
         unit_dirs.extend_from_slice(&[c[0] / n, c[1] / n, c[2] / n]);
     }
@@ -98,11 +98,15 @@ fn every_rule_off_is_the_batch_triangulation_solve() {
     let offsets = [0usize, 3];
     let want = triangulate_batch(
         &unit_dirs
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| Vector3::new(c[0], c[1], c[2]))
             .collect::<Vec<_>>(),
         &centres
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|c| Point3::new(c[0], c[1], c[2]))
             .collect::<Vec<_>>(),
         &offsets,

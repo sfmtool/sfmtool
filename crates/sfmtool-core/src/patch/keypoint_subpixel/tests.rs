@@ -1635,7 +1635,7 @@ fn max_outer_sweeps_per_sweep_guard_does_not_regress_below_seed_at_sweep_t() {
 /// True when some pixel of the flat R·R·4 texture carries cross-view agreement
 /// (alpha > 0).
 fn has_nonzero_alpha(rep: &[u8]) -> bool {
-    rep.chunks_exact(4).any(|px| px[3] > 0)
+    rep.as_chunks::<4>().0.iter().any(|px| px[3] > 0)
 }
 
 #[test]
@@ -1668,7 +1668,7 @@ fn render_bitmaps_fuses_representative_for_finite_point() {
         "aligned views must agree somewhere (alpha > 0)"
     );
     assert!(
-        rep.chunks_exact(4).any(|px| px[0] > 0),
+        rep.as_chunks::<4>().0.iter().any(|px| px[0] > 0),
         "the fused texture must carry real image content"
     );
 }

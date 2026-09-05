@@ -76,7 +76,12 @@ pub fn rotation_init<'py>(
     let clusters = to_contiguous!(cluster_indexes);
     let images = to_contiguous!(image_indexes);
     let pos_flat = to_contiguous!(positions_xy);
-    let positions: Vec<[f64; 2]> = pos_flat.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+    let positions: Vec<[f64; 2]> = pos_flat
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1]])
+        .collect();
 
     // Cluster ids must be nondecreasing (contiguous runs).
     if clusters.windows(2).any(|w| w[1] < w[0]) {

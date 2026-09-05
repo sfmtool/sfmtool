@@ -80,8 +80,10 @@ fn test_write_and_read_back_cameras() {
         .unwrap();
     assert_eq!(params_blob.len(), 4 * 8); // 4 f64 params
     let params: Vec<f64> = params_blob
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     assert!((params[0] - 1000.0).abs() < 1e-10); // fx
     assert!((params[1] - 1000.0).abs() < 1e-10); // fy
@@ -111,8 +113,10 @@ fn test_write_and_read_back_cameras() {
         .unwrap();
     assert_eq!(kp_blob.len(), 2 * 2 * 4); // 2 keypoints × 2 coords × f32
     let kp_values: Vec<f32> = kp_blob
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     assert!((kp_values[0] - 100.0).abs() < 1e-5);
     assert!((kp_values[1] - 200.0).abs() < 1e-5);
@@ -192,8 +196,10 @@ fn test_write_pose_priors() {
         )
         .unwrap();
     let pos: Vec<f64> = pos_blob
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     assert!((pos[0] - 1.0).abs() < 1e-10);
     assert!((pos[1] - 2.0).abs() < 1e-10);
@@ -310,8 +316,10 @@ fn test_write_two_view_geometries() {
     };
     assert_eq!(f_blob.len(), 9 * 8); // 3x3 matrix of f64
     let f_values: Vec<f64> = f_blob
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     // Should be identity
     assert!((f_values[0] - 1.0).abs() < 1e-10);
@@ -326,8 +334,10 @@ fn test_write_two_view_geometries() {
         stmt.query_row([], |row| row.get(0)).unwrap()
     };
     let qvec: Vec<f64> = qvec_blob
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     assert!((qvec[0] - 1.0).abs() < 1e-10); // w
     assert!((qvec[1]).abs() < 1e-10); // x
@@ -890,12 +900,16 @@ fn test_feature_then_matches_with_tvg_round_trip() {
             )
             .unwrap();
         let qvec: Vec<f64> = qvec_blob
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect();
         let tvec: Vec<f64> = tvec_blob
-            .chunks_exact(8)
-            .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| f64::from_le_bytes(*c))
             .collect();
         assert!((qvec[0] - 0.9).abs() < 1e-10);
         assert!((qvec[1] - 0.1).abs() < 1e-10);
@@ -1333,8 +1347,10 @@ fn test_write_multi_sensor_rig() {
         .unwrap();
     assert_eq!(pose_blob.len(), 7 * 8); // qw,qx,qy,qz,tx,ty,tz as f64
     let values: Vec<f64> = pose_blob
-        .chunks_exact(8)
-        .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
         .collect();
     assert!((values[0] - 1.0).abs() < 1e-10); // qw
     assert!((values[4] - 0.1).abs() < 1e-10); // tx

@@ -67,7 +67,7 @@ impl PointTrackDetail {
         // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
         let (w, h) = (tile.width() as usize, tile.height() as usize);
         let mut rgba = Vec::with_capacity(w * h * 4);
-        for px in tile.data().chunks_exact(3) {
+        for px in tile.data().as_chunks::<3>().0.iter() {
             rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
         }
         let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
@@ -146,7 +146,7 @@ pub(super) fn build_stored_patch_texture(
     if rgba.iter().all(|&b| b == 0) {
         return None;
     }
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0.iter_mut() {
         px[3] = 255;
     }
     let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);

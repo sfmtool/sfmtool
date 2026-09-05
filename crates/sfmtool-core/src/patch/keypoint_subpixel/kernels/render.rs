@@ -415,7 +415,7 @@ impl RefineTile {
                 for c in 0..ch {
                     let seg = &mut dst[c * n + k..][..len];
                     let pbase = c * area + (trow - 1) * res + (tcol - 1);
-                    for (j, wrow) in w16.chunks_exact(4).enumerate() {
+                    for (j, wrow) in w16.as_chunks::<4>().0.iter().enumerate() {
                         // One pass per tap row: the four horizontal taps are
                         // overlapping shifted reads of the same contiguous
                         // texel row (`windows(4)`), fused into a single

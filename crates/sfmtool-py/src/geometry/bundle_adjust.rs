@@ -270,7 +270,12 @@ pub fn bundle_adjust<'py>(
     let mut pts: Vec<[f64; 3]> = (0..n_pt)
         .map(|p| [p_in[p * 3], p_in[p * 3 + 1], p_in[p * 3 + 2]])
         .collect();
-    let uv_rows: Vec<[f64; 2]> = uv_in.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+    let uv_rows: Vec<[f64; 2]> = uv_in
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| [c[0], c[1]])
+        .collect();
     let stages: Vec<BaSchedule> = schedule
         .iter()
         .map(|&(trim_px, loss_scale)| BaSchedule {

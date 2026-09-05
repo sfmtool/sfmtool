@@ -568,7 +568,9 @@ pub fn cluster_census(
         INVALID_RESIDUAL_PX,
     );
     let residual_norms: Vec<f64> = residuals
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|r| (r[0] * r[0] + r[1] * r[1]).sqrt())
         .collect();
 

@@ -147,11 +147,15 @@ pub fn build_observation_adjacency(
     }
 
     let keypoints: Vec<[f64; 2]> = keypoints_data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| [c[0], c[1]])
         .collect();
     let point_positions: Vec<[f64; 3]> = positions_data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| [c[0], c[1], c[2]])
         .collect();
 

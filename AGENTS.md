@@ -244,7 +244,7 @@ backlog and keep them honest as findings get addressed:
   start.
 - Not every CLI command has a spec yet. The `xform` sub-commands are specced
   under `specs/cli/reconstruction/xform/` rather than as top-level commands.
-- Python 3.14 and Rust 1.97 are pinned in `pixi.toml`. That is the *development*
+- Python 3.14 and Rust 1.98 are pinned in `pixi.toml`. That is the *development*
   toolchain, and it is deliberately not the same thing as the MSRV: the workspace
   declares `rust-version = "1.95"` in `[workspace.package]` (inherited by all nine
   crates), because the PyPI sdist compiles this workspace on the user's own rustc
