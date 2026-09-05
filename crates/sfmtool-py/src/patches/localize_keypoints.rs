@@ -12,10 +12,9 @@ use sfmtool_core::patch::keypoint_localize::{
     localize_patch_cloud_keypoints, BasisInputs, BasisPick, KeypointLocalizeParams,
     SearchStrategy as LocalizeSearchStrategy,
 };
-use sfmtool_core::patch::normal_refine::{
-    view_indices_from_reconstruction, PatchWindow, ProjectedImage, Sampler,
-};
+use sfmtool_core::patch::normal_refine::{view_indices_from_reconstruction, ProjectedImage};
 
+use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
 use crate::ProgressCounter;
@@ -194,30 +193,8 @@ impl PyPatchCloud {
             ));
         }
 
-        let window = match window {
-            "uniform" => PatchWindow::Uniform,
-            "gaussian" => PatchWindow::Gaussian {
-                sigma: window_sigma,
-            },
-            "gaussian_disk" => PatchWindow::GaussianDisk {
-                sigma: window_sigma,
-            },
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
-                )))
-            }
-        };
-        let sampler = match sampler {
-            "bilinear" => Sampler::Bilinear,
-            "bilinear_mip" => Sampler::BilinearMip,
-            "anisotropic" => Sampler::Anisotropic,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
-                )))
-            }
-        };
+        let window = parse_patch_window(window, window_sigma)?;
+        let sampler = parse_sampler(sampler)?;
         if !(search_resolution_multiplier.is_finite() && search_resolution_multiplier > 0.0) {
             return Err(PyValueError::new_err(format!(
                 "search_resolution_multiplier must be > 0, got {search_resolution_multiplier}"

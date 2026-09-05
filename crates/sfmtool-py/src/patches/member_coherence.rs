@@ -14,8 +14,9 @@ use sfmtool_core::patch::member_coherence::{
     member_keypoints_from_reconstruction, member_views_from_reconstruction,
     validate_patch_cloud_member_coherence, MemberCoherenceParams, MemberVerdict,
 };
-use sfmtool_core::patch::normal_refine::{PatchWindow, ProjectedImage, Sampler};
+use sfmtool_core::patch::normal_refine::ProjectedImage;
 
+use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
 use super::views::{resolve_pyramids, resolve_scene};
 use crate::ProgressCounter;
@@ -214,30 +215,8 @@ impl PyPatchCloud {
             ));
         }
 
-        let window = match window {
-            "uniform" => PatchWindow::Uniform,
-            "gaussian" => PatchWindow::Gaussian {
-                sigma: window_sigma,
-            },
-            "gaussian_disk" => PatchWindow::GaussianDisk {
-                sigma: window_sigma,
-            },
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
-                )))
-            }
-        };
-        let sampler = match sampler {
-            "bilinear" => Sampler::Bilinear,
-            "bilinear_mip" => Sampler::BilinearMip,
-            "anisotropic" => Sampler::Anisotropic,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
-                )))
-            }
-        };
+        let window = parse_patch_window(window, window_sigma)?;
+        let sampler = parse_sampler(sampler)?;
         let params = MemberCoherenceParams {
             bar,
             margin_gate,

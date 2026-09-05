@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
-use sfmtool_core::patch::normal_refine::PatchWindow;
+use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler};
 
 /// `numpy.median` of a non-empty slice: the middle value for an odd count, the
 /// mean of the two central values for an even count. Sorts `v` in place.
@@ -30,6 +30,20 @@ pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWind
         "gaussian_disk" => Ok(PatchWindow::GaussianDisk { sigma }),
         other => Err(PyValueError::new_err(format!(
             "unknown window: {other:?} (expected uniform|gaussian|gaussian_disk)"
+        ))),
+    }
+}
+
+/// Map a sampler name to the shared [`Sampler`] the patch kernels resample
+/// through. The companion to [`parse_patch_window`]: every binding that takes
+/// a `window` takes a `sampler` beside it.
+pub(super) fn parse_sampler(sampler: &str) -> PyResult<Sampler> {
+    match sampler {
+        "bilinear" => Ok(Sampler::Bilinear),
+        "bilinear_mip" => Ok(Sampler::BilinearMip),
+        "anisotropic" => Ok(Sampler::Anisotropic),
+        other => Err(PyValueError::new_err(format!(
+            "unknown sampler: {other:?} (expected bilinear|bilinear_mip|anisotropic)"
         ))),
     }
 }
