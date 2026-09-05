@@ -17,7 +17,7 @@ specified in [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 ## Basis evaluation
 
 The kernels live in
-[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs)
+[kernels/sfmtool_fisheye.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs)
 (`distort_ray_sfmtool_fisheye`, `sfmtool_fisheye_to_ray`,
 `recover_radial_bspline`, `sfmtool_fisheye_ray_jacobian`), with the B-spline
 basis in

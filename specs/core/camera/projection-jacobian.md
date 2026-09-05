@@ -43,10 +43,14 @@ choose the analytic or fallback path.
 `CameraIntrinsics::ray_to_pixel_with_jacobian` and
 `CameraModel::distort_jacobian` live in
 [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs), the
-per-model kernels (`radial_fisheye_ray_jacobian`, `sfmtool_fisheye_ray_jacobian`,
-`sfmtool_pinhole_radial_factor`) in
-[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs), and
-`CameraModel::supports_pixel_jacobian` in
+per-model kernels in one file per model family —
+`radial_fisheye_ray_jacobian` in
+[kernels/equidistant.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/equidistant.rs),
+`sfmtool_fisheye_ray_jacobian` in
+[kernels/sfmtool_fisheye.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs),
+`sfmtool_pinhole_radial_factor` in
+[kernels/sfmtool_pinhole.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_pinhole.rs)
+— and `CameraModel::supports_pixel_jacobian` in
 [intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
 
 ```rust

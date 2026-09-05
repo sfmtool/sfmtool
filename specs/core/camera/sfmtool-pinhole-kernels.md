@@ -20,12 +20,14 @@ coefficients, is specified in [bundle-adjustment.md](../geometry/bundle-adjustme
 ## Forward projection
 
 The kernels live in
-[kernels.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels.rs)
+[kernels/sfmtool_pinhole.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_pinhole.rs)
 (`distort_sfmtool_pinhole`, `undistort_sfmtool_pinhole`,
-`sfmtool_pinhole_radial_factor`, `sfmtool_pinhole_unfolded`,
-`recover_radial_bspline`), sharing the B-spline basis in
-[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs) with
-the fisheye sibling; dispatch is in
+`sfmtool_pinhole_radial_factor`, `sfmtool_pinhole_unfolded`), sharing both
+`recover_radial_bspline` — which lives with the fisheye sibling in
+[kernels/sfmtool_fisheye.rs](../../../crates/sfmtool-core/src/camera/distortion/kernels/sfmtool_fisheye.rs)
+— and the B-spline basis in
+[bspline.rs](../../../crates/sfmtool-core/src/camera/distortion/bspline.rs);
+dispatch is in
 [distortion.rs](../../../crates/sfmtool-core/src/camera/distortion.rs) and the
 classification arms in
 [intrinsics.rs](../../../crates/sfmtool-core/src/camera/intrinsics.rs).
