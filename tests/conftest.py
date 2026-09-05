@@ -226,14 +226,21 @@ def build_cluster_reconstruction(
         # First attempt uses the fixed seed for a reproducible result; retries
         # let the solver randomize so a fresh split can register all images.
         seed = random_seed if attempt == 1 else None
-        _solve(
-            [],
-            workspace_dir,
-            colmap_dir,
-            matches_file=matches_file,
-            random_seed=seed,
-            output_sfm_file=str(output_sfm_file),
-        )
+        try:
+            _solve(
+                [],
+                workspace_dir,
+                colmap_dir,
+                matches_file=matches_file,
+                random_seed=seed,
+                output_sfm_file=str(output_sfm_file),
+            )
+        except RuntimeError:
+            # A degenerate solve -- GLOMAP is not seed-deterministic, and the
+            # extreme case raises "No 3D points found" -- is just another
+            # attempt to rank below the rest, not a fixture failure. Retry with
+            # fresh randomization, as the ``.camrig`` fixture below does.
+            continue
         path, count = _largest_recon(output_sfm_file)
         points = SfmrReconstruction.load(path).point_count
         key = (count, points)
@@ -248,6 +255,11 @@ def build_cluster_reconstruction(
         if images_ok and points_ok:
             break
 
+    if best_path is None:
+        raise RuntimeError(
+            f"every one of {max_attempts} solve attempts on {workspace_dir} was "
+            "degenerate (the solver raised each time); no reconstruction to keep."
+        )
     # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
     for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
         stale.unlink()
