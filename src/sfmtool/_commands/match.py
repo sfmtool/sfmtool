@@ -26,22 +26,29 @@ _MODE_OPTIONS: dict[str, list[tuple[str, str]]] = {
         ("cluster_alpha", "--cluster-alpha"),
         ("cluster_d", "--cluster-d"),
         ("cluster_preset", "--cluster-preset"),
-        ("clusters_output", "--clusters-output"),
     ],
 }
+
+# Options that describe an image set being matched, and so mean nothing to
+# `--derive-pairs`, whose image set is fixed by the clusters file it reads.
+_DERIVE_PAIRS_STRAY_OPTIONS: list[tuple[str, str]] = [
+    ("max_feature_count", "--max-features"),
+    ("range_expr", "--range"),
+]
+
+
+def _passed_on_command_line(attr: str) -> bool:
+    """Whether this invocation set `attr` explicitly rather than by default."""
+    ctx = click.get_current_context()
+    return ctx.get_parameter_source(attr) == click.ParameterSource.COMMANDLINE
 
 
 def _reject_stray_mode_options(selected: str) -> None:
     """Error if a mode-specific option was passed for an unselected method."""
-    ctx = click.get_current_context()
     for mode, opts in _MODE_OPTIONS.items():
         if mode == selected:
             continue
-        stray = [
-            flag
-            for attr, flag in opts
-            if ctx.get_parameter_source(attr) == click.ParameterSource.COMMANDLINE
-        ]
+        stray = [flag for attr, flag in opts if _passed_on_command_line(attr)]
         if stray:
             verb = "only applies" if len(stray) == 1 else "only apply"
             raise click.UsageError(
@@ -146,13 +153,13 @@ def _reject_stray_mode_options(selected: str) -> None:
     help="Kd-tree forest preset for --cluster. Default: accurate.",
 )
 @click.option(
-    "--clusters-output",
-    "clusters_output",
-    type=click.Path(),
-    default=None,
-    help="Path for the clusters-bearing .matches file --cluster writes as its "
-    "primary artifact. Default: matches/<verified stem>-clusters.matches "
-    "under the workspace.",
+    "--derive-pairs",
+    "derive_pairs",
+    is_flag=True,
+    help="Derive the verified pairwise + two-view-geometry .matches from a "
+    "clusters-bearing .matches file (written by --cluster). PATHS is that one "
+    "file. This is the artifact COLMAP's mapper needs; nothing in sfmtool's "
+    "own pipeline reads two-view geometries.",
 )
 @click.option(
     "--camera-model",
@@ -183,7 +190,7 @@ def match(
     cluster_alpha,
     cluster_d,
     cluster_preset,
-    clusters_output,
+    derive_pairs,
     camera_model,
     merge,
 ):
@@ -203,8 +210,11 @@ def match(
         sfm match --flow images/
 
         # Background-floor track-cluster matching (writes the clusters
-        # .matches primary artifact plus the verified pairwise+TVG file)
+        # .matches, deterministically; no COLMAP involved)
         sfm match --cluster images/
+
+        # Derive the verified pairwise+TVG .matches COLMAP's mapper needs
+        sfm match --derive-pairs matches/my-clusters.matches
 
         # With feature count limit
         sfm match --exhaustive --max-features 4096 images/
@@ -225,23 +235,20 @@ def match(
             raise click.ClickException(str(e))
         return
 
-    from ..cli import deduce_workspace
-
-    # Default to the current directory when no paths are given
-    if not paths:
-        paths = (".",)
-
-    method_count = sum([exhaustive, sequential, flow_match, cluster_match])
+    method_count = sum(
+        [exhaustive, sequential, flow_match, cluster_match, derive_pairs]
+    )
     if method_count > 1:
         raise click.UsageError(
             "Cannot specify more than one matching method. "
             "Choose one of: --exhaustive (-e), --sequential (-s), --flow, "
-            "or --cluster"
+            "--cluster, or --derive-pairs"
         )
     if method_count == 0:
         raise click.UsageError(
             "Must specify a matching method: "
-            "--exhaustive (-e), --sequential (-s), --flow, or --cluster"
+            "--exhaustive (-e), --sequential (-s), --flow, --cluster, "
+            "or --derive-pairs"
         )
 
     matching_method = (
@@ -249,11 +256,30 @@ def match(
         if flow_match
         else "cluster"
         if cluster_match
+        else "derive-pairs"
+        if derive_pairs
         else "sequential"
         if sequential
         else "exhaustive"
     )
     _reject_stray_mode_options(selected=matching_method)
+
+    if derive_pairs:
+        _run_derive_pairs_mode(paths, output_path, camera_model)
+        return
+
+    # Default to the current directory when no paths are given
+    if not paths:
+        paths = (".",)
+
+    if cluster_match and _passed_on_command_line("camera_model"):
+        # The clustering uses no intrinsics, and --cluster no longer verifies
+        # anything, so a camera model here would be silently inert.
+        raise click.UsageError(
+            "--camera-model does not apply to --cluster matching, which uses "
+            "no intrinsics. It applies to --derive-pairs, which estimates the "
+            "two-view geometries."
+        )
 
     numbers = None
     if range_expr:
@@ -267,6 +293,8 @@ def match(
     )
     if not filenames:
         raise click.UsageError("No image files found in the provided paths.")
+
+    from ..cli import deduce_workspace
 
     absolute_paths = [Path(os.path.normpath(os.path.abspath(p))) for p in filenames]
     workspace_dir = deduce_workspace({p.parent for p in absolute_paths})
@@ -292,7 +320,49 @@ def match(
             cluster_d=cluster_d,
             cluster_alpha=cluster_alpha,
             cluster_preset=cluster_preset,
-            clusters_output=clusters_output,
         )
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+
+def _run_derive_pairs_mode(
+    paths: tuple[str, ...], output_path: str | None, camera_model: str | None
+) -> None:
+    """Validate `--derive-pairs` arguments and run the derivation."""
+    from .._sfmtool.io import read_matches_metadata
+
+    stray = [
+        flag
+        for attr, flag in _DERIVE_PAIRS_STRAY_OPTIONS
+        if _passed_on_command_line(attr)
+    ]
+    if stray:
+        verb = "applies" if len(stray) == 1 else "apply"
+        raise click.UsageError(
+            f"{', '.join(stray)} {verb} to matching an image set, but "
+            "--derive-pairs reads its image set from the clusters file."
+        )
+
+    if len(paths) != 1 or not paths[0].endswith(".matches"):
+        raise click.UsageError(
+            "--derive-pairs takes exactly one clusters-bearing .matches file "
+            "(the output of 'sfm match --cluster'), not image paths."
+        )
+
+    source = Path(paths[0])
+    try:
+        source_metadata = read_matches_metadata(str(source))
+    except Exception as e:
+        raise click.ClickException(str(e))
+    if not source_metadata.get("has_clusters", False):
+        raise click.UsageError(
+            f"{source} stores no clusters. --derive-pairs derives pairs from "
+            "the clusters-bearing .matches file 'sfm match --cluster' writes."
+        )
+
+    from ..feature_match._derive_pairs import _run_derive_pairs
+
+    try:
+        _run_derive_pairs(source, output_path=output_path, camera_model=camera_model)
     except Exception as e:
         raise click.ClickException(str(e))

@@ -197,6 +197,24 @@ def solve(
         if flow_match:
             raise click.UsageError("--flow-match cannot be used with a .matches file.")
 
+        # The COLMAP mapper reads its correspondence graph from the database's
+        # two-view geometry table, so a clusters-bearing file — which by
+        # format never carries two-view geometries — would hand it an empty
+        # graph and register nothing. Say so instead of solving into silence.
+        from .._sfmtool.io import read_matches_metadata
+
+        try:
+            matches_metadata = read_matches_metadata(str(matches_file))
+        except Exception as e:
+            raise click.ClickException(str(e))
+        if matches_metadata.get("has_clusters", False):
+            raise click.UsageError(
+                f"{matches_file} is a clusters-bearing .matches file and "
+                "carries no two-view geometries, which the mapper needs. "
+                f"Run 'sfm match --derive-pairs {matches_file}' first and "
+                "solve from the .matches file it writes."
+            )
+
         try:
             if colmap_dir:
                 _run_sfm(

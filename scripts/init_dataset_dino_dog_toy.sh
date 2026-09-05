@@ -3,8 +3,8 @@
 # This script creates a workspace, copies test images, and sets up an sfm_solve.sh script
 #
 # Pipeline: sfmtool SIFT (capped at 2500 features) -> track-cluster matching ->
-# incremental SfM. The feature cap bounds match and solve cost on these
-# high-resolution images.
+# derived pairs -> incremental SfM. The feature cap bounds match and solve cost
+# on these high-resolution images.
 
 set -e
 
@@ -28,7 +28,7 @@ echo "Copied ${NUM_IMAGES} images to ${WORKSPACE_DIR}/images/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Dino Dog Toy dataset
-# sfmtool SIFT -> track-cluster matching -> incremental SfM
+# sfmtool SIFT -> track-cluster matching -> derived pairs -> incremental SfM
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -42,8 +42,12 @@ fi
 sfm sift --extract -t 3 images/*.jpg
 
 # Track-cluster matching
-mkdir -p tvg-matches
-sfm match --cluster images/ -o tvg-matches/dino_dog_toy.matches
+mkdir -p matches tvg-matches
+sfm match --cluster images/ -o matches/dino_dog_toy-clusters.matches
+
+# Derive the verified pairwise + two-view-geometry matches the mapper reads
+sfm match --derive-pairs matches/dino_dog_toy-clusters.matches \
+  -o tvg-matches/dino_dog_toy.matches
 
 echo "Running incremental SfM on Dino Dog Toy dataset..."
 sfm solve --incremental --seed 42 tvg-matches/dino_dog_toy.matches

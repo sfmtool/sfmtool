@@ -419,15 +419,18 @@ floor inside the track itself; pass `--cluster-d` to raise it.
   points of recall (absorbed downstream by geometric verification + track
   redundancy).
 - **There is no `sfm solve --cluster` shortcut.** The matcher is reached through
-  `sfm match --cluster`, which writes a `.matches` file; `sfm solve` then takes
-  that file like any other match set.
+  `sfm match --cluster`, which writes a clusters `.matches` file;
+  `sfm match --derive-pairs` verifies that into the pairwise + two-view-geometry
+  file `sfm solve` then takes like any other match set.
 
 ## Relationship to Existing Pipeline
 
 Conceptually this matcher replaces the per-pair Lowe ratio test with a per-point,
-data-derived distance radius. It runs geometric verification itself, so its
-`.matches` output carries two-view geometry and plugs into `sfm solve` and `sfm
-to-colmap-db` exactly like the existing matchers.
+data-derived distance radius. Its `.matches` output stores the clusters, and the
+pairwise view every existing consumer wants is derived from them at read time,
+so `sfm to-colmap-db` reads it directly; `sfm match --derive-pairs` verifies
+that expansion into the pairwise + two-view-geometry file COLMAP's mapper
+needs.
 
 ### Vocabulary trees
 
@@ -459,9 +462,11 @@ its PyO3 binding in
 [`matching/cluster.rs`](../../../crates/sfmtool-py/src/matching/cluster.rs)
 (bound under `sfmtool._sfmtool.matching`), and the Python matcher layer in
 [`_cluster_matching.py`](../../../src/sfmtool/feature_match/_cluster_matching.py),
-orchestrated by `_run_cluster_matching` in
-[`_run.py`](../../../src/sfmtool/feature_match/_run.py) and reached from the CLI
-as `sfm match --cluster` (see
+orchestrated by `_materialize_clusters` in
+[`_run.py`](../../../src/sfmtool/feature_match/_run.py) — which `sfm match
+--cluster` follows with a cluster-file write, and the in-solve matching mode
+(`_run_cluster_matching`) with a database write plus verification — and reached
+from the CLI as `sfm match --cluster` (see
 [match-command.md](../../cli/image-feature/match-command.md)). The algorithm and
 its justification are above; this section is the API and data flow, centred on
 [§2 Per-point threshold: the background floor](#2-per-point-threshold-the-background-floor).
@@ -912,18 +917,20 @@ describing `--cluster` and its options, and link back to this section.
 The emitted `.matches` flows through the existing consumers unchanged:
 
 ```bash
-pixi run sfm match --cluster images -o tvg-matches/cluster.matches
-pixi run sfm to-colmap-db tvg-matches/cluster.matches colmap.db
+pixi run sfm match --cluster images -o matches/cluster-clusters.matches
+pixi run sfm to-colmap-db matches/cluster-clusters.matches colmap.db
+pixi run sfm match --derive-pairs matches/cluster-clusters.matches \
+    -o tvg-matches/cluster.matches
 pixi run sfm solve -i tvg-matches/cluster.matches                       # incremental SfM
 ```
 
-Because the `.matches` already carries two-view geometry, `sfm to-colmap-db` /
-`sfm solve` write the embedded TVG straight into the COLMAP DB
-(`_setup_for_sfm_from_matches` / `_write_matches_to_db` in `_colmap_db.py`) — no
-re-verification needed. A `sfm solve --cluster` shortcut (match then map in one
-call) is a reasonable follow-on but is **out of scope** here; the
-`match → .matches → solve` path is
-the deliverable.
+`sfm to-colmap-db` derives the pairs from the cluster file at read time.
+`sfm solve` needs the two-view geometries the mapper reads its correspondence
+graph from, which is what `sfm match --derive-pairs` produces;
+`_setup_for_sfm_from_matches` / `_write_matches_to_db` then write the embedded
+TVG straight into the COLMAP DB. There is no `sfm solve --cluster` shortcut
+(match then map in one call); the `match → .matches → derive-pairs → solve`
+path is the pipeline.
 
 #### Tests
 
@@ -932,10 +939,11 @@ the deliverable.
   per image, spans ≥ `min_size` images) and one-to-one-per-pair on the converted
   matches.
 - **Integration**: using the `isolated_seoul_bull_17_images` fixture (see
-  `tests/conftest.py`), run `sfm match --cluster` and assert a `.matches` file is
-  produced with the expected pair/match counts > 0 and `has_two_view_geometries`
-  True (geometric verification ran); optionally feed it to `to-colmap-db` and
-  assert a DB is created.
+  `tests/conftest.py`), run `sfm match --cluster` and assert a clusters
+  `.matches` file is produced with `cluster_count` / `cluster_member_count` > 0
+  and no two-view geometries, and that a second run reproduces the backbone bit
+  for bit; feed it to `to-colmap-db` and to `sfm match --derive-pairs`, whose
+  output carries two-view geometries.
 - `pixi run fmt && pixi run check` for the Python changes.
 
 ### Production defaults (single source of truth)

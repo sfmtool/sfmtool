@@ -4,18 +4,27 @@
 
 Matches SIFT features between image pairs and writes a `.matches` file. Requires a workspace
 with previously extracted SIFT features. Uses COLMAP to perform the matching, except for the
-experimental "flow" mode, which has some promise for videos.
+track-cluster matcher and the experimental "flow" mode, which has some promise for videos.
+
+The command is implemented in
+[`_commands/match.py`](../../../src/sfmtool/_commands/match.py), which is a thin
+Click wrapper over [`feature_match/_run.py`](../../../src/sfmtool/feature_match/_run.py)
+(the matching methods) and
+[`feature_match/_derive_pairs.py`](../../../src/sfmtool/feature_match/_derive_pairs.py)
+(the `--derive-pairs` mode).
 
 ## Command Syntax
 
 ```bash
 sfm match [PATHS...] --exhaustive | --sequential | --flow | --cluster [OPTIONS...]
+sfm match --derive-pairs CLUSTERS.matches [-o OUTPUT.matches]
 sfm match --merge FILE1.matches FILE2.matches ... -o OUTPUT.matches
 ```
 
 `PATHS` are image directories or files; when omitted, the current directory is used
-(except with `--merge`, which requires explicit `.matches` paths). Exactly one matching
-method must be specified, or `--merge` to combine existing `.matches` files.
+(except with `--merge`, which requires explicit `.matches` paths, and `--derive-pairs`,
+which requires exactly one). Exactly one matching method must be specified, or `--merge`
+to combine existing `.matches` files.
 
 ## Matching Methods
 
@@ -25,6 +34,7 @@ method must be specified, or `--merge` to combine existing `.matches` files.
 | `--sequential / -s` | Match each image against its nearby neighbors in sequence order |
 | `--flow` | Use dense optical flow to guide feature matching |
 | `--cluster` | Cluster all images' descriptors at once (background-floor track-cluster matching) |
+| `--derive-pairs` | Verify a clusters-bearing `.matches` file into the pairwise + two-view-geometry file COLMAP's mapper reads |
 | `--merge` | Merge multiple `.matches` files into one |
 
 Exactly one matching method must be given. Each method has its own tuning
@@ -33,6 +43,9 @@ options (`--sequential-overlap` for `--sequential`; `--flow-preset` /
 `--cluster-preset` for `--cluster`). Passing a method-specific option without
 its companion method is rejected with a `UsageError` rather than silently
 ignored.
+
+Every method writes exactly one `.matches` file, at `-o` or at a generated
+default.
 
 ## Options
 
@@ -44,11 +57,16 @@ ignored.
 | `--cluster-alpha` | float | 0.8 | Background-floor radius multiplier for cluster matching |
 | `--cluster-d` | int | 10 | Background rank: the d-th-nearest distance sets the floor for cluster matching |
 | `--cluster-preset` | `accurate` \| `balanced` \| `fast` | `accurate` | Kd-tree forest preset for cluster matching |
-| `--clusters-output` | path | `matches/<verified stem>-clusters.matches` | Path for the clusters-bearing `.matches` file `--cluster` writes as its primary artifact |
 | `--max-features` | int | | Maximum features per image |
 | `--output / -o` | path | auto | Output `.matches` file path (default: timestamped, required for `--merge`) |
 | `--range / -r` | string | | Range expression for file numbers |
 | `--camera-model` | choice | auto | Camera model override (e.g., `SIMPLE_RADIAL`, `OPENCV`). Accepts the same 11 COLMAP model names as `solve` and `camrig create`. |
+
+`--max-features` and `--range` describe an image set being matched, so
+`--derive-pairs` — whose image set is fixed by the clusters file it reads —
+rejects them. `--camera-model` feeds geometric verification, so `--cluster`,
+which verifies nothing, rejects it too; under `--derive-pairs` it selects the
+model the two-view geometries are estimated with.
 
 ## Process
 
@@ -57,6 +75,10 @@ ignored.
 3. Runs the selected matching strategy
 4. Computes descriptor distances for matched pairs
 5. Writes a timestamped `.matches` file
+
+`--cluster` is the exception: it opens no database and runs steps 1, 3 and 5
+only, because the clusters it writes carry neither descriptor distances nor
+two-view geometries.
 
 ## Camera Intrinsics
 
@@ -72,52 +94,92 @@ enumerating image pairs, it concatenates every image's descriptors into one
 corpus, queries each descriptor's nearest neighbours over a randomized kd-tree
 forest, and keeps the cross-image neighbours within `--cluster-alpha` × its
 `--cluster-d`-th-nearest distance (its *background floor*). Those candidates
-are materialized into track clusters and then expanded into per-image-pair
-matches, which are geometrically verified — so the `-o` output `.matches`
-carries two-view geometry and is written under `tvg-matches/`. Image pair
-selection falls out of the clustering: only pairs that share a cluster are
-verified.
+are materialized into track clusters, and the clusters are the output. Image
+pair selection falls out of the clustering — the pairs are exactly those that
+share a cluster — and is derivable from the file at any time.
 
-### Dual output: the cluster file is the primary artifact
+### One output: the clusters-bearing `.matches`
 
-`--cluster` writes **two** files, echoing both paths:
+`--cluster` writes a single file — clusters backbone, no pairs, no two-view
+geometries, carrying `matching_method: "cluster"`, the matcher's options, and
+`cluster_count` / `cluster_member_count` metadata. Default path: the workspace
+`matches/` directory, with the usual timestamped stem plus a `-clusters`
+suffix; `-o` names it explicitly.
 
-1. **The clusters-bearing `.matches`** (clusters backbone, no pairs, no
-   TVGs; `matching_method: "cluster"`, matcher options recorded, and
-   `cluster_count` / `cluster_member_count` metadata) — the matcher's durable
-   primary artifact, written **before** geometric verification so it survives
-   a verification failure. Default path: the workspace `matches/` directory,
-   named after the verified output's stem plus a `-clusters` suffix; override
-   with `--clusters-output`. This file feeds cluster-native consumers
-   (`sfm cluster-patches`, re-expansion, inspection); pairwise consumers
-   derive pairs from it at read time via
-   `sfmtool.feature_match.pairs_from_matches`.
-2. **The verified pairwise+TVG `.matches`** at `-o` (or the timestamped
-   `tvg-matches/` default) — the solver-facing derivative, unchanged in
-   meaning, produced by materializing the cluster expansion into the COLMAP
-   DB and verifying it. Verification culls pairs below COLMAP's
-   `min_num_matches`, so its candidate pairs are a subset of the cluster
-   file's derived expansion.
+The file feeds cluster-native consumers (`sfm cluster-patches`,
+`sfm estimate-intrinsics`, inspection) directly, and pairwise consumers derive
+pairs from it at read time via `sfmtool.feature_match.pairs_from_matches` —
+`sfm to-colmap-db` reads it unchanged. Images are listed in lexicographic
+order, which is the order every `.matches` reader uses, so indices stay
+comparable with any file derived from it.
 
-Both files list the images in the same (lexicographic) order, so image
-indices are directly comparable between them.
+**The run is deterministic.** Nothing on this path consults a COLMAP database
+or `pycolmap`; the same corpus and options produce the same backbone bit for
+bit. Geometric verification, the one nondeterministic step, lives in
+[`--derive-pairs`](#derive-pairs).
 
-**Rig same-frame pair exclusion applies to the pair expansion only, never to
-the stored clusters.** The clusters persisted to the primary artifact are the
-raw matcher output; for multi-sensor rigs, the same-frame `(i, j)` exclusion
-(back-to-back sensors with no shared view) is applied when the expansion is
-written to the DB for verification — a consumer re-deriving pairs from the
-cluster file must re-apply any rig exclusion it needs.
-
-The clustering itself uses no intrinsics or poses. `--camera-model` is still
-accepted with `--cluster` because it feeds the geometric verification step
-(as it does for the other matchers): the chosen model is written into the
-COLMAP database and used to estimate each clustered pair's two-view geometry.
-As elsewhere, `--camera-model` is rejected only when a `camera_config.json`
-resolves for one of the images (see [Camera Intrinsics](#camera-intrinsics)).
+The clustering uses no intrinsics or poses, so `--camera-model` is rejected
+with `--cluster`: it would be inert. It applies to `--derive-pairs`, which
+estimates the two-view geometries.
 
 See [`../../core/features/track-cluster-matching.md`](../../core/features/track-cluster-matching.md)
 for the algorithm design, empirical justification, and the production API.
+
+## Derive Pairs
+
+Two-view geometries exist for COLMAP's mapper, which reads its correspondence
+graph from the database's two-view geometry table. Nothing in sfmtool's own
+pipeline consumes them, so verification is a COLMAP-boundary concern rather
+than a matcher concern, and `--derive-pairs` produces the boundary artifact on
+demand:
+
+```bash
+sfm match --derive-pairs matches/my-clusters.matches
+```
+
+The one positional argument is a clusters-bearing `.matches` file. Anything
+else — image paths, several paths, or a `.matches` file that stores pairs
+rather than clusters — is rejected with a `UsageError`. The output is the
+verified pairwise + two-view-geometry
+`.matches` file, at `-o` or, by default, under the workspace's `tvg-matches/`
+directory named after the input's stem with a trailing `-clusters` removed
+(so `matches/kerry_park-clusters.matches` →
+`tvg-matches/kerry_park.matches`).
+
+The derivation expands the clusters into per-image-pair matches, writes them
+with the workspace's features and cameras into a throwaway COLMAP database,
+runs `pycolmap.verify_matches` over exactly the derived pair list, and reads
+the surviving matches back with their geometries. Verification culls pairs
+below COLMAP's `min_num_matches`, so the output's pairs are a subset of the
+expansion, with identical match sets on every surviving pair.
+
+The output inherits the source's `matching_method`, matcher options and
+workspace block, and records where it came from under
+`matching_options["derived_pairs"]`:
+
+```json
+{
+  "derived_pairs": {
+    "source_path": "../matches/kerry_park-clusters.matches",
+    "source_content_xxh128": "9a51..."
+  }
+}
+```
+
+`source_path` is relative to the output file's directory and
+`source_content_xxh128` is the source's whole-file hash, the same pair of
+facts a derived cluster selection records (see
+[`../../formats/matches-file-format.md`](../../formats/matches-file-format.md)).
+
+**Rig same-frame pair exclusion is not applied.** The stored clusters are the
+raw matcher output, and the derivation verifies every pair they produce; for a
+multi-sensor rig, the same-frame `(i, j)` exclusion (back-to-back sensors with
+no shared view) is applied only by the in-solve cluster matching mode, which
+matches into the solve's own database. A consumer that needs the exclusion
+applies it itself.
+
+`sfm solve` refuses a clusters-bearing `.matches` file and names this mode,
+rather than handing the mapper a database with an empty correspondence graph.
 
 ## Merge
 
@@ -147,8 +209,9 @@ sfm match --sequential --sequential-overlap 20
 # Flow-based matching for video frames
 sfm match --flow --flow-preset high_quality --flow-skip 10
 
-# Background-floor track-cluster matching
-sfm match --cluster images/
+# Background-floor track-cluster matching, then the COLMAP boundary file
+sfm match --cluster images/ -o matches/my-clusters.matches
+sfm match --derive-pairs matches/my-clusters.matches
 
 # Match a subset of images
 sfm match --exhaustive --range 1:100 --max-features 4096

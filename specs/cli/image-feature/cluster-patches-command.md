@@ -122,7 +122,7 @@ sfm cluster-patches -i matches/clusters.matches -o matches/strict.matches \
 ## Notes
 
 - `sfm match --cluster` writes the cluster-bearing input file (default
-  `matches/<verified stem>-clusters.matches`, `--clusters-output` to override).
+  `matches/<timestamped stem>-clusters.matches`, `-o` to override).
   Consumers that need pairwise matches from such a file obtain them through
   `sfmtool.feature_match.pairs_from_matches`
   ([`cluster-patches.md`](../../core/patch/cluster-patches.md)).

@@ -168,8 +168,10 @@ def build_cluster_reconstruction(
 
     Mirrors ``scripts/init_dataset_*.sh``: initialize the workspace with the
     sfmtool SIFT backend, run background-floor track-cluster matching
-    (``sfm match --cluster``) to a ``.matches`` file, then solve from that file.
-    Matching runs once; only the (cheap) solve is retried. Each solve can split
+    (``sfm match --cluster``) to a clusters ``.matches`` file, derive the
+    verified pairwise+TVG file the mapper reads (``sfm match --derive-pairs``),
+    then solve from that. Matching runs once; only the (cheap) solve is
+    retried. Each solve can split
     into several sub-reconstructions, so the most complete one is selected and
     canonicalized to ``output_sfm_file``. When ``expected_image_count`` and/or
     ``min_point_count`` are set the solve is re-run (with fresh randomization)
@@ -179,25 +181,29 @@ def build_cluster_reconstruction(
     ``min_point_count`` lets a caller insist on a substantive point cloud rather
     than accepting the first attempt that merely registers every image.
     """
+    from sfmtool.feature_match._derive_pairs import _run_derive_pairs
     from sfmtool.feature_match._run import _run_matching
 
     init_workspace(
         workspace_dir, feature_tool="sfmtool", max_num_features=max_num_features
     )
 
-    matches_dir = workspace_dir / "tvg-matches"
-    matches_dir.mkdir(parents=True, exist_ok=True)
-    matches_file = matches_dir / "recon.matches"
+    clusters_file = workspace_dir / "matches" / "recon-clusters.matches"
     # _run_matching extracts any missing .sift files before matching.
     _run_matching(
         [Path(p) for p in image_paths],
         workspace_dir,
         matching_method="cluster",
         max_feature_count=None,
-        output_path=str(matches_file),
+        output_path=str(clusters_file),
         camera_model=None,
         cluster_d=cluster_d,
     )
+
+    matches_dir = workspace_dir / "tvg-matches"
+    matches_dir.mkdir(parents=True, exist_ok=True)
+    matches_file = matches_dir / "recon.matches"
+    _run_derive_pairs(clusters_file, output_path=str(matches_file))
 
     colmap_dir = workspace_dir / "colmap"
     if incremental:

@@ -161,18 +161,53 @@ def _setup_for_sfm(
     return db_path, image_dir, rig_used
 
 
+def resolve_image_and_sift_paths(
+    workspace_dir: Path,
+    image_names: list[str],
+    feature_prefix_dir: str,
+) -> tuple[list[Path], list[Path]]:
+    """Resolve workspace-relative image names to image and `.sift` paths.
+
+    The `.sift` file of `sub/dir/img.jpg` lives at
+    `sub/dir/<feature_prefix_dir>/img.jpg.sift`, which is the layout
+    `image_files_to_sift_files` writes; this is the read-side counterpart that
+    resolves names recorded in a `.matches` file without consulting the
+    workspace config. Raises `FileNotFoundError` naming the first file that
+    does not exist.
+    """
+    image_paths: list[Path] = []
+    sift_paths: list[Path] = []
+    for name in image_names:
+        img_path = workspace_dir / name
+        if not img_path.exists():
+            raise FileNotFoundError(f"Image not found: {img_path}")
+        image_paths.append(img_path)
+
+        rel = Path(name)
+        sift_path = workspace_dir / rel.parent / feature_prefix_dir / f"{rel.name}.sift"
+        if not sift_path.exists():
+            raise FileNotFoundError(f"SIFT file not found: {sift_path}")
+        sift_paths.append(sift_path)
+    return image_paths, sift_paths
+
+
 def _setup_for_sfm_from_matches(
     matches_file: str | Path,
     colmap_dir: str | Path,
     camera_model: str | None = None,
     range_expr: str | None = None,
     camera_config_resolver: CameraConfigResolver | None = None,
+    matches_data: dict | None = None,
 ) -> tuple[Path, Path, list[Path], bool]:
     """Prepare a COLMAP database from a .matches file for running the mapper.
 
     If `range_expr` is provided, restrict the solve to images whose filename
     number falls within the range; dropped images are excluded from the DB
     and any pairs that reference them are skipped.
+
+    `matches_data` lets a caller that has already parsed the file hand the
+    dict over instead of paying for a second parse; it must be the contents of
+    `matches_file`.
 
     Returns:
         tuple: (db_path, image_dir, image_paths, rig_used) — `rig_used` is True
@@ -190,8 +225,9 @@ def _setup_for_sfm_from_matches(
     matches_file = Path(matches_file)
     colmap_dir = Path(colmap_dir)
 
-    print(f"Loading matches from: {matches_file}")
-    matches_data = read_matches(matches_file)
+    if matches_data is None:
+        print(f"Loading matches from: {matches_file}")
+        matches_data = read_matches(matches_file)
     # The single pairwise view: stored pairs verbatim, or the canonical
     # cluster expansion for cluster-bearing files (descriptor distances are
     # not needed to populate the DB).
@@ -277,21 +313,9 @@ def _setup_for_sfm_from_matches(
 
     # Resolve image paths and .sift paths
     feature_prefix_dir = ws_meta.get("contents", {}).get("feature_prefix_dir", "")
-    image_paths = []
-    sift_paths = []
-    for name in image_names:
-        img_path = workspace_dir / name
-        if not img_path.exists():
-            raise FileNotFoundError(f"Image not found: {img_path}")
-        image_paths.append(img_path)
-
-        img_parent = Path(name).parent
-        img_basename = Path(name).name
-        sift_rel = img_parent / feature_prefix_dir / f"{img_basename}.sift"
-        sift_path = workspace_dir / sift_rel
-        if not sift_path.exists():
-            raise FileNotFoundError(f"SIFT file not found: {sift_path}")
-        sift_paths.append(sift_path)
+    image_paths, sift_paths = resolve_image_and_sift_paths(
+        workspace_dir, image_names, feature_prefix_dir
+    )
 
     # Set up COLMAP directory and database
     colmap_dir.mkdir(exist_ok=True, parents=True)

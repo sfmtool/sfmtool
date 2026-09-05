@@ -99,7 +99,7 @@ images, pairs, clusters, cluster_patches, two_view_geometries.
 
 ### `clusters/` — the matcher's primary artifact
 
-Written by `sfm match --cluster` before geometric verification, **in place
+Written by `sfm match --cluster` as that command's whole output, **in place
 of** the `image_pairs/` section (which such a file omits entirely). CSR layout
 identical to the in-memory `ClusterSet`:
 
@@ -123,11 +123,12 @@ Top-level metadata gains `"has_clusters": true`; the pairwise summary fields
 grouped and sorted per the `image_pairs/` ordering rules. The reader surfaces
 this behind the same pairs API used for stored-pairs files. Because
 `two_view_geometries/` arrays are keyed per stored pair, a cluster file
-cannot carry TVGs directly; the geometric-verification step materializes the
-expansion — it reads a cluster file and writes a new pairwise
-`.matches` file with `image_pairs/` + `two_view_geometries/` (the write-once
-workflow, unchanged). The cluster file remains the durable primary artifact;
-the verified pairwise file is the solver-facing derivative.
+cannot carry TVGs directly; the geometric-verification step
+(`sfm match --derive-pairs`) materializes the expansion — it reads a cluster
+file and writes a new pairwise `.matches` file with `image_pairs/` +
+`two_view_geometries/` (the write-once workflow, unchanged). The cluster file
+remains the durable primary artifact; the verified pairwise file is the
+COLMAP-facing derivative, produced on demand.
 
 ### `cluster_patches/` — the enrichment (requires `clusters/`)
 

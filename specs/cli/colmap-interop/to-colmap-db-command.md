@@ -59,6 +59,13 @@ Populates the database with camera intrinsics, pose priors, keypoints, descripto
 Populates the database with cameras, keypoints, descriptors, and pre-computed matches and
 two-view geometries (if included) from the matches file.
 
+A clusters-bearing `.matches` file works directly: its pairs are derived at
+read time through `sfmtool.feature_match.pairs_from_matches`, and the database
+gets matches with no two-view geometry table. That is enough for anything that
+reads correspondences, but not for COLMAP's mapper, which reads its
+correspondence graph from the two-view geometry table — verify first with
+`sfm match --derive-pairs` and export the file it writes.
+
 ## Camera Intrinsics (`.matches` mode only)
 
 If any image referenced by the `.matches` file resolves a `camera_config.json` (closest-ancestor

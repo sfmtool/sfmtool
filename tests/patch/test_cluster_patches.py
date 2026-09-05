@@ -4,8 +4,8 @@
 """Integration tests for the `sfm cluster-patches` CLI command.
 
 The cluster-bearing input file is produced the way users produce it: by
-`sfm match --cluster`, which persists the matcher's clusters as its primary
-artifact (programmatic construction of cluster-bearing dicts is covered by
+`sfm match --cluster`, whose whole output is the matcher's clusters
+(programmatic construction of cluster-bearing dicts is covered by
 `../matching/test_matches_clusters.py` and
 `../matching/test_pairs_from_matches.py`).
 """
@@ -37,15 +37,7 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
     assert result.exit_code == 0, result.output
     result = runner.invoke(
         main,
-        [
-            "match",
-            "--cluster",
-            "--clusters-output",
-            str(out),
-            "--output",
-            str(workspace_dir / "tvg-matches" / "verified.matches"),
-            str(workspace_dir),
-        ],
+        ["match", "--cluster", "--output", str(out), str(workspace_dir)],
     )
     assert result.exit_code == 0, result.output
     assert out.exists()

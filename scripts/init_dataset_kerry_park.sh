@@ -3,8 +3,8 @@
 # This script creates a workspace, copies the rig images and rig_config.json,
 # and sets up an sfm_solve.sh script
 #
-# Pipeline: sfmtool SIFT -> track-cluster matching -> global SfM (GLOMAP) on a
-# 360-degree fisheye rig.
+# Pipeline: sfmtool SIFT -> track-cluster matching -> derived pairs -> global
+# SfM (GLOMAP) on a 360-degree fisheye rig.
 
 set -e
 
@@ -31,8 +31,8 @@ echo "Copied ${NUM_FRAMES} rig frames to ${WORKSPACE_DIR}/"
 cat > "${WORKSPACE_DIR}/sfm_solve.sh" << 'EOF'
 #!/bin/bash
 # SfM solve script for Kerry Park dataset
-# sfmtool SIFT -> track-cluster matching -> global SfM (GLOMAP) on a 360-degree
-# fisheye rig
+# sfmtool SIFT -> track-cluster matching -> derived pairs -> global SfM (GLOMAP)
+# on a 360-degree fisheye rig
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -46,8 +46,13 @@ fi
 sfm sift --extract -t 3 fisheye_left/*.jpg fisheye_right/*.jpg
 
 # Track-cluster matching
-mkdir -p tvg-matches
-sfm match --cluster fisheye_left fisheye_right -o tvg-matches/kerry_park.matches
+mkdir -p matches tvg-matches
+sfm match --cluster fisheye_left fisheye_right \
+  -o matches/kerry_park-clusters.matches
+
+# Derive the verified pairwise + two-view-geometry matches the mapper reads
+sfm match --derive-pairs matches/kerry_park-clusters.matches \
+  -o tvg-matches/kerry_park.matches
 
 echo "Running global SfM (GLOMAP) on Kerry Park dataset..."
 sfm solve --global --seed 42 tvg-matches/kerry_park.matches

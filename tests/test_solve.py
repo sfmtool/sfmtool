@@ -142,10 +142,9 @@ def test_solve_from_matches(isolated_seoul_bull_17_images: list[Path]):
     assert output_path.exists()
 
 
-def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
-    """The dataset-script recipe: sfmtool SIFT + track-cluster matching, then
-    solve from the resulting .matches file."""
-    workspace_dir = isolated_seoul_bull_17_images[0].parent
+def _cluster_matches_workspace(images: list[Path]) -> tuple[Path, Path]:
+    """Set up the dataset-script front half: workspace, SIFT, cluster match."""
+    workspace_dir = images[0].parent
 
     # The committed camera_config.json would reject --camera-model, but the
     # cluster recipe uses auto-detected intrinsics — leave it in place.
@@ -157,7 +156,7 @@ def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
     result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
     assert result.exit_code == 0, result.output
 
-    matches_path = workspace_dir / "cluster.matches"
+    clusters_path = workspace_dir / "matches" / "seoul_bull-clusters.matches"
     result = CliRunner().invoke(
         main,
         [
@@ -166,8 +165,33 @@ def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
             "--cluster-d",
             "28",
             "--output",
-            str(matches_path),
+            str(clusters_path),
             str(workspace_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert clusters_path.exists()
+    return workspace_dir, clusters_path
+
+
+def test_solve_from_derived_cluster_matches(
+    isolated_seoul_bull_17_images: list[Path],
+):
+    """The dataset-script recipe: sfmtool SIFT, track-cluster matching, derive
+    the verified pairwise+TVG file, then solve from that."""
+    workspace_dir, clusters_path = _cluster_matches_workspace(
+        isolated_seoul_bull_17_images
+    )
+
+    matches_path = workspace_dir / "tvg-matches" / "seoul_bull.matches"
+    result = CliRunner().invoke(
+        main,
+        [
+            "match",
+            "--derive-pairs",
+            str(clusters_path),
+            "--output",
+            str(matches_path),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -194,6 +218,19 @@ def test_solve_from_cluster_matches(isolated_seoul_bull_17_images: list[Path]):
     recon = SfmrReconstruction.load(output_path)
     assert recon.image_count > 0
     assert recon.point_count > 0
+
+
+def test_solve_from_bare_cluster_matches_rejected(
+    isolated_seoul_bull_17_images: list[Path],
+):
+    """A clusters file carries no two-view geometries, which the mapper reads
+    its correspondence graph from; solve says so and names the fix."""
+    _, clusters_path = _cluster_matches_workspace(isolated_seoul_bull_17_images)
+
+    result = CliRunner().invoke(main, ["solve", "-i", str(clusters_path)])
+    assert result.exit_code != 0
+    assert "carries no two-view geometries" in result.output
+    assert "sfm match --derive-pairs" in result.output
 
 
 def test_resolve_output_path_explicit(tmp_path: Path):

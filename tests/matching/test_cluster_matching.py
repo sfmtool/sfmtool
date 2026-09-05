@@ -133,21 +133,9 @@ class TestClusterMatch:
 
 
 class TestClusterCli:
-    def test_cluster_honors_camera_model(
-        self, isolated_seoul_bull_17_images: list[Path]
-    ):
-        # --camera-model is accepted with --cluster: it feeds the geometric
-        # verification step. (Remove the committed camera_config.json first,
-        # since an explicit model conflicts with a resolved config.)
-        workspace_dir = isolated_seoul_bull_17_images[0].parent
-        (workspace_dir / "camera_config.json").unlink()
-
-        result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
-        assert result.exit_code == 0, result.output
-        result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
-        assert result.exit_code == 0, result.output
-
-        output_path = workspace_dir / "tvg-matches" / "cluster.matches"
+    def test_cluster_rejects_camera_model(self, isolated_seoul_bull_image: Path):
+        # The clustering uses no intrinsics and verifies nothing, so a camera
+        # model would be inert; it belongs to --derive-pairs.
         result = CliRunner().invoke(
             main,
             [
@@ -155,20 +143,12 @@ class TestClusterCli:
                 "--cluster",
                 "--camera-model",
                 "SIMPLE_RADIAL",
-                "--output",
-                str(output_path),
-                str(workspace_dir),
+                str(isolated_seoul_bull_image),
             ],
         )
-        assert result.exit_code == 0, result.output
-        assert output_path.exists()
-
-        from sfmtool._sfmtool.io import read_matches
-
-        matches_data = read_matches(str(output_path))
-        # The model fed geometric verification: TVGs are present.
-        assert matches_data["has_two_view_geometries"]
-        assert matches_data["tvg_metadata"]["inlier_count"] > 0
+        assert result.exit_code != 0
+        assert "--camera-model does not apply to --cluster" in result.output
+        assert "--derive-pairs" in result.output
 
     def test_cluster_and_exhaustive_rejected(self, isolated_seoul_bull_image: Path):
         result = CliRunner().invoke(
@@ -189,43 +169,28 @@ class TestClusterCli:
         result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
         assert result.exit_code == 0, result.output
 
-        output_path = workspace_dir / "tvg-matches" / "cluster.matches"
+        clusters_path = workspace_dir / "matches" / "cluster-clusters.matches"
         result = CliRunner().invoke(
             main,
             [
                 "match",
                 "--cluster",
                 "--output",
-                str(output_path),
+                str(clusters_path),
                 str(workspace_dir),
             ],
         )
         assert result.exit_code == 0, result.output
         assert "Running cluster matching" in result.output
         assert "track clusters" in result.output
-        assert output_path.exists()
+        assert clusters_path.exists()
 
         from sfmtool._sfmtool.io import read_matches, verify_matches
 
-        matches_data = read_matches(str(output_path))
-        meta = matches_data["metadata"]
-        assert meta["matching_method"] == "cluster"
-        assert meta["matching_tool"] == "sfmtool"
-        assert meta["matching_options"]["mode"] == "background-floor"
-        assert meta["matching_options"]["d"] == 10
-        assert meta["matching_options"]["alpha"] == 0.8
-        assert meta["image_count"] == 17
-        assert meta["image_pair_count"] > 0
-        assert meta["match_count"] > 0
-        # Geometric verification ran: TVGs are embedded.
-        assert matches_data["has_two_view_geometries"]
-        assert matches_data["tvg_metadata"]["inlier_count"] > 0
+        # The clusters file is the whole output: no COLMAP database is opened
+        # and no verified pairwise file is written.
+        assert not (workspace_dir / "tvg-matches").exists()
 
-        # --cluster also writes the clusters-bearing primary artifact, at the
-        # default location derived from the verified output's stem.
-        clusters_path = workspace_dir / "matches" / "cluster-clusters.matches"
-        assert str(clusters_path) in result.output
-        assert clusters_path.exists()
         valid, errors = verify_matches(str(clusters_path))
         assert valid, errors
 
@@ -234,45 +199,33 @@ class TestClusterCli:
         assert cluster_data["has_clusters"]
         assert not cluster_data["has_two_view_geometries"]
         assert cmeta["matching_method"] == "cluster"
+        assert cmeta["matching_tool"] == "sfmtool"
+        assert cmeta["image_count"] == 17
         assert cmeta["cluster_count"] > 0
         assert cmeta["cluster_member_count"] > 0
+        assert cmeta["matching_options"]["mode"] == "background-floor"
         assert cmeta["matching_options"]["d"] == 10
+        assert cmeta["matching_options"]["alpha"] == 0.8
         assert cluster_data["matcher_options"]["preset"] == "accurate"
-        # Both files list the same images in the same order, so indices
-        # are directly comparable.
-        assert list(cluster_data["image_names"]) == list(matches_data["image_names"])
 
-        # The derived pairwise view of the cluster file reproduces the
-        # verified file's candidate pairs: verification culls pairs below
-        # COLMAP's min_num_matches (15) from the DB, so the verified file's
-        # pairs are a subset of the expansion, with identical match sets on
-        # every surviving pair.
+        # Nothing in the cluster path is nondeterministic, so a second run on
+        # the same corpus produces the same backbone bit for bit.
+        rerun_path = workspace_dir / "matches" / "rerun-clusters.matches"
+        result = CliRunner().invoke(
+            main,
+            ["match", "--cluster", "--output", str(rerun_path), str(workspace_dir)],
+        )
+        assert result.exit_code == 0, result.output
+        rerun_data = read_matches(str(rerun_path))
+        for key in ("cluster_starts", "member_images", "member_features"):
+            np.testing.assert_array_equal(rerun_data[key], cluster_data[key])
+
+        # The cluster file's pairwise view needs no sift lookup, so its
+        # distances are NaN placeholders.
         from sfmtool.feature_match import pairs_from_matches
 
         derived = pairs_from_matches(cluster_data)
-
-        def _per_pair_matches(pairs_dict):
-            out = {}
-            offset = 0
-            for (i, j), count in zip(
-                pairs_dict["image_index_pairs"], pairs_dict["match_counts"]
-            ):
-                count = int(count)
-                block = pairs_dict["match_feature_indexes"][offset : offset + count]
-                out[(int(i), int(j))] = block[np.lexsort((block[:, 1], block[:, 0]))]
-                offset += count
-            return out
-
-        derived_pairs = _per_pair_matches(derived)
-        verified_pairs = _per_pair_matches(matches_data)
-        assert set(verified_pairs) <= set(derived_pairs)
-        assert len(verified_pairs) > 0
-        for key, verified_block in verified_pairs.items():
-            np.testing.assert_array_equal(derived_pairs[key], verified_block)
-        # Only sub-threshold pairs may be culled by verification.
-        for key in set(derived_pairs) - set(verified_pairs):
-            assert len(derived_pairs[key]) < 15, key
-        # No sift lookup: the derived distances are NaN placeholders.
+        assert len(derived["image_index_pairs"]) > 0
         assert np.isnan(derived["match_descriptor_distances"]).all()
 
         # Consumer smoke test: `sfm inspect` reports cluster stats.
@@ -292,28 +245,211 @@ class TestClusterCli:
         assert result.exit_code == 0, result.output
         assert cluster_db_path.exists()
 
-        # The verified .matches feeds the existing COLMAP DB consumer
-        # unchanged.
-        db_path = tmp_path / "colmap.db"
+    def test_cluster_default_output_lands_in_matches(
+        self, isolated_seoul_bull_17_images: list[Path]
+    ):
+        workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+        result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+        result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+
+        result = CliRunner().invoke(main, ["match", "--cluster", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+
+        written = list((workspace_dir / "matches").glob("*.matches"))
+        assert len(written) == 1, written
+        assert written[0].stem.endswith("-clusters")
+        assert not (workspace_dir / "tvg-matches").exists()
+
+
+class TestDerivePairsCli:
+    """`sfm match --derive-pairs`: the verified pairwise+TVG boundary file."""
+
+    def _cluster_workspace(self, images: list[Path]) -> tuple[Path, Path]:
+        workspace_dir = images[0].parent
+
+        result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+        result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+
+        clusters_path = workspace_dir / "matches" / "seoul-clusters.matches"
         result = CliRunner().invoke(
             main,
-            ["to-colmap-db", str(output_path), str(db_path)],
+            ["match", "--cluster", "--output", str(clusters_path), str(workspace_dir)],
         )
+        assert result.exit_code == 0, result.output
+        return workspace_dir, clusters_path
+
+    def test_derive_pairs_end_to_end(
+        self, isolated_seoul_bull_17_images: list[Path], tmp_path
+    ):
+        workspace_dir, clusters_path = self._cluster_workspace(
+            isolated_seoul_bull_17_images
+        )
+
+        result = CliRunner().invoke(
+            main, ["match", "--derive-pairs", str(clusters_path)]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Default output: tvg-matches/, with the "-clusters" suffix dropped.
+        out_path = workspace_dir / "tvg-matches" / "seoul.matches"
+        assert out_path.exists()
+
+        from sfmtool._sfmtool.io import read_matches, verify_matches
+
+        valid, errors = verify_matches(str(out_path))
+        assert valid, errors
+
+        derived_file = read_matches(str(out_path))
+        meta = derived_file["metadata"]
+        assert derived_file["has_two_view_geometries"]
+        assert derived_file["tvg_metadata"]["inlier_count"] > 0
+        assert not derived_file.get("has_clusters", False)
+        assert meta["matching_method"] == "cluster"
+        assert meta["matching_tool"] == "sfmtool"
+        assert meta["image_count"] == 17
+        assert meta["image_pair_count"] > 0
+        assert meta["match_count"] > 0
+        # The matcher's own options ride along, and a provenance record names
+        # the clusters file this was derived from.
+        assert meta["matching_options"]["mode"] == "background-floor"
+        provenance = meta["matching_options"]["derived_pairs"]
+        assert provenance["source_path"].endswith("seoul-clusters.matches")
+
+        from sfmtool._sfmtool.io import MatchesFile
+
+        assert provenance["source_content_xxh128"] == (
+            MatchesFile(clusters_path).content_xxh128
+        )
+
+        cluster_data = read_matches(str(clusters_path))
+        # Both files list the same images in the same order, so indices are
+        # directly comparable.
+        assert list(cluster_data["image_names"]) == list(derived_file["image_names"])
+
+        # Verification culls pairs below COLMAP's min_num_matches (15), so the
+        # verified pairs are a subset of the cluster expansion with identical
+        # match sets on every surviving pair.
+        from sfmtool.feature_match import pairs_from_matches
+
+        def _per_pair_matches(pairs_dict):
+            out = {}
+            offset = 0
+            for (i, j), count in zip(
+                pairs_dict["image_index_pairs"], pairs_dict["match_counts"]
+            ):
+                count = int(count)
+                block = pairs_dict["match_feature_indexes"][offset : offset + count]
+                out[(int(i), int(j))] = block[np.lexsort((block[:, 1], block[:, 0]))]
+                offset += count
+            return out
+
+        expansion = _per_pair_matches(pairs_from_matches(cluster_data))
+        verified = _per_pair_matches(derived_file)
+        assert len(verified) > 0
+        assert set(verified) <= set(expansion)
+        for key, verified_block in verified.items():
+            np.testing.assert_array_equal(expansion[key], verified_block)
+        for key in set(expansion) - set(verified):
+            assert len(expansion[key]) < 15, key
+
+        # The derived file feeds the COLMAP DB consumer unchanged.
+        db_path = tmp_path / "colmap.db"
+        result = CliRunner().invoke(main, ["to-colmap-db", str(out_path), str(db_path)])
         assert result.exit_code == 0, result.output
         assert db_path.exists()
 
-    def test_clusters_output_requires_cluster_method(
+    def test_derive_pairs_explicit_output(
+        self, isolated_seoul_bull_17_images: list[Path], tmp_path
+    ):
+        _, clusters_path = self._cluster_workspace(isolated_seoul_bull_17_images)
+
+        out_path = tmp_path / "explicit.matches"
+        result = CliRunner().invoke(
+            main,
+            ["match", "--derive-pairs", str(clusters_path), "-o", str(out_path)],
+        )
+        assert result.exit_code == 0, result.output
+        assert out_path.exists()
+
+        from sfmtool._sfmtool.io import read_matches
+
+        assert read_matches(str(out_path))["has_two_view_geometries"]
+
+    def test_derive_pairs_rejects_pairs_only_input(
+        self, isolated_seoul_bull_17_images: list[Path]
+    ):
+        workspace_dir = isolated_seoul_bull_17_images[0].parent
+
+        result = CliRunner().invoke(main, ["ws", "init", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+        result = CliRunner().invoke(main, ["sift", "--extract", str(workspace_dir)])
+        assert result.exit_code == 0, result.output
+
+        pairs_path = workspace_dir / "exhaustive.matches"
+        result = CliRunner().invoke(
+            main,
+            ["match", "--exhaustive", "-o", str(pairs_path), str(workspace_dir)],
+        )
+        assert result.exit_code == 0, result.output
+
+        result = CliRunner().invoke(main, ["match", "--derive-pairs", str(pairs_path)])
+        assert result.exit_code != 0
+        assert "stores no clusters" in result.output
+
+    def test_derive_pairs_rejects_image_paths(self, isolated_seoul_bull_image: Path):
+        result = CliRunner().invoke(
+            main, ["match", "--derive-pairs", str(isolated_seoul_bull_image.parent)]
+        )
+        assert result.exit_code != 0
+        assert "exactly one clusters-bearing .matches file" in result.output
+
+    def test_derive_pairs_rejects_other_method(self, isolated_seoul_bull_image: Path):
+        result = CliRunner().invoke(
+            main,
+            [
+                "match",
+                "--derive-pairs",
+                "--cluster",
+                str(isolated_seoul_bull_image),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "Cannot specify more than one matching method" in result.output
+
+    def test_derive_pairs_rejects_matcher_options(
         self, isolated_seoul_bull_image: Path
     ):
         result = CliRunner().invoke(
             main,
             [
                 "match",
-                "--exhaustive",
-                "--clusters-output",
-                "x.matches",
+                "--derive-pairs",
+                "--cluster-d",
+                "20",
                 str(isolated_seoul_bull_image),
             ],
         )
         assert result.exit_code != 0
-        assert "--clusters-output" in result.output
+        assert "--cluster-d only applies to --cluster matching" in result.output
+
+    def test_derive_pairs_rejects_image_set_options(
+        self, isolated_seoul_bull_image: Path
+    ):
+        result = CliRunner().invoke(
+            main,
+            [
+                "match",
+                "--derive-pairs",
+                "--max-features",
+                "500",
+                str(isolated_seoul_bull_image),
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--max-features" in result.output
+        assert "reads its image set from the clusters file" in result.output

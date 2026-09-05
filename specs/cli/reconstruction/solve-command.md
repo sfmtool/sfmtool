@@ -67,6 +67,14 @@ matching, and then solves. The matching strategy is exhaustive by default, or fl
 When a single `.matches` file is provided, pre-computed matches are loaded directly into the
 COLMAP database, skipping feature extraction and matching.
 
+The file must carry two-view geometries: the mapper reads its correspondence
+graph from the database's two-view geometry table, so a file without them
+registers nothing. A clusters-bearing `.matches` file — which by format never
+stores two-view geometries — is refused up front with a `UsageError` naming
+`sfm match --derive-pairs`, the mode that turns it into the pairwise + TVG
+file the mapper reads (see
+[`../image-feature/match-command.md`](../image-feature/match-command.md)).
+
 ### Sequential overlap mode
 
 `--seq-overlap WINDOW,OVERLAP` reconstructs the sequence in overlapping windows of size

@@ -960,8 +960,9 @@ expansion is deterministic and cheap (`clusters_to_pair_matches`), while storing
 roughly doubles the correspondence payload with derived values: per-pair data grows as
 Σ C(k,2) over cluster sizes versus the Σ k the clusters themselves cost. Consumers
 that need pairs obtain them by calling the expansion at read time; the cluster file
-remains the durable primary artifact, and the geometric-verification step writes the
-solver-facing pairwise derivative as a new file. See
+remains the durable primary artifact, and the geometric-verification step
+(`sfm match --derive-pairs`) writes the COLMAP-facing pairwise derivative as a
+new file. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the full design
 discussion.
 
