@@ -32,6 +32,7 @@
 
 use matches_format::MatchesData;
 
+use crate::camera::CameraIntrinsics;
 use crate::geometry::focal_vote::{
     focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, FocalVoteResult,
     MatchesInputError, MatchesObservations, ScanVote, VoteFamily, FAMILY_DISAGREEMENT_BAND,
@@ -229,6 +230,14 @@ pub struct IntrinsicsEstimate {
     pub screening_vote: Option<FocalVoteResult>,
     /// The full vote result behind the verdict, untouched, for diagnostics.
     pub vote: FocalVoteResult,
+    /// The camera the estimate implies: the one a caller solves with, built
+    /// at the call's `width` x `height` with the image centre as its
+    /// principal point. Equidistant at the verdict focal for a confirmed
+    /// [`CameraModel::EquidistantFisheye`] verdict, otherwise a pinhole at
+    /// the raw pinhole vote focal; `None` when there is no consensus focal to
+    /// build from. The full rule, including where each focal is read from, is
+    /// in `specs/core/geometry/estimate-intrinsics.md`.
+    pub camera: Option<CameraIntrinsics>,
 }
 
 /// Estimate a camera from cluster-track observations: the model verdict, its
@@ -330,6 +339,8 @@ pub fn estimate_intrinsics(
         })
         .unwrap_or_default();
 
+    let camera = verdict_camera(confirmed, screening_vote.as_ref(), &vote, width, height);
+
     IntrinsicsEstimate {
         camera_model,
         confirmed,
@@ -338,7 +349,50 @@ pub fn estimate_intrinsics(
         escalation,
         screening_vote,
         vote,
+        camera,
     }
+}
+
+/// The camera an estimate's verdict implies, at the image centre
+/// ([`IntrinsicsEstimate::camera`]). The rule lives in
+/// `specs/core/geometry/estimate-intrinsics.md`, "The camera".
+fn verdict_camera(
+    confirmed: Option<bool>,
+    screening_vote: Option<&FocalVoteResult>,
+    vote: &FocalVoteResult,
+    width: u32,
+    height: u32,
+) -> Option<CameraIntrinsics> {
+    let principal_point_x = f64::from(width) / 2.0;
+    let principal_point_y = f64::from(height) / 2.0;
+    let model =
+        if vote.camera_model == Some(CameraModel::EquidistantFisheye) && confirmed == Some(true) {
+            crate::camera::CameraModel::EquidistantFisheye {
+                focal_length: vote.focal_px?,
+                principal_point_x,
+                principal_point_y,
+            }
+        } else {
+            // The raw pinhole vote, wherever this run holds it: the screening vote
+            // an escalated `Auto` run kept, else the top-level focal when `vote` is
+            // itself the pinhole answer, else the pinhole column's own consensus --
+            // which is the only place it survives a run that column lost.
+            let pinhole_focal = match screening_vote {
+                Some(screening) => screening.focal_px,
+                None if vote.camera_model == Some(CameraModel::Pinhole) => vote.focal_px,
+                None => column(vote, CameraModel::Pinhole).and_then(|c| c.focal_px),
+            };
+            crate::camera::CameraModel::SimplePinhole {
+                focal_length: pinhole_focal?,
+                principal_point_x,
+                principal_point_y,
+            }
+        };
+    Some(CameraIntrinsics {
+        model,
+        width,
+        height,
+    })
 }
 
 /// Estimate a camera from a parsed `.matches` file's cluster tracks, in one

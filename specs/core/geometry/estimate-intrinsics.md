@@ -91,6 +91,10 @@ pub struct IntrinsicsEstimate {
     pub screening_vote: Option<FocalVoteResult>,
     /// The full vote result behind the verdict, untouched.
     pub vote: FocalVoteResult,
+    /// The camera the estimate implies, at the call's width and height with
+    /// the image centre as its principal point. `None` without a consensus
+    /// focal to build it from.
+    pub camera: Option<CameraIntrinsics>,
 }
 
 pub fn escalation_reasons(
@@ -168,6 +172,38 @@ An unconfirmed equidistant verdict is returned as-is (`camera_model` set,
 `confirmed == Some(false)`); refusing to act on it is the caller's policy,
 not the estimator's.
 
+## The camera
+
+`camera` is the verdict read out as the thing a caller actually solves with:
+a `CameraIntrinsics` at the call's `(width, height)`, whose principal point is
+the image centre `(width/2, height/2)` -- the same centre the vote itself
+assumed, so the camera cannot disagree with the evidence behind it.
+
+Which model it carries is the confirmation question, not the verdict alone:
+
+- **A confirmed equidistant verdict** gives an `EquidistantFisheye` camera at
+  `focal_px`, the verdict's own consensus.
+- **Everything else** -- a pinhole verdict, an UNCONFIRMED equidistant one, no
+  verdict at all -- gives a `SimplePinhole` camera at the raw pinhole vote
+  focal. An unconfirmed equidistant verdict rests on nothing but the
+  arbitration, so the camera stays on the chart the capture is still assumed to
+  obey while `camera_model` and `confirmed` report what the arbitration said.
+
+The raw pinhole vote focal is whichever of these the run holds it in, in order:
+`screening_vote`, where an escalated `Auto` run keeps the pinhole-only vote;
+otherwise `vote.focal_px`, when `vote` IS the pinhole answer (a pinhole-only
+run, or a multi-column run whose verdict is `Pinhole`, the top-level focal
+being the winning column's); otherwise the pinhole column's own consensus,
+which is the only place that answer survives a multi-column run the pinhole
+column lost. The three cases are one reading -- the capture's pinhole focal --
+spread over the three shapes a result can take.
+
+`camera` is `None` when the applicable focal is `None`. A confirmed equidistant
+verdict with no focal yields no camera rather than a pinhole one: an
+equidistant focal parameterizes `θ = r/f` and a pinhole focal `r = f·tan θ`,
+and the two agree only near the axis, so substituting one for the other is a
+units error rather than a fallback.
+
 ## The weak-vote escalation
 
 `ColumnPolicy::Auto` runs the vote pinhole-only, reads `escalation_reasons`
@@ -233,8 +269,9 @@ policy pays for itself.
   under `"vote"`, so Python callers keep full diagnostic access without a
   second call. Its `columns` argument takes the string `"auto"` for
   `ColumnPolicy::Auto` and a sequence of column names for `Fixed`;
-  `escalation` comes back as the reasons' string names and `screening_vote`
-  as a nested vote dict.
+  `escalation` comes back as the reasons' string names, `screening_vote`
+  as a nested vote dict, and `camera` as a
+  `sfmtool._sfmtool.geometry.CameraIntrinsics` (or `None`).
 - The binding takes the same two forms as the Rust surface and only these
   two: `estimate_intrinsics(matches_file, ...)` with a `MatchesFile` handle
   (a selection included), which forwards to `estimate_intrinsics_from_matches`,

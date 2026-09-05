@@ -18,7 +18,11 @@ against identical captures.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.geometry import estimate_intrinsics, focal_vote
+from sfmtool._sfmtool.geometry import (
+    CameraIntrinsics,
+    estimate_intrinsics,
+    focal_vote,
+)
 
 from .test_focal_vote_rust_bindings import (
     F_FISH,
@@ -43,6 +47,7 @@ def test_estimate_dict_layout():
         "escalation",
         "screening_vote",
         "vote",
+        "camera",
     }
     assert est["camera_model"] in ("Pinhole", "EquidistantFisheye", None)
     assert est["confirmed"] in (True, False, None)
@@ -225,6 +230,92 @@ def test_auto_leaves_a_strong_pinhole_vote_alone():
     assert auto["vote"] == focal_vote(starts, im, pos, W, H, seed=0)
 
 
+def _read(cam):
+    """A camera's model, focal (both axes agree for the two single-focal models
+    the estimate builds), principal point and size."""
+    assert isinstance(cam, CameraIntrinsics)
+    fx, fy = cam.focal_lengths
+    assert fx == fy
+    return cam.model, fx, cam.principal_point, cam.width, cam.height
+
+
+def test_confirmed_equidistant_verdict_gives_an_equidistant_camera():
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
+    assert est["confirmed"] is True
+    assert _read(est["camera"]) == (
+        "EQUIDISTANT_FISHEYE",
+        est["focal_px"],
+        (W / 2.0, H / 2.0),
+        W,
+        H,
+    )
+
+
+def test_pinhole_verdict_gives_a_pinhole_camera_at_the_vote_focal():
+    starts, im, pos = _rotation_scene(2024)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
+    assert est["camera_model"] == "Pinhole"
+    # The pinhole column won, so the top-level focal IS the pinhole answer.
+    assert _read(est["camera"]) == (
+        "SIMPLE_PINHOLE",
+        est["focal_px"],
+        (W / 2.0, H / 2.0),
+        W,
+        H,
+    )
+
+
+def test_unconfirmed_equidistant_verdict_falls_back_to_the_pinhole_column():
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
+    (fish,) = [
+        c for c in est["vote"]["columns"] if c["camera_model"] == "EquidistantFisheye"
+    ]
+    unconfirmed = estimate_intrinsics(
+        starts,
+        im,
+        pos,
+        W,
+        H,
+        seed=0,
+        min_rotation_mass=fish["n_certified_rotation"] + 1,
+    )
+    assert unconfirmed["camera_model"] == "EquidistantFisheye"
+    assert unconfirmed["confirmed"] is False
+    # Named columns never escalate, so the pinhole answer survives only in the
+    # column the fisheye verdict beat -- never as the top-level equidistant one.
+    (pinhole,) = [
+        c for c in unconfirmed["vote"]["columns"] if c["camera_model"] == "Pinhole"
+    ]
+    cam = unconfirmed["camera"]
+    assert cam.model == "SIMPLE_PINHOLE"
+    assert cam.focal_lengths[0] == pinhole["focal_px"]
+    assert cam.focal_lengths[0] != unconfirmed["focal_px"]
+
+
+def test_auto_reads_the_pinhole_focal_off_the_vote_it_screened_on():
+    # The reading every "auto" caller used to do by hand, on both arms: the
+    # screening vote's focal when the run kept one, the vote's own otherwise.
+    for scene in (_fisheye_scene(2718), _two_subcapture_scene()):
+        starts, im, pos = scene
+        est = estimate_intrinsics(
+            starts, im, pos, W, H, seed=0, columns="auto", min_rotation_mass=10**9
+        )
+        assert est["confirmed"] is not True
+        res = est["screening_vote"] or est["vote"]
+        if res["focal_px"] is None:
+            assert est["camera"] is None
+        else:
+            assert _read(est["camera"]) == (
+                "SIMPLE_PINHOLE",
+                res["focal_px"],
+                (W / 2.0, H / 2.0),
+                W,
+                H,
+            )
+
+
 def test_rejects_unknown_column_policy_string():
     starts, im, pos = _rotation_scene(2024)
     with pytest.raises(ValueError):
@@ -239,3 +330,5 @@ def test_empty_input_has_no_verdict():
     assert est["confirmed"] is None
     assert est["focal_px"] is None
     assert est["verdict_votes"] == []
+    # No consensus focal is no camera.
+    assert est["camera"] is None

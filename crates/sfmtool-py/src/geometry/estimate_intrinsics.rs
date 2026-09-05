@@ -15,6 +15,7 @@ use sfmtool_core::geometry::estimate_intrinsics::{
 };
 use sfmtool_core::geometry::focal_vote::{CameraModel, FocalVoteOptions};
 
+use super::camera_intrinsics::PyCameraIntrinsics;
 use super::focal_vote::{
     matches_err_to_py, scan_vote_dict, vote_columns, vote_dict, vote_source, VoteSource,
 };
@@ -76,7 +77,8 @@ use super::focal_vote::{
 /// Returns:
 ///     ``{"camera_model": str | None, "confirmed": bool | None, "focal_px":
 ///     float | None, "verdict_votes": list[dict], "escalation": list[str] |
-///     None, "screening_vote": dict | None, "vote": dict}``.
+///     None, "screening_vote": dict | None, "vote": dict, "camera":
+///     CameraIntrinsics | None}``.
 ///
 ///     ``camera_model`` is the model verdict and ``focal_px`` the winning
 ///     column's consensus focal. ``confirmed`` answers whether an
@@ -109,6 +111,14 @@ use super::focal_vote::{
 ///
 ///     ``vote`` is the full ``focal_vote`` result dict behind the verdict,
 ///     untouched.
+///
+///     ``camera`` is the camera the estimate implies, at the call's width and
+///     height with the image centre as its principal point: an
+///     ``EQUIDISTANT_FISHEYE`` at ``focal_px`` for a CONFIRMED
+///     ``"EquidistantFisheye"`` verdict, otherwise a ``SIMPLE_PINHOLE`` at
+///     the raw pinhole vote focal, and ``None`` when there is no consensus
+///     focal. The full rule is in
+///     ``specs/core/geometry/estimate-intrinsics.md``.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
 // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -205,6 +215,10 @@ pub fn estimate_intrinsics<'py>(
             .transpose()?,
     )?;
     d.set_item("vote", vote_dict(py, &estimate.vote)?)?;
+    d.set_item(
+        "camera",
+        estimate.camera.map(|inner| PyCameraIntrinsics { inner }),
+    )?;
     Ok(d)
 }
 

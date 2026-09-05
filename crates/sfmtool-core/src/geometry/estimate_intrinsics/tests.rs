@@ -474,6 +474,164 @@ fn a_fixed_column_set_never_escalates() {
     assert!(est.screening_vote.is_none());
 }
 
+// ── The camera the verdict implies ───────────────────────────────────────────
+
+/// A camera's model name, focal (both axes agree for the two single-focal
+/// models this field builds) and principal point, as raw bits where it matters.
+fn read(cam: &CameraIntrinsics) -> (&'static str, u64, (f64, f64), u32, u32) {
+    let (fx, fy) = cam.focal_lengths();
+    assert_eq!(fx.to_bits(), fy.to_bits(), "single-focal model");
+    (
+        cam.model_name(),
+        fx.to_bits(),
+        cam.principal_point(),
+        cam.width,
+        cam.height,
+    )
+}
+
+#[test]
+fn a_confirmed_equidistant_verdict_gives_an_equidistant_camera() {
+    let est = estimate(&fisheye_scene(2718), &IntrinsicsOptions::default());
+    assert_eq!(est.confirmed, Some(true));
+    let cam = est
+        .camera
+        .as_ref()
+        .expect("a confirmed verdict has a camera");
+    assert_eq!(
+        read(cam),
+        (
+            "EQUIDISTANT_FISHEYE",
+            est.focal_px.expect("consensus").to_bits(),
+            (f64::from(W) / 2.0, f64::from(H) / 2.0),
+            W,
+            H,
+        )
+    );
+}
+
+#[test]
+fn a_pinhole_verdict_gives_a_pinhole_camera_at_the_vote_focal() {
+    let est = estimate(
+        &two_subcapture_scene(6, 8, F_TRUE, F_TRUE, 99),
+        &IntrinsicsOptions::default(),
+    );
+    assert_eq!(est.camera_model, Some(CameraModel::Pinhole));
+    // The pinhole column won, so the top-level focal IS the pinhole answer.
+    let cam = est.camera.as_ref().expect("a pinhole verdict has a camera");
+    assert_eq!(
+        read(cam),
+        (
+            "SIMPLE_PINHOLE",
+            est.focal_px.expect("consensus").to_bits(),
+            (f64::from(W) / 2.0, f64::from(H) / 2.0),
+            W,
+            H,
+        )
+    );
+}
+
+#[test]
+fn an_unconfirmed_equidistant_verdict_falls_back_to_the_pinhole_column() {
+    // Fixed columns, so nothing was screened: the pinhole answer survives only
+    // in the column the fisheye verdict beat.
+    let est = estimate(
+        &parallax_only_fisheye_scene(31337),
+        &IntrinsicsOptions::default(),
+    );
+    assert_eq!(est.camera_model, Some(CameraModel::EquidistantFisheye));
+    assert_eq!(est.confirmed, Some(false));
+    assert!(est.screening_vote.is_none());
+
+    let pinhole = column(&est.vote, CameraModel::Pinhole)
+        .expect("pinhole column")
+        .focal_px
+        .expect("pinhole consensus");
+    let cam = est.camera.as_ref().expect("a pinhole camera");
+    assert_eq!(cam.model_name(), "SIMPLE_PINHOLE");
+    assert_eq!(cam.focal_lengths().0.to_bits(), pinhole.to_bits());
+    // ...and NOT the equidistant consensus the top-level focal reports, which
+    // parameterizes a different map.
+    assert_ne!(
+        cam.focal_lengths().0.to_bits(),
+        est.focal_px.expect("consensus").to_bits()
+    );
+}
+
+#[test]
+fn an_escalated_run_reads_the_pinhole_focal_off_the_screening_vote() {
+    // This capture escalates on a thin pool rather than on no consensus, so the
+    // screening vote it kept HAS a pinhole focal -- and its unconfirmed fisheye
+    // verdict means that focal is the one the camera takes, not the top-level
+    // equidistant consensus.
+    let est = estimate(&parallax_only_fisheye_scene(31337), &auto());
+    assert_eq!(est.camera_model, Some(CameraModel::EquidistantFisheye));
+    assert_eq!(est.confirmed, Some(false));
+    let screening = est.screening_vote.as_ref().expect("an escalated run");
+    let cam = est.camera.as_ref().expect("a pinhole camera");
+    assert_eq!(cam.model_name(), "SIMPLE_PINHOLE");
+    assert_eq!(
+        cam.focal_lengths().0.to_bits(),
+        screening.focal_px.expect("pinhole consensus").to_bits()
+    );
+    assert_ne!(
+        cam.focal_lengths().0.to_bits(),
+        est.focal_px.expect("consensus").to_bits()
+    );
+}
+
+#[test]
+fn an_unescalated_auto_run_takes_the_pinhole_vote_it_ran() {
+    // No second run, so `vote` IS the pinhole-only vote and its top-level focal
+    // is the pinhole answer.
+    let est = estimate(&two_subcapture_scene(6, 8, F_TRUE, F_TRUE, 99), &auto());
+    assert_eq!(est.escalation.as_deref(), Some(&[][..]));
+    assert!(est.screening_vote.is_none());
+    let cam = est.camera.as_ref().expect("a pinhole camera");
+    assert_eq!(cam.model_name(), "SIMPLE_PINHOLE");
+    assert_eq!(
+        cam.focal_lengths().0.to_bits(),
+        est.vote.focal_px.expect("consensus").to_bits()
+    );
+}
+
+#[test]
+fn no_consensus_leaves_no_camera() {
+    let est = estimate_intrinsics(&[0], &[], &[], W, H, &IntrinsicsOptions::default());
+    assert_eq!(est.focal_px, None);
+    assert!(est.camera.is_none());
+}
+
+#[test]
+fn the_pinhole_camera_is_the_focal_a_caller_would_read_by_hand() {
+    // The precedence, stated as the reading every `Auto` caller used to do:
+    // the screening vote's focal when there is one, the vote's own otherwise --
+    // whichever arm the capture takes, and whether or not it has a camera.
+    // A rotation-mass floor nothing clears keeps every verdict on the pinhole
+    // rule, so all three captures are read the same way.
+    for obs in [
+        fisheye_scene(2718),
+        parallax_only_fisheye_scene(31337),
+        two_subcapture_scene(6, 8, F_TRUE, F_TRUE, 99),
+    ] {
+        let est = estimate(
+            &obs,
+            &IntrinsicsOptions {
+                min_rotation_mass: usize::MAX,
+                ..auto()
+            },
+        );
+        assert_ne!(est.confirmed, Some(true));
+        let by_hand = est.screening_vote.as_ref().unwrap_or(&est.vote).focal_px;
+        assert_eq!(
+            est.camera
+                .as_ref()
+                .map(|c| (c.model_name(), c.focal_lengths().0.to_bits())),
+            by_hand.map(|f| ("SIMPLE_PINHOLE", f.to_bits()))
+        );
+    }
+}
+
 // ── The from-matches entry ───────────────────────────────────────────────────
 
 /// A parsed `.matches` value carrying a synthetic capture as its cluster
