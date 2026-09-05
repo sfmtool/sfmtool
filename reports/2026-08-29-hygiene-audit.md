@@ -219,6 +219,32 @@ generic over a const it also reads as a boolean**
 
 **Both halves of the `distortion.rs` split nearly doubled, and one of them is no
 longer distortion**
+> _Status (2026-09-04): **Partially done.** The `kernels.rs` half landed as
+> `585b258`. `kernels/` is now seven family modules — `brown` (45),
+> `equidistant` (514: the three polynomial fisheyes, the ray-direction helpers
+> and the distortion-free `θ = r/f` block, which are one model family split
+> across three banners), `thin_prism` (257), `rad_tan` (334),
+> `sfmtool_fisheye` (259), `sfmtool_pinhole` (151) and `blend` (59) — with
+> `kernels/mod.rs` (45) re-exporting all of them, so `distortion.rs`'s
+> `use kernels::*` is unchanged and nothing outside the module moved. Every
+> function body is byte-identical; the only textual edits are the visibility
+> spelling (`pub(super)`, which after the move would mean "visible in
+> `kernels`", became `pub(in crate::camera::distortion)` — the form
+> `patch/keypoint_subpixel/kernels/` already uses — which pushed twelve
+> signatures past 100 columns for `cargo fmt` to rewrap), the per-family `use`
+> lines, and nine cross-family doc links rewritten as `super::` paths.
+> `newton_thin_prism` and `newton_rad_tan_thin_prism` are now one file apart
+> (`thin_prism.rs`, `rad_tan.rs`), still unmerged. Two counts in the finding
+> are off: the file holds 43 *items* — 40 free functions, two consts and a type
+> alias — and the families are ten blocks, not eight.
+>
+> **Still open: the `camera/projection.rs` half.** The `impl CameraIntrinsics`
+> block calls `radial_fisheye_ray_jacobian` and `sfmtool_fisheye_ray_jacobian`
+> directly, and both are private to `camera::distortion`. Moving the block to a
+> sibling module means widening those two through `kernels/mod.rs` and
+> `distortion.rs` both — trading this finding's own "nothing outside the module
+> moves" property for the file split — so it is left for a change that decides
+> that deliberately rather than as a side effect._
 - Location: `crates/sfmtool-core/src/camera/distortion/kernels.rs` (793 → **1515**);
   `crates/sfmtool-core/src/camera/distortion.rs` (890 → **1233**)
 - Problem: Two findings that share a cause.
@@ -465,6 +491,15 @@ second copy says so**
   real disagreement.
 
 **`dock.rs::ui` is a 377-line `TabViewer` method with six inline tab bodies**
+> _Status (2026-09-04): **Done** as `aa00ae0`. `show_viewer_3d`,
+> `show_image_browser`, `show_image_detail`, `show_point_track_detail` and
+> `show_intrinsics_detail` now sit on `impl TabContext<'_>` beside
+> `apply_scene_graph_response`, and `ui` is a 20-line dispatch. Pure extraction:
+> each method body is its arm's body, comments included; the only differences
+> are lines `cargo fmt` rejoined once they were two indent levels shallower.
+> Re-measured before the change: `dock.rs` was **845** and `fn ui` **85–515**
+> (431 lines) over **seven** arms — the finding says six because it does not
+> count the one-line `ActionLog` arm._
 - Location: `crates/sfm-explorer/src/dock.rs` (560 → **720**); `fn ui` **78–455**
 - Problem: `TabViewer::ui` is a single `match tab` with six arms, each of which
   builds that panel's arguments, calls its `show`, and then handles its response
@@ -585,6 +620,18 @@ and two disagreeing `error_color`s**
 
 **`patches/args.rs` exists to hold the shared string→enum parsers; five of eight
 callers hand-inline them instead**
+> _Status (2026-09-04): **Partially done** as `f51a109`. `parse_sampler` joins
+> `parse_patch_window` in `args.rs`, and all five inline matches in
+> `localize_keypoints`, `refine_keypoints`, `refine_normals`, `member_coherence`
+> and `select_views` now call the two shared parsers. Both error strings are
+> byte-identical to the ones they replaced, so `unknown window` goes from six
+> spellings in the crate to one and `unknown sampler` from five to one —
+> `tests/patch/test_patch_normal_refine.py` and
+> `tests/rust_bindings/test_localizability_rust_bindings.py` assert on them, and
+> both still pass. Neither `matching/cluster.rs` nor `patches/localizability.rs`
+> had a sampler match to share: the five were the whole set. **Still open: the
+> 29-line prologue** the three biggest bindings open with, which this finding
+> proposes lifting into `views.rs` as `resolve_patch_scene`._
 - Location: `crates/sfmtool-py/src/patches/args.rs` (88) and
   `patches/{localize_keypoints,refine_keypoints,refine_normals,member_coherence,
   select_views}.rs`
@@ -1048,11 +1095,19 @@ acquittals are findings in this one.
    demonstrated in the same file by `apply_scene_graph_response`; the other five arms
    just never got it, and every new panel adds one more.
 
+   > _Status (2026-09-04): Both splits landed — `kernels.rs` as `585b258`,
+   > `dock.rs::ui` as `aa00ae0`. The second half of the `kernels.rs` finding
+   > (`camera/projection.rs`) did not; see that finding for why._
+
 Runner-up, called out because it is the cheapest correctness-shaped fix in the
 report: `sfmtool-py`'s five hand-inlined `parse_patch_window` matches. `args.rs`
 exists to hold them, three callers use it, five do not, and the failure mode is that
 adding a window kernel silently leaves five bindings rejecting the new name with a
 message listing the old three. One `parse_sampler` function and five call-site edits.
+
+> _Status (2026-09-04): **Done** as `f51a109` — `parse_sampler` added, and all five
+> window matches plus all five sampler matches routed through `args.rs`, with the
+> error strings unchanged. The prologue half of that finding is untouched._
 
 ---
 
