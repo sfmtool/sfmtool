@@ -464,6 +464,39 @@ textures are actually allocated**
 
 **The intrinsics work landed the same displacement-field summary twice, and its
 second copy says so**
+> _Status (2026-09-04): **Done** as `872ca75`.
+> `camera::report::distortion_extent(cam, cols) -> DistortionExtent` now sits
+> beside `distortion_field` and returns `{ grid, field, max_px, limit_deg,
+> excluded }`, plus `trusted(&DistortionSample)` — the predicate the maximum and
+> the count were taken with, so a consumer marking the excluded nodes splits the
+> field the way the numbers beside it were taken — and `total()`. Both GUI sites
+> consume it; `derived.rs` 208 -> 156 and `image_detail/intrinsics/mod.rs`
+> 567 -> 540._
+>
+> _**The two copies agreed on the arithmetic** — same square-cell grid rule, same
+> `theta_deg <= limit` test, same `hypot` maximum over the trusted samples, same
+> untrusted count — and differed in three things, all reconciled:_
+>
+> - _The panel nulled `limit_deg` when the bound excluded nothing, so its row falls
+>   back to `over the image`. That is a phrasing decision rather than part of the
+>   measurement, and it now lives at the one call site that makes it
+>   (`parameters.rs`), as `extent.limit_deg.filter(|_| extent.excluded > 0)`._
+> - _The panel guarded the whole computation on `has_distortion()`; the layer
+>   computed an empty field for such a model. The shared function skips the field,
+>   so both get the same thing and the panel keeps its `Option` to print "none"
+>   with._
+> - _The layer retains the grid to draw arrows from and the panel does not, so the
+>   **field travels on the extent**. The alternative — a summary-only return —
+>   would have made the layer sample a few hundred ray round trips twice._
+>
+> _The numbers moved with the code: the square-cell grid, the pinhole's zero field,
+> the `kerry_park` fisheye's folded corners and the unbounded model's empty
+> exclusion are now in `camera/report/tests.rs`, plus a new test that `trusted`
+> partitions the field the counts were taken over. What is left in the GUI is one
+> test that the layer reports what the core computed.
+> `specs/gui/camera-intrinsics.md` gained the type and the function in its
+> `camera::report` interface block, and says in both prose sites that the panel's
+> number and the overlay's legend are one call._
 - Location: `crates/sfm-explorer/src/intrinsics_detail/derived.rs:175`
   (`distortion_extent`) + `:203` (`grid_rows`);
   `crates/sfm-explorer/src/image_detail/intrinsics/mod.rs:161`
@@ -518,6 +551,27 @@ second copy says so**
 
 **`AppState` is 36 fields and a 543-line impl mixing selection state with
 reconstruction operations**
+> _Status (2026-09-04): **Done** as `e5478e1`. `state/ops.rs` (344) holds
+> `load_file`, `load_demo`, `reload_node`, `align_node`, `resect_image`,
+> `resect_image_inner` and `load_resect_matches` as a second `impl AppState`;
+> `state.rs` 1701 -> 1380 keeps the struct, its defaults and the accessors. Pure
+> movement, no signature changed: a child module sees its parent's private items,
+> so `label_of`, `forget_recon` and the private `resect_matches_cache` field are
+> reachable unqualified._
+>
+> _**Two the finding did not name joined**, on its own test. `load_file` reads an
+> `.sfmr` off disk, builds a `SceneNode` and is where the "Failed to load ..." text
+> lives; `load_demo` is the third node-arrival path beside it. `append_node` stayed
+> — it is the arrival path's selection bookkeeping and touches neither disk nor
+> solver — as did `reset_node_transform`._
+>
+> _**The file did hold a third kind of thing, and it is where the rest of the 47%
+> went**: the Image Detail display catalogue — `OverlayMode`,
+> `FeatureDisplaySettings`, `IntrinsicsDisplaySettings`, `ImageDetailDisplay`,
+> `record_image_detail_changes` and its six text helpers, ~360 lines — plus the two
+> free cache loaders `ensure_sift_cached` / `ensure_full_res_cached`. Neither is an
+> `AppState` method, so neither was in this finding's scope; the catalogue is a
+> plausible `state/display.rs` if the file grows again._
 - Location: `crates/sfm-explorer/src/state.rs` (678 → **997**); `struct AppState`
   **160–338** (36 fields); `impl AppState` **348–890**
 - Problem: The last snapshot cleared this file as "a coordinator, not a grab-bag" at
@@ -537,6 +591,23 @@ reconstruction operations**
 - Risk: low — a file split within one impl.
 
 **`scene_graph/mod.rs` grew 40% and is the only module in its directory**
+> _Status (2026-09-04): **Done** as `81d0dcd`. Re-measured first: `mod.rs` was
+> **1,309**, not 1,218. The four groups were still the four groups, and three moved
+> out — `cameras.rs` (375), `menus.rs` (226), `widgets.rs` (126) — leaving `mod.rs`
+> at **662** with the tree walk, the panel entry point, the shared row constants
+> and `show_points_group`, which the finding's line ranges left unassigned and
+> which is a sibling of the camera groups in the walk. Nothing changed but
+> visibility: the items a sibling now calls are `pub(super)`, and everything stays
+> private to `scene_graph`._
+>
+> _**`tests.rs` mostly did not follow, and that is the finding's own rule applied.**
+> Nearly every test in it drives a whole egui frame through `SceneGraphPanel::show`
+> over a ~370-line shared harness of fixtures, `run_frame`, `settled` and
+> `click_at`, so it spans all four groups by construction and splitting it would
+> mean copying that harness three times. The exception is the four pure formatter
+> tests, which name their subject directly and did follow: `camera_row_text`'s two
+> to `cameras/tests.rs`, `compact_count`'s and `with_thousands`' to
+> `widgets/tests.rs`. 2,759 -> 2,664._
 - Location: `crates/sfm-explorer/src/scene_graph/` — `mod.rs` (868 → **1218**),
   `tests.rs` (2,759)
 - Problem: Cleared at 868 by the last snapshot as "already well decomposed", which is
@@ -570,6 +641,36 @@ and two disagreeing `error_color`s**
 > _Carried forward unchanged from 2026-08-08. Re-verified at HEAD: `overlay.rs` is
 > **635**, `draw_overlays` **19–386** (368), and `colormap.rs` (206) still holds the
 > five six-line wrappers with byte-identical bodies._
+>
+> _Status (2026-09-04): **Done** as `35b70d1`. `draw_value_overlay(painter,
+> panel_rect, features, selected_point, to_panel, value, range, map, label)` is the
+> body all five arms share; what a mode *is* — the extractor, the range, which of
+> the two ramps, the colorbar's title — is the four arguments after `to_panel`. The
+> extractor returns `Option<f32>`, which is what lets the four modes that skip a
+> NaN and the one that substitutes `vmax` for a non-finite error be the same call.
+> `colormap.rs` gained `ramp(value, vmin, vmax, &Colormap)` and made `Colormap`,
+> `ERROR_COLORMAP` and `QUALITY_COLORMAP` nameable; four of the five wrappers are
+> gone and `error_color` survives as a one-liner because it has two callers in two
+> panels and the name is what says they agree. `overlay.rs` 635 -> 615 with a
+> shared body it did not have, `colormap.rs` 206 -> 180._
+>
+> _**The two `error_color`s were reconciled, and the finding's claim about them is
+> half right.** The point-track one is deleted; the table now calls
+> `colormap::error_color(error, 0.0, ERROR_RAMP_MAX_PX)`. But the two ramps were
+> never different **shapes**: compared over 300,000 samples from -0.01 px to 3.0 px
+> they produce identical RGB at every one except a single 1/255 step near 1.6 px,
+> where two spellings of the same interpolation — `(1 - s)*255` against
+> `255 + s*(0 - 255)` — differ by one float ulp before truncation. The panels do
+> disagree about what a 1 px error looks like, but because of the **domain**: this
+> panel fixes 0-2 px so its dots can be read against the absolute number in the
+> Error column, while the Image Detail overlay fits its range to the image's own
+> error spread so that "which features in *this* frame are the bad ones" has an
+> answer. Both are deliberate, both are kept, and both are now written down in
+> `specs/gui/point-track-detail.md` rather than only in two function bodies._
+>
+> _The N/A grey survived the merge, as an explicit `NO_ERROR_COLOR` at the call
+> site. It was inside the old ramp function; a NaN normalized into the shared one
+> clamps to an end of it and would have painted "no measurement" as full red._
 - Location: `crates/sfm-explorer/src/image_detail/overlay.rs`;
   `crates/sfm-explorer/src/colormap.rs:60–118`;
   `crates/sfm-explorer/src/point_track_detail/metrics.rs:19`
@@ -594,6 +695,16 @@ and two disagreeing `error_color`s**
 > _Carried forward unchanged from 2026-08-08. Re-verified: no crate-level
 > `src/metrics.rs` exists; `point_track_detail/mod.rs` still re-exports at the old
 > path._
+>
+> _Status (2026-09-04): **Done** as `5ff41ed`. The module is `crate::metrics`
+> (135) with its own `metrics/tests.rs` (39), which the four pure-numerics tests
+> moved into. The compat re-exports and the comment documenting them are gone;
+> `image_detail`, `mcp::read` and `point_track_detail::prepare` name the real path.
+> `error_color` had already left in `35b70d1`, as this finding's own "while there"
+> suggested. `specs/gui/architecture.md`'s tree and module table and
+> `specs/gui/mcp-server.md`'s provenance paragraph name the new path; the
+> architecture table's `colormap.rs` row was corrected at the same time, since it
+> still described the five per-metric wrappers._
 - Location: `crates/sfm-explorer/src/point_track_detail/metrics.rs`
 - Problem: `compute_point_diagnostics` and `compute_max_pairwise_angle` are
   triangulation math living inside one panel and imported by another, behind a
@@ -609,6 +720,28 @@ and two disagreeing `error_color`s**
 > a `mod tests;` declaration. Two new modules landed in the window
 > (`point_track_detail`, `image_detail/intrinsics`) and both used the sibling-file
 > form, so the convention is holding — this is the last exception._
+>
+> _Status (2026-09-04): **Done** as `ed2a8b5` — and the "last exception" claim was
+> stale by **six**. There were **seven** inline blocks across three crates, not
+> one, and two of them are invisible to the obvious `git grep "mod tests {"`
+> because they are not called `tests`:_
+>
+> - _`sfm-explorer/src/cli.rs` -> `cli/tests.rs`_
+> - _`sfm-explorer/src/mcp/frame.rs` -> `mcp/frame/tests.rs`_
+> - _`sfm-explorer/src/platform/mod.rs` -> `platform/tests.rs`_
+> - _`sfm-explorer/src/platform/windows.rs` -> `platform/windows/tests.rs` (the one
+>   the finding named)_
+> - _`sfm-explorer/src/state.rs` -> `state/tests.rs`, was
+>   `mod image_detail_display_tests`_
+> - _`sfmr-colmap/src/colmap_io/read.rs` -> `colmap_io/read/tests.rs`_
+> - _`sfmtool-core/src/reconstruction/edit.rs` -> `edit/tests.rs`, was
+>   `mod patch_frame_tests`_
+>
+> _Each body is its own, dedented by the one level it lost, with a module doc added
+> because a file needs one where an inline block did not. No test changed. The
+> check the next snapshot should run is not `git grep "mod tests {"` but a scan for
+> a `#[cfg(test)]` line followed by any `mod ... {`, which is what found the last
+> two; it now returns nothing across all nine crates._
 - Location: `crates/sfm-explorer/src/platform/windows.rs:746–832` (86 of 832)
 - Proposed fix: move to `platform/windows/tests.rs`.
 - Effort: low
