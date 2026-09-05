@@ -256,7 +256,7 @@ pub(super) fn error_stats(errors: &mut [f32]) -> Value {
         return Value::Null;
     }
     // A behind-the-camera observation reprojects to NaN
-    // (`point_track_detail::metrics`), which would sort unpredictably and
+    // (`crate::metrics`), which would sort unpredictably and
     // poison the mean. Those rows drop out of the statistics and stay in the
     // track, where the agent can see them for what they are.
     errors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater));

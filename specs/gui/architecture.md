@@ -150,9 +150,9 @@ sfmtool/
 │   │       │   ├── prepare.rs        # Per-observation data for a new selection
 │   │       │   ├── header.rs         # Point summary bar + stored-patch tile
 │   │       │   ├── table.rs          # Observation table, rows, thumbnails
-│   │       │   ├── patch.rs          # Oriented-patch frames and textures
-│   │       │   └── metrics.rs        # Errors, ray angles, triangulation stats
+│   │       │   └── patch.rs          # Oriented-patch frames and textures
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
+│   │       ├── metrics.rs            # Reprojection error, ray angles, triangulation diagnostics
 │   │       ├── platform/
 │   │       │   ├── mod.rs
 │   │       │   └── windows.rs    # DirectManipulation touchpad integration
@@ -191,9 +191,10 @@ sfmtool/
 | `window.rs` | What the window is (`WindowInfo`, `WindowState`, `MonitorInfo`), the `window` section of a layout document (`WindowChange`, `MonitorRect`, `fit_to_monitor`), and the `WindowHost` seam every `winit` window call goes through — five primitives and the provided `apply` that orders them. |
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom that persists across image and reconstruction switches, and 7 overlay modes. |
-| `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures, `metrics.rs` owns the numerics. |
+| `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures. The numbers themselves are `metrics.rs`, at the crate root. |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
-| `colormap.rs` | Shared color ramps used by the overlay modes and point-cloud colorings. |
+| `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
+| `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — the Point Track Detail table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
 
 ---
 

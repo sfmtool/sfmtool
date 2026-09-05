@@ -420,8 +420,10 @@ array, not from an error it has to tell apart from a real one.
 number the agent is told matches the colour the human is looking at.
 `get_camera_image`'s summary is `compute_observation_reprojection_errors`, which
 the Image Detail panel's error heatmap uses; a track observation's is
-`point_track_detail::compute_observation_metrics`, widened to `pub(crate)` for
-exactly this reason.
+`metrics::compute_observation_metrics`, the same function the Point Track
+Detail table tabulates. `metrics` sits at the crate root rather than inside
+that panel for exactly this reason: no one surface owns a number three of them
+quote.
 
 Both can be absent, and say so rather than inventing a number.
 `get_camera_image`'s `reproj_error` is `null` when the errors cannot be

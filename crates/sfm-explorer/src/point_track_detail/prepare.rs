@@ -6,7 +6,7 @@
 //! Everything the table draws is precomputed once here — on selection change,
 //! not per frame — into [`super::TrackObservationData`]. This is the seam
 //! between the reconstruction and the display code: it reads observations,
-//! keypoints and SIFT features, delegates the numbers to [`super::metrics`] and
+//! keypoints and SIFT features, delegates the numbers to [`crate::metrics`] and
 //! the patch state to [`super::patch`], and leaves the rendering modules with
 //! nothing to compute.
 
@@ -15,11 +15,11 @@ use std::path::Path;
 
 use sfmtool_core::SfmrReconstruction;
 
-use super::metrics::{
-    compute_max_pairwise_angle, compute_observation_metrics, compute_point_diagnostics,
-};
 use super::patch::{build_patch_frame, build_stored_patch_texture};
 use super::{PointTrackDetail, TrackObservationData};
+use crate::metrics::{
+    compute_max_pairwise_angle, compute_observation_metrics, compute_point_diagnostics,
+};
 use crate::scene::{ImageRef, PointRef};
 use crate::state::CachedSiftFeatures;
 

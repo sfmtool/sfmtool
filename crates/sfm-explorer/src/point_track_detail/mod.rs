@@ -15,8 +15,10 @@
 //! - [`header`] — the point summary bar and the stored-patch tile.
 //! - [`table`] — the scrollable observation table, its rows and thumbnails.
 //! - [`patch`] — oriented-patch frames and the textures built from them.
-//! - [`metrics`] — reprojection error, ray angles, triangulation diagnostics
-//!   and the error→color ramp.
+//!
+//! The numbers themselves are [`crate::metrics`], at the crate root: this panel
+//! tabulates them, the Image Detail overlay colours features by them and the
+//! MCP surface reports them, so none of the three owns them.
 
 use std::collections::HashMap;
 
@@ -29,23 +31,12 @@ use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::CachedSiftFeatures;
 
 mod header;
-mod metrics;
 mod patch;
 mod prepare;
 mod table;
 
 #[cfg(test)]
 mod tests;
-
-// Re-exported at the old path: `image_detail` imports both as
-// `crate::point_track_detail::<name>`.
-pub(crate) use metrics::{compute_max_pairwise_angle, compute_point_diagnostics};
-
-/// The per-observation reprojection error this panel tabulates, re-exported so
-/// the MCP surface reports the same number rather than a second derivation of
-/// it.
-#[cfg(feature = "mcp")]
-pub(crate) use metrics::compute_observation_metrics;
 
 /// Precomputed data for one observation in the track.
 struct TrackObservationData {

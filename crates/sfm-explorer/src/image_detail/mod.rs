@@ -763,7 +763,7 @@ fn populate_feature_diagnostics(
         OverlayMode::DepthReliability | OverlayMode::ConditionNumber => {
             for feature in features.iter_mut() {
                 if feature.is_tracked() {
-                    let (cond, z) = crate::point_track_detail::compute_point_diagnostics(
+                    let (cond, z) = crate::metrics::compute_point_diagnostics(
                         recon,
                         feature.point_index as usize,
                     );
@@ -800,5 +800,5 @@ fn compute_max_track_angle_deg(recon: &SfmrReconstruction, point_idx: usize) -> 
     if world_rays.len() < 2 {
         return 0.0;
     }
-    crate::point_track_detail::compute_max_pairwise_angle(&world_rays)
+    crate::metrics::compute_max_pairwise_angle(&world_rays)
 }

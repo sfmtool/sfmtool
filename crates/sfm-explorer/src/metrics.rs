@@ -1,14 +1,24 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Numeric analysis behind the panel: per-observation reprojection error and
-//! ray angle, and whole-track triangulation diagnostics.
+//! Triangulation numerics: per-observation reprojection error and ray angle,
+//! and whole-track diagnostics for one 3D point.
 //!
 //! Nothing here touches egui state — every function is a pure computation over
-//! the reconstruction, which is what lets the panel's display code stay thin.
+//! a [`SfmrReconstruction`], which is what lets the display code that quotes
+//! them stay thin. They live at the crate root rather than under a panel
+//! because three different surfaces read the same numbers: the Point Track
+//! Detail table tabulates them, the Image Detail overlay colours features by
+//! them, and the MCP `get_point` tool reports them to an agent. A figure an
+//! agent is told and a figure the human beside it reads off a panel have to be
+//! the same figure, and that is easier to keep true when there is one
+//! definition and no panel owns it.
 
 use nalgebra::Vector3;
 use sfmtool_core::SfmrReconstruction;
+
+#[cfg(test)]
+mod tests;
 
 /// Compute per-observation reprojection error and ray angle for one observation.
 ///
