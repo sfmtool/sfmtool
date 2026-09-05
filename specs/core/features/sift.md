@@ -530,10 +530,15 @@ pub struct Detection {
 }
 
 // Stage 2: describe an arbitrary *subset*, on demand. A descriptor is a pure
-// function of (scale_space, keypoint), so this can be called for as few or as
-// many keypoints as you need, in any order, any number of times.
-pub fn compute_descriptors(scale_space: &ScaleSpace, keypoints: &[SiftKeypoint]) -> Descriptors;
-pub fn compute_descriptor(scale_space: &ScaleSpace, keypoint: &SiftKeypoint) -> [u8; 128];
+// function of (scale_space, keypoint) and the two descriptor-geometry
+// parameters `magnification` (subregion spacing in units of sigma_kp) and
+// `clamp` (post-normalization component cap), both carried on `SiftParams`.
+// So this can be called for as few or as many keypoints as you need, in any
+// order, any number of times.
+pub fn compute_descriptors(scale_space: &ScaleSpace, keypoints: &[SiftKeypoint],
+                           magnification: f32, clamp: f32) -> Descriptors;
+pub fn compute_descriptor(scale_space: &ScaleSpace, keypoint: &SiftKeypoint,
+                          magnification: f32, clamp: f32) -> [u8; 128];
 
 // Convenience one-shot that builds the pyramid once and runs both, describing
 // every keypoint (the common case / describe-all path).
@@ -659,7 +664,7 @@ sfmtool-core/src/features/sift/
 `py.detach(...)` around the compute):
 
 - `detect_sift_keypoints(image, params=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, responses (N,) f32)`
-- `extract_sift(image, params=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, descriptors (N,128) u8)`
+- `extract_sift(image, params=None, max_described=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, descriptors (K,128) u8)` — the binding for `extract_sift_partial`: `K = min(max_described, N)`, and `K = N` when `max_described` is `None`
 
 This output is exactly what `src/sfmtool/sift/` already consumes, so a new `extract_rust.py`
 backend slots in alongside `extract_opencv.py` / `extract_colmap.py` and writes via the

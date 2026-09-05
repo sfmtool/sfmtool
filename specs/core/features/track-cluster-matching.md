@@ -171,7 +171,7 @@ understand why. Incremental works better on our small set of test datasets.
    pairs, bucketed by image pair (§4); this is a derived view for the pairwise
    pipeline.
 5. **Verify & write** — run geometric verification on the pairs
-   (`pycolmap.geometric_verification`) and write `.matches` carrying the surviving
+   (`pycolmap.verify_matches`) and write `.matches` carrying the surviving
    two-view geometry, like every other matcher.
 
 ### 1. Index and the shared k-NN query
@@ -851,7 +851,13 @@ with the cluster pairs instead of running a pycolmap matcher:
    (`_populate_db_features`, as `_run_matching` does).
 2. Write the cluster pair arrays into the DB (`_write_matches_to_db` from
    `_colmap_db.py`, or `pycolmap.Database.write_matches` per pair).
-3. `pycolmap.geometric_verification(db_path)` — populates the two-view geometries.
+3. `pycolmap.verify_matches(str(db_path), str(pairs_path), options=tvg_options)`
+   — populates the two-view geometries. It verifies the pairs named in
+   `pairs_path`, one `name_i name_j` per line, so that file is written out
+   first. This is the call the rest of the tree uses (`_run.py:504`,
+   `_derive_pairs.py:84`) in preference to
+   `pycolmap.geometric_verification(db_path)`, which verifies every pair the
+   database holds.
 4. `matches_data = read_colmap_db_matches(str(db_path), include_tvg=True)` —
    reads the surviving matches **and** their TVG back, so
    `has_two_view_geometries = True`.

@@ -60,6 +60,11 @@ binding has between `obs_point` and `opt_f` (`point_at_infinity=None`,
 and `core/features/sift.md:662` documents `extract_sift(image, params=None)` where the
 binding also takes `max_described=None` (`sfmtool-py/src/sift/extract.rs:268`).
 
+> _Status (2026-09-06): **Done.** Both signatures now list every parameter, in the
+> binding's order and with its defaults. `bundle_adjust` was verified by calling it
+> with all seventeen documented arguments as keywords and again positionally; the
+> returned dict's keys match the spec's return comment exactly._
+
 Three defaults are documented as values the code reaches indirectly and are fine:
 `ws init --max-features 8192` (Click `None`, resolved in `sift/extract_sfmtool.py:63`),
 `epipolar --sweep-window-size 30` (set at `epipolar.py:226`), `pano2rig --face-size`
@@ -229,6 +234,13 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `inverse_search.wgsl:1` says "one thread per patch (Option B from spec)", an option list in neither spec. `blur_downsample.wgsl:9` says the pass is "selected by `params.pass`" but `Params` has no `pass` field; selection is by entry point. `gpu/mod.rs:4` still titles the module "GPU-accelerated variational refinement" though it owns DIS, pyramid and upsample too. Neither flow spec is cited from any source file.
 
 ### specs/core/features/sift.md
+> _Status (2026-09-06): **Partially done.** The two signatures a reader copies are
+> fixed: `compute_descriptors` / `compute_descriptor` carry `magnification` and
+> `clamp`, and the `extract_sift` binding line carries `max_described` with its
+> `K = min(max_described, N)` contract. The stale `benches/sift.rs` path, the
+> `extract_rust.py` name, the five-file module tree, the two prose-only `SiftParams`
+> fields, the "(DoG can be freed)" annotation and the opening paragraph are untouched._
+
 **Summary:** sfmtool's pure-Rust SIFT detector/descriptor: the five-stage algorithm and its parameter table, SIMD/rayon parallelism, the tiled DoG/detect fusion (Tier 1/1.5, Tier 2 rejected), the cap-aware coarse-to-fine octave walk, the Python extraction-orchestration pipelining, the detect/describe split API, and the PyO3 bindings.
 **Implementing code:** `crates/sfmtool-core/src/features/sift/mod.rs` (`SiftParams`, `detect_keypoints`, `compute_descriptors`, `compute_descriptor`, `extract_sift`, `extract_sift_partial`), `sift/{scale_space,detect,orientation,descriptor,gray,simd}.rs`, `crates/sfmtool-py/src/sift/extract.rs`, `src/sfmtool/sift/extract_sfmtool.py`.
 **Inconsistencies:**
@@ -343,6 +355,15 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** the parent-at-infinity `ValueError` (122–124) is implemented but untested (`TestSpawnValidation` covers the other three). Spec 69–70 defines `high_reproj` as RMS over the gate; the code also forces `sum_sq = INFINITY` when the triangulated position fails to project into a surviving view (`spawn.rs:361-369`), so a projection failure surfaces as `high_reproj` rather than `bad_triangulation`.
 
 ### specs/core/features/track-cluster-matching.md
+> _Status (2026-09-06): **Partially done**, and the `pycolmap` bullet below is wrong on
+> one point. `pycolmap.geometric_verification(db_path)` does exist and the
+> one-argument call is valid, so the documented call would not fail if copied — it is
+> only a function the tree never calls. Both sites (174, 854) now name
+> `pycolmap.verify_matches` with its pair-list argument, and 854 says why the tree
+> prefers it. Everything else here, including the five passages describing the
+> pre-239ee24 verify-and-write flow that those two lines sit inside, is left for the
+> Production Implementation rewrite (Top priorities §3)._
+
 **Summary:** The background-floor track-cluster matcher: one k-NN query over a kd-forest built on the whole descriptor corpus, a per-descriptor radius `alpha · dist[i, d]`, density-ordered seeding into a hard cluster partition, and a derived per-image-pair match view. Carries the empirical tuning (α = 0.8, the `d` sweep), a cost section, and a three-layer "Production Implementation" section (Rust core, PyO3, Python/CLI).
 **Implementing code:** `crates/sfmtool-core/src/features/cluster_match/mod.rs` (`BackgroundFloorParams`, `Clusters`, `PairMatches`, `background_floor_clusters`, `clusters_to_pair_matches`); `crates/sfmtool-py/src/matching/cluster.rs:84`; `src/sfmtool/feature_match/_cluster_matching.py:47`; `feature_match/_run.py:80-118, 265, 507, 546`; `_commands/match.py:126-153, 275-281`.
 **Inconsistencies:** (code is right in every case)
@@ -363,6 +384,14 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `matching_mode="cluster"` (`db_setup.py:130-146` → `_run_cluster_matching`) is live code no CLI reaches: `solve.py:303` only produces `"flow"`/`"exhaustive"`. The spec mentions the in-solve mode at 466–468 without saying it is unreachable, while asserting at 421 that no `sfm solve --cluster` exists. `cluster_match/covisibility.rs` + `covisibility/` (501 lines) live inside the module this spec owns but are specced in `cluster-covisibility.md`; the Layer 1 "Location" section (509–512) does not mention the sibling.
 
 ### specs/gui/mcp-server.md
+> _Status (2026-09-06): **Partially done.** The two copyable-and-wrong artefacts are
+> fixed — `serve`'s signature now carries the wake closure, and the feature list drops
+> `dep:serde_json` with a sentence saying why it is unconditional. Fixing the list
+> exposed that `--no-default-features` did not build at all; see Top priorities §2.
+> The CLI flag description, the `set_view` exact-form requirement, the doubled
+> screenshot size, the `max_dimension` floor and the prior-state paragraph at 686–693
+> are untouched._
+
 **Summary:** The opt-in MCP control surface the viewer hosts with `--mcp`: the 23-tool catalog with every argument and reply shape, the wire-vocabulary rule, the single-threaded drain/defer architecture, the HTTP/loopback transport and its security posture, and the Rust seam (`Command`, `Outcome`, `apply_with_window`, `serve`).
 **Implementing code:** `crates/sfm-explorer/src/mcp/tools.rs` (`catalog`, `parse`, `parse_set_view`, `parse_placement`), `mcp/mod.rs` (`Command`, `apply_with_window`, `screenshot_caption`), `mcp/server.rs` (`serve`, `APPLY_TIMEOUT`), `mcp/{read,render,display,layout,window,frame,view,write}.rs`; `src/cli.rs::DEFAULT_MCP_PORT`; `src/state.rs:155-208, 258-334`; `Cargo.toml:44-50, 82, 90`.
 **Inconsistencies:**
@@ -552,6 +581,35 @@ one below), so all but one of these are spec fixes.
    `pycolmap.geometric_verification`, which the codebase never calls;
    `bundle-adjustment.md:245-267` omits three binding parameters. One doc-only PR,
    verified by pasting each call into a test.
+
+   > _Status (2026-09-06): **Done**, and it was five, not six. Each call was verified
+   > the way this item asks: `extract_sift` and `bundle_adjust` called with every
+   > documented keyword (positionally too, for `bundle_adjust`, and the returned keys
+   > match the spec's return comment); `compute_descriptors` / `compute_descriptor`
+   > pasted into a throwaway `sfmtool-core` integration test as `fn` coercions and
+   > compiled; `serve` matched against `server.rs:97-101`._
+   >
+   > _**The `pycolmap` finding is a false positive on this item's criterion.**
+   > `pycolmap.geometric_verification(db_path)` exists and the one-argument call is
+   > valid — "Run geometric verification on all image pairs in the database". So the
+   > documented call does not fail if copied; it is simply not the call the tree makes,
+   > which is the separate §3 problem. Both spec sites now name
+   > `pycolmap.verify_matches` with its pair-list argument, and `:854` says why the tree
+   > prefers it. The rest of that passage still describes the pre-239ee24 flow and is
+   > left for priority #3._
+   >
+   > _**Fixing the Cargo feature list turned up a build break, and that is the real
+   > find.** The claim under the block — `--no-default-features` drops the MCP tree —
+   > was not true: `cargo check -p sfm-explorer --no-default-features` failed with 19
+   > errors. `9770ab3` (#365) added `mod metrics;` between `#[cfg(feature = "mcp")]`
+   > and `mod mcp;`, so the attribute landed on the wrong module — `mcp` compiled
+   > unconditionally without its dependencies, and `metrics` was gated off while
+   > `point_track_detail::prepare` imports it unconditionally. Two lines reordered in
+   > `lib.rs`; `clear_selection` / `deselect_point`, whose only callers are in
+   > `mcp::write`, take `#[cfg_attr(not(feature = "mcp"), allow(dead_code))]`. Both
+   > feature configurations now pass `cargo check --all-targets`, clippy and the 582
+   > `sfm-explorer` lib tests. **Nothing in CI builds `--no-default-features`**, which
+   > is why a documented build configuration stayed broken for a week; worth a job._
 
 3. **`track-cluster-matching.md` contradicts itself about what `--cluster` writes, and
    300 of its 962 lines transcribe the code.** Five passages still describe the

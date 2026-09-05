@@ -935,6 +935,10 @@ impl AppState {
     /// One entry rather than three: `clear_selection` is a single request, and
     /// the image, the intrinsics and the point going together is what it means
     /// rather than three things that happened to coincide.
+    ///
+    /// Only `mcp::write` calls this and [`Self::deselect_point`]; the UI clears
+    /// a selection by selecting something else.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub fn clear_selection(&mut self) {
         if self.selected_image.is_none()
             && self.selected_camera.is_none()
@@ -952,6 +956,7 @@ impl AppState {
     }
 
     /// Drop the point selection alone.
+    #[cfg_attr(not(feature = "mcp"), allow(dead_code))]
     pub fn deselect_point(&mut self) {
         if self.selected_point.take().is_some() {
             self.action_log.record(Kind::Selection, "Deselected point");

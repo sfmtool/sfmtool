@@ -23,8 +23,8 @@ mod image_browser;
 mod image_detail;
 mod intrinsics_detail;
 mod layout;
-mod mcp;
 #[cfg(feature = "mcp")]
+mod mcp;
 mod metrics;
 mod platform;
 mod point_track_detail;

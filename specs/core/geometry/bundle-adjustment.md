@@ -250,6 +250,15 @@ bundle_adjust(
     uv,                        # (n_obs, 2)
     obs_image,                 # (n_obs,) uint32
     obs_point,                 # (n_obs,) uint32
+    point_at_infinity=None,    # (n_pt,) bool; a marked row of `points` is a
+                               # world-frame direction. None/all-False
+                               # reproduces the finite-only kernel bit for bit
+    protected=None,            # (n_obs,) bool; protected observations survive
+                               # every trim gate and take the wider loss scale.
+                               # None/all-False reproduces the unprotected
+                               # behavior bit for bit
+    protected_loss_scale=3.0,  # multiplier on each stage's loss scale for
+                               # protected observations (positive and finite)
     opt_f=False,               # SIMPLE_PINHOLE, EQUIDISTANT_FISHEYE,
                                # SIMPLE_RADIAL_FISHEYE, SFMTOOL_FISHEYE
                                # or SFMTOOL_PINHOLE

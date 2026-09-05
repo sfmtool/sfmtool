@@ -1582,7 +1582,8 @@ pub(crate) fn apply_as_agent(state: &mut AppState, viewer: &mut Viewer3D,
 
 /// Start the server. Returns once it is bound and listening, or with the bind
 /// error; the runtime lives on its own thread from here.
-pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>, proxy: EventLoopProxy<UserEvent>)
+pub(crate) fn serve(port: u16, tx: UnboundedSender<Request>,
+                    wake: impl Fn() + Send + Sync + 'static)
     -> Result<SocketAddr, ServeError>;
 ```
 
@@ -1648,13 +1649,14 @@ dropped:
 ```toml
 [features]
 default = ["mcp"]
-mcp = ["dep:rmcp", "dep:tokio", "dep:axum", "dep:serde", "dep:serde_json", "dep:base64"]
+mcp = ["dep:rmcp", "dep:tokio", "dep:axum", "dep:serde", "dep:base64"]
 ```
 
 Default on, so the flag works in a stock build; `--no-default-features` drops it
 for anyone trading the feature against build time. In a build without it, `--mcp`
 is rejected at startup with a message naming the flag it needs, rather than
-ignored.
+ignored. `serde_json` is absent from the list because it is unconditional:
+Panels > Save/Load Layout reads and writes the layout file in every build.
 
 A tool's JSON reply crosses the wire twice: as `structuredContent` for a client
 that reads it as data, and as a text block for one that reads it as text. Both,
