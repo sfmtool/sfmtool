@@ -382,6 +382,30 @@ appeared behind it**
   than it was: the section splits can no longer misspell or reorder an entry name.
 
 **`verify_matches` is a 710-line function — still the largest in the workspace**
+> _Status (2026-09-06): **Done.** Re-measured first: at the time of the split
+> `verify.rs` was **897** lines and `verify_matches` **746** (152–897), not 710
+> at 126. It is now **108** lines, an orchestrator over one
+> `verify_<section>_section` per present section — images, image_pairs, clusters,
+> cluster_patches, two_view_geometries — each owning its hasher from open to
+> digest, with that section's structural checks factored out beside it
+> (`check_pair_ordering`, `check_match_counts`, `check_match_feature_bounds`,
+> `check_clusters_structure`, `check_cluster_patch_lengths`,
+> `check_member_statuses`, `check_cluster_references`) and one
+> `check_section_hash` for the six identically-worded digest comparisons. Two
+> private structs carry what a section hands on: `PairsRaw` / `ClusterPatchRaw`
+> group the raw entries a section's checks re-read, and `ClusterBackbone` carries
+> the cluster arrays plus the `consistent` flag the cluster-patch checks share
+> with the backbone's own. `structure_errors` (129) was left alone — it is already
+> a named unit, is a flat list of independent checks, and splitting it would trade
+> one readable body for three call sites. The file grew 897 → 1,135 on the
+> signatures and doc comments the split needs. Behaviour is pinned
+> byte-for-byte: a throwaway harness ran `verify_matches` over 1,495 archives (six
+> synthetic fixtures plus a real 85-image pairwise+TVG file, times version
+> rewrites, metadata mutations, entry drops, and per-entry byte and shape damage,
+> with the stored digests zeroed so every computed hash appears in the output) and
+> the before/after transcripts are identical. The sibling finding above
+> (`write_matches`, the three `sfmr-format` entry points, `validate_dimensions*`)
+> is deliberately untouched and still open._
 > _Carried forward from 2026-08-08 (719 → 710)._
 - Location: `crates/matches-format/src/verify.rs:126` (file 835)
 - Problem: One function holding every invariant `.matches` has. Same section
