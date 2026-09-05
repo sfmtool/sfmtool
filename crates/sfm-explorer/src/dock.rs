@@ -88,426 +88,11 @@ impl TabViewer for TabContext<'_> {
                 let response = self.scene_graph.show(ui, self.state);
                 self.apply_scene_graph_response(ui, response);
             }
-            Tab::Viewer3D => {
-                // `[` / `]` step the selected reconstruction. Handled here
-                // rather than inside `show` because it is the one viewport
-                // binding that needs the whole scene; gated on the same
-                // keyboard arbitration the viewport's own bindings use, so a
-                // HUD `DragValue` being typed into still owns the keys.
-                if !ui.ctx().egui_wants_keyboard_input() {
-                    self.viewer_3d.handle_recon_step(ui, self.state);
-                }
-                if self.state.selected_recon.is_some() {
-                    // The HUD goes up before the viewport claims the rect: it
-                    // lives on its own `Area` layer (so it still paints on top),
-                    // and `show` below consults the rect it occupies to arbitrate
-                    // every pointer input path.
-                    self.viewer_3d
-                        .show_hud(ui, self.state, self.diagnostics, self.handler_ok);
-                }
-                // Read before the node is borrowed out of the scene: the status
-                // line is derived from the whole log, and the viewport call
-                // below holds the log mutably for the keyboard bindings.
-                let status = self.state.status_message();
-                // Fetched only after `show_hud` has handed back its `&mut
-                // AppState`: the node borrows `state.scene`, and the two cannot
-                // overlap.
-                let node = selected_node(&self.state.scene, self.state.selected_recon);
-                if let Some(node) = node {
-                    // The viewport's own bindings (`,` / `.`) move the image
-                    // selection, and they move it in a scratch copy: applying
-                    // it afterwards through `select_image` is what keeps the
-                    // selected camera in step, which a `&mut` straight into the
-                    // field could not.
-                    let mut selection = self.state.selected_image;
-                    self.viewer_3d.show(
-                        ui,
-                        node,
-                        &self.state.scene,
-                        self.state.solo,
-                        &mut selection,
-                        self.state.show_grid,
-                        self.state.length_scale,
-                        status.as_deref(),
-                        self.gesture_events,
-                        self.scroll_input,
-                        self.state.show_controls_help,
-                        self.state.show_fps,
-                        self.scene_texture_id,
-                        self.hover_depth,
-                        self.hover_pick,
-                        &mut self.state.action_log,
-                    );
-                    if selection != self.state.selected_image {
-                        self.state.select_image(selection);
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(100.0);
-                            if let Some(msg) = &status {
-                                ui.colored_label(egui::Color32::RED, msg);
-                                ui.add_space(20.0);
-                            }
-                            ui.heading("SfM Explorer");
-                            ui.add_space(20.0);
-                            ui.label("No reconstruction loaded.");
-                            ui.add_space(10.0);
-                            ui.label("Use File > Open to load a .sfmr file,");
-                            ui.label("or File > Load Demo Data to see sample data.");
-                        });
-                    });
-                }
-            }
-            Tab::ImageBrowser => {
-                let node = selected_node(&self.state.scene, self.state.selected_recon);
-                if let Some(node) = node {
-                    let recon = &node.recon;
-                    let id = node.id;
-                    // The strip shows exactly one reconstruction's sequence.
-                    // Name it whenever there is more than one to confuse it
-                    // with; with a single file the header would be pure chrome
-                    // in an already-short panel.
-                    if self.state.scene.len() > 1 {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&node.label).strong());
-                            ui.label(
-                                egui::RichText::new(format!("({} images)", recon.images.len()))
-                                    .weak()
-                                    .small(),
-                            );
-                        });
-                    }
-                    let track_images = compute_track_images(self.state, node);
-                    let hover_track_images = compute_hover_track_images(self.state, node);
-                    let sibling_images =
-                        crate::scene::camera_sibling_images(node, self.state.selected_camera);
-                    let camera_view_image = self
-                        .viewer_3d
-                        .camera_view
-                        .as_ref()
-                        .and_then(|cv| cv.image.index_in(id));
-                    let response = self.image_browser.show(
-                        ui,
-                        recon,
-                        id,
-                        self.state.selected_image_in(id),
-                        &track_images,
-                        &hover_track_images,
-                        &sibling_images,
-                        self.state.hovered_image_in(id),
-                        camera_view_image,
-                        self.gesture_events,
-                        self.scroll_input,
-                        &mut self.state.action_log,
-                    );
-                    // Held back rather than applied here: `select_image`
-                    // wants `&mut AppState`, and `node` is borrowed out of the
-                    // scene for the camera-view calls below.
-                    let new_selection = response
-                        .selection_changed
-                        .map(|sel| sel.map(|i| ImageRef::new(id, i)));
-                    if response.has_pointer {
-                        // Browser owns hover state when it has the pointer.
-                        self.state.hovered_image =
-                            response.hovered_image.map(|i| ImageRef::new(id, i));
-                        // Clear point hover from other panels since browser
-                        // doesn't produce hovered_point.
-                        self.state.hovered_point = None;
-                    }
-                    if let Some(img_idx) = response.request_camera_view {
-                        let current_time = ui.input(|i| i.time);
-                        let image = ImageRef::new(id, img_idx);
-                        if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d.animated_switch_camera_view(
-                                image,
-                                node,
-                                current_time,
-                                &mut self.state.action_log,
-                            );
-                        } else {
-                            self.viewer_3d.enter_camera_view(
-                                image,
-                                node,
-                                current_time,
-                                &mut self.state.action_log,
-                            );
-                        }
-                    }
-                    // Instant camera switch during animation playback. Logs
-                    // nothing: it follows the selection step that produced it,
-                    // and a `Looking through …` between every two
-                    // `Selected image …` would break the coalescing that keeps
-                    // a scrub to one line.
-                    if let Some(img_idx) = response.request_camera_switch {
-                        if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d
-                                .switch_camera_view(ImageRef::new(id, img_idx), node);
-                        }
-                    }
-                    if let Some(selection) = new_selection {
-                        self.state.select_image(selection);
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("No reconstruction loaded");
-                    });
-                }
-            }
-            Tab::ImageDetail => {
-                let node = selected_node(&self.state.scene, self.state.selected_recon);
-                if let Some(node) = node {
-                    let recon = &node.recon;
-                    let id = node.id;
-                    // Read out before the cache borrows below: they hold `&mut`
-                    // into `state`, which rules out an `&self.state` method call
-                    // for as long as their results are alive.
-                    let selected_image = self.state.selected_image_in(id);
-                    let selected_point = self.state.selected_point_in(id);
-                    let hovered_point = self.state.hovered_point_in(id);
-                    // The camera the selected image resolves to — the subject of
-                    // the intrinsics layer, and `None` with no image selected.
-                    let camera = selected_image.and_then(|idx| {
-                        let camera_index = recon.images.get(idx)?.camera_index as usize;
-                        Some((
-                            CameraRef::new(id, camera_index),
-                            recon.cameras.get(camera_index)?,
-                        ))
-                    });
-                    // What the panel's controls were before this frame ran.
-                    // The toolbar, the gear popup and the `I` key inside
-                    // `ImageDetail::show` all write straight into the two
-                    // settings structs, so one snapshot around the whole
-                    // stretch is what turns any of them into an Action Log
-                    // entry — in the same words `set_image_detail_display`
-                    // produces, since both call one differ.
-                    let before = crate::state::ImageDetailDisplay::snapshot(
-                        &self.state.feature_display,
-                        &self.state.intrinsics_display,
-                    );
-                    // Overlay toolbar at the top of the detail panel
-                    show_overlay_toolbar(
-                        ui,
-                        &mut self.state.feature_display,
-                        &mut self.state.intrinsics_display,
-                        self.image_detail,
-                        camera,
-                    );
-
-                    // Determine how many SIFT features to load based on overlay mode
-                    let read_count_for_image = |idx: usize| -> usize {
-                        if self.state.feature_display.overlay_mode
-                            == crate::state::OverlayMode::None
-                        {
-                            // Only need tracked features
-                            recon.max_track_feature_index[idx] as usize + 1
-                        } else {
-                            // Need up to max_features (or all tracked features, whichever is more)
-                            let tracked = recon.max_track_feature_index[idx] as usize + 1;
-                            let display = self
-                                .state
-                                .feature_display
-                                .max_features
-                                .unwrap_or(usize::MAX);
-                            tracked.max(display)
-                        }
-                    };
-
-                    // Only `sift_files` reconstructions have `.sift` companions;
-                    // an embedded_patches recon reads its keypoints inline, so
-                    // skip the (always-failing, per-frame) cache probe.
-                    let sift = selected_image.and_then(|idx| {
-                        recon.feature_indexes()?;
-                        let read_count = read_count_for_image(idx);
-                        crate::state::ensure_sift_cached(
-                            &mut self.state.sift_cache,
-                            recon,
-                            ImageRef::new(id, idx),
-                            read_count,
-                        )
-                    });
-                    // Full-res CPU pixels come from the shared cache (also
-                    // used by the Point Track Detail patch tiles), so each
-                    // image is decoded from disk at most once.
-                    let full_res = selected_image.and_then(|idx| {
-                        crate::state::ensure_full_res_cached(
-                            &mut self.state.full_res_cache,
-                            recon,
-                            ImageRef::new(id, idx),
-                        )
-                    });
-                    let detail_response = self.image_detail.show(
-                        ui,
-                        recon,
-                        id,
-                        selected_image,
-                        selected_point,
-                        hovered_point,
-                        self.gesture_events,
-                        self.scroll_input,
-                        sift,
-                        full_res,
-                        &self.state.feature_display,
-                        &mut self.state.intrinsics_display,
-                    );
-                    let after = crate::state::ImageDetailDisplay::snapshot(
-                        &self.state.feature_display,
-                        &self.state.intrinsics_display,
-                    );
-                    crate::state::record_image_detail_changes(
-                        &mut self.state.action_log,
-                        &before,
-                        &after,
-                    );
-                    if let Some(point_idx) = detail_response.select_point {
-                        // Through the setter rather than the field: the point
-                        // is inside the selected reconstruction already, so the
-                        // coupling rules are a no-op here — but the setter is
-                        // also what records the selection.
-                        self.state.select_point(PointRef::new(id, point_idx));
-                    }
-                    if detail_response.has_pointer {
-                        // Detail owns hover state when it has the pointer.
-                        self.state.hovered_point =
-                            detail_response.hovered_point.map(|p| PointRef::new(id, p));
-                        // Clear image hover from other panels since detail
-                        // doesn't produce hovered_image.
-                        self.state.hovered_image = None;
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("No reconstruction loaded");
-                    });
-                }
-            }
-            Tab::PointTrackDetail => {
-                let node = selected_node(&self.state.scene, self.state.selected_recon);
-                if let Some(node) = node {
-                    let recon = &node.recon;
-                    let id = node.id;
-                    let selected_point = self.state.selected_point_in(id);
-                    // Ensure SIFT positions are cached for all images in the
-                    // track (sift_files only; embedded_patches reads keypoints
-                    // inline, so the `.sift` probe would fail every time).
-                    if recon.feature_indexes().is_some() {
-                        if let Some(pt_idx) = selected_point {
-                            if pt_idx < recon.points.len() {
-                                for img_idx in recon.track_image_indices(pt_idx) {
-                                    let need = recon.max_track_feature_index[img_idx] as usize + 1;
-                                    crate::state::ensure_sift_cached(
-                                        &mut self.state.sift_cache,
-                                        recon,
-                                        ImageRef::new(id, img_idx),
-                                        need,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    // Pre-cache full-res images for every observing image of
-                    // the selected point so the panel can render per-observation
-                    // patch tiles from an immutable cache reference. Only
-                    // needed when the recon carries patch frames (the tiles
-                    // are gated on them).
-                    if recon.patch_u_halfvec_xyz.is_some() {
-                        if let Some(pt_idx) = selected_point {
-                            if pt_idx < recon.points.len() {
-                                for img_idx in recon.track_image_indices(pt_idx) {
-                                    crate::state::ensure_full_res_cached(
-                                        &mut self.state.full_res_cache,
-                                        recon,
-                                        ImageRef::new(id, img_idx),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    let track_response = self.point_track_detail.show(
-                        ui,
-                        recon,
-                        id,
-                        selected_point,
-                        self.state.hovered_image_in(id),
-                        &self.state.sift_cache,
-                        &self.state.full_res_cache,
-                        self.gesture_events,
-                        self.scroll_input,
-                    );
-                    // As in the browser arm: applied once `node`'s borrow is
-                    // done with, since the setter needs the state mutably.
-                    let new_selection = track_response
-                        .select_image
-                        .map(|img_idx| ImageRef::new(id, img_idx));
-                    if let Some(img_idx) = track_response.request_camera_view {
-                        let current_time = ui.input(|i| i.time);
-                        let image = ImageRef::new(id, img_idx);
-                        if self.viewer_3d.camera_view.is_some() {
-                            self.viewer_3d.animated_switch_camera_view(
-                                image,
-                                node,
-                                current_time,
-                                &mut self.state.action_log,
-                            );
-                        } else {
-                            self.viewer_3d.enter_camera_view(
-                                image,
-                                node,
-                                current_time,
-                                &mut self.state.action_log,
-                            );
-                        }
-                    }
-                    if track_response.has_pointer {
-                        // Track detail owns hover state when it has the pointer.
-                        self.state.hovered_image =
-                            track_response.hovered_image.map(|i| ImageRef::new(id, i));
-                        // Clear point hover from other panels since track detail
-                        // doesn't produce hovered_point.
-                        self.state.hovered_point = None;
-                    }
-                    if track_response.request_goto_point {
-                        self.state.open_goto_point();
-                    }
-                    if let Some(image) = new_selection {
-                        self.state.select_image(Some(image));
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("No reconstruction loaded");
-                    });
-                }
-            }
-            Tab::IntrinsicsDetail => {
-                let node = selected_node(&self.state.scene, self.state.selected_recon);
-                if let Some(node) = node {
-                    // Both indices are read out of the *selected* node: the
-                    // selection coupling puts `selected_camera` inside the
-                    // selected reconstruction (`select_camera` selects the
-                    // recon that owns it, and `select_recon` filters it), so
-                    // there is no third recon for this panel to follow.
-                    let selected_camera =
-                        self.state.selected_camera.and_then(|c| c.index_in(node.id));
-                    let selected_image = self.state.selected_image_in(node.id);
-                    let response =
-                        self.intrinsics_detail
-                            .show(ui, node, selected_camera, selected_image);
-                    if response.has_pointer {
-                        // The panel raises neither hover channel, so owning the
-                        // pointer means clearing both: a highlight left over
-                        // from the panel the pointer came from would otherwise
-                        // sit there for as long as the user reads a table.
-                        self.state.hovered_image = None;
-                        self.state.hovered_point = None;
-                    }
-                    if let Some(image) = response.select_image {
-                        self.state.select_image(Some(image));
-                    }
-                } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("No reconstruction loaded");
-                    });
-                }
-            }
+            Tab::Viewer3D => self.show_viewer_3d(ui),
+            Tab::ImageBrowser => self.show_image_browser(ui),
+            Tab::ImageDetail => self.show_image_detail(ui),
+            Tab::PointTrackDetail => self.show_point_track_detail(ui),
+            Tab::IntrinsicsDetail => self.show_intrinsics_detail(ui),
             // The one tab with no empty state: an empty scene still has a
             // session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
@@ -529,6 +114,433 @@ impl TabViewer for TabContext<'_> {
 }
 
 impl TabContext<'_> {
+    /// The 3D Viewer tab: the reconstruction-stepping keys, the HUD, and the
+    /// viewport itself, in the borrow order the three of them require.
+    fn show_viewer_3d(&mut self, ui: &mut egui::Ui) {
+        // `[` / `]` step the selected reconstruction. Handled here
+        // rather than inside `show` because it is the one viewport
+        // binding that needs the whole scene; gated on the same
+        // keyboard arbitration the viewport's own bindings use, so a
+        // HUD `DragValue` being typed into still owns the keys.
+        if !ui.ctx().egui_wants_keyboard_input() {
+            self.viewer_3d.handle_recon_step(ui, self.state);
+        }
+        if self.state.selected_recon.is_some() {
+            // The HUD goes up before the viewport claims the rect: it
+            // lives on its own `Area` layer (so it still paints on top),
+            // and `show` below consults the rect it occupies to arbitrate
+            // every pointer input path.
+            self.viewer_3d
+                .show_hud(ui, self.state, self.diagnostics, self.handler_ok);
+        }
+        // Read before the node is borrowed out of the scene: the status
+        // line is derived from the whole log, and the viewport call
+        // below holds the log mutably for the keyboard bindings.
+        let status = self.state.status_message();
+        // Fetched only after `show_hud` has handed back its `&mut
+        // AppState`: the node borrows `state.scene`, and the two cannot
+        // overlap.
+        let node = selected_node(&self.state.scene, self.state.selected_recon);
+        if let Some(node) = node {
+            // The viewport's own bindings (`,` / `.`) move the image
+            // selection, and they move it in a scratch copy: applying
+            // it afterwards through `select_image` is what keeps the
+            // selected camera in step, which a `&mut` straight into the
+            // field could not.
+            let mut selection = self.state.selected_image;
+            self.viewer_3d.show(
+                ui,
+                node,
+                &self.state.scene,
+                self.state.solo,
+                &mut selection,
+                self.state.show_grid,
+                self.state.length_scale,
+                status.as_deref(),
+                self.gesture_events,
+                self.scroll_input,
+                self.state.show_controls_help,
+                self.state.show_fps,
+                self.scene_texture_id,
+                self.hover_depth,
+                self.hover_pick,
+                &mut self.state.action_log,
+            );
+            if selection != self.state.selected_image {
+                self.state.select_image(selection);
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(100.0);
+                    if let Some(msg) = &status {
+                        ui.colored_label(egui::Color32::RED, msg);
+                        ui.add_space(20.0);
+                    }
+                    ui.heading("SfM Explorer");
+                    ui.add_space(20.0);
+                    ui.label("No reconstruction loaded.");
+                    ui.add_space(10.0);
+                    ui.label("Use File > Open to load a .sfmr file,");
+                    ui.label("or File > Load Demo Data to see sample data.");
+                });
+            });
+        }
+    }
+
+    /// The Image Browser tab: the selected reconstruction's image strip, and
+    /// the selection and hover it reports back.
+    fn show_image_browser(&mut self, ui: &mut egui::Ui) {
+        let node = selected_node(&self.state.scene, self.state.selected_recon);
+        if let Some(node) = node {
+            let recon = &node.recon;
+            let id = node.id;
+            // The strip shows exactly one reconstruction's sequence.
+            // Name it whenever there is more than one to confuse it
+            // with; with a single file the header would be pure chrome
+            // in an already-short panel.
+            if self.state.scene.len() > 1 {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(&node.label).strong());
+                    ui.label(
+                        egui::RichText::new(format!("({} images)", recon.images.len()))
+                            .weak()
+                            .small(),
+                    );
+                });
+            }
+            let track_images = compute_track_images(self.state, node);
+            let hover_track_images = compute_hover_track_images(self.state, node);
+            let sibling_images =
+                crate::scene::camera_sibling_images(node, self.state.selected_camera);
+            let camera_view_image = self
+                .viewer_3d
+                .camera_view
+                .as_ref()
+                .and_then(|cv| cv.image.index_in(id));
+            let response = self.image_browser.show(
+                ui,
+                recon,
+                id,
+                self.state.selected_image_in(id),
+                &track_images,
+                &hover_track_images,
+                &sibling_images,
+                self.state.hovered_image_in(id),
+                camera_view_image,
+                self.gesture_events,
+                self.scroll_input,
+                &mut self.state.action_log,
+            );
+            // Held back rather than applied here: `select_image`
+            // wants `&mut AppState`, and `node` is borrowed out of the
+            // scene for the camera-view calls below.
+            let new_selection = response
+                .selection_changed
+                .map(|sel| sel.map(|i| ImageRef::new(id, i)));
+            if response.has_pointer {
+                // Browser owns hover state when it has the pointer.
+                self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
+                // Clear point hover from other panels since browser
+                // doesn't produce hovered_point.
+                self.state.hovered_point = None;
+            }
+            if let Some(img_idx) = response.request_camera_view {
+                let current_time = ui.input(|i| i.time);
+                let image = ImageRef::new(id, img_idx);
+                if self.viewer_3d.camera_view.is_some() {
+                    self.viewer_3d.animated_switch_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
+                } else {
+                    self.viewer_3d.enter_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
+                }
+            }
+            // Instant camera switch during animation playback. Logs
+            // nothing: it follows the selection step that produced it,
+            // and a `Looking through …` between every two
+            // `Selected image …` would break the coalescing that keeps
+            // a scrub to one line.
+            if let Some(img_idx) = response.request_camera_switch {
+                if self.viewer_3d.camera_view.is_some() {
+                    self.viewer_3d
+                        .switch_camera_view(ImageRef::new(id, img_idx), node);
+                }
+            }
+            if let Some(selection) = new_selection {
+                self.state.select_image(selection);
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("No reconstruction loaded");
+            });
+        }
+    }
+
+    /// The Image Detail tab: one image at full size with its feature and
+    /// intrinsics overlays, and the selection the overlays report back.
+    fn show_image_detail(&mut self, ui: &mut egui::Ui) {
+        let node = selected_node(&self.state.scene, self.state.selected_recon);
+        if let Some(node) = node {
+            let recon = &node.recon;
+            let id = node.id;
+            // Read out before the cache borrows below: they hold `&mut`
+            // into `state`, which rules out an `&self.state` method call
+            // for as long as their results are alive.
+            let selected_image = self.state.selected_image_in(id);
+            let selected_point = self.state.selected_point_in(id);
+            let hovered_point = self.state.hovered_point_in(id);
+            // The camera the selected image resolves to — the subject of
+            // the intrinsics layer, and `None` with no image selected.
+            let camera = selected_image.and_then(|idx| {
+                let camera_index = recon.images.get(idx)?.camera_index as usize;
+                Some((
+                    CameraRef::new(id, camera_index),
+                    recon.cameras.get(camera_index)?,
+                ))
+            });
+            // What the panel's controls were before this frame ran.
+            // The toolbar, the gear popup and the `I` key inside
+            // `ImageDetail::show` all write straight into the two
+            // settings structs, so one snapshot around the whole
+            // stretch is what turns any of them into an Action Log
+            // entry — in the same words `set_image_detail_display`
+            // produces, since both call one differ.
+            let before = crate::state::ImageDetailDisplay::snapshot(
+                &self.state.feature_display,
+                &self.state.intrinsics_display,
+            );
+            // Overlay toolbar at the top of the detail panel
+            show_overlay_toolbar(
+                ui,
+                &mut self.state.feature_display,
+                &mut self.state.intrinsics_display,
+                self.image_detail,
+                camera,
+            );
+
+            // Determine how many SIFT features to load based on overlay mode
+            let read_count_for_image = |idx: usize| -> usize {
+                if self.state.feature_display.overlay_mode == crate::state::OverlayMode::None {
+                    // Only need tracked features
+                    recon.max_track_feature_index[idx] as usize + 1
+                } else {
+                    // Need up to max_features (or all tracked features, whichever is more)
+                    let tracked = recon.max_track_feature_index[idx] as usize + 1;
+                    let display = self
+                        .state
+                        .feature_display
+                        .max_features
+                        .unwrap_or(usize::MAX);
+                    tracked.max(display)
+                }
+            };
+
+            // Only `sift_files` reconstructions have `.sift` companions;
+            // an embedded_patches recon reads its keypoints inline, so
+            // skip the (always-failing, per-frame) cache probe.
+            let sift = selected_image.and_then(|idx| {
+                recon.feature_indexes()?;
+                let read_count = read_count_for_image(idx);
+                crate::state::ensure_sift_cached(
+                    &mut self.state.sift_cache,
+                    recon,
+                    ImageRef::new(id, idx),
+                    read_count,
+                )
+            });
+            // Full-res CPU pixels come from the shared cache (also
+            // used by the Point Track Detail patch tiles), so each
+            // image is decoded from disk at most once.
+            let full_res = selected_image.and_then(|idx| {
+                crate::state::ensure_full_res_cached(
+                    &mut self.state.full_res_cache,
+                    recon,
+                    ImageRef::new(id, idx),
+                )
+            });
+            let detail_response = self.image_detail.show(
+                ui,
+                recon,
+                id,
+                selected_image,
+                selected_point,
+                hovered_point,
+                self.gesture_events,
+                self.scroll_input,
+                sift,
+                full_res,
+                &self.state.feature_display,
+                &mut self.state.intrinsics_display,
+            );
+            let after = crate::state::ImageDetailDisplay::snapshot(
+                &self.state.feature_display,
+                &self.state.intrinsics_display,
+            );
+            crate::state::record_image_detail_changes(&mut self.state.action_log, &before, &after);
+            if let Some(point_idx) = detail_response.select_point {
+                // Through the setter rather than the field: the point
+                // is inside the selected reconstruction already, so the
+                // coupling rules are a no-op here — but the setter is
+                // also what records the selection.
+                self.state.select_point(PointRef::new(id, point_idx));
+            }
+            if detail_response.has_pointer {
+                // Detail owns hover state when it has the pointer.
+                self.state.hovered_point =
+                    detail_response.hovered_point.map(|p| PointRef::new(id, p));
+                // Clear image hover from other panels since detail
+                // doesn't produce hovered_image.
+                self.state.hovered_image = None;
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("No reconstruction loaded");
+            });
+        }
+    }
+
+    /// The Point Track tab: the selected point's observations across the
+    /// images that see it, and the image selection its rows report back.
+    fn show_point_track_detail(&mut self, ui: &mut egui::Ui) {
+        let node = selected_node(&self.state.scene, self.state.selected_recon);
+        if let Some(node) = node {
+            let recon = &node.recon;
+            let id = node.id;
+            let selected_point = self.state.selected_point_in(id);
+            // Ensure SIFT positions are cached for all images in the
+            // track (sift_files only; embedded_patches reads keypoints
+            // inline, so the `.sift` probe would fail every time).
+            if recon.feature_indexes().is_some() {
+                if let Some(pt_idx) = selected_point {
+                    if pt_idx < recon.points.len() {
+                        for img_idx in recon.track_image_indices(pt_idx) {
+                            let need = recon.max_track_feature_index[img_idx] as usize + 1;
+                            crate::state::ensure_sift_cached(
+                                &mut self.state.sift_cache,
+                                recon,
+                                ImageRef::new(id, img_idx),
+                                need,
+                            );
+                        }
+                    }
+                }
+            }
+            // Pre-cache full-res images for every observing image of
+            // the selected point so the panel can render per-observation
+            // patch tiles from an immutable cache reference. Only
+            // needed when the recon carries patch frames (the tiles
+            // are gated on them).
+            if recon.patch_u_halfvec_xyz.is_some() {
+                if let Some(pt_idx) = selected_point {
+                    if pt_idx < recon.points.len() {
+                        for img_idx in recon.track_image_indices(pt_idx) {
+                            crate::state::ensure_full_res_cached(
+                                &mut self.state.full_res_cache,
+                                recon,
+                                ImageRef::new(id, img_idx),
+                            );
+                        }
+                    }
+                }
+            }
+            let track_response = self.point_track_detail.show(
+                ui,
+                recon,
+                id,
+                selected_point,
+                self.state.hovered_image_in(id),
+                &self.state.sift_cache,
+                &self.state.full_res_cache,
+                self.gesture_events,
+                self.scroll_input,
+            );
+            // As in the browser arm: applied once `node`'s borrow is
+            // done with, since the setter needs the state mutably.
+            let new_selection = track_response
+                .select_image
+                .map(|img_idx| ImageRef::new(id, img_idx));
+            if let Some(img_idx) = track_response.request_camera_view {
+                let current_time = ui.input(|i| i.time);
+                let image = ImageRef::new(id, img_idx);
+                if self.viewer_3d.camera_view.is_some() {
+                    self.viewer_3d.animated_switch_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
+                } else {
+                    self.viewer_3d.enter_camera_view(
+                        image,
+                        node,
+                        current_time,
+                        &mut self.state.action_log,
+                    );
+                }
+            }
+            if track_response.has_pointer {
+                // Track detail owns hover state when it has the pointer.
+                self.state.hovered_image =
+                    track_response.hovered_image.map(|i| ImageRef::new(id, i));
+                // Clear point hover from other panels since track detail
+                // doesn't produce hovered_point.
+                self.state.hovered_point = None;
+            }
+            if track_response.request_goto_point {
+                self.state.open_goto_point();
+            }
+            if let Some(image) = new_selection {
+                self.state.select_image(Some(image));
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("No reconstruction loaded");
+            });
+        }
+    }
+
+    /// The Camera Intrinsics tab: the selected camera's model and its derived
+    /// quantities, for the camera and image the selection names.
+    fn show_intrinsics_detail(&mut self, ui: &mut egui::Ui) {
+        let node = selected_node(&self.state.scene, self.state.selected_recon);
+        if let Some(node) = node {
+            // Both indices are read out of the *selected* node: the
+            // selection coupling puts `selected_camera` inside the
+            // selected reconstruction (`select_camera` selects the
+            // recon that owns it, and `select_recon` filters it), so
+            // there is no third recon for this panel to follow.
+            let selected_camera = self.state.selected_camera.and_then(|c| c.index_in(node.id));
+            let selected_image = self.state.selected_image_in(node.id);
+            let response = self
+                .intrinsics_detail
+                .show(ui, node, selected_camera, selected_image);
+            if response.has_pointer {
+                // The panel raises neither hover channel, so owning the
+                // pointer means clearing both: a highlight left over
+                // from the panel the pointer came from would otherwise
+                // sit there for as long as the user reads a table.
+                self.state.hovered_image = None;
+                self.state.hovered_point = None;
+            }
+            if let Some(image) = response.select_image {
+                self.state.select_image(Some(image));
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("No reconstruction loaded");
+            });
+        }
+    }
+
     /// Apply what the Scene panel reported: selection, hover, camera view,
     /// per-node zoom-to-fit, and the node lifecycle operations.
     fn apply_scene_graph_response(&mut self, ui: &egui::Ui, response: SceneGraphResponse) {
