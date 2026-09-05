@@ -17,9 +17,15 @@
 //! ties in row order, and a member row takes the FIRST selection row that
 //! carries its key.
 //!
+//! The radius itself is not defined here: it is
+//! [`crate::analysis::cluster_radii`]'s reading, shared with the coarsest-N
+//! cut so both mean the same thing by "radius".
+//!
 //! See `specs/core/analysis/source-clusters.md` for the design.
 
 use rayon::prelude::*;
+
+use crate::analysis::cluster_radii::cluster_radii;
 
 /// The cluster selection the member was drawn from, as flat arrays.
 #[derive(Debug, Clone, Copy)]
@@ -120,17 +126,14 @@ pub fn source_clusters(
     let n_cl = sel.cluster_starts.len().saturating_sub(1);
 
     let row_cluster = cluster_of_row(sel.cluster_starts, n_member);
-    let row_radius = radius_of_row(sel.member_affine_shapes, sel.refine_radius);
-
     // Cluster radius: the widest of its own members', so "radius" means here
-    // what it meant when the admission was drawn.
-    let mut cluster_radius = vec![0.0f64; n_cl];
-    for (r, &c) in row_cluster.iter().enumerate() {
-        let slot = &mut cluster_radius[c as usize];
-        if row_radius[r] > *slot {
-            *slot = row_radius[r];
-        }
-    }
+    // what it meant when the admission was drawn. The reading is shared with
+    // the coarsest-N cut rather than restated ([`crate::analysis::cluster_radii`]).
+    let cluster_radius = cluster_radii(
+        sel.cluster_starts,
+        sel.member_affine_shapes,
+        sel.refine_radius,
+    );
 
     let (admitted, n_rows_matched) = admission_mask(sel, member, &row_cluster, n_cl);
 
@@ -248,22 +251,6 @@ fn cluster_of_row(cluster_starts: &[u32], n_member: usize) -> Vec<u32> {
         }
     }
     out
-}
-
-/// Each selection row's feature radius: half the refine radius times the sum of
-/// the stored affine's two column norms, which is the refine radius times their
-/// mean.
-fn radius_of_row(shapes: &[f64], refine_radius: f64) -> Vec<f64> {
-    let half = 0.5 * refine_radius;
-    shapes
-        .par_chunks_exact(4)
-        .map(|a| {
-            // Column norms of the row-major 2x2 [a0 a1; a2 a3].
-            let c0 = (a[0] * a[0] + a[2] * a[2]).sqrt();
-            let c1 = (a[1] * a[1] + a[3] * a[3]).sqrt();
-            half * (c0 + c1)
-        })
-        .collect()
 }
 
 /// Which clusters the member's admission already holds, and how many member

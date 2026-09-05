@@ -690,7 +690,11 @@ fn uniform_dimensions(matches: &MatchesData) -> Result<(u32, u32), MatchesInputE
 }
 
 /// One array as a slice, borrowed when its storage is already contiguous.
-fn contiguous(a: &Array1<u32>) -> Cow<'_, [u32]> {
+///
+/// Shared with the other readers of a `.matches` file's member arrays (the
+/// cluster covisibility's `from_matches`), so a non-standard-layout array is
+/// handled in one place rather than asserted away at each read.
+pub(crate) fn contiguous(a: &Array1<u32>) -> Cow<'_, [u32]> {
     match a.as_slice() {
         Some(s) => Cow::Borrowed(s),
         None => Cow::Owned(a.iter().copied().collect()),

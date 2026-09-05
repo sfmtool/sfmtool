@@ -43,10 +43,31 @@ Each selection row carries an absolute 2x3 affine: the leading 2x2 is the
 feature's shape in that image's pixels and the last column is its keypoint. A
 row's radius is the refine radius times the MEAN of the affine's two column
 norms, computed as half the refine radius times their sum. A cluster's radius is
-its widest row's.
+its widest row's; a cluster with no rows reads `0.0`.
 
 That is the same reading the selection's own admission was drawn with, so
 "radius" means the same thing on both sides of the join.
+
+It is also one implementation rather than a convention each caller restates.
+The reading lives in its own module and the join calls it, so a caller that
+wants the radii alone, or the coarsest clusters ordered by them, gets exactly
+the numbers the bands are measured against.
+
+The reading is width-agnostic on purpose. A `.matches` backbone stores the
+shapes as `f32` and a selection read back through Python may hold them as
+`f64`; every value widens to `f64` where it is read, before the first multiply,
+so both spellings of the same shape produce the same radius bit for bit.
+
+## The coarsest-N cut
+
+A caller that wants a small alias-free working set takes the `n` clusters of
+largest radius. The ordering is radius descending with ties broken by ascending
+cluster id, and `NaN` -- a shape with no extent -- sorts last, so a cluster that
+has an extent is never displaced by one that does not.
+
+The cut comes back sorted ASCENDING by id. That is what makes it composable: it
+is a cluster-id set to restrict a selection by, not a ranking. Fewer than `n`
+clusters yields all of them.
 
 ## Bands are octaves of the admission floor
 
@@ -113,3 +134,30 @@ come back beside the arrays, along with `admission_radius` and
 
 The band grid itself is not built here. It is a property of the population a
 caller is banding, and the caller passes the edges it decided on.
+
+The radius reading and the cut over it live in
+[cluster_radii.rs](../../../crates/sfmtool-core/src/analysis/cluster_radii.rs)
+(`member_radii`, `cluster_radii`, `coarsest_clusters`, and the
+`*_from_matches` forms), bound as `sfmtool._sfmtool.analysis.cluster_radii` and
+`coarsest_clusters`. Both bindings take their input in either of two forms, the
+shape the intrinsics estimate uses: a `MatchesFile` -- a selection included --
+which states the shapes and the refine radius itself, or those arrays spelled
+out.
+
+```python
+from sfmtool._sfmtool.analysis import cluster_radii, coarsest_clusters
+
+radius = cluster_radii(matches)              # (n_clusters,) float64
+keep = coarsest_clusters(matches, 3000)      # (<= 3000,) uint32, ascending
+
+radius = cluster_radii(
+    cluster_starts,        # (n_clusters + 1,) uint32 CSR boundaries
+    member_affine_shapes,  # (n_member, 2, 2) float32
+    refine_radius,         # float
+)
+keep = coarsest_clusters(cluster_starts, 3000, member_affine_shapes, refine_radius)
+```
+
+The file forms need the cluster backbone, its member affine shapes, and the
+`cluster_patches/` section the refine radius is recorded in; a file missing any
+of those is refused by name rather than answered from a default.
