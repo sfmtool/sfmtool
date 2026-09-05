@@ -265,6 +265,11 @@ impl ClusterCovisibility {
             });
         }
 
+        if prof::enabled() {
+            prof::reset();
+        }
+        let t_total = std::time::Instant::now();
+
         let mut counts = vec![0u32; num_images * num_images];
         let mut displacement = positions_xy.map(|_| DisplacementTables {
             mean: vec![0.0; num_images * num_images],
@@ -273,60 +278,64 @@ impl ClusterCovisibility {
         let mut rng = SplitMix64::new(seed);
         let mut rows: Vec<usize> = Vec::new();
         let mut span: Vec<u32> = Vec::new();
-        for c in 0..cluster_starts.len() - 1 {
-            let lo = cluster_starts[c] as usize;
-            let hi = cluster_starts[c + 1] as usize;
-            rows.clear();
-            rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
-            span.clear();
-            span.extend(rows.iter().map(|&k| member_images[k]));
-            span.sort_unstable();
-            span.dedup();
-            for (a, &i) in span.iter().enumerate() {
-                for &j in &span[a + 1..] {
-                    counts[i as usize * num_images + j as usize] += 1;
-                    counts[j as usize * num_images + i as usize] += 1;
-                }
-            }
-            // One uniformly-sampled distinct-member pair per multi-member
-            // cluster; a pair landing in one image is skipped, not resampled
-            // (the mean displacement tables measure cross-image motion only).
-            if let (Some(tables), Some(pos)) = (displacement.as_mut(), positions_xy) {
-                if rows.len() >= 2 {
-                    let a = rng.below(rows.len());
-                    let mut b = rng.below(rows.len() - 1);
-                    if b >= a {
-                        b += 1;
-                    }
-                    let (ra, rb) = (rows[a], rows[b]);
-                    let (ia, ib) = (member_images[ra] as usize, member_images[rb] as usize);
-                    if ia != ib {
-                        let d = f64::hypot(
-                            pos[ra][0] as f64 - pos[rb][0] as f64,
-                            pos[ra][1] as f64 - pos[rb][1] as f64,
-                        );
-                        // Accumulate sums in `mean` (upper triangle); a final
-                        // pass divides and mirrors.
-                        let key = ia.min(ib) * num_images + ia.max(ib);
-                        tables.mean[key] += d;
-                        tables.count[key] += 1;
+        prof::CLUSTER_PASS.time(|| {
+            for c in 0..cluster_starts.len() - 1 {
+                let lo = cluster_starts[c] as usize;
+                let hi = cluster_starts[c + 1] as usize;
+                rows.clear();
+                rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
+                span.clear();
+                span.extend(rows.iter().map(|&k| member_images[k]));
+                span.sort_unstable();
+                span.dedup();
+                for (a, &i) in span.iter().enumerate() {
+                    for &j in &span[a + 1..] {
+                        counts[i as usize * num_images + j as usize] += 1;
+                        counts[j as usize * num_images + i as usize] += 1;
                     }
                 }
-            }
-        }
-        if let Some(tables) = displacement.as_mut() {
-            for i in 0..num_images {
-                for j in (i + 1)..num_images {
-                    let (up, lo) = (i * num_images + j, j * num_images + i);
-                    let n = tables.count[up];
-                    if n > 0 {
-                        tables.mean[up] /= n as f64;
-                        tables.mean[lo] = tables.mean[up];
-                        tables.count[lo] = n;
+                // One uniformly-sampled distinct-member pair per multi-member
+                // cluster; a pair landing in one image is skipped, not resampled
+                // (the mean displacement tables measure cross-image motion only).
+                if let (Some(tables), Some(pos)) = (displacement.as_mut(), positions_xy) {
+                    if rows.len() >= 2 {
+                        let a = rng.below(rows.len());
+                        let mut b = rng.below(rows.len() - 1);
+                        if b >= a {
+                            b += 1;
+                        }
+                        let (ra, rb) = (rows[a], rows[b]);
+                        let (ia, ib) = (member_images[ra] as usize, member_images[rb] as usize);
+                        if ia != ib {
+                            let d = f64::hypot(
+                                pos[ra][0] as f64 - pos[rb][0] as f64,
+                                pos[ra][1] as f64 - pos[rb][1] as f64,
+                            );
+                            // Accumulate sums in `mean` (upper triangle); a final
+                            // pass divides and mirrors.
+                            let key = ia.min(ib) * num_images + ia.max(ib);
+                            tables.mean[key] += d;
+                            tables.count[key] += 1;
+                        }
                     }
                 }
             }
-        }
+        });
+        prof::MEAN_FOLD.time(|| {
+            if let Some(tables) = displacement.as_mut() {
+                for i in 0..num_images {
+                    for j in (i + 1)..num_images {
+                        let (up, lo) = (i * num_images + j, j * num_images + i);
+                        let n = tables.count[up];
+                        if n > 0 {
+                            tables.mean[up] /= n as f64;
+                            tables.mean[lo] = tables.mean[up];
+                            tables.count[lo] = n;
+                        }
+                    }
+                }
+            }
+        });
 
         // The sparse displacement neighborhood shares the positioned inputs;
         // a second linear pass keeps the sampled-table RNG stream untouched.
@@ -340,6 +349,11 @@ impl ClusterCovisibility {
             )?),
             None => None,
         };
+
+        if prof::enabled() {
+            prof::TOTAL.record(t_total);
+            prof::report(num_images, cluster_starts.len() - 1, m);
+        }
 
         Ok(Self {
             num_images,
@@ -579,6 +593,7 @@ impl Iterator for SeedGroups<'_> {
 }
 
 mod displacement;
+mod prof;
 mod selection;
 
 pub use displacement::DisplacementNeighborhood;

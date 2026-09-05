@@ -102,6 +102,17 @@ matcher's cluster-size cap (e.g. to ~100 for long-track experiments) scales
 construction cost by `d` and makes each mega-cluster vote on up to
 `d(d−1)/2` pairs.
 
+A positioned build runs three passes over the same arrays and returns one
+object, so which pass the time went to is not visible from outside it.
+`SFMTOOL_PROFILE=1` turns on per-phase wall-time counters
+(`covisibility/prof.rs`, the convention of `focal_vote/prof.rs`) and prints a
+summary to stderr when the build finishes: `cluster_pass` (the span dedupe, the
+shared-count votes and the sampled displacement draw), `mean_fold` (the `N²`
+divide-and-mirror over the sampled tables), and `neighborhood_accum` /
+`neighborhood_sort` (the exhaustive cross-image member-pair accumulation and
+the pair sort behind `DisplacementNeighborhood`). With the variable unset each
+timer is one branch on a cached flag.
+
 ## Rust API
 
 The counts and the grouping queries live in

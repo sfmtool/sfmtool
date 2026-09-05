@@ -112,43 +112,47 @@ impl DisplacementNeighborhood {
         let mut pairs: HashMap<(u32, u32), PairAccum> = HashMap::new();
         let mut rows: Vec<usize> = Vec::new();
         let mut span: Vec<u32> = Vec::new();
-        for c in 0..cluster_starts.len() - 1 {
-            let lo = cluster_starts[c] as usize;
-            let hi = cluster_starts[c + 1] as usize;
-            rows.clear();
-            rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
-            // Shared-cluster votes: once per deduplicated image pair.
-            span.clear();
-            span.extend(rows.iter().map(|&k| member_images[k]));
-            span.sort_unstable();
-            span.dedup();
-            for (a, &i) in span.iter().enumerate() {
-                for &j in &span[a + 1..] {
-                    pairs.entry((i, j)).or_default().shared += 1;
-                }
-            }
-            // Displacement: every accepted cross-image member pair.
-            for (a, &ka) in rows.iter().enumerate() {
-                for &kb in &rows[a + 1..] {
-                    let (ia, ib) = (member_images[ka], member_images[kb]);
-                    if ia == ib {
-                        continue;
+        super::prof::NBR_ACCUM.time(|| {
+            for c in 0..cluster_starts.len() - 1 {
+                let lo = cluster_starts[c] as usize;
+                let hi = cluster_starts[c + 1] as usize;
+                rows.clear();
+                rows.extend((lo..hi).filter(|&k| member_accepted.is_none_or(|mask| mask[k])));
+                // Shared-cluster votes: once per deduplicated image pair.
+                span.clear();
+                span.extend(rows.iter().map(|&k| member_images[k]));
+                span.sort_unstable();
+                span.dedup();
+                for (a, &i) in span.iter().enumerate() {
+                    for &j in &span[a + 1..] {
+                        pairs.entry((i, j)).or_default().shared += 1;
                     }
-                    let d = f64::hypot(
-                        positions_xy[ka][0] as f64 - positions_xy[kb][0] as f64,
-                        positions_xy[ka][1] as f64 - positions_xy[kb][1] as f64,
-                    );
-                    let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
-                    e.disp_sum += d;
-                    e.disp_n += 1;
+                }
+                // Displacement: every accepted cross-image member pair.
+                for (a, &ka) in rows.iter().enumerate() {
+                    for &kb in &rows[a + 1..] {
+                        let (ia, ib) = (member_images[ka], member_images[kb]);
+                        if ia == ib {
+                            continue;
+                        }
+                        let d = f64::hypot(
+                            positions_xy[ka][0] as f64 - positions_xy[kb][0] as f64,
+                            positions_xy[ka][1] as f64 - positions_xy[kb][1] as f64,
+                        );
+                        let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
+                        e.disp_sum += d;
+                        e.disp_n += 1;
+                    }
                 }
             }
-        }
+        });
 
         // Deterministic order despite the hash-map accumulator.
-        let mut sorted: Vec<((u32, u32), PairAccum)> = pairs.into_iter().collect();
-        sorted.sort_unstable_by_key(|&(k, _)| k);
-        Ok(Self::from_sorted_pairs(num_images, &sorted))
+        Ok(super::prof::NBR_SORT.time(|| {
+            let mut sorted: Vec<((u32, u32), PairAccum)> = pairs.into_iter().collect();
+            sorted.sort_unstable_by_key(|&(k, _)| k);
+            Self::from_sorted_pairs(num_images, &sorted)
+        }))
     }
 
     /// Assemble the CSR adjacency from `(i, j) → accum` pairs sorted by key
