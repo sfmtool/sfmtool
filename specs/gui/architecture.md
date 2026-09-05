@@ -135,6 +135,8 @@ sfmtool/
 │   │       │       ├── target.rs       # Target indicator pipeline
 │   │       │       └── track_ray.rs    # Track ray pipeline
 │   │       ├── state.rs              # Shared application state (AppState)
+│   │       └── state/
+│   │           └── ops.rs        # AppState's reconstruction operations (load, reload, align, resect)
 │   │       ├── layout.rs             # The layout document: window placement + panel arrangement
 │   │       ├── window.rs             # WindowHost, the window snapshot, and the `window` section
 │   │       ├── image_browser.rs      # Thumbnail strip with horizontal scrolling
@@ -183,7 +185,8 @@ sfmtool/
 | `dock.rs` | `Tab` enum (4 variants) and `egui_dock::TabViewer` implementation: routes each tab to its panel's `show()` and threads the cross-panel `*Response` shape into `AppState`. |
 | `viewer_3d/` | `ViewportCamera` (wraps `Camera` from sfmtool-core with FOV/clip planes), orbit/pan/zoom math, WASD fly navigation with Q/E tilt, input handling (mouse/trackpad/keyboard), Alt-mode target control, camera view mode, grid drawing. `mod.rs` orchestrates; `camera.rs`/`input.rs`/`overlay.rs` own the sub-concerns. |
 | `scene_renderer/` | All GPU pipeline management across ~14 modules: texture creation/resize, point upload, frustum upload (pinhole + distorted), thumbnail texture array atlas loading, uniform updates, multi-pass rendering, GPU readback, per-pass pipeline creation (`pipelines/` subdirectory). |
-| `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters, the dock, and the window snapshot. |
+| `state.rs` | `AppState` struct: reconstruction data, visibility toggles, selected image/points, hover state, rendering parameters, the dock, and the window snapshot — plus the small selection and lookup accessors the panels call every frame. |
+| `state/ops.rs` | `AppState`'s reconstruction *operations*, as a second `impl` block: `load_file`, `load_demo`, `reload_node`, `align_node`, `resect_image` and `load_resect_matches`. These are the methods that read a file off disk, run a fit or a resection, build a `SceneNode` out of the answer and write the sentence the user reads about it. |
 | `layout.rs` | The layout document — the window's placement and the panel arrangement, its JSON, and the `AppState` operations the Panels menu and the MCP tools share. See [panel-layout.md](panel-layout.md). |
 | `window.rs` | What the window is (`WindowInfo`, `WindowState`, `MonitorInfo`), the `window` section of a layout document (`WindowChange`, `MonitorRect`, `fit_to_monitor`), and the `WindowHost` seam every `winit` window call goes through — five primitives and the provided `apply` that orders them. |
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
