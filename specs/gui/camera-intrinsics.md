@@ -244,6 +244,29 @@ pub fn radial_profile(cam: &CameraIntrinsics, azimuth_deg: f64, samples: usize)
     -> Vec<RadialSample>;
 pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize)
     -> Vec<DistortionSample>;
+
+/// A sampled field with the summary a consumer quotes off it: the grid, the
+/// maximum over the nodes inside `trustworthy_max_theta_deg`, that bound, and
+/// how many nodes it left out.
+pub struct DistortionExtent {
+    pub grid: (usize, usize),     // (cols, rows), rows chosen for square cells
+    pub field: Vec<DistortionSample>,
+    pub max_px: f64,              // largest displacement over the trusted nodes
+    pub limit_deg: Option<f64>,   // trustworthy_max_theta_deg(cam)
+    pub excluded: usize,          // nodes outside that bound
+}
+impl DistortionExtent {
+    /// The predicate `max_px` and `excluded` were computed with.
+    pub fn trusted(&self, sample: &DistortionSample) -> bool;
+    /// Nodes the grid produced, trusted and excluded together.
+    pub fn total(&self) -> usize;
+}
+
+/// Sample the field at `cols` nodes across and summarize it — the one
+/// definition of "how far does this lens move a pixel, and over what part of
+/// the frame was that measured". Rows follow the image aspect; a model that is
+/// its own ideal map is skipped rather than sampled to a field of zeros.
+pub fn distortion_extent(cam: &CameraIntrinsics, cols: usize) -> DistortionExtent;
 /// The same displacement at **one** pixel rather than at a grid node —
 /// what the overlay's hover readout wants. `distortion_field` is defined in
 /// terms of it, so the two cannot disagree about the ideal map.
@@ -684,8 +707,11 @@ a reader still sees how much frame lies outside the modelled domain. On
 `kerry_park` the frame's mid-edge is past 100° against an 84° bound, so that is
 most of the outer third of the picture.
 
-**Distortion field.** A `grid_cols × rows` grid over the image (rows chosen to
-keep cells square). For each grid pixel `u`:
+**Distortion field.** `distortion_extent(cam, grid_cols)` — a
+`grid_cols × rows` grid over the image, rows chosen to keep cells square, with
+the maximum and the excluded count the legend quotes. The layer's arrows are
+that extent's samples, split by its own `trusted` predicate so the marked nodes
+are exactly the ones the maximum left out. For each grid pixel `u`:
 
 1. `ray = pixel_to_ray(u)` — where this pixel actually looks;
 2. `u_ref = reference_project(ray)` — where the family's ideal map would have
@@ -891,10 +917,14 @@ A second table, visually separated, holding what the parameters *mean*:
 | 35 mm equivalent | `19.1 mm` | perspective models only; `f_px · 43.267 / diagonal_px`, sensor-independent by construction |
 | distortion | `yes — max 13.0 px inside 84.1°` / `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum, bounded by § "The trustworthy domain" |
 
-**The distortion row bounds its own domain.** The maximum is taken over
-`distortion_field`'s grid — 16 columns, with the row count chosen to keep the
-cells square — restricted to the nodes inside `trustworthy_max_theta_deg`, and
-the row names the bound it used: `yes — max 13.0 px inside 84.1°`. Its tooltip
+**The distortion row bounds its own domain.** The maximum is
+`distortion_extent(cam, 16)`'s — a 16-column grid, with the row count chosen to
+keep the cells square, restricted to the nodes inside
+`trustworthy_max_theta_deg` — and the row names the bound it used:
+`yes — max 13.0 px inside 84.1°`. It is the same call the Image Detail overlay
+layer makes for its arrows, at the same default density, so the panel's number
+and the overlay's legend describe one field by construction rather than by two
+implementations agreeing. Its tooltip
 says how many of the grid's nodes were dropped and why. Unqualified the number
 would be a true statement about two forward maps and a false one about a
 camera: on `kerry_park` the maximum over the whole rectangle is **272.7 px**,

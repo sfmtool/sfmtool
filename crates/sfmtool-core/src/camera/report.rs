@@ -270,6 +270,137 @@ pub fn distortion_field(cam: &CameraIntrinsics, cols: usize, rows: usize) -> Vec
         .collect()
 }
 
+/// The displacement field over a grid `cols` across, together with the summary
+/// a consumer quotes off it.
+///
+/// The summary is the awkward half of the field, and it is awkward in the same
+/// way for everybody who draws one: the maximum is only meaningful over the
+/// part of the frame the model can be held to, so it has to be taken over the
+/// samples inside [`trustworthy_max_theta_deg`] and the rest counted rather
+/// than silently dropped. On `kerry_park`'s real `OPENCV_FISHEYE` the image
+/// rectangle's corners are 150° off-axis, outside the lens's image circle,
+/// where the `k1..k4` polynomial has folded — the unrestricted maximum comes
+/// out at 272.7 px against the 13.0 px the lens actually displaces anything.
+/// Such a number is honest about two forward maps and misleading about the
+/// camera, which is why the bound and the excluded count travel with the
+/// maximum instead of being left to each caller to reconstruct.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DistortionExtent {
+    /// The grid the field was sampled on, `(cols, rows)`. `rows` is chosen to
+    /// keep the cells square, so the grid samples the frame evenly rather than
+    /// more densely along its short side.
+    pub grid: (usize, usize),
+    /// The field itself, one entry per surviving grid node, row-major — what
+    /// [`distortion_field`] returned for [`Self::grid`]. Empty for a model
+    /// whose [`CameraIntrinsics::has_distortion`] is `false`, which **is** its
+    /// own ideal map and so has an identically-zero field to draw.
+    pub field: Vec<DistortionSample>,
+    /// The largest displacement over the trusted nodes, in image pixels.
+    /// Zero when there are none.
+    pub max_px: f64,
+    /// The incidence-angle bound the nodes were filtered to
+    /// ([`trustworthy_max_theta_deg`]), or `None` when the model describes a
+    /// lens at every angle and the whole grid counted.
+    pub limit_deg: Option<f64>,
+    /// Grid nodes outside [`Self::limit_deg`] — how much of the frame
+    /// [`Self::max_px`] is *not* about.
+    pub excluded: usize,
+}
+
+impl DistortionExtent {
+    /// Whether a sample of [`Self::field`] is inside [`Self::limit_deg`], and
+    /// so whether it is a measurement at all.
+    ///
+    /// The predicate [`Self::max_px`] and [`Self::excluded`] were computed
+    /// with, exposed so a consumer marking the excluded nodes on screen splits
+    /// the field the same way the numbers beside it were taken.
+    pub fn trusted(&self, sample: &DistortionSample) -> bool {
+        self.limit_deg.is_none_or(|limit| sample.theta_deg <= limit)
+    }
+
+    /// Nodes the grid produced, trusted and excluded together.
+    pub fn total(&self) -> usize {
+        self.field.len()
+    }
+}
+
+/// Sample the displacement field at `cols` nodes across the image width and
+/// summarize it — the one definition of "how far does this lens move a pixel,
+/// and over what part of the frame was that measured".
+///
+/// `cols` is clamped to at least 1; the rows follow from the image aspect so
+/// the cells come out square. A model that is its own ideal map is skipped
+/// entirely rather than sampled to a field of zeros, so
+/// [`DistortionExtent::field`] is empty and [`DistortionExtent::max_px`] is 0
+/// for it.
+///
+/// ```
+/// use sfmtool_core::camera::{report, CameraIntrinsics, CameraModel};
+///
+/// let cam = CameraIntrinsics {
+///     width: 640,
+///     height: 480,
+///     model: CameraModel::SimpleRadial {
+///         focal_length: 500.0,
+///         principal_point_x: 320.0,
+///         principal_point_y: 240.0,
+///         radial_distortion_k1: -0.1,
+///     },
+/// };
+/// let extent = report::distortion_extent(&cam, 16);
+/// assert_eq!(extent.grid, (16, 12));
+/// assert_eq!(extent.total(), 16 * 12);
+/// // SIMPLE_RADIAL is trustworthy at every angle, so nothing is excluded.
+/// assert_eq!(extent.limit_deg, None);
+/// assert_eq!(extent.excluded, 0);
+/// assert!(extent.max_px > 0.0);
+/// ```
+pub fn distortion_extent(cam: &CameraIntrinsics, cols: usize) -> DistortionExtent {
+    let cols = cols.max(1);
+    let rows = grid_rows(cam, cols);
+    let limit_deg = trustworthy_max_theta_deg(cam);
+    // A model that *is* its own ideal map has an identically-zero field, so
+    // there is nothing to measure and nothing to draw.
+    let field = if cam.has_distortion() {
+        distortion_field(cam, cols, rows)
+    } else {
+        Vec::new()
+    };
+
+    let mut extent = DistortionExtent {
+        grid: (cols, rows),
+        field,
+        max_px: 0.0,
+        limit_deg,
+        excluded: 0,
+    };
+    for sample in &extent.field {
+        if extent
+            .limit_deg
+            .is_none_or(|limit| sample.theta_deg <= limit)
+        {
+            let displacement = (sample.pixel[0] - sample.reference[0])
+                .hypot(sample.pixel[1] - sample.reference[1]);
+            extent.max_px = extent.max_px.max(displacement);
+        } else {
+            extent.excluded += 1;
+        }
+    }
+    extent
+}
+
+/// Grid rows that keep the sampled cells square at `cols` across.
+///
+/// A camera with no width has no aspect to preserve, so the grid is square in
+/// nodes rather than in pixels.
+fn grid_rows(cam: &CameraIntrinsics, cols: usize) -> usize {
+    if cam.width == 0 {
+        return cols;
+    }
+    let ratio = f64::from(cam.height) / f64::from(cam.width);
+    ((cols as f64 * ratio).round() as usize).max(1)
+}
+
 /// The lens's displacement at **one** pixel: the same quantity
 /// [`distortion_field`] reports at a grid node, at an arbitrary pixel.
 ///

@@ -108,9 +108,12 @@ pub(super) fn show_derived(ui: &mut egui::Ui, camera: &CameraIntrinsics, derived
 
             ui.label("distortion");
             match &derived.max_distortion {
-                Some(extent) => match extent.limit_deg {
+                // A bound that excluded nothing is not worth qualifying the
+                // row with: it is the same statement as "over the image", one
+                // clause longer.
+                Some(extent) => match extent.limit_deg.filter(|_| extent.excluded > 0) {
                     Some(limit) => {
-                        let (dropped, total) = extent.excluded;
+                        let (dropped, total) = (extent.excluded, extent.total());
                         ui.monospace(format!(
                             "yes — max {:.1} px inside {limit:.1}°",
                             extent.max_px

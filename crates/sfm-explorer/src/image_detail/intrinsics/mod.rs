@@ -158,47 +158,31 @@ pub(crate) struct CameraLayer {
 
 impl CameraLayer {
     /// Compute the layer's products for `camera` at `cols` arrows across.
+    ///
+    /// The field, its maximum and the excluded count all come out of
+    /// [`report::distortion_extent`], which is also what the Intrinsics
+    /// panel's own row quotes — so the two describe one field at the default
+    /// density by construction rather than by two implementations agreeing.
+    /// What is left here is the layer's own product: the arrows, which are the
+    /// samples split by the extent's own trust predicate so the marked nodes
+    /// are exactly the ones the maximum left out.
     pub(super) fn compute(camera: &CameraIntrinsics, cols: usize) -> Self {
-        let cols = cols.max(1);
-        let rows = grid_rows(camera, cols);
-        let limit_deg = report::trustworthy_max_theta_deg(camera);
-        let inside = |theta_deg: f64| limit_deg.is_none_or(|limit| theta_deg <= limit);
-
-        // A model that *is* its own ideal map has an identically-zero field, so
-        // there is nothing to measure and nothing to draw.
-        let field = if camera.has_distortion() {
-            report::distortion_field(camera, cols, rows)
-        } else {
-            Vec::new()
-        };
-        let total = field.len();
-        let mut max_px = 0.0_f64;
-        let mut outside = 0;
-        let arrows: Vec<Arrow> = field
-            .into_iter()
-            .map(|sample| {
-                let trusted = inside(sample.theta_deg);
-                if trusted {
-                    max_px = max_px.max(
-                        (sample.pixel[0] - sample.reference[0])
-                            .hypot(sample.pixel[1] - sample.reference[1]),
-                    );
-                } else {
-                    outside += 1;
-                }
-                Arrow {
-                    reference: sample.reference,
-                    pixel: sample.pixel,
-                    trusted,
-                }
+        let extent = report::distortion_extent(camera, cols);
+        let arrows: Vec<Arrow> = extent
+            .field
+            .iter()
+            .map(|sample| Arrow {
+                reference: sample.reference,
+                pixel: sample.pixel,
+                trusted: extent.trusted(sample),
             })
             .collect();
 
         Self {
-            grid: (cols, rows),
-            limit_deg,
-            max_px,
-            extrapolated: (outside, total),
+            grid: extent.grid,
+            limit_deg: extent.limit_deg,
+            max_px: extent.max_px,
+            extrapolated: (extent.excluded, extent.total()),
             arrows,
             auto_scale: 1.0,
             geometry: None,
@@ -225,17 +209,6 @@ pub(crate) struct Arrow {
     /// Whether the sampled ray is inside [`CameraLayer::limit_deg`], and so
     /// whether this node is a measurement at all. See [`mod@field`].
     pub trusted: bool,
-}
-
-/// Grid rows that keep the sampled cells square at `cols` across — the same
-/// rule the Camera Intrinsics panel's own field uses, so the panel's number and
-/// this layer's legend describe one field at the default density.
-fn grid_rows(camera: &CameraIntrinsics, cols: usize) -> usize {
-    if camera.width == 0 {
-        return cols;
-    }
-    let ratio = f64::from(camera.height) / f64::from(camera.width);
-    ((cols as f64 * ratio).round() as usize).max(1)
 }
 
 /// How much wider than its stroke a halo is drawn.

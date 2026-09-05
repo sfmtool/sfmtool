@@ -984,6 +984,140 @@ fn the_kerry_park_fisheye_is_bounded_well_inside_its_corners() {
 }
 
 // -----------------------------------------------------------------------
+// distortion_extent
+// -----------------------------------------------------------------------
+
+/// `kerry_park`'s real `OPENCV_FISHEYE`, the camera the trustworthy bound
+/// exists for.
+fn kerry_park_camera() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::OpenCVFisheye {
+            focal_length_x: 129.1499937015594,
+            focal_length_y: 129.2573627423474,
+            principal_point_x: 240.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: 0.038113353966529886,
+            radial_distortion_k2: -0.00800851799065643,
+            radial_distortion_k3: 0.008329720504707577,
+            radial_distortion_k4: -0.0026901578801066814,
+        },
+        width: 480,
+        height: 480,
+    }
+}
+
+/// An ordinary `SIMPLE_RADIAL`, the `seoul_bull_sculpture` shape: trustworthy
+/// at every angle its projective divide accepts, on a portrait frame.
+fn seoul_bull_camera() -> CameraIntrinsics {
+    CameraIntrinsics {
+        model: CameraModel::SimpleRadial {
+            focal_length: 344.0,
+            principal_point_x: 135.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -0.035,
+        },
+        width: 270,
+        height: 480,
+    }
+}
+
+/// The rows follow the image aspect, so the sampled cells are square in pixels
+/// rather than the grid being square in nodes.
+#[test]
+fn the_extents_grid_keeps_its_cells_square() {
+    // 270 × 480, so a 16-wide grid is 28 rows deep.
+    assert_eq!(distortion_extent(&seoul_bull_camera(), 16).grid, (16, 28));
+    assert_eq!(distortion_extent(&kerry_park_camera(), 12).grid, (12, 12));
+    // A camera with no width has no aspect to preserve.
+    let no_image = CameraIntrinsics {
+        width: 0,
+        ..seoul_bull_camera()
+    };
+    assert_eq!(distortion_extent(&no_image, 9).grid, (9, 9));
+    // And `cols` is clamped rather than producing an empty grid.
+    assert_eq!(distortion_extent(&seoul_bull_camera(), 0).grid.0, 1);
+}
+
+/// A model that **is** its own ideal map is skipped rather than sampled to a
+/// field of zeros: there is nothing to measure and nothing to draw.
+#[test]
+fn a_model_that_is_its_own_ideal_map_measures_no_displacement() {
+    let cam = cam(CameraModel::Pinhole {
+        focal_length_x: F_PERSP,
+        focal_length_y: F_PERSP,
+        principal_point_x: CX,
+        principal_point_y: CY,
+    });
+    let extent = distortion_extent(&cam, 16);
+    assert!(extent.field.is_empty());
+    assert_eq!(extent.total(), 0);
+    assert_eq!(extent.max_px, 0.0);
+    assert_eq!(extent.excluded, 0);
+    assert_eq!(extent.limit_deg, None);
+}
+
+/// The whole reason the summary is not just `field.iter().max()`: on a
+/// circular fisheye the unfiltered maximum is 273 px of folded polynomial and
+/// the filtered one is the 13 px the lens actually displaces anything.
+#[test]
+fn the_circular_fisheyes_folded_corners_are_excluded_from_the_maximum() {
+    let cam = kerry_park_camera();
+    let extent = distortion_extent(&cam, 16);
+    let limit = extent.limit_deg.expect("OPENCV_FISHEYE is a bounded model");
+    assert!(
+        (84.0..85.0).contains(&limit),
+        "kerry_park's camera 0 stops describing a lens at 84.1°, got {limit}"
+    );
+
+    assert!(
+        extent.excluded > 0,
+        "the frame's corners are outside the bound"
+    );
+    assert!(extent.excluded < extent.total(), "and its centre is not");
+
+    let displacement = |sample: &DistortionSample| {
+        (sample.pixel[0] - sample.reference[0]).hypot(sample.pixel[1] - sample.reference[1])
+    };
+    let unfiltered = extent
+        .field
+        .iter()
+        .map(displacement)
+        .fold(0.0_f64, f64::max);
+    assert!(
+        extent.max_px < 20.0,
+        "trustworthy maximum should be the lens's own, got {}",
+        extent.max_px
+    );
+    assert!(
+        unfiltered > 10.0 * extent.max_px,
+        "the fold should dwarf the lens, got {unfiltered} against {}",
+        extent.max_px
+    );
+}
+
+/// An unbounded model is measured over the whole rectangle, and says so by
+/// excluding nothing.
+#[test]
+fn an_unbounded_model_excludes_nothing() {
+    let extent = distortion_extent(&seoul_bull_camera(), 16);
+    assert_eq!(extent.limit_deg, None);
+    assert_eq!(extent.excluded, 0);
+    assert_eq!(extent.total(), 16 * 28);
+    assert!(extent.max_px > 0.0);
+}
+
+/// [`DistortionExtent::trusted`] is the predicate the counts were taken with,
+/// so a consumer splitting the field for display splits it the same way.
+#[test]
+fn the_trust_predicate_partitions_the_field_the_counts_were_taken_over() {
+    for cam in [kerry_park_camera(), seoul_bull_camera()] {
+        let extent = distortion_extent(&cam, 16);
+        let trusted = extent.field.iter().filter(|s| extent.trusted(s)).count();
+        assert_eq!(trusted + extent.excluded, extent.total());
+    }
+}
+
+// -----------------------------------------------------------------------
 // off_axis_angle_deg
 // -----------------------------------------------------------------------
 

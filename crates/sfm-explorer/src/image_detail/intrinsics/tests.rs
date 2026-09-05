@@ -90,63 +90,33 @@ fn the_layers_glyphs_are_available_in_the_bundled_fonts() {
     }
 }
 
+/// The layer's numbers are [`report::distortion_extent`]'s, not a second
+/// summary of the same field.
+///
+/// What that function computes — the square-celled grid, the maximum over the
+/// trusted nodes, the excluded count — is pinned in `camera/report/tests.rs`,
+/// on both a bounded fisheye and an unbounded radial. What is the layer's own
+/// is this plumbing, and that the arrows are the extent's field split by its
+/// own trust predicate rather than by a second reading of the bound.
 #[test]
-fn the_grid_keeps_its_cells_square() {
-    let layer = CameraLayer::compute(&simple_radial_camera(), 16);
-    // 270 × 480, so a 16-wide grid is 28 rows deep.
-    assert_eq!(layer.grid, (16, 28));
+fn the_layer_reports_the_extent_the_core_computed() {
+    use sfmtool_core::camera::report;
 
-    let layer = CameraLayer::compute(&kerry_park_camera(), 12);
-    assert_eq!(layer.grid, (12, 12));
-}
-
-#[test]
-fn a_model_that_is_its_own_ideal_map_measures_no_displacement() {
-    let layer = CameraLayer::compute(&pinhole_camera(), 16);
-    assert_eq!(layer.max_px, 0.0);
-    assert_eq!(layer.extrapolated, (0, 0));
-    assert_eq!(layer.limit_deg, None);
-}
-
-#[test]
-fn the_circular_fisheyes_folded_corners_are_excluded_from_the_maximum() {
-    let camera = kerry_park_camera();
-    let layer = CameraLayer::compute(&camera, 16);
-    let limit = layer.limit_deg.expect("OPENCV_FISHEYE is a bounded model");
-    assert!(
-        (84.0..85.0).contains(&limit),
-        "kerry_park's camera 0 stops describing a lens at 84.1°, got {limit}"
-    );
-
-    let (outside, total) = layer.extrapolated;
-    assert!(outside > 0, "the frame's corners are outside the bound");
-    assert!(outside < total, "and its centre is not");
-
-    // The whole point: the unfiltered maximum is 273 px of folded polynomial,
-    // the filtered one is the 13 px the lens actually displaces anything.
-    let unfiltered = sfmtool_core::camera::report::distortion_field(&camera, 16, 16)
-        .iter()
-        .map(|s| (s.pixel[0] - s.reference[0]).hypot(s.pixel[1] - s.reference[1]))
-        .fold(0.0_f64, f64::max);
-    assert!(
-        layer.max_px < 20.0,
-        "trustworthy maximum should be the lens's own, got {}",
-        layer.max_px
-    );
-    assert!(
-        unfiltered > 10.0 * layer.max_px,
-        "the fold should dwarf the lens, got {unfiltered} against {}",
-        layer.max_px
-    );
-}
-
-#[test]
-fn an_unbounded_model_excludes_nothing() {
-    let layer = CameraLayer::compute(&simple_radial_camera(), 16);
-    assert_eq!(layer.limit_deg, None);
-    assert_eq!(layer.extrapolated.0, 0);
-    assert_eq!(layer.extrapolated.1, 16 * 28);
-    assert!(layer.max_px > 0.0);
+    for (camera, cols) in [
+        (kerry_park_camera(), 16),
+        (simple_radial_camera(), 16),
+        (pinhole_camera(), 12),
+    ] {
+        let extent = report::distortion_extent(&camera, cols);
+        let layer = CameraLayer::compute(&camera, cols);
+        assert_eq!(layer.grid, extent.grid);
+        assert_eq!(layer.limit_deg, extent.limit_deg);
+        assert_eq!(layer.max_px, extent.max_px);
+        assert_eq!(layer.extrapolated, (extent.excluded, extent.total()));
+        assert_eq!(layer.arrows.len(), extent.field.len());
+        let marked = layer.arrows.iter().filter(|a| !a.trusted).count();
+        assert_eq!(marked, extent.excluded);
+    }
 }
 
 #[test]
