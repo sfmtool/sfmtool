@@ -22,6 +22,11 @@ This is a filter in the `sfm xform` pipeline, so it composes with the existing o
 position on the command line determines when it runs relative to geometric transforms, point
 filters, bundle adjustment, etc.
 
+The selection reasons about the finite point cloud only. A point at infinity is a direction, not
+a location, so it has no position or triangulation angle for the coverage loop to use; its
+observations are dropped before selection starts, and a reconstruction whose points are all at
+infinity is rejected with an error.
+
 ## Command Syntax
 
 ```bash

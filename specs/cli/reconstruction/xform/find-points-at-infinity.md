@@ -186,7 +186,9 @@ sfm xform in.sfmr out.sfmr --find-points-at-infinity <eps_deg>[,<desc_thresh>[,<
 
 e.g. `--find-points-at-infinity 0.1,200,2` (defaults: `desc_thresh` 200,
 `min_views` 2, `noise_floor_px` 1.0 — the keypoint-localisation noise the
-classifier converts to per-ray angular noise).
+classifier converts to per-ray angular noise). The Lowe ratio of the pairwise
+confirm step is fixed at 0.8 by the Python transform and is not exposed on the
+command line; only the core function and its PyO3 method take it.
 `--max-features <N>` — the standard cap many commands carry, taking each image's
 largest features — bounds the per-image keypoint set. It caps memory and runtime
 on dense or many-image solves, and the largest-scale features tend to be the most

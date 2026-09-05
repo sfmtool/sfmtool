@@ -247,7 +247,7 @@ Pass 2:  EDL post-process
   Output: Final display color (edge darkening + supernova glow)
 
 Pass 3:  Target indicator
-  Input:  Octahedron edges + scene depth texture
+  Input:  Compass edge instances + star mesh + scene depth texture
   Output: EDL output color (additive blending, reads depth for occlusion)
 
 Pass 4:  Track rays (when a 3D point is selected)

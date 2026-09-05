@@ -36,8 +36,11 @@ are transformed to align with it.
 ## Multi-Reconstruction Alignment
 
 When aligning more than one reconstruction, the command builds a connectivity graph of shared
-images to determine alignment order, ensuring each reconstruction is aligned through the
-shortest path to the reference.
+images to determine alignment order. Alignment expands greedily from the reference: each pass
+aligns every not-yet-aligned reconstruction that shares images with one already aligned, and
+passes repeat until no reconstruction can be added. A reconstruction that connects to the
+reference only through others is aligned through whichever aligned neighbours it has at that
+moment, not through a shortest path.
 
 ## Output
 

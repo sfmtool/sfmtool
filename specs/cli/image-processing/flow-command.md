@@ -16,7 +16,7 @@ sfm flow <IMAGE1> <IMAGE2> [OPTIONS...]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--draw / -d` | path | | Save visualization (omit for statistics only) |
+| `--draw / -d` | path | | Save visualization (omit for statistics only). Writes derived files next to the path: `<stem>_flow<ext>` for the flow field, plus `<stem>_A<ext>` and `<stem>_B<ext>` for the annotated images, or the path itself with `--side-by-side` |
 | `--preset` | `fast` \| `default` \| `high_quality` | `default` | Flow quality preset |
 | `--reconstruction / -r` | path | | `.sfmr` file to compare against |
 | `--max-features` | int | all | Maximum features to visualize |

@@ -343,8 +343,9 @@ point-track header and in the Image Detail tooltip, next to the max track angle.
   `B⊥` or accept the scalar camera-extent upper bound.
 - Noise model: per-camera `noise_px` default, and whether to fold per-point
   reprojection error into σ as `classify_points_at_infinity` does today
-  (`noise = max(reproj_error, floor)`); discovered points currently carry
-  `error = 0`.
+  (`noise = max(reproj_error, floor)`). Discovered points carry their mean
+  reprojection error against the appended track, so the same fold is
+  available to them.
 - Weighted vs unweighted midpoint as the default (unweighted matches current
   behavior; inverse-depth² is closer to reprojection error).
 

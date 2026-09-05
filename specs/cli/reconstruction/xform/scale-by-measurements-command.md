@@ -137,10 +137,11 @@ Scale factor distribution (5 measurements):
 Scaling reconstruction by 958.6
 ```
 
-The histogram uses a fixed number of equally-spaced bins (5 by default) spanning from the
-minimum to maximum observed scale factor. Each `#` pair represents one measurement. The bin
-edge labels use enough decimal places to distinguish bins. For a single measurement, the histogram
-is omitted.
+The histogram uses five equally-spaced bins (not configurable) spanning from the minimum to
+maximum observed scale factor. Each `#` pair represents one measurement. The bin edge labels are
+formatted to a precision chosen from the bin width (one to three decimals, or four significant
+figures for very narrow bins) and right-aligned to the widest label. For a single measurement,
+the histogram is omitted; when every measurement agrees exactly, a one-line summary replaces it.
 
 If measurements disagree significantly (e.g., >5% deviation from median), the command prints a
 warning. This serves as a cross-check for reconstruction distortion — if two measurements on the

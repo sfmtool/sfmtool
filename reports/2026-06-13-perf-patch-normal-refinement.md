@@ -306,6 +306,12 @@ datasets (4 cores), multiplicative where independent.
    the caller ignores `confidence` (e.g. parameter sweeps, quick passes). A
    `compute_confidence: bool` (default true) is a trivial **1.1×** for those
    callers.
+
+   > _Status (2026-09-05): Done — `NormalRefineParams::compute_confidence`
+   > exists, threaded through the binding and `--refine-normals`. It defaults
+   > to `false` rather than the `true` proposed here: under the fronto cache the
+   > stencil is an un-cached extra render pass (~⅙ of the cached runtime), so
+   > confidence is opt-in and reads as `NaN` when off._
 7. **Subset-aware pyramid build in the binding** — `refine_normals` builds
    pyramids for *all* images (dino: 1.45 s/call) even when `point_ids`
    touches a handful of views. Building only the views referenced by the
