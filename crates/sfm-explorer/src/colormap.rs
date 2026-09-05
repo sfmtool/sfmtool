@@ -7,10 +7,18 @@
 //! The `error` colormap matches Python's `visualization/_colormap.py`;
 //! the `quality` colormap is a GUI-only variant so track length and
 //! max track angle share the same red→yellow→green encoding.
+//!
+//! There are exactly **two** ramps and one way to sample them,
+//! [`ramp`]. Everything a panel varies — where the ramp's ends sit, what the
+//! colorbar is called — is an argument, so "is higher better?" is answered by
+//! which of [`ERROR_COLORMAP`] and [`QUALITY_COLORMAP`] a caller names and
+//! nowhere else. A per-metric wrapper function would be a third place for that
+//! answer to be written down, and the two panels drifting apart on what a 1 px
+//! error looks like is what that costs.
 
 /// A colormap defined by control points (position, r, g, b).
 /// Positions are in [0, 1], colors are in [0, 255].
-struct Colormap {
+pub struct Colormap {
     stops: &'static [(f32, u8, u8, u8)],
 }
 
@@ -43,7 +51,7 @@ impl Colormap {
 }
 
 /// Error colormap: green (good, low error) -> yellow -> red (bad, high error).
-const ERROR_COLORMAP: Colormap = Colormap {
+pub const ERROR_COLORMAP: Colormap = Colormap {
     stops: &[(0.0, 0, 200, 0), (0.5, 255, 255, 0), (1.0, 255, 0, 0)],
 };
 
@@ -51,66 +59,32 @@ const ERROR_COLORMAP: Colormap = Colormap {
 /// Inverse of ERROR_COLORMAP — used for metrics where higher is better
 /// (track length, max track angle). Shared so visually comparable metrics
 /// use the same encoding.
-const QUALITY_COLORMAP: Colormap = Colormap {
+pub const QUALITY_COLORMAP: Colormap = Colormap {
     stops: &[(0.0, 255, 0, 0), (0.5, 255, 255, 0), (1.0, 0, 200, 0)],
 };
 
-/// Map a reprojection error value to a color.
-/// `vmin` and `vmax` define the range (values outside are clamped).
+/// Normalize `value` into `[vmin, vmax]` and sample `map` at it.
+///
+/// Values outside the range are clamped by [`Colormap::sample`], and a
+/// degenerate range — every feature in the image carrying the same number —
+/// samples the middle of the ramp rather than dividing by zero.
+pub fn ramp(value: f32, vmin: f32, vmax: f32, map: &Colormap) -> egui::Color32 {
+    let t = if (vmax - vmin).abs() < 1e-9 {
+        0.5
+    } else {
+        (value - vmin) / (vmax - vmin)
+    };
+    map.sample(t)
+}
+
+/// Reprojection error over `[vmin, vmax]` px: green (good) → yellow → red.
+///
+/// Named because two panels colour the same quantity — the Image Detail
+/// overlay over the image's own error range, the Point Track Detail table's
+/// thumbnail dots over a fixed 0–2 px — and the name is what says they are the
+/// same ramp.
 pub fn error_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    let t = if (vmax - vmin).abs() < 1e-9 {
-        0.5
-    } else {
-        (value - vmin) / (vmax - vmin)
-    };
-    ERROR_COLORMAP.sample(t)
-}
-
-/// Map a track length (observation count) to a color.
-/// `vmin` and `vmax` define the range (values outside are clamped).
-pub fn track_length_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    let t = if (vmax - vmin).abs() < 1e-9 {
-        0.5
-    } else {
-        (value - vmin) / (vmax - vmin)
-    };
-    QUALITY_COLORMAP.sample(t)
-}
-
-/// Map a max track angle (degrees) to a color.
-/// `vmin` and `vmax` define the range (values outside are clamped).
-pub fn max_track_angle_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    let t = if (vmax - vmin).abs() < 1e-9 {
-        0.5
-    } else {
-        (value - vmin) / (vmax - vmin)
-    };
-    QUALITY_COLORMAP.sample(t)
-}
-
-/// Map an inverse-depth z-score to a color: high (depth well-resolved) → green,
-/// low (near-infinity / unconstrained depth) → red. `vmin`/`vmax` define the
-/// range (values outside are clamped).
-pub fn depth_reliability_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    let t = if (vmax - vmin).abs() < 1e-9 {
-        0.5
-    } else {
-        (value - vmin) / (vmax - vmin)
-    };
-    QUALITY_COLORMAP.sample(t)
-}
-
-/// Map a (log10) condition number to a color: low (well-conditioned) → green,
-/// high (ill-conditioned / near-degenerate) → red. Higher is worse, so this
-/// uses the error encoding. `vmin`/`vmax` define the range (values outside are
-/// clamped).
-pub fn condition_number_color(value: f32, vmin: f32, vmax: f32) -> egui::Color32 {
-    let t = if (vmax - vmin).abs() < 1e-9 {
-        0.5
-    } else {
-        (value - vmin) / (vmax - vmin)
-    };
-    ERROR_COLORMAP.sample(t)
+    ramp(value, vmin, vmax, &ERROR_COLORMAP)
 }
 
 /// Draw a vertical colorbar legend on the painter.

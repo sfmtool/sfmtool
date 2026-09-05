@@ -854,18 +854,29 @@ fn point_diagnostics_are_finite_for_a_triangulated_point() {
     assert!(z.is_finite(), "inverse-depth z {z}");
 }
 
+/// The dots are the shared error ramp over this panel's fixed 0–2 px, with
+/// "no measurement" kept off the ramp entirely.
 #[test]
 fn error_color_ramps_from_green_through_yellow_to_red() {
-    let green = super::metrics::error_color(0.0);
-    let yellow = super::metrics::error_color(1.0);
-    let red = super::metrics::error_color(2.0);
+    use super::table::{error_dot_color, ERROR_RAMP_MAX_PX, NO_ERROR_COLOR};
+
+    let green = error_dot_color(0.0);
+    let yellow = error_dot_color(1.0);
+    let red = error_dot_color(2.0);
     assert_eq!((green.r(), green.b()), (0, 0));
     assert_eq!((yellow.r(), yellow.g(), yellow.b()), (255, 255, 0));
     assert_eq!((red.r(), red.g(), red.b()), (255, 0, 0));
     // Anything past the top of the ramp stays red; NaN is the "N/A" gray.
-    assert_eq!(super::metrics::error_color(50.0), red);
-    assert_eq!(
-        super::metrics::error_color(f32::NAN),
-        egui::Color32::from_rgb(128, 128, 128)
-    );
+    assert_eq!(error_dot_color(50.0), red);
+    assert_eq!(error_dot_color(f32::NAN), NO_ERROR_COLOR);
+
+    // And they are the Image Detail overlay's colours at the same range, which
+    // is the whole point of there being one `error_color`.
+    for error in [0.0_f32, 0.25, 0.5, 1.0, 1.75, 2.0] {
+        assert_eq!(
+            error_dot_color(error),
+            crate::colormap::error_color(error, 0.0, ERROR_RAMP_MAX_PX),
+            "error {error} px"
+        );
+    }
 }

@@ -113,179 +113,94 @@ impl ImageDetail {
                 }
             }
             OverlayMode::ReprojError => {
-                // Compute value range from tracked features
                 let (vmin, vmax) = compute_error_range(features, recon);
-                // Draw colored circles for tracked features
-                for feature in features {
-                    if !feature.is_tracked() {
-                        continue;
-                    }
-                    let center = image_to_panel(feature.position[0], feature.position[1]);
-                    if !panel_rect.expand(10.0).contains(center) {
-                        continue;
-                    }
-                    let error = recon
-                        .points
-                        .get(feature.point_index as usize)
-                        .map(|p| if p.error.is_finite() { p.error } else { vmax })
-                        .unwrap_or(0.0);
-                    let is_selected = selected_point == Some(feature.point_index as usize);
-                    let color = colormap::error_color(error, vmin, vmax);
-                    let radius = 5.0;
-                    painter.circle_filled(center, radius, color);
-                    if is_selected {
-                        painter.circle_stroke(
-                            center,
-                            radius + 2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                        );
-                    }
-                }
-                // Draw colorbar legend
-                colormap::draw_colorbar(
+                // The one arm with no `None`: a point missing from the cloud
+                // colours as zero and a non-finite error saturates the ramp,
+                // rather than either dropping out of the picture.
+                draw_value_overlay(
                     painter,
                     panel_rect,
+                    features,
+                    selected_point,
+                    image_to_panel,
+                    |feature| {
+                        Some(
+                            recon
+                                .points
+                                .get(feature.point_index as usize)
+                                .map(|p| if p.error.is_finite() { p.error } else { vmax })
+                                .unwrap_or(0.0),
+                        )
+                    },
+                    (vmin, vmax),
+                    &colormap::ERROR_COLORMAP,
                     "Reproj Error (px)",
-                    vmin,
-                    vmax,
-                    colormap::error_color,
                 );
             }
             OverlayMode::TrackLength => {
-                // Compute value range from tracked features
                 let (vmin, vmax) = compute_track_length_range(features, recon);
-                // Draw colored circles for tracked features
-                for feature in features {
-                    if !feature.is_tracked() {
-                        continue;
-                    }
-                    let center = image_to_panel(feature.position[0], feature.position[1]);
-                    if !panel_rect.expand(10.0).contains(center) {
-                        continue;
-                    }
-                    let track_len = recon
-                        .observation_counts
-                        .get(feature.point_index as usize)
-                        .copied()
-                        .unwrap_or(1) as f32;
-                    let is_selected = selected_point == Some(feature.point_index as usize);
-                    let color = colormap::track_length_color(track_len, vmin, vmax);
-                    let radius = 5.0;
-                    painter.circle_filled(center, radius, color);
-                    if is_selected {
-                        painter.circle_stroke(
-                            center,
-                            radius + 2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                        );
-                    }
-                }
-                // Draw colorbar legend
-                colormap::draw_colorbar(
+                draw_value_overlay(
                     painter,
                     panel_rect,
+                    features,
+                    selected_point,
+                    image_to_panel,
+                    |feature| {
+                        Some(
+                            recon
+                                .observation_counts
+                                .get(feature.point_index as usize)
+                                .copied()
+                                .unwrap_or(1) as f32,
+                        )
+                    },
+                    (vmin, vmax),
+                    &colormap::QUALITY_COLORMAP,
                     "Track Length",
-                    vmin,
-                    vmax,
-                    colormap::track_length_color,
                 );
             }
             OverlayMode::MaxTrackAngle => {
-                let (vmin, vmax) = compute_finite_value_range(features, |f| f.max_track_angle_deg);
-                for feature in features {
-                    if !feature.is_tracked() || !feature.max_track_angle_deg.is_finite() {
-                        continue;
-                    }
-                    let center = image_to_panel(feature.position[0], feature.position[1]);
-                    if !panel_rect.expand(10.0).contains(center) {
-                        continue;
-                    }
-                    let is_selected = selected_point == Some(feature.point_index as usize);
-                    let color =
-                        colormap::max_track_angle_color(feature.max_track_angle_deg, vmin, vmax);
-                    let radius = 5.0;
-                    painter.circle_filled(center, radius, color);
-                    if is_selected {
-                        painter.circle_stroke(
-                            center,
-                            radius + 2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                        );
-                    }
-                }
-                colormap::draw_colorbar(
+                let range = compute_finite_value_range(features, |f| f.max_track_angle_deg);
+                draw_value_overlay(
                     painter,
                     panel_rect,
+                    features,
+                    selected_point,
+                    image_to_panel,
+                    |feature| finite(feature.max_track_angle_deg),
+                    range,
+                    &colormap::QUALITY_COLORMAP,
                     "Max Track Angle (°)",
-                    vmin,
-                    vmax,
-                    colormap::max_track_angle_color,
                 );
             }
             OverlayMode::DepthReliability => {
-                let (vmin, vmax) = compute_finite_value_range(features, |f| f.inverse_depth_z);
-                for feature in features {
-                    if !feature.is_tracked() || !feature.inverse_depth_z.is_finite() {
-                        continue;
-                    }
-                    let center = image_to_panel(feature.position[0], feature.position[1]);
-                    if !panel_rect.expand(10.0).contains(center) {
-                        continue;
-                    }
-                    let is_selected = selected_point == Some(feature.point_index as usize);
-                    let color =
-                        colormap::depth_reliability_color(feature.inverse_depth_z, vmin, vmax);
-                    let radius = 5.0;
-                    painter.circle_filled(center, radius, color);
-                    if is_selected {
-                        painter.circle_stroke(
-                            center,
-                            radius + 2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                        );
-                    }
-                }
-                colormap::draw_colorbar(
+                let range = compute_finite_value_range(features, |f| f.inverse_depth_z);
+                draw_value_overlay(
                     painter,
                     panel_rect,
+                    features,
+                    selected_point,
+                    image_to_panel,
+                    |feature| finite(feature.inverse_depth_z),
+                    range,
+                    &colormap::QUALITY_COLORMAP,
                     "Inverse-depth z",
-                    vmin,
-                    vmax,
-                    colormap::depth_reliability_color,
                 );
             }
             OverlayMode::ConditionNumber => {
                 // Condition numbers span orders of magnitude — color in log10.
-                let (vmin, vmax) =
+                let range =
                     compute_finite_value_range(features, |f| log10_condition(f.condition_number));
-                for feature in features {
-                    let log_cond = log10_condition(feature.condition_number);
-                    if !feature.is_tracked() || !log_cond.is_finite() {
-                        continue;
-                    }
-                    let center = image_to_panel(feature.position[0], feature.position[1]);
-                    if !panel_rect.expand(10.0).contains(center) {
-                        continue;
-                    }
-                    let is_selected = selected_point == Some(feature.point_index as usize);
-                    let color = colormap::condition_number_color(log_cond, vmin, vmax);
-                    let radius = 5.0;
-                    painter.circle_filled(center, radius, color);
-                    if is_selected {
-                        painter.circle_stroke(
-                            center,
-                            radius + 2.0,
-                            egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
-                        );
-                    }
-                }
-                colormap::draw_colorbar(
+                draw_value_overlay(
                     painter,
                     panel_rect,
+                    features,
+                    selected_point,
+                    image_to_panel,
+                    |feature| finite(log10_condition(feature.condition_number)),
+                    range,
+                    &colormap::ERROR_COLORMAP,
                     "log10(Condition #)",
-                    vmin,
-                    vmax,
-                    colormap::condition_number_color,
                 );
             }
         }
@@ -542,6 +457,71 @@ fn find_nearest_tracked_feature(
         }
     }
     None
+}
+
+/// Radius of a value-coloured feature dot, and the gap the selection ring
+/// leaves outside it.
+const VALUE_DOT_RADIUS: f32 = 5.0;
+
+/// `Some(value)` for a number worth colouring, `None` for one the ramp has
+/// nothing to say about.
+fn finite(value: f32) -> Option<f32> {
+    value.is_finite().then_some(value)
+}
+
+/// Draw one value-driven overlay: a coloured dot per tracked feature the
+/// extractor has a number for, a ring around the selected one, and the
+/// colorbar that says what the colours mean.
+///
+/// This is the body all five heatmap modes share. What a mode actually is —
+/// which number it reads off a feature, over what range, against which of the
+/// two ramps, under what title — is exactly the four arguments after
+/// `to_panel`; everything else about drawing a heatmap is here, once. The
+/// alternative is five copies of a loop whose only interesting line is the
+/// one that reads the value, which is what this replaced.
+///
+/// `value` returning `None` drops the feature entirely rather than colouring
+/// it: a NaN would clamp to one end of the ramp and read as a real
+/// measurement at that extreme.
+#[allow(clippy::too_many_arguments)]
+fn draw_value_overlay(
+    painter: &egui::Painter,
+    panel_rect: egui::Rect,
+    features: &[DisplayFeature],
+    selected_point: Option<usize>,
+    to_panel: impl Fn(f32, f32) -> egui::Pos2,
+    value: impl Fn(&DisplayFeature) -> Option<f32>,
+    (vmin, vmax): (f32, f32),
+    map: &colormap::Colormap,
+    label: &str,
+) {
+    for feature in features {
+        if !feature.is_tracked() {
+            continue;
+        }
+        let Some(value) = value(feature) else {
+            continue;
+        };
+        let center = to_panel(feature.position[0], feature.position[1]);
+        if !panel_rect.expand(10.0).contains(center) {
+            continue;
+        }
+        painter.circle_filled(
+            center,
+            VALUE_DOT_RADIUS,
+            colormap::ramp(value, vmin, vmax, map),
+        );
+        if selected_point == Some(feature.point_index as usize) {
+            painter.circle_stroke(
+                center,
+                VALUE_DOT_RADIUS + 2.0,
+                egui::Stroke::new(2.0_f32, egui::Color32::YELLOW),
+            );
+        }
+    }
+    colormap::draw_colorbar(painter, panel_rect, label, vmin, vmax, |v, lo, hi| {
+        colormap::ramp(v, lo, hi, map)
+    });
 }
 
 /// Compute the reprojection error range for tracked features in the display list.

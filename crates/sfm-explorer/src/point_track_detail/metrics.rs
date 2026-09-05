@@ -2,35 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Numeric analysis behind the panel: per-observation reprojection error and
-//! ray angle, whole-track triangulation diagnostics, and the error→color ramp
-//! the table uses to tint feature dots.
+//! ray angle, and whole-track triangulation diagnostics.
 //!
 //! Nothing here touches egui state — every function is a pure computation over
 //! the reconstruction, which is what lets the panel's display code stay thin.
 
 use nalgebra::Vector3;
 use sfmtool_core::SfmrReconstruction;
-
-/// Map reprojection error (pixels) to a green→yellow→red color.
-///
-/// - 0.0 px → green (0, 200, 0)
-/// - 1.0 px → yellow (255, 255, 0)
-/// - 2.0+ px → red (255, 0, 0)
-pub(super) fn error_color(error: f32) -> egui::Color32 {
-    if error.is_nan() {
-        return egui::Color32::from_rgb(128, 128, 128); // gray for N/A
-    }
-    let t = error.clamp(0.0, 2.0) / 2.0; // 0..1 over range 0..2 px
-    if t < 0.5 {
-        // green → yellow (t: 0..0.5 → s: 0..1)
-        let s = t * 2.0;
-        egui::Color32::from_rgb((s * 255.0) as u8, (200.0 + s * 55.0) as u8, 0)
-    } else {
-        // yellow → red (t: 0.5..1 → s: 0..1)
-        let s = (t - 0.5) * 2.0;
-        egui::Color32::from_rgb(255, ((1.0 - s) * 255.0) as u8, 0)
-    }
-}
 
 /// Compute per-observation reprojection error and ray angle for one observation.
 ///

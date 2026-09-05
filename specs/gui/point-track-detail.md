@@ -151,13 +151,25 @@ Below the header, the panel shows a vertically scrollable table of observations
 
 | Column | Content |
 |--------|---------|
-| Thumbnail | Small thumbnail of the image (from `recon.thumbnails_y_x_rgb`), with a dot overlay at the feature position. |
+| Thumbnail | Small thumbnail of the image (from `recon.thumbnails_y_x_rgb`), with a dot overlay at the feature position, tinted by that observation's reprojection error. |
 | Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
 | Image | Image index in the reconstruction. |
 | Name | Image filename (truncated with leading `…/` for long paths). |
 | Feat # | Feature index within the image's SIFT file (or the observation index for embedded-keypoint reconstructions with no SIFT file). |
 | Size | The feature's full extent in pixels — see "Size column" below. For SIFT observations the affine shape comes from the cached `affine_shapes`; for embedded keypoints it is derived by projecting the point's patch frame into the image. Shows `N/A` when unavailable (zero). |
 | Error | Per-observation reprojection error in pixels (`N/A` when undefined). |
+
+**The thumbnail dot's colour** is `colormap::error_color` — the same
+green→yellow→red ramp the Image Detail panel's reprojection-error overlay
+draws — over a **fixed 0–2 px**. Fixed rather than fitted to the track, because
+the dots are read against each other *and* against the absolute number in the
+Error column, and a range that shrank to the best and worst of seven
+observations would paint a sub-pixel track in full red. The Image Detail
+overlay fits its range to the image instead, for the opposite reason: there the
+question is which features in *this* frame are the bad ones. An observation
+with no error to show — the point is behind the camera, so the metrics came
+back `NaN` — is grey, deliberately off the ramp: "no measurement" is not a
+position on a green-to-red scale.
 | Angle | Angular discrepancy between observation ray and point direction, in degrees. |
 | Feature (x, y) | Feature position in image pixel coordinates. |
 

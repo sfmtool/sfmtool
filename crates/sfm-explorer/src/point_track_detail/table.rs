@@ -14,8 +14,8 @@ use ndarray::Axis;
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 
-use super::metrics::error_color;
 use super::{PointTrackDetail, PointTrackDetailResponse, PATCH_TILE, THUMB_SIZE};
+use crate::colormap;
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, ReconId};
 use crate::texture::thumbnail_color_image;
@@ -24,6 +24,36 @@ use crate::texture::thumbnail_color_image;
 const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
 /// Size of the feature dot overlay on thumbnails.
 const DOT_RADIUS: f32 = 3.0;
+
+/// Where this panel puts the top of the reprojection-error ramp, in pixels.
+///
+/// Fixed rather than fitted to the track, because a track's dots are read
+/// against each other *and* against the absolute number in the Error column: a
+/// range that shrank to the best and worst of seven observations would paint a
+/// sub-pixel track in full red. The Image Detail overlay fits its range to the
+/// image instead, for the opposite reason — there the question is which
+/// features in *this* frame are the bad ones.
+pub(super) const ERROR_RAMP_MAX_PX: f32 = 2.0;
+
+/// The grey a dot gets when the observation has no error to colour — the point
+/// is behind the camera, so `compute_observation_metrics` returned NaN.
+///
+/// Kept out of the ramp deliberately: "no measurement" is not a position on a
+/// green-to-red scale, and a NaN normalized into one would come out at an end
+/// of it and read as an extreme.
+pub(super) const NO_ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(128, 128, 128);
+
+/// The colour of one thumbnail's feature dot.
+///
+/// [`colormap::error_color`] is the same ramp the Image Detail panel's
+/// reprojection-error overlay draws, so the two panels agree about what a
+/// given error looks like at a given range.
+pub(super) fn error_dot_color(error: f32) -> egui::Color32 {
+    if error.is_nan() {
+        return NO_ERROR_COLOR;
+    }
+    colormap::error_color(error, 0.0, ERROR_RAMP_MAX_PX)
+}
 
 /// Fixed column x-offsets, relative to the left edge of the table.
 ///
@@ -347,7 +377,7 @@ impl PointTrackDetail {
             let sy = thumb_rect.min.y + (feature_xy[1] / img_h) * thumb_rect.height();
 
             let dot_center = egui::pos2(sx, sy);
-            let dot_color = error_color(reproj_error);
+            let dot_color = error_dot_color(reproj_error);
             ui.painter()
                 .circle_filled(dot_center, DOT_RADIUS, dot_color);
             // Dark outline for visibility
