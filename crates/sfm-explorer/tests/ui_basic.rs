@@ -3,6 +3,7 @@
 
 #![cfg(any(windows, target_os = "macos", target_os = "linux"))]
 
+use std::cell::RefCell;
 use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, Once};
 use std::time::{Duration, Instant};
@@ -46,10 +47,6 @@ fn init() {
     SET_TIMEOUT.call_once(|| xa11y::set_default_timeout(default));
 }
 
-fn launch() -> Child {
-    launch_with(&["--no-default-layout"])
-}
-
 /// Launch the viewer with the given arguments.
 ///
 /// Every test but the startup-load one passes `--no-default-layout`: a
@@ -78,40 +75,47 @@ fn launch_with(args: &[&str]) -> Child {
 /// test that spawned it. Fields drop in declaration order, so `child` is killed
 /// (its window torn down) *before* `_lock` is released and the next test may
 /// launch — keeping windows strictly non-overlapping.
+///
+/// `child` sits behind a `RefCell` because [`attach`] replaces it: a launch
+/// that never becomes discoverable is retried once, in place, so the guard
+/// still owns (and on drop still kills) whichever process is current.
 struct Guard {
-    child: Child,
+    child: RefCell<Child>,
+    /// The viewer's command line, kept so a stuck launch can be respawned the
+    /// same way. `None` marks a guard whose process cannot simply be
+    /// re-spawned — the MCP viewer, whose endpoint line has already been read
+    /// off its stdout — and [`ChildHandle::relaunch`] declines to retry it.
+    args: Option<Vec<String>>,
     _lock: MutexGuard<'static, ()>,
 }
 
 impl Guard {
     /// Acquire the serialization lock, then launch the app under it.
     fn new() -> Self {
-        let _lock = ui_test_lock();
-        Guard {
-            child: launch(),
-            _lock,
-        }
+        Guard::with_args(&["--no-default-layout"])
     }
 
     /// The same, with the viewer's command line spelled out.
     fn with_args(args: &[&str]) -> Self {
         let _lock = ui_test_lock();
         Guard {
-            child: launch_with(args),
+            child: RefCell::new(launch_with(args)),
+            args: Some(args.iter().map(|a| (*a).to_string()).collect()),
             _lock,
         }
     }
 
-    fn child(&self) -> &Child {
-        &self.child
+    fn child(&self) -> ChildHandle<'_> {
+        ChildHandle { guard: self }
     }
 
     /// Wait up to `budget` for the app to exit on its own. Returns whether it
     /// did — `false` means it was still running when the budget ran out.
     fn wait_for_exit(&mut self, budget: Duration) -> bool {
         let deadline = Instant::now() + budget;
+        let child = self.child.get_mut();
         loop {
-            match self.child.try_wait() {
+            match child.try_wait() {
                 Ok(Some(_)) => return true,
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(100))
@@ -125,8 +129,45 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        self.child.kill().ok();
-        self.child.wait().ok();
+        let child = self.child.get_mut();
+        child.kill().ok();
+        child.wait().ok();
+    }
+}
+
+/// A borrow of the process a [`Guard`] currently owns: its pid, and the one
+/// operation [`attach`] needs beyond reading that — replacing it.
+#[derive(Clone, Copy)]
+struct ChildHandle<'a> {
+    guard: &'a Guard,
+}
+
+impl ChildHandle<'_> {
+    /// The pid of the process the guard owns *now* — re-read after a relaunch.
+    fn id(&self) -> u32 {
+        self.guard.child.borrow().id()
+    }
+
+    /// Kill and reap the current process, then spawn a replacement with the
+    /// same command line, leaving the guard owning the new one. Returns
+    /// whether a replacement was launched; `false` for a guard that recorded
+    /// no command line, whose caller must report the original failure.
+    ///
+    /// Reaping matters as much as killing: the tests are serialized on
+    /// `UI_TEST_LOCK` and match the Windows window by title, so an abandoned
+    /// viewer would be found by the next `attach` instead of the fresh one.
+    fn relaunch(&self) -> bool {
+        let Some(args) = self.guard.args.as_deref() else {
+            return false;
+        };
+        {
+            let mut child = self.guard.child.borrow_mut();
+            child.kill().ok();
+            child.wait().ok();
+        }
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        *self.guard.child.borrow_mut() = launch_with(&args);
+        true
     }
 }
 
@@ -151,9 +192,35 @@ const CONTENT_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_os = "macos"))]
 const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn attach(child: &Child) -> App {
+/// Attach to the launched viewer, relaunching it once if it never becomes
+/// discoverable, and panicking with both failures if the relaunch is no better.
+///
+/// The retry is for the runner, not the product: over 400 CI runs, three
+/// `ui-test-windows` launches (2026-08-08, 08-09, 08-24) never registered with
+/// UI Automation inside the full [`ATTACH_TIMEOUT`], failing as
+/// `SelectorNotMatched` from application discovery, or as
+/// `Platform { code: -2146233083 }` (HRESULT 0x80131505 out of the automation
+/// client) — while every other test in the same job attached normally, and a
+/// re-run of the same commit passed. A second process is the cheapest way past a launch
+/// the runner lost; one retry only, so a real regression still fails fast and
+/// reports what it saw both times.
+fn attach(child: ChildHandle<'_>) -> App {
     init();
-    attach_app(child)
+    let first = match try_attach_app(child) {
+        Ok(app) => return app,
+        Err(e) => e,
+    };
+    assert!(
+        child.relaunch(),
+        "sfm-explorer window did not appear: {first}"
+    );
+    match try_attach_app(child) {
+        Ok(app) => app,
+        Err(second) => panic!(
+            "sfm-explorer window did not appear, on the original launch or on \
+             one relaunch: {first}; after relaunching: {second}"
+        ),
+    }
 }
 
 /// On Windows, xa11y's `by_pid` roots at the first top-level window for the
@@ -162,11 +229,11 @@ fn attach(child: &Child) -> App {
 /// 16px-wide "group") rather than our UI, so locator queries and bounds resolve
 /// against the wrong element. Select our window by its title instead.
 #[cfg(windows)]
-fn attach_app(_child: &Child) -> App {
+fn try_attach_app(_child: ChildHandle<'_>) -> Result<App, String> {
     App::find(ATTACH_TIMEOUT, |d| {
         d.name.as_deref() == Some("SfM Explorer")
     })
-    .expect("sfm-explorer window did not appear")
+    .map_err(|e| format!("{e:?}"))
 }
 
 /// Everywhere else a process has exactly one accessibility root and the pid
@@ -177,8 +244,8 @@ fn attach_app(_child: &Child) -> App {
 /// registers for the process. Being pid-addressed also makes the MCP tests'
 /// `[MCP :port]` title suffix a non-issue on both.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn attach_app(child: &Child) -> App {
-    App::by_pid(child.id(), ATTACH_TIMEOUT).expect("sfm-explorer did not appear")
+fn try_attach_app(child: ChildHandle<'_>) -> Result<App, String> {
+    App::by_pid(child.id(), ATTACH_TIMEOUT).map_err(|e| format!("{e:?}"))
 }
 
 // --- Window-level tests ---
@@ -593,7 +660,14 @@ impl McpViewer {
             .unwrap_or_else(|| panic!("no endpoint in {line:?}"))
             .to_string();
         McpViewer {
-            guard: Guard { child, _lock },
+            // No recorded command line: this viewer's endpoint was read off
+            // the stdout of *this* process, so a respawn would be a viewer on
+            // a different port that nothing is listening to.
+            guard: Guard {
+                child: RefCell::new(child),
+                args: None,
+                _lock,
+            },
             address,
         }
     }

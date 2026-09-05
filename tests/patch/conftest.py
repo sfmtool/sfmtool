@@ -25,9 +25,18 @@ def load_images(recon) -> list[np.ndarray]:
     return images
 
 
-def sample_point_ids(cloud, n: int = 200, seed: int = 0) -> list[int]:
-    """A deterministic point-id subset, to keep the per-point search fast."""
+def sample_point_ids(cloud, n: int = 200, seed: int = 0, restrict_to=None) -> list[int]:
+    """A deterministic point-id subset, to keep the per-point search fast.
+
+    ``restrict_to`` narrows the pool to the given point ids before drawing, for a
+    test whose assertion holds only for points with a particular property: a
+    120-point draw from the whole cloud can otherwise contain none of them and
+    fail on a perfectly correct reconstruction.
+    """
     ids = np.asarray(cloud.point_indexes)
+    if restrict_to is not None:
+        wanted = np.asarray(sorted(restrict_to), dtype=ids.dtype)
+        ids = ids[np.isin(ids, wanted)]
     rng = np.random.default_rng(seed)
     return np.sort(rng.choice(ids, size=min(n, len(ids)), replace=False)).tolist()
 

@@ -2,12 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
 
 from sfmtool._workspace import init_workspace
+
+if TYPE_CHECKING:
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
 TEST_DATA_DIR = Path(__file__).parent.parent / "test-data"
 
@@ -105,6 +110,22 @@ def _largest_recon(output_sfm_file: Path):
     return best_path, best_count
 
 
+def _rotate_by_quaternion(
+    quat_wxyz: np.ndarray, vectors: np.ndarray, *, inverse: bool = False
+) -> np.ndarray:
+    """Rotate each row of ``vectors`` by the parallel unit wxyz quaternion.
+
+    Uses the optimized unit-quaternion form ``v' = v + 2w(u×v) + 2u×(u×v)``,
+    which needs no 3x3 matrix. ``inverse=True`` applies the conjugate ``(w, -u)``
+    — the camera-to-world rotation, given the world-to-camera quaternions a
+    reconstruction stores.
+    """
+    w = quat_wxyz[:, :1]
+    u = -quat_wxyz[:, 1:] if inverse else quat_wxyz[:, 1:]
+    t = 2.0 * np.cross(u, vectors)
+    return vectors + w * t + np.cross(u, t)
+
+
 def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     """Drop finite points that triangulated onto their observing camera centres.
 
@@ -130,14 +151,8 @@ def _drop_camera_coincident_points(sfmr_path: Path) -> None:
     tpid = np.asarray(recon.track_point_indexes)
     at_inf = np.asarray(recon.point_is_at_infinity)
 
-    # Per-observation ray distance d = ‖R(q)·X + t‖ in the camera frame, using
-    # the optimized unit-quaternion rotation v' = v + 2w(u×v) + 2u×(u×v).
-    x = pos[tpid]
-    q = quat[tii]
-    w = q[:, :1]
-    u = q[:, 1:]
-    t = 2.0 * np.cross(u, x)
-    cam_pt = x + w * t + np.cross(u, t) + trans[tii]
+    # Per-observation ray distance d = ‖R(q)·X + t‖ in the camera frame.
+    cam_pt = _rotate_by_quaternion(quat[tii], pos[tpid]) + trans[tii]
     d = np.linalg.norm(cam_pt, axis=1)
 
     # Keep a point if any observation is non-degenerate (matches the FeatureSize
@@ -163,6 +178,7 @@ def build_cluster_reconstruction(
     expected_image_count: int | None = None,
     min_point_count: int = 0,
     max_attempts: int = 6,
+    accept: Callable[["SfmrReconstruction"], str | None] | None = None,
 ) -> Path:
     """Solve a ``.sfmr`` the way the dataset scripts now do.
 
@@ -180,6 +196,16 @@ def build_cluster_reconstruction(
     solve — all images registered but few points — is a degenerate result, so
     ``min_point_count`` lets a caller insist on a substantive point cloud rather
     than accepting the first attempt that merely registers every image.
+
+    ``accept`` is the general form of that insistence, for guarantees no scalar
+    floor can express. It is called with the attempt's chosen reconstruction once
+    the image and point checks pass; returning a string rejects the attempt (the
+    string is the reason, and the loop re-randomizes), returning ``None`` accepts
+    it and stops. Attempts are still ranked as above, so a rejected attempt can
+    still be the best one seen — but a caller that asks for a guarantee gets it or
+    a ``RuntimeError``: if no attempt is ever accepted the fixture fails naming the
+    last rejection reason, which beats handing the tests a reconstruction that
+    quietly lacks the property they assert.
     """
     from sfmtool.feature_match._derive_pairs import _run_derive_pairs
     from sfmtool.feature_match._run import _run_matching
@@ -218,6 +244,8 @@ def build_cluster_reconstruction(
     # reconstruction, and among those the densest. This keeps retrying past a
     # complete-but-sparse solve until a substantive one shows up.
     best_path, best_key = None, (-1, -1)
+    accepted = accept is None
+    last_rejection = "no attempt met the image / point-count floors"
     for attempt in range(1, max_attempts + 1):
         if colmap_dir.exists():
             shutil.rmtree(colmap_dir)
@@ -242,7 +270,8 @@ def build_cluster_reconstruction(
             # fresh randomization, as the ``.camrig`` fixture below does.
             continue
         path, count = _largest_recon(output_sfm_file)
-        points = SfmrReconstruction.load(path).point_count
+        recon = SfmrReconstruction.load(path)
+        points = recon.point_count
         key = (count, points)
         if key > best_key:
             best_key = key
@@ -253,12 +282,23 @@ def build_cluster_reconstruction(
         images_ok = expected_image_count is None or count >= expected_image_count
         points_ok = points >= min_point_count
         if images_ok and points_ok:
-            break
+            if accept is None:
+                break
+            reason = accept(recon)
+            if reason is None:
+                accepted = True
+                break
+            last_rejection = reason
 
     if best_path is None:
         raise RuntimeError(
             f"every one of {max_attempts} solve attempts on {workspace_dir} was "
             "degenerate (the solver raised each time); no reconstruction to keep."
+        )
+    if not accepted:
+        raise RuntimeError(
+            f"none of {max_attempts} solve attempts on {workspace_dir} was accepted; "
+            f"last rejection: {last_rejection}."
         )
     # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
     for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
@@ -366,6 +406,155 @@ KERRY_PARK_SENSORS = ("fisheye_left", "fisheye_right")
 # matching/solve cost. Disk-parsing/resolution fixtures still see all 24 frames.
 KERRY_PARK_SOLVE_FRAME_COUNT = 8
 
+# GLOMAP is not seed-deterministic, so "16 images and >= 200 points" does not pin
+# down *which* reconstruction the session gets, and three patch tests assert a
+# property of it that a legitimate solve can lack. Each floor below is a
+# guarantee the fixture holds out for, so those tests measure the algorithm
+# rather than the luck of the solve; the counts behind them are read off the
+# reconstruction's own arrays, with no patch cloud and no images.
+#
+# Multi-view points at infinity, for
+# test_patch_view_selection.py::test_select_views_infinity_admitted_are_in_front,
+# which selects views for *every* infinity point in the cloud. A handful is
+# enough for the test to have something to check, and a solve that yields none at
+# all is the degenerate case worth re-rolling. (Ten sample solves of this fixture
+# gave 5 to 14.)
+MIN_INFINITY_POINTS = 5
+# Points the rig can see past 90 deg off axis, for
+# test_patch_view_selection.py::test_select_views_admitted_points_are_in_front_of_camera,
+# which needs at least one *admitted* view out there. See
+# :func:`points_with_past_90_candidate` for why this counts candidates rather
+# than observations. (Ten sample solves gave 115 to 259; the floor only has to
+# leave the test's 150-point sample a real pool to draw from.)
+MIN_PAST_90_CANDIDATE_POINTS = 40
+# Points whose track spans a real range of viewing angles, for
+# test_patch_keypoint_localization.py::test_localize_keypoints_grazing_cutoff_drops_views:
+# a strict min_grazing_cos can only drop a view that is oblique to the patch
+# normal, and on an all-narrow-baseline solve there is none to drop. These are
+# scarce -- a survey of 20 builds gave 7 to 14 of ~300 points -- which is exactly
+# why that test cannot sample the cloud at large. One of those 20 solves had a
+# single oblique point, and that is the one this floor sends back.
+MIN_OBLIQUE_POINTS = 5
+# "Oblique" = an observation ray more than this far from the point's mean viewing
+# direction. min_grazing_cos = 0.99 in the grazing test cuts at ~8.1 deg, so 10
+# deg leaves the guarantee strictly inside what that cutoff drops.
+OBLIQUE_ANGLE_DEG = 10.0
+
+
+def points_with_past_90_candidate(recon) -> set[int]:
+    """Finite points that some image sees past 90 deg off its optical axis.
+
+    A *candidate* (point, image) pair, not an observation: no track observation
+    of the kerry_park solve sits past 90 deg -- the matcher finds nothing that far
+    into the fisheye periphery -- yet view selection admits views beyond the
+    track, and those are what reach it. So the predicate asks, of every point and
+    every image: is the point behind the 90 deg plane (canonical cameras look down
+    -Z, so camera-frame ``z >= 0``) and does the camera model still project it
+    inside the frame? Points at infinity are excluded; the infinity form of that
+    visibility is its own test.
+    """
+    pos = np.asarray(recon.positions, dtype=np.float64)
+    quat = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
+    trans = np.asarray(recon.translations, dtype=np.float64)
+    cameras = recon.cameras
+    camera_index = np.asarray(recon.camera_indexes)
+    finite_ids = np.nonzero(~np.asarray(recon.point_is_at_infinity))[0]
+    image_count = recon.image_count
+    if len(finite_ids) == 0 or image_count == 0:
+        return set()
+
+    # Every (point, image) pair at once: x_cam = R·X + t.
+    point_of = np.repeat(finite_ids, image_count)
+    image_of = np.tile(np.arange(image_count), len(finite_ids))
+    x_cam = _rotate_by_quaternion(quat[image_of], pos[point_of]) + trans[image_of]
+
+    out: set[int] = set()
+    for pair in np.nonzero(x_cam[:, 2] >= 0.0)[0]:
+        pid = int(point_of[pair])
+        if pid in out:
+            continue
+        cam = cameras[int(camera_index[image_of[pair]])]
+        px = cam.ray_to_pixel(x_cam[pair].tolist())
+        if px is not None and 0.0 <= px[0] < cam.width and 0.0 <= px[1] < cam.height:
+            out.add(pid)
+    return out
+
+
+def points_with_oblique_view(
+    recon, min_angle_deg: float = OBLIQUE_ANGLE_DEG
+) -> set[int]:
+    """Finite points observed from more than ``min_angle_deg`` off their mean ray.
+
+    Unit rays from the camera centres to the point, their normalized sum as the
+    point's mean viewing direction (what ``normal="mean_viewing"`` hands the
+    patch), and the widest angle any ray of the track makes with it. Only such a
+    point owns a view that a grazing-angle cutoff can drop.
+    """
+    pos = np.asarray(recon.positions, dtype=np.float64)
+    quat = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
+    trans = np.asarray(recon.translations, dtype=np.float64)
+    at_infinity = np.asarray(recon.point_is_at_infinity)
+    obs_image = np.asarray(recon.track_image_indexes)
+    obs_point = np.asarray(recon.track_point_indexes)
+    if len(pos) == 0 or len(obs_point) == 0:
+        return set()
+
+    # A point at infinity has a direction in the camera frame, not a position.
+    finite = ~at_infinity[obs_point]
+    image_idx, point_idx = obs_image[finite], obs_point[finite]
+    x_cam = _rotate_by_quaternion(quat[image_idx], pos[point_idx]) + trans[image_idx]
+    distance = np.linalg.norm(x_cam, axis=1)
+    usable = distance > 1e-12
+    image_idx, point_idx = image_idx[usable], point_idx[usable]
+    # World-space unit ray from the camera centre to the point: X - C = Rᵀ·x_cam.
+    ray = _rotate_by_quaternion(
+        quat[image_idx], x_cam[usable] / distance[usable, None], inverse=True
+    )
+
+    mean_dir = np.zeros_like(pos)
+    np.add.at(mean_dir, point_idx, ray)
+    norm = np.linalg.norm(mean_dir, axis=1)
+    has_mean = norm > 1e-12
+    mean_dir[has_mean] /= norm[has_mean, None]
+
+    cos = np.einsum("ij,ij->i", ray, mean_dir[point_idx])
+    oblique = has_mean[point_idx] & (cos < np.cos(np.radians(min_angle_deg)))
+    return {int(p) for p in point_idx[oblique]}
+
+
+def _kerry_park_reject_reason(recon) -> str | None:
+    """Why this kerry_park solve is unfit for the patch tests, or ``None`` if it is.
+
+    The ``accept`` hook of :func:`build_cluster_reconstruction`, holding the
+    reconstruction to the three ``MIN_*`` guarantees above. Each check is a count
+    over the reconstruction's own arrays, so the whole hook costs a fraction of
+    the solve attempt it vets.
+    """
+    at_infinity = np.asarray(recon.point_is_at_infinity)
+    observed = np.bincount(
+        np.asarray(recon.track_point_indexes), minlength=len(at_infinity)
+    )
+    # Points at infinity that carry a real (multi-view) track.
+    infinity_points = int(np.count_nonzero(at_infinity & (observed >= 2)))
+    if infinity_points < MIN_INFINITY_POINTS:
+        return (
+            f"points at infinity with a multi-view track: {infinity_points} "
+            f"(>= {MIN_INFINITY_POINTS} required)"
+        )
+    past_90 = len(points_with_past_90_candidate(recon))
+    if past_90 < MIN_PAST_90_CANDIDATE_POINTS:
+        return (
+            f"points visible past 90 deg off a camera's axis: {past_90} "
+            f"(>= {MIN_PAST_90_CANDIDATE_POINTS} required)"
+        )
+    oblique = len(points_with_oblique_view(recon))
+    if oblique < MIN_OBLIQUE_POINTS:
+        return (
+            f"points observed more than {OBLIQUE_ANGLE_DEG:g} deg off their mean "
+            f"viewing direction: {oblique} (>= {MIN_OBLIQUE_POINTS} required)"
+        )
+    return None
+
 
 def _copy_kerry_park_into(workspace_dir: Path) -> None:
     """Copy the kerry_park rig images + rig_config.json into ``workspace_dir``.
@@ -459,6 +648,9 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
     # (CI has seen ~80). Insist on a substantive point cloud (well above the
     # test's >= 150 floor, leaving margin for the trailing camera-coincident
     # point drop) and retry hard for it, keeping the densest complete attempt.
+    # ``accept`` adds the structural guarantees the patch tests assert -- points
+    # at infinity, past-90-deg observations, obliquely-viewed points -- which no
+    # point count implies.
     sfmr_path = build_cluster_reconstruction(
         workspace_dir,
         image_paths,
@@ -468,6 +660,7 @@ def kerry_park_workspace_once(tmp_path_factory) -> Path:
         expected_image_count=expected_count,
         min_point_count=200,
         max_attempts=10,
+        accept=_kerry_park_reject_reason,
     )
 
     recon = SfmrReconstruction.load(sfmr_path)

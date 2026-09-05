@@ -198,7 +198,15 @@ class TestReconstructionCloneRoundTrip:
         )
 
     def test_fortran_2d_kwargs_round_trip(self, seoul_bull_workspace, tmp_path):
-        """The five `to_contiguous!`-converted 2-D kwargs, which had no test."""
+        """The five `to_contiguous!`-converted 2-D kwargs, which had no test.
+
+        The C- and F-ordered clones travel the same clone + save + load path and
+        must agree bit for bit: layout invariance is what this module tests.
+        Pose-bit preservation through that path is a separate property, owned
+        by `unit_quaternion_preserving`'s Rust tests, so the check against the
+        source arrays is loose (1e-15) for the float fields; it still catches a
+        bug that transposed both layouts alike.
+        """
         from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
         recon = SfmrReconstruction.load(seoul_bull_workspace)
@@ -213,13 +221,26 @@ class TestReconstructionCloneRoundTrip:
             if min(v.shape[:2]) > 1:
                 assert not v.flags["C_CONTIGUOUS"], f"{k} is degenerate"
 
-        out = tmp_path / "kw.sfmr"
-        recon.clone_with_changes(**f_kwargs).save(out, operation="t")
-        back = SfmrReconstruction.load(out)
-        for name, expected in fields.items():
+        out_c = tmp_path / "kw_c.sfmr"
+        out_f = tmp_path / "kw_f.sfmr"
+        recon.clone_with_changes(
+            **{k: np.ascontiguousarray(v) for k, v in fields.items()}
+        ).save(out_c, operation="t")
+        recon.clone_with_changes(**f_kwargs).save(out_f, operation="t")
+        c_back = SfmrReconstruction.load(out_c)
+        f_back = SfmrReconstruction.load(out_f)
+
+        for name, source in fields.items():
+            from_c = np.asarray(getattr(c_back, name))
             np.testing.assert_array_equal(
-                np.asarray(getattr(back, name)), expected, err_msg=name
+                np.asarray(getattr(f_back, name)), from_c, err_msg=name
             )
+            if np.issubdtype(source.dtype, np.floating):
+                np.testing.assert_allclose(
+                    from_c, source, rtol=0, atol=1e-15, err_msg=name
+                )
+            else:
+                np.testing.assert_array_equal(from_c, source, err_msg=name)
 
 
 class TestNegativeStride:

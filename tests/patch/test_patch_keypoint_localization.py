@@ -23,6 +23,7 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
+from ..conftest import points_with_oblique_view
 from .conftest import load_images, rotation_matrices, sample_point_ids
 
 
@@ -235,7 +236,16 @@ def test_localize_keypoints_grazing_cutoff_drops_views(kerry_park_workspace: Pat
     cloud = PatchCloud.from_reconstruction(
         recon, normal="mean_viewing", extent_value=5.0
     )
-    sample = sample_point_ids(cloud, n=120)
+    # A cutoff can only drop a view that is oblique to the patch normal, so
+    # sample from the points that have one (the fixture guarantees they exist).
+    # An unrestricted 120-point draw can land entirely on narrow-baseline tracks
+    # -- every ray within ~8 deg of the mean viewing direction, which 0.99 does
+    # not cut -- and then strict == permissive on a correct reconstruction.
+    sample = sample_point_ids(cloud, n=120, restrict_to=points_with_oblique_view(recon))
+    assert sample, (
+        "no cloud point has an observation more than 10 deg off its mean viewing "
+        "direction; kerry_park_workspace_once guarantees MIN_OBLIQUE_POINTS of them"
+    )
 
     def total_kept(min_grazing_cos: float) -> int:
         res = cloud.localize_keypoints(

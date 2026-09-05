@@ -22,6 +22,7 @@ import numpy as np
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
+from ..conftest import points_with_past_90_candidate
 from .conftest import load_images, rotation_matrices, sample_point_ids
 
 
@@ -261,7 +262,18 @@ def test_select_views_admitted_points_are_in_front_of_camera(
         f"kerry_park must be the wide-fisheye stress case; got {cams[0].model}"
     )
 
-    sample = sample_point_ids(cloud, n=150)
+    # Sample from the points the rig can actually image past 90° off axis (the
+    # fixture guarantees a pool of them). Selection admits a view only after
+    # photometric vetting, so an unrestricted 150-point draw can leave
+    # `past_90 == 0` on a perfectly correct reconstruction — which is how this
+    # test flaked.
+    sample = sample_point_ids(
+        cloud, n=150, restrict_to=points_with_past_90_candidate(recon)
+    )
+    assert sample, (
+        "no cloud point is visible past 90 deg off any camera's axis; "
+        "kerry_park_workspace_once guarantees MIN_PAST_90_CANDIDATE_POINTS of them"
+    )
     results = cloud.select_views(recon, images, point_indexes=sample, resolution=12)
 
     past_90 = 0
@@ -308,7 +320,11 @@ def test_select_views_infinity_admitted_are_in_front(kerry_park_workspace: Path)
     cam_idx = np.asarray(recon.camera_indexes)
 
     inf_ids = [int(p) for p in np.asarray(cloud.point_indexes) if is_inf[int(p)]]
-    assert inf_ids, "kerry_park should carry points at infinity"
+    assert inf_ids, (
+        "the kerry_park cloud carries no point at infinity, which "
+        "kerry_park_workspace_once guarantees (MIN_INFINITY_POINTS) — the fixture "
+        "accepted a reconstruction it should have re-rolled, not a defect here"
+    )
     results = cloud.select_views(recon, images, point_indexes=inf_ids, resolution=12)
 
     checked = 0
