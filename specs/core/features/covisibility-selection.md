@@ -26,9 +26,13 @@ ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
                                 seed=0)
 ```
 
-`positions_xy` (`f64 [n_obs, 2]`, aligned with `member_images`) enables
+`positions_xy` (`f32 [n_obs, 2]` -- the width the `.matches` backbone
+stores keypoints at, so a file's rows pass through untouched; the binding
+also accepts `float64` and casts -- aligned with `member_images`) enables
 the displacement queries; construction without it leaves them
-unavailable (calls raise). The shared-cluster counts are unchanged. The
+unavailable (calls raise). Every distance and mean is computed in `f64`,
+each coordinate widened where it is read. The shared-cluster counts are
+unchanged. The
 `member_accepted` mask gates the displacement pass too: only accepted
 members are sampled.
 

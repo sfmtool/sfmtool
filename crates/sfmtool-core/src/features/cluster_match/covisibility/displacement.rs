@@ -70,12 +70,15 @@ impl DisplacementNeighborhood {
     /// per pair into the shared count, and every accepted cross-image member
     /// pair contributes its Euclidean position distance to the pair's mean
     /// displacement. Deterministic — no sampling.
+    ///
+    /// Positions are the `f32` pairs a `.matches` backbone stores; the
+    /// distances and their means are `f64`.
     pub fn from_clusters(
         cluster_starts: &[u32],
         member_images: &[u32],
         member_accepted: Option<&[bool]>,
         num_images: usize,
-        positions_xy: &[[f64; 2]],
+        positions_xy: &[[f32; 2]],
     ) -> Result<Self, CovisibilityError> {
         let m = member_images.len();
         let csr_valid = !cluster_starts.is_empty()
@@ -132,8 +135,8 @@ impl DisplacementNeighborhood {
                         continue;
                     }
                     let d = f64::hypot(
-                        positions_xy[ka][0] - positions_xy[kb][0],
-                        positions_xy[ka][1] - positions_xy[kb][1],
+                        positions_xy[ka][0] as f64 - positions_xy[kb][0] as f64,
+                        positions_xy[ka][1] as f64 - positions_xy[kb][1] as f64,
                     );
                     let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
                     e.disp_sum += d;

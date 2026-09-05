@@ -11,7 +11,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.io import write_matches
+from sfmtool._sfmtool.io import MatchesFile, write_matches
 from sfmtool._sfmtool.matching import ClusterCovisibility
 
 
@@ -37,6 +37,11 @@ FILE_STARTS = CLUSTER_STARTS[:-1]
 FILE_IMAGES = MEMBER_IMAGES[:9]
 FILE_FEATURES = MEMBER_FEATURES[:9]
 FILE_STATUS = MEMBER_STATUS[:9]
+
+# Distinct per-member keypoint positions, at the backbone's own float32
+# width: the counts ignore them, the displacement queries a from_matches
+# matrix answers do not.
+FILE_POSITIONS = np.arange(len(FILE_IMAGES) * 2, dtype=np.float32).reshape(-1, 2) * 2.0
 
 
 def _ref_covisibility(starts, images, num_images, accepted=None):
@@ -125,9 +130,9 @@ def _write_cluster_matches(path, with_patches):
         "cluster_starts": FILE_STARTS,
         "member_images": FILE_IMAGES,
         "member_features": FILE_FEATURES,
-        # The backbone's member geometry (format version 6); covisibility does
-        # not read it, so placeholder values suffice.
-        "member_positions": np.zeros((len(FILE_IMAGES), 2), dtype=np.float32),
+        # The backbone's member geometry (format version 6); the counts ignore
+        # the positions, the displacement queries ride on them.
+        "member_positions": FILE_POSITIONS.copy(),
         "member_affine_shapes": np.tile(
             np.eye(2, dtype=np.float32), (len(FILE_IMAGES), 1, 1)
         ).copy(),
@@ -254,23 +259,28 @@ class TestConstructors:
         npt.assert_array_equal(counts, counts.T)
         npt.assert_array_equal(np.diag(counts), 0)
 
-    def test_from_matches_file_all_members(self, tmp_path):
+    def test_from_matches_all_members(self, tmp_path):
         path = tmp_path / "clusters.matches"
         _write_cluster_matches(path, with_patches=False)
-        cov = ClusterCovisibility.from_matches_file(path)
+        cov = ClusterCovisibility.from_matches(MatchesFile(path))
         expected = _ref_covisibility(FILE_STARTS, FILE_IMAGES, N_IMAGES)
         npt.assert_array_equal(cov.counts, expected)
 
-    def test_from_matches_file_str_path(self, tmp_path):
+    def test_from_matches_takes_a_selection(self, tmp_path):
         path = tmp_path / "clusters.matches"
         _write_cluster_matches(path, with_patches=False)
-        cov = ClusterCovisibility.from_matches_file(str(path))
+        sel = MatchesFile(path).select_clusters(min_span=2)
+        cov = ClusterCovisibility.from_matches(sel)
+        # Every fixture cluster spans 2 images, so the selection is the file.
         assert cov.num_images == N_IMAGES
+        npt.assert_array_equal(
+            cov.counts, _ref_covisibility(FILE_STARTS, FILE_IMAGES, N_IMAGES)
+        )
 
-    def test_from_matches_file_default_mask_is_reference_or_kept(self, tmp_path):
+    def test_from_matches_default_mask_is_reference_or_kept(self, tmp_path):
         path = tmp_path / "cluster-patches.matches"
         _write_cluster_matches(path, with_patches=True)
-        cov = ClusterCovisibility.from_matches_file(path)
+        cov = ClusterCovisibility.from_matches(MatchesFile(path))
         accepted = np.isin(FILE_STATUS, (0, 1))
         expected = _ref_covisibility(
             FILE_STARTS, FILE_IMAGES, N_IMAGES, accepted=accepted
@@ -281,11 +291,40 @@ class TestConstructors:
         assert cov.counts[0, 2] == 2
         assert cov.counts[1, 3] == 0
 
-    def test_from_matches_file_rejects_pairwise_backbone(self, tmp_path):
+    @pytest.mark.parametrize("with_patches", [False, True])
+    def test_from_matches_counts_equal_from_arrays(self, tmp_path, with_patches):
+        # The file constructor is the array one plus the format's own mask:
+        # same arrays in, same counts out, under both mask policies.
+        path = tmp_path / f"parity-{with_patches}.matches"
+        _write_cluster_matches(path, with_patches=with_patches)
+        cov = ClusterCovisibility.from_matches(MatchesFile(path))
+        accepted = np.isin(FILE_STATUS, (0, 1)) if with_patches else None
+        arrays = ClusterCovisibility.from_arrays(
+            FILE_STARTS, FILE_IMAGES, N_IMAGES, member_accepted=accepted
+        )
+        npt.assert_array_equal(cov.counts, arrays.counts)
+
+    def test_from_matches_positions_enable_displacement_queries(self, tmp_path):
+        path = tmp_path / "clusters.matches"
+        _write_cluster_matches(path, with_patches=False)
+        cov = ClusterCovisibility.from_matches(MatchesFile(path))
+        # The backbone's member positions come along, so the neighborhood
+        # exists and the pair answers instead of raising.
+        assert cov.pair_stats(0, 1) is not None
+        arrays = ClusterCovisibility.from_arrays(
+            FILE_STARTS, FILE_IMAGES, N_IMAGES, positions_xy=FILE_POSITIONS
+        )
+        npt.assert_array_equal(cov.pair_displacement(), arrays.pair_displacement())
+        npt.assert_array_equal(
+            cov.pair_displacement_counts(), arrays.pair_displacement_counts()
+        )
+        npt.assert_array_equal(cov.nearest(0, 4), arrays.nearest(0, 4))
+
+    def test_from_matches_rejects_pairwise_backbone(self, tmp_path):
         path = tmp_path / "pairwise.matches"
         _write_pairwise_matches(path)
-        with pytest.raises(ValueError, match="clusters"):
-            ClusterCovisibility.from_matches_file(path)
+        with pytest.raises(ValueError, match="no clusters/ section"):
+            ClusterCovisibility.from_matches(MatchesFile(path))
 
 
 class TestValidation:
@@ -490,9 +529,21 @@ class TestPairDisplacement:
         with pytest.raises(ValueError, match="without positions_xy"):
             cov.pair_displacement_counts()
 
+    def test_float32_and_float64_positions_agree(self):
+        # float32 is the backbone's own width; a float64 array is cast, which
+        # is exact for values that came out of such a file.
+        positions = np.arange(len(MEMBER_IMAGES) * 2, dtype=np.float32).reshape(-1, 2)
+        built = [
+            ClusterCovisibility.from_arrays(
+                CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES, positions_xy=p
+            )
+            for p in (positions, positions.astype(np.float64))
+        ]
+        npt.assert_array_equal(*[c.pair_displacement() for c in built])
+
     def test_wrong_positions_dtype_raises(self):
-        positions = np.zeros((len(MEMBER_IMAGES), 2), dtype=np.float32)
-        with pytest.raises(TypeError, match="float64"):
+        positions = np.zeros((len(MEMBER_IMAGES), 2), dtype=np.uint8)
+        with pytest.raises(TypeError, match="float32 or float64"):
             ClusterCovisibility.from_arrays(
                 CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES, positions_xy=positions
             )

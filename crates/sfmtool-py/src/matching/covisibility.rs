@@ -8,43 +8,60 @@
 //! `specs/core/features/covisibility-selection.md`).
 
 use std::borrow::Cow;
-use std::path::PathBuf;
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 
-use matches_format::ClusterMemberStatus;
 use pyo3::types::PyDict;
 use sfmtool_core::features::cluster_match::covisibility::{
     ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedGroupParams,
 };
 
+use crate::io::matches_file::PyMatchesFile;
+
 use super::cluster::extract_u32_1d;
 
-/// Extract an `(M, 2)` `float64` positions array as `Vec<[f64; 2]>`, with a
-/// clear error if the dtype or shape is wrong.
-fn extract_positions_xy(arr: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<[f64; 2]>> {
-    let arr = arr.extract::<numpy::PyReadonlyArray2<f64>>().map_err(|_| {
+/// Extract an `(M, 2)` positions array as the `f32` pairs the kernel takes,
+/// with a clear error if the dtype or shape is wrong.
+///
+/// `float32` is the `.matches` backbone's own width and is taken as it lies.
+/// `float64` is accepted and cast, because a caller holding positions read out
+/// of such a file has `f32`-originated values in a `float64` array and the cast
+/// is exact for every one of them.
+fn extract_positions_xy(arr: &Bound<'_, PyAny>, what: &str) -> PyResult<Vec<[f32; 2]>> {
+    let width_err = |width: usize| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "{what} must be an (M, 2) array; got width {width}"
+        ))
+    };
+    if let Ok(a) = arr.extract::<numpy::PyReadonlyArray2<f32>>() {
+        if a.shape()[1] != 2 {
+            return Err(width_err(a.shape()[1]));
+        }
+        return Ok(a
+            .as_array()
+            .rows()
+            .into_iter()
+            .map(|r| [r[0], r[1]])
+            .collect());
+    }
+    let a = arr.extract::<numpy::PyReadonlyArray2<f64>>().map_err(|_| {
         let dtype = arr
             .getattr("dtype")
             .and_then(|d| d.getattr("name"))
             .and_then(|n| n.extract::<String>())
             .unwrap_or_else(|_| "?".to_string());
         pyo3::exceptions::PyTypeError::new_err(format!(
-            "{what} must be an (M, 2) float64 array, got {dtype}"
+            "{what} must be an (M, 2) float32 or float64 array, got {dtype}"
         ))
     })?;
-    if arr.shape()[1] != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "{what} must be an (M, 2) array; got width {}",
-            arr.shape()[1]
-        )));
+    if a.shape()[1] != 2 {
+        return Err(width_err(a.shape()[1]));
     }
-    Ok(arr
-        .as_array()
+    Ok(a.as_array()
         .rows()
         .into_iter()
-        .map(|r| [r[0], r[1]])
+        .map(|r| [r[0] as f32, r[1] as f32])
         .collect())
 }
 
@@ -67,7 +84,7 @@ fn extract_bool_1d<'py>(
 
 /// Per-image-pair shared-cluster counts (symmetric, zero diagonal) with the
 /// grouping queries built on them: greedy mutually-covisible seed groups and
-/// candidate ranking. Construct via ``from_arrays`` or ``from_matches_file``.
+/// candidate ranking. Construct via ``from_arrays`` or ``from_matches``.
 ///
 /// This is *cluster* covisibility — a pre-reconstruction quantity computed
 /// from match clusters, distinct from the post-reconstruction shared-3D-track
@@ -114,8 +131,11 @@ impl PyClusterCovisibility {
     ///         count. None (default) counts every member. Each cluster
     ///         contributes at most 1 to any pair; clusters spanning fewer
     ///         than 2 accepted images contribute nothing.
-    ///     positions_xy: Optional (M, 2) float64 per-member observation
-    ///         positions (pixels), parallel to member_images. Enables the
+    ///     positions_xy: Optional (M, 2) float32 per-member observation
+    ///         positions (pixels), parallel to member_images -- the width the
+    ///         ``.matches`` backbone stores them at. A float64 array is
+    ///         accepted and cast, which is exact for the f32-originated values
+    ///         a caller reads out of such a file. Enables the
     ///         displacement queries (``pair_displacement``,
     ///         ``pair_displacement_counts``) and the isolation-ordered
     ///         thinning sweep: one seeded sampled pass at construction draws
@@ -156,42 +176,27 @@ impl PyClusterCovisibility {
         Ok(Self { inner })
     }
 
-    /// Build the count matrix from a cluster-bearing ``.matches`` file.
+    /// Build the count matrix from an open ``MatchesFile`` (a selection
+    /// included), whose cluster backbone already IS the layout
+    /// ``from_arrays`` takes.
     ///
-    /// When the file carries a ``cluster_patches/`` section, the default
-    /// acceptance mask is status ∈ {reference, kept}; otherwise every member
-    /// counts. Custom masks: use ``read_matches`` + numpy + ``from_arrays``.
+    /// When the file carries a ``cluster_patches/`` section, the acceptance
+    /// mask is status ∈ {reference, kept}; otherwise every member counts.
+    /// Custom masks: use ``read_matches`` + numpy + ``from_arrays``.
+    ///
+    /// The backbone's member positions come along, so the displacement
+    /// queries (``pair_displacement``, ``nearest``, ``pair_stats``, …) and
+    /// the isolation-ordered ``thin`` sweep answer on the result.
     ///
     /// Args:
-    ///     path: ``.matches`` file path (str or Path). The file must store
-    ///         the cluster backbone (``clusters/``), not the pairwise one.
+    ///     matches_file: A ``MatchesFile`` storing the cluster backbone
+    ///         (``clusters/``), not the pairwise one.
+    ///     seed: Seed for the displacement sampling pass (default 0).
     #[staticmethod]
-    fn from_matches_file(path: PathBuf) -> PyResult<Self> {
-        let data = matches_format::read_matches(&path)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-        let clusters = data.clusters.ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "{}: no clusters/ section — cluster covisibility needs the cluster \
-                 backbone, not pairwise matches",
-                path.display()
-            ))
-        })?;
-        let mask: Option<Vec<bool>> = data.cluster_patches.as_ref().map(|cp| {
-            cp.member_status
-                .iter()
-                .map(|&s| {
-                    s == ClusterMemberStatus::Reference as u8
-                        || s == ClusterMemberStatus::Kept as u8
-                })
-                .collect()
-        });
-        let inner = CoreClusterCovisibility::from_clusters(
-            clusters.cluster_starts.as_slice().expect("contiguous"),
-            clusters.member_images.as_slice().expect("contiguous"),
-            mask.as_deref(),
-            data.image_names.len(),
-        )
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    #[pyo3(signature = (matches_file, seed=0))]
+    fn from_matches(matches_file: PyRef<'_, PyMatchesFile>, seed: u64) -> PyResult<Self> {
+        let inner = CoreClusterCovisibility::from_matches(matches_file.data(), seed)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
 

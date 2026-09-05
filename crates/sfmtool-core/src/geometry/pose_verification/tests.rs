@@ -102,7 +102,15 @@ impl Scene {
         for c in 0..n_cl {
             starts[c + 1] += starts[c];
         }
-        DisplacementNeighborhood::from_clusters(&starts, &self.image, None, self.n_img(), &self.pos)
+        // The neighborhood takes observations at the `.matches` backbone's
+        // `f32` width; this scene generates them in `f64`, so it narrows here
+        // exactly as a file would have stored them.
+        let pos: Vec<[f32; 2]> = self
+            .pos
+            .iter()
+            .map(|p| [p[0] as f32, p[1] as f32])
+            .collect();
+        DisplacementNeighborhood::from_clusters(&starts, &self.image, None, self.n_img(), &pos)
             .unwrap()
     }
 }

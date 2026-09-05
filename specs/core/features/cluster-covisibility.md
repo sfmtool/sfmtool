@@ -109,7 +109,8 @@ The counts and the grouping queries live in
 — module `sfmtool_core::features::cluster_match::covisibility`, beside the
 matcher that produces the clusters — bound as
 `sfmtool._sfmtool.matching.ClusterCovisibility`. Core stays I/O-free: raw CSR
-slices in, following `refine_cluster_patches`.
+slices in, following `refine_cluster_patches`, or an already-parsed
+`MatchesData`.
 
 ```rust
 pub struct ClusterCovisibility { /* num_images, counts (private) */ }
@@ -123,6 +124,15 @@ impl ClusterCovisibility {
         member_images: &[u32],
         member_accepted: Option<&[bool]>,
         num_images: usize,
+    ) -> Result<Self, CovisibilityError>;
+
+    /// A parsed `.matches` file, with the acceptance policy its sections
+    /// imply (see Acceptance). `CovisibilityError::NoClusters` when the file
+    /// stores the pairwise backbone; `seed` drives the displacement
+    /// sampling pass.
+    pub fn from_matches(
+        matches: &MatchesData,
+        seed: u64,
     ) -> Result<Self, CovisibilityError>;
 
     pub fn num_images(&self) -> usize;
@@ -181,7 +191,7 @@ a yielded group has `W ≥ min_shared`.
 `crates/sfmtool-py/src/matching/covisibility.rs`); no Python wrapper layer.
 
 ```python
-ClusterCovisibility.from_matches_file(path)          # str | Path
+ClusterCovisibility.from_matches(matches_file, seed=0)   # a MatchesFile
 ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
                                 member_accepted=None, positions_xy=None,
                                 seed=0)
@@ -197,12 +207,18 @@ cov.rank_by_covisibility(image, candidates)   # numpy uint32
 `for group in cov.seed_groups(...):` consumes lazily and
 `list(cov.seed_groups(...))` recovers the eager behavior.
 
-`from_matches_file` is glue in the binding crate (which already depends on
-`matches-format`): reads the file, defaults the mask to
-status ∈ {reference, kept} when a `cluster_patches/` section is present and
-all-members otherwise. Requires format ≥ v4 only if a consumer asks for the
-radius channel; the covisibility itself works on any loadable version.
-Custom masks use `read_matches` + numpy + `from_arrays`.
+`from_matches` takes the `MatchesFile` handle (a selection included) and
+forwards its parsed data to the core entry of the same name, so a file is
+parsed once and the acceptance policy has one home: the mask is
+status ∈ {reference, kept} when a `cluster_patches/` section is present, and
+all-members otherwise. The backbone's `member_positions` pass through as the
+`f32` pairs the file stores, copying nothing and widening nothing (the
+displacement arithmetic is `f64` at the point of computation), so the
+displacement queries and the isolation-ordered `thin` sweep answer on a
+matrix built this way; a cluster file below format v6 stores no positions and
+leaves them unavailable. `num_images` is the image table's length. A file
+storing the pairwise backbone raises `ValueError`. Custom masks use
+`read_matches` + numpy + `from_arrays`.
 
 ## Validation
 

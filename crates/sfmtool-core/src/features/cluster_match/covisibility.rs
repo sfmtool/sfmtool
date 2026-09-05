@@ -18,6 +18,12 @@
 //! reach), and `specs/core/geometry/pose-verification.md` for the sparse
 //! displacement-neighborhood substrate ([`DisplacementNeighborhood`]).
 
+use std::borrow::Cow;
+
+use matches_format::{ClusterMemberStatus, MatchesData};
+
+use crate::geometry::focal_vote::contiguous;
+
 /// Dense-backend image cap. Storage is a row-major `u32` matrix (`4·N²`
 /// bytes): 64 MB at this bound, which sits inside the spec's ~4–5 k-image
 /// window where dense storage stops being reasonable. Construction errors
@@ -26,9 +32,14 @@
 /// appears.
 pub const MAX_DENSE_IMAGES: usize = 4096;
 
-/// Errors from [`ClusterCovisibility::from_clusters`] input validation.
+/// Errors from [`ClusterCovisibility::from_clusters`] input validation, plus
+/// the one property of a `.matches` file [`ClusterCovisibility::from_matches`]
+/// refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CovisibilityError {
+    /// [`ClusterCovisibility::from_matches`]: the file stores the pairwise
+    /// backbone, so it holds no clusters to count.
+    NoClusters,
     /// `num_images` exceeds [`MAX_DENSE_IMAGES`].
     TooManyImages { num_images: usize },
     /// `cluster_starts` is not a valid CSR offset array over the members.
@@ -55,6 +66,11 @@ pub enum CovisibilityError {
 impl std::fmt::Display for CovisibilityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::NoClusters => write!(
+                f,
+                "this .matches file carries no clusters/ section: cluster covisibility \
+                 needs the cluster backbone, not pairwise matches"
+            ),
             Self::TooManyImages { num_images } => write!(
                 f,
                 "num_images ({num_images}) exceeds the dense covisibility bound \
@@ -196,6 +212,11 @@ impl ClusterCovisibility {
     /// [`Self::pair_displacement_counts`]) and the isolation-ordered thinning
     /// sweep (see [`Self::thin`]).
     ///
+    /// Positions are `f32` pairs, the width a `.matches` backbone stores them
+    /// at, so a file's own rows are the argument with nothing copied; every
+    /// distance is computed in `f64`, each coordinate widened where it is
+    /// read.
+    ///
     /// One sampled displacement pass runs at construction: every cluster with
     /// two or more accepted members contributes one seeded uniformly-sampled
     /// distinct-member pair (`seed` drives the sampling; same-image pairs are
@@ -207,7 +228,7 @@ impl ClusterCovisibility {
         member_images: &[u32],
         member_accepted: Option<&[bool]>,
         num_images: usize,
-        positions_xy: Option<&[[f64; 2]]>,
+        positions_xy: Option<&[[f32; 2]]>,
         seed: u64,
     ) -> Result<Self, CovisibilityError> {
         if num_images > MAX_DENSE_IMAGES {
@@ -280,7 +301,10 @@ impl ClusterCovisibility {
                     let (ra, rb) = (rows[a], rows[b]);
                     let (ia, ib) = (member_images[ra] as usize, member_images[rb] as usize);
                     if ia != ib {
-                        let d = f64::hypot(pos[ra][0] - pos[rb][0], pos[ra][1] - pos[rb][1]);
+                        let d = f64::hypot(
+                            pos[ra][0] as f64 - pos[rb][0] as f64,
+                            pos[ra][1] as f64 - pos[rb][1] as f64,
+                        );
                         // Accumulate sums in `mean` (upper triangle); a final
                         // pass divides and mirrors.
                         let key = ia.min(ib) * num_images + ia.max(ib);
@@ -323,6 +347,69 @@ impl ClusterCovisibility {
             displacement,
             neighborhood,
         })
+    }
+
+    /// Build the count matrix from a parsed `.matches` file, with the
+    /// acceptance policy its sections imply.
+    ///
+    /// The file states everything the matrix needs: the `clusters/` backbone
+    /// supplies the CSR index, the member images and their positions, and the
+    /// image table supplies `num_images`. A `cluster_patches/` section makes
+    /// the acceptance mask status in {[`ClusterMemberStatus::Reference`],
+    /// [`ClusterMemberStatus::Kept`]}; without one, every member counts. That
+    /// policy lives here rather than in each caller, so a file answers the
+    /// same counts wherever it is opened; any other mask is built by the
+    /// caller and passed to [`Self::from_clusters_with_positions`].
+    ///
+    /// The member positions ride along, so the displacement queries and the
+    /// isolation-ordered thinning sweep answer on a matrix built this way,
+    /// with `seed` driving the sampling pass exactly as in
+    /// [`Self::from_clusters_with_positions`]. A cluster file below format
+    /// version 6 carries no positions, and those queries stay unavailable.
+    ///
+    /// ```no_run
+    /// use sfmtool_core::features::cluster_match::covisibility::ClusterCovisibility;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
+    /// let covis = ClusterCovisibility::from_matches(&matches, 0)?;
+    /// println!("{} images", covis.num_images());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_matches(matches: &MatchesData, seed: u64) -> Result<Self, CovisibilityError> {
+        let clusters = matches
+            .clusters
+            .as_ref()
+            .ok_or(CovisibilityError::NoClusters)?;
+        let mask: Option<Vec<bool>> = matches.cluster_patches.as_ref().map(|cp| {
+            cp.member_status
+                .iter()
+                .map(|&s| {
+                    s == ClusterMemberStatus::Reference as u8
+                        || s == ClusterMemberStatus::Kept as u8
+                })
+                .collect()
+        });
+        // The kernel takes the file's own `f32` pairs, so a standard-layout
+        // `(M, 2)` array is borrowed as `M` consecutive pairs rather than
+        // copied.
+        let positions: Option<Cow<'_, [[f32; 2]]>> =
+            clusters
+                .member_positions
+                .as_ref()
+                .map(|p| match p.as_slice() {
+                    Some(flat) => Cow::Borrowed(flat.as_chunks::<2>().0),
+                    None => Cow::Owned(p.rows().into_iter().map(|r| [r[0], r[1]]).collect()),
+                });
+        Self::from_clusters_with_positions(
+            &contiguous(&clusters.cluster_starts),
+            &contiguous(&clusters.member_images),
+            mask.as_deref(),
+            matches.image_names.len(),
+            positions.as_deref(),
+            seed,
+        )
     }
 
     /// Number of images the matrix covers.

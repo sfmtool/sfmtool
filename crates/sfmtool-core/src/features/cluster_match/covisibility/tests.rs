@@ -268,7 +268,7 @@ fn determinism() {
 /// one in image `j` at distance `d`. Two-member clusters make the sampled
 /// displacement pass deterministic regardless of seed (the pair is
 /// forced), so `mean[i][j] == d` and `count[i][j] == w` exactly.
-fn from_positioned_edges(num_images: usize, edges: &[(u32, u32, u32, f64)]) -> ClusterCovisibility {
+fn from_positioned_edges(num_images: usize, edges: &[(u32, u32, u32, f32)]) -> ClusterCovisibility {
     let mut starts = vec![0u32];
     let mut images = Vec::new();
     let mut positions = Vec::new();
@@ -368,7 +368,7 @@ fn displacement_seeded_determinism() {
     // the multi-member cluster count for any seed.
     let starts = [0u32, 4, 7, 9];
     let images = [0u32, 1, 2, 3, 1, 2, 3, 0, 2];
-    let positions: Vec<[f64; 2]> = (0..9).map(|k| [k as f64 * 3.0, k as f64]).collect();
+    let positions: Vec<[f32; 2]> = (0..9).map(|k| [k as f32 * 3.0, k as f32]).collect();
     let build = |seed| {
         ClusterCovisibility::from_clusters_with_positions(
             &starts,
@@ -535,13 +535,13 @@ fn reach_respects_min_shared_boundary() {
 
 /// A small positioned scene: 4 images, clusters mixing spans, one masked
 /// member, one duplicate-image member.
-fn small_scene() -> (Vec<u32>, Vec<u32>, Vec<[f64; 2]>, Vec<bool>) {
+fn small_scene() -> (Vec<u32>, Vec<u32>, Vec<[f32; 2]>, Vec<bool>) {
     // Cluster 0: images {0, 1, 2}; cluster 1: {0, 1}; cluster 2: {1, 2}
     // with a duplicate member in image 1; cluster 3: {2, 3};
     // cluster 4: {0, 3} but the image-3 member is masked out.
     let starts = vec![0u32, 3, 5, 8, 10, 12];
     let images = vec![0u32, 1, 2, 0, 1, 1, 1, 2, 2, 3, 0, 3];
-    let positions: Vec<[f64; 2]> = (0..12).map(|k| [k as f64 * 2.0, k as f64]).collect();
+    let positions: Vec<[f32; 2]> = (0..12).map(|k| [k as f32 * 2.0, k as f32]).collect();
     let mask = vec![
         true, true, true, true, true, true, true, true, true, true, true, false,
     ];
@@ -553,7 +553,7 @@ fn small_scene() -> (Vec<u32>, Vec<u32>, Vec<[f64; 2]>, Vec<bool>) {
 fn dense_reference(
     starts: &[u32],
     images: &[u32],
-    positions: &[[f64; 2]],
+    positions: &[[f32; 2]],
     mask: Option<&[bool]>,
     n: usize,
 ) -> (Vec<Vec<u32>>, Vec<Vec<f64>>) {
@@ -580,8 +580,8 @@ fn dense_reference(
                     continue;
                 }
                 let d = f64::hypot(
-                    positions[ka][0] - positions[kb][0],
-                    positions[ka][1] - positions[kb][1],
+                    positions[ka][0] as f64 - positions[kb][0] as f64,
+                    positions[ka][1] as f64 - positions[kb][1] as f64,
                 );
                 sum[ia][ib] += d;
                 sum[ib][ia] += d;
@@ -699,8 +699,8 @@ fn neighborhood_duplicate_image_members_count_once_but_displace() {
                       // |p5 - p7| and |p6 - p7| (members 5, 6 in image 1; 7 in image 2).
     let dist = |a: usize, b: usize| {
         f64::hypot(
-            positions[a][0] - positions[b][0],
-            positions[a][1] - positions[b][1],
+            positions[a][0] as f64 - positions[b][0] as f64,
+            positions[a][1] as f64 - positions[b][1] as f64,
         )
     };
     let want = (dist(1, 2) + dist(5, 7) + dist(6, 7)) / 3.0;
