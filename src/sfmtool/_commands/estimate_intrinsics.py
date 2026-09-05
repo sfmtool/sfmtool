@@ -76,12 +76,15 @@ def _resolve_dimensions(image_dims, image_names: list[str]) -> tuple[int, int]:
     return int(distinct[0][0]), int(distinct[0][1])
 
 
-def _load_observations(matches_path: Path) -> dict:
-    """Flat cluster-contiguous observation arrays for the whole `.matches` file.
+def _load_selection(matches_path: Path) -> tuple:
+    """The selection the vote runs on, and what the report says about it.
 
     Every cluster the file admits votes: the selection is the unrestricted one
     (all images, the format's own member admission), because the vote is a
-    referee over the capture's full pair graph.
+    referee over the capture's full pair graph. The selection handle goes
+    straight to the kernel, which reads the backbone's own CSR arrays and
+    member positions off it -- so nothing is re-derived here beyond the
+    counts and the image size the report and the `.camrig` need.
     """
     import numpy as np
 
@@ -94,35 +97,22 @@ def _load_observations(matches_path: Path) -> dict:
             "to produce a cluster-bearing .matches file"
         )
     image_names = list(mfile.image_names)
+    # The kernel enforces the shared-camera rule too; resolving it here first
+    # is what turns it into a message naming the offending resolutions.
     width, height = _resolve_dimensions(mfile.image_dims, image_names)
 
     selection = mfile.select_clusters()
     starts = np.asarray(selection.cluster_starts, dtype=np.int64)
-    cluster_indexes = np.repeat(
-        np.arange(len(starts) - 1, dtype=np.uint32), np.diff(starts)
-    )
-    image_indexes = np.asarray(selection.member_images, dtype=np.uint32)
-    # The backbone states its members' positions, whatever stage the file is
-    # at: the detections of a matcher output, or the refinement's own answer
-    # once `sfm cluster-patches` has run. The default selection has already
-    # dropped the members the refinement excluded, by status -- which is the
-    # only exclusion rule there is; the values themselves are always real.
-    # Stored float32, widened here because the vote solves in float64.
-    positions = np.ascontiguousarray(
-        np.asarray(selection.member_positions(), dtype=np.float64)
-    )
-    if len(cluster_indexes) == 0:
+    if len(starts) < 2 or starts[-1] == 0:
         raise click.UsageError(
             f"{matches_path} holds no cluster observations to vote on"
         )
-    return {
+    return selection, {
         "image_names": image_names,
         "width": width,
         "height": height,
-        "cluster_indexes": cluster_indexes,
-        "image_indexes": image_indexes,
-        "positions": positions,
         "cluster_count": len(starts) - 1,
+        "observation_count": int(starts[-1]),
     }
 
 
@@ -162,7 +152,7 @@ def _report_lines(estimate: dict, data: dict) -> list[str]:
     lines = [
         f"Images:        {len(data['image_names'])} @ {width}x{height}",
         f"Clusters:      {data['cluster_count']} "
-        f"({len(data['cluster_indexes'])} observations)",
+        f"({data['observation_count']} observations)",
         "",
     ]
 
@@ -449,13 +439,9 @@ def estimate_intrinsics(
     from .._sfmtool.geometry import estimate_intrinsics as estimate
 
     try:
-        data = _load_observations(Path(input_path))
+        selection, data = _load_selection(Path(input_path))
         result = estimate(
-            data["cluster_indexes"],
-            data["image_indexes"],
-            data["positions"],
-            data["width"],
-            data["height"],
+            selection,
             seed=seed,
             columns=_MODEL_COLUMNS[model_option.lower()],
         )

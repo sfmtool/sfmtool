@@ -8,10 +8,13 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use matches_format::MatchesData;
 use sfmtool_core::geometry::focal_vote::{
-    focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, FocalVoteResult,
-    ScanCell, ScanVote,
+    focal_vote_from_matches, focal_vote_with_options, CameraModel, ColumnDiagnostics,
+    FocalVoteOptions, FocalVoteResult, MatchesInputError, ScanCell, ScanVote,
 };
+
+use crate::io::matches_file::PyMatchesFile;
 
 /// One column's `scan_votes` entry as a Python dict.
 pub(crate) fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bound<'py, PyDict>> {
@@ -41,38 +44,110 @@ pub(crate) fn scan_vote_dict<'py>(py: Python<'py>, v: &ScanVote) -> PyResult<Bou
     Ok(d)
 }
 
-/// The observation arrays every vote-shaped binding takes, validated and
-/// copied into the layout the kernel wants.
-pub(crate) struct VoteInputs {
-    /// Cluster id per observation, nondecreasing.
-    pub clusters: Vec<u32>,
-    /// Image id per observation.
-    pub images: Vec<u32>,
-    /// Full-pixel keypoint position per observation.
-    pub positions: Vec<[f64; 2]>,
+/// The CSR observation arrays a vote-shaped binding takes in its array form,
+/// validated and copied into the layout the kernel wants.
+pub(crate) struct VoteArrays {
+    /// `n_clusters + 1` CSR offsets into the member arrays.
+    pub cluster_starts: Vec<u32>,
+    /// Image id per member.
+    pub member_images: Vec<u32>,
+    /// Full-pixel keypoint position per member.
+    pub member_positions: Vec<[f64; 2]>,
+    /// Shared image width.
+    pub width: u32,
+    /// Shared image height.
+    pub height: u32,
 }
 
-/// Validate and unpack the three observation arrays.
-pub(crate) fn vote_inputs(
-    cluster_indexes: PyReadonlyArray1<'_, u32>,
-    image_indexes: PyReadonlyArray1<'_, u32>,
-    positions_xy: PyReadonlyArray2<'_, f64>,
-) -> PyResult<VoteInputs> {
-    if positions_xy.shape()[1] != 2 {
+/// What a vote-shaped binding was called with: a parsed `.matches` handle, or
+/// the CSR arrays spelled out.
+///
+/// Both forms reach the same kernel; the object form hands the whole file to
+/// the core's own `from_matches` entry rather than taking the file apart here,
+/// so the reading (the `f32 → f64` widening, the shared-dimensions rule) has
+/// exactly one implementation and both languages get it.
+pub(crate) enum VoteSource<'a> {
+    /// A `.matches` file, read by the core entry point.
+    Matches(&'a MatchesData),
+    /// Explicit CSR observations.
+    Arrays(VoteArrays),
+}
+
+/// Resolve a vote-shaped binding's positional arguments into one of the two
+/// forms.
+///
+/// `source` is either a `MatchesFile` — and then nothing else may be given —
+/// or the `cluster_starts` array, and then all four remaining arguments are
+/// required.
+pub(crate) fn vote_source<'a, 'py>(
+    source: &'a Bound<'py, PyAny>,
+    member_images: Option<PyReadonlyArray1<'py, u32>>,
+    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> PyResult<VoteSource<'a>> {
+    if let Ok(file) = source.cast::<PyMatchesFile>() {
+        if member_images.is_some()
+            || member_positions.is_some()
+            || width.is_some()
+            || height.is_some()
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "the MatchesFile form takes no observation arrays: the file states \
+                 its own members and image size",
+            ));
+        }
+        return Ok(VoteSource::Matches(file.get().data()));
+    }
+    let cluster_starts: PyReadonlyArray1<'py, u32> = source.extract().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err(
+            "the first argument must be a MatchesFile or a (n_clusters + 1,) uint32 \
+             cluster_starts array",
+        )
+    })?;
+    let (Some(member_images), Some(member_positions), Some(width), Some(height)) =
+        (member_images, member_positions, width, height)
+    else {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "positions_xy must have shape (n_obs, 2)",
+            "the array form takes cluster_starts, member_images, member_positions, \
+             width and height",
+        ));
+    };
+    Ok(VoteSource::Arrays(vote_arrays(
+        cluster_starts,
+        member_images,
+        member_positions,
+        width,
+        height,
+    )?))
+}
+
+/// Validate and unpack the CSR observation arrays.
+///
+/// The index contract is checked here, in `O(n_clusters)`, so a caller learns
+/// what is wrong with its arrays instead of getting the empty vote back.
+fn vote_arrays(
+    cluster_starts: PyReadonlyArray1<'_, u32>,
+    member_images: PyReadonlyArray1<'_, u32>,
+    member_positions: PyReadonlyArray2<'_, f64>,
+    width: u32,
+    height: u32,
+) -> PyResult<VoteArrays> {
+    if member_positions.shape()[1] != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "member_positions must have shape (n_members, 2)",
         ));
     }
-    let n_obs = cluster_indexes.shape()[0];
-    if image_indexes.shape()[0] != n_obs || positions_xy.shape()[0] != n_obs {
+    let n_members = member_images.shape()[0];
+    if member_positions.shape()[0] != n_members {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "cluster_indexes, image_indexes, and positions_xy must share n_obs",
+            "member_images and member_positions must share n_members",
         ));
     }
 
-    let clusters = to_contiguous!(cluster_indexes);
-    let images = to_contiguous!(image_indexes);
-    let pos_flat = to_contiguous!(positions_xy);
+    let starts = to_contiguous!(cluster_starts);
+    let images = to_contiguous!(member_images);
+    let pos_flat = to_contiguous!(member_positions);
     let positions: Vec<[f64; 2]> = pos_flat
         .as_chunks::<2>()
         .0
@@ -80,17 +155,36 @@ pub(crate) fn vote_inputs(
         .map(|c| [c[0], c[1]])
         .collect();
 
-    // Cluster ids must be nondecreasing (contiguous runs).
-    if clusters.windows(2).any(|w| w[1] < w[0]) {
+    if starts.first() != Some(&0) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "cluster_indexes must be nondecreasing",
+            "cluster_starts must have at least one entry and open at 0",
         ));
     }
-    Ok(VoteInputs {
-        clusters: clusters.into_owned(),
-        images: images.into_owned(),
-        positions,
+    if starts.windows(2).any(|w| w[1] < w[0]) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "cluster_starts must be nondecreasing",
+        ));
+    }
+    if starts.last().copied().unwrap_or(0) as usize != n_members {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "cluster_starts must close at the member count ({n_members}), not {}",
+            starts.last().copied().unwrap_or(0)
+        )));
+    }
+    Ok(VoteArrays {
+        cluster_starts: starts.into_owned(),
+        member_images: images.into_owned(),
+        member_positions: positions,
+        width,
+        height,
     })
+}
+
+/// Map a core matches-reading refusal onto the Python exception the caller
+/// sees. Every one of them is a property of the file, so they are all value
+/// errors.
+pub(crate) fn matches_err_to_py(e: MatchesInputError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
 }
 
 /// Resolve the `columns` argument; `None` is the pinhole-only default.
@@ -157,13 +251,26 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 /// by the depth/focal (bas-relief) compensation of structure-based focal
 /// estimation.
 ///
+/// Takes its observations in either of two forms, and only these two:
+///
+/// * ``focal_vote(matches_file, ...)`` -- a ``MatchesFile`` (a selection
+///   included), whose cluster backbone already IS the layout below and whose
+///   image table supplies the shared image size. Every image of the file must
+///   carry the same dimensions, because the vote estimates one shared camera.
+/// * ``focal_vote(cluster_starts, member_images, member_positions, width,
+///   height, ...)`` -- the same observations spelled out.
+///
 /// Args:
-///     cluster_indexes: (n_obs,) uint32 cluster id per observation,
-///         nondecreasing (each distinct cluster is a contiguous run).
-///     image_indexes: (n_obs,) uint32 image id per observation.
-///     positions_xy: (n_obs, 2) float64 full-pixel keypoint positions.
+///     cluster_starts: A ``MatchesFile``, or the (n_clusters + 1,) uint32 CSR
+///         offsets into the member arrays: opening at 0, nondecreasing, and
+///         closing at the member count.
+///     member_images: (n_members,) uint32 image id per member. Omitted in the
+///         ``MatchesFile`` form.
+///     member_positions: (n_members, 2) float64 full-pixel keypoint
+///         positions. Omitted in the ``MatchesFile`` form.
 ///     width: Shared image width; the principal point is the image centre.
-///     height: Shared image height.
+///         Omitted in the ``MatchesFile`` form.
+///     height: Shared image height. Omitted in the ``MatchesFile`` form.
 ///     seed: SplitMix64 seed for the sampled pair-table pass and the RANSAC
 ///         estimators; same inputs + seed => bit-identical output (default 0).
 ///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
@@ -231,37 +338,44 @@ fn column_dict<'py>(py: Python<'py>, c: &ColumnDiagnostics) -> PyResult<Bound<'p
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02, columns=None))]
+#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, epipolar_min_disp_frac=0.02, columns=None))]
 pub fn focal_vote<'py>(
     py: Python<'py>,
-    cluster_indexes: PyReadonlyArray1<'py, u32>,
-    image_indexes: PyReadonlyArray1<'py, u32>,
-    positions_xy: PyReadonlyArray2<'py, f64>,
-    width: u32,
-    height: u32,
+    cluster_starts: Bound<'py, PyAny>,
+    member_images: Option<PyReadonlyArray1<'py, u32>>,
+    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    width: Option<u32>,
+    height: Option<u32>,
     seed: u64,
     epipolar_min_disp_frac: f64,
     columns: Option<Vec<String>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let inputs = vote_inputs(cluster_indexes, image_indexes, positions_xy)?;
+    let source = vote_source(
+        &cluster_starts,
+        member_images,
+        member_positions,
+        width,
+        height,
+    )?;
     let options = FocalVoteOptions {
         seed,
         epipolar_min_disp_frac,
         columns: vote_columns(columns)?,
     };
 
-    let result = py.detach(move || {
-        focal_vote_with_options(
-            &inputs.clusters,
-            &inputs.images,
-            &inputs.positions,
-            width,
-            height,
+    let result = py.detach(move || match source {
+        VoteSource::Matches(matches) => focal_vote_from_matches(matches, &options),
+        VoteSource::Arrays(a) => Ok(focal_vote_with_options(
+            &a.cluster_starts,
+            &a.member_images,
+            &a.member_positions,
+            a.width,
+            a.height,
             &options,
-        )
+        )),
     });
 
-    vote_dict(py, &result)
+    vote_dict(py, &result.map_err(matches_err_to_py)?)
 }
 
 /// A [`FocalVoteResult`] as the Python dict the binding documents.

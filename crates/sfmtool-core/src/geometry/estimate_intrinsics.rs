@@ -30,9 +30,12 @@
 //! ([`escalation_reasons`]) -- adaptive strategy inside the estimator, not a
 //! decision each caller re-derives from the vote's diagnostics.
 
+use matches_format::MatchesData;
+
 use crate::geometry::focal_vote::{
     focal_vote_with_options, CameraModel, ColumnDiagnostics, FocalVoteOptions, FocalVoteResult,
-    ScanVote, VoteFamily, FAMILY_DISAGREEMENT_BAND, ORTHO_GRID_HI, ORTHO_GRID_LO, ORTHO_GRID_N,
+    MatchesInputError, MatchesObservations, ScanVote, VoteFamily, FAMILY_DISAGREEMENT_BAND,
+    ORTHO_GRID_HI, ORTHO_GRID_LO, ORTHO_GRID_N,
 };
 
 /// Certified rotation-cell votes an equidistant verdict needs before it counts
@@ -233,10 +236,12 @@ pub struct IntrinsicsEstimate {
 /// See `specs/core/geometry/estimate-intrinsics.md`.
 ///
 /// The arguments before `options` are the vote's own
-/// ([`focal_vote_with_options`]): `cluster_indexes` nondecreasing, one
-/// `image_indexes` entry and one full-pixel `positions_xy` entry per
-/// observation, and the shared image size whose centre is the principal point.
-/// The function does no I/O and estimates no structure.
+/// ([`focal_vote_with_options`]): the cluster-grouped (CSR) observations —
+/// `cluster_starts` of `n_clusters + 1` offsets, one `member_images` entry and
+/// one full-pixel `member_positions` entry per member — and the shared image
+/// size whose centre is the principal point. The function does no I/O and
+/// estimates no structure; [`estimate_intrinsics_from_matches`] is the same
+/// estimate with a `.matches` file read for the caller.
 ///
 /// [`IntrinsicsOptions::columns`] decides how many times the vote runs: once
 /// under [`ColumnPolicy::Fixed`], and under [`ColumnPolicy::Auto`] once when
@@ -245,11 +250,14 @@ pub struct IntrinsicsEstimate {
 /// ```no_run
 /// use sfmtool_core::geometry::estimate_intrinsics::{estimate_intrinsics, IntrinsicsOptions};
 ///
-/// # let (cluster_indexes, image_indexes, positions_xy) = (vec![], vec![], vec![]);
+/// // One two-member cluster, seen in images 0 and 1.
+/// let cluster_starts = [0u32, 2];
+/// let member_images = [0u32, 1];
+/// let member_positions = [[120.0, 240.0], [131.5, 238.0]];
 /// let estimate = estimate_intrinsics(
-///     &cluster_indexes,
-///     &image_indexes,
-///     &positions_xy,
+///     &cluster_starts,
+///     &member_images,
+///     &member_positions,
 ///     640,
 ///     480,
 ///     &IntrinsicsOptions::default(),
@@ -259,18 +267,18 @@ pub struct IntrinsicsEstimate {
 /// }
 /// ```
 pub fn estimate_intrinsics(
-    cluster_indexes: &[u32],
-    image_indexes: &[u32],
-    positions_xy: &[[f64; 2]],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f64; 2]],
     width: u32,
     height: u32,
     options: &IntrinsicsOptions,
 ) -> IntrinsicsEstimate {
     let run = |columns: Vec<CameraModel>| {
         focal_vote_with_options(
-            cluster_indexes,
-            image_indexes,
-            positions_xy,
+            cluster_starts,
+            member_images,
+            member_positions,
             width,
             height,
             &FocalVoteOptions {
@@ -331,6 +339,50 @@ pub fn estimate_intrinsics(
         screening_vote,
         vote,
     }
+}
+
+/// Estimate a camera from a parsed `.matches` file's cluster tracks, in one
+/// call. See `specs/core/geometry/estimate-intrinsics.md`.
+///
+/// The file already states the observations in the layout the vote takes, so
+/// this reads them ([`MatchesObservations::read`]) and estimates: the cluster
+/// backbone's CSR index and member arrays are borrowed, the member positions
+/// are widened `f32 → f64` once (exactly, so no arithmetic moves), and the
+/// shared image size comes off the image table. It is [`estimate_intrinsics`]
+/// with the reading done for the caller, and produces identical bits.
+///
+/// Errors on a property of the file rather than of the vote — no cluster
+/// backbone, no member positions, no dimensions, or images that do not all
+/// share one resolution ([`MatchesInputError`]). That last rule is the
+/// shared-camera contract: the vote places the principal point at the image
+/// centre of ONE camera, so a file mixing resolutions is not one estimate, and
+/// checking it here is what keeps every caller from silently taking `dims[0]`.
+///
+/// ```no_run
+/// use sfmtool_core::geometry::estimate_intrinsics::{
+///     estimate_intrinsics_from_matches, IntrinsicsOptions,
+/// };
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
+/// let estimate = estimate_intrinsics_from_matches(&matches, &IntrinsicsOptions::default())?;
+/// println!("{:?} at {:?} px", estimate.camera_model, estimate.focal_px);
+/// # Ok(())
+/// # }
+/// ```
+pub fn estimate_intrinsics_from_matches(
+    matches: &MatchesData,
+    options: &IntrinsicsOptions,
+) -> Result<IntrinsicsEstimate, MatchesInputError> {
+    let obs = MatchesObservations::read(matches)?;
+    Ok(estimate_intrinsics(
+        &obs.cluster_starts,
+        &obs.member_images,
+        &obs.member_positions,
+        obs.width,
+        obs.height,
+        options,
+    ))
 }
 
 /// One column's diagnostics, if the vote ran that column.

@@ -33,8 +33,8 @@ BOTH = ("pinhole", "equidistant")
 
 
 def test_estimate_dict_layout():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
     assert set(est) == {
         "camera_model",
         "confirmed",
@@ -61,9 +61,9 @@ def test_estimate_dict_layout():
 def test_default_columns_are_both():
     # Unlike focal_vote, whose default is the closed-form pinhole kernel, the
     # estimate's default runs both columns: the verdict is what it is for.
-    cl, im, pos = _fisheye_scene(2718)
-    default = estimate_intrinsics(cl, im, pos, W, H, seed=0)
-    explicit = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns=BOTH)
+    starts, im, pos = _fisheye_scene(2718)
+    default = estimate_intrinsics(starts, im, pos, W, H, seed=0)
+    explicit = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns=BOTH)
     assert default == explicit
     assert [c["camera_model"] for c in default["vote"]["columns"]] == [
         "Pinhole",
@@ -72,29 +72,31 @@ def test_default_columns_are_both():
 
 
 def test_nested_vote_is_the_focal_vote_result():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns=BOTH)
-    raw = focal_vote(cl, im, pos, W, H, seed=0, columns=BOTH)
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns=BOTH)
+    raw = focal_vote(starts, im, pos, W, H, seed=0, columns=BOTH)
     assert est["vote"] == raw
 
 
 def test_fisheye_capture_is_confirmed():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
     assert est["camera_model"] == "EquidistantFisheye", est["vote"]["columns"]
     assert est["confirmed"] is True
     assert abs(est["focal_px"] - F_FISH) / F_FISH < 0.05
 
 
 def test_min_rotation_mass_floor_is_respected():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
     (fish,) = [
         c for c in est["vote"]["columns"] if c["camera_model"] == "EquidistantFisheye"
     ]
     mass = fish["n_certified_rotation"]
     assert mass >= 1
-    above = estimate_intrinsics(cl, im, pos, W, H, seed=0, min_rotation_mass=mass + 1)
+    above = estimate_intrinsics(
+        starts, im, pos, W, H, seed=0, min_rotation_mass=mass + 1
+    )
     assert above["confirmed"] is False
     # Only the corroboration moved; the verdict itself did not.
     assert above["camera_model"] == est["camera_model"]
@@ -102,23 +104,23 @@ def test_min_rotation_mass_floor_is_respected():
 
 
 def test_pinhole_verdict_raises_no_confirmation_question():
-    cl, im, pos = _rotation_scene(2024)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _rotation_scene(2024)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
     assert est["camera_model"] == "Pinhole"
     assert est["confirmed"] is None
 
 
 def test_single_column_arbitrates_nothing():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns=("fisheye",))
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns=("fisheye",))
     assert est["camera_model"] == "EquidistantFisheye"
     # One column is the verdict by construction, so there is nothing to confirm.
     assert est["confirmed"] is None
 
 
 def test_verdict_votes_are_the_winning_column_s_certified_scans():
-    cl, im, pos = _fisheye_scene(2718)
-    est = estimate_intrinsics(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _fisheye_scene(2718)
+    est = estimate_intrinsics(starts, im, pos, W, H, seed=0)
     (fish,) = [
         c for c in est["vote"]["columns"] if c["camera_model"] == "EquidistantFisheye"
     ]
@@ -139,50 +141,62 @@ def test_verdict_votes_are_the_winning_column_s_certified_scans():
 
 
 def test_seed_reproducibility():
-    cl, im, pos = _fisheye_scene(2718)
-    a = estimate_intrinsics(cl, im, pos, W, H, seed=7)
-    b = estimate_intrinsics(cl, im, pos, W, H, seed=7)
+    starts, im, pos = _fisheye_scene(2718)
+    a = estimate_intrinsics(starts, im, pos, W, H, seed=7)
+    b = estimate_intrinsics(starts, im, pos, W, H, seed=7)
     assert a == b
 
 
 def test_rejects_unknown_column():
-    cl, im, pos = _rotation_scene(2024)
+    starts, im, pos = _rotation_scene(2024)
     with pytest.raises(ValueError):
-        estimate_intrinsics(cl, im, pos, W, H, columns=("brown-conrady",))
+        estimate_intrinsics(starts, im, pos, W, H, columns=("brown-conrady",))
 
 
 def test_shape_validation():
+    ten = np.zeros(10, np.uint32)
+    with pytest.raises(ValueError):
+        estimate_intrinsics(np.array([0, 10], np.uint32), ten, np.zeros((10, 3)), W, H)
     with pytest.raises(ValueError):
         estimate_intrinsics(
-            np.zeros(10, np.uint32), np.zeros(10, np.uint32), np.zeros((10, 3)), W, H
+            np.array([0, 10], np.uint32),
+            np.zeros(9, np.uint32),
+            np.zeros((10, 2)),
+            W,
+            H,
         )
+    # The CSR index's own contract, checked before anything votes.
     with pytest.raises(ValueError):
-        estimate_intrinsics(
-            np.zeros(10, np.uint32), np.zeros(9, np.uint32), np.zeros((10, 2)), W, H
-        )
+        estimate_intrinsics(np.array([1, 10], np.uint32), ten, np.zeros((10, 2)), W, H)
+    with pytest.raises(ValueError):
+        estimate_intrinsics(np.array([0, 9], np.uint32), ten, np.zeros((10, 2)), W, H)
 
 
 def _two_subcapture_scene() -> tuple:
     """A far-field rotation rig and a baseline track in one observation set, on
     disjoint images and clusters -- both vote families at once, so the pinhole
-    pool is wide enough to stand without the camera-model columns."""
-    rot_c, rot_i, rot_p = _rotation_scene(2024)
-    par_c, par_i, par_p = _parallax_scene(7)
+    pool is wide enough to stand without the camera-model columns.
+
+    Concatenating two CSR captures is concatenating their member arrays and
+    shifting the second index past the first's member count -- dropping its
+    opening 0, which the first index's closing offset already is."""
+    rot_s, rot_i, rot_p = _rotation_scene(2024)
+    par_s, par_i, par_p = _parallax_scene(7)
     return (
-        np.concatenate([rot_c, par_c + rot_c.max() + 1]).astype(np.uint32),
+        np.concatenate([rot_s, par_s[1:] + rot_s[-1]]).astype(np.uint32),
         np.concatenate([rot_i, par_i + rot_i.max() + 1]).astype(np.uint32),
         np.concatenate([rot_p, par_p]).astype(np.float64),
     )
 
 
 def test_auto_escalates_a_weak_pinhole_vote_to_the_two_column_answer():
-    cl, im, pos = _fisheye_scene(2718)
-    auto = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns="auto")
+    starts, im, pos = _fisheye_scene(2718)
+    auto = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns="auto")
     assert auto["escalation"], "a fisheye capture's pinhole vote is weak"
     assert all(isinstance(reason, str) for reason in auto["escalation"])
 
     # The escalated answer is the both-columns answer on the same inputs.
-    both = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns=BOTH)
+    both = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns=BOTH)
     assert auto["camera_model"] == both["camera_model"]
     assert auto["confirmed"] == both["confirmed"]
     assert auto["focal_px"] == both["focal_px"]
@@ -193,12 +207,12 @@ def test_auto_escalates_a_weak_pinhole_vote_to_the_two_column_answer():
     screening = auto["screening_vote"]
     assert screening["columns"] == []
     assert screening["camera_model"] == "Pinhole"
-    assert screening == focal_vote(cl, im, pos, W, H, seed=0)
+    assert screening == focal_vote(starts, im, pos, W, H, seed=0)
 
 
 def test_auto_leaves_a_strong_pinhole_vote_alone():
-    cl, im, pos = _two_subcapture_scene()
-    auto = estimate_intrinsics(cl, im, pos, W, H, seed=0, columns="auto")
+    starts, im, pos = _two_subcapture_scene()
+    auto = estimate_intrinsics(starts, im, pos, W, H, seed=0, columns="auto")
     # No reason fired, so no scan ran: no columns, a Pinhole verdict by
     # construction, nothing to confirm and no screening vote to keep separate.
     assert auto["escalation"] == []
@@ -208,18 +222,18 @@ def test_auto_leaves_a_strong_pinhole_vote_alone():
     assert auto["confirmed"] is None
     assert auto["verdict_votes"] == []
     # It IS the pinhole-only vote, which is what makes skipping the scans free.
-    assert auto["vote"] == focal_vote(cl, im, pos, W, H, seed=0)
+    assert auto["vote"] == focal_vote(starts, im, pos, W, H, seed=0)
 
 
 def test_rejects_unknown_column_policy_string():
-    cl, im, pos = _rotation_scene(2024)
+    starts, im, pos = _rotation_scene(2024)
     with pytest.raises(ValueError):
-        estimate_intrinsics(cl, im, pos, W, H, columns="both")
+        estimate_intrinsics(starts, im, pos, W, H, columns="both")
 
 
 def test_empty_input_has_no_verdict():
     est = estimate_intrinsics(
-        np.zeros(0, np.uint32), np.zeros(0, np.uint32), np.zeros((0, 2)), W, H
+        np.zeros(1, np.uint32), np.zeros(0, np.uint32), np.zeros((0, 2)), W, H
     )
     assert est["camera_model"] is None
     assert est["confirmed"] is None

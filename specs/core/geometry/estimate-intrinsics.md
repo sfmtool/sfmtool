@@ -18,10 +18,14 @@ has nothing for the arbitration to overturn. `ColumnPolicy::Auto` therefore
 screens on the pinhole-only vote and re-runs with both columns exactly when
 that vote comes back weak, reporting which weak-vote reasons fired.
 
-The function does no I/O. Reading a `.matches` file, resolving keypoint
-positions, and choosing which clusters to admit are the caller's job; the
-API is pure compute over arrays, so it serves the CLI command, the seed
-pipeline, and tests identically.
+`estimate_intrinsics` itself does no I/O: it is pure compute over the
+cluster-grouped observation arrays, so it serves the CLI command, the seed
+pipeline, and tests identically. `estimate_intrinsics_from_matches` is the
+same estimate over an already-parsed `.matches` file, which states those
+observations in exactly that layout — so a caller holding a file makes one
+call instead of taking the file apart, and the reading (the `f32 → f64`
+widening, the shared-camera dimensions rule) has one implementation that
+both languages reach.
 
 ## Rust interface
 
@@ -95,24 +99,46 @@ pub fn escalation_reasons(
     height: u32,
 ) -> Vec<EscalationReason>
 
+/// Cluster-grouped (CSR) observations: `cluster_starts` of `n_clusters + 1`
+/// offsets (opening at 0, nondecreasing, closing at the member count), one
+/// `member_images` entry and one `member_positions` entry per member, and
+/// the shared image size whose centre is the principal point. See
+/// focal-vote.md for the contract and its up-front validation.
 pub fn estimate_intrinsics(
-    cluster_indexes: &[u32],
-    image_indexes: &[u32],
-    positions_xy: &[[f64; 2]],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f64; 2]],
     width: u32,
     height: u32,
     options: &IntrinsicsOptions,
 ) -> IntrinsicsEstimate
+
+/// The same estimate over a parsed `.matches` file: the cluster backbone's
+/// CSR index and member images borrowed, its member positions widened
+/// `f32 -> f64` once, and `(width, height)` off the image table. Errors
+/// (`MatchesInputError`) only on a property of the file.
+pub fn estimate_intrinsics_from_matches(
+    matches: &MatchesData,
+    options: &IntrinsicsOptions,
+) -> Result<IntrinsicsEstimate, MatchesInputError>
 ```
 
 Example call: the CLI's `--model auto` is
-`estimate_intrinsics(ci, ii, xy, w, h, &IntrinsicsOptions { columns:
+`estimate_intrinsics_from_matches(&matches, &IntrinsicsOptions { columns:
 ColumnPolicy::Auto, ..Default::default() })` -- pinhole first, both columns
 on a weak vote, structural confirmation -- and then reads `camera_model`,
 `confirmed`, `focal_px` and `escalation` off the result instead of
-re-deriving any of them from the vote dict. A caller that wants both columns
+re-deriving any of them from the vote dict. A caller whose observations are
+already in hand as arrays calls `estimate_intrinsics` with the same options
+and gets the same bits. A caller that wants both columns
 unconditionally leaves `columns` at its `Fixed` default, whose `vote.columns`
 is already the pair.
+
+**The shared-camera rule.** The from-matches entry refuses a file whose
+images do not all carry the same dimensions. The estimate is of ONE camera
+with a centred principal point, so a file mixing resolutions is not one
+estimate; checking it at the reading is what keeps every caller from
+silently answering it from the first image's size.
 
 ## Verdict semantics
 
@@ -209,3 +235,10 @@ policy pays for itself.
   `ColumnPolicy::Auto` and a sequence of column names for `Fixed`;
   `escalation` comes back as the reasons' string names and `screening_vote`
   as a nested vote dict.
+- The binding takes the same two forms as the Rust surface and only these
+  two: `estimate_intrinsics(matches_file, ...)` with a `MatchesFile` handle
+  (a selection included), which forwards to `estimate_intrinsics_from_matches`,
+  and `estimate_intrinsics(cluster_starts, member_images, member_positions,
+  width, height, ...)`. Mixing them -- observation arrays alongside a
+  `MatchesFile`, or the array form with an argument missing -- is a
+  `ValueError`, and so is every `MatchesInputError`.

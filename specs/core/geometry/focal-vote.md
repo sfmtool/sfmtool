@@ -39,19 +39,46 @@ belong to that verdict.
 
 ## Inputs
 
-Flat observation arrays over track clusters (the same layout the patch and
-matching modules use):
+Cluster-grouped (CSR) observations — the layout the `.matches` cluster
+backbone stores, so a file's own arrays are the vote's arguments:
 
 | Input | Type | Description |
 |---|---|---|
-| `cluster_indexes` | `u32 [n_obs]` | Cluster id per observation, nondecreasing |
-| `image_indexes` | `u32 [n_obs]` | Image id per observation |
-| `positions_xy` | `f64 [n_obs, 2]` | Full-pixel keypoint position |
+| `cluster_starts` | `u32 [n_clusters + 1]` | CSR offsets into the member arrays: opens at `0`, nondecreasing, closes at `n_members` |
+| `member_images` | `u32 [n_members]` | Image id per member |
+| `member_positions` | `f64 [n_members, 2]` | Full-pixel keypoint position per member |
 | `width`, `height` | `u32` | Shared image size; the principal point is the image centre |
 | `seed` | `u64` | RANSAC seed; identical inputs and seed reproduce identical output |
 
+Cluster `c` owns members `cluster_starts[c]..cluster_starts[c+1]`. The index
+is validated up front in `O(n_clusters)` — the four conditions above, plus
+member arrays of one length — and input that breaks it votes nothing and
+comes back as the empty result. A CSR index cannot express a cluster whose
+members are interleaved with another's, which is why the check is a property
+of `n_clusters` rather than a scan of every observation; it *can* express an
+empty cluster, which occupies an index and contributes nothing.
+
 Observations must reference at least two images. Clusters with fewer than
 two member images contribute nothing.
+
+Positions are `f64`. A `.matches` file stores `f32` and the widening is
+exact, so the file's numbers and the kernel's arithmetic are the same
+numbers.
+
+### From a `.matches` file
+
+`focal_vote_from_matches(&MatchesData, &FocalVoteOptions)` is the whole
+file-to-vote path in one call: it reads the cluster backbone's CSR index and
+member images (borrowed), widens the member positions once, and takes
+`(width, height)` off the image table — **refusing a file whose images do not
+all carry the same dimensions**, which is the shared-camera contract the
+centred principal point rests on, stated here instead of every caller
+silently taking the first image's size. It errors only on a property of the
+file (`MatchesInputError`: no cluster backbone, no member positions, no
+images, no dimensions, mixed dimensions); a capture the vote simply cannot
+answer is a result with no consensus, not an error.
+[`estimate_intrinsics_from_matches`](estimate-intrinsics.md) is the same
+reading behind the typed answer.
 
 ## Output
 
@@ -407,9 +434,20 @@ and the 4-point LO-RANSAC homography in
 [homography_estimation.rs](../../../crates/sfmtool-core/src/geometry/homography_estimation.rs),
 bound as `sfmtool._sfmtool.geometry.focal_vote` and `estimate_homography`.
 
-`sfmtool._sfmtool.geometry.focal_vote(cluster_indexes, image_indexes,
-positions_xy, width, height, seed=0, epipolar_min_disp_frac=0.02,
-columns=None)` returns a dict mirroring the output table (`family` and
+`sfmtool._sfmtool.geometry.focal_vote` takes its observations in either of
+two forms and only these two, mirroring the two Rust entry points:
+
+- `focal_vote(matches_file, *, seed=0, epipolar_min_disp_frac=0.02,
+  columns=None)` — a `MatchesFile` handle, a selection included, forwarded to
+  `focal_vote_from_matches`.
+- `focal_vote(cluster_starts, member_images, member_positions, width, height,
+  *, seed=0, epipolar_min_disp_frac=0.02, columns=None)` — the CSR arrays
+  spelled out.
+
+Passing observation arrays alongside a `MatchesFile`, or the array form with
+an argument missing, is a `ValueError`; so is a CSR index that does not open
+at `0`, is not nondecreasing, or does not close at the member count. The call
+returns a dict mirroring the output table (`family` and
 `camera_model` as strings, `None` for absent optionals). `columns` is a
 sequence of column names (`"pinhole"`, `"equidistant"` / `"fisheye"`);
 `None` means the pinhole-only default, which reproduces the closed-form
@@ -552,6 +590,13 @@ forensic run, not a supported configuration.
   and returns the majority family's median, never a between-modes blend;
   the tie→`Rotation` rule; homography RANSAC recovers a planted H under
   outlier contamination; seeded determinism.
+- Rust, the CSR contract: every way of breaking the index — no offsets at
+  all, an index that opens late, closes short, closes past the members, or
+  runs backwards, and member arrays of different lengths — votes nothing on
+  a capture that otherwise reaches a consensus; interleaving an empty
+  cluster before every real one leaves the capture's answer bit-identical,
+  which is what says the merge-join reads cluster INDEX rather than cluster
+  identity.
 - Rust, camera-model columns: synthetic equidistant scenes (pure
   rotation and parallax) recover a planted fisheye focal through each
   cell; the same fisheye pair read through the pinhole column survives

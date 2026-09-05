@@ -56,19 +56,20 @@ def _project(r, t, x):
 
 
 class _Obs:
+    """Accumulating builder for the kernel's CSR observations: one span-2
+    cluster per pushed correspondence, so `starts` is `[0, 2, 4, ...]`."""
+
     def __init__(self):
-        self.cluster, self.image, self.pos, self.n = [], [], [], 0
+        self.starts, self.image, self.pos = [0], [], []
 
     def push(self, ia, pa, ib, pb):
-        c = self.n
-        self.n += 1
-        self.cluster += [c, c]
         self.image += [ia, ib]
         self.pos += [pa, pb]
+        self.starts.append(len(self.image))
 
     def arrays(self):
         return (
-            np.asarray(self.cluster, dtype=np.uint32),
+            np.asarray(self.starts, dtype=np.uint32),
             np.asarray(self.image, dtype=np.uint32),
             np.asarray(self.pos, dtype=np.float64),
         )
@@ -228,8 +229,8 @@ def test_homography_determinism():
 
 
 def test_focal_vote_dict_layout():
-    cl, im, pos = _rotation_scene(2024)
-    res = focal_vote(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _rotation_scene(2024)
+    res = focal_vote(starts, im, pos, W, H, seed=0)
     assert set(res) == {
         "focal_px",
         "family",
@@ -294,30 +295,53 @@ def test_focal_vote_dict_layout():
 
 
 def test_focal_vote_shape_validation():
+    ten = np.zeros(10, np.uint32)
+    # Positions must be (n_members, 2), and parallel to member_images.
+    with pytest.raises(ValueError):
+        focal_vote(np.array([0, 10], np.uint32), ten, np.zeros((10, 3)), W, H)
     with pytest.raises(ValueError):
         focal_vote(
-            np.zeros(10, np.uint32), np.zeros(10, np.uint32), np.zeros((10, 3)), W, H
-        )
-    with pytest.raises(ValueError):
-        focal_vote(
-            np.zeros(10, np.uint32), np.zeros(9, np.uint32), np.zeros((10, 2)), W, H
-        )
-    # Non-monotone cluster ids are rejected.
-    with pytest.raises(ValueError):
-        focal_vote(
-            np.array([0, 2, 1], np.uint32),
-            np.array([0, 1, 2], np.uint32),
-            np.zeros((3, 2)),
+            np.array([0, 10], np.uint32),
+            np.zeros(9, np.uint32),
+            np.zeros((10, 2)),
             W,
             H,
         )
 
 
+def test_focal_vote_rejects_a_broken_csr_index():
+    images = np.zeros(4, np.uint32)
+    positions = np.zeros((4, 2))
+    valid = np.array([0, 2, 4], np.uint32)
+    # The control: the same members under a valid index are accepted.
+    focal_vote(valid, images, positions, W, H)
+
+    # No offsets at all, and an index that does not open at 0.
+    for starts in (np.zeros(0, np.uint32), np.array([1, 4], np.uint32)):
+        with pytest.raises(ValueError):
+            focal_vote(starts, images, positions, W, H)
+    # Non-monotonic offsets.
+    with pytest.raises(ValueError):
+        focal_vote(np.array([0, 3, 2, 4], np.uint32), images, positions, W, H)
+    # Offsets that do not close at the member count, short and long.
+    for last in (3, 5):
+        with pytest.raises(ValueError):
+            focal_vote(np.array([0, 2, last], np.uint32), images, positions, W, H)
+
+
+def test_focal_vote_array_form_needs_every_argument():
+    starts, im, pos = _rotation_scene(2024)
+    with pytest.raises(ValueError):
+        focal_vote(starts, im, pos, W)
+    with pytest.raises(TypeError):
+        focal_vote("not an array", im, pos, W, H)
+
+
 def test_focal_vote_rotation_scene():
     # Parallax-free rig: the epipolar candidates are homography-dominated, so
     # the pool is rotation votes and Rotation is its majority contributor.
-    cl, im, pos = _rotation_scene(2024)
-    res = focal_vote(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _rotation_scene(2024)
+    res = focal_vote(starts, im, pos, W, H, seed=0)
     assert res["family"] == "Rotation", res
     assert res["n_rotation"] > res["n_epipolar"]
     assert res["n_pool"] == res["n_epipolar"] + res["n_rotation"]
@@ -341,8 +365,8 @@ def test_focal_vote_rotation_scene():
 def test_focal_vote_parallax_scene():
     # Baseline track over finite structure: direction-consistent epipolar pairs
     # dominate the pool.
-    cl, im, pos = _parallax_scene(4048)
-    res = focal_vote(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _parallax_scene(4048)
+    res = focal_vote(starts, im, pos, W, H, seed=0)
     assert res["family"] == "Epipolar", res
     assert res["n_epipolar"] > res["n_rotation"]
     assert res["n_pool"] >= 2
@@ -362,9 +386,9 @@ def test_focal_vote_parallax_scene():
 
 
 def test_focal_vote_seed_reproducibility():
-    cl, im, pos = _rotation_scene(2024)
-    a = focal_vote(cl, im, pos, W, H, seed=42)
-    b = focal_vote(cl, im, pos, W, H, seed=42)
+    starts, im, pos = _rotation_scene(2024)
+    a = focal_vote(starts, im, pos, W, H, seed=42)
+    b = focal_vote(starts, im, pos, W, H, seed=42)
     assert a["focal_px"] == b["focal_px"]
     assert a["family"] == b["family"]
     assert a["n_epipolar"] == b["n_epipolar"]
@@ -380,11 +404,11 @@ def test_focal_vote_seed_reproducibility():
 
 
 def test_focal_vote_noncontiguous_input():
-    cl, im, pos = _rotation_scene(2024)
+    starts, im, pos = _rotation_scene(2024)
     pos_nc = np.repeat(pos, 2, axis=1)[:, ::2]
     assert not pos_nc.flags["C_CONTIGUOUS"]
-    a = focal_vote(cl, im, pos_nc, W, H, seed=0)
-    b = focal_vote(cl, im, np.ascontiguousarray(pos), W, H, seed=0)
+    a = focal_vote(starts, im, pos_nc, W, H, seed=0)
+    b = focal_vote(starts, im, np.ascontiguousarray(pos), W, H, seed=0)
     assert a["focal_px"] == b["focal_px"]
     assert a["family"] == b["family"]
 
@@ -451,23 +475,23 @@ def test_focal_vote_default_columns_match_explicit_pinhole_only():
     # The new parameter defaults to pinhole-only, and asking for pinhole-only
     # explicitly reproduces the default call exactly — every pre-existing key
     # included.
-    cl, im, pos = _rotation_scene(2024)
-    default = focal_vote(cl, im, pos, W, H, seed=0)
-    explicit = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole",))
+    starts, im, pos = _rotation_scene(2024)
+    default = focal_vote(starts, im, pos, W, H, seed=0)
+    explicit = focal_vote(starts, im, pos, W, H, seed=0, columns=("pinhole",))
     assert default == explicit
     assert default["camera_model"] == "Pinhole"
     assert default["columns"] == []
 
 
 def test_focal_vote_rejects_unknown_column():
-    cl, im, pos = _rotation_scene(2024)
+    starts, im, pos = _rotation_scene(2024)
     with pytest.raises(ValueError):
-        focal_vote(cl, im, pos, W, H, columns=("brown-conrady",))
+        focal_vote(starts, im, pos, W, H, columns=("brown-conrady",))
 
 
 def test_focal_vote_fisheye_capture_is_arbitrated_equidistant():
-    cl, im, pos = _fisheye_scene(2718)
-    res = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
+    starts, im, pos = _fisheye_scene(2718)
+    res = focal_vote(starts, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
     assert res["camera_model"] == "EquidistantFisheye", res["columns"]
     assert [c["camera_model"] for c in res["columns"]] == [
         "Pinhole",
@@ -554,9 +578,9 @@ def test_focal_vote_fisheye_capture_is_arbitrated_equidistant():
 def test_focal_vote_pinhole_capture_is_arbitrated_pinhole():
     # The converse, and the compatibility guarantee: when pinhole wins, the
     # top-level fields are exactly the pinhole-only answer.
-    cl, im, pos = _parallax_scene(4048)
-    both = focal_vote(cl, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
-    only = focal_vote(cl, im, pos, W, H, seed=0)
+    starts, im, pos = _parallax_scene(4048)
+    both = focal_vote(starts, im, pos, W, H, seed=0, columns=("pinhole", "equidistant"))
+    only = focal_vote(starts, im, pos, W, H, seed=0)
     assert both["camera_model"] == "Pinhole", both["columns"]
     for key in (
         "focal_px",
@@ -573,16 +597,17 @@ def test_focal_vote_pinhole_capture_is_arbitrated_pinhole():
 
 
 def test_focal_vote_columns_seed_reproducibility():
-    cl, im, pos = _fisheye_scene(2718)
+    starts, im, pos = _fisheye_scene(2718)
     cols = ("pinhole", "equidistant")
-    a = focal_vote(cl, im, pos, W, H, seed=11, columns=cols)
-    b = focal_vote(cl, im, pos, W, H, seed=11, columns=cols)
+    a = focal_vote(starts, im, pos, W, H, seed=11, columns=cols)
+    b = focal_vote(starts, im, pos, W, H, seed=11, columns=cols)
     assert a == b
 
 
 def test_focal_vote_empty_input():
+    # No clusters at all, which in CSR is the lone opening offset.
     res = focal_vote(
-        np.zeros(0, np.uint32), np.zeros(0, np.uint32), np.zeros((0, 2)), W, H
+        np.zeros(1, np.uint32), np.zeros(0, np.uint32), np.zeros((0, 2)), W, H
     )
     assert res["focal_px"] is None
     assert res["family"] is None

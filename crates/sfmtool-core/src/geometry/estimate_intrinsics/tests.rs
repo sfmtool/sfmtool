@@ -10,7 +10,7 @@ use crate::geometry::focal_vote::{ScanCell, VoteFamily};
 
 /// Run the estimator over a synthetic capture, both columns, seed 0.
 fn estimate(obs: &Obs, options: &IntrinsicsOptions) -> IntrinsicsEstimate {
-    estimate_intrinsics(&obs.cluster, &obs.image, &obs.pos, W, H, options)
+    estimate_intrinsics(&obs.starts, &obs.image, &obs.pos, W, H, options)
 }
 
 /// A fisheye capture with parallax but NO far-field rotation pairs: every
@@ -201,7 +201,7 @@ fn the_vote_comes_back_untouched() {
     let obs = fisheye_scene(2718);
     let est = estimate(&obs, &IntrinsicsOptions::default());
     let raw = crate::geometry::focal_vote::focal_vote_with_options(
-        &obs.cluster,
+        &obs.starts,
         &obs.image,
         &obs.pos,
         W,
@@ -223,7 +223,7 @@ fn the_vote_comes_back_untouched() {
 
 #[test]
 fn empty_input_has_no_verdict_and_no_question() {
-    let est = estimate_intrinsics(&[], &[], &[], W, H, &IntrinsicsOptions::default());
+    let est = estimate_intrinsics(&[0], &[], &[], W, H, &IntrinsicsOptions::default());
     assert_eq!(est.camera_model, None);
     assert_eq!(est.confirmed, None);
     assert_eq!(est.focal_px, None);
@@ -453,7 +453,7 @@ fn auto_leaves_a_strong_pinhole_vote_alone() {
     // It is exactly the pinhole-only vote, which is what makes skipping the
     // scans free rather than a different answer.
     let pinhole = crate::geometry::focal_vote::focal_vote_with_options(
-        &obs.cluster,
+        &obs.starts,
         &obs.image,
         &obs.pos,
         W,
@@ -472,4 +472,175 @@ fn a_fixed_column_set_never_escalates() {
     let est = estimate(&fisheye_scene(2718), &IntrinsicsOptions::default());
     assert_eq!(est.escalation, None);
     assert!(est.screening_vote.is_none());
+}
+
+// ── The from-matches entry ───────────────────────────────────────────────────
+
+/// A parsed `.matches` value carrying a synthetic capture as its cluster
+/// backbone, at the given per-image dimensions.
+///
+/// The member arrays ARE the capture's observation arrays -- the file's layout
+/// and the vote's are the same layout -- with the positions narrowed to the
+/// `f32` a file stores, so the entry's widening is exercised on values that
+/// round-trip exactly.
+fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
+    let n_members = obs.image.len();
+    let mut positions = ndarray::Array2::<f32>::zeros((n_members, 2));
+    for (row, p) in obs.pos.iter().enumerate() {
+        positions[[row, 0]] = p[0] as f32;
+        positions[[row, 1]] = p[1] as f32;
+    }
+    let mut image_dims = ndarray::Array2::<u32>::zeros((dims.len(), 2));
+    for (row, &(w, h)) in dims.iter().enumerate() {
+        image_dims[[row, 0]] = w;
+        image_dims[[row, 1]] = h;
+    }
+    MatchesData {
+        metadata: matches_format::MatchesMetadata {
+            version: matches_format::MATCHES_FORMAT_VERSION,
+            matching_method: "test".into(),
+            matching_tool: "test".into(),
+            matching_tool_version: "0".into(),
+            matching_options: std::collections::BTreeMap::new(),
+            workspace: matches_format::WorkspaceMetadata {
+                absolute_path: String::new(),
+                relative_path: ".".into(),
+                contents: matches_format::WorkspaceContents {
+                    feature_tool: "none".into(),
+                    feature_type: "sift".into(),
+                    feature_options: serde_json::json!({}),
+                    feature_prefix_dir: String::new(),
+                },
+            },
+            timestamp: String::new(),
+            image_count: dims.len() as u32,
+            image_pair_count: None,
+            match_count: None,
+            cluster_count: Some(obs.starts.len() as u32 - 1),
+            cluster_member_count: Some(n_members as u32),
+            has_two_view_geometries: false,
+            has_clusters: true,
+            has_cluster_patches: false,
+        },
+        content_hash: matches_format::MatchesContentHash {
+            metadata_xxh128: String::new(),
+            images_xxh128: String::new(),
+            image_pairs_xxh128: None,
+            clusters_xxh128: None,
+            cluster_patches_xxh128: None,
+            two_view_geometries_xxh128: None,
+            content_xxh128: String::new(),
+        },
+        image_names: (0..dims.len()).map(|i| format!("images/{i}.jpg")).collect(),
+        feature_tool_hashes: vec![[0u8; 16]; dims.len()],
+        sift_content_hashes: vec![[0u8; 16]; dims.len()],
+        feature_counts: ndarray::Array1::zeros(dims.len()),
+        image_dims: Some(image_dims),
+        image_pairs: None,
+        clusters: Some(matches_format::ClustersData {
+            cluster_starts: ndarray::Array1::from(obs.starts.clone()),
+            member_images: ndarray::Array1::from(obs.image.clone()),
+            member_features: ndarray::Array1::from_iter(0..n_members as u32),
+            member_positions: Some(positions),
+            member_affine_shapes: None,
+            matcher_options: serde_json::json!({}),
+        }),
+        cluster_patches: None,
+        two_view_geometries: None,
+    }
+}
+
+/// The same capture the file carries, read back as the array entry sees it:
+/// the file's `f32` positions widened, which is what the from-matches entry
+/// does once.
+fn widened(obs: &Obs) -> Vec<[f64; 2]> {
+    obs.pos
+        .iter()
+        .map(|p| [f64::from(p[0] as f32), f64::from(p[1] as f32)])
+        .collect()
+}
+
+#[test]
+fn the_from_matches_entry_is_the_array_entry() {
+    let obs = fisheye_scene(2718);
+    let n_img = obs.image.iter().max().expect("members") + 1;
+    let dims = vec![(W, H); n_img as usize];
+    let options = IntrinsicsOptions::default();
+
+    let from_file =
+        estimate_intrinsics_from_matches(&matches_of(&obs, &dims), &options).expect("readable");
+    let from_arrays = estimate_intrinsics(&obs.starts, &obs.image, &widened(&obs), W, H, &options);
+
+    assert_eq!(from_file.camera_model, from_arrays.camera_model);
+    assert_eq!(from_file.confirmed, from_arrays.confirmed);
+    assert_eq!(
+        from_file.focal_px.map(f64::to_bits),
+        from_arrays.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(from_file.vote.n_pool, from_arrays.vote.n_pool);
+    assert_eq!(
+        from_file.verdict_votes.len(),
+        from_arrays.verdict_votes.len()
+    );
+    for (a, b) in from_file
+        .verdict_votes
+        .iter()
+        .zip(&from_arrays.verdict_votes)
+    {
+        assert_eq!(a.focal_px.to_bits(), b.focal_px.to_bits());
+    }
+}
+
+#[test]
+fn mixed_image_dimensions_are_refused() {
+    // The vote places the principal point at the centre of ONE camera, so a
+    // file whose images are not one resolution is not one estimate -- named
+    // here rather than silently answered from the first image's dimensions.
+    let obs = fisheye_scene(2718);
+    let n_img = (obs.image.iter().max().expect("members") + 1) as usize;
+    let mut dims = vec![(W, H); n_img];
+    dims[2] = (W / 2, H);
+    let err = estimate_intrinsics_from_matches(&matches_of(&obs, &dims), &Default::default())
+        .expect_err("mixed dimensions");
+    assert_eq!(
+        err,
+        MatchesInputError::MixedDimensions {
+            expected: (W, H),
+            found: (W / 2, H),
+            image: "images/2.jpg".to_string(),
+        }
+    );
+    assert!(err.to_string().contains("images/2.jpg"), "{err}");
+}
+
+#[test]
+fn a_file_without_clusters_is_refused() {
+    let obs = fisheye_scene(2718);
+    let n_img = (obs.image.iter().max().expect("members") + 1) as usize;
+    let mut matches = matches_of(&obs, &vec![(W, H); n_img]);
+    matches.clusters = None;
+    assert_eq!(
+        estimate_intrinsics_from_matches(&matches, &Default::default()).expect_err("no clusters"),
+        MatchesInputError::NoClusters
+    );
+
+    // ...as is a cluster backbone with no member positions, and a file that
+    // never recorded its image dimensions.
+    let mut matches = matches_of(&obs, &vec![(W, H); n_img]);
+    matches
+        .clusters
+        .as_mut()
+        .expect("clusters")
+        .member_positions = None;
+    assert_eq!(
+        estimate_intrinsics_from_matches(&matches, &Default::default()).expect_err("no positions"),
+        MatchesInputError::NoMemberPositions
+    );
+
+    let mut matches = matches_of(&obs, &vec![(W, H); n_img]);
+    matches.image_dims = None;
+    assert_eq!(
+        estimate_intrinsics_from_matches(&matches, &Default::default()).expect_err("no dims"),
+        MatchesInputError::NoImageDimensions
+    );
 }

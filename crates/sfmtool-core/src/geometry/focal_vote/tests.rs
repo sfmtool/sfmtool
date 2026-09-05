@@ -87,33 +87,40 @@ impl Cam {
     }
 }
 
-/// Accumulating builder for flat observation arrays (one span-2 cluster per
+/// Accumulating builder for CSR observation arrays (one span-2 cluster per
 /// emitted correspondence).
-#[derive(Default)]
 pub(crate) struct Obs {
-    pub(crate) cluster: Vec<u32>,
+    /// CSR offsets, one entry longer than the member arrays' cluster count.
+    pub(crate) starts: Vec<u32>,
     pub(crate) image: Vec<u32>,
     pub(crate) pos: Vec<[f64; 2]>,
-    next: u32,
+}
+
+impl Default for Obs {
+    /// No clusters at all, which in CSR is the single opening offset.
+    fn default() -> Self {
+        Self {
+            starts: vec![0],
+            image: Vec::new(),
+            pos: Vec::new(),
+        }
+    }
 }
 
 impl Obs {
     fn push_pair(&mut self, ia: u32, pa: [f64; 2], ib: u32, pb: [f64; 2]) {
-        let c = self.next;
-        self.next += 1;
-        self.cluster.push(c);
         self.image.push(ia);
         self.pos.push(pa);
-        self.cluster.push(c);
         self.image.push(ib);
         self.pos.push(pb);
+        self.starts.push(self.image.len() as u32);
     }
     fn run(&self, seed: u64) -> FocalVoteResult {
-        focal_vote(&self.cluster, &self.image, &self.pos, W, H, seed)
+        focal_vote(&self.starts, &self.image, &self.pos, W, H, seed)
     }
     fn run_columns(&self, seed: u64, columns: &[CameraModel]) -> FocalVoteResult {
         focal_vote_with_options(
-            &self.cluster,
+            &self.starts,
             &self.image,
             &self.pos,
             W,
@@ -995,7 +1002,7 @@ fn column_scans_are_deterministic() {
 
 #[test]
 fn empty_input_no_consensus() {
-    let res = focal_vote(&[], &[], &[], W, H, 0);
+    let res = focal_vote(&[0], &[], &[], W, H, 0);
     assert!(res.focal_px.is_none());
     assert_eq!(res.family, None);
     assert_eq!(res.n_epipolar, 0);
@@ -1005,6 +1012,65 @@ fn empty_input_no_consensus() {
     assert_eq!(res.n_degenerate, 0);
     assert_eq!(res.pool_spread, 0.0);
     assert_eq!(res.family_disagreement, None);
+}
+
+// ── The CSR input contract ───────────────────────────────────────────────────
+
+#[test]
+fn a_broken_csr_index_votes_nothing() {
+    // A real capture's arrays, with one thing wrong with the index each time.
+    // Every one of them is a caller error rather than a starved capture, and
+    // the vote refuses them all the same way it refuses an empty input.
+    let obs = two_subcapture_scene(5, 6, F_TRUE, F_TRUE, 1234);
+    assert!(obs.run(0).focal_px.is_some(), "the control must vote");
+    let n = obs.image.len() as u32;
+
+    let refused = |starts: &[u32]| {
+        let res = focal_vote(starts, &obs.image, &obs.pos, W, H, 0);
+        assert_eq!(res.focal_px, None, "starts {starts:?} should vote nothing");
+        assert_eq!(res.n_pool, 0);
+        assert!(res.columns.is_empty());
+    };
+
+    // No offsets at all: not even the opening 0.
+    refused(&[]);
+    // Opens somewhere other than 0.
+    let mut late_open = obs.starts.clone();
+    late_open[0] = 2;
+    refused(&late_open);
+    // Closes short of the member count, so the tail members belong to nothing.
+    let mut short_close = obs.starts.clone();
+    *short_close.last_mut().expect("non-empty") = n - 2;
+    refused(&short_close);
+    // Closes past the member arrays.
+    let mut long_close = obs.starts.clone();
+    *long_close.last_mut().expect("non-empty") = n + 2;
+    refused(&long_close);
+    // Non-monotonic: one cluster's window runs backwards.
+    let mut backwards = obs.starts.clone();
+    backwards[3] = backwards[2] - 1;
+    refused(&backwards);
+    // The member arrays disagree on length.
+    let res = focal_vote(&obs.starts, &obs.image, &obs.pos[..n as usize - 1], W, H, 0);
+    assert_eq!(res.focal_px, None);
+}
+
+#[test]
+fn empty_clusters_are_carried_and_vote_nothing() {
+    // CSR can express a cluster with no members, which the expanded form
+    // could not. Such a cluster occupies an index and contributes nothing, so
+    // the capture's answer is bit-identical to the same scene without it.
+    let obs = two_subcapture_scene(5, 6, F_TRUE, F_TRUE, 1234);
+    let dense = obs.run(0);
+    // Interleave an empty cluster before every real one: each offset repeated.
+    let padded: Vec<u32> = obs.starts.iter().flat_map(|&s| [s, s]).collect();
+    let sparse = focal_vote(&padded, &obs.image, &obs.pos, W, H, 0);
+    assert_eq!(
+        sparse.focal_px.map(f64::to_bits),
+        dense.focal_px.map(f64::to_bits)
+    );
+    assert_eq!(sparse.n_pool, dense.n_pool);
+    assert_eq!(sparse.pool_spread.to_bits(), dense.pool_spread.to_bits());
 }
 
 #[test]

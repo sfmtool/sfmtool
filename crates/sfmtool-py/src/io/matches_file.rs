@@ -30,6 +30,13 @@ pub struct PyMatchesFile {
 }
 
 impl PyMatchesFile {
+    /// The parsed file behind the handle, for the bindings that hand a whole
+    /// `.matches` to a core entry point taking `&MatchesData` (the vote's
+    /// object form) instead of re-deriving its arrays through Python.
+    pub(crate) fn data(&self) -> &MatchesData {
+        &self.inner
+    }
+
     fn clusters(&self) -> PyResult<&matches_format::ClustersData> {
         self.inner.clusters.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(

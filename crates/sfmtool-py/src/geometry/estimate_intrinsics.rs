@@ -10,11 +10,14 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 
 use sfmtool_core::geometry::estimate_intrinsics::{
-    estimate_intrinsics as core_estimate_intrinsics, ColumnPolicy, IntrinsicsOptions,
+    estimate_intrinsics as core_estimate_intrinsics, estimate_intrinsics_from_matches,
+    ColumnPolicy, IntrinsicsOptions,
 };
 use sfmtool_core::geometry::focal_vote::{CameraModel, FocalVoteOptions};
 
-use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
+use super::focal_vote::{
+    matches_err_to_py, scan_vote_dict, vote_columns, vote_dict, vote_source, VoteSource,
+};
 
 /// Estimate a camera from cluster-track observations: the model verdict, its
 /// corroboration, the consensus focal, and the votes behind them (see
@@ -24,13 +27,28 @@ use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
 /// returns one typed answer instead of a diagnostic table. The raw vote comes
 /// back nested under ``"vote"``, so nothing is lost.
 ///
+/// Takes its observations in either of two forms, and only these two:
+///
+/// * ``estimate_intrinsics(matches_file, ...)`` -- a ``MatchesFile`` (a
+///   selection included), whose cluster backbone already IS the layout below
+///   and whose image table supplies the shared image size. Every image of the
+///   file must carry the same dimensions, because the estimate is of ONE
+///   shared camera with a centred principal point; a file mixing resolutions
+///   raises ``ValueError`` rather than being answered from its first image.
+/// * ``estimate_intrinsics(cluster_starts, member_images, member_positions,
+///   width, height, ...)`` -- the same observations spelled out.
+///
 /// Args:
-///     cluster_indexes: (n_obs,) uint32 cluster id per observation,
-///         nondecreasing (each distinct cluster is a contiguous run).
-///     image_indexes: (n_obs,) uint32 image id per observation.
-///     positions_xy: (n_obs, 2) float64 full-pixel keypoint positions.
+///     cluster_starts: A ``MatchesFile``, or the (n_clusters + 1,) uint32 CSR
+///         offsets into the member arrays: opening at 0, nondecreasing, and
+///         closing at the member count.
+///     member_images: (n_members,) uint32 image id per member. Omitted in the
+///         ``MatchesFile`` form.
+///     member_positions: (n_members, 2) float64 full-pixel keypoint
+///         positions. Omitted in the ``MatchesFile`` form.
 ///     width: Shared image width; the principal point is the image centre.
-///     height: Shared image height.
+///         Omitted in the ``MatchesFile`` form.
+///     height: Shared image height. Omitted in the ``MatchesFile`` form.
 ///     seed: SplitMix64 seed for the RANSAC estimators and the column scans;
 ///         same inputs + seed => bit-identical output (default 0).
 ///     epipolar_min_disp_frac: Wide-baseline gate for epipolar candidate
@@ -94,20 +112,26 @@ use super::focal_vote::{scan_vote_dict, vote_columns, vote_dict, vote_inputs};
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, width, height, *, seed=0, epipolar_min_disp_frac=0.02, columns=None, min_rotation_mass=1))]
+#[pyo3(signature = (cluster_starts, member_images=None, member_positions=None, width=None, height=None, *, seed=0, epipolar_min_disp_frac=0.02, columns=None, min_rotation_mass=1))]
 pub fn estimate_intrinsics<'py>(
     py: Python<'py>,
-    cluster_indexes: PyReadonlyArray1<'py, u32>,
-    image_indexes: PyReadonlyArray1<'py, u32>,
-    positions_xy: PyReadonlyArray2<'py, f64>,
-    width: u32,
-    height: u32,
+    cluster_starts: Bound<'py, PyAny>,
+    member_images: Option<PyReadonlyArray1<'py, u32>>,
+    member_positions: Option<PyReadonlyArray2<'py, f64>>,
+    width: Option<u32>,
+    height: Option<u32>,
     seed: u64,
     epipolar_min_disp_frac: f64,
     columns: Option<Bound<'py, PyAny>>,
     min_rotation_mass: usize,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let inputs = vote_inputs(cluster_indexes, image_indexes, positions_xy)?;
+    let source = vote_source(
+        &cluster_starts,
+        member_images,
+        member_positions,
+        width,
+        height,
+    )?;
     // Unlike `focal_vote`, whose default is the closed-form pinhole kernel,
     // this function's default is both columns: the verdict is the product.
     // `"auto"` hands the choice to the estimator instead, and then the column
@@ -139,16 +163,19 @@ pub fn estimate_intrinsics<'py>(
         min_rotation_mass,
     };
 
-    let estimate = py.detach(move || {
-        core_estimate_intrinsics(
-            &inputs.clusters,
-            &inputs.images,
-            &inputs.positions,
-            width,
-            height,
-            &options,
-        )
-    });
+    let estimate = py
+        .detach(move || match source {
+            VoteSource::Matches(matches) => estimate_intrinsics_from_matches(matches, &options),
+            VoteSource::Arrays(a) => Ok(core_estimate_intrinsics(
+                &a.cluster_starts,
+                &a.member_images,
+                &a.member_positions,
+                a.width,
+                a.height,
+                &options,
+            )),
+        })
+        .map_err(matches_err_to_py)?;
 
     let d = PyDict::new(py);
     d.set_item("camera_model", estimate.camera_model.map(|m| m.as_str()))?;

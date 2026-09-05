@@ -105,15 +105,14 @@ def _vote_result(
 
 
 def _observations(width=640, height=480, image_names=None) -> dict:
-    """A `_load_observations` payload for a two-image, one-cluster capture."""
+    """The report payload `_load_selection` returns beside the selection, for a
+    two-image, one-cluster capture."""
     return {
         "image_names": image_names or ["images/a.jpg", "images/b.jpg"],
         "width": width,
         "height": height,
-        "cluster_indexes": np.zeros(2, dtype=np.uint32),
-        "image_indexes": np.array([0, 1], dtype=np.uint32),
-        "positions": np.zeros((2, 2), dtype=np.float64),
         "cluster_count": 1,
+        "observation_count": 2,
     }
 
 
@@ -130,8 +129,10 @@ def stub_estimate(monkeypatch, tmp_path):
     calls: list[dict] = []
 
     def run(result: dict, *args: str, data: dict | None = None):
+        # The command hands the selection handle straight to the kernel, so a
+        # canned run needs no `.matches` at all: the stub estimator ignores it.
         monkeypatch.setattr(
-            ei, "_load_observations", lambda path: data or _observations()
+            ei, "_load_selection", lambda path: (None, data or _observations())
         )
 
         def stub(*a, **k):
@@ -485,21 +486,81 @@ def cluster_matches_file(isolated_seoul_bull_17_images) -> Path:
 
 def test_the_vote_reads_the_backbones_positions(cluster_matches_file):
     """The file states its members' positions, so the vote reads them straight
-    off the selection -- no `.sift` file is opened, and there is no other path
-    to take."""
+    off the selection handle -- no `.sift` file is opened, and there is no
+    other path to take."""
     from sfmtool._sfmtool.io import MatchesFile
 
     assert not hasattr(ei, "_positions_from_sift"), (
         "the legacy .sift lookup is gone; version <= 5 cluster files are refused"
     )
-    data = ei._load_observations(cluster_matches_file)
-    assert len(data["positions"]) == len(data["cluster_indexes"]) > 0
-    assert np.isfinite(data["positions"]).all()
+    selection, data = ei._load_selection(cluster_matches_file)
+    positions = np.asarray(selection.member_positions(), dtype=np.float64)
+    assert len(positions) == data["observation_count"] > 0
+    assert np.isfinite(positions).all()
 
-    selection = MatchesFile(cluster_matches_file).select_clusters()
+    expected = MatchesFile(cluster_matches_file).select_clusters()
     npt.assert_array_equal(
-        data["positions"], np.asarray(selection.member_positions(), dtype=np.float64)
+        positions, np.asarray(expected.member_positions(), dtype=np.float64)
     )
+
+
+def test_the_object_form_is_the_array_form(cluster_matches_file):
+    """The selection handle and its own arrays are two spellings of one call:
+    the kernel reads the file's CSR index and widens its float32 positions, so
+    a caller spelling that out gets bit-identical numbers."""
+    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
+
+    selection, data = ei._load_selection(cluster_matches_file)
+    object_form = estimate(selection, seed=0, columns="auto")
+    array_form = estimate(
+        np.asarray(selection.cluster_starts, dtype=np.uint32),
+        np.asarray(selection.member_images, dtype=np.uint32),
+        np.ascontiguousarray(
+            np.asarray(selection.member_positions(), dtype=np.float64)
+        ),
+        data["width"],
+        data["height"],
+        seed=0,
+        columns="auto",
+    )
+    assert object_form == array_form
+
+
+def test_the_object_form_takes_no_observation_arrays(cluster_matches_file):
+    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
+
+    selection, data = ei._load_selection(cluster_matches_file)
+    with pytest.raises(ValueError):
+        estimate(
+            selection,
+            np.asarray(selection.member_images, dtype=np.uint32),
+            np.ascontiguousarray(
+                np.asarray(selection.member_positions(), dtype=np.float64)
+            ),
+            data["width"],
+            data["height"],
+        )
+
+
+def test_a_pairwise_matches_file_is_refused(cluster_matches_file: Path):
+    """The vote draws its pairs from cluster tracks, so the pairwise backbone
+    is refused by name rather than voted on.
+
+    Reuses the cluster fixture's workspace, whose `.sift` files are already
+    extracted, and only adds the pairwise match.
+    """
+    from sfmtool._sfmtool.geometry import estimate_intrinsics as estimate
+    from sfmtool._sfmtool.io import MatchesFile
+
+    workspace_dir = cluster_matches_file.parent.parent
+    out = cluster_matches_file.parent / "pairs.matches"
+    result = CliRunner().invoke(
+        main, ["match", "--sequential", "--output", str(out), str(workspace_dir)]
+    )
+    assert result.exit_code == 0, result.output
+
+    with pytest.raises(ValueError, match="clusters"):
+        estimate(MatchesFile(out))
 
 
 def test_an_unreadable_matches_file_is_a_clean_cli_error(tmp_path):

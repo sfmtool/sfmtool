@@ -25,10 +25,14 @@
 //!
 //! See `specs/core/geometry/focal-vote.md` for the design.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use nalgebra::Matrix3;
+use ndarray::Array1;
 use rayon::prelude::*;
+
+use matches_format::MatchesData;
 
 use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
@@ -523,25 +527,228 @@ fn rotation_self_calib_focal(h: &Matrix3<f64>, max_wh: f64) -> Option<f64> {
     }
 }
 
+/// Why a `.matches` file's observations cannot be voted on as one camera.
+///
+/// Every variant is a property of the file rather than of the vote: a vote
+/// that simply finds no consensus is a `FocalVoteResult`, not an error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MatchesInputError {
+    /// The file stores the pairwise backbone, so it carries no cluster tracks
+    /// to draw pairs from.
+    NoClusters,
+    /// The cluster backbone carries no member positions — a file written
+    /// before format version 6 made them mandatory.
+    NoMemberPositions,
+    /// The file names no images at all.
+    NoImages,
+    /// The file records no image dimensions (format version ≤ 3), so the
+    /// principal point cannot be placed.
+    NoImageDimensions,
+    /// The images do not all share one resolution, and the vote estimates ONE
+    /// shared camera with a centred principal point.
+    MixedDimensions {
+        /// The first image's dimensions, which every image must share.
+        expected: (u32, u32),
+        /// The dimensions of the first image that disagrees.
+        found: (u32, u32),
+        /// That image's name.
+        image: String,
+    },
+}
+
+impl std::fmt::Display for MatchesInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MatchesInputError::NoClusters => write!(
+                f,
+                "this .matches file carries no clusters/ section: the vote draws its \
+                 pairs from cluster tracks, which the pairwise backbone does not store"
+            ),
+            MatchesInputError::NoMemberPositions => write!(
+                f,
+                "this .matches file's clusters carry no member positions, so there are \
+                 no keypoints to vote on"
+            ),
+            MatchesInputError::NoImages => {
+                write!(f, "this .matches file names no images")
+            }
+            MatchesInputError::NoImageDimensions => write!(
+                f,
+                "this .matches file stores no image dimensions, so the principal point \
+                 cannot be placed at the image centre"
+            ),
+            MatchesInputError::MixedDimensions {
+                expected,
+                found,
+                image,
+            } => write!(
+                f,
+                "the images of this .matches file have more than one resolution and the \
+                 vote estimates ONE shared camera: {image} is {}x{}, not the {}x{} of \
+                 the first image",
+                found.0, found.1, expected.0, expected.1
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MatchesInputError {}
+
+/// The vote's observations exactly as a `.matches` file states them: the
+/// cluster backbone's CSR index and member arrays, and the one image size all
+/// of the file's images share.
+///
+/// Produced by [`MatchesObservations::read`], which is what makes
+/// [`focal_vote_from_matches`] and
+/// [`estimate_intrinsics_from_matches`](super::estimate_intrinsics::estimate_intrinsics_from_matches)
+/// one reading of a file rather than two.
+pub struct MatchesObservations<'a> {
+    /// `n_clusters + 1` CSR offsets into the member arrays, borrowed from the
+    /// file when its array is contiguous.
+    pub cluster_starts: Cow<'a, [u32]>,
+    /// One image id per member, borrowed on the same terms.
+    pub member_images: Cow<'a, [u32]>,
+    /// One full-pixel keypoint position per member, widened from the file's
+    /// `f32`. The widening is exact, so it moves no arithmetic.
+    pub member_positions: Vec<[f64; 2]>,
+    /// The width every image of the file shares.
+    pub width: u32,
+    /// The height every image of the file shares.
+    pub height: u32,
+}
+
+impl<'a> MatchesObservations<'a> {
+    /// Read a parsed `.matches` file's cluster observations.
+    ///
+    /// The uniform-dimensions rule is checked here, once, rather than in every
+    /// caller: the vote places the principal point at the image centre of a
+    /// single shared camera, so a file mixing resolutions is not one estimate.
+    pub fn read(matches: &'a MatchesData) -> Result<Self, MatchesInputError> {
+        let clusters = matches
+            .clusters
+            .as_ref()
+            .ok_or(MatchesInputError::NoClusters)?;
+        let positions = clusters
+            .member_positions
+            .as_ref()
+            .ok_or(MatchesInputError::NoMemberPositions)?;
+        let (width, height) = uniform_dimensions(matches)?;
+        Ok(MatchesObservations {
+            cluster_starts: contiguous(&clusters.cluster_starts),
+            member_images: contiguous(&clusters.member_images),
+            member_positions: positions
+                .rows()
+                .into_iter()
+                .map(|p| [f64::from(p[0]), f64::from(p[1])])
+                .collect(),
+            width,
+            height,
+        })
+    }
+}
+
+/// The one `(width, height)` every image of the file carries.
+fn uniform_dimensions(matches: &MatchesData) -> Result<(u32, u32), MatchesInputError> {
+    if matches.image_names.is_empty() {
+        return Err(MatchesInputError::NoImages);
+    }
+    let dims = matches
+        .image_dims
+        .as_ref()
+        .ok_or(MatchesInputError::NoImageDimensions)?;
+    let mut rows = dims.rows().into_iter();
+    let first = rows.next().ok_or(MatchesInputError::NoImages)?;
+    let expected = (first[0], first[1]);
+    for (i, row) in rows.enumerate() {
+        let found = (row[0], row[1]);
+        if found != expected {
+            return Err(MatchesInputError::MixedDimensions {
+                expected,
+                found,
+                // The dimension rows are parallel to the image table; `i`
+                // counts from the second row, which is image 1.
+                image: matches
+                    .image_names
+                    .get(i + 1)
+                    .cloned()
+                    .unwrap_or_else(|| format!("image {}", i + 1)),
+            });
+        }
+    }
+    Ok(expected)
+}
+
+/// One array as a slice, borrowed when its storage is already contiguous.
+fn contiguous(a: &Array1<u32>) -> Cow<'_, [u32]> {
+    match a.as_slice() {
+        Some(s) => Cow::Borrowed(s),
+        None => Cow::Owned(a.iter().copied().collect()),
+    }
+}
+
+/// Whether `cluster_starts` is a valid CSR index over `n_members` members:
+/// at least one entry, opening at `0`, nondecreasing, and closing at the
+/// member count.
+///
+/// This is the whole input contract, and it costs `O(n_clusters)` — the
+/// expanded per-observation cluster column it replaces could express states
+/// (a cluster's members split by another cluster's) that only an
+/// `O(n_observations)` scan could rule out.
+fn valid_csr(cluster_starts: &[u32], n_members: usize) -> bool {
+    match (cluster_starts.first(), cluster_starts.last()) {
+        (Some(&first), Some(&last)) => {
+            first == 0
+                && last as usize == n_members
+                && cluster_starts.windows(2).all(|w| w[0] <= w[1])
+        }
+        _ => false,
+    }
+}
+
+/// Estimate a shared focal length from a parsed `.matches` file's cluster
+/// tracks, in one call. See `specs/core/geometry/focal-vote.md`.
+///
+/// The file states the observations in exactly the layout the vote takes, so
+/// this reads them ([`MatchesObservations::read`]) and votes; it is the array
+/// entry point with the reading done for the caller, and produces identical
+/// bits.
+pub fn focal_vote_from_matches(
+    matches: &MatchesData,
+    options: &FocalVoteOptions,
+) -> Result<FocalVoteResult, MatchesInputError> {
+    let obs = MatchesObservations::read(matches)?;
+    Ok(focal_vote_with_options(
+        &obs.cluster_starts,
+        &obs.member_images,
+        &obs.member_positions,
+        obs.width,
+        obs.height,
+        options,
+    ))
+}
+
 /// Estimate a shared focal length from cluster-track observations without any
 /// reconstruction. See `specs/core/geometry/focal-vote.md`.
 ///
-/// `cluster_indexes` must be nondecreasing (each distinct cluster is a
-/// contiguous run); `image_indexes` and `positions_xy` are the image id and
-/// full-pixel keypoint position per observation. The principal point is the
-/// image centre `(width/2, height/2)`.
+/// Observations arrive in the cluster-grouped (CSR) layout the `.matches`
+/// backbone stores: `cluster_starts` holds `n_clusters + 1` offsets into the
+/// member arrays (opening at `0`, nondecreasing, closing at the member count),
+/// and `member_images` / `member_positions` carry one image id and one
+/// full-pixel keypoint position per member. The principal point is the image
+/// centre `(width/2, height/2)`. Input that breaks that contract votes
+/// nothing and comes back as the empty result.
 pub fn focal_vote(
-    cluster_indexes: &[u32],
-    image_indexes: &[u32],
-    positions_xy: &[[f64; 2]],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f64; 2]],
     width: u32,
     height: u32,
     seed: u64,
 ) -> FocalVoteResult {
     focal_vote_with_min_disp(
-        cluster_indexes,
-        image_indexes,
-        positions_xy,
+        cluster_starts,
+        member_images,
+        member_positions,
         width,
         height,
         seed,
@@ -554,18 +761,18 @@ pub fn focal_vote(
 /// The floor is the wide-baseline gate: too low admits near-static pairs whose
 /// ill-conditioned fundamental matrices vote junk focals into the pool.
 pub fn focal_vote_with_min_disp(
-    cluster_indexes: &[u32],
-    image_indexes: &[u32],
-    positions_xy: &[[f64; 2]],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f64; 2]],
     width: u32,
     height: u32,
     seed: u64,
     epipolar_min_disp_frac: f64,
 ) -> FocalVoteResult {
     focal_vote_with_options(
-        cluster_indexes,
-        image_indexes,
-        positions_xy,
+        cluster_starts,
+        member_images,
+        member_positions,
         width,
         height,
         &FocalVoteOptions {
@@ -585,9 +792,9 @@ pub fn focal_vote_with_min_disp(
 /// the model by certified model-informative mass, and reports the winning
 /// column's consensus.
 pub fn focal_vote_with_options(
-    cluster_indexes: &[u32],
-    image_indexes: &[u32],
-    positions_xy: &[[f64; 2]],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_positions: &[[f64; 2]],
     width: u32,
     height: u32,
     options: &FocalVoteOptions,
@@ -618,12 +825,14 @@ pub fn focal_vote_with_options(
         camera_model: None,
         columns: Vec::new(),
     };
-    let n_obs = cluster_indexes.len();
-    if n_obs == 0 || image_indexes.len() != n_obs || positions_xy.len() != n_obs {
+    // The whole input contract, checked once and in O(n_clusters): a valid CSR
+    // index over member arrays of one length. Nothing below re-checks it.
+    let n_obs = member_images.len();
+    if n_obs == 0 || member_positions.len() != n_obs || !valid_csr(cluster_starts, n_obs) {
         return empty;
     }
 
-    let n_img = match image_indexes.iter().max() {
+    let n_img = match member_images.iter().max() {
         Some(&m) => m as usize + 1,
         None => return empty,
     };
@@ -641,20 +850,18 @@ pub fn focal_vote_with_options(
     let mut image_clusters: ImageClusters = vec![Vec::new(); n_img];
     let mut pair_accum: HashMap<(u32, u32), PairAccum> = HashMap::new();
 
-    let mut run_start = 0usize;
-    let mut run_idx: u32 = 0;
-    while run_start < n_obs {
-        let cid = cluster_indexes[run_start];
-        let mut run_end = run_start + 1;
-        while run_end < n_obs && cluster_indexes[run_end] == cid {
-            run_end += 1;
-        }
+    // Each cluster is one `cluster_starts` window; the merge-join below keys on
+    // the window's position, so an empty cluster contributes nothing and costs
+    // only its index.
+    for (run_idx, window) in cluster_starts.windows(2).enumerate() {
+        let (run_start, run_end) = (window[0] as usize, window[1] as usize);
+        let run_idx = run_idx as u32;
 
-        // Per-image dedupe (last observation wins, mirroring the reference's
+        // Per-image dedupe (last member wins, mirroring the reference's
         // (cluster, image) row map) for the correspondence lists.
         let mut last_seen: HashMap<u32, [f64; 2]> = HashMap::new();
         for r in run_start..run_end {
-            last_seen.insert(image_indexes[r], positions_xy[r]);
+            last_seen.insert(member_images[r], member_positions[r]);
         }
         let mut members: Vec<(u32, [f64; 2])> = last_seen.into_iter().collect();
         members.sort_by_key(|m| m.0);
@@ -673,9 +880,6 @@ pub fn focal_vote_with_options(
                 e.disp_sum += d;
             }
         }
-
-        run_start = run_end;
-        run_idx += 1;
     }
 
     // ── Epipolar votes ───────────────────────────────────────────────────────
