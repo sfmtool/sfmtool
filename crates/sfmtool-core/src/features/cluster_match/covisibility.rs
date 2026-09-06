@@ -116,9 +116,9 @@ impl std::fmt::Display for CovisibilityError {
 
 impl std::error::Error for CovisibilityError {}
 
-/// Tuning for [`ClusterCovisibility::seed_groups`].
+/// Tuning for [`ClusterCovisibility::seed_image_groups`].
 #[derive(Clone, Debug)]
-pub struct SeedGroupParams {
+pub struct SeedImageGroupParams {
     /// Maximum images per group (default 5). The seed edge always
     /// contributes two images, so values below 2 behave as 2.
     pub group_size: usize,
@@ -127,13 +127,33 @@ pub struct SeedGroupParams {
     pub min_shared: u32,
 }
 
-impl Default for SeedGroupParams {
+impl Default for SeedImageGroupParams {
     fn default() -> Self {
         Self {
             group_size: 5,
             min_shared: 8,
         }
     }
+}
+
+/// One greedy mutually-covisible seed group: its images plus the edge it
+/// was grown from.
+///
+/// The seed pair is the group's **maximum-shared pair**: the founding edge
+/// was the strongest among all non-excluded pairs at that step, and every
+/// image the group later took in was non-excluded then, so
+/// `count(a, b) <= seed_shared` holds for every pair `(a, b)` drawn from
+/// [`Self::images`]. A caller that wants the group's best-supported pair
+/// therefore reads [`Self::seed_pair`] instead of re-scanning the group.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeedImageGroup {
+    /// The group's image indexes, sorted ascending.
+    pub images: Vec<u32>,
+    /// The strongest-edge pair the group was grown from, `(i, j)` with
+    /// `i < j`.
+    pub seed_pair: (u32, u32),
+    /// That pair's shared-cluster count.
+    pub seed_shared: u32,
 }
 
 /// Deterministic 64-bit generator (splitmix64) behind the sampled
@@ -486,14 +506,15 @@ impl ClusterCovisibility {
         self.neighborhood.as_ref()
     }
 
-    /// Lazy iterator of greedy mutually-covisible seed groups (see the
+    /// Lazy iterator of greedy mutually-covisible groups of images (see the
     /// spec's Seed-group algorithm): each `next()` scans for the strongest
-    /// remaining edge and greedily extends it, so consumers take as many
-    /// groups as they need and drop the rest unpaid. Deterministic: the
-    /// sequence depends only on the input arrays, groups are disjoint, and
-    /// the first `k` groups are identical however many are consumed.
-    pub fn seed_groups(&self, params: &SeedGroupParams) -> SeedGroups<'_> {
-        SeedGroups {
+    /// remaining edge and greedily extends it, yielding a
+    /// [`SeedImageGroup`], so consumers take as many groups as they need and
+    /// drop the rest unpaid. Deterministic: the sequence depends only on the
+    /// input arrays, groups are disjoint, and the first `k` groups are
+    /// identical however many are consumed.
+    pub fn seed_image_groups(&self, params: &SeedImageGroupParams) -> SeedImageGroups<'_> {
+        SeedImageGroups {
             covis: self,
             excluded: vec![false; self.num_images],
             params: params.clone(),
@@ -502,19 +523,19 @@ impl ClusterCovisibility {
 
     /// One step of the seed-group algorithm against an external exclusion
     /// mask: find the strongest non-excluded edge, greedily extend it, mark
-    /// the yielded group excluded, and return it sorted ascending. `None`
-    /// when the strongest remaining edge is below `min_shared` (or no edge
-    /// remains).
+    /// the yielded group excluded, and return it with its images sorted
+    /// ascending alongside the founding edge. `None` when the strongest
+    /// remaining edge is below `min_shared` (or no edge remains).
     ///
-    /// This is the single implementation the borrowing [`SeedGroups`]
+    /// This is the single implementation the borrowing [`SeedImageGroups`]
     /// iterator and external lazy iterators (e.g. the Python binding, which
     /// cannot hold a Rust borrow) both drive; `excluded` must have
     /// [`Self::num_images`] entries. Panics otherwise.
-    pub fn next_seed_group(
+    pub fn next_seed_image_group(
         &self,
         excluded: &mut [bool],
-        params: &SeedGroupParams,
-    ) -> Option<Vec<u32>> {
+        params: &SeedImageGroupParams,
+    ) -> Option<SeedImageGroup> {
         let n = self.num_images;
         assert_eq!(
             excluded.len(),
@@ -567,28 +588,35 @@ impl ClusterCovisibility {
         }
 
         // 3. Yield sorted ascending; exclude from all later consideration.
+        //    The founding edge rides along: it is the group's maximum-shared
+        //    pair (see `SeedImageGroup`) and the scan already knows it.
         group.sort_unstable();
         for &g in &group {
             excluded[g as usize] = true;
         }
-        Some(group)
+        Some(SeedImageGroup {
+            images: group,
+            seed_pair: (i as u32, j as u32),
+            seed_shared: w,
+        })
     }
 }
 
 /// Lazy seed-group iterator. Borrows the matrix; the only state is the
 /// excluded-image mask (no matrix copy). Each `next()` costs one strongest
 /// remaining-edge scan plus the group-extension steps.
-pub struct SeedGroups<'a> {
+pub struct SeedImageGroups<'a> {
     covis: &'a ClusterCovisibility,
     excluded: Vec<bool>,
-    params: SeedGroupParams,
+    params: SeedImageGroupParams,
 }
 
-impl Iterator for SeedGroups<'_> {
-    type Item = Vec<u32>;
+impl Iterator for SeedImageGroups<'_> {
+    type Item = SeedImageGroup;
 
-    fn next(&mut self) -> Option<Vec<u32>> {
-        self.covis.next_seed_group(&mut self.excluded, &self.params)
+    fn next(&mut self) -> Option<SeedImageGroup> {
+        self.covis
+            .next_seed_image_group(&mut self.excluded, &self.params)
     }
 }
 

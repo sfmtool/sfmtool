@@ -20,7 +20,7 @@ _EXPECTED = (
     "clusters_to_pair_matches",
     # covisibility.rs
     "ClusterCovisibility",
-    "ClusterCovisibilitySeedGroups",
+    "ClusterCovisibilitySeedImageGroups",
     # descriptor.rs
     "descriptor_distance",
     "find_best_descriptor_match",

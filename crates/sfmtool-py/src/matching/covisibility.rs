@@ -14,7 +14,7 @@ use pyo3::prelude::*;
 
 use pyo3::types::PyDict;
 use sfmtool_core::features::cluster_match::covisibility::{
-    ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedGroupParams,
+    ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedImageGroupParams,
 };
 
 use crate::io::matches_file::PyMatchesFile;
@@ -418,23 +418,34 @@ impl PyClusterCovisibility {
         Ok(PyArray1::from_vec(py, ranked).into_any().unbind())
     }
 
-    /// Lazy iterator of greedy mutually-covisible seed groups (``list[int]``,
-    /// sorted ascending), per the spec's Seed-group algorithm: each step
-    /// takes the strongest remaining edge and greedily extends it maximizing
-    /// the minimum shared count vs the group, then excludes the yielded
-    /// images. Deterministic; groups are disjoint; ends when the strongest
-    /// remaining edge is below ``min_shared``.
+    /// Lazy iterator of greedy mutually-covisible groups of images, per the
+    /// spec's Seed-group algorithm: each step takes the strongest remaining
+    /// edge and greedily extends it maximizing the minimum shared count vs
+    /// the group, then excludes the yielded images. Deterministic; groups
+    /// are disjoint; ends when the strongest remaining edge is below
+    /// ``min_shared``.
+    ///
+    /// Each step yields a dict ``{"images": list[int] sorted ascending,
+    /// "seed_pair": (i, j) with i < j, "seed_shared": int}``. The seed pair
+    /// is the edge the group grew from and is the group's maximum-shared
+    /// pair, so a caller wanting the best-supported pair reads it instead of
+    /// re-scanning the group.
     ///
     /// Args:
     ///     group_size: Maximum images per group (default 5).
-    ///     min_shared: Minimum within-group pairwise covisibility (default 8).
-    #[pyo3(signature = (group_size=5, min_shared=8))]
-    fn seed_groups(slf: PyRef<'_, Self>, group_size: usize, min_shared: u32) -> PySeedGroups {
+    ///     min_shared: Minimum within-group pairwise covisibility
+    ///         (default 8); keyword-only.
+    #[pyo3(signature = (group_size=5, *, min_shared=8))]
+    fn seed_image_groups(
+        slf: PyRef<'_, Self>,
+        group_size: usize,
+        min_shared: u32,
+    ) -> PySeedImageGroups {
         let num_images = slf.inner.num_images();
-        PySeedGroups {
+        PySeedImageGroups {
             parent: slf.into(),
             excluded: vec![false; num_images],
-            params: SeedGroupParams {
+            params: SeedImageGroupParams {
                 group_size,
                 min_shared,
             },
@@ -442,33 +453,45 @@ impl PyClusterCovisibility {
     }
 }
 
-/// Lazy iterator over a [`PyClusterCovisibility`]'s seed groups. Holds a
-/// reference to its parent plus the excluded-image mask; each ``__next__``
+/// Lazy iterator over a [`PyClusterCovisibility`]'s seed image groups. Holds
+/// a reference to its parent plus the excluded-image mask; each ``__next__``
 /// re-runs the shared core step function against the parent's counts, so the
-/// sequence is identical to the core `SeedGroups` iterator.
-#[pyclass(name = "ClusterCovisibilitySeedGroups", module = "sfmtool.matching")]
-pub struct PySeedGroups {
+/// sequence is identical to the core `SeedImageGroups` iterator.
+#[pyclass(
+    name = "ClusterCovisibilitySeedImageGroups",
+    module = "sfmtool.matching"
+)]
+pub struct PySeedImageGroups {
     parent: Py<PyClusterCovisibility>,
     excluded: Vec<bool>,
-    params: SeedGroupParams,
+    params: SeedImageGroupParams,
 }
 
 #[pymethods]
-impl PySeedGroups {
+impl PySeedImageGroups {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __next__(&mut self) -> Option<Vec<u32>> {
-        self.parent
+    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(group) = self
+            .parent
             .get()
             .inner
-            .next_seed_group(&mut self.excluded, &self.params)
+            .next_seed_image_group(&mut self.excluded, &self.params)
+        else {
+            return Ok(None);
+        };
+        let d = PyDict::new(py);
+        d.set_item("images", group.images)?;
+        d.set_item("seed_pair", group.seed_pair)?;
+        d.set_item("seed_shared", group.seed_shared)?;
+        Ok(Some(d))
     }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClusterCovisibility>()?;
-    m.add_class::<PySeedGroups>()?;
+    m.add_class::<PySeedImageGroups>()?;
     Ok(())
 }

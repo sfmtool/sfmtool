@@ -122,8 +122,16 @@ fn rank_by_covisibility_orders_and_drops_zeros() {
     assert_eq!(cov.rank_by_covisibility(0, &[0, 2]), vec![2]);
 }
 
+/// The image lists of a seed-group run, for the expectations that predate
+/// the enriched yield.
+fn group_images(cov: &ClusterCovisibility, params: &SeedImageGroupParams) -> Vec<Vec<u32>> {
+    cov.seed_image_groups(params)
+        .map(|g| g.images)
+        .collect::<Vec<_>>()
+}
+
 #[test]
-fn seed_groups_two_disjoint_triangles() {
+fn seed_image_groups_two_disjoint_triangles() {
     let cov = from_edges(
         6,
         &[
@@ -135,21 +143,76 @@ fn seed_groups_two_disjoint_triangles() {
             (4, 5, 9),
         ],
     );
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 3,
         min_shared: 8,
     };
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1, 2], vec![3, 4, 5]]);
+    let groups: Vec<_> = cov.seed_image_groups(&params).collect();
+    assert_eq!(
+        groups.iter().map(|g| g.images.clone()).collect::<Vec<_>>(),
+        vec![vec![0, 1, 2], vec![3, 4, 5]]
+    );
+    // Each group reports the founding edge and its weight: the strongest
+    // remaining pair at that step, lexicographically smallest on the tie.
+    assert_eq!(groups[0].seed_pair, (0, 1));
+    assert_eq!(groups[0].seed_shared, 10);
+    assert_eq!(groups[1].seed_pair, (3, 4));
+    assert_eq!(groups[1].seed_shared, 9);
 }
 
 #[test]
 fn seed_edge_tie_breaks_lexicographically() {
     // Two equal-strength edges: (0, 1) wins over (2, 3).
     let cov = from_edges(4, &[(2, 3, 10), (0, 1, 10)]);
-    let params = SeedGroupParams::default();
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1], vec![2, 3]]);
+    let params = SeedImageGroupParams::default();
+    let groups: Vec<_> = cov.seed_image_groups(&params).collect();
+    assert_eq!(
+        groups.iter().map(|g| g.images.clone()).collect::<Vec<_>>(),
+        vec![vec![0, 1], vec![2, 3]]
+    );
+    assert_eq!(groups[0].seed_pair, (0, 1));
+    assert_eq!(groups[1].seed_pair, (2, 3));
+}
+
+#[test]
+fn seed_pair_is_the_groups_maximum_shared_pair() {
+    // A weighted graph with a non-trivial tie structure: the founding edge
+    // ties with several in-group pairs, and the extension order is decided
+    // by the minimum-vs-group criterion rather than by the pair weights, so
+    // the invariant is not simply "the first pair happens to be largest".
+    let mut edges = Vec::new();
+    let mut state = 0x1234_5678u32;
+    for i in 0..14u32 {
+        for j in (i + 1)..14 {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            // A small weight alphabet forces many exact ties.
+            edges.push((i, j, 4 + (state >> 29)));
+        }
+    }
+    let cov = from_edges(14, &edges);
+    let params = SeedImageGroupParams {
+        group_size: 5,
+        min_shared: 5,
+    };
+    let groups: Vec<_> = cov.seed_image_groups(&params).collect();
+    assert!(groups.len() >= 2, "fixture must yield multiple groups");
+    for g in &groups {
+        let (i, j) = g.seed_pair;
+        assert!(i < j, "seed pair is ordered");
+        assert!(g.images.contains(&i) && g.images.contains(&j));
+        assert_eq!(cov.count(i, j), g.seed_shared);
+        assert!(g.seed_shared >= params.min_shared);
+        for a in 0..g.images.len() {
+            for b in (a + 1)..g.images.len() {
+                assert!(
+                    cov.count(g.images[a], g.images[b]) <= g.seed_shared,
+                    "pair ({}, {}) exceeds the seed edge",
+                    g.images[a],
+                    g.images[b]
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -167,12 +230,11 @@ fn extension_tie_breaks_smallest_k() {
             (2, 3, 8),
         ],
     );
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 3,
         min_shared: 8,
     };
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1, 2]]);
+    assert_eq!(group_images(&cov, &params), vec![vec![0, 1, 2]]);
 }
 
 #[test]
@@ -181,31 +243,29 @@ fn star_topology_does_not_form_a_group() {
     // minimum-vs-group criterion stops every extension, so only the
     // strongest hub edge pair is ever yielded.
     let cov = from_edges(4, &[(0, 1, 10), (0, 2, 10), (0, 3, 10)]);
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 4,
         min_shared: 8,
     };
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1]]);
+    assert_eq!(group_images(&cov, &params), vec![vec![0, 1]]);
 }
 
 #[test]
 fn extension_stops_below_min_shared_but_yields_partial_group() {
     // {0, 1, 2} is mutually strong; 3 attaches to 0 and 1 only weakly.
     let cov = from_edges(4, &[(0, 1, 10), (0, 2, 9), (1, 2, 9), (0, 3, 4), (1, 3, 4)]);
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 4,
         min_shared: 8,
     };
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1, 2]]);
+    assert_eq!(group_images(&cov, &params), vec![vec![0, 1, 2]]);
 }
 
 #[test]
 fn iterator_ends_when_strongest_edge_below_min_shared() {
     let cov = from_edges(3, &[(0, 1, 5), (1, 2, 3)]);
-    let params = SeedGroupParams::default(); // min_shared = 8
-    assert_eq!(cov.seed_groups(&params).count(), 0);
+    let params = SeedImageGroupParams::default(); // min_shared = 8
+    assert_eq!(cov.seed_image_groups(&params).count(), 0);
 }
 
 #[test]
@@ -219,12 +279,11 @@ fn group_size_caps_extension() {
         }
     }
     let cov = from_edges(5, &edges);
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 3,
         min_shared: 8,
     };
-    let groups: Vec<_> = cov.seed_groups(&params).collect();
-    assert_eq!(groups, vec![vec![0, 1, 2], vec![3, 4]]);
+    assert_eq!(group_images(&cov, &params), vec![vec![0, 1, 2], vec![3, 4]]);
 }
 
 #[test]
@@ -239,14 +298,14 @@ fn prefix_stability() {
         }
     }
     let cov = from_edges(12, &edges);
-    let params = SeedGroupParams {
+    let params = SeedImageGroupParams {
         group_size: 4,
         min_shared: 3,
     };
-    let all: Vec<_> = cov.seed_groups(&params).collect();
+    let all: Vec<_> = cov.seed_image_groups(&params).collect();
     assert!(all.len() >= 2, "fixture must yield multiple groups");
     for k in 1..=all.len() {
-        let prefix: Vec<_> = cov.seed_groups(&params).take(k).collect();
+        let prefix: Vec<_> = cov.seed_image_groups(&params).take(k).collect();
         assert_eq!(prefix, all[..k]);
     }
 }
@@ -254,11 +313,14 @@ fn prefix_stability() {
 #[test]
 fn determinism() {
     let cov = from_edges(6, &[(0, 1, 9), (1, 2, 9), (0, 2, 9), (3, 4, 8)]);
-    let params = SeedGroupParams::default();
-    let a: Vec<_> = cov.seed_groups(&params).collect();
-    let b: Vec<_> = cov.seed_groups(&params).collect();
+    let params = SeedImageGroupParams::default();
+    let a: Vec<_> = cov.seed_image_groups(&params).collect();
+    let b: Vec<_> = cov.seed_image_groups(&params).collect();
     assert_eq!(a, b);
-    assert_eq!(a, vec![vec![0, 1, 2], vec![3, 4]]);
+    assert_eq!(
+        a.iter().map(|g| g.images.clone()).collect::<Vec<_>>(),
+        vec![vec![0, 1, 2], vec![3, 4]]
+    );
 }
 
 // ── Selection queries (specs/core/features/covisibility-selection.md) ──────────

@@ -59,8 +59,12 @@ def _ref_covisibility(starts, images, num_images, accepted=None):
     return counts
 
 
-def _ref_seed_groups(counts, group_size=5, min_shared=8):
-    """Numpy reference implementation of the spec's seed-group algorithm."""
+def _ref_seed_image_groups(counts, group_size=5, min_shared=8):
+    """Numpy reference implementation of the spec's seed-group algorithm.
+
+    Yields the same dicts the binding does: ``images``, ``seed_pair``,
+    ``seed_shared``.
+    """
     n = len(counts)
     excluded = np.zeros(n, dtype=bool)
     groups = []
@@ -89,7 +93,13 @@ def _ref_seed_groups(counts, group_size=5, min_shared=8):
                 break
             group.append(best_k[1])
         group.sort()
-        groups.append(group)
+        groups.append(
+            {
+                "images": group,
+                "seed_pair": (best[1], best[2]),
+                "seed_shared": best[0],
+            }
+        )
         excluded[group] = True
 
 
@@ -389,7 +399,7 @@ class TestRankByCovisibility:
             cov.rank_by_covisibility(0, np.array([N_IMAGES], dtype=np.uint32))
 
 
-class TestSeedGroups:
+class TestSeedImageGroups:
     def test_parity_with_numpy_reference(self):
         # A deterministic pseudo-random weighted graph on 10 images.
         rng = np.random.default_rng(7)
@@ -404,8 +414,8 @@ class TestSeedGroups:
         starts, images = _edges_to_arrays(10, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 10)
         for group_size, min_shared in [(5, 8), (3, 4), (2, 1), (4, 12)]:
-            got = list(cov.seed_groups(group_size=group_size, min_shared=min_shared))
-            want = _ref_seed_groups(
+            got = list(cov.seed_image_groups(group_size, min_shared=min_shared))
+            want = _ref_seed_image_groups(
                 cov.counts, group_size=group_size, min_shared=min_shared
             )
             assert got == want, (group_size, min_shared)
@@ -415,36 +425,98 @@ class TestSeedGroups:
         edges = [(0, 1, 10), (0, 2, 10), (1, 2, 10), (3, 4, 9)]
         starts, images = _edges_to_arrays(5, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 5)
-        it = cov.seed_groups()
+        it = cov.seed_image_groups()
         assert iter(it) is it
-        assert next(it) == [0, 1, 2]
-        assert next(it) == [3, 4]
+        assert next(it) == {
+            "images": [0, 1, 2],
+            "seed_pair": (0, 1),
+            "seed_shared": 10,
+        }
+        assert next(it) == {"images": [3, 4], "seed_pair": (3, 4), "seed_shared": 9}
         with pytest.raises(StopIteration):
             next(it)
+
+    def test_min_shared_is_keyword_only(self):
+        edges = [(0, 1, 10), (2, 3, 9)]
+        starts, images = _edges_to_arrays(4, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 4)
+        with pytest.raises(TypeError):
+            cov.seed_image_groups(5, 8)
 
     def test_lazy_prefix_matches_eager_list(self):
         edges = [(0, 1, 10), (0, 2, 10), (1, 2, 10), (3, 4, 9), (5, 6, 8)]
         starts, images = _edges_to_arrays(7, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 7)
-        eager = list(cov.seed_groups())
+        eager = list(cov.seed_image_groups())
         assert len(eager) == 3
-        lazy = cov.seed_groups()
+        lazy = cov.seed_image_groups()
         assert [next(lazy), next(lazy)] == eager[:2]
 
     def test_iterators_are_independent(self):
         edges = [(0, 1, 10), (2, 3, 9)]
         starts, images = _edges_to_arrays(4, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 4)
-        a = cov.seed_groups()
-        b = cov.seed_groups()
-        assert next(a) == [0, 1]
-        assert next(b) == [0, 1]  # b holds its own exclusion state
+        a = cov.seed_image_groups()
+        b = cov.seed_image_groups()
+        assert next(a)["images"] == [0, 1]
+        # b holds its own exclusion state
+        assert next(b)["images"] == [0, 1]
 
     def test_star_topology_does_not_form_a_group(self):
         edges = [(0, 1, 10), (0, 2, 10), (0, 3, 10)]
         starts, images = _edges_to_arrays(4, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 4)
-        assert list(cov.seed_groups()) == [[0, 1]]
+        assert [g["images"] for g in cov.seed_image_groups()] == [[0, 1]]
+
+    def test_seed_pair_is_the_groups_maximum_shared_pair(self):
+        # A small weight alphabet forces exact ties, so the invariant is not
+        # simply "the first pair happens to be the largest".
+        rng = np.random.default_rng(11)
+        edges = [
+            (i, j, int(w))
+            for (i, j), w in zip(
+                [(i, j) for i in range(12) for j in range(i + 1, 12)],
+                rng.integers(4, 9, size=66),
+            )
+        ]
+        starts, images = _edges_to_arrays(12, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 12)
+        counts = cov.counts
+        groups = list(cov.seed_image_groups(5, min_shared=5))
+        assert len(groups) >= 2
+        for g in groups:
+            i, j = g["seed_pair"]
+            assert i < j
+            assert {i, j} <= set(g["images"])
+            assert counts[i, j] == g["seed_shared"] >= 5
+            within = counts[np.ix_(g["images"], g["images"])]
+            assert within.max() == g["seed_shared"]
+
+    def test_seed_shared_counts_clusters_in_both_seed_images(self, tmp_path):
+        # The identity a consumer relies on: seed_shared is the number of
+        # clusters whose accepted (reference/kept) members land in both
+        # seed-pair images, on the very data the matrix was built from.
+        path = tmp_path / "cluster-patches.matches"
+        _write_cluster_matches(path, with_patches=True)
+        cov = ClusterCovisibility.from_matches(MatchesFile(path))
+        accepted = np.isin(FILE_STATUS, (0, 1))
+        groups = list(cov.seed_image_groups(5, min_shared=1))
+        assert groups, "fixture must yield a group"
+        for g in groups:
+            i, j = g["seed_pair"]
+            shared = 0
+            for c in range(len(FILE_STARTS) - 1):
+                lo, hi = int(FILE_STARTS[c]), int(FILE_STARTS[c + 1])
+                span = set(FILE_IMAGES[lo:hi][accepted[lo:hi]])
+                shared += {i, j} <= span
+            assert shared == g["seed_shared"]
+        # The fixture's own numbers: (0, 2) is the strongest edge at 2
+        # clusters, and image 1 joins on its single shared cluster each way.
+        assert groups[0] == {
+            "images": [0, 1, 2],
+            "seed_pair": (0, 2),
+            "seed_shared": 2,
+        }
 
 
 # ── Selection queries (specs/core/features/covisibility-selection.md) ──────────────

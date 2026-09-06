@@ -150,10 +150,13 @@ impl ClusterCovisibility {
     pub fn count(&self, i: u32, j: u32) -> u32;
     pub fn row(&self, i: u32) -> &[u32];
 
-    /// Lazy iterator of greedy mutually-covisible groups; see Seed-group
-    /// algorithm.  Each `next()` produces one group; consumers take as
-    /// many as they need and drop the rest unpaid.
-    pub fn seed_groups(&self, params: &SeedGroupParams) -> SeedGroups<'_>;
+    /// Lazy iterator of greedy mutually-covisible groups of images; see
+    /// Seed-group algorithm.  Each `next()` produces one group; consumers
+    /// take as many as they need and drop the rest unpaid.
+    pub fn seed_image_groups(
+        &self,
+        params: &SeedImageGroupParams,
+    ) -> SeedImageGroups<'_>;
 
     /// `candidates` reordered by descending covisibility with `image`
     /// (ties: ascending index); zero-covisibility candidates are dropped.
@@ -163,17 +166,32 @@ impl ClusterCovisibility {
 /// Borrows the matrix; state is an excluded-image mask (no matrix copy).
 /// Each `next()` costs one scan for the strongest remaining edge plus the
 /// group-extension steps.
-pub struct SeedGroups<'a> { /* covis, excluded: Vec<bool>, params */ }
-impl Iterator for SeedGroups<'_> { type Item = Vec<u32>; }
+pub struct SeedImageGroups<'a> { /* covis, excluded: Vec<bool>, params */ }
+impl Iterator for SeedImageGroups<'_> { type Item = SeedImageGroup; }
 
-pub struct SeedGroupParams {
+/// A group of images plus the edge it was grown from.
+pub struct SeedImageGroup {
+    pub images: Vec<u32>,      // sorted ascending
+    pub seed_pair: (u32, u32), // i < j
+    pub seed_shared: u32,      // W[seed_pair]
+}
+
+pub struct SeedImageGroupParams {
     pub group_size: usize, // default 5
     pub min_shared: u32,   // default 8 — see caveat
 }
 ```
 
+The yield names images, so the type does: a group is a set of image
+indexes, and nothing about the receiver being a cluster-covisibility matrix
+makes it a set of clusters.
+
+`seed_pair` and `seed_shared` are the founding edge the algorithm's first
+step already picked, carried out rather than discarded, so a caller that
+wants the group's best-supported pair pays nothing for it.
+
 `min_shared = 8` is carried over from the experiments unvalidated; a
-data-derived constructor (`SeedGroupParams::derive`, e.g. a fraction of the
+data-derived constructor (`SeedImageGroupParams::derive`, e.g. a fraction of the
 median nonzero edge weight) is the intended replacement once evaluated.
 
 ### Seed-group algorithm
@@ -189,12 +207,21 @@ all later consideration. Each `next()`:
    minimum is ≥ `min_shared` and the group is below `group_size`. The
    *minimum*-vs-group criterion keeps groups mutually covisible rather
    than hub-and-spokes.
-3. Yield the group sorted ascending and mark its images excluded.
+3. Yield the group — its images sorted ascending, alongside the founding
+   edge `(i, j)` and its weight — and mark its images excluded.
 
 Guarantees: the sequence depends only on the input arrays (no RNG, no
 iteration-order dependence); groups are disjoint; the first `k` groups are
 identical however many are ultimately consumed; every within-group pair of
 a yielded group has `W ≥ min_shared`.
+
+**The seed pair is the group's maximum-shared pair.** The founding edge was
+the strongest among *all* non-excluded pairs at step 1, and every image
+step 2 took in was non-excluded then, so every pair `(a, b)` of the yielded
+group was a candidate edge at step 1 and satisfies
+`W[a, b] ≤ seed_shared`. A consumer looking for the group's strongest pair
+therefore reads `seed_pair` rather than re-scanning `group_size·(group_size−1)/2`
+pairs.
 
 ## Bindings
 
@@ -209,14 +236,22 @@ ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
 
 cov.num_images          # getter
 cov.counts              # numpy (N, N) uint32 copy; errors above dense bound
-cov.seed_groups(group_size=5, min_shared=8)   # iterator of list[int]
+cov.seed_image_groups(group_size=5, *, min_shared=8)  # iterator of dicts
 cov.rank_by_covisibility(image, candidates)   # numpy uint32
 ```
 
-`seed_groups` returns an iterator object (holding a reference to its
+`seed_image_groups` returns an iterator object (holding a reference to its
 `ClusterCovisibility` plus the excluded-image state), so
-`for group in cov.seed_groups(...):` consumes lazily and
-`list(cov.seed_groups(...))` recovers the eager behavior.
+`for group in cov.seed_image_groups(...):` consumes lazily and
+`list(cov.seed_image_groups(...))` recovers the eager behavior. Each step
+yields a dict in the `estimate_intrinsics` result style:
+
+```python
+{"images": [3, 7, 11, 12, 15], "seed_pair": (7, 12), "seed_shared": 214}
+```
+
+`min_shared` is keyword-only: a bare second positional integer reads as a
+count of groups rather than as an edge-weight floor.
 
 `from_matches` takes the `MatchesFile` handle (a selection included) and
 forwards its parsed data to the core entry of the same name, so a file is
@@ -237,10 +272,13 @@ storing the pairwise backbone raises `ValueError`. Custom masks use
   span-1 clusters ignored, seed-group determinism and tie-breaks, prefix
   stability (the first `k` groups match whether `k` or all are consumed),
   the hub-vs-mutual distinction (a star topology must not form a group),
-  dense bound error.
+  the maximum-shared-pair invariant over a tie-dense graph, dense bound
+  error.
 - Bindings test (`tests/rust_bindings/`): array and file constructors on a
-  small generated file; numpy round-trip; parity of `seed_groups` with a
-  numpy reference implementation.
+  small generated file; numpy round-trip; parity of `seed_image_groups`
+  with a numpy reference implementation, the maximum-shared-pair invariant,
+  and `seed_shared` against a direct count of the clusters whose accepted
+  members reach both seed-pair images.
 - First consumer: `exp_pinhole_bootstrap.py` swaps its `covisibility()` and
   `pick_seed_groups()` for the binding — campaign parity on seoul is the
   acceptance test.
