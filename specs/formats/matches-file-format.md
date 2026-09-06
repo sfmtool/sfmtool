@@ -1026,8 +1026,19 @@ cluster_patches, two_view_geometries.
 2. Decompress each file and hash the raw uncompressed bytes
 3. Recompute section and overall hashes
 4. Compare with stored values in `content_hash.json.zst`
-5. Validate structural constraints (feature index bounds, count sums, pair ordering;
+5. Check every raw array a structural check indexes against the byte length its
+   declared count calls for
+6. Validate structural constraints (feature index bounds, count sums, pair ordering;
    cluster CSR, member bounds, patch statuses and reference invariants)
+
+Step 6 walks the raw arrays by index, so a section's structural checks are skipped
+once one of its arrays fails step 5 — and the pairwise feature-bounds walk is
+skipped as well when the per-pair `match_counts` do not sum to `match_count`,
+since those are the run lengths it advances through. The length or sum error is
+what reports the file as invalid, and what says why the rest of the section's
+findings are absent. Verification never trusts a declared count far enough to
+index past the end of an array: a truncated, over-long or hand-edited file is
+reported, not a crash.
 
 ## Usage Examples
 

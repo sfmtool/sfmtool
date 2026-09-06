@@ -438,10 +438,14 @@ fn verify_image_pairs_section<R: std::io::Read + Seek>(
         match_feature_indexes: match_fi_raw,
     };
 
-    // Structural validation on raw data
-    check_pair_ordering(&raw.image_index_pairs, pair_count, image_count, errors);
-    check_match_counts(&raw.match_counts, match_count, errors);
-    check_match_feature_bounds(
+    // Structural validation on raw data. The length checks run first and gate
+    // the rest, because everything below indexes by pair, by match or by
+    // image: an array that is not the length its declared count calls for
+    // cannot be walked. `check_match_counts` extends that gate — its values
+    // are the CSR run lengths `check_match_feature_bounds` advances through,
+    // and a sum that overruns `match_count` walks off the end of
+    // `match_feature_indexes`.
+    let lengths_ok = check_pair_array_lengths(
         &raw,
         feature_counts_raw,
         pair_count,
@@ -449,8 +453,81 @@ fn verify_image_pairs_section<R: std::io::Read + Seek>(
         image_count,
         errors,
     );
+    if lengths_ok {
+        check_pair_ordering(&raw.image_index_pairs, pair_count, image_count, errors);
+    }
+    if lengths_ok && check_match_counts(&raw.match_counts, match_count, errors) {
+        check_match_feature_bounds(
+            &raw,
+            feature_counts_raw,
+            pair_count,
+            match_count,
+            image_count,
+            errors,
+        );
+    }
 
     Ok(pairs_hash)
+}
+
+/// Check every array the pair-table checks index against the count it is sized
+/// by: the three `image_pairs/` entries, plus the `images/feature_counts` the
+/// bounds walk resolves each pair's two images through.
+///
+/// Returns whether they can be indexed by pair, by match and by image. This is
+/// the pairwise backbone's counterpart to the cluster backbone's `consistent`
+/// flag and plays the same role — once an array is not the length its declared
+/// count calls for, no later check may walk it, and the length error itself is
+/// what tells the reader why those findings are absent.
+fn check_pair_array_lengths(
+    raw: &PairsRaw,
+    feature_counts_raw: &[u8],
+    pair_count: usize,
+    match_count: usize,
+    image_count: usize,
+    errors: &mut Vec<String>,
+) -> bool {
+    let mut pairs_ok = true;
+    // The (P, 2) and (M, 2) uint32 tables are 8 bytes per row; the flat
+    // per-pair and per-image uint32 arrays are 4 bytes per element.
+    for (name, raw_len, expected, count, unit) in [
+        (
+            "image_index_pairs",
+            raw.image_index_pairs.len(),
+            pair_count * 8,
+            pair_count,
+            "uint32 pairs",
+        ),
+        (
+            "match_counts",
+            raw.match_counts.len(),
+            pair_count * 4,
+            pair_count,
+            "uint32 values",
+        ),
+        (
+            "match_feature_indexes",
+            raw.match_feature_indexes.len(),
+            match_count * 8,
+            match_count,
+            "uint32 pairs",
+        ),
+        (
+            "feature_counts",
+            feature_counts_raw.len(),
+            image_count * 4,
+            image_count,
+            "uint32 values",
+        ),
+    ] {
+        if raw_len != expected {
+            errors.push(format!(
+                "{name} byte length {raw_len} != expected {expected} ({count} {unit})"
+            ));
+            pairs_ok = false;
+        }
+    }
+    pairs_ok
 }
 
 /// Validate pair sorting (idx_i < idx_j, lexicographic order).
@@ -492,7 +569,17 @@ fn check_pair_ordering(
 }
 
 /// Validate the per-pair match counts against the file's match total.
-fn check_match_counts(match_counts_raw: &[u8], match_count: usize, errors: &mut Vec<String>) {
+///
+/// Returns whether they sum to `match_count`, which is what makes them usable
+/// as the CSR run lengths [`check_match_feature_bounds`] advances through. A
+/// zero count is reported but does not clear the gate: it shortens a run
+/// rather than overrunning the array.
+fn check_match_counts(
+    match_counts_raw: &[u8],
+    match_count: usize,
+    errors: &mut Vec<String>,
+) -> bool {
+    let mut sum_ok = true;
     if !match_counts_raw.is_empty() {
         let counts = raw_to_u32(match_counts_raw);
         let sum: u64 = counts.iter().map(|&c| c as u64).sum();
@@ -500,15 +587,21 @@ fn check_match_counts(match_counts_raw: &[u8], match_count: usize, errors: &mut 
             errors.push(format!(
                 "Sum of match_counts ({sum}) != match_count ({match_count})"
             ));
+            sum_ok = false;
         }
         if counts.iter().any(|&c| c < 1) {
             errors.push("match_counts contains values < 1".into());
         }
     }
+    sum_ok
 }
 
 /// Validate that every matched feature index is within its image's feature
 /// count, walking the CSR-style match runs pair by pair.
+///
+/// The walk indexes all four arrays without further bounds checks, so callers
+/// must first have cleared both gates: [`check_pair_array_lengths`] for the
+/// array lengths and [`check_match_counts`] for the run lengths.
 fn check_match_feature_bounds(
     raw: &PairsRaw,
     feature_counts_raw: &[u8],

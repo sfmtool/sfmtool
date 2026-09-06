@@ -1134,6 +1134,32 @@ fn expect_verify_error(
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// [`expect_verify_error`] for the whole finding list: craft an invalid file
+/// and assert `verify_matches` reports exactly `expected`, in order. Used
+/// where what a gate *suppresses* matters as much as what it reports.
+fn expect_verify_errors(
+    name: &str,
+    data: &MatchesData,
+    mutate: impl FnOnce(&mut Vec<(String, Vec<u8>)>),
+    expected: &[&str],
+) {
+    let dir = std::env::temp_dir().join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("valid.matches");
+    let dst = dir.join("invalid.matches");
+    write_matches(&src, data, 3).unwrap();
+
+    let mut entries = load_archive_entries(&src);
+    mutate(&mut entries);
+    rebuild_matches_archive(&entries, &dst);
+
+    let (valid, errors) = verify_matches(&dst).unwrap();
+    assert_eq!(errors, expected);
+    assert!(!valid);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_verify_rejects_both_backbones() {
     // A cluster-bearing file that also contains image_pairs/ entries.
@@ -1331,6 +1357,146 @@ fn test_verify_rejects_two_kept_members_one_image() {
             );
         },
         "both reference/kept for image 0",
+    );
+}
+
+// ── The pairwise backbone's length / CSR gate ─────────────────────────────
+//
+// `make_test_data` is the fixture throughout: 3 images with feature_counts
+// [100, 150, 200], 2 pairs and 5 matches. Every array below is therefore
+// checked against a count the metadata declares, and each case is a shape
+// `write_matches` cannot produce — only a truncated download, a bad disk or a
+// hand-edited archive can. Before the gate existed each one indexed past the
+// end of a raw array and panicked out of `verify_matches`.
+
+#[test]
+fn test_verify_rejects_short_pairwise_arrays() {
+    // Each array short by one element, one case per array. The length error
+    // is the only finding: the ordering and bounds checks that would read
+    // these arrays are gated off, so nothing downstream guesses at the
+    // truncated bytes.
+    expect_verify_errors(
+        "matches_test_verify_short_index_pairs",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "image_pairs/image_index_pairs.2.2.uint32.zst",
+                |bytes| bytes.truncate(8), // 1 pair instead of 2
+            )
+        },
+        &["image_index_pairs byte length 8 != expected 16 (2 uint32 pairs)"],
+    );
+
+    expect_verify_errors(
+        "matches_test_verify_short_match_counts",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(entries, "image_pairs/match_counts.2.uint32.zst", |bytes| {
+                bytes.truncate(4) // 1 count instead of 2
+            })
+        },
+        &["match_counts byte length 4 != expected 8 (2 uint32 values)"],
+    );
+
+    expect_verify_errors(
+        "matches_test_verify_short_match_fi",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "image_pairs/match_feature_indexes.5.2.uint32.zst",
+                |bytes| bytes.truncate(32), // 4 matches instead of 5
+            )
+        },
+        &["match_feature_indexes byte length 32 != expected 40 (5 uint32 pairs)"],
+    );
+
+    // images/feature_counts is an images/ array, but the pair-table bounds
+    // walk resolves each pair's two images through it, so its length is part
+    // of the same gate.
+    expect_verify_errors(
+        "matches_test_verify_short_feature_counts",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(entries, "images/feature_counts.3.uint32.zst", |bytes| {
+                bytes.truncate(8) // 2 counts instead of 3
+            })
+        },
+        &["feature_counts byte length 8 != expected 12 (3 uint32 values)"],
+    );
+}
+
+#[test]
+fn test_verify_rejects_overlong_pairwise_arrays() {
+    // Too long is as wrong as too short: the count in the metadata and the
+    // one in the entry name both say how many elements there are.
+    expect_verify_errors(
+        "matches_test_verify_long_match_fi",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "image_pairs/match_feature_indexes.5.2.uint32.zst",
+                |bytes| bytes.extend_from_slice(&[0; 8]), // a 6th match
+            )
+        },
+        &["match_feature_indexes byte length 48 != expected 40 (5 uint32 pairs)"],
+    );
+}
+
+#[test]
+fn test_verify_rejects_match_counts_overrunning_match_count() {
+    // The counts are the CSR run lengths the bounds walk advances through, so
+    // a sum past match_count would walk off the end of match_feature_indexes
+    // even though every array is the length it should be.
+    expect_verify_errors(
+        "matches_test_verify_counts_overrun",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(entries, "image_pairs/match_counts.2.uint32.zst", |bytes| {
+                set_u32(bytes, 0, 4) // counts become [4, 2], sum 6 > 5
+            })
+        },
+        &["Sum of match_counts (6) != match_count (5)"],
+    );
+}
+
+#[test]
+fn test_verify_gates_pair_checks_on_array_consistency() {
+    // A file that is wrong twice over: match_counts overruns match_count, and
+    // a feature index is out of range for its image. Only the count error is
+    // reported — the bounds walk cannot be trusted to reach the second one,
+    // and the reported error is what says so.
+    expect_verify_errors(
+        "matches_test_verify_gate_suppresses",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(entries, "image_pairs/match_counts.2.uint32.zst", |bytes| {
+                set_u32(bytes, 0, 4)
+            });
+            mutate_entry(
+                entries,
+                "image_pairs/match_feature_indexes.5.2.uint32.zst",
+                |bytes| set_u32(bytes, 0, 100), // feature_counts[0] = 100
+            );
+        },
+        &["Sum of match_counts (6) != match_count (5)"],
+    );
+
+    // With the counts consistent again, the same out-of-range index is
+    // reported: the gate suppresses the walk, not the finding.
+    expect_verify_errors(
+        "matches_test_verify_gate_opens",
+        &make_test_data(),
+        |entries| {
+            mutate_entry(
+                entries,
+                "image_pairs/match_feature_indexes.5.2.uint32.zst",
+                |bytes| set_u32(bytes, 0, 100),
+            )
+        },
+        &["match_feature_indexes[0][0] = 100 >= feature_counts[0] = 100"],
     );
 }
 
