@@ -348,12 +348,15 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test-ci
-          # Windows only. It is the sole environment where the cache pays: 70s
-          # to install against 32s to restore. macOS installs in 24s and restores
-          # in 20s, which does not earn 0.6 GB of the repo's 10 GB budget --
-          # budget the Rust target caches turn into whole minutes. See the lint
-          # job for the measurement.
-          cache: ${{ runner.os == 'Windows' }}
+          # No env cache, on either platform. Windows `test-ci` is the one
+          # environment that is genuinely slower to install than to restore (70s
+          # against 32s, measured over the 11 runs in #382), so it kept its cache
+          # when the other five were dropped -- but 39s for 1.41 GB is 28 s/GB,
+          # against the ~165 s/GB a Rust target cache returns. It was the least
+          # valuable gigabyte still in the budget, and at 14% of the repo's 10 GB
+          # it was displacing entries worth six times as much. macOS was already
+          # `false` (24s to install, 20s to restore). See the lint job.
+          cache: false
 
       - name: Build Python extension
         # --release: the debug-built PyO3 extension runs the Rust SIFT/flow
@@ -638,6 +641,97 @@ jobs:
             target
             !target/**/incremental/**
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+
+  # Delete the previous generation of Rust caches once the current one exists.
+  #
+  # `actions/cache` only ever adds entries, and GitHub's LRU does not run until
+  # the repo is already over its 10 GB budget -- at which point it is evicting
+  # *live* entries rather than dead ones. The seven target caches are keyed on
+  # `Cargo.lock` alone, so a dependency bump asks for a second full generation
+  # (~7 GB) on top of a steady state that is already ~7 GB, and about half the
+  # live set is destroyed to make room. That is why a PR can restore nothing and
+  # cold-compile: neither the key it wanted nor a prefix fallback survived,
+  # because the older generation had been the LRU victim. Superseded entries had
+  # been outliving their replacements by hours (`Windows-cargo-ui-target-1a22…`
+  # was still resident five hours after `…-777c…` replaced it).
+  #
+  # Pruning bounds the total to one generation plus the run that replaces it.
+  # Two guards keep it from eating anything load-bearing:
+  #
+  #   1. An old entry goes only once the same prefix has an entry at *this* run's
+  #      lockfile hash. A save that failed or was skipped therefore leaves the
+  #      old generation alone -- which is exactly what `restore-keys` falls back
+  #      to.
+  #   2. An entry newer than that replacement is never touched, so two
+  #      overlapping pushes to main (the concurrency group deliberately does not
+  #      cancel main) cannot have the older one delete the newer one's caches.
+  #
+  # PR restores are unaffected: the `restore-keys` prefix fallback resolves to
+  # the newest matching entry, which after a prune is the generation just
+  # written.
+  prune-caches:
+    needs:
+      [lint, test-linux, test-os, ui-test-windows, ui-test-macos, ui-test-linux]
+    if: ${{ always() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      # `gh cache delete` needs this; the workflow default is `contents: read`.
+      actions: write
+    steps:
+      # `hashFiles` reads the workspace, so the lockfile has to be on disk. It is
+      # the only thing this job reads, hence the sparse checkout.
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: Cargo.lock
+          sparse-checkout-cone-mode: false
+      - name: Delete superseded cargo caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEEP: ${{ hashFiles('Cargo.lock') }}
+        run: |
+          set -euo pipefail
+          gh cache list --repo "$REPO" --limit 100 \
+            --json id,key,createdAt,sizeInBytes \
+            --jq '.[] | [.id, .key, .createdAt, .sizeInBytes] | @tsv' > caches.tsv
+
+          # Prefix -> creation time of its current-generation entry. An empty
+          # KEEP (no lockfile) leaves this empty and the prune does nothing.
+          declare -A live
+          while IFS=$'\t' read -r id key created size; do
+            case "$key" in *-cargo-*) ;; *) continue ;; esac
+            if [ "${key##*-}" = "$KEEP" ]; then
+              live["${key%-*}"]=$created
+            fi
+          done < caches.tsv
+
+          freed=0
+          while IFS=$'\t' read -r id key created size; do
+            case "$key" in *-cargo-*) ;; *) continue ;; esac
+            if [ "${key##*-}" = "$KEEP" ]; then
+              continue
+            fi
+            replacement=${live[${key%-*}]:-}
+            if [ -z "$replacement" ]; then
+              echo "keeping  $key (no current-generation entry for this prefix)"
+              continue
+            fi
+            # Timestamps are fixed-width UTC ISO-8601, so this orders correctly.
+            if [[ ! "$created" < "$replacement" ]]; then
+              echo "keeping  $key (newer than its replacement)"
+              continue
+            fi
+            echo "deleting $key ($((size / 1048576)) MB)"
+            if gh cache delete "$id" --repo "$REPO"; then
+              freed=$((freed + size))
+            else
+              echo "         already gone"
+            fi
+          done < caches.tsv
+
+          echo "freed $((freed / 1048576)) MB"
+          gh cache list --repo "$REPO" --limit 100 --json sizeInBytes --jq \
+            '"remaining: \([.[].sizeInBytes] | add // 0 | . / 1073741824 * 100 | round / 100) GB"'
 
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
