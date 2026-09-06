@@ -5,12 +5,10 @@
 //!
 //! Per *realized* covisible image pair, the shared-cluster count and the
 //! mean pixel displacement of the pair's shared-cluster keypoints, built in
-//! one pass over the clusters — linear in observations, no dense matrix
-//! anywhere. See `specs/core/geometry/pose-verification.md` (Substrate).
+//! one pass over the clusters — linear in observations, and stored sparsely.
+//! See `specs/core/geometry/pose-verification.md` (Substrate).
 
-use std::collections::HashMap;
-
-use super::CovisibilityError;
+use super::{CovisibilityError, MAX_DENSE_IMAGES};
 
 /// Sampled per-image-pair feature-displacement tables (row-major
 /// `(num_images, num_images)`, symmetric, zero diagonal). Present only when
@@ -28,7 +26,8 @@ pub(super) struct DisplacementTables {
 /// pair's shared-cluster keypoints. Built in one pass over the clusters —
 /// each cluster emits its accepted cross-image member pairs, so under the
 /// cluster matcher's span cap both time and storage are linear in
-/// observations, with no dense matrix anywhere. See
+/// observations; the only dense array is the build's transient pair-slot
+/// index (`PairSlots`), which the assembled substrate does not keep. See
 /// `specs/core/geometry/pose-verification.md` (Substrate).
 ///
 /// The shared count matches [`ClusterCovisibility::count`](super::ClusterCovisibility::count) (each cluster
@@ -60,6 +59,62 @@ struct PairAccum {
     disp_n: u32,
 }
 
+/// A pair slot no cluster has touched yet. Entry indexes stay well below it:
+/// at most `MAX_DENSE_IMAGES * (MAX_DENSE_IMAGES - 1) / 2` (~8.4 M) pairs can
+/// ever be realized.
+const UNSET: u32 = u32::MAX;
+
+/// Transient dense index from an unordered image pair to its accumulator,
+/// backing the neighborhood accumulation.
+///
+/// `slots` is one `u32` per ordered pair (`4 · num_images²` bytes, the same
+/// order as the `counts` matrix [`ClusterCovisibility`](super::ClusterCovisibility)
+/// holds permanently: 192 KB at 219 images, 67 MB at the
+/// [`MAX_DENSE_IMAGES`] cap) and is dropped when the build assembles its CSR;
+/// only *realized* pairs get an accumulator, so `entries` keeps the sparsity
+/// a hash map would give while the address computation is one multiply-add
+/// and one indexed load instead of a hash.
+///
+/// **Accumulation-order contract.** The kernel's arithmetic is order
+/// sensitive: `disp_sum` is an `f64` running sum, so a pair's mean is
+/// bit-reproducible only while its additions arrive in the same sequence.
+/// This index preserves that because it changes the *address* of an
+/// accumulator and nothing else -- the clusters are walked in the same order,
+/// each cluster's span pairs and member pairs are emitted in the same order,
+/// and each emitted pair reaches the same accumulator. `entries` fills in
+/// first-touch order (as a hash map's entries are created), and
+/// [`DisplacementNeighborhood::from_clusters`] sorts it by key before
+/// assembly; the keys are unique unordered pairs, so that sort fixes the
+/// sequence [`DisplacementNeighborhood::from_sorted_pairs`] sees regardless of
+/// how the entries were ordered before it.
+struct PairSlots {
+    num_images: usize,
+    slots: Vec<u32>,
+    entries: Vec<((u32, u32), PairAccum)>,
+}
+
+impl PairSlots {
+    fn new(num_images: usize) -> Self {
+        Self {
+            num_images,
+            slots: vec![UNSET; num_images * num_images],
+            entries: Vec::new(),
+        }
+    }
+
+    /// The accumulator for the pair `(i, j)`, `i < j`, created on first touch.
+    #[inline]
+    fn accum(&mut self, i: u32, j: u32) -> &mut PairAccum {
+        let cell = i as usize * self.num_images + j as usize;
+        let slot = &mut self.slots[cell];
+        if *slot == UNSET {
+            *slot = self.entries.len() as u32;
+            self.entries.push(((i, j), PairAccum::default()));
+        }
+        &mut self.entries[*slot as usize].1
+    }
+}
+
 impl DisplacementNeighborhood {
     /// Build the substrate from CSR cluster arrays plus per-member positions
     /// (all parallel to `member_images`, pixel units). `member_accepted` is
@@ -73,6 +128,12 @@ impl DisplacementNeighborhood {
     ///
     /// Positions are the `f32` pairs a `.matches` backbone stores; the
     /// distances and their means are `f64`.
+    ///
+    /// `num_images` is bounded by [`MAX_DENSE_IMAGES`] the same way
+    /// [`ClusterCovisibility`](super::ClusterCovisibility) is: the assembled
+    /// substrate is sparse, but the accumulation indexes pairs through a
+    /// transient `num_images²` slot array, so the bound that sizes the count
+    /// matrix sizes this too.
     pub fn from_clusters(
         cluster_starts: &[u32],
         member_images: &[u32],
@@ -109,10 +170,16 @@ impl DisplacementNeighborhood {
             });
         }
 
-        let mut pairs: HashMap<(u32, u32), PairAccum> = HashMap::new();
-        let mut rows: Vec<usize> = Vec::new();
-        let mut span: Vec<u32> = Vec::new();
-        super::prof::NBR_ACCUM.time(|| {
+        // Both statistics address their accumulator through one slot index,
+        // whose `num_images²` cell array is what the dense bound sizes.
+        if num_images > MAX_DENSE_IMAGES {
+            return Err(CovisibilityError::TooManyImages { num_images });
+        }
+
+        let mut entries = super::prof::NBR_ACCUM.time(|| {
+            let mut pairs = PairSlots::new(num_images);
+            let mut rows: Vec<usize> = Vec::new();
+            let mut span: Vec<u32> = Vec::new();
             for c in 0..cluster_starts.len() - 1 {
                 let lo = cluster_starts[c] as usize;
                 let hi = cluster_starts[c + 1] as usize;
@@ -125,7 +192,7 @@ impl DisplacementNeighborhood {
                 span.dedup();
                 for (a, &i) in span.iter().enumerate() {
                     for &j in &span[a + 1..] {
-                        pairs.entry((i, j)).or_default().shared += 1;
+                        pairs.accum(i, j).shared += 1;
                     }
                 }
                 // Displacement: every accepted cross-image member pair.
@@ -139,19 +206,19 @@ impl DisplacementNeighborhood {
                             positions_xy[ka][0] as f64 - positions_xy[kb][0] as f64,
                             positions_xy[ka][1] as f64 - positions_xy[kb][1] as f64,
                         );
-                        let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
+                        let e = pairs.accum(ia.min(ib), ia.max(ib));
                         e.disp_sum += d;
                         e.disp_n += 1;
                     }
                 }
             }
+            pairs.entries
         });
 
-        // Deterministic order despite the hash-map accumulator.
+        // Deterministic order despite the first-touch accumulator order.
         Ok(super::prof::NBR_SORT.time(|| {
-            let mut sorted: Vec<((u32, u32), PairAccum)> = pairs.into_iter().collect();
-            sorted.sort_unstable_by_key(|&(k, _)| k);
-            Self::from_sorted_pairs(num_images, &sorted)
+            entries.sort_unstable_by_key(|&(k, _)| k);
+            Self::from_sorted_pairs(num_images, &entries)
         }))
     }
 

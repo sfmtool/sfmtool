@@ -766,6 +766,180 @@ fn neighborhood_from_arrays_validation() {
     );
 }
 
+/// A fleet-shaped synthetic scene: `n_clusters` band-diagonal clusters over
+/// `n_images` images (each anchors one image and takes the next `span - 1`
+/// around the ring, the pair-space shape of a sequential capture), spans
+/// 2..=8, one member in eight duplicated into its cluster's anchor image, and
+/// pseudo-random pixel positions. Every draw comes off one seeded
+/// [`SplitMix64`] stream, so the arrays are the same on every run and every
+/// platform.
+fn fleet_scene(
+    n_images: usize,
+    n_clusters: usize,
+    seed: u64,
+) -> (Vec<u32>, Vec<u32>, Vec<[f32; 2]>, Vec<bool>) {
+    let mut rng = SplitMix64::new(seed);
+    let mut starts = vec![0u32];
+    let mut images: Vec<u32> = Vec::new();
+    let mut positions: Vec<[f32; 2]> = Vec::new();
+    let mut mask: Vec<bool> = Vec::new();
+    for _ in 0..n_clusters {
+        let span = 2 + rng.below(7);
+        let anchor = rng.below(n_images);
+        for t in 0..span {
+            images.push(((anchor + t) % n_images) as u32);
+        }
+        if rng.below(8) == 0 {
+            images.push(anchor as u32);
+        }
+        while positions.len() < images.len() {
+            positions.push([
+                rng.below(1 << 21) as f32 / 1024.0,
+                rng.below(1 << 20) as f32 / 1024.0,
+            ]);
+            // ~1 member in 16 rejected, so the masked arm exercises clusters
+            // that lose members without losing their whole span.
+            mask.push(rng.below(16) != 0);
+        }
+        starts.push(images.len() as u32);
+    }
+    (starts, images, positions, mask)
+}
+
+/// One realized pair with its finished statistics: `((i, j), (shared count,
+/// mean displacement))`.
+type PairStat = ((u32, u32), (u32, f64));
+
+/// The pre-dense-slot accumulation, kept verbatim as the equality reference:
+/// one `HashMap<(u32, u32), _>` entry per realized pair, shared votes from the
+/// deduplicated span and displacement sums over every accepted cross-image
+/// member pair. Returns per-pair `(shared, mean displacement)` keyed by the
+/// ordered pair `i < j`.
+fn hashmap_reference(
+    starts: &[u32],
+    images: &[u32],
+    positions: &[[f32; 2]],
+    mask: Option<&[bool]>,
+) -> std::collections::HashMap<(u32, u32), (u32, f64)> {
+    let mut pairs: std::collections::HashMap<(u32, u32), (u32, f64, u32)> =
+        std::collections::HashMap::new();
+    let mut rows: Vec<usize> = Vec::new();
+    let mut span: Vec<u32> = Vec::new();
+    for c in 0..starts.len() - 1 {
+        let (lo, hi) = (starts[c] as usize, starts[c + 1] as usize);
+        rows.clear();
+        rows.extend((lo..hi).filter(|&k| mask.is_none_or(|m| m[k])));
+        span.clear();
+        span.extend(rows.iter().map(|&k| images[k]));
+        span.sort_unstable();
+        span.dedup();
+        for (a, &i) in span.iter().enumerate() {
+            for &j in &span[a + 1..] {
+                pairs.entry((i, j)).or_default().0 += 1;
+            }
+        }
+        for (a, &ka) in rows.iter().enumerate() {
+            for &kb in &rows[a + 1..] {
+                let (ia, ib) = (images[ka], images[kb]);
+                if ia == ib {
+                    continue;
+                }
+                let d = f64::hypot(
+                    positions[ka][0] as f64 - positions[kb][0] as f64,
+                    positions[ka][1] as f64 - positions[kb][1] as f64,
+                );
+                let e = pairs.entry((ia.min(ib), ia.max(ib))).or_default();
+                e.1 += d;
+                e.2 += 1;
+            }
+        }
+    }
+    pairs
+        .into_iter()
+        .map(|(k, (shared, sum, n))| (k, (shared, if n > 0 { sum / n as f64 } else { 0.0 })))
+        .collect()
+}
+
+/// The dense pair-slot index must reproduce the hash-map accumulation it
+/// replaced to the last bit, at a scale where hash order and first-touch order
+/// are thoroughly different: every pair, count, mean (compared by `to_bits`)
+/// and the CSR row layout `neighbors` walks.
+#[test]
+fn neighborhood_matches_hashmap_reference_at_scale() {
+    let (starts, images, positions, mask) = fleet_scene(300, 20_000, 0x5eed);
+    assert!(
+        images.len() > 80_000,
+        "scene too small to be a regression net"
+    );
+    for (arm, m) in [("unmasked", None), ("masked", Some(mask.as_slice()))] {
+        let nb =
+            DisplacementNeighborhood::from_clusters(&starts, &images, m, 300, &positions).unwrap();
+        let want = hashmap_reference(&starts, &images, &positions, m);
+        assert!(want.len() > 2000, "{arm}: too few realized pairs to matter");
+        assert_eq!(nb.num_pairs(), want.len(), "{arm}: pair count");
+
+        // Serialized pair arrays, exactly: order, keys, counts, and the mean
+        // bit pattern (an f64 running sum reordered would differ here).
+        let (pi, pj, shared, mean) = nb.to_arrays();
+        let mut expect: Vec<PairStat> = want.iter().map(|(&k, &v)| (k, v)).collect();
+        expect.sort_unstable_by_key(|&(k, _)| k);
+        assert_eq!(pi.len(), expect.len());
+        for (k, &((i, j), (s, d))) in expect.iter().enumerate() {
+            assert_eq!((pi[k], pj[k]), (i, j), "{arm}: pair {k}");
+            assert_eq!(shared[k], s, "{arm}: shared for ({i}, {j})");
+            assert_eq!(
+                mean[k].to_bits(),
+                d.to_bits(),
+                "{arm}: mean displacement for ({i}, {j})"
+            );
+        }
+
+        // CSR structure: each row's partners, ascending, with their stats.
+        for i in 0..300u32 {
+            let mut want_row: Vec<(u32, u32, f64)> = want
+                .iter()
+                .filter_map(|(&(a, b), &(s, d))| match (a, b) {
+                    (a, b) if a == i => Some((b, s, d)),
+                    (a, b) if b == i => Some((a, s, d)),
+                    _ => None,
+                })
+                .collect();
+            want_row.sort_unstable_by_key(|&(j, _, _)| j);
+            let got: Vec<(u32, u32, f64)> = nb.neighbors(i).collect();
+            assert_eq!(got.len(), want_row.len(), "{arm}: row {i} length");
+            for (g, w) in got.iter().zip(&want_row) {
+                assert_eq!((g.0, g.1), (w.0, w.1), "{arm}: row {i} entry");
+                assert_eq!(g.2.to_bits(), w.2.to_bits(), "{arm}: row {i} mean");
+            }
+        }
+    }
+}
+
+#[test]
+fn neighborhood_edge_scales() {
+    // Zero images: the slot array is empty and no cluster can address it.
+    let nb = DisplacementNeighborhood::from_clusters(&[0], &[], None, 0, &[]).unwrap();
+    assert_eq!((nb.num_images(), nb.num_pairs()), (0, 0));
+    assert_eq!(nb.to_arrays(), (vec![], vec![], vec![], vec![]));
+    // One image: slots exist, but no cross-image pair ever realizes.
+    let nb = DisplacementNeighborhood::from_clusters(
+        &[0, 2],
+        &[0, 0],
+        None,
+        1,
+        &[[0.0, 0.0], [3.0, 4.0]],
+    )
+    .unwrap();
+    assert_eq!(nb.num_pairs(), 0);
+    // Above the dense bound the slot array is refused, as for the matrix.
+    assert_eq!(
+        DisplacementNeighborhood::from_clusters(&[0], &[], None, MAX_DENSE_IMAGES + 1, &[]),
+        Err(CovisibilityError::TooManyImages {
+            num_images: MAX_DENSE_IMAGES + 1
+        })
+    );
+}
+
 #[test]
 fn neighborhood_available_through_cluster_covisibility() {
     let (starts, images, positions, _) = small_scene();

@@ -38,7 +38,14 @@ with per-image queries:
 - pair stats lookup.
 
 A cluster-member acceptance mask (as elsewhere on `ClusterCovisibility`)
-is honored at construction. Persistence is the substrate's own:
+is honored at construction. The build itself is not sparse: it addresses
+a pair's accumulator through a transient dense slot index over
+`num_images²` (`4·N²` bytes, the same order as the count matrix
+`ClusterCovisibility` holds permanently), which is why
+`DisplacementNeighborhood::from_clusters` refuses `num_images` above the
+dense bound the count matrix uses. Only realized pairs get an
+accumulator, and the index is dropped once the sparse adjacency is
+assembled. Persistence is the substrate's own:
 `DisplacementNeighborhood::to_arrays` emits parallel per-pair arrays
 `(i, j, shared count, mean displacement)` with `i < j`, and
 `from_arrays` rebuilds it, so one computation serves a multi-stage
@@ -171,7 +178,10 @@ a caller can do that without re-running either screen.
 
 - Substrate: construction cost linear in observations under the span
   cap; `nearest`/`farthest` exact against a dense reference on a small
-  scene; mask honored; serialization round-trips.
+  scene; mask honored; serialization round-trips; the slot-indexed
+  accumulation reproduces a hash-map reference exactly -- pair set,
+  counts, mean-displacement bit patterns and CSR rows -- on a 300-image,
+  20 000-cluster synthetic scene, masked and unmasked.
 - Screens on a synthetic scene with implanted misregistrations: a
   wrong-pose camera with healthy neighbours is flagged by both screens;
   an unflagged scene yields no flags at the default thresholds; a
