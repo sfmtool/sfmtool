@@ -91,11 +91,120 @@ def _cluster_patch_dict() -> dict:
     }
 
 
+def _pairwise_dict() -> dict:
+    """2 images, 1 pair, 1 match -- the pairwise backbone, no clusters."""
+    return {
+        "metadata": {
+            "version": 4,
+            "matching_method": "sequential",
+            "matching_tool": "sfmtool",
+            "matching_tool_version": "0.2",
+            "matching_options": {},
+            "workspace": {
+                "absolute_path": "/tmp/workspace",
+                "relative_path": "..",
+                "contents": {
+                    "feature_tool": "sfmtool",
+                    "feature_type": "sift",
+                    "feature_options": {},
+                    "feature_prefix_dir": "features/sift-sfmtool-abc123",
+                },
+            },
+            "timestamp": "2026-07-09T10:00:00Z",
+            "image_count": 2,
+            "image_pair_count": 1,
+            "match_count": 1,
+            "has_two_view_geometries": False,
+        },
+        "image_names": ["a.jpg", "b.jpg"],
+        "feature_tool_hashes": [b"\x00" * 16] * 2,
+        "sift_content_hashes": [b"\x01" * 16] * 2,
+        "feature_counts": np.array([1, 1], dtype=np.uint32),
+        "image_dims": np.array([[640, 480], [640, 480]], dtype=np.uint32),
+        "image_index_pairs": np.array([[0, 1]], dtype=np.uint32),
+        "match_counts": np.array([1], dtype=np.uint32),
+        "match_feature_indexes": np.array([[0, 0]], dtype=np.uint32),
+        "match_descriptor_distances": np.array([100.0], dtype=np.float32),
+        "has_two_view_geometries": False,
+    }
+
+
 @pytest.fixture
 def matches_path(tmp_path):
     path = tmp_path / "clusters-patches.matches"
     write_matches(path, _cluster_patch_dict())
     return path
+
+
+@pytest.fixture
+def pairwise_path(tmp_path):
+    path = tmp_path / "pairwise.matches"
+    write_matches(path, _pairwise_dict())
+    return path
+
+
+def test_counts_match_the_arrays(matches_path):
+    mf = MatchesFile(matches_path)
+
+    assert mf.image_count == len(mf.image_names)
+    assert mf.cluster_count == len(mf.cluster_starts) - 1
+    assert mf.member_count == len(mf.member_images)
+    assert (mf.image_count, mf.cluster_count, mf.member_count) == (4, 3, 8)
+
+
+def test_counts_follow_a_selection(matches_path):
+    mf = MatchesFile(matches_path)
+
+    # A derived handle reports the SELECTION's counts, not the source's:
+    # image 0 is restricted away, cluster 1 drops as unrefinable, and the two
+    # survivors keep two members each.
+    sel = mf.select_clusters(min_span=2, restrict_images=mf.image_names[1:])
+    assert sel.image_count == len(sel.image_names) == 3
+    assert sel.cluster_count == len(sel.cluster_starts) - 1 == 2
+    assert sel.member_count == len(sel.member_images) == 4
+
+    # And a second derivation off the first tracks it down again.
+    inner = sel.select_clusters(restrict_cluster_ids=[1])
+    assert inner.cluster_count == 1
+    assert inner.member_count == 2
+
+
+def test_shared_image_dims(tmp_path, pairwise_path):
+    # The fixture's images differ in resolution, so the file states no single
+    # one -- and the refusal names the first image to disagree rather than
+    # handing back dims[0].  (The dims-less refusal belongs to version <= 3
+    # files, which the writer cannot produce; it is pinned in the
+    # matches-format unit tests.)
+    src = _cluster_patch_dict()
+    path = tmp_path / "mixed.matches"
+    write_matches(path, src)
+    mf = MatchesFile(path)
+    for name in ("image_width", "image_height"):
+        with pytest.raises(ValueError, match="frames/frame_002.jpg is 1024x768"):
+            getattr(mf, name)
+
+    # One resolution across the table, and both getters read it.
+    src["image_dims"] = np.tile(np.array([640, 480], dtype=np.uint32), (4, 1))
+    uniform = tmp_path / "uniform.matches"
+    write_matches(uniform, src)
+    uni = MatchesFile(uniform)
+    assert (uni.image_width, uni.image_height) == (640, 480)
+
+    # A pairwise file is not excluded -- the image table is universal.
+    pw = MatchesFile(pairwise_path)
+    assert (pw.image_width, pw.image_height) == (640, 480)
+
+
+def test_cluster_counts_reject_a_pairwise_file(pairwise_path):
+    mf = MatchesFile(pairwise_path)
+
+    # The image table is universal; the cluster counts share cluster_starts'
+    # gate.
+    assert mf.image_count == 2
+    assert not mf.has_clusters
+    for name in ("cluster_starts", "cluster_count", "member_count"):
+        with pytest.raises(ValueError, match="pairwise backbone"):
+            getattr(mf, name)
 
 
 def test_accessors_match_source_arrays(matches_path):

@@ -2929,3 +2929,38 @@ fn archive_entry_names_pin_call_sites() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[test]
+fn test_shared_image_dims_uniform() {
+    let mut data = make_test_data();
+    // Bring the third image onto the resolution of the first two.
+    data.image_dims =
+        Some(Array2::from_shape_vec((3, 2), vec![640, 480, 640, 480, 640, 480]).unwrap());
+    assert_eq!(data.shared_image_dims(), Ok((640, 480)));
+}
+
+#[test]
+fn test_shared_image_dims_mixed() {
+    // The fixture's third image is 1024x768 where the first two are 640x480,
+    // and the reading names it rather than taking dims[0].
+    let data = make_test_data();
+    assert_eq!(
+        data.shared_image_dims(),
+        Err(SharedDimsError::Mixed {
+            expected: (640, 480),
+            found: (1024, 768),
+            image: "frames/frame_002.jpg".into(),
+        })
+    );
+}
+
+#[test]
+fn test_shared_image_dims_absent_and_empty() {
+    let mut data = make_test_data();
+    data.image_dims = None;
+    assert_eq!(data.shared_image_dims(), Err(SharedDimsError::NoDimensions));
+
+    // An empty image table is its own answer, checked before the dimensions.
+    data.image_names.clear();
+    assert_eq!(data.shared_image_dims(), Err(SharedDimsError::NoImages));
+}

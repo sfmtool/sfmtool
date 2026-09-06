@@ -566,3 +566,71 @@ pub struct MatchesData {
     /// Optional two-view geometries; requires `image_pairs`.
     pub two_view_geometries: Option<TwoViewGeometryData>,
 }
+
+/// Why a file states no single image resolution — see
+/// [`MatchesData::shared_image_dims`].
+///
+/// Each variant is a property of the file, so a caller that needs one shared
+/// camera can report which of the three situations it met without re-walking
+/// `image_dims` itself.
+#[derive(Error, Clone, Debug, PartialEq, Eq)]
+pub enum SharedDimsError {
+    /// The file names no images, so there is nothing to read a resolution
+    /// from.
+    #[error("this .matches file names no images")]
+    NoImages,
+
+    /// The file records no `image_dims` at all (format version ≤ 3, which
+    /// never stored them).
+    #[error("this .matches file stores no image dimensions")]
+    NoDimensions,
+
+    /// Two images carry different dimensions.
+    #[error("{image} is {}x{}, not the {}x{} of the first image", found.0, found.1, expected.0, expected.1)]
+    Mixed {
+        /// The first image's dimensions, which every image must share.
+        expected: (u32, u32),
+        /// The dimensions of the first image that disagrees.
+        found: (u32, u32),
+        /// That image's name (or `image {index}` when the name is missing).
+        image: String,
+    },
+}
+
+impl MatchesData {
+    /// The one `(width, height)` every image of this file carries.
+    ///
+    /// The uniformity reading lives here, once, so that a caller estimating a
+    /// single shared camera never has to take `image_dims[0]` and hope: a
+    /// file whose images differ in resolution states no such pair, and says
+    /// which image is the first to disagree ([`SharedDimsError`]).
+    pub fn shared_image_dims(&self) -> Result<(u32, u32), SharedDimsError> {
+        if self.image_names.is_empty() {
+            return Err(SharedDimsError::NoImages);
+        }
+        let dims = self
+            .image_dims
+            .as_ref()
+            .ok_or(SharedDimsError::NoDimensions)?;
+        let mut rows = dims.rows().into_iter();
+        let first = rows.next().ok_or(SharedDimsError::NoImages)?;
+        let expected = (first[0], first[1]);
+        for (i, row) in rows.enumerate() {
+            let found = (row[0], row[1]);
+            if found != expected {
+                return Err(SharedDimsError::Mixed {
+                    expected,
+                    found,
+                    // The dimension rows are parallel to the image table; `i`
+                    // counts from the second row, which is image 1.
+                    image: self
+                        .image_names
+                        .get(i + 1)
+                        .cloned()
+                        .unwrap_or_else(|| format!("image {}", i + 1)),
+                });
+            }
+        }
+        Ok(expected)
+    }
+}

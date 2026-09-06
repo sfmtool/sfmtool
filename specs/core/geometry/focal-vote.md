@@ -81,13 +81,16 @@ costs its lane advantage back.
 `focal_vote_from_matches(&MatchesData, &FocalVoteOptions)` is the whole
 file-to-vote path in one call: it reads the cluster backbone's CSR index and
 member images (borrowed), widens the member positions once, and takes
-`(width, height)` off the image table — **refusing a file whose images do not
-all carry the same dimensions**, which is the shared-camera contract the
-centred principal point rests on, stated here instead of every caller
-silently taking the first image's size. It errors only on a property of the
-file (`MatchesInputError`: no cluster backbone, no member positions, no
-images, no dimensions, mixed dimensions); a capture the vote simply cannot
-answer is a result with no consensus, not an error.
+`(width, height)` from `MatchesData::shared_image_dims` — the file-level
+reading of the one resolution every image carries, which **refuses a file
+whose images do not all carry the same dimensions**. That is the
+shared-camera contract the centred principal point rests on, and it lives
+with the file rather than in every caller silently taking the first image's
+size; the vote restates its three dimension outcomes in its own terms. It
+errors only on a property of the file (`MatchesInputError`: no cluster
+backbone, no member positions, no images, no dimensions, mixed dimensions); a
+capture the vote simply cannot answer is a result with no consensus, not an
+error.
 [`estimate_intrinsics_from_matches`](estimate-intrinsics.md) is the same
 reading behind the typed answer.
 

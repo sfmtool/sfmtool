@@ -603,6 +603,28 @@ impl std::fmt::Display for MatchesInputError {
 
 impl std::error::Error for MatchesInputError {}
 
+impl From<matches_format::SharedDimsError> for MatchesInputError {
+    /// The file-level reading, restated in the vote's terms: the three ways a
+    /// file states no one resolution are the three dimension variants here,
+    /// which keep their own wording because they say why the *vote* cannot
+    /// proceed.
+    fn from(e: matches_format::SharedDimsError) -> Self {
+        match e {
+            matches_format::SharedDimsError::NoImages => MatchesInputError::NoImages,
+            matches_format::SharedDimsError::NoDimensions => MatchesInputError::NoImageDimensions,
+            matches_format::SharedDimsError::Mixed {
+                expected,
+                found,
+                image,
+            } => MatchesInputError::MixedDimensions {
+                expected,
+                found,
+                image,
+            },
+        }
+    }
+}
+
 /// The vote's observations exactly as a `.matches` file states them: the
 /// cluster backbone's CSR index and member arrays, and the one image size all
 /// of the file's images share.
@@ -630,9 +652,11 @@ pub struct MatchesObservations<'a> {
 impl<'a> MatchesObservations<'a> {
     /// Read a parsed `.matches` file's cluster observations.
     ///
-    /// The uniform-dimensions rule is checked here, once, rather than in every
-    /// caller: the vote places the principal point at the image centre of a
-    /// single shared camera, so a file mixing resolutions is not one estimate.
+    /// The uniform-dimensions rule is the file-level reading
+    /// ([`MatchesData::shared_image_dims`]) restated as a vote input, rather
+    /// than a check in every caller: the vote places the principal point at
+    /// the image centre of a single shared camera, so a file mixing
+    /// resolutions is not one estimate.
     pub fn read(matches: &'a MatchesData) -> Result<Self, MatchesInputError> {
         let clusters = matches
             .clusters
@@ -642,7 +666,9 @@ impl<'a> MatchesObservations<'a> {
             .member_positions
             .as_ref()
             .ok_or(MatchesInputError::NoMemberPositions)?;
-        let (width, height) = uniform_dimensions(matches)?;
+        let (width, height) = matches
+            .shared_image_dims()
+            .map_err(MatchesInputError::from)?;
         Ok(MatchesObservations {
             cluster_starts: contiguous(&clusters.cluster_starts),
             member_images: contiguous(&clusters.member_images),
@@ -656,37 +682,6 @@ impl<'a> MatchesObservations<'a> {
             height,
         })
     }
-}
-
-/// The one `(width, height)` every image of the file carries.
-fn uniform_dimensions(matches: &MatchesData) -> Result<(u32, u32), MatchesInputError> {
-    if matches.image_names.is_empty() {
-        return Err(MatchesInputError::NoImages);
-    }
-    let dims = matches
-        .image_dims
-        .as_ref()
-        .ok_or(MatchesInputError::NoImageDimensions)?;
-    let mut rows = dims.rows().into_iter();
-    let first = rows.next().ok_or(MatchesInputError::NoImages)?;
-    let expected = (first[0], first[1]);
-    for (i, row) in rows.enumerate() {
-        let found = (row[0], row[1]);
-        if found != expected {
-            return Err(MatchesInputError::MixedDimensions {
-                expected,
-                found,
-                // The dimension rows are parallel to the image table; `i`
-                // counts from the second row, which is image 1.
-                image: matches
-                    .image_names
-                    .get(i + 1)
-                    .cloned()
-                    .unwrap_or_else(|| format!("image {}", i + 1)),
-            });
-        }
-    }
-    Ok(expected)
 }
 
 /// One array as a slice, borrowed when its storage is already contiguous.

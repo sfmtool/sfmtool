@@ -46,6 +46,16 @@ impl PyMatchesFile {
         })
     }
 
+    /// The one resolution every image of the file shares, as the Python
+    /// error a file that states none deserves.
+    fn shared_image_dims(&self) -> PyResult<(u32, u32)> {
+        self.inner.shared_image_dims().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "this file states no single image resolution: {e}"
+            ))
+        })
+    }
+
     fn cluster_patches(&self) -> PyResult<&matches_format::ClusterPatchData> {
         self.inner.cluster_patches.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("no cluster_patches/ section in this file")
@@ -132,6 +142,49 @@ impl PyMatchesFile {
     #[getter]
     fn feature_counts<'py>(&self, py: Python<'py>) -> Py<PyAny> {
         self.inner.feature_counts.to_pyarray(py).into_any().unbind()
+    }
+
+    /// Number of images in the image table.
+    #[getter]
+    fn image_count(&self) -> u32 {
+        self.inner.metadata.image_count
+    }
+
+    /// The pixel width every image of the file shares. Raises `ValueError`
+    /// when the file records no dimensions or its images differ in
+    /// resolution.
+    #[getter]
+    fn image_width(&self) -> PyResult<u32> {
+        Ok(self.shared_image_dims()?.0)
+    }
+
+    /// The pixel height every image of the file shares, under the same rule
+    /// as `image_width`.
+    #[getter]
+    fn image_height(&self) -> PyResult<u32> {
+        Ok(self.shared_image_dims()?.1)
+    }
+
+    /// Number of clusters (`cluster_starts` length minus one).
+    #[getter]
+    fn cluster_count(&self) -> PyResult<u32> {
+        self.clusters()?;
+        Ok(self
+            .inner
+            .metadata
+            .cluster_count
+            .expect("a cluster-bearing file carries cluster_count"))
+    }
+
+    /// Total number of cluster members across all clusters.
+    #[getter]
+    fn member_count(&self) -> PyResult<u32> {
+        self.clusters()?;
+        Ok(self
+            .inner
+            .metadata
+            .cluster_member_count
+            .expect("a cluster-bearing file carries cluster_member_count"))
     }
 
     /// Whether the file stores the cluster backbone.
