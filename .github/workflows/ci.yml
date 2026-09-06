@@ -58,7 +58,16 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: lint
-          cache: true
+          # No env cache: restoring one costs more than building it. Measured
+          # over 11 runs, `pixi install --locked` beat a cache restore for every
+          # environment but Windows `test-ci` -- here 5s to install against 6s
+          # to restore, because pixi links packages from the conda-forge CDN
+          # faster than the cache service ships the installed tree back. The
+          # seven env caches also held 5.5 GB of the repo's 10 GB budget to save
+          # ~35s a run at best, and the LRU eviction that caused was evicting
+          # the Rust target caches, which are worth ~15 min a run. See the
+          # test-os job for the one environment that pays.
+          cache: false
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
@@ -226,7 +235,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test-ci
-          cache: true
+          # No env cache: installing test-ci here takes 19s and restoring it 21s,
+          # for 1.7 GB of the shared cache budget. See the lint job.
+          cache: false
 
       - name: Run tests with combined coverage
         shell: bash
@@ -337,7 +348,12 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: test-ci
-          cache: true
+          # Windows only. It is the sole environment where the cache pays: 70s
+          # to install against 32s to restore. macOS installs in 24s and restores
+          # in 20s, which does not earn 0.6 GB of the repo's 10 GB budget --
+          # budget the Rust target caches turn into whole minutes. See the lint
+          # job for the measurement.
+          cache: ${{ runner.os == 'Windows' }}
 
       - name: Build Python extension
         # --release: the debug-built PyO3 extension runs the Rust SIFT/flow
@@ -402,7 +418,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: ui
-          cache: true
+          # No env cache: the ui env installs in 5s and restores in 4s.
+          # See the lint job.
+          cache: false
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
@@ -466,7 +484,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: ui
-          cache: true
+          # No env cache: the ui env installs in 3s and restores in 4s.
+          # See the lint job.
+          cache: false
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
@@ -560,7 +580,9 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.9.6
         with:
           environments: ui
-          cache: true
+          # No env cache: the ui env installs in 4s and restores in 8s.
+          # See the lint job.
+          cache: false
       - name: Cache cargo home
         uses: actions/cache@v5
         with:
