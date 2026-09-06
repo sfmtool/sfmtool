@@ -325,6 +325,31 @@ appeared behind it**
 > coexist, and the latter still holds the three `cam_*` camera constructors that are
 > not numeric primitives by any reading. `orthonormalized` was added to it today,
 > which makes it one item longer but no better named._
+>
+> _Status (2026-09-06): **Done** as `db4ec30`. The median half: `crate::numeric`
+> is now a `pub` module with `pub` entry points, `np_median` is deleted, and
+> `patches/localizability.rs` calls `median_in_place` — so the binding and the
+> kernel it wraps take the same median, and the panic-on-NaN goes with it. Two
+> copies this report did not count went the same way: `focal_vote::log_median`
+> (now the shared median of the logs, exponentiated) and
+> `photometric_ransac::per_pixel_median`, which sorted `f32` with
+> `partial_cmp().unwrap_or(Equal)` — not a total order either. Eight
+> `fn …median…` remain in the workspace: the two shared entry points, three
+> delegates to them, and three that are genuinely a different operation;
+> `numeric/tests.rs::the_workspace_has_one_median` scans the crates' non-test
+> sources and fails on any that is not in its annotated allowlist, which is the
+> mechanical enforcement the Top 3 asked for (verified by adding a median and
+> watching it fail). The **two `pub(crate) mod numeric`** half is closed by
+> dissolving `geometry/numeric.rs` rather than renaming it: the three `cam_*`
+> builders became `CameraIntrinsics::with_focal{,_k1,_bspline}` in
+> `camera/intrinsics.rs`; `polar_rotation`, `orthonormalized` and
+> `rotation_angle` joined `geometry/rotation.rs`, whose axis-angle conversion
+> had the angle formula inline and now calls it, and which gained the four
+> tests those three never had; `splitmix64` joined the median in
+> `crate::numeric` by that module's own cross-topic criterion, taking
+> `covisibility.rs`'s byte-identical copy with it; and the rest split by
+> subject into `geometry/acos_poly.rs` (153) and `geometry/null_space.rs`
+> (106). `crate::numeric` is the only module in the crate called `numeric`._
 - Location: `crates/sfmtool-core/src/numeric.rs` (121) and
   `crates/sfmtool-core/src/geometry/numeric.rs` (112); new copies at
   `geometry/resect_images.rs:1188`, `sfmtool-py/src/patches/args.rs:15`,
@@ -1228,6 +1253,14 @@ acquittals are findings in this one.
    median at 11pm. Whatever the fix, it should end with `numeric.rs` being the only
    place in the crate that spells one — and, ideally, with a clippy `disallowed_methods`
    entry or a grep-based test that says so mechanically.
+
+   > _Status (2026-09-06): The mechanical half landed as `db4ec30`:
+   > `numeric/tests.rs::the_workspace_has_one_median` reads the workspace's
+   > non-test sources and fails on any `fn …median…` outside an allowlist that
+   > has to say, per entry, why it is not this median. A grep-based test rather
+   > than `disallowed_methods`, because what needs catching is a hand-written
+   > median, not a call to a named method. The rest of this finding — the
+   > `resect_images.rs` primitives themselves — was resolved earlier, above._
 
 2. **The `sfm-explorer` G-buffer contract → `gpu_types.rs`.**
    Best pure effort-to-value ratio. The three-attachment format triple and the
