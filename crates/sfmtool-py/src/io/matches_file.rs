@@ -9,10 +9,11 @@
 //! access, and `select_clusters` runs the `matches-format` derivation
 //! (`specs/formats/matches-file-format.md` § "Cluster Selection").
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use numpy::ToPyArray;
+use numpy::{PyReadonlyArray1, ToPyArray};
 use pyo3::prelude::*;
 
 use matches_format::{ClusterMemberStatus, ClusterSelect, MatchesData};
@@ -69,6 +70,20 @@ fn parse_status(item: &Bound<'_, PyAny>) -> PyResult<ClusterMemberStatus> {
     })?;
     ClusterMemberStatus::from_str(&s)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// The `restrict_cluster_ids` argument as the ids the selection takes.
+///
+/// A `uint32` array — what `analysis.coarsest_cluster_ids` hands back — is read
+/// straight off its buffer. Any other sequence of ints falls through to PyO3's
+/// element-wise extraction, which is where a negative or too-wide value is
+/// refused.
+fn cluster_ids(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
+    if let Ok(a) = obj.extract::<PyReadonlyArray1<'_, u32>>() {
+        let ids: Cow<'_, [u32]> = to_contiguous!(a);
+        return Ok(ids.into_owned());
+    }
+    obj.extract()
 }
 
 #[pymethods]
@@ -299,8 +314,10 @@ impl PyMatchesFile {
     ///         default 2).
     ///     restrict_images: Optional collection of image NAMES; every name
     ///         must exist in this file.
-    ///     restrict_cluster_ids: Optional sequence of cluster ids of THIS
-    ///         file (its source ids); every id must be in range.
+    ///     restrict_cluster_ids: Optional cluster ids of THIS file (its
+    ///         source ids); every id must be in range. A (n,) uint32 array —
+    ///         what `analysis.coarsest_cluster_ids` returns — is read off its
+    ///         buffer; any other sequence of ints is taken element-wise.
     ///     accepted_statuses: Optional member statuses to keep, as ints
     ///         (0..=6) or names ("reference", "kept", ...). Default:
     ///         reference + kept. Ignored when the file has no
@@ -310,13 +327,13 @@ impl PyMatchesFile {
         &self,
         min_span: u32,
         restrict_images: Option<Vec<String>>,
-        restrict_cluster_ids: Option<Vec<u32>>,
+        restrict_cluster_ids: Option<Bound<'_, PyAny>>,
         accepted_statuses: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<Self> {
         let mut opts = ClusterSelect {
             min_span,
             restrict_images,
-            restrict_cluster_ids,
+            restrict_cluster_ids: restrict_cluster_ids.as_ref().map(cluster_ids).transpose()?,
             ..ClusterSelect::default()
         };
         if let Some(items) = accepted_statuses {

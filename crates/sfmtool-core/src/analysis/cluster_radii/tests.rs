@@ -65,14 +65,17 @@ fn the_coarsest_cut_is_radius_descending_with_ties_by_ascending_id() {
         shape(1.0, 0.0, 0.0, 1.0),
     ]);
     // Ascending return, so the tie shows in WHICH ids are taken, not in order.
-    assert_eq!(coarsest_clusters(&starts, &shapes, 5.0, 2), vec![0, 1]);
-    assert_eq!(coarsest_clusters(&starts, &shapes, 5.0, 3), vec![0, 1, 2]);
+    assert_eq!(coarsest_cluster_ids(&starts, &shapes, 5.0, 2), vec![0, 1]);
+    assert_eq!(
+        coarsest_cluster_ids(&starts, &shapes, 5.0, 3),
+        vec![0, 1, 2]
+    );
     // Asking for more than exist yields all of them.
     assert_eq!(
-        coarsest_clusters(&starts, &shapes, 5.0, 99),
+        coarsest_cluster_ids(&starts, &shapes, 5.0, 99),
         vec![0, 1, 2, 3]
     );
-    assert!(coarsest_clusters(&starts, &shapes, 5.0, 0).is_empty());
+    assert!(coarsest_cluster_ids(&starts, &shapes, 5.0, 0).is_empty());
 }
 
 /// A minimal cluster-backbone file with the `cluster_patches/` section the
@@ -159,8 +162,8 @@ fn the_file_form_answers_what_the_arrays_form_answers() {
         cluster_radii(&starts, &shapes, 6.0)
     );
     assert_eq!(
-        coarsest_clusters_from_matches(&data, 1).expect("readable"),
-        coarsest_clusters(&starts, &shapes, 6.0, 1)
+        coarsest_cluster_ids_from_matches(&data, 1).expect("readable"),
+        coarsest_cluster_ids(&starts, &shapes, 6.0, 1)
     );
 }
 
@@ -173,7 +176,7 @@ fn a_file_without_the_patch_section_is_refused_by_name() {
         Err(ClusterRadiiError::NoClusterPatches)
     );
     assert_eq!(
-        coarsest_clusters_from_matches(&file(&starts, &shapes, 12.0, false), 1),
+        coarsest_cluster_ids_from_matches(&file(&starts, &shapes, 12.0, false), 1),
         Err(ClusterRadiiError::NoClusterPatches)
     );
 
@@ -207,5 +210,5 @@ fn a_nan_shape_never_displaces_a_cluster_that_has_an_extent() {
     let starts = [0u32, 1, 2];
     let shapes = flat(&[shape(f32::NAN, 0.0, 0.0, 1.0), shape(1.0, 0.0, 0.0, 1.0)]);
     // Cluster 0's only member has no extent, so the finite cluster is taken.
-    assert_eq!(coarsest_clusters(&starts, &shapes, 6.0, 1), vec![1]);
+    assert_eq!(coarsest_cluster_ids(&starts, &shapes, 6.0, 1), vec![1]);
 }

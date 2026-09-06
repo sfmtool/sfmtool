@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for the cluster-radius Rust bindings
-(``sfmtool._sfmtool.analysis.cluster_radii`` / ``coarsest_clusters``; see
+(``sfmtool._sfmtool.analysis.cluster_radii`` / ``coarsest_cluster_ids``; see
 ``specs/core/analysis/source-clusters.md``)."""
 
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from sfmtool._sfmtool.analysis import cluster_radii, coarsest_clusters
+from sfmtool._sfmtool.analysis import cluster_radii, coarsest_cluster_ids
 from sfmtool._sfmtool.io import MatchesFile, write_matches
 
 # ── Fixture data ──────────────────────────────────────────────────────────
@@ -150,10 +150,10 @@ class TestClusterRadii:
             )
 
 
-# ── coarsest_clusters ─────────────────────────────────────────────────────
+# ── coarsest_cluster_ids ──────────────────────────────────────────────────
 
 
-class TestCoarsestClusters:
+class TestCoarsestClusterIds:
     @pytest.mark.parametrize(
         "n,expected",
         [
@@ -166,15 +166,15 @@ class TestCoarsestClusters:
         ],
     )
     def test_radius_descending_with_ties_by_id_returned_ascending(self, n, expected):
-        got = coarsest_clusters(CLUSTER_STARTS, n, MEMBER_SHAPES, REFINE_RADIUS)
+        got = coarsest_cluster_ids(CLUSTER_STARTS, n, MEMBER_SHAPES, REFINE_RADIUS)
         assert got.dtype == np.uint32
         npt.assert_array_equal(got, np.array(expected, dtype=np.uint32))
 
     def test_object_form_equals_array_form(self, cluster_file):
         for n in (1, 2, 3, 4):
             npt.assert_array_equal(
-                coarsest_clusters(cluster_file, n),
-                coarsest_clusters(CLUSTER_STARTS, n, MEMBER_SHAPES, REFINE_RADIUS),
+                coarsest_cluster_ids(cluster_file, n),
+                coarsest_cluster_ids(CLUSTER_STARTS, n, MEMBER_SHAPES, REFINE_RADIUS),
             )
 
     def test_the_cut_matches_the_ordering_of_the_radii(self, cluster_file):
@@ -182,10 +182,10 @@ class TestCoarsestClusters:
         # The hand ordering the binding replaces: descending radius, stable in
         # id, then the ids sorted ascending.
         expected = np.sort(np.argsort(-radii, kind="stable")[:3])
-        npt.assert_array_equal(coarsest_clusters(cluster_file, 3), expected)
+        npt.assert_array_equal(coarsest_cluster_ids(cluster_file, 3), expected)
 
     def test_a_file_without_cluster_patches_is_refused(self, tmp_path):
         path = tmp_path / "clusters.matches"
         _write_cluster_matches(path, with_patches=False)
         with pytest.raises(ValueError, match="no cluster_patches/ section"):
-            coarsest_clusters(MatchesFile(path), 2)
+            coarsest_cluster_ids(MatchesFile(path), 2)

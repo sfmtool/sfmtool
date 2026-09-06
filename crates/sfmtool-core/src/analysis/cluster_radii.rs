@@ -31,7 +31,7 @@ use rayon::prelude::*;
 
 use crate::geometry::focal_vote::contiguous;
 
-/// What [`cluster_radii_from_matches`] and [`coarsest_clusters_from_matches`]
+/// What [`cluster_radii_from_matches`] and [`coarsest_cluster_ids_from_matches`]
 /// refuse: a property of the `.matches` file, never of the radius reading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterRadiiError {
@@ -151,13 +151,12 @@ pub fn cluster_radii(
 /// Ids of the `n` coarsest clusters: radius descending, id ascending on ties,
 /// returned sorted ASCENDING.
 ///
-/// The ascending return is what makes the cut composable -- it is a cluster-id
-/// set to restrict a selection by, not a ranking -- while the descending
+/// The ascending return is what composes as a restriction, while the descending
 /// ordering behind it decides membership. Fewer than `n` clusters returns all
 /// of them.
 ///
 /// ```
-/// use sfmtool_core::analysis::cluster_radii::coarsest_clusters;
+/// use sfmtool_core::analysis::cluster_radii::coarsest_cluster_ids;
 ///
 /// let starts = [0u32, 1, 2, 3];
 /// // Clusters 0 and 2 tie at the same radius; the smaller id is taken first.
@@ -166,9 +165,9 @@ pub fn cluster_radii(
 ///     1.0, 0.0, 0.0, 1.0, //
 ///     2.0, 0.0, 0.0, 2.0, //
 /// ];
-/// assert_eq!(coarsest_clusters(&starts, &shapes, 6.0, 2), vec![0, 2]);
+/// assert_eq!(coarsest_cluster_ids(&starts, &shapes, 6.0, 2), vec![0, 2]);
 /// ```
-pub fn coarsest_clusters(
+pub fn coarsest_cluster_ids(
     cluster_starts: &[u32],
     member_affine_shapes: &[f32],
     refine_radius: f32,
@@ -180,7 +179,7 @@ pub fn coarsest_clusters(
     )
 }
 
-/// The coarsest-N cut over radii already in hand; see [`coarsest_clusters`].
+/// The coarsest-N cut over radii already in hand; see [`coarsest_cluster_ids`].
 ///
 /// The comparator is a total order over the whole `f32` range so the cut is a
 /// function of the radii alone: descending, `NaN` last (a shape carrying `NaN`
@@ -241,8 +240,8 @@ pub fn cluster_radii_from_matches(matches: &MatchesData) -> Result<Vec<f32>, Clu
 }
 
 /// The coarsest-N cut over a parsed `.matches` file; see
-/// [`coarsest_clusters`] and [`cluster_radii_from_matches`].
-pub fn coarsest_clusters_from_matches(
+/// [`coarsest_cluster_ids`] and [`cluster_radii_from_matches`].
+pub fn coarsest_cluster_ids_from_matches(
     matches: &MatchesData,
     n: usize,
 ) -> Result<Vec<u32>, ClusterRadiiError> {

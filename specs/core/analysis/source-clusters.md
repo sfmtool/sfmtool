@@ -140,25 +140,28 @@ caller is banding, and the caller passes the edges it decided on.
 
 The radius reading and the cut over it live in
 [cluster_radii.rs](../../../crates/sfmtool-core/src/analysis/cluster_radii.rs)
-(`member_radii`, `cluster_radii`, `coarsest_clusters`, and the
+(`member_radii`, `cluster_radii`, `coarsest_cluster_ids`, and the
 `*_from_matches` forms), bound as `sfmtool._sfmtool.analysis.cluster_radii` and
-`coarsest_clusters`. Both bindings take their input in either of two forms, the
-shape the intrinsics estimate uses: a `MatchesFile` -- a selection included --
-which states the shapes and the refine radius itself, or those arrays spelled
-out.
+`coarsest_cluster_ids`. Both bindings take their input in either of two forms,
+the shape the intrinsics estimate uses: a `MatchesFile` -- a selection
+included -- which states the shapes and the refine radius itself, or those
+arrays spelled out.
 
 ```python
-from sfmtool._sfmtool.analysis import cluster_radii, coarsest_clusters
+from sfmtool._sfmtool.analysis import cluster_radii, coarsest_cluster_ids
 
 radius = cluster_radii(matches)              # (n_clusters,) float32
-keep = coarsest_clusters(matches, 3000)      # (<= 3000,) uint32, ascending
+keep = coarsest_cluster_ids(matches, 3000)   # (<= 3000,) uint32, ascending
+coarse = matches.select_clusters(restrict_cluster_ids=keep)
 
 radius = cluster_radii(
     cluster_starts,        # (n_clusters + 1,) uint32 CSR boundaries
     member_affine_shapes,  # (n_member, 2, 2) float32, float64 accepted and cast
     refine_radius,         # float, narrowed to the float32 the reading runs at
 )
-keep = coarsest_clusters(cluster_starts, 3000, member_affine_shapes, refine_radius)
+keep = coarsest_cluster_ids(
+    cluster_starts, 3000, member_affine_shapes, refine_radius
+)
 ```
 
 The file forms need the cluster backbone, its member affine shapes, and the

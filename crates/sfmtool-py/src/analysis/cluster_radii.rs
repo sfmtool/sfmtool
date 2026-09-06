@@ -3,7 +3,7 @@
 
 //! Python bindings for the per-cluster feature radius and the coarsest-N cut
 //! ordered by it (``sfmtool._sfmtool.analysis.cluster_radii`` /
-//! ``coarsest_clusters``; see ``specs/core/analysis/source-clusters.md``).
+//! ``coarsest_cluster_ids``; see ``specs/core/analysis/source-clusters.md``).
 
 use std::borrow::Cow;
 
@@ -14,7 +14,8 @@ use pyo3::prelude::*;
 use matches_format::MatchesData;
 use sfmtool_core::analysis::cluster_radii::{
     cluster_radii as core_cluster_radii, cluster_radii_from_matches,
-    coarsest_clusters as core_coarsest_clusters, coarsest_clusters_from_matches, ClusterRadiiError,
+    coarsest_cluster_ids as core_coarsest_cluster_ids, coarsest_cluster_ids_from_matches,
+    ClusterRadiiError,
 };
 
 use crate::io::matches_file::PyMatchesFile;
@@ -196,15 +197,14 @@ pub fn cluster_radii<'py>(
 /// Ids of the ``n`` coarsest clusters: radius descending, id ascending on ties,
 /// returned sorted ASCENDING (see ``specs/core/analysis/source-clusters.md``).
 ///
-/// The ascending return is what makes the cut composable -- it is a cluster-id
-/// set to restrict a selection by, not a ranking -- while the descending
-/// ordering behind it decides membership. Fewer than ``n`` clusters yields all
-/// of them.
+/// The ascending return is what composes as a ``select_clusters``
+/// ``restrict_cluster_ids`` argument, while the descending ordering behind it
+/// decides membership. Fewer than ``n`` clusters yields all of them.
 ///
 /// Takes its input in the same two forms as ``cluster_radii``:
 ///
-/// * ``coarsest_clusters(matches_file, n)``
-/// * ``coarsest_clusters(cluster_starts, n, member_affine_shapes,
+/// * ``coarsest_cluster_ids(matches_file, n)``
+/// * ``coarsest_cluster_ids(cluster_starts, n, member_affine_shapes,
 ///   refine_radius)``
 ///
 /// Args:
@@ -226,7 +226,7 @@ pub fn cluster_radii<'py>(
 #[allow(rustdoc::invalid_rust_codeblocks)]
 #[pyfunction]
 #[pyo3(signature = (cluster_starts, n, member_affine_shapes=None, refine_radius=None))]
-pub fn coarsest_clusters<'py>(
+pub fn coarsest_cluster_ids<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
     n: usize,
@@ -236,12 +236,12 @@ pub fn coarsest_clusters<'py>(
     let source = radii_source(&cluster_starts, member_affine_shapes, refine_radius)?;
     let out = py
         .detach(move || match source {
-            RadiiSource::Matches(matches) => coarsest_clusters_from_matches(matches, n),
+            RadiiSource::Matches(matches) => coarsest_cluster_ids_from_matches(matches, n),
             RadiiSource::Arrays {
                 cluster_starts,
                 member_affine_shapes,
                 refine_radius,
-            } => Ok(core_coarsest_clusters(
+            } => Ok(core_coarsest_cluster_ids(
                 &cluster_starts,
                 &member_affine_shapes,
                 refine_radius,
@@ -256,6 +256,6 @@ pub fn coarsest_clusters<'py>(
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cluster_radii, m)?)?;
-    m.add_function(wrap_pyfunction!(coarsest_clusters, m)?)?;
+    m.add_function(wrap_pyfunction!(coarsest_cluster_ids, m)?)?;
     Ok(())
 }

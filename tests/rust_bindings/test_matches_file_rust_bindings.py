@@ -225,6 +225,46 @@ def test_select_clusters_restrict_cluster_ids(matches_path, tmp_path):
     npt.assert_array_equal(MatchesFile(out).member_features, sel.member_features)
 
 
+def test_select_clusters_restrict_cluster_ids_from_an_array(matches_path):
+    mf = MatchesFile(matches_path)
+
+    # The uint32 array `analysis.coarsest_cluster_ids` hands back restricts to
+    # exactly what the same ids as a list restrict to.
+    from_list = mf.select_clusters(restrict_cluster_ids=[0, 2])
+    from_array = mf.select_clusters(
+        restrict_cluster_ids=np.array([0, 2], dtype=np.uint32)
+    )
+    npt.assert_array_equal(from_array.cluster_starts, from_list.cluster_starts)
+    npt.assert_array_equal(from_array.member_images, from_list.member_images)
+    npt.assert_array_equal(from_array.member_features, from_list.member_features)
+    npt.assert_array_equal(from_array.reference_members, from_list.reference_members)
+    npt.assert_array_equal(from_array.member_status, from_list.member_status)
+    provenance = from_array.metadata["matching_options"]["cluster_selection"]
+    assert provenance["restrict_cluster_ids"] == [0, 2]
+
+    # A strided view of a uint32 array reads the elements it names, not the
+    # buffer under it.
+    strided = mf.select_clusters(
+        restrict_cluster_ids=np.array([0, 1, 2], dtype=np.uint32)[::2]
+    )
+    npt.assert_array_equal(strided.member_features, from_list.member_features)
+
+    # Any other integer dtype, and a plain sequence of numpy scalars, go
+    # through element-wise extraction to the same place.
+    for ids in (
+        np.array([0, 2], dtype=np.int64),
+        np.array([0, 2], dtype=np.int32),
+        [np.uint32(0), np.uint32(2)],
+        (0, 2),
+    ):
+        other = mf.select_clusters(restrict_cluster_ids=ids)
+        npt.assert_array_equal(other.member_features, from_list.member_features)
+
+    # An empty selection is still the requested set, not "no restriction".
+    empty = mf.select_clusters(restrict_cluster_ids=np.array([], dtype=np.uint32))
+    npt.assert_array_equal(empty.cluster_starts, [0])
+
+
 def test_select_clusters_errors(matches_path):
     mf = MatchesFile(matches_path)
     with pytest.raises(ValueError, match="min_span"):
@@ -236,6 +276,13 @@ def test_select_clusters_errors(matches_path):
     # The file has 3 clusters, so id 3 names none of them.
     with pytest.raises(ValueError, match="restrict_cluster_ids id 3"):
         mf.select_clusters(restrict_cluster_ids=[3])
+    # A value no uint32 holds is refused where it is extracted, not wrapped.
+    with pytest.raises(OverflowError):
+        mf.select_clusters(restrict_cluster_ids=[-1])
+    with pytest.raises(OverflowError):
+        mf.select_clusters(restrict_cluster_ids=np.array([-1], dtype=np.int64))
+    with pytest.raises(TypeError):
+        mf.select_clusters(restrict_cluster_ids=np.array([0.0, 2.0]))
     # Statuses accept ints and names interchangeably.
     by_int = mf.select_clusters(accepted_statuses=[0, 1])
     by_name = mf.select_clusters(accepted_statuses=["reference", "kept"])
