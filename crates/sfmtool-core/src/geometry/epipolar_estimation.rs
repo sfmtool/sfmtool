@@ -27,9 +27,9 @@
 
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
-use crate::geometry::numeric::splitmix64;
 use crate::geometry::polynomial::{polish_cubic_root, solve_cubic};
 use crate::geometry::rotation::skew_symmetric;
+use crate::numeric::splitmix64;
 
 /// Relative floor on the eigenvalue of `AᵀA` that must stay clear of the null
 /// space: the third-smallest for the 7-point design (whose null space is

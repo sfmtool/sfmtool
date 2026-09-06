@@ -11,11 +11,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::numeric::median_in_place;
 use sfmtool_core::patch::localizability::{
     score_localizability_stack, window_weights as localizability_window_weights,
 };
 
-use super::args::{np_median, parse_patch_window};
+use super::args::parse_patch_window;
 use super::cloud::PyPatchCloud;
 use crate::PySfmrReconstruction;
 
@@ -183,7 +184,7 @@ impl PyPatchCloud {
                 }
             }
             if !vals.is_empty() {
-                *s = np_median(&mut vals);
+                *s = median_in_place(&mut vals);
             }
         }
 

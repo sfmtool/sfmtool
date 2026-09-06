@@ -24,6 +24,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rayon::prelude::*;
 
+use crate::numeric::median_in_place;
 use crate::spherical::per_tile_source_stack::{PatchPixel, PerSphericalTileSourceStack};
 
 /// Tuning knobs; defaults match the spec's recommendations.
@@ -663,22 +664,23 @@ fn ransac_cluster_for_tile(
 
 /// Per-pixel-channel median across `k` rows (no validity weighting; matches
 /// the spec's median-fallback definition).
+///
+/// The median is [`median_in_place`], the crate's only one, over an `f64`
+/// scratch reused across pixels — `k` is at most `subset_size` here, so the
+/// widening costs a conversion per sample and buys the defined total order.
+/// The rows are finite (a gain times a bounded pixel value), so the NaN rule
+/// does not bind; what it replaces is the old
+/// `partial_cmp().unwrap_or(Equal)`, which is not a total order and left the
+/// result unspecified if one ever appeared.
 fn per_pixel_median(row_patch: &[f32], k: usize, ss: usize, c: usize) -> Vec<f32> {
     let pixel_count = ss * ss * c;
     let mut out = vec![0.0f32; pixel_count];
-    let mut buf: Vec<f32> = vec![0.0; k];
+    let mut buf: Vec<f64> = vec![0.0; k];
     for p in 0..pixel_count {
-        for i in 0..k {
-            buf[i] = row_patch[i * pixel_count + p];
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = row_patch[i * pixel_count + p] as f64;
         }
-        // Total order on f32 (no NaN: input is finite from gain * bounded
-        // pixel value).
-        buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        out[p] = if k % 2 == 1 {
-            buf[k / 2]
-        } else {
-            0.5 * (buf[k / 2 - 1] + buf[k / 2])
-        };
+        out[p] = median_in_place(&mut buf) as f32;
     }
     out
 }

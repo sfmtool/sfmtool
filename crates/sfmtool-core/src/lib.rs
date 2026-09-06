@@ -26,7 +26,7 @@ pub mod analysis;
 pub mod camera;
 pub mod features;
 pub mod geometry;
-pub(crate) mod numeric;
+pub mod numeric;
 pub mod patch;
 pub mod reconstruction;
 pub mod spatial;

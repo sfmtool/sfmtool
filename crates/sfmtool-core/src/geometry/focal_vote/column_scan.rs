@@ -41,7 +41,7 @@ use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 use rayon::prelude::*;
 
 use crate::geometry::focal_vote::prof;
-use crate::geometry::numeric::splitmix64;
+use crate::numeric::splitmix64;
 
 // ── Scan configuration (see the spec's Camera-Model Columns section) ─────────
 
@@ -472,20 +472,20 @@ pub(crate) fn null_from_rows(
 /// selected rows, reshaped row-major into a `3×3` matrix.
 ///
 /// The exact null space of exactly [`EPI_SAMPLE`] rows, so
-/// [`crate::geometry::numeric::null9_from_8rows`] answers it directly and the
+/// [`crate::geometry::null_space::null9_from_8rows`] answers it directly and the
 /// squared system never forms. Any other row count — and the
 /// `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` diagnostic — falls back to
 /// [`null_from_rows`], which is also what the consensus refits keep using: a
 /// least-squares smallest direction is not an exact null space.
 fn null_from_minimal_sample(rows: &[SVector<f64, 9>], s: &[usize]) -> Option<Matrix3<f64>> {
-    if s.len() != EPI_SAMPLE || crate::geometry::numeric::eigen_minsolve_enabled() {
+    if s.len() != EPI_SAMPLE || crate::geometry::null_space::eigen_minsolve_enabled() {
         return null_from_rows(rows, s.iter().copied());
     }
     let mut a = [[0.0f64; 9]; 8];
     for (k, &i) in s.iter().enumerate() {
         a[k].copy_from_slice(rows[i].as_slice());
     }
-    let v = crate::geometry::numeric::null9_from_8rows(a)?;
+    let v = crate::geometry::null_space::null9_from_8rows(a)?;
     let m = Matrix3::new(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
     m.iter().all(|x| x.is_finite()).then_some(m)
 }
@@ -525,7 +525,7 @@ pub(crate) fn singular_values_desc(m: &Matrix3<f64>) -> [f64; 3] {
 // orders below its ~1e-2 threshold, and the rotation one is measured through
 // the NORM OF THE CROSS PRODUCT rather than the arccosine of the dot, which is
 // what keeps a small angle in its own leading digits (see
-// `crate::geometry::numeric::asin_poly_scalar_f32`).
+// `crate::geometry::acos_poly::asin_poly_scalar_f32`).
 //
 // The epipolar cell's `f32` path is the DEFAULT (`SFMTOOL_FOCAL_VOTE_F64_EPI`
 // is its diagnostic restore); the rotation cell's stays opt-in
@@ -905,7 +905,7 @@ fn rotation_angle_f32(m: &[[f32; 3]; 3], a: (f32, f32, f32), b: (f32, f32, f32))
     let cy = pz * b.0 - px * b.2;
     let cz = px * b.1 - py * b.0;
     let s = ((cx * cx + cy * cy) + cz * cz).sqrt().min(1.0);
-    let ang = crate::geometry::numeric::asin_poly_scalar_f32(s);
+    let ang = crate::geometry::acos_poly::asin_poly_scalar_f32(s);
     if c < 0.0 {
         std::f32::consts::PI - ang
     } else {
@@ -1313,7 +1313,7 @@ fn scan_epipolar(
 ///
 /// The AVX2 path fills `out` with clamped cosines and then takes the angles
 /// with the vector `acos` polynomial, whose scalar twin
-/// [`crate::geometry::numeric::acos_poly_scalar`] serves the ragged tail and
+/// [`crate::geometry::acos_poly::acos_poly_scalar`] serves the ragged tail and
 /// the fallback below — one arithmetic in every arm, so the dispatch stays a
 /// pure performance switch. The vectorized half is taken only when `idx` is a
 /// consecutive run, which is the hot shape: the RANSAC scoring loops in
@@ -1342,7 +1342,7 @@ pub(crate) fn rotation_residuals(
             // `idx[0] .. idx[0] + len` lies inside both ray slices while `out`
             // covers `len` elements.
             unsafe { rotation_cosines_avx2(rot, &r1[idx[0]..], &r2[idx[0]..], &mut out[..len]) };
-            if crate::geometry::numeric::libm_acos_enabled() {
+            if crate::geometry::acos_poly::libm_acos_enabled() {
                 for o in out[..len].iter_mut() {
                     *o = o.acos();
                 }
@@ -1365,14 +1365,16 @@ fn rotation_residuals_scalar(
     idx: &[usize],
     out: &mut [f64],
 ) {
-    if crate::geometry::numeric::libm_acos_enabled() {
+    if crate::geometry::acos_poly::libm_acos_enabled() {
         for (o, &i) in out.iter_mut().zip(idx.iter()) {
             *o = (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0).acos();
         }
         return;
     }
     for (o, &i) in out.iter_mut().zip(idx.iter()) {
-        *o = crate::geometry::numeric::acos_poly_scalar((rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0));
+        *o = crate::geometry::acos_poly::acos_poly_scalar(
+            (rot * r1[i]).dot(&r2[i]).clamp(-1.0, 1.0),
+        );
     }
 }
 
@@ -1421,7 +1423,7 @@ unsafe fn rotation_cosines_avx2(
 
 /// In-place `acos` over a slice of clamped cosines, four lanes at a time.
 ///
-/// The ragged tail takes [`crate::geometry::numeric::acos_poly_scalar`], the
+/// The ragged tail takes [`crate::geometry::acos_poly::acos_poly_scalar`], the
 /// bit-identical twin of the vector form, so a slice length that is not a
 /// multiple of four changes nothing but the instruction count.
 ///
@@ -1437,7 +1439,7 @@ unsafe fn acos_slice_avx2(out: &mut [f64]) {
         _mm256_storeu_pd(p, crate::geometry::simd::acos_pd(_mm256_loadu_pd(p)));
     }
     for o in out[blocks * 4..].iter_mut() {
-        *o = crate::geometry::numeric::acos_poly_scalar(*o);
+        *o = crate::geometry::acos_poly::acos_poly_scalar(*o);
     }
 }
 

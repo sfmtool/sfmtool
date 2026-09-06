@@ -26,7 +26,7 @@
 use ndarray::ArrayView3;
 use rayon::prelude::*;
 
-use crate::geometry::numeric::splitmix64;
+use crate::numeric::splitmix64;
 
 use super::params::MemberStatus;
 use super::{inv2, mul2, REFERENCE_UNREFINABLE};

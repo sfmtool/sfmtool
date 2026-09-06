@@ -20,7 +20,7 @@
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3};
 
 use crate::geometry::epipolar_estimation::{hartley_normalize, vec_to_mat3};
-use crate::geometry::numeric::splitmix64;
+use crate::numeric::splitmix64;
 
 /// A least-squares design whose largest eigenvalue is below this (relative to
 /// the machine-scale zero used elsewhere) carries no constraint — reject.
@@ -69,7 +69,7 @@ fn homography_dlt_timed(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>
     // scale- and sign-invariant, so the sign the elimination happens to pick is
     // cosmetic. `SFMTOOL_FOCAL_VOTE_EIGEN_MINSOLVE` sends it through the eigen
     // path instead.
-    if n == 4 && !crate::geometry::numeric::eigen_minsolve_enabled() {
+    if n == 4 && !crate::geometry::null_space::eigen_minsolve_enabled() {
         let mut a = [[0.0f64; 9]; 8];
         for (k, (p, q)) in n1.iter().zip(n2.iter()).enumerate() {
             let (x, y) = (p[0], p[1]);
@@ -77,7 +77,7 @@ fn homography_dlt_timed(x1: &[[f64; 2]], x2: &[[f64; 2]]) -> Option<Matrix3<f64>
             a[2 * k] = [-x, -y, -1.0, 0.0, 0.0, 0.0, xp * x, xp * y, xp];
             a[2 * k + 1] = [0.0, 0.0, 0.0, -x, -y, -1.0, yp * x, yp * y, yp];
         }
-        let v = crate::geometry::numeric::null9_from_8rows(a)?;
+        let v = crate::geometry::null_space::null9_from_8rows(a)?;
         let h_hat = vec_to_mat3(&SVector::<f64, 9>::from_column_slice(&v));
         let t2_inv = t2.try_inverse()?;
         let h = t2_inv * h_hat * t1;

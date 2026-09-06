@@ -156,9 +156,12 @@ pub struct SeedImageGroup {
     pub seed_shared: u32,
 }
 
-/// Deterministic 64-bit generator (splitmix64) behind the sampled
-/// displacement pass. Bounded draws use Lemire's widening multiply; the
-/// modulo bias is ~`bound / 2^64` — irrelevant at cluster sizes.
+/// Deterministic 64-bit generator behind the sampled displacement pass.
+///
+/// The step is [`crate::numeric::splitmix64`], the crate's one; this adds
+/// the seed state and the bounded draw, which uses Lemire's widening
+/// multiply — the modulo bias is ~`bound / 2^64`, irrelevant at cluster
+/// sizes.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -167,11 +170,7 @@ impl SplitMix64 {
     }
 
     fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
+        crate::numeric::splitmix64(&mut self.0)
     }
 
     /// Uniform draw in `[0, bound)`; `bound` must be nonzero.

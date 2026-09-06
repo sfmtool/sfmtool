@@ -18,7 +18,7 @@
 //!   is vectorized only as a polynomial that has a scalar twin performing the
 //!   same operations in the same order, so both arms evaluate the same
 //!   arithmetic: [`acos_pd`] and
-//!   [`crate::geometry::numeric::acos_poly_scalar`] read one shared coefficient
+//!   [`crate::geometry::acos_poly::acos_poly_scalar`] read one shared coefficient
 //!   table and each ragged tail takes the scalar twin, never `f64::acos`.
 //! - **No skipped lanes.** Where the scalar code takes a guard branch to a
 //!   sentinel (`f64::INFINITY` for a degenerate homography transfer), the SIMD
@@ -246,9 +246,9 @@ pub(crate) unsafe fn broadcast_mat3(
 }
 
 /// `acos` over `[-1, 1]`, four lanes at a time — the vector twin of
-/// [`crate::geometry::numeric::acos_poly_scalar`].
+/// [`crate::geometry::acos_poly::acos_poly_scalar`].
 ///
-/// Same coefficient table ([`crate::geometry::numeric::ACOS_POLY`]), same
+/// Same coefficient table ([`crate::geometry::acos_poly::ACOS_POLY`]), same
 /// operations in the same order, with the scalar form's branches as compares
 /// and blends: `copysign(r, d)` is `or(r, and(signmask, d))`, and the big/small
 /// and sign selections are `blendv`. Every lane therefore yields the bits the
@@ -261,7 +261,7 @@ pub(crate) unsafe fn broadcast_mat3(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn acos_pd(d: std::arch::x86_64::__m256d) -> std::arch::x86_64::__m256d {
-    use crate::geometry::numeric::ACOS_POLY as A;
+    use crate::geometry::acos_poly::ACOS_POLY as A;
     use std::arch::x86_64::*;
 
     let signmask = _mm256_set1_pd(-0.0);
@@ -368,10 +368,10 @@ pub(crate) unsafe fn broadcast_mat3_ps(
 }
 
 /// `asin` over `[0, 1]`, eight lanes at a time — the vector twin of
-/// [`crate::geometry::numeric::asin_poly_scalar_f32`].
+/// [`crate::geometry::acos_poly::asin_poly_scalar_f32`].
 ///
-/// Same coefficient table ([`crate::geometry::numeric::ACOS_POLY_F32`], the
-/// narrowed [`crate::geometry::numeric::ACOS_POLY`]), same operations in the
+/// Same coefficient table ([`crate::geometry::acos_poly::ACOS_POLY_F32`], the
+/// narrowed [`crate::geometry::acos_poly::ACOS_POLY`]), same operations in the
 /// same order, with the scalar form's branch as a compare and two blends.
 ///
 /// # Safety
@@ -379,7 +379,7 @@ pub(crate) unsafe fn broadcast_mat3_ps(
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) unsafe fn asin_ps(s: std::arch::x86_64::__m256) -> std::arch::x86_64::__m256 {
-    use crate::geometry::numeric::ACOS_POLY_F32 as A;
+    use crate::geometry::acos_poly::ACOS_POLY_F32 as A;
     use std::arch::x86_64::*;
 
     let half = _mm256_set1_ps(0.5);

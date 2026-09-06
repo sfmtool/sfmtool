@@ -47,9 +47,8 @@ use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions
 use crate::geometry::bundle_adjust::{
     bundle_adjust, BaSchedule, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
-use crate::geometry::numeric::{cam_at, splitmix64};
 use crate::geometry::pose_refine::refine_absolute_pose;
-use crate::numeric::median;
+use crate::numeric::{median, splitmix64};
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -1065,7 +1064,7 @@ pub fn grow_reconstruction(
         BA_MIN_OBS,
     );
     let focal = ba.focal;
-    let cam_final = cam_at(camera, focal);
+    let cam_final = camera.with_focal(focal);
     // Re-triangulation at the released focal (the finishing adjustment wiped
     // every cluster outside its observation set).
     fill_new_points(

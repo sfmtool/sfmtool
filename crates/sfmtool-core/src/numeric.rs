@@ -1,14 +1,18 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Robust scalar statistics shared across every topic group.
+//! Scalar primitives that must compute the same number everywhere: the
+//! crate's one median, and the one RNG step behind its deterministic sampling.
 //!
 //! Crate-level rather than filed under one group because the callers are not
 //! related: the growth and pose-verification kernels ([`crate::geometry`]),
-//! the adjacency and census passes ([`crate::analysis`]), and the two patch
-//! IRLS loops ([`crate::patch`]) all want the same number.
+//! the adjacency and census passes ([`crate::analysis`]), the two patch IRLS
+//! loops ([`crate::patch`]) and the covisibility sampler
+//! ([`crate::features`]) all want the same number. The two median entry
+//! points are `pub` so that the bindings in `sfmtool-py` reach this
+//! implementation rather than spelling their own beside it.
 //!
-//! ## Why this is centralized
+//! ## Why the median is centralized
 //!
 //! There were six `median` implementations here with **three incompatible NaN
 //! policies**, and they agreed only on clean data:
@@ -47,7 +51,15 @@
 //!   routes an empty population into those same paths instead of inventing a
 //!   number for it.
 //! - **Even counts average the two middle values** (numpy convention), which
-//!   all six already did.
+//!   all six already did. This is `numpy.median`'s rule, so a binding that
+//!   used to compute its own "numpy median" gets the same answers from
+//!   [`median_in_place`] — with the NaN and empty cases defined instead of
+//!   panicking.
+//!
+//! There is one median in this workspace and it is here. `numeric/tests.rs`
+//! enforces that mechanically: it scans the crates for `fn …median…`
+//! definitions and fails on any that is not in its allowlist of the few that
+//! are genuinely a different operation. Add a caller, not a copy.
 
 /// Length at or above which quickselect beats a full sort.
 ///
@@ -75,7 +87,7 @@ const SELECT_MIN_LEN: usize = 32;
 /// **partitioned around the median** on the long one. No caller relies on the
 /// order afterwards; they either overwrite the buffer or drop it. Do not add
 /// one that does.
-pub(crate) fn median_in_place(values: &mut [f64]) -> f64 {
+pub fn median_in_place(values: &mut [f64]) -> f64 {
     if values.is_empty() {
         return f64::NAN;
     }
@@ -112,9 +124,24 @@ pub(crate) fn median_in_place(values: &mut [f64]) -> f64 {
 ///
 /// The borrowing counterpart to [`median_in_place`], for callers holding a
 /// shared slice they cannot disturb. Identical semantics otherwise.
-pub(crate) fn median(values: &[f64]) -> f64 {
+pub fn median(values: &[f64]) -> f64 {
     let mut scratch = values.to_vec();
     median_in_place(&mut scratch)
+}
+
+/// SplitMix64 step: advance `state` and return the mixed output.
+///
+/// The deterministic RANSAC samplers seed one of these per kernel, so the exact
+/// bit mixing is part of every sampling-dependent result. Crate-level for the
+/// same reason the median is: the geometry kernels' minimal samples, the
+/// covisibility sampler and the patch cluster-consistency draws are unrelated
+/// callers that must nonetheless step the same generator.
+pub(crate) fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e3779b97f4a7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+    z ^ (z >> 31)
 }
 
 #[cfg(test)]

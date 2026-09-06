@@ -32,8 +32,8 @@ use crate::geometry::bundle_adjust::{
 };
 use crate::geometry::focal_vote::ortho_cost;
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
-use crate::geometry::numeric::{polar_rotation, rotation_angle};
 use crate::geometry::resect_translation::resect_translation;
+use crate::geometry::rotation::{polar_rotation, rotation_angle};
 use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 use crate::CameraIntrinsics;
 

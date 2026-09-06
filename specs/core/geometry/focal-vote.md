@@ -542,7 +542,7 @@ did.
 
 One table serves both evaluations — a second copy would be free to drift,
 and the scalar/vector bit-identity is the whole point. It lives with the
-scalar evaluation in `geometry::numeric`, which is **not** gated on
+scalar evaluation in `geometry::acos_poly`, which is **not** gated on
 `x86_64`: every platform evaluates the polynomial, and that is what makes
 this path platform-deterministic where libm's `acos`, differing in the
 last bits between operating systems, was not.
@@ -551,7 +551,7 @@ last bits between operating systems, was not.
 
 A minimal sample of eight rows has an exact one-dimensional null space, so
 the RANSAC hypotheses take it directly by Gaussian elimination with
-partial pivoting (`numeric::null9_from_8rows`) instead of forming `AᵀA`
+partial pivoting (`null_space::null9_from_8rows`) instead of forming `AᵀA`
 and running a 9×9 `symmetric_eigen`. That avoids squaring the condition
 number as well as an iterative decomposition, and it is ordinary `f64`
 arithmetic, hence platform-deterministic like the polynomial above. The

@@ -21,8 +21,8 @@
 
 use nalgebra::{Matrix3, Matrix6, Point3, UnitQuaternion, Vector3, Vector6};
 
-use crate::geometry::numeric::splitmix64;
 use crate::geometry::polynomial::{polish_cubic_root, solve_cubic, solve_quadratic};
+use crate::numeric::splitmix64;
 
 /// A world-to-camera pose: rotation and translation with `x_cam = R·X + t`.
 type Pose = (UnitQuaternion<f64>, Vector3<f64>);

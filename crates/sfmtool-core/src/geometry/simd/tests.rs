@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::geometry::numeric::{acos_poly_scalar, asin_poly_scalar_f32, splitmix64};
+use crate::geometry::acos_poly::{acos_poly_scalar, asin_poly_scalar_f32};
+use crate::numeric::splitmix64;
 use nalgebra::Vector3;
 
 /// The `AoS → SoA` transposes are pure lane shuffles, so an exact element

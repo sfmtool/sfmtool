@@ -38,7 +38,7 @@ use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
 };
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
-use crate::numeric::median;
+use crate::numeric::{median, median_in_place};
 
 pub mod column_scan;
 pub(crate) mod prof;
@@ -405,19 +405,17 @@ fn log_iqr(vals: &[f64]) -> f64 {
 /// vote, even length their geometric mean. Every focal median in this kernel
 /// is taken this way, consistent with the log-space agreement bands and
 /// spreads. `None` for an empty population.
+///
+/// The median itself is [`median_in_place`] — this is the crate's one median
+/// applied to the logs, not a second one. That is also where the NaN rule
+/// comes from: a minority of non-positive focals (whose `ln` is NaN or `−∞`)
+/// leaves the median finite instead of poisoning it.
 fn log_median(vals: &[f64]) -> Option<f64> {
     if vals.is_empty() {
         return None;
     }
     let mut v: Vec<f64> = vals.iter().map(|x| x.ln()).collect();
-    v.sort_by(f64::total_cmp);
-    let n = v.len();
-    let l = if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        0.5 * (v[n / 2 - 1] + v[n / 2])
-    };
-    Some(l.exp())
+    Some(median_in_place(&mut v).exp())
 }
 
 /// Per-image-pair accumulator over the exhaustive per-cluster pass: how many

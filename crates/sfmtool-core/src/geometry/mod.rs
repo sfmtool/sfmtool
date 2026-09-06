@@ -4,6 +4,7 @@
 //! Geometric primitives: rotations, rigid transforms, and ray geometry.
 
 pub mod absolute_pose;
+pub(crate) mod acos_poly;
 pub mod affine_factorization;
 pub mod baseline_direction;
 pub mod batch_resection;
@@ -13,7 +14,7 @@ pub mod epipolar_estimation;
 pub mod estimate_intrinsics;
 pub mod focal_vote;
 pub mod homography_estimation;
-pub(crate) mod numeric;
+pub(crate) mod null_space;
 pub(crate) mod polynomial;
 pub mod pose_refine;
 pub mod pose_verification;

@@ -182,3 +182,153 @@ fn the_quickselect_path_applies_the_same_nan_rule() {
         }
     }
 }
+
+/// Every `fn …median…` in the workspace's non-test sources, with why it is not
+/// a second copy of [`median_in_place`].
+///
+/// Paths are relative to `crates/`.
+const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
+    (
+        "sfmtool-core/src/numeric.rs",
+        "median_in_place",
+        "the shared median itself",
+    ),
+    (
+        "sfmtool-core/src/numeric.rs",
+        "median",
+        "the borrowing counterpart of the shared median",
+    ),
+    (
+        "sfmtool-core/src/geometry/focal_vote.rs",
+        "log_median",
+        "delegates: the shared median of the logs, exponentiated",
+    ),
+    (
+        "sfmtool-core/src/geometry/translation_averaging.rs",
+        "median_floor",
+        "delegates: the shared median with a positive floor",
+    ),
+    (
+        "sfmtool-core/src/spherical/photometric_ransac.rs",
+        "per_pixel_median",
+        "delegates: the shared median per pixel over an f64 scratch",
+    ),
+    (
+        "sfmtool-core/src/features/kdforest/build.rs",
+        "median_value",
+        "a different operation: a generic split pivot over `ForestScalar` \
+         (u8 descriptors as well as f32), taking the upper middle by \
+         quickselect and never averaging — averaging would invent a \
+         coordinate the tree cannot split on",
+    ),
+    (
+        "sfmr-format/src/depth_stats.rs",
+        "median_sorted",
+        "a different crate, and one this crate depends on rather than the \
+         other way round, so it cannot reach `sfmtool_core::numeric`; it \
+         also takes an already-sorted slice",
+    ),
+    (
+        "sfm-explorer/src/scene_renderer/auto_point_size.rs",
+        "iteratively_trimmed_median",
+        "a different operation: repeated trimming of a sorted prefix, which \
+         must keep an actual sample each pass so the prefix never empties",
+    ),
+];
+
+/// Recursively collect `.rs` files under `dir`, skipping test modules.
+fn rs_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let entries = std::fs::read_dir(dir).expect("readable source directory");
+    for entry in entries {
+        let path = entry.expect("readable directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.is_dir() {
+            if name != "target" && name != "tests" {
+                rs_sources(&path, out);
+            }
+        } else if name.ends_with(".rs") && name != "tests.rs" {
+            out.push(path);
+        }
+    }
+}
+
+/// The mechanical half of "one median in this workspace".
+///
+/// The module docs have said so since the six copies were merged, and a doc
+/// comment is exactly what the next new median will not read: the copy this
+/// test was written for landed thirteen days after that merge, in a crate
+/// that already imported the shared one. So the rule is enforced by reading
+/// the sources: any `fn` whose name contains `median` outside this file's
+/// allowlist fails, and the fix is normally to call [`median_in_place`]
+/// rather than to extend the list. Extending it is for an operation that is
+/// genuinely not this median — say so in the reason, which is the review
+/// this test is really asking for.
+///
+/// Test modules are exempt: an independent reference implementation is how
+/// this file checks the real one (see `reference_median` above).
+#[test]
+fn the_workspace_has_one_median() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ is the parent of this crate");
+    let mut sources = Vec::new();
+    rs_sources(crates, &mut sources);
+    assert!(
+        sources.len() > 100,
+        "expected to scan the workspace sources, found {} files",
+        sources.len()
+    );
+
+    let mut unlisted = Vec::new();
+    for path in &sources {
+        let rel = path
+            .strip_prefix(crates)
+            .expect("scanned under crates/")
+            .to_string_lossy()
+            .replace('\\', "/");
+        for line in std::fs::read_to_string(path)
+            .expect("readable source")
+            .lines()
+        {
+            let Some(name) = fn_name(line) else { continue };
+            if !name.to_ascii_lowercase().contains("median") {
+                continue;
+            }
+            if !MEDIAN_ALLOWLIST
+                .iter()
+                .any(|(p, f, _)| *p == rel && *f == name)
+            {
+                unlisted.push(format!("{rel}: fn {name}"));
+            }
+        }
+    }
+    assert!(
+        unlisted.is_empty(),
+        "new median implementations outside `crate::numeric`:\n  {}\n\
+         Call `sfmtool_core::numeric::median_in_place` instead — it is `pub`, \
+         so the bindings reach it too. If this really is a different \
+         operation, add it to MEDIAN_ALLOWLIST in numeric/tests.rs with the \
+         reason.",
+        unlisted.join("\n  ")
+    );
+}
+
+/// The name defined by a `fn` item on `line`, or `None` if it defines none.
+///
+/// Deliberately crude — it reads declarations, not Rust — but it sees every
+/// form a median has been written in here: bare, `pub`, `pub(crate)`,
+/// `pub(super)`, `#[inline]`-preceded (the attribute is its own line), and
+/// generic. A `fn` inside a string or comment would be a false positive; none
+/// exists, and one would be visible in the failure message.
+fn fn_name(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("pub").map_or_else(
+        || line.trim_start(),
+        |r| r.trim_start_matches(|c| c != ' ').trim_start(),
+    );
+    let rest = rest.strip_prefix("fn ")?;
+    let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')?;
+    Some(&rest[..end])
+}

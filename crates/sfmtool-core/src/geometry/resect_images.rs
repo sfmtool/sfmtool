@@ -40,7 +40,7 @@ use crate::camera::report::angle_between;
 use crate::camera::CameraIntrinsics;
 use crate::geometry::batch_resection::{resect_images_batch, ResectOptions};
 use crate::geometry::focal_vote::column_scan::kabsch;
-use crate::geometry::numeric::orthonormalized;
+use crate::geometry::rotation::orthonormalized;
 use crate::numeric::median_in_place;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::reconstruction::{

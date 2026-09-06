@@ -24,7 +24,6 @@ use crate::camera::distortion::bspline::{
 };
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
-use crate::geometry::numeric::{cam_with, cam_with_bspline};
 use crate::reconstruction::point_estimation::{
     estimate_points_from_observations, FewObservations, ObservationSet, PointRules,
 };
@@ -713,9 +712,9 @@ fn solve_lm<const CAM_COLS: usize>(
     // rides along inside `cam0` untouched).
     let build_cam = |fv: f64, k1v: f64, bsv: &[f64]| {
         if opt_bspline {
-            cam_with_bspline(cam0, fv, bsv)
+            cam0.with_focal_bspline(fv, bsv)
         } else {
-            cam_with(cam0, fv, k1v)
+            cam0.with_focal_k1(fv, k1v)
         }
     };
     // The imaged field, as the kept observations report it: the largest pixel
@@ -1184,7 +1183,7 @@ fn bundle_adjust_staged(
     // dimensionless and rides on the ray-derived radial coordinate
     // (`x_d = (θ + δ(θ))·ûx` for SFMTOOL_FISHEYE, `x_d = (ρ + δ(ρ))·ûx` with
     // `ρ = ρ_xy/rz` for SFMTOOL_PINHOLE), so `f` never appears inside the
-    // distorted coordinate and `(u − cx)/f` stays exact. `numeric::cam_at`
+    // distorted coordinate and `(u − cx)/f` stays exact. `CameraIntrinsics::with_focal`
     // mirrors this gate.
     let opt_f = opt_f
         && matches!(
@@ -1232,9 +1231,9 @@ fn bundle_adjust_staged(
 
     for (rnd, stage) in schedule.iter().enumerate() {
         let cam_now = if opt_bspline {
-            cam_with_bspline(cam, f, &bspline)
+            cam.with_focal_bspline(f, &bspline)
         } else {
-            cam_with(cam, f, k1)
+            cam.with_focal_k1(f, k1)
         };
         if rnd > 0 {
             reestimate_points(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
@@ -1329,9 +1328,9 @@ fn bundle_adjust_staged(
     }
 
     let cam_final = if opt_bspline {
-        cam_with_bspline(cam, f, &bspline)
+        cam.with_focal_bspline(f, &bspline)
     } else {
-        cam_with(cam, f, k1)
+        cam.with_focal_k1(f, k1)
     };
     let (norms, _depths) = residual_norms_depths(
         &cam_final, quats, trans, points, is_dir, uv, obs_img, obs_pt,

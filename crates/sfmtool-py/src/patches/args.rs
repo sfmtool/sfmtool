@@ -1,26 +1,17 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared parameter-string parsers and small numeric helpers for the
-//! patch-kernel bindings.
+//! Shared parameter-string parsers for the patch-kernel bindings.
+//!
+//! Numeric helpers do not belong here: the bindings take them from
+//! `sfmtool_core::numeric`, so a binding and the kernel it wraps compute
+//! the same number.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::{PatchWindow, Sampler};
-
-/// `numpy.median` of a non-empty slice: the middle value for an odd count, the
-/// mean of the two central values for an even count. Sorts `v` in place.
-pub(super) fn np_median(v: &mut [f64]) -> f64 {
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let n = v.len();
-    if n % 2 == 1 {
-        v[n / 2]
-    } else {
-        0.5 * (v[n / 2 - 1] + v[n / 2])
-    }
-}
 
 /// Map a window name + sigma to the shared [`PatchWindow`] kernel.
 pub(crate) fn parse_patch_window(window: &str, sigma: f64) -> PyResult<PatchWindow> {

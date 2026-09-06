@@ -719,6 +719,69 @@ impl CameraIntrinsics {
     pub fn has_distortion(&self) -> bool {
         self.model.has_distortion()
     }
+
+    /// This camera at focal `f` — a clone for every model but the five the
+    /// focal release admits: `SIMPLE_PINHOLE`, `EQUIDISTANT_FISHEYE`,
+    /// `SIMPLE_RADIAL_FISHEYE`, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`, whose
+    /// projections all multiply `f` onto a distorted coordinate that does not
+    /// itself read `f` (for the last two, the dimensionless radial spline rides
+    /// on the ray's own radial coordinate).
+    ///
+    /// Focal optimization is gated on exactly those five models, so no other
+    /// camera ever sees a moved focal; this matches the bundle adjustment's
+    /// focal handling.
+    pub(crate) fn with_focal(&self, f: f64) -> CameraIntrinsics {
+        let mut out = self.clone();
+        match &mut out.model {
+            CameraModel::SimplePinhole { focal_length, .. }
+            | CameraModel::EquidistantFisheye { focal_length, .. }
+            | CameraModel::SimpleRadialFisheye { focal_length, .. }
+            | CameraModel::SfmtoolFisheye { focal_length, .. }
+            | CameraModel::SfmtoolPinhole { focal_length, .. } => *focal_length = f,
+            _ => {}
+        }
+        out
+    }
+
+    /// This camera at focal `f` and radial coefficient `k1` —
+    /// [`with_focal`](Self::with_focal) plus the one distortion parameter the
+    /// bundle adjustment can release, which exists only on
+    /// `SIMPLE_RADIAL_FISHEYE`. `k1` is ignored for every other model (`opt_k1`
+    /// is gated on that one).
+    pub(crate) fn with_focal_k1(&self, f: f64, k1: f64) -> CameraIntrinsics {
+        let mut out = self.with_focal(f);
+        if let CameraModel::SimpleRadialFisheye {
+            radial_distortion_k1,
+            ..
+        } = &mut out.model
+        {
+            *radial_distortion_k1 = k1;
+        }
+        out
+    }
+
+    /// This camera at focal `f` and spline coefficients `bspline` —
+    /// [`with_focal`](Self::with_focal) plus the coefficient vector the bundle
+    /// adjustment's spline release moves, which exists on the two sfmtool
+    /// spline models, `SFMTOOL_FISHEYE` and `SFMTOOL_PINHOLE`. `bspline` is
+    /// ignored for every other model (`opt_bspline` is gated on those two). The
+    /// sibling of [`with_focal_k1`](Self::with_focal_k1): the two never apply
+    /// together, because no model carries both a `k1` and a spline.
+    pub(crate) fn with_focal_bspline(&self, f: f64, bspline: &[f64]) -> CameraIntrinsics {
+        let mut out = self.with_focal(f);
+        let coeffs = match &mut out.model {
+            CameraModel::SfmtoolFisheye {
+                bspline: coeffs, ..
+            }
+            | CameraModel::SfmtoolPinhole {
+                bspline: coeffs, ..
+            } => coeffs,
+            _ => return out,
+        };
+        coeffs.clear();
+        coeffs.extend_from_slice(bspline);
+        out
+    }
 }
 
 #[cfg(test)]
