@@ -31,8 +31,8 @@ requires poses and points. The two must not share a name or type.
 banded thinning, reach — are specified in
 [covisibility-selection.md](covisibility-selection.md), and the sparse
 displacement-neighborhood substrate (`DisplacementNeighborhood`: exhaustive
-per-pair displacement means with `nearest` / `farthest` / pair-stats queries and
-array serialization) in
+per-pair displacement means, magnitude and vector, with `nearest` /
+`farthest` / per-pair queries and array serialization) in
 [pose-verification.md](../geometry/pose-verification.md).
 
 ## Definition
@@ -176,8 +176,10 @@ pub struct SeedImageGroup {
     pub images: Vec<u32>,      // sorted ascending
     pub seed_pair: (u32, u32), // i < j
     pub seed_shared: u32,      // W[seed_pair]
-    pub pair_shared: Vec<u32>,               // condensed upper triangle
-    pub pair_displacement: Option<Vec<f32>>, // same order; None unpositioned
+    pub pair_shared: Vec<u32>, // condensed upper triangle
+    // Same order; both None on an unpositioned matrix.
+    pub pair_displacement_magnitude: Option<Vec<f32>>,
+    pub pair_displacement_vector: Option<Vec<[f32; 2]>>,
 }
 
 pub struct SeedImageGroupParams {
@@ -194,34 +196,41 @@ makes it a set of clusters.
 step already picked, carried out rather than discarded, so a caller that
 wants the group's best-supported pair pays nothing for it.
 
-`pair_shared` and `pair_displacement` carry out what the receiver already
-holds about the group's **internal** pairs, so a consumer classifying the
-group's motion regime reads the group rather than querying the matrix pair by
-pair. Both are the group's condensed upper triangle over `images`: for
-indexes `a < b` into `images`, the entry sits at
-`a·(2·len − a − 1)/2 + (b − a − 1)` — the pairs enumerated
-`(0,1), (0,2), …, (0,len−1), (1,2), …` — and both vectors have length
+`pair_shared`, `pair_displacement_magnitude` and `pair_displacement_vector`
+carry out what the receiver already holds about the group's **internal**
+pairs, so a consumer classifying the group's motion regime reads the group
+rather than querying the matrix pair by pair. All three are the group's
+condensed upper triangle over `images`: for indexes `a < b` into `images`, the
+entry sits at `a·(2·len − a − 1)/2 + (b − a − 1)` — the pairs enumerated
+`(0,1), (0,2), …, (0,len−1), (1,2), …` — and all three vectors have length
 `len·(len−1)/2`.
 
 - `pair_shared[k]` is `W` for that pair, read straight off the counts matrix.
   The entry for `seed_pair` is `seed_shared`, and by the maximum-shared-pair
   property below it is the vector's maximum.
-- `pair_displacement[k]` is the mean pixel displacement of the pair's
-  shared-cluster keypoints, read off the sparse `DisplacementNeighborhood`
-  (`pose-verification.md`) — the exhaustive per-pair mean, not the seeded
-  one-sample-per-cluster tables behind `pair_displacement()`. The whole field
-  is `None` when the matrix was built without positions, since there is then
-  no neighborhood; within a positioned build, a pair the neighborhood holds
-  no entry for reads `0.0` — it shares no accepted cluster, so there are no
-  keypoints to average. Such a pair only occurs at `min_shared = 0`, which
-  lets the extension take an image sharing nothing with the group.
+- `pair_displacement_magnitude[k]` is the mean pixel displacement magnitude of
+  the pair's shared-cluster keypoints and `pair_displacement_vector[k]` their
+  mean displacement vector, both read off the sparse
+  `DisplacementNeighborhood` (`pose-verification.md`) — the exhaustive
+  per-pair means, not the seeded one-sample-per-cluster tables behind
+  `pair_displacement_magnitude()`. Both fields are `None` when the matrix was
+  built without positions, since there is then no neighborhood; within a
+  positioned build, a pair the neighborhood holds no entry for reads `0.0` and
+  `[0.0, 0.0]` — it shares no accepted cluster, so there are no keypoints to
+  average. Such a pair only occurs at `min_shared = 0`, which lets the
+  extension take an image sharing nothing with the group.
+
+  Each vector points from the earlier image of its pair to the later one:
+  `images` is sorted ascending, so the condensed enumeration's `(a, b)` with
+  `a < b` is already the pair's own ascending key, and the neighborhood's
+  orientation contract carries through unchanged.
 
   The reported width is `f32`, one rounding of the neighborhood's `f64` mean
-  per entry: the quantity is a mean over keypoint coordinates the `.matches`
-  backbone stores at single precision, so there is no double-precision
-  content to carry. The neighborhood keeps its own `f64` accumulation and
-  mean — pose verification reads those — and the narrowing happens only
-  where the group is filled.
+  per entry (per component, for the vector): the quantities are means over
+  keypoint coordinates the `.matches` backbone stores at single precision, so
+  there is no double-precision content to carry. The neighborhood keeps its
+  own `f64` accumulation and means — pose verification reads those — and the
+  narrowing happens only where the group is filled.
 
 `min_shared = 8` is carried over from the experiments unvalidated; a
 data-derived constructor (`SeedImageGroupParams::derive`, e.g. a fraction of the
@@ -282,22 +291,24 @@ yields a `sfmtool._sfmtool.matching.SeedImageGroup`, a frozen object over the
 core struct whose getters carry the vectors as numpy arrays:
 
 ```python
-group.images             # (len,) uint32, sorted ascending
-group.seed_pair          # (i, j) tuple of int, i < j
-group.seed_shared        # int
-group.pair_shared        # (len*(len-1)//2,) uint32, condensed upper triangle
-group.pair_displacement  # same shape, float32 — or None without positions
-repr(group)              # 'SeedImageGroup(5 images 3..15, seed_pair=(7, 12), …)'
+group.images                       # (len,) uint32, sorted ascending
+group.seed_pair                    # (i, j) tuple of int, i < j
+group.seed_shared                  # int
+group.pair_shared                  # (n_pairs,) uint32, condensed upper triangle
+group.pair_displacement_magnitude  # (n_pairs,) float32 — None without positions
+group.pair_displacement_vector     # (n_pairs, 2) float32 — None without positions
+repr(group)                        # 'SeedImageGroup(5 images 3..15, seed_pair=(7, 12), …)'
 ```
 
-The arrays are what a consumer does its arithmetic on — an `argmax` over
-`pair_displacement`, a boolean mask over `pair_shared` — with no list
-conversion in between. Both are the condensed upper triangle over `images`,
-the order `scipy.spatial.distance.pdist` uses, so
-`scipy.spatial.distance.squareform` reshapes either into a dense group-local
-matrix. `pair_displacement` reports at the core struct's `f32` width; `repr`
-identifies the group by its image span and seed pair without printing the
-arrays.
+with `n_pairs = len*(len-1)//2`. The arrays are what a consumer does its
+arithmetic on — an `argmax` over `pair_displacement_magnitude`, a boolean mask
+over `pair_shared`, a coherence test over `pair_displacement_vector` — with no
+list conversion in between. All three run in the condensed upper-triangle
+order over `images`, the order `scipy.spatial.distance.pdist` uses, so
+`scipy.spatial.distance.squareform` reshapes the scalar ones into a dense
+group-local matrix. Both displacement arrays report at the core struct's `f32`
+width; `repr` identifies the group by its image span and seed pair without
+printing the arrays.
 
 `min_shared` is keyword-only: a bare second positional integer reads as a
 count of groups rather than as an edge-weight floor.
@@ -323,9 +334,9 @@ storing the pairwise backbone raises `ValueError`. Custom masks use
   the hub-vs-mutual distinction (a star topology must not form a group),
   the maximum-shared-pair invariant over a tie-dense graph, dense bound
   error, the condensed pair ordering against direct `count(i, j)` calls over
-  a group whose pairs all differ, `pair_displacement` against direct
-  neighborhood pair queries on a positioned build (and `None` on an
-  unpositioned one).
+  a group whose pairs all differ, `pair_displacement_magnitude` and
+  `pair_displacement_vector` against direct neighborhood pair queries on a
+  positioned build (and `None` on an unpositioned one).
 - Bindings test (`tests/rust_bindings/`): array and file constructors on a
   small generated file; numpy round-trip; parity of `seed_image_groups` —
   the enriched yield included — with a numpy reference implementation over

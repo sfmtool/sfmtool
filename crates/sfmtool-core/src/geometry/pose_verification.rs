@@ -234,7 +234,7 @@ fn shared_rows(lists: &[Vec<(u32, usize)>], a: usize, b: usize) -> Vec<(usize, u
 
 /// Registered `nearest` neighbours of `subject`: partners at or above the
 /// shared-cluster floor with a registered pose, sorted by ascending mean
-/// displacement (ties: ascending index), truncated to `k`.
+/// displacement magnitude (ties: ascending index), truncated to `k`.
 fn nearest_registered(
     neighborhood: &DisplacementNeighborhood,
     subject: u32,
@@ -243,7 +243,7 @@ fn nearest_registered(
     min_shared: u32,
 ) -> Vec<u32> {
     let mut ranked: Vec<(f64, u32)> = neighborhood
-        .neighbors(subject)
+        .neighbors_magnitude(subject)
         .filter(|&(j, shared, _)| shared >= min_shared && j != subject && posed[j as usize])
         .map(|(j, _, d)| (d, j))
         .collect();

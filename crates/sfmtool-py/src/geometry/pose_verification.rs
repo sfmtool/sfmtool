@@ -6,7 +6,7 @@
 //! ``specs/core/geometry/pose-verification.md``).
 //!
 //! The substrate travels as its compact serialization — the parallel per-pair
-//! arrays ``pair_i`` / ``pair_j`` / ``pair_count`` / ``pair_mean_disp``
+//! arrays ``pair_i`` / ``pair_j`` / ``pair_count`` / ``pair_mean_magnitude``
 //! produced by ``ClusterCovisibility.neighborhood_arrays()`` (or persisted by
 //! an earlier stage) — so one computation serves a multi-stage pipeline.
 
@@ -50,7 +50,7 @@ fn read_verify_inputs(
     pair_i: &PyReadonlyArray1<'_, u32>,
     pair_j: &PyReadonlyArray1<'_, u32>,
     pair_count: &PyReadonlyArray1<'_, u32>,
-    pair_mean_disp: &PyReadonlyArray1<'_, f64>,
+    pair_mean_magnitude: &PyReadonlyArray1<'_, f64>,
 ) -> PyResult<VerifyInputs> {
     let (clusters, images, positions) =
         read_observations(cluster_indexes, image_indexes, positions_xy)?;
@@ -75,7 +75,7 @@ fn read_verify_inputs(
     let pi: Cow<'_, [u32]> = to_contiguous!(pair_i);
     let pj: Cow<'_, [u32]> = to_contiguous!(pair_j);
     let pc: Cow<'_, [u32]> = to_contiguous!(pair_count);
-    let pd: Cow<'_, [f64]> = to_contiguous!(pair_mean_disp);
+    let pd: Cow<'_, [f64]> = to_contiguous!(pair_mean_magnitude);
     let n_img = images
         .iter()
         .chain(posed_idx.iter())
@@ -84,7 +84,9 @@ fn read_verify_inputs(
         .map(|&i| i as usize + 1)
         .max()
         .unwrap_or(0);
-    let neighborhood = DisplacementNeighborhood::from_arrays(&pi, &pj, &pc, &pd, n_img)
+    // The kernels read the magnitude alone, so the substrate reloads without
+    // the vector column (its entries stay zero).
+    let neighborhood = DisplacementNeighborhood::from_arrays(&pi, &pj, &pc, &pd, None, n_img)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     Ok(VerifyInputs {
@@ -149,9 +151,12 @@ fn verification_dict<'py>(py: Python<'py>, out: &PoseVerification) -> PyResult<B
 ///     pair_i: (n_pairs,) uint32 substrate pair first image.
 ///     pair_j: (n_pairs,) uint32 substrate pair second image.
 ///     pair_count: (n_pairs,) uint32 shared-cluster count per pair.
-///     pair_mean_disp: (n_pairs,) float64 mean keypoint displacement per
-///         pair (pixels). The four pair arrays are the substrate's compact
-///         serialization (``ClusterCovisibility.neighborhood_arrays()``).
+///     pair_mean_magnitude: (n_pairs,) float64 mean keypoint displacement
+///         magnitude per pair (pixels). The four pair arrays are the ``"i"``,
+///         ``"j"``, ``"count"`` and ``"mean_magnitude"`` columns of the
+///         substrate's compact serialization
+///         (``ClusterCovisibility.neighborhood_arrays()``); the mean
+///         displacement vector is not read here.
 ///     resect_min_obs: Screen A skips (and flags) a camera with fewer
 ///         observations of valid points than this (default 8).
 ///     resect_accept_gate: Screen A clears a camera at or above this
@@ -178,7 +183,7 @@ fn verification_dict<'py>(py: Python<'py>, out: &PoseVerification) -> PyResult<B
 ///     union of both screens).
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, points, quaternions_wxyz, translations, posed_indexes, pair_i, pair_j, pair_count, pair_mean_disp, *, resect_min_obs=8, resect_accept_gate=0.30, max_neighbors=4, min_shared=50, min_pair_correspondences=30, min_h_inliers=20, min_rotation_measurements=2, rotation_threshold_deg=3.0, seed=0))]
+#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, points, quaternions_wxyz, translations, posed_indexes, pair_i, pair_j, pair_count, pair_mean_magnitude, *, resect_min_obs=8, resect_accept_gate=0.30, max_neighbors=4, min_shared=50, min_pair_correspondences=30, min_h_inliers=20, min_rotation_measurements=2, rotation_threshold_deg=3.0, seed=0))]
 pub fn verify_poses<'py>(
     py: Python<'py>,
     cluster_indexes: PyReadonlyArray1<'py, u32>,
@@ -192,7 +197,7 @@ pub fn verify_poses<'py>(
     pair_i: PyReadonlyArray1<'py, u32>,
     pair_j: PyReadonlyArray1<'py, u32>,
     pair_count: PyReadonlyArray1<'py, u32>,
-    pair_mean_disp: PyReadonlyArray1<'py, f64>,
+    pair_mean_magnitude: PyReadonlyArray1<'py, f64>,
     resect_min_obs: usize,
     resect_accept_gate: f64,
     max_neighbors: usize,
@@ -214,7 +219,7 @@ pub fn verify_poses<'py>(
         &pair_i,
         &pair_j,
         &pair_count,
-        &pair_mean_disp,
+        &pair_mean_magnitude,
     )?;
     let cam = camera.inner.clone();
     let options = VerifyOptions {
@@ -273,7 +278,7 @@ pub fn verify_poses<'py>(
 ///     inlier arrays are NaN where no repair was attempted.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, points, quaternions_wxyz, translations, posed_indexes, pair_i, pair_j, pair_count, pair_mean_disp, *, resect_min_obs=8, resect_accept_gate=0.30, max_neighbors=4, min_shared=50, min_pair_correspondences=30, min_h_inliers=20, min_rotation_measurements=2, rotation_threshold_deg=3.0, seed=0, min_obs=12, inlier_floor=0.10, inlier_margin=0.05))]
+#[pyo3(signature = (cluster_indexes, image_indexes, positions_xy, camera, points, quaternions_wxyz, translations, posed_indexes, pair_i, pair_j, pair_count, pair_mean_magnitude, *, resect_min_obs=8, resect_accept_gate=0.30, max_neighbors=4, min_shared=50, min_pair_correspondences=30, min_h_inliers=20, min_rotation_measurements=2, rotation_threshold_deg=3.0, seed=0, min_obs=12, inlier_floor=0.10, inlier_margin=0.05))]
 pub fn repair_poses<'py>(
     py: Python<'py>,
     cluster_indexes: PyReadonlyArray1<'py, u32>,
@@ -287,7 +292,7 @@ pub fn repair_poses<'py>(
     pair_i: PyReadonlyArray1<'py, u32>,
     pair_j: PyReadonlyArray1<'py, u32>,
     pair_count: PyReadonlyArray1<'py, u32>,
-    pair_mean_disp: PyReadonlyArray1<'py, f64>,
+    pair_mean_magnitude: PyReadonlyArray1<'py, f64>,
     resect_min_obs: usize,
     resect_accept_gate: f64,
     max_neighbors: usize,
@@ -312,7 +317,7 @@ pub fn repair_poses<'py>(
         &pair_i,
         &pair_j,
         &pair_count,
-        &pair_mean_disp,
+        &pair_mean_magnitude,
     )?;
     let cam = camera.inner.clone();
     let options = RepairOptions {

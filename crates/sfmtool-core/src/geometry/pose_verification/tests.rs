@@ -340,7 +340,7 @@ fn high_parallax_pair_alone_never_flags_rotation_screen() {
     let mut rng = Lcg(11);
     let mut scene = station_scene(2, 1, 300, 0.2, -0.5, &mut rng);
     let nb = scene.neighborhood();
-    let (shared, _) = nb.pair(0, 1).expect("pair must be covisible");
+    let (shared, _) = nb.pair_magnitude(0, 1).expect("pair must be covisible");
     assert!(shared >= 50, "fixture needs a realized pair, got {shared}");
 
     let clean = verify(&scene, &VerifyOptions::default());

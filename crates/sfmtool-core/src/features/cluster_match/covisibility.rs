@@ -50,13 +50,14 @@ pub enum CovisibilityError {
     PositionsNotParallel { members: usize, positions: usize },
     /// A member's image index is out of range.
     ImageIndexOutOfRange { index: u32, num_images: usize },
-    /// [`DisplacementNeighborhood::from_arrays`]: the four pair arrays do not
-    /// share one length.
+    /// [`DisplacementNeighborhood::from_arrays`]: the pair arrays do not share
+    /// one length (the vector column is `None` when it was not supplied).
     PairArraysNotParallel {
         i: usize,
         j: usize,
         shared: usize,
-        mean_disp: usize,
+        mean_magnitude: usize,
+        mean_vector: Option<usize>,
     },
     /// [`DisplacementNeighborhood::from_arrays`]: a diagonal (`i == j`) or
     /// repeated pair.
@@ -99,11 +100,16 @@ impl std::fmt::Display for CovisibilityError {
                 i,
                 j,
                 shared,
-                mean_disp,
+                mean_magnitude,
+                mean_vector,
             } => write!(
                 f,
                 "pair arrays must share one length: i ({i}), j ({j}), shared ({shared}), \
-                 mean_disp ({mean_disp})"
+                 mean_magnitude ({mean_magnitude}), mean_vector ({})",
+                match mean_vector {
+                    Some(n) => n.to_string(),
+                    None => "absent".to_string(),
+                }
             ),
             Self::BadPair { i, j } => write!(
                 f,
@@ -146,12 +152,13 @@ impl Default for SeedImageGroupParams {
 /// [`Self::images`]. A caller that wants the group's best-supported pair
 /// therefore reads [`Self::seed_pair`] instead of re-scanning the group.
 ///
-/// [`Self::pair_shared`] and [`Self::pair_displacement`] carry out what the
-/// matrix already holds about the group's internal pairs, so a consumer
-/// classifying the group's motion regime reads it here rather than querying
-/// the covisibility object pair by pair.
+/// [`Self::pair_shared`], [`Self::pair_displacement_magnitude`] and
+/// [`Self::pair_displacement_vector`] carry out what the matrix already holds
+/// about the group's internal pairs, so a consumer classifying the group's
+/// motion regime reads it here rather than querying the covisibility object
+/// pair by pair.
 ///
-/// Not `Eq`: [`Self::pair_displacement`] holds floating-point means.
+/// Not `Eq`: the displacement fields hold floating-point means.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeedImageGroup {
     /// The group's image indexes, sorted ascending.
@@ -171,14 +178,14 @@ pub struct SeedImageGroup {
     /// that pair; the entry for [`Self::seed_pair`] is [`Self::seed_shared`],
     /// which is the maximum over the whole vector.
     pub pair_shared: Vec<u32>,
-    /// Mean keypoint displacement (pixels) for the same pairs in the same
-    /// condensed order, read off the sparse
+    /// Mean keypoint displacement magnitude (pixels) for the same pairs in
+    /// the same condensed order, read off the sparse
     /// [`DisplacementNeighborhood`] — the exhaustive per-pair mean over the
     /// pair's shared-cluster keypoints, not the seeded one-sample-per-cluster
-    /// tables behind [`ClusterCovisibility::pair_displacement`]. `None` when
-    /// the covisibility was built without positions (no neighborhood). A pair
-    /// the neighborhood holds no entry for reads `0.0`: it shares no accepted
-    /// clusters.
+    /// tables behind [`ClusterCovisibility::pair_displacement_magnitude`].
+    /// `None` when the covisibility was built without positions (no
+    /// neighborhood). A pair the neighborhood holds no entry for reads `0.0`:
+    /// it shares no accepted clusters.
     ///
     /// `f32`, one rounding of the neighborhood's `f64` mean per entry: the
     /// quantity is a mean over keypoint coordinates the `.matches` backbone
@@ -186,7 +193,20 @@ pub struct SeedImageGroup {
     /// carry. The neighborhood keeps its own `f64` accumulation and mean —
     /// pose verification reads those — and this field is only the narrowed
     /// report to a consumer classifying the group's motion regime.
-    pub pair_displacement: Option<Vec<f32>>,
+    pub pair_displacement_magnitude: Option<Vec<f32>>,
+    /// Mean keypoint displacement *vector* (pixels) for the same pairs in the
+    /// same condensed order, from the same [`DisplacementNeighborhood`]
+    /// entries, `None` and `[0.0, 0.0]` under exactly the conditions
+    /// [`Self::pair_displacement_magnitude`] is `None` and `0.0` under, and
+    /// narrowed to `f32` by the same single rounding.
+    ///
+    /// Oriented by the pair's ascending image indexes, not by the group's
+    /// enumeration: entry `k` covers the pair `(images[a], images[b])` with
+    /// `a < b`, and because [`Self::images`] is sorted ascending that pair's
+    /// key is `(images[a], images[b])` too — so the vector always points from
+    /// the earlier image's keypoint to the later one's (see
+    /// [`DisplacementNeighborhood`]'s orientation contract).
+    pub pair_displacement_vector: Option<Vec<[f32; 2]>>,
 }
 
 /// Deterministic 64-bit generator behind the sampled displacement pass.
@@ -260,9 +280,10 @@ impl ClusterCovisibility {
 
     /// [`Self::from_clusters`] plus optional per-member observation positions
     /// (`positions_xy`, parallel to `member_images`, pixel units), which
-    /// enable the displacement queries ([`Self::pair_displacement`],
-    /// [`Self::pair_displacement_counts`]) and the isolation-ordered thinning
-    /// sweep (see [`Self::thin`]).
+    /// enable the displacement queries
+    /// ([`Self::pair_displacement_magnitude`],
+    /// [`Self::pair_displacement_counts`]) and the
+    /// isolation-ordered thinning sweep (see [`Self::thin`]).
     ///
     /// Positions are `f32` pairs, the width a `.matches` backbone stores them
     /// at, so a file's own rows are the argument with nothing copied; every
@@ -515,24 +536,27 @@ impl ClusterCovisibility {
         ranked
     }
 
-    /// Row-major `(num_images, num_images)` mean sampled feature
-    /// displacement per covisible pair (symmetric, `0` where no sample
-    /// landed). `None` when constructed without positions.
-    pub fn pair_displacement(&self) -> Option<&[f64]> {
+    /// Row-major `(num_images, num_images)` mean *sampled* feature
+    /// displacement magnitude per covisible pair (symmetric, `0` where no
+    /// sample landed) — the seeded one-sample-per-cluster estimate, not the
+    /// neighborhood's exhaustive mean. `None` when constructed without
+    /// positions.
+    pub fn pair_displacement_magnitude(&self) -> Option<&[f64]> {
         self.displacement.as_ref().map(|t| t.mean.as_slice())
     }
 
-    /// Row-major `(num_images, num_images)` sample counts behind
-    /// [`Self::pair_displacement`], for callers that gate on support.
-    /// `None` when constructed without positions.
+    /// Row-major `(num_images, num_images)` sample counts behind the sampled
+    /// displacement tables -- the same sampled member pairs support every
+    /// statistic derived from them, so the counts name none of them. `None`
+    /// when constructed without positions.
     pub fn pair_displacement_counts(&self) -> Option<&[u32]> {
         self.displacement.as_ref().map(|t| t.count.as_slice())
     }
 
     /// The sparse displacement-neighborhood substrate (per realized pair:
-    /// shared-cluster count + exhaustive mean keypoint displacement, with the
-    /// `nearest` / `farthest` / `pair` queries and array serialization).
-    /// `None` when constructed without positions. See
+    /// shared-cluster count + exhaustive mean keypoint displacement magnitude
+    /// and vector, with the `nearest` / `farthest` / per-pair queries and
+    /// array serialization). `None` when constructed without positions. See
     /// `specs/core/geometry/pose-verification.md`.
     pub fn displacement_neighborhood(&self) -> Option<&DisplacementNeighborhood> {
         self.neighborhood.as_ref()
@@ -632,18 +656,32 @@ impl ClusterCovisibility {
         //    `a < b` enumeration fills both vectors, so they stay parallel.
         let n_pairs = group.len() * (group.len() - 1) / 2;
         let mut pair_shared = Vec::with_capacity(n_pairs);
-        let mut pair_displacement = self
+        let mut pair_magnitude = self
+            .neighborhood
+            .as_ref()
+            .map(|_| Vec::with_capacity(n_pairs));
+        let mut pair_vector = self
             .neighborhood
             .as_ref()
             .map(|_| Vec::with_capacity(n_pairs));
         for (a, &ia) in group.iter().enumerate() {
             for &ib in &group[a + 1..] {
                 pair_shared.push(self.counts[ia as usize * n + ib as usize]);
-                if let (Some(disp), Some(nb)) = (pair_displacement.as_mut(), &self.neighborhood) {
+                if let (Some(mags), Some(vecs), Some(nb)) = (
+                    pair_magnitude.as_mut(),
+                    pair_vector.as_mut(),
+                    &self.neighborhood,
+                ) {
                     // An unrealized pair shares no accepted cluster, so its
-                    // displacement has no keypoints to average: 0.0. The one
+                    // displacement has no keypoints to average: zero. The one
                     // narrowing to the reported `f32` width happens here.
-                    disp.push(nb.pair(ia, ib).map_or(0.0, |(_, d)| d as f32));
+                    // `group` is sorted, so `ia < ib` is the pair's own key
+                    // and the vector's orientation needs no adjustment.
+                    mags.push(nb.pair_magnitude(ia, ib).map_or(0.0, |(_, d)| d as f32));
+                    vecs.push(
+                        nb.pair_vector(ia, ib)
+                            .map_or([0.0, 0.0], |(_, [dx, dy])| [dx as f32, dy as f32]),
+                    );
                 }
             }
         }
@@ -653,7 +691,8 @@ impl ClusterCovisibility {
             seed_pair: (i as u32, j as u32),
             seed_shared: w,
             pair_shared,
-            pair_displacement,
+            pair_displacement_magnitude: pair_magnitude,
+            pair_displacement_vector: pair_vector,
         })
     }
 }

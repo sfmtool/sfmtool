@@ -15,27 +15,42 @@ verification at every stage.
 
 ## Substrate: the displacement neighborhood
 
-Per covisible image pair: the shared-cluster count and the mean pixel
-displacement of shared-cluster keypoints. One pass over clusters emits
-each cluster's member pairs (`span·(span−1)/2` of them); under the
-cluster matcher's size cap the total is linear in observations. The two
-statistics are aggregated differently on purpose. The shared count is
-deduplicated per cluster, so it agrees with `ClusterCovisibility.count`:
-a cluster votes at most once for a pair however many members it holds in
-either image. The mean displacement averages over *every* accepted
-cross-image member pair of those clusters — exhaustive, not the seeded
-one-sample-per-cluster estimate behind
-`ClusterCovisibility.pair_displacement`. The two aggregations coincide
-wherever clusters hold one member per image, which is the common case.
-Storage is sparse — only realized pairs, itself linear under the cap —
-with per-image queries:
+Per covisible image pair: the shared-cluster count, the mean pixel
+displacement *magnitude* of shared-cluster keypoints, and their mean
+displacement *vector*. One pass over clusters emits each cluster's member
+pairs (`span·(span−1)/2` of them); under the cluster matcher's size cap
+the total is linear in observations. The statistics are aggregated
+differently on purpose. The shared count is deduplicated per cluster, so
+it agrees with `ClusterCovisibility.count`: a cluster votes at most once
+for a pair however many members it holds in either image. Both means
+average over *every* accepted cross-image member pair of those clusters —
+exhaustive, not the seeded one-sample-per-cluster estimate behind
+`ClusterCovisibility.pair_displacement_magnitude`. The two aggregations
+coincide wherever clusters hold one member per image, which is the common
+case. Storage is sparse — only realized pairs, itself linear under the
+cap — with per-image queries:
 
-- `nearest(i, k, min_shared)` — the k lowest-mean-displacement partners
+- `nearest(i, k, min_shared)` — the k lowest-mean-magnitude partners
   with at least `min_shared` shared clusters (near-duplicate viewpoints);
-- `farthest(i, k, min_shared)` — the k highest-displacement partners over
+- `farthest(i, k, min_shared)` — the k highest-magnitude partners over
   the same shared-count floor (wide-baseline pairs, e.g. for focal
   estimation);
-- pair stats lookup.
+- per-pair lookup, `pair_magnitude(i, j)` and `pair_vector(i, j)`, and the
+  row walks `neighbors_magnitude(i)` / `neighbors_vector(i)`.
+
+**Orientation.** The magnitude is a distance and does not care which
+member of a pair came first; the vector does, and the substrate keys it
+to the image indexes. A pair is stored under its ascending key
+`(lo, hi)`, and every member pair contributes *(position in image `hi`) −
+(position in image `lo`)* — the delta flips when the member pair arrives
+in the other order. Without that normalization the same physical flow
+would enter the running sum with either sign depending on how a cluster
+happened to list its members, and coherent motion would cancel itself.
+The queries answer in the key's orientation whatever order their
+arguments arrive in: `pair_vector(i, j)` and `pair_vector(j, i)` are the
+same vector, pointing from the lower-indexed image's keypoint to the
+higher-indexed image's, and `neighbors_vector(i)` reports its row in that
+same key orientation rather than relative to `i`.
 
 A cluster-member acceptance mask (as elsewhere on `ClusterCovisibility`)
 is honored at construction. The build itself is not sparse: it addresses
@@ -45,13 +60,21 @@ a pair's accumulator through a transient dense slot index over
 `DisplacementNeighborhood::from_clusters` refuses `num_images` above the
 dense bound the count matrix uses. Only realized pairs get an
 accumulator, and the index is dropped once the sparse adjacency is
-assembled. Persistence is the substrate's own:
-`DisplacementNeighborhood::to_arrays` emits parallel per-pair arrays
-`(i, j, shared count, mean displacement)` with `i < j`, and
+assembled. Each accumulator runs an `f64` sum per statistic — the
+magnitude and the two vector components — over the same member pairs, and
+one division by the same count finishes all three.
+
+Persistence is the substrate's own: `DisplacementNeighborhood::to_arrays`
+emits parallel per-pair arrays `(i, j, shared count, mean magnitude, mean
+vector)` with `i < j` — so each emitted vector is oriented `i → j` — and
 `from_arrays` rebuilds it, so one computation serves a multi-stage
-pipeline. The round trip is on the neighborhood alone — the
-`ClusterCovisibility` it was built from is not recoverable from those
-arrays, and the kernels only ever need the neighborhood.
+pipeline. `from_arrays` takes the vector column as an option: it reads
+each row's vector in that row's own `i → j` sense and re-orients it onto
+the key, and `None` (the magnitude-only serialization the verification
+kernels feed it) leaves every vector zero. The round trip is on the
+neighborhood alone — the `ClusterCovisibility` it was built from is not
+recoverable from those arrays, and the kernels only ever need the
+neighborhood.
 
 ## Screen A: self-resection
 
@@ -177,11 +200,16 @@ a caller can do that without re-running either screen.
 ## Testing requirements
 
 - Substrate: construction cost linear in observations under the span
-  cap; `nearest`/`farthest` exact against a dense reference on a small
-  scene; mask honored; serialization round-trips; the slot-indexed
-  accumulation reproduces a hash-map reference exactly -- pair set,
-  counts, mean-displacement bit patterns and CSR rows -- on a 300-image,
-  20 000-cluster synthetic scene, masked and unmasked.
+  cap; `nearest`/`farthest` and both per-pair means exact against a dense
+  reference on a small scene; mask honored; serialization round-trips,
+  including a reversed-orientation reload and a magnitude-only one; the
+  vector's orientation pinned on a scene whose two clusters list the same
+  flow's members in opposite orders (they must add, not cancel) and its
+  cancellation on opposed flows of equal length (zero vector mean,
+  nonzero magnitude mean); the slot-indexed accumulation reproduces a
+  hash-map reference exactly -- pair set, counts, mean-magnitude bit
+  patterns and CSR rows -- on a 300-image, 20 000-cluster synthetic
+  scene, masked and unmasked.
 - Screens on a synthetic scene with implanted misregistrations: a
   wrong-pose camera with healthy neighbours is flagged by both screens;
   an unflagged scene yields no flags at the default thresholds; a

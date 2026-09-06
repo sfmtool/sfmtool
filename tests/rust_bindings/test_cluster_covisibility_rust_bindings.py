@@ -59,18 +59,22 @@ def _ref_covisibility(starts, images, num_images, accepted=None):
     return counts
 
 
-def _ref_seed_image_groups(counts, group_size=5, min_shared=8, pair_mean=None):
+def _ref_seed_image_groups(
+    counts, group_size=5, min_shared=8, pair_mean=None, pair_vector=None
+):
     """Numpy reference implementation of the spec's seed-group algorithm.
 
     Yields dicts of what the binding's ``SeedImageGroup`` attributes hold:
-    ``images``, ``seed_pair``, ``seed_shared``, ``pair_shared`` and
-    ``pair_displacement``. The last two are the group's internal pairs in
-    condensed upper-triangle order, the order ``scipy.spatial.distance.pdist``
-    uses. ``pair_mean`` is a dense (N, N) float64 matrix of the displacement
-    neighborhood's per-pair means (0 for an unrealized pair); None reproduces
-    a matrix built without positions. The displacements come back at float32,
-    the reported width: the binding rounds the same float64 neighborhood mean
-    once, so ``np.float32(ref)`` matches it bit for bit.
+    ``images``, ``seed_pair``, ``seed_shared``, ``pair_shared``,
+    ``pair_displacement_magnitude`` and ``pair_displacement_vector``. The last
+    three are the group's internal pairs in condensed upper-triangle order, the
+    order ``scipy.spatial.distance.pdist`` uses. ``pair_mean`` is a dense
+    (N, N) float64 matrix of the displacement neighborhood's per-pair mean
+    magnitudes and ``pair_vector`` a dense (N, N, 2) float64 array of its mean
+    vectors in low→high orientation (both 0 for an unrealized pair); None
+    reproduces a matrix built without positions. The displacements come back at
+    float32, the reported width: the binding rounds the same float64
+    neighborhood mean once, so ``np.float32(ref)`` matches it bit for bit.
     """
     n = len(counts)
     excluded = np.zeros(n, dtype=bool)
@@ -109,13 +113,23 @@ def _ref_seed_image_groups(counts, group_size=5, min_shared=8, pair_mean=None):
                 "pair_shared": np.array(
                     [counts[group[a], group[b]] for a, b in pairs], dtype=np.uint32
                 ),
-                "pair_displacement": (
+                "pair_displacement_magnitude": (
                     None
                     if pair_mean is None
                     else np.array(
                         [pair_mean[group[a], group[b]] for a, b in pairs],
                         dtype=np.float64,
                     ).astype(np.float32)
+                ),
+                "pair_displacement_vector": (
+                    None
+                    if pair_vector is None
+                    else np.array(
+                        [pair_vector[group[a], group[b]] for a, b in pairs],
+                        dtype=np.float64,
+                    )
+                    .reshape(len(pairs), 2)
+                    .astype(np.float32)
                 ),
             }
         )
@@ -142,12 +156,24 @@ def _assert_group_matches(got, want, context=None):
     assert got.seed_shared == want["seed_shared"], context
     npt.assert_array_equal(got.pair_shared, want["pair_shared"], err_msg=f"{context}")
     assert got.pair_shared.dtype == np.uint32
-    if want["pair_displacement"] is None:
-        assert got.pair_displacement is None, context
+    if want["pair_displacement_magnitude"] is None:
+        assert got.pair_displacement_magnitude is None, context
     else:
-        assert got.pair_displacement.dtype == np.float32
+        assert got.pair_displacement_magnitude.dtype == np.float32
         npt.assert_array_equal(
-            got.pair_displacement, want["pair_displacement"], err_msg=f"{context}"
+            got.pair_displacement_magnitude,
+            want["pair_displacement_magnitude"],
+            err_msg=f"{context}",
+        )
+    if want["pair_displacement_vector"] is None:
+        assert got.pair_displacement_vector is None, context
+    else:
+        assert got.pair_displacement_vector.dtype == np.float32
+        assert got.pair_displacement_vector.shape == (len(got.pair_shared), 2)
+        npt.assert_array_equal(
+            got.pair_displacement_vector,
+            want["pair_displacement_vector"],
+            err_msg=f"{context}",
         )
 
 
@@ -375,13 +401,16 @@ class TestConstructors:
         cov = ClusterCovisibility.from_matches(MatchesFile(path))
         # The backbone's member positions come along, so the neighborhood
         # exists and the pair answers instead of raising.
-        assert cov.pair_stats(0, 1) is not None
+        assert cov.pair_magnitude(0, 1) is not None
         arrays = ClusterCovisibility.from_arrays(
             FILE_STARTS, FILE_IMAGES, N_IMAGES, positions_xy=FILE_POSITIONS
         )
-        npt.assert_array_equal(cov.pair_displacement(), arrays.pair_displacement())
         npt.assert_array_equal(
-            cov.pair_displacement_counts(), arrays.pair_displacement_counts()
+            cov.pair_displacement_magnitude(), arrays.pair_displacement_magnitude()
+        )
+        npt.assert_array_equal(
+            cov.pair_displacement_counts(),
+            arrays.pair_displacement_counts(),
         )
         npt.assert_array_equal(cov.nearest(0, 4), arrays.nearest(0, 4))
 
@@ -487,13 +516,15 @@ class TestSeedImageGroups:
         assert first.seed_pair == (0, 1)
         assert first.seed_shared == 10
         npt.assert_array_equal(first.pair_shared, [10, 10, 10])
-        assert first.pair_displacement is None
+        assert first.pair_displacement_magnitude is None
+        assert first.pair_displacement_vector is None
         second = next(it)
         npt.assert_array_equal(second.images, [3, 4])
         assert second.seed_pair == (3, 4)
         assert second.seed_shared == 9
         npt.assert_array_equal(second.pair_shared, [9])
-        assert second.pair_displacement is None
+        assert second.pair_displacement_magnitude is None
+        assert second.pair_displacement_vector is None
         with pytest.raises(StopIteration):
             next(it)
 
@@ -589,7 +620,8 @@ class TestSeedImageGroups:
                     g.pair_shared[_condensed_index(g.images, x, y)] == (counts[x, y])
                 ), (x, y)
         # Without positions there is no displacement to report.
-        assert g.pair_displacement is None
+        assert g.pair_displacement_magnitude is None
+        assert g.pair_displacement_vector is None
 
     def test_pair_displacement_parity_on_a_positioned_build(self):
         # Distinct per-edge displacements: each two-member cluster forces its
@@ -609,8 +641,12 @@ class TestSeedImageGroups:
         # Dense per-pair means, straight from the neighborhood serialization.
         arrs = cov.neighborhood_arrays()
         pair_mean = np.zeros((5, 5))
-        pair_mean[arrs["i"], arrs["j"]] = arrs["mean_disp"]
-        pair_mean[arrs["j"], arrs["i"]] = arrs["mean_disp"]
+        pair_mean[arrs["i"], arrs["j"]] = arrs["mean_magnitude"]
+        pair_mean[arrs["j"], arrs["i"]] = arrs["mean_magnitude"]
+        # The vector is keyed low→high, so both triangle halves take it as is.
+        pair_vector = np.zeros((5, 5, 2))
+        pair_vector[arrs["i"], arrs["j"]] = arrs["mean_vector"]
+        pair_vector[arrs["j"], arrs["i"]] = arrs["mean_vector"]
         for group_size, min_shared in [(5, 8), (4, 8), (3, 4), (2, 1)]:
             got = list(cov.seed_image_groups(group_size, min_shared=min_shared))
             want = _ref_seed_image_groups(
@@ -618,17 +654,34 @@ class TestSeedImageGroups:
                 group_size=group_size,
                 min_shared=min_shared,
                 pair_mean=pair_mean,
+                pair_vector=pair_vector,
             )
             _assert_groups_match(got, want, context=(group_size, min_shared))
         # And each entry is the neighborhood's own pair answer, narrowed once.
         for g in list(cov.seed_image_groups(5, min_shared=8)):
-            assert g.pair_displacement.dtype == np.float32
+            assert g.pair_displacement_magnitude.dtype == np.float32
+            assert g.pair_displacement_vector.dtype == np.float32
             for a, x in enumerate(g.images):
                 for y in g.images[a + 1 :]:
                     at = _condensed_index(g.images, x, y)
-                    shared, mean = cov.pair_stats(x, y)
-                    assert g.pair_displacement[at] == np.float32(mean), (x, y)
-                    assert g.pair_shared[at] == shared
+                    shared, mean = cov.pair_magnitude(x, y)
+                    shared_v, (dx, dy) = cov.pair_vector(x, y)
+                    assert g.pair_displacement_magnitude[at] == np.float32(mean), (x, y)
+                    npt.assert_array_equal(
+                        g.pair_displacement_vector[at],
+                        np.array([dx, dy], dtype=np.float64).astype(np.float32),
+                        err_msg=f"{(x, y)}",
+                    )
+                    assert g.pair_shared[at] == shared == shared_v
+        # The synthetic edges lay every member pair along +x from the lower
+        # image to the higher one, so each vector is its magnitude in x.
+        for g in list(cov.seed_image_groups(5, min_shared=8)):
+            npt.assert_array_equal(
+                g.pair_displacement_vector[:, 0], g.pair_displacement_magnitude
+            )
+            npt.assert_array_equal(
+                g.pair_displacement_vector[:, 1], np.zeros(len(g.pair_shared))
+            )
 
     def test_pair_displacement_zero_for_an_unrealized_pair(self):
         # min_shared=0 lets the extension take an image sharing nothing with
@@ -638,16 +691,22 @@ class TestSeedImageGroups:
         (g,) = list(cov.seed_image_groups(3, min_shared=0))
         npt.assert_array_equal(g.images, [0, 1, 2])
         npt.assert_array_equal(g.pair_shared, [5, 0, 0])
-        assert cov.pair_stats(0, 2) is None
-        npt.assert_array_equal(g.pair_displacement, [4.0, 0.0, 0.0])
-        assert g.pair_displacement.dtype == np.float32
+        assert cov.pair_magnitude(0, 2) is None
+        assert cov.pair_vector(0, 2) is None
+        npt.assert_array_equal(g.pair_displacement_magnitude, [4.0, 0.0, 0.0])
+        assert g.pair_displacement_magnitude.dtype == np.float32
+        npt.assert_array_equal(
+            g.pair_displacement_vector, [[4.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+        )
+        assert g.pair_displacement_vector.dtype == np.float32
 
     def test_pair_displacement_is_none_without_positions(self):
         edges = [(0, 1, 10), (0, 2, 10), (1, 2, 10)]
         starts, images = _edges_to_arrays(3, edges)
         cov = ClusterCovisibility.from_arrays(starts, images, 3)
         for g in cov.seed_image_groups(3, min_shared=8):
-            assert g.pair_displacement is None
+            assert g.pair_displacement_magnitude is None
+            assert g.pair_displacement_vector is None
             n = len(g.images)
             assert len(g.pair_shared) == n * (n - 1) // 2
 
@@ -721,7 +780,7 @@ class TestPairDisplacement:
         cov = ClusterCovisibility.from_arrays(
             starts, images, 3, positions_xy=positions, seed=42
         )
-        mean = cov.pair_displacement()
+        mean = cov.pair_displacement_magnitude()
         count = cov.pair_displacement_counts()
         assert mean.dtype == np.float64 and mean.shape == (3, 3)
         assert count.dtype == np.uint32 and count.shape == (3, 3)
@@ -746,9 +805,12 @@ class TestPairDisplacement:
             )
             for _ in range(2)
         )
-        npt.assert_array_equal(a.pair_displacement(), b.pair_displacement())
         npt.assert_array_equal(
-            a.pair_displacement_counts(), b.pair_displacement_counts()
+            a.pair_displacement_magnitude(), b.pair_displacement_magnitude()
+        )
+        npt.assert_array_equal(
+            a.pair_displacement_counts(),
+            b.pair_displacement_counts(),
         )
         # All members sit in distinct images, so the sample always lands.
         assert a.pair_displacement_counts().sum() == 2
@@ -756,7 +818,7 @@ class TestPairDisplacement:
     def test_raises_without_positions(self):
         cov = ClusterCovisibility.from_arrays(CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES)
         with pytest.raises(ValueError, match="without positions_xy"):
-            cov.pair_displacement()
+            cov.pair_displacement_magnitude()
         with pytest.raises(ValueError, match="without positions_xy"):
             cov.pair_displacement_counts()
 
@@ -770,7 +832,7 @@ class TestPairDisplacement:
             )
             for p in (positions, positions.astype(np.float64))
         ]
-        npt.assert_array_equal(*[c.pair_displacement() for c in built])
+        npt.assert_array_equal(*[c.pair_displacement_magnitude() for c in built])
 
     def test_wrong_positions_dtype_raises(self):
         positions = np.zeros((len(MEMBER_IMAGES), 2), dtype=np.uint8)
@@ -816,14 +878,26 @@ class TestDisplacementNeighborhood:
             positions_xy=np.array(positions, np.float64),
         )
 
-    def test_pair_stats_exact(self):
+    def test_pair_magnitude_exact(self):
         cov = self._cov()
-        assert cov.pair_stats(0, 1) == (2, 10.0)
-        assert cov.pair_stats(1, 0) == (2, 10.0)
-        assert cov.pair_stats(0, 2) == (1, 5.0)
-        assert cov.pair_stats(1, 2) == (1, 25.0)
-        assert cov.pair_stats(0, 3) is None  # unrealized
-        assert cov.pair_stats(0, 0) is None  # diagonal
+        assert cov.pair_magnitude(0, 1) == (2, 10.0)
+        assert cov.pair_magnitude(1, 0) == (2, 10.0)
+        assert cov.pair_magnitude(0, 2) == (1, 5.0)
+        assert cov.pair_magnitude(1, 2) == (1, 25.0)
+        assert cov.pair_magnitude(0, 3) is None  # unrealized
+        assert cov.pair_magnitude(0, 0) is None  # diagonal
+
+    def test_pair_vector_exact(self):
+        # Every fixture member pair runs along +x from the lower image to the
+        # higher one, so each mean vector is its mean magnitude in x.
+        cov = self._cov()
+        assert cov.pair_vector(0, 1) == (2, (10.0, 0.0))
+        # The pair key's orientation, not the caller's argument order.
+        assert cov.pair_vector(1, 0) == (2, (10.0, 0.0))
+        assert cov.pair_vector(0, 2) == (1, (5.0, 0.0))
+        assert cov.pair_vector(1, 2) == (1, (25.0, 0.0))
+        assert cov.pair_vector(0, 3) is None  # unrealized
+        assert cov.pair_vector(0, 0) is None  # diagonal
 
     def test_nearest_and_farthest(self):
         cov = self._cov()
@@ -838,14 +912,46 @@ class TestDisplacementNeighborhood:
 
     def test_neighborhood_arrays_layout(self):
         arrs = self._cov().neighborhood_arrays()
-        assert set(arrs) == {"i", "j", "count", "mean_disp"}
+        assert set(arrs) == {"i", "j", "count", "mean_magnitude", "mean_vector"}
         npt.assert_array_equal(arrs["i"], [0, 0, 1])
         npt.assert_array_equal(arrs["j"], [1, 2, 2])
         npt.assert_array_equal(arrs["count"], [2, 1, 1])
-        npt.assert_array_equal(arrs["mean_disp"], [10.0, 5.0, 25.0])
+        npt.assert_array_equal(arrs["mean_magnitude"], [10.0, 5.0, 25.0])
+        # Every row is oriented i → j, and the fixture's flows run along +x.
+        assert arrs["mean_vector"].shape == (3, 2)
+        npt.assert_array_equal(
+            arrs["mean_vector"], [[10.0, 0.0], [5.0, 0.0], [25.0, 0.0]]
+        )
         assert arrs["i"].dtype == np.uint32
         assert arrs["count"].dtype == np.uint32
-        assert arrs["mean_disp"].dtype == np.float64
+        assert arrs["mean_magnitude"].dtype == np.float64
+        assert arrs["mean_vector"].dtype == np.float64
+
+    def test_pair_vector_orientation_survives_reversed_members(self):
+        # Two clusters over images 0 and 1 listing their members in opposite
+        # orders while describing the same +(10, 4) flow: the orientation
+        # contract makes them add rather than cancel.
+        starts = np.array([0, 2, 4], np.uint32)
+        images = np.array([0, 1, 1, 0], np.uint32)
+        positions = np.array(
+            [[0.0, 0.0], [10.0, 4.0], [20.0, 8.0], [10.0, 4.0]], np.float64
+        )
+        cov = ClusterCovisibility.from_arrays(starts, images, 2, positions_xy=positions)
+        assert cov.pair_vector(0, 1) == (2, (10.0, 4.0))
+        assert cov.pair_vector(1, 0) == (2, (10.0, 4.0))
+        assert cov.pair_magnitude(0, 1) == (2, float(np.hypot(10.0, 4.0)))
+
+    def test_pair_vector_cancels_where_the_magnitude_does_not(self):
+        # Opposed flows of equal length: zero mean vector, nonzero mean
+        # magnitude.
+        starts = np.array([0, 2, 4], np.uint32)
+        images = np.array([0, 1, 0, 1], np.uint32)
+        positions = np.array(
+            [[0.0, 0.0], [10.0, 0.0], [50.0, 0.0], [40.0, 0.0]], np.float64
+        )
+        cov = ClusterCovisibility.from_arrays(starts, images, 2, positions_xy=positions)
+        assert cov.pair_vector(0, 1) == (2, (0.0, 0.0))
+        assert cov.pair_magnitude(0, 1) == (2, 10.0)
 
     def test_raises_without_positions(self):
         cov = ClusterCovisibility.from_arrays(CLUSTER_STARTS, MEMBER_IMAGES, N_IMAGES)
@@ -854,7 +960,9 @@ class TestDisplacementNeighborhood:
         with pytest.raises(ValueError, match="without positions_xy"):
             cov.farthest(0, 4)
         with pytest.raises(ValueError, match="without positions_xy"):
-            cov.pair_stats(0, 1)
+            cov.pair_magnitude(0, 1)
+        with pytest.raises(ValueError, match="without positions_xy"):
+            cov.pair_vector(0, 1)
         with pytest.raises(ValueError, match="without positions_xy"):
             cov.neighborhood_arrays()
 
@@ -865,7 +973,9 @@ class TestDisplacementNeighborhood:
         with pytest.raises(ValueError, match="out of range"):
             cov.farthest(9, 1)
         with pytest.raises(ValueError, match="out of range"):
-            cov.pair_stats(0, 4)
+            cov.pair_magnitude(0, 4)
+        with pytest.raises(ValueError, match="out of range"):
+            cov.pair_vector(0, 4)
 
 
 class TestThin:

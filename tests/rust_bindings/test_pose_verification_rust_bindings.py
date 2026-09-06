@@ -177,7 +177,7 @@ def _neighborhood_arrays(sc):
         starts, sc["image"], sc["n_img"], positions_xy=sc["pos"]
     )
     arrs = covis.neighborhood_arrays()
-    return arrs["i"], arrs["j"], arrs["count"], arrs["mean_disp"]
+    return arrs["i"], arrs["j"], arrs["count"], arrs["mean_magnitude"]
 
 
 def _verify(sc, **kwargs):

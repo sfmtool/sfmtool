@@ -41,11 +41,16 @@ members are sampled.
 One sampled pass at construction: every cluster with two or more member
 images contributes one seeded uniformly-sampled member pair (same-image
 pairs skipped); squared-root pixel distances accumulate per image pair.
+These are magnitudes; the sampled tables carry no displacement vector (the
+exhaustive `DisplacementNeighborhood` of
+[pose-verification.md](../geometry/pose-verification.md) is where a caller
+reads one).
 
-- `pair_displacement()` → `f64 [n_img, n_img]`: mean feature displacement
-  per covisible pair, `0` where no sample landed.
-- `pair_displacement_counts()` → `u32 [n_img, n_img]`: samples behind each
-  mean, for callers that gate on support.
+- `pair_displacement_magnitude()` → `f64 [n_img, n_img]`: mean sampled
+  feature displacement magnitude per covisible pair, `0` where no sample
+  landed.
+- `pair_displacement_counts()` → `u32 [n_img, n_img]`: samples
+  behind each mean, for callers that gate on support.
 
 ## Thinning
 

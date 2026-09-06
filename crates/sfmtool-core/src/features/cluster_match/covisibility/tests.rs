@@ -222,10 +222,10 @@ fn seed_pair_is_the_groups_maximum_shared_pair() {
     }
 }
 
-/// The condensed upper-triangle index `SeedImageGroup::pair_shared` and
-/// `SeedImageGroup::pair_displacement` are ordered by, for the pair of image
-/// indexes `(x, y)` — written from the documented formula rather than by
-/// re-deriving the enumeration.
+/// The condensed upper-triangle index `SeedImageGroup::pair_shared` and the
+/// group's displacement vectors are ordered by, for the pair of image indexes
+/// `(x, y)` — written from the documented formula rather than by re-deriving
+/// the enumeration.
 fn condensed_index(images: &[u32], x: u32, y: u32) -> usize {
     let pos = |v: u32| images.iter().position(|&g| g == v).expect("image in group");
     let (a, b) = (pos(x.min(y)), pos(x.max(y)));
@@ -277,11 +277,12 @@ fn pair_shared_is_the_condensed_upper_triangle() {
     );
     assert_eq!(g.pair_shared.iter().copied().max(), Some(g.seed_shared));
     // No positions were supplied, so there is no displacement to report.
-    assert_eq!(g.pair_displacement, None);
+    assert_eq!(g.pair_displacement_magnitude, None);
+    assert_eq!(g.pair_displacement_vector, None);
 }
 
 #[test]
-fn pair_displacement_reads_the_neighborhood() {
+fn pair_displacement_magnitude_reads_the_neighborhood() {
     // Distinct per-edge displacements over the same four-image graph: each
     // two-member cluster forces its pair, so the neighborhood's exhaustive
     // mean for an edge is exactly that edge's distance.
@@ -300,30 +301,50 @@ fn pair_displacement_reads_the_neighborhood() {
     };
     let g = cov.seed_image_groups(&params).next().unwrap();
     assert_eq!(g.images, vec![0, 1, 2, 3]);
-    let disp = g.pair_displacement.as_ref().expect("positioned build");
+    let disp = g
+        .pair_displacement_magnitude
+        .as_ref()
+        .expect("positioned build");
     assert_eq!(disp.len(), g.pair_shared.len());
     assert_eq!(*disp, vec![5.0, 7.0, 9.0, 11.0, 13.0, 3.0]);
+    // The vector runs along +x from the lower image to the higher one, so
+    // each entry is its magnitude in the first component.
+    let vecs = g
+        .pair_displacement_vector
+        .as_ref()
+        .expect("positioned build");
+    assert_eq!(
+        *vecs,
+        vec![
+            [5.0, 0.0],
+            [7.0, 0.0],
+            [9.0, 0.0],
+            [11.0, 0.0],
+            [13.0, 0.0],
+            [3.0, 0.0]
+        ]
+    );
     // Every entry is the neighborhood's own answer for that pair, and the
     // exhaustive means differ from the sampled tables' storage layout.
     let nb = cov.displacement_neighborhood().expect("positioned build");
     for a in 0..g.images.len() {
         for b in (a + 1)..g.images.len() {
             let (x, y) = (g.images[a], g.images[b]);
-            let (shared, mean) = nb.pair(x, y).expect("realized pair");
+            let (shared, mean) = nb.pair_magnitude(x, y).expect("realized pair");
+            let (shared_v, [dx, dy]) = nb.pair_vector(x, y).expect("realized pair");
             // The reported width is `f32`: the neighborhood's `f64` mean
             // rounded once, so the comparison is exact against `mean as f32`.
-            assert_eq!(
-                disp[condensed_index(&g.images, x, y)],
-                mean as f32,
-                "pair ({x}, {y})"
-            );
-            assert_eq!(g.pair_shared[condensed_index(&g.images, x, y)], shared);
+            let at = condensed_index(&g.images, x, y);
+            assert_eq!(disp[at], mean as f32, "pair ({x}, {y})");
+            assert_eq!(vecs[at], [dx as f32, dy as f32], "pair ({x}, {y})");
+            assert_eq!(g.pair_shared[at], shared);
+            assert_eq!(shared_v, shared);
         }
     }
 }
 
 #[test]
-fn pair_displacement_reads_zero_for_an_unrealized_pair() {
+fn pair_displacement_magnitude_reads_zero_for_an_unrealized_pair() {
     // `min_shared = 0` lets the extension take an image sharing nothing with
     // the group, so the group holds a pair the neighborhood never realized.
     let cov = from_positioned_edges(3, &[(0, 1, 5, 4.0)]);
@@ -335,19 +356,25 @@ fn pair_displacement_reads_zero_for_an_unrealized_pair() {
     assert_eq!(g.images, vec![0, 1, 2]);
     assert_eq!(g.pair_shared, vec![5, 0, 0]);
     let nb = cov.displacement_neighborhood().expect("positioned build");
-    assert_eq!(nb.pair(0, 2), None);
-    assert_eq!(g.pair_displacement, Some(vec![4.0, 0.0, 0.0]));
+    assert_eq!(nb.pair_magnitude(0, 2), None);
+    assert_eq!(nb.pair_vector(0, 2), None);
+    assert_eq!(g.pair_displacement_magnitude, Some(vec![4.0, 0.0, 0.0]));
+    assert_eq!(
+        g.pair_displacement_vector,
+        Some(vec![[4.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
+    );
 }
 
 #[test]
-fn pair_displacement_absent_without_positions() {
+fn pair_displacement_magnitude_absent_without_positions() {
     let cov = from_edges(3, &[(0, 1, 10), (0, 2, 10), (1, 2, 10)]);
     let params = SeedImageGroupParams {
         group_size: 3,
         min_shared: 8,
     };
     for g in cov.seed_image_groups(&params) {
-        assert_eq!(g.pair_displacement, None);
+        assert_eq!(g.pair_displacement_magnitude, None);
+        assert_eq!(g.pair_displacement_vector, None);
         assert_eq!(
             g.pair_shared.len(),
             g.images.len() * (g.images.len() - 1) / 2
@@ -516,7 +543,7 @@ fn displacement_exact_on_forced_two_member_samples() {
         42,
     )
     .unwrap();
-    let mean = cov.pair_displacement().unwrap();
+    let mean = cov.pair_displacement_magnitude().unwrap();
     let count = cov.pair_displacement_counts().unwrap();
     let at = |m: &[f64], i: usize, j: usize| m[i * 3 + j];
     assert_eq!(at(mean, 0, 1), 7.5);
@@ -552,13 +579,13 @@ fn displacement_same_image_pairs_skipped() {
     .unwrap();
     let count = cov.pair_displacement_counts().unwrap();
     assert_eq!(count.iter().sum::<u32>(), 2); // cluster 1 only, mirrored
-    assert_eq!(cov.pair_displacement().unwrap()[1], 4.0);
+    assert_eq!(cov.pair_displacement_magnitude().unwrap()[1], 4.0);
 }
 
 #[test]
 fn displacement_unavailable_without_positions() {
     let cov = from_edges(3, &[(0, 1, 5)]);
-    assert!(cov.pair_displacement().is_none());
+    assert!(cov.pair_displacement_magnitude().is_none());
     assert!(cov.pair_displacement_counts().is_none());
 }
 
@@ -583,7 +610,10 @@ fn displacement_seeded_determinism() {
         .unwrap()
     };
     let (a, b, c) = (build(7), build(7), build(8));
-    assert_eq!(a.pair_displacement(), b.pair_displacement());
+    assert_eq!(
+        a.pair_displacement_magnitude(),
+        b.pair_displacement_magnitude()
+    );
     assert_eq!(a.pair_displacement_counts(), b.pair_displacement_counts());
     for cov in [&a, &c] {
         let total: u32 = cov.pair_displacement_counts().unwrap().iter().sum();
@@ -604,7 +634,7 @@ fn displacement_sampling_respects_mask() {
         0,
     )
     .unwrap();
-    let mean = cov.pair_displacement().unwrap();
+    let mean = cov.pair_displacement_magnitude().unwrap();
     let count = cov.pair_displacement_counts().unwrap();
     assert_eq!(mean[2], 13.0); // (0, 2)
     assert_eq!(count[2], 1);
@@ -751,16 +781,20 @@ fn small_scene() -> (Vec<u32>, Vec<u32>, Vec<[f32; 2]>, Vec<bool>) {
 }
 
 /// Dense reference: brute-force per-pair shared counts and displacement
-/// means straight from the definition.
+/// means (magnitude and vector) straight from the definition. Both `[i][j]`
+/// and `[j][i]` hold the vector in the pair's low→high orientation, matching
+/// the substrate's own contract.
+#[allow(clippy::type_complexity)]
 fn dense_reference(
     starts: &[u32],
     images: &[u32],
     positions: &[[f32; 2]],
     mask: Option<&[bool]>,
     n: usize,
-) -> (Vec<Vec<u32>>, Vec<Vec<f64>>) {
+) -> (Vec<Vec<u32>>, Vec<Vec<f64>>, Vec<Vec<[f64; 2]>>) {
     let mut shared = vec![vec![0u32; n]; n];
     let mut sum = vec![vec![0.0f64; n]; n];
+    let mut vsum = vec![vec![[0.0f64; 2]; n]; n];
     let mut cnt = vec![vec![0u32; n]; n];
     for c in 0..starts.len() - 1 {
         let rows: Vec<usize> = (starts[c] as usize..starts[c + 1] as usize)
@@ -787,6 +821,15 @@ fn dense_reference(
                 );
                 sum[ia][ib] += d;
                 sum[ib][ia] += d;
+                // The member sitting in the lower-indexed image is subtracted,
+                // whichever of the two the enumeration reached first.
+                let (k_lo, k_hi) = if ia < ib { (ka, kb) } else { (kb, ka) };
+                let dx = positions[k_hi][0] as f64 - positions[k_lo][0] as f64;
+                let dy = positions[k_hi][1] as f64 - positions[k_lo][1] as f64;
+                for (a, b) in [(ia, ib), (ib, ia)] {
+                    vsum[a][b][0] += dx;
+                    vsum[a][b][1] += dy;
+                }
                 cnt[ia][ib] += 1;
                 cnt[ib][ia] += 1;
             }
@@ -805,7 +848,21 @@ fn dense_reference(
                 .collect()
         })
         .collect();
-    (shared, mean)
+    let mean_vector = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| {
+                    if cnt[i][j] > 0 {
+                        let d = cnt[i][j] as f64;
+                        [vsum[i][j][0] / d, vsum[i][j][1] / d]
+                    } else {
+                        [0.0, 0.0]
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    (shared, mean, mean_vector)
 }
 
 #[test]
@@ -813,15 +870,20 @@ fn neighborhood_exact_against_dense_reference() {
     let (starts, images, positions, _) = small_scene();
     let nb =
         DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
-    let (shared, mean) = dense_reference(&starts, &images, &positions, None, 4);
+    let (shared, mean, mean_vector) = dense_reference(&starts, &images, &positions, None, 4);
     for i in 0..4u32 {
         for j in 0..4u32 {
-            let expected = if i != j && shared[i as usize][j as usize] > 0 {
-                Some((shared[i as usize][j as usize], mean[i as usize][j as usize]))
-            } else {
-                None
-            };
-            assert_eq!(nb.pair(i, j), expected, "pair ({i}, {j})");
+            let realized = i != j && shared[i as usize][j as usize] > 0;
+            let expected =
+                realized.then(|| (shared[i as usize][j as usize], mean[i as usize][j as usize]));
+            assert_eq!(nb.pair_magnitude(i, j), expected, "pair ({i}, {j})");
+            let expected_v = realized.then(|| {
+                (
+                    shared[i as usize][j as usize],
+                    mean_vector[i as usize][j as usize],
+                )
+            });
+            assert_eq!(nb.pair_vector(i, j), expected_v, "vector ({i}, {j})");
         }
     }
     // Shared counts agree with the dense ClusterCovisibility matrix.
@@ -829,7 +891,7 @@ fn neighborhood_exact_against_dense_reference() {
     for i in 0..4u32 {
         for j in 0..4u32 {
             assert_eq!(
-                nb.pair(i, j).map(|(s, _)| s).unwrap_or(0),
+                nb.pair_magnitude(i, j).map(|(s, _)| s).unwrap_or(0),
                 cov.count(i, j),
                 "count ({i}, {j})"
             );
@@ -842,7 +904,7 @@ fn neighborhood_nearest_farthest_exact() {
     let (starts, images, positions, _) = small_scene();
     let nb =
         DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
-    let (shared, mean) = dense_reference(&starts, &images, &positions, None, 4);
+    let (shared, mean, _) = dense_reference(&starts, &images, &positions, None, 4);
     for i in 0..4u32 {
         for min_shared in [1u32, 2] {
             // Brute-force ranking from the dense reference.
@@ -873,17 +935,22 @@ fn neighborhood_honors_mask() {
         .unwrap();
     // Cluster 4's image-3 member is masked, so pair (0, 3) loses its only
     // vote; pair (2, 3) from cluster 3 survives.
-    assert_eq!(nb.pair(0, 3), None);
-    assert!(nb.pair(2, 3).is_some());
-    let (shared, mean) = dense_reference(&starts, &images, &positions, Some(&mask), 4);
+    assert_eq!(nb.pair_magnitude(0, 3), None);
+    assert!(nb.pair_magnitude(2, 3).is_some());
+    let (shared, mean, mean_vector) = dense_reference(&starts, &images, &positions, Some(&mask), 4);
     for i in 0..4u32 {
         for j in 0..4u32 {
-            let expected = if i != j && shared[i as usize][j as usize] > 0 {
-                Some((shared[i as usize][j as usize], mean[i as usize][j as usize]))
-            } else {
-                None
-            };
-            assert_eq!(nb.pair(i, j), expected, "pair ({i}, {j})");
+            let realized = i != j && shared[i as usize][j as usize] > 0;
+            let expected =
+                realized.then(|| (shared[i as usize][j as usize], mean[i as usize][j as usize]));
+            assert_eq!(nb.pair_magnitude(i, j), expected, "pair ({i}, {j})");
+            let expected_v = realized.then(|| {
+                (
+                    shared[i as usize][j as usize],
+                    mean_vector[i as usize][j as usize],
+                )
+            });
+            assert_eq!(nb.pair_vector(i, j), expected_v, "vector ({i}, {j})");
         }
     }
 }
@@ -895,7 +962,7 @@ fn neighborhood_duplicate_image_members_count_once_but_displace() {
     let (starts, images, positions, _) = small_scene();
     let nb =
         DisplacementNeighborhood::from_clusters(&starts, &images, None, 4, &positions).unwrap();
-    let (s, d) = nb.pair(1, 2).unwrap();
+    let (s, d) = nb.pair_magnitude(1, 2).unwrap();
     assert_eq!(s, 2); // clusters 0 and 2
                       // Cluster 0 contributes |p1 - p2|; cluster 2 contributes
                       // |p5 - p7| and |p6 - p7| (members 5, 6 in image 1; 7 in image 2).
@@ -910,12 +977,72 @@ fn neighborhood_duplicate_image_members_count_once_but_displace() {
 }
 
 #[test]
+fn neighborhood_vector_is_oriented_by_image_order() {
+    // Two clusters over images 0 and 1 listing their members in opposite
+    // orders — cluster 0 the image-0 member first, cluster 1 the image-1
+    // member first — while describing the same +(10, 4) flow from image 0 to
+    // image 1. The orientation contract makes them add; a raw
+    // first-member-minus-second-member delta would sum to zero here.
+    let starts = [0u32, 2, 4];
+    let images = [0u32, 1, 1, 0];
+    let positions = [
+        [0.0, 0.0],  // cluster 0, image 0
+        [10.0, 4.0], // cluster 0, image 1
+        [20.0, 8.0], // cluster 1, image 1
+        [10.0, 4.0], // cluster 1, image 0
+    ];
+    let nb =
+        DisplacementNeighborhood::from_clusters(&starts, &images, None, 2, &positions).unwrap();
+    assert_eq!(nb.pair_vector(0, 1), Some((2, [10.0, 4.0])));
+    // The pair key's orientation, not the caller's: (1, 0) answers the same.
+    assert_eq!(nb.pair_vector(1, 0), Some((2, [10.0, 4.0])));
+    // Both CSR rows carry the key-oriented vector, including the row whose
+    // partner sits below it.
+    assert_eq!(
+        nb.neighbors_vector(0).collect::<Vec<_>>(),
+        vec![(1, 2, [10.0, 4.0])]
+    );
+    assert_eq!(
+        nb.neighbors_vector(1).collect::<Vec<_>>(),
+        vec![(0, 2, [10.0, 4.0])]
+    );
+    // The magnitude is member-order free and unchanged by any of this.
+    let d = f64::hypot(10.0, 4.0);
+    assert_eq!(nb.pair_magnitude(0, 1), Some((2, d)));
+    // The serialization emits the vector in its `i → j` sense.
+    let (pi, pj, _, mag, vecs) = nb.to_arrays();
+    assert_eq!((pi, pj), (vec![0], vec![1]));
+    assert_eq!(mag, vec![d]);
+    assert_eq!(vecs, vec![[10.0, 4.0]]);
+}
+
+#[test]
+fn neighborhood_vector_cancels_where_the_magnitude_does_not() {
+    // Two clusters carrying opposed image-0 → image-1 flows of equal length:
+    // the mean vector is zero while the mean magnitude is that length. The
+    // two statistics answer different questions and this is where they part.
+    let starts = [0u32, 2, 4];
+    let images = [0u32, 1, 0, 1];
+    let positions = [
+        [0.0, 0.0],
+        [10.0, 0.0], // +10 along x
+        [50.0, 0.0],
+        [40.0, 0.0], // -10 along x
+    ];
+    let nb =
+        DisplacementNeighborhood::from_clusters(&starts, &images, None, 2, &positions).unwrap();
+    assert_eq!(nb.pair_vector(0, 1), Some((2, [0.0, 0.0])));
+    assert_eq!(nb.pair_magnitude(0, 1), Some((2, 10.0)));
+}
+
+#[test]
 fn neighborhood_serialization_round_trips() {
     let (starts, images, positions, mask) = small_scene();
     let nb = DisplacementNeighborhood::from_clusters(&starts, &images, Some(&mask), 4, &positions)
         .unwrap();
-    let (pi, pj, shared, mean_disp) = nb.to_arrays();
+    let (pi, pj, shared, mean_mag, mean_vec) = nb.to_arrays();
     assert_eq!(pi.len(), nb.num_pairs());
+    assert_eq!(mean_vec.len(), pi.len());
     assert!(pi.iter().zip(&pj).all(|(&i, &j)| i < j));
     assert!(pi
         .iter()
@@ -923,44 +1050,71 @@ fn neighborhood_serialization_round_trips() {
         .collect::<Vec<_>>()
         .windows(2)
         .all(|w| w[0] < w[1]));
-    let back = DisplacementNeighborhood::from_arrays(&pi, &pj, &shared, &mean_disp, 4).unwrap();
+    let back =
+        DisplacementNeighborhood::from_arrays(&pi, &pj, &shared, &mean_mag, Some(&mean_vec), 4)
+            .unwrap();
     assert_eq!(back, nb);
-    // Reversed pair order still reloads to the same substrate.
+    // Reversed pair order still reloads to the same substrate. Swapping i/j
+    // flips each row's orientation, so the vectors it carries must be negated
+    // to describe the same flow — `from_arrays` reads them in the row's own
+    // i → j sense and re-orients them onto the key.
     let rev = |v: &[u32]| -> Vec<u32> { v.iter().rev().copied().collect() };
-    let mean_rev: Vec<f64> = mean_disp.iter().rev().copied().collect();
+    let mean_rev: Vec<f64> = mean_mag.iter().rev().copied().collect();
+    let vec_rev: Vec<[f64; 2]> = mean_vec.iter().rev().map(|&[x, y]| [-x, -y]).collect();
     let back2 = DisplacementNeighborhood::from_arrays(
         &rev(&pj), // also swap i/j: (j, i) normalizes to (i, j)
         &rev(&pi),
         &rev(&shared),
         &mean_rev,
+        Some(&vec_rev),
         4,
     )
     .unwrap();
     assert_eq!(back2, nb);
+    // Without the vector column the magnitudes still reload exactly, and
+    // every vector reads zero.
+    let magnitude_only =
+        DisplacementNeighborhood::from_arrays(&pi, &pj, &shared, &mean_mag, None, 4).unwrap();
+    let (_, _, shared_back, mag_back, vec_back) = magnitude_only.to_arrays();
+    assert_eq!(shared_back, shared);
+    assert_eq!(mag_back, mean_mag);
+    assert!(vec_back.iter().all(|&[x, y]| x == 0.0 && y == 0.0));
 }
 
 #[test]
 fn neighborhood_from_arrays_validation() {
     assert_eq!(
-        DisplacementNeighborhood::from_arrays(&[0], &[1, 2], &[3], &[1.0], 3),
+        DisplacementNeighborhood::from_arrays(&[0], &[1, 2], &[3], &[1.0], None, 3),
         Err(CovisibilityError::PairArraysNotParallel {
             i: 1,
             j: 2,
             shared: 1,
-            mean_disp: 1
+            mean_magnitude: 1,
+            mean_vector: None
+        })
+    );
+    // A supplied vector column joins the parallel-length requirement.
+    assert_eq!(
+        DisplacementNeighborhood::from_arrays(&[0], &[1], &[3], &[1.0], Some(&[]), 3),
+        Err(CovisibilityError::PairArraysNotParallel {
+            i: 1,
+            j: 1,
+            shared: 1,
+            mean_magnitude: 1,
+            mean_vector: Some(0)
         })
     );
     assert_eq!(
-        DisplacementNeighborhood::from_arrays(&[1], &[1], &[3], &[1.0], 3),
+        DisplacementNeighborhood::from_arrays(&[1], &[1], &[3], &[1.0], None, 3),
         Err(CovisibilityError::BadPair { i: 1, j: 1 })
     );
     // Duplicate unordered pair (0, 1) given as (0, 1) and (1, 0).
     assert_eq!(
-        DisplacementNeighborhood::from_arrays(&[0, 1], &[1, 0], &[3, 4], &[1.0, 2.0], 3),
+        DisplacementNeighborhood::from_arrays(&[0, 1], &[1, 0], &[3, 4], &[1.0, 2.0], None, 3),
         Err(CovisibilityError::BadPair { i: 0, j: 1 })
     );
     assert_eq!(
-        DisplacementNeighborhood::from_arrays(&[0], &[5], &[3], &[1.0], 3),
+        DisplacementNeighborhood::from_arrays(&[0], &[5], &[3], &[1.0], None, 3),
         Err(CovisibilityError::ImageIndexOutOfRange {
             index: 5,
             num_images: 3
@@ -1064,8 +1218,10 @@ fn hashmap_reference(
 
 /// The dense pair-slot index must reproduce the hash-map accumulation it
 /// replaced to the last bit, at a scale where hash order and first-touch order
-/// are thoroughly different: every pair, count, mean (compared by `to_bits`)
-/// and the CSR row layout `neighbors` walks.
+/// are thoroughly different: every pair, count, mean magnitude (compared by
+/// `to_bits`) and the CSR row layout `neighbors_magnitude` walks. The
+/// reference computes the magnitude alone, so this is also the standing proof
+/// that adding the vector statistic left that arithmetic untouched.
 #[test]
 fn neighborhood_matches_hashmap_reference_at_scale() {
     let (starts, images, positions, mask) = fleet_scene(300, 20_000, 0x5eed);
@@ -1082,7 +1238,7 @@ fn neighborhood_matches_hashmap_reference_at_scale() {
 
         // Serialized pair arrays, exactly: order, keys, counts, and the mean
         // bit pattern (an f64 running sum reordered would differ here).
-        let (pi, pj, shared, mean) = nb.to_arrays();
+        let (pi, pj, shared, mean, _) = nb.to_arrays();
         let mut expect: Vec<PairStat> = want.iter().map(|(&k, &v)| (k, v)).collect();
         expect.sort_unstable_by_key(|&(k, _)| k);
         assert_eq!(pi.len(), expect.len());
@@ -1107,7 +1263,7 @@ fn neighborhood_matches_hashmap_reference_at_scale() {
                 })
                 .collect();
             want_row.sort_unstable_by_key(|&(j, _, _)| j);
-            let got: Vec<(u32, u32, f64)> = nb.neighbors(i).collect();
+            let got: Vec<(u32, u32, f64)> = nb.neighbors_magnitude(i).collect();
             assert_eq!(got.len(), want_row.len(), "{arm}: row {i} length");
             for (g, w) in got.iter().zip(&want_row) {
                 assert_eq!((g.0, g.1), (w.0, w.1), "{arm}: row {i} entry");
@@ -1122,7 +1278,7 @@ fn neighborhood_edge_scales() {
     // Zero images: the slot array is empty and no cluster can address it.
     let nb = DisplacementNeighborhood::from_clusters(&[0], &[], None, 0, &[]).unwrap();
     assert_eq!((nb.num_images(), nb.num_pairs()), (0, 0));
-    assert_eq!(nb.to_arrays(), (vec![], vec![], vec![], vec![]));
+    assert_eq!(nb.to_arrays(), (vec![], vec![], vec![], vec![], vec![]));
     // One image: slots exist, but no cross-image pair ever realizes.
     let nb = DisplacementNeighborhood::from_clusters(
         &[0, 2],

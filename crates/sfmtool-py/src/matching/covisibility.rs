@@ -137,8 +137,9 @@ impl PyClusterCovisibility {
     ///         ``.matches`` backbone stores them at. A float64 array is
     ///         accepted and cast, which is exact for the f32-originated values
     ///         a caller reads out of such a file. Enables the
-    ///         displacement queries (``pair_displacement``,
-    ///         ``pair_displacement_counts``) and the isolation-ordered
+    ///         displacement queries (``pair_displacement_magnitude``,
+    ///         ``pair_displacement_counts``) and the
+    ///         isolation-ordered
     ///         thinning sweep: one seeded sampled pass at construction draws
     ///         one uniform distinct-member pair per multi-member cluster
     ///         (same-image pairs skipped). The counts are unchanged.
@@ -186,8 +187,9 @@ impl PyClusterCovisibility {
     /// Custom masks: use ``read_matches`` + numpy + ``from_arrays``.
     ///
     /// The backbone's member positions come along, so the displacement
-    /// queries (``pair_displacement``, ``nearest``, ``pair_stats``, …) and
-    /// the isolation-ordered ``thin`` sweep answer on the result.
+    /// queries (``pair_displacement_magnitude``, ``nearest``,
+    /// ``pair_magnitude``, ``pair_vector``, …) and the isolation-ordered
+    /// ``thin`` sweep answer on the result.
     ///
     /// Args:
     ///     matches_file: A ``MatchesFile`` storing the cluster backbone
@@ -221,12 +223,14 @@ impl PyClusterCovisibility {
             .unbind())
     }
 
-    /// Mean sampled feature displacement per covisible pair as a numpy
-    /// (N, N) float64 copy (symmetric, 0 where no sample landed).
+    /// Mean *sampled* feature displacement magnitude per covisible pair as a
+    /// numpy (N, N) float64 copy (symmetric, 0 where no sample landed) — the
+    /// seeded one-sample-per-cluster estimate, not the neighborhood's
+    /// exhaustive mean.
     ///
     /// Raises ValueError when constructed without ``positions_xy``.
-    fn pair_displacement<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
-        let mean = self.inner.pair_displacement().ok_or_else(|| {
+    fn pair_displacement_magnitude<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+        let mean = self.inner.pair_displacement_magnitude().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "constructed without positions_xy — displacement queries are unavailable",
             )
@@ -238,8 +242,8 @@ impl PyClusterCovisibility {
             .unbind())
     }
 
-    /// Samples behind each ``pair_displacement`` mean as a numpy (N, N)
-    /// uint32 copy, for callers that gate on support.
+    /// Samples behind each ``pair_displacement_magnitude`` mean as a numpy
+    /// (N, N) uint32 copy, for callers that gate on support.
     ///
     /// Raises ValueError when constructed without ``positions_xy``.
     fn pair_displacement_counts<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
@@ -307,32 +311,56 @@ impl PyClusterCovisibility {
             .unbind())
     }
 
-    /// ``(shared count, mean displacement)`` for the pair ``(i, j)`` from
-    /// the sparse displacement neighborhood, or None when the pair is
-    /// unrealized (or ``i == j``).
+    /// ``(shared count, mean displacement magnitude)`` for the pair
+    /// ``(i, j)`` from the sparse displacement neighborhood, or None when the
+    /// pair is unrealized (or ``i == j``).
     ///
     /// Raises ValueError when constructed without ``positions_xy``.
-    fn pair_stats(&self, i: u32, j: u32) -> PyResult<Option<(u32, f64)>> {
+    fn pair_magnitude(&self, i: u32, j: u32) -> PyResult<Option<(u32, f64)>> {
         self.check_image(i)?;
         self.check_image(j)?;
-        Ok(self.neighborhood()?.pair(i, j))
+        Ok(self.neighborhood()?.pair_magnitude(i, j))
+    }
+
+    /// ``(shared count, (dx, dy))`` for the pair ``(i, j)`` from the sparse
+    /// displacement neighborhood — the mean displacement *vector* — or None
+    /// when the pair is unrealized (or ``i == j``). The vector runs from the
+    /// lower-indexed image's keypoint to the higher-indexed image's, so the
+    /// answer does not depend on the argument order.
+    ///
+    /// Raises ValueError when constructed without ``positions_xy``.
+    fn pair_vector(&self, i: u32, j: u32) -> PyResult<Option<(u32, (f64, f64))>> {
+        self.check_image(i)?;
+        self.check_image(j)?;
+        Ok(self
+            .neighborhood()?
+            .pair_vector(i, j)
+            .map(|(shared, [dx, dy])| (shared, (dx, dy))))
     }
 
     /// The displacement neighborhood's compact serialization: a dict of
     /// parallel per-pair numpy arrays ``{"i" (n_pairs,) uint32, "j"
-    /// (n_pairs,) uint32, "count" (n_pairs,) uint32, "mean_disp" (n_pairs,)
-    /// float64}`` with ``i < j``, sorted by ``(i, j)``. Persist them (e.g.
-    /// ``np.savez``) and feed them back to ``verify_poses`` /
-    /// ``repair_poses``, so one computation serves a multi-stage pipeline.
+    /// (n_pairs,) uint32, "count" (n_pairs,) uint32, "mean_magnitude"
+    /// (n_pairs,) float64, "mean_vector" (n_pairs, 2) float64}`` with
+    /// ``i < j``, sorted by ``(i, j)``; every ``mean_vector`` row runs
+    /// ``i`` → ``j``. Persist them (e.g. ``np.savez``) and feed the
+    /// magnitude columns back to ``verify_poses`` / ``repair_poses``, so one
+    /// computation serves a multi-stage pipeline.
     ///
     /// Raises ValueError when constructed without ``positions_xy``.
     fn neighborhood_arrays<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let (pi, pj, count, mean_disp) = self.neighborhood()?.to_arrays();
+        let (pi, pj, count, mean_magnitude, mean_vector) = self.neighborhood()?.to_arrays();
+        let n_pairs = mean_vector.len();
+        let flat: Vec<f64> = mean_vector.into_iter().flatten().collect();
         let d = PyDict::new(py);
         d.set_item("i", PyArray1::from_vec(py, pi))?;
         d.set_item("j", PyArray1::from_vec(py, pj))?;
         d.set_item("count", PyArray1::from_vec(py, count))?;
-        d.set_item("mean_disp", PyArray1::from_vec(py, mean_disp))?;
+        d.set_item("mean_magnitude", PyArray1::from_vec(py, mean_magnitude))?;
+        d.set_item(
+            "mean_vector",
+            PyArray1::from_vec(py, flat).reshape([n_pairs, 2])?,
+        )?;
         Ok(d)
     }
 
@@ -455,10 +483,11 @@ impl PyClusterCovisibility {
 /// it was grown from, and the covisibility evidence for the group's internal
 /// pairs. Yielded by ``ClusterCovisibility.seed_image_groups``.
 ///
-/// ``pair_shared`` and ``pair_displacement`` are condensed upper triangles
-/// over ``images``, so a consumer classifying the group's motion regime does
-/// numpy arithmetic on them (an ``argmax``, a boolean mask) rather than
-/// querying the covisibility object pair by pair.
+/// ``pair_shared``, ``pair_displacement_magnitude`` and
+/// ``pair_displacement_vector`` are condensed upper triangles over
+/// ``images``, so a consumer classifying the group's motion regime does numpy
+/// arithmetic on them (an ``argmax``, a boolean mask) rather than querying the
+/// covisibility object pair by pair.
 #[pyclass(name = "SeedImageGroup", module = "sfmtool.matching", frozen)]
 pub struct PySeedImageGroup {
     inner: SeedImageGroup,
@@ -500,19 +529,43 @@ impl PySeedImageGroup {
         PyArray1::from_slice(py, &self.inner.pair_shared)
     }
 
-    /// Mean keypoint displacement in pixels for the same pairs in the same
-    /// condensed order, as a float32 numpy array — the sparse displacement
-    /// neighborhood's exhaustive per-pair mean, not the seeded
+    /// Mean keypoint displacement magnitude in pixels for the same pairs in
+    /// the same condensed order, as a float32 numpy array — the sparse
+    /// displacement neighborhood's exhaustive per-pair mean, not the seeded
     /// one-sample-per-cluster tables behind
-    /// ``ClusterCovisibility.pair_displacement()``. ``0.0`` for a pair
+    /// ``ClusterCovisibility.pair_displacement_magnitude()``. ``0.0`` for a
+    /// pair sharing no accepted cluster. None when the matrix was constructed
+    /// without ``positions_xy``.
+    #[getter]
+    fn pair_displacement_magnitude<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray1<f32>>> {
+        self.inner
+            .pair_displacement_magnitude
+            .as_ref()
+            .map(|d| PyArray1::from_slice(py, d))
+    }
+
+    /// Mean keypoint displacement *vector* in pixels for the same pairs in
+    /// the same condensed order, as an (n_pairs, 2) float32 numpy array from
+    /// the same neighborhood entries. Each row runs from the earlier image of
+    /// its pair to the later one (``images`` is sorted ascending, so that is
+    /// the condensed enumeration's own order). ``(0.0, 0.0)`` for a pair
     /// sharing no accepted cluster. None when the matrix was constructed
     /// without ``positions_xy``.
     #[getter]
-    fn pair_displacement<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f32>>> {
-        self.inner
-            .pair_displacement
-            .as_ref()
-            .map(|d| PyArray1::from_slice(py, d))
+    fn pair_displacement_vector<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
+        let Some(v) = self.inner.pair_displacement_vector.as_ref() else {
+            return Ok(None);
+        };
+        let flat: Vec<f32> = v.iter().flatten().copied().collect();
+        Ok(Some(
+            PyArray1::from_vec(py, flat)
+                .reshape([v.len(), 2])?
+                .into_any()
+                .unbind(),
+        ))
     }
 
     fn __repr__(&self) -> String {
