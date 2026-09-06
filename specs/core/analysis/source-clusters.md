@@ -53,10 +53,13 @@ The reading lives in its own module and the join calls it, so a caller that
 wants the radii alone, or the coarsest clusters ordered by them, gets exactly
 the numbers the bands are measured against.
 
-The reading is width-agnostic on purpose. A `.matches` backbone stores the
-shapes as `f32` and a selection read back through Python may hold them as
-`f64`; every value widens to `f64` where it is read, before the first multiply,
-so both spellings of the same shape produce the same radius bit for bit.
+The reading is `f32` wide, in and out: `f32` is the width a `.matches` backbone
+stores the shapes at, the computation is two squares of one shape summed under a
+square root with no cancellation and a MAX rather than a sum along a cluster so
+nothing accumulates, and every consumer orders or bands by the result rather
+than doing further arithmetic on it. A caller holding the shapes widened -- the
+join's selection arrays are `f64`, alongside the pixel positions -- narrows them
+at its own boundary, which recovers the stored value exactly.
 
 ## The coarsest-N cut
 
@@ -147,13 +150,13 @@ out.
 ```python
 from sfmtool._sfmtool.analysis import cluster_radii, coarsest_clusters
 
-radius = cluster_radii(matches)              # (n_clusters,) float64
+radius = cluster_radii(matches)              # (n_clusters,) float32
 keep = coarsest_clusters(matches, 3000)      # (<= 3000,) uint32, ascending
 
 radius = cluster_radii(
     cluster_starts,        # (n_clusters + 1,) uint32 CSR boundaries
-    member_affine_shapes,  # (n_member, 2, 2) float32
-    refine_radius,         # float
+    member_affine_shapes,  # (n_member, 2, 2) float32, float64 accepted and cast
+    refine_radius,         # float, narrowed to the float32 the reading runs at
 )
 keep = coarsest_clusters(cluster_starts, 3000, member_affine_shapes, refine_radius)
 ```

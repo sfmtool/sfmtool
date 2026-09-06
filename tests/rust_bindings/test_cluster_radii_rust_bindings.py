@@ -21,8 +21,8 @@ REFINE_RADIUS = PATCH_SIZE / 2.0
 # 4 clusters of 2 members each. Member shapes are scaled identities, so a
 # member's radius is REFINE_RADIUS * scale and a cluster's is its widest
 # member's. Clusters 0 and 2 tie at 1.0, which is what the id tiebreak is read
-# off; every scale is a power of two, so widening f32 -> f64 is exact and the
-# expected radii are exact too.
+# off; every scale is a binary fraction, so the f32 reading is exact and the
+# expected radii compare equal against a float64 array.
 CLUSTER_STARTS = np.array([0, 2, 4, 6, 8], dtype=np.uint32)
 MEMBER_SCALES = np.array([0.5, 1.0, 2.0, 0.25, 1.0, 0.75, 0.5, 0.25], dtype=np.float32)
 EXPECTED_RADII = np.array([4.0, 8.0, 4.0, 2.0])
@@ -108,7 +108,8 @@ def cluster_file(tmp_path):
 class TestClusterRadii:
     def test_array_form_reads_the_widest_member(self):
         radii = cluster_radii(CLUSTER_STARTS, MEMBER_SHAPES, REFINE_RADIUS)
-        assert radii.dtype == np.float64
+        # The reading's own width, which is the width the shapes are stored at.
+        assert radii.dtype == np.float32
         npt.assert_array_equal(radii, EXPECTED_RADII)
 
     def test_object_form_equals_array_form(self, cluster_file):

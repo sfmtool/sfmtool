@@ -12,10 +12,14 @@
 //! [`crate::analysis::source_clusters`] bands against and what the coarsest-N
 //! cut orders by, so both take it from here rather than restating it.
 //!
-//! The arithmetic runs in `f64` whatever width the shapes arrive at: a
-//! `.matches` backbone stores them as `f32` and a selection read out through
-//! Python may hold them as `f64`, and both widen to the same value before the
-//! first multiply.
+//! The reading is `f32` wide, in and out: `f32` is what a `.matches` backbone
+//! stores the shapes at, and the computation gives nothing back for a wider
+//! accumulator to hold onto -- each radius is two squares of one member's own
+//! shape summed under a square root, with no cancellation, and a cluster takes
+//! a MAX over its members rather than a sum, so no error accumulates along a
+//! cluster however many members it has. What consumes a radius orders or bands
+//! by it, and `f32` resolves the gap between two clusters far below the
+//! precision either of those decisions is taken at.
 //!
 //! See `specs/core/analysis/source-clusters.md` for the design.
 
@@ -79,21 +83,18 @@ impl std::error::Error for ClusterRadiiError {}
 /// mean.
 ///
 /// `member_affine_shapes` is flat, four values per member, each 2x2 in
-/// row-major order. Every value widens to `f64` where it is read, so the `f32`
-/// a `.matches` backbone stores and the `f64` a caller may hold produce the
-/// same number.
-pub fn member_radii<T>(member_affine_shapes: &[T], refine_radius: f64) -> Vec<f64>
-where
-    T: Copy + Into<f64> + Sync,
-{
+/// row-major order, at the `f32` width a `.matches` backbone stores them at. A
+/// caller holding them widened narrows them back at its own boundary, which is
+/// exact for every value that came off such a file.
+pub fn member_radii(member_affine_shapes: &[f32], refine_radius: f32) -> Vec<f32> {
     let half = 0.5 * refine_radius;
     member_affine_shapes
         .par_chunks_exact(4)
         .map(|a| {
             // Column norms of the row-major 2x2 [a0 a1; a2 a3].
-            let (a0, a1, a2, a3) = (a[0].into(), a[1].into(), a[2].into(), a[3].into());
-            let c0: f64 = (a0 * a0 + a2 * a2).sqrt();
-            let c1: f64 = (a1 * a1 + a3 * a3).sqrt();
+            let (a0, a1, a2, a3) = (a[0], a[1], a[2], a[3]);
+            let c0 = (a0 * a0 + a2 * a2).sqrt();
+            let c1 = (a1 * a1 + a3 * a3).sqrt();
             half * (c0 + c1)
         })
         .collect()
@@ -121,14 +122,11 @@ where
 /// ];
 /// assert_eq!(cluster_radii(&starts, &shapes, 6.0), vec![6.0, 12.0]);
 /// ```
-pub fn cluster_radii<T>(
+pub fn cluster_radii(
     cluster_starts: &[u32],
-    member_affine_shapes: &[T],
-    refine_radius: f64,
-) -> Vec<f64>
-where
-    T: Copy + Into<f64> + Sync,
-{
+    member_affine_shapes: &[f32],
+    refine_radius: f32,
+) -> Vec<f32> {
     let row_radius = member_radii(member_affine_shapes, refine_radius);
     let n_member = row_radius.len();
     let n_cl = cluster_starts.len().saturating_sub(1);
@@ -139,7 +137,7 @@ where
             // `min(hi)` rather than an assert: a non-monotonic offset pair is an
             // empty cluster here, the same reading the CSR walk elsewhere gives.
             let lo = (cluster_starts[c] as usize).min(hi);
-            let mut widest = 0.0f64;
+            let mut widest = 0.0f32;
             for &r in &row_radius[lo..hi] {
                 if r > widest {
                     widest = r;
@@ -170,15 +168,12 @@ where
 /// ];
 /// assert_eq!(coarsest_clusters(&starts, &shapes, 6.0, 2), vec![0, 2]);
 /// ```
-pub fn coarsest_clusters<T>(
+pub fn coarsest_clusters(
     cluster_starts: &[u32],
-    member_affine_shapes: &[T],
-    refine_radius: f64,
+    member_affine_shapes: &[f32],
+    refine_radius: f32,
     n: usize,
-) -> Vec<u32>
-where
-    T: Copy + Into<f64> + Sync,
-{
+) -> Vec<u32> {
     coarsest_by_radius(
         &cluster_radii(cluster_starts, member_affine_shapes, refine_radius),
         n,
@@ -187,11 +182,11 @@ where
 
 /// The coarsest-N cut over radii already in hand; see [`coarsest_clusters`].
 ///
-/// The comparator is a total order over the whole `f64` range so the cut is a
+/// The comparator is a total order over the whole `f32` range so the cut is a
 /// function of the radii alone: descending, `NaN` last (a shape carrying `NaN`
 /// has no extent and must not displace a cluster that does), ties in ascending
 /// id order.
-fn coarsest_by_radius(radius: &[f64], n: usize) -> Vec<u32> {
+fn coarsest_by_radius(radius: &[f32], n: usize) -> Vec<u32> {
     let mut order: Vec<u32> = (0..radius.len() as u32).collect();
     let n = n.min(order.len());
     if n == 0 {
@@ -232,11 +227,11 @@ fn coarsest_by_radius(radius: &[f64], n: usize) -> Vec<u32> {
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
 /// let radius = cluster_radii_from_matches(&matches)?;
-/// println!("{} clusters, widest {:?}", radius.len(), radius.iter().cloned().fold(0.0, f64::max));
+/// println!("{} clusters, widest {:?}", radius.len(), radius.iter().cloned().fold(0.0, f32::max));
 /// # Ok(())
 /// # }
 /// ```
-pub fn cluster_radii_from_matches(matches: &MatchesData) -> Result<Vec<f64>, ClusterRadiiError> {
+pub fn cluster_radii_from_matches(matches: &MatchesData) -> Result<Vec<f32>, ClusterRadiiError> {
     let input = RadiiInput::read(matches)?;
     Ok(cluster_radii(
         &input.cluster_starts,
@@ -261,8 +256,9 @@ struct RadiiInput<'a> {
     cluster_starts: Cow<'a, [u32]>,
     /// The member affine shapes, flat, four per member in row-major order.
     member_affine_shapes: Cow<'a, [f32]>,
-    /// The refine radius the `cluster_patches/` section records.
-    refine_radius: f64,
+    /// The refine radius the `cluster_patches/` section records, at the width
+    /// the reading runs at.
+    refine_radius: f32,
 }
 
 impl<'a> RadiiInput<'a> {
@@ -281,6 +277,9 @@ impl<'a> RadiiInput<'a> {
             .ok_or(ClusterRadiiError::NoClusterPatches)?
             .refine_radius()
             .ok_or(ClusterRadiiError::NoRefineRadius)?;
+        // The file records the refine radius as a JSON number, so it arrives
+        // `f64` wide however it was written; the reading is `f32`.
+        let refine_radius = refine_radius as f32;
         Ok(Self {
             cluster_starts: contiguous(&clusters.cluster_starts),
             member_affine_shapes: match shapes.as_slice() {

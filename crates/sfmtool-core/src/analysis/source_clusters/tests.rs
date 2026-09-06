@@ -5,6 +5,10 @@ use super::*;
 
 /// A selection row: `(image, feature, scale)`. The shape is a scaled identity,
 /// so the row's radius is `refine_radius * scale`.
+///
+/// Every scale a test pins a radius on is a binary fraction: the reading
+/// narrows the selection's `f64` shapes to its own `f32`, so an exactly
+/// representable scale keeps the expected radius exact at both widths.
 fn rows(spec: &[(u32, u32, f64)]) -> (Vec<u32>, Vec<u32>, Vec<f64>, Vec<f64>) {
     let mut img = Vec::new();
     let mut feat = Vec::new();
@@ -50,8 +54,8 @@ fn a_cluster_the_member_holds_is_not_a_candidate() {
         (1, 11, 1.0),
         (0, 20, 0.5),
         (1, 21, 0.5),
-        (0, 30, 0.3),
-        (1, 31, 0.3),
+        (0, 30, 0.25),
+        (1, 31, 0.25),
     ]);
     let starts = [0u32, 2, 4, 6];
     let out = source_clusters(
@@ -68,7 +72,7 @@ fn a_cluster_the_member_holds_is_not_a_candidate() {
     assert_eq!(out.admission_radius, vec![6.0]);
     assert_eq!(out.admission_floor_px, 6.0);
     assert_eq!(out.candidates, vec![1, 2]);
-    assert_eq!(out.candidate_radius, vec![3.0, 1.7999999999999998]);
+    assert_eq!(out.candidate_radius, vec![3.0, 1.5]);
 }
 
 #[test]
@@ -128,7 +132,7 @@ fn the_selected_rows_are_the_candidates_own_rows_on_placed_frames() {
 
 #[test]
 fn a_clusters_radius_is_its_widest_members() {
-    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 20, 0.2), (1, 21, 0.9)]);
+    let (img, feat, pos, shp) = rows(&[(0, 10, 1.0), (1, 11, 1.0), (0, 20, 0.25), (1, 21, 0.75)]);
     let starts = [0u32, 2, 4];
     let out = source_clusters(
         selection(&starts, &img, &feat, &pos, &shp, 2),
@@ -139,7 +143,7 @@ fn a_clusters_radius_is_its_widest_members() {
         &[0, 1],
         &EDGES,
     );
-    assert_eq!(out.candidate_radius, vec![6.0 * 0.9]);
+    assert_eq!(out.candidate_radius, vec![6.0 * 0.75]);
 }
 
 #[test]

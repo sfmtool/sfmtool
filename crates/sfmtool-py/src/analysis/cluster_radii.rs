@@ -33,7 +33,7 @@ enum RadiiSource<'a> {
     Arrays {
         cluster_starts: Vec<u32>,
         member_affine_shapes: Vec<f32>,
-        refine_radius: f64,
+        refine_radius: f32,
     },
 }
 
@@ -46,7 +46,7 @@ enum RadiiSource<'a> {
 fn radii_source<'a, 'py>(
     source: &'a Bound<'py, PyAny>,
     member_affine_shapes: Option<Bound<'py, PyAny>>,
-    refine_radius: Option<f64>,
+    refine_radius: Option<f32>,
 ) -> PyResult<RadiiSource<'a>> {
     if let Ok(file) = source.cast::<PyMatchesFile>() {
         if member_affine_shapes.is_some() || refine_radius.is_some() {
@@ -156,11 +156,13 @@ fn radii_err_to_py(e: ClusterRadiiError) -> PyErr {
 ///         array is accepted and cast, which is exact for the
 ///         ``f32``-originated values a caller reads out of such a file.
 ///         Omitted in the ``MatchesFile`` form.
-///     refine_radius: The refine radius the shapes are expressed against.
-///         Omitted in the ``MatchesFile`` form.
+///     refine_radius: The refine radius the shapes are expressed against. A
+///         Python float is float64 and narrows to the float32 the reading
+///         runs at. Omitted in the ``MatchesFile`` form.
 ///
 /// Returns:
-///     (n_clusters,) float64 radius per cluster, in cluster order.
+///     (n_clusters,) float32 radius per cluster, in cluster order -- the width
+///     the shapes are stored at and the reading is computed at.
 // This is a Python docstring (rendered by `help()`), not Rust prose: its
 // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
 // indented code blocks, which rustdoc then tries to parse as Rust.
@@ -171,8 +173,8 @@ pub fn cluster_radii<'py>(
     py: Python<'py>,
     cluster_starts: Bound<'py, PyAny>,
     member_affine_shapes: Option<Bound<'py, PyAny>>,
-    refine_radius: Option<f64>,
-) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    refine_radius: Option<f32>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let source = radii_source(&cluster_starts, member_affine_shapes, refine_radius)?;
     let out = py
         .detach(move || match source {
@@ -210,9 +212,11 @@ pub fn cluster_radii<'py>(
 ///         offsets into the member arrays.
 ///     n: How many of the coarsest clusters to name.
 ///     member_affine_shapes: (n_member, 2, 2) float32 absolute affine shapes.
-///         Omitted in the ``MatchesFile`` form.
-///     refine_radius: The refine radius the shapes are expressed against.
-///         Omitted in the ``MatchesFile`` form.
+///         A float64 array is accepted and cast. Omitted in the
+///         ``MatchesFile`` form.
+///     refine_radius: The refine radius the shapes are expressed against. A
+///         Python float is float64 and narrows to the float32 the reading
+///         runs at. Omitted in the ``MatchesFile`` form.
 ///
 /// Returns:
 ///     (min(n, n_clusters),) uint32 cluster ids, ascending.
@@ -227,7 +231,7 @@ pub fn coarsest_clusters<'py>(
     cluster_starts: Bound<'py, PyAny>,
     n: usize,
     member_affine_shapes: Option<Bound<'py, PyAny>>,
-    refine_radius: Option<f64>,
+    refine_radius: Option<f32>,
 ) -> PyResult<Bound<'py, PyArray1<u32>>> {
     let source = radii_source(&cluster_starts, member_affine_shapes, refine_radius)?;
     let out = py

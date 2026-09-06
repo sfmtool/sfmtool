@@ -22,10 +22,12 @@ fn a_members_radius_is_half_the_refine_radius_times_the_column_norm_sum() {
     // Radius = 0.5 * 6 * 15 = 45.
     let shapes = flat(&[shape(3.0, 0.0, 4.0, 10.0)]);
     assert_eq!(member_radii(&shapes, 6.0), vec![45.0]);
-    // The same values as f64 read the same, so a caller holding widened shapes
-    // is not a second convention.
+    // A caller holding the same shapes widened -- the source-cluster join's
+    // selection arrays are f64 -- narrows them back at its own boundary and
+    // reads the same number, so the widening is not a second convention.
     let wide: Vec<f64> = shapes.iter().map(|&v| f64::from(v)).collect();
-    assert_eq!(member_radii(&wide, 6.0), vec![45.0]);
+    let narrowed: Vec<f32> = wide.iter().map(|&v| v as f32).collect();
+    assert_eq!(member_radii(&narrowed, 6.0), vec![45.0]);
 }
 
 #[test]

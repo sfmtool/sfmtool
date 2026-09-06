@@ -39,8 +39,10 @@ pub struct SourceSelection<'a> {
     /// `n_member * 2`, each row's absolute keypoint position in pixels.
     pub member_positions: &'a [f64],
     /// `n_member * 4`, each row's absolute 2x2 affine shape in row-major
-    /// order — the map from the detector's canonical unit frame onto that
+    /// order -- the map from the detector's canonical unit frame onto that
     /// member's image pixels, so its column norms are the member's extent.
+    /// Held at the width the caller's selection arrays are; the radius reading
+    /// narrows them to its own `f32`.
     pub member_affine_shapes: &'a [f64],
     /// The refine radius the selection's shapes are expressed against.
     pub refine_radius: f64,
@@ -129,11 +131,24 @@ pub fn source_clusters(
     // Cluster radius: the widest of its own members', so "radius" means here
     // what it meant when the admission was drawn. The reading is shared with
     // the coarsest-N cut rather than restated ([`crate::analysis::cluster_radii`]).
-    let cluster_radius = cluster_radii(
-        sel.cluster_starts,
-        sel.member_affine_shapes,
-        sel.refine_radius,
-    );
+    //
+    // The selection's shapes reach this join widened: they originate as the
+    // `f32` a `.matches` cluster backbone stores and a caller reading them back
+    // holds them in an `f64` array, alongside the `f64` pixel positions. The
+    // radius reading is `f32` wide, so they narrow here, which recovers the
+    // stored value exactly for every shape that came off such a file. The radii
+    // widen again on the way out because the bands, the floor and the caller's
+    // own arrays are `f64`.
+    let shapes: Vec<f32> = sel
+        .member_affine_shapes
+        .par_iter()
+        .map(|&v| v as f32)
+        .collect();
+    let cluster_radius: Vec<f64> =
+        cluster_radii(sel.cluster_starts, &shapes, sel.refine_radius as f32)
+            .into_iter()
+            .map(f64::from)
+            .collect();
 
     let (admitted, n_rows_matched) = admission_mask(sel, member, &row_cluster, n_cl);
 
