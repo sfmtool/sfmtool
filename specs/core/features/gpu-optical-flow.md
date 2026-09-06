@@ -141,6 +141,13 @@ Gather-based: one thread per output pixel. For each pixel, loops over all patche
 that could cover it (bounded by patch size and stride). Dispatched 2D with 16×16
 workgroups.
 
+The photometric weight `1 / max(1, |Δintensity|)` is evaluated on the 0–255 scale, so
+the shader carries its own `INTENSITY_SCALE` constant matching `interp.rs`'s. WGSL
+cannot import the Rust constant, so the two are held together by the CPU/GPU parity
+tests in `gpu/tests.rs` rather than by the compiler — a silent divergence here changes
+results without failing to build. See
+[optical-flow.md](optical-flow.md) for why the scale is load-bearing.
+
 ### 4. Variational Refinement
 
 Four compute shaders:

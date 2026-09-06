@@ -574,6 +574,43 @@ one below), so all but one of these are spec fixes.
    task and `tests/matching/test_flow.py` are the harness. Same PR: `pyramid.rs:20`'s
    binomial-kernel comment describes a kernel the code does not use.
 
+   > _Status (2026-09-05): **Done.** Resolved in favour of the paper's scale:
+   > `interp.rs` gained an `INTENSITY_SCALE = 255.0` applied at the clamp, and
+   > `densify.wgsl` carries the matching constant. Decided by measurement, as the item
+   > asks — but **neither named harness was usable**: there is no `bench-flow` task
+   > (`scripts/benchmark_optical_flow.py` exists and is timing-only), and
+   > `tests/matching/test_flow.py` tests flow *visualization* and match helpers, not
+   > flow accuracy. The repo had no flow-quality metric at all. Measurement was
+   > therefore endpoint error against exact closed-form ground truth: affine warps
+   > (translation, rotation, zoom, shear, combined) of three test-data images, where
+   > `F(x) = A⁻¹x − x` is analytic, plus a two-layer scene with a motion boundary.
+   > That harness landed as `scripts/benchmark_flow_accuracy.py` (scores what
+   > `benchmark_optical_flow.py` times), so every figure below is reproducible and the
+   > next flow change has something to be judged against._
+   >
+   > _Every one of 21 scenes improved and none regressed. Mean EPE −3.0% (`default`),
+   > −3.7% (`fast`), −8.7% (`high_quality`); pixels over 3px −26% (`default`). The
+   > confirming signal is **where** it lands: the motion-boundary scenes, the case Eq. 3
+   > exists for, improved 23–53%, and the gain scales with patch overlap (4 patches per
+   > pixel at `default`, 16 at `high_quality`). Holds under added sensor noise at σ = 2
+   > and σ = 5 intensity levels. GPU and CPU agree to 4 decimals on the same scenes._
+   >
+   > _Two things worth carrying forward. **(a) The clamp never divided by zero at any
+   > scale** — `max(1.0)` lower-bounds the denominator — so the hazard here was only
+   > ever the dead weight, not a NaN. **(b) EPE keeps improving past the paper's 255,
+   > monotonically, saturating near 8192** (a further −6.7% on `default`), because a
+   > global factor cancels in a normalized average and larger scales interpolate toward
+   > soft winner-take-all. That is a retune of a cited algorithm rather than a bug fix,
+   > and three synthetic scenes are not the evidence for it; landed 255 and left the
+   > lead here. A real-benchmark (Sintel/KITTI) evaluation would settle it._
+   >
+   > _Regression cover: `interp/tests.rs::test_densify_weights_by_photometric_error`
+   > gives two overlapping patches contradictory flows and asserts the result favours
+   > the one that fits. Verified non-vacuous — against the old constant it fails with
+   > `densified dx 0`, exactly the box-average midpoint. `pyramid.rs`'s comment now
+   > names the sigma-1.0 Gaussian the code actually uses (as a code span, not an
+   > intra-doc link: `GAUSS6_1D` is private and `build` is public)._
+
 2. **Six documented calls that fail if copied.** `mcp-server.md:1585` `serve` takes an
    `EventLoopProxy` the code replaced with a wake closure, and `:1651`'s Cargo feature
    list would not build; `sift.md:535-536` `compute_descriptors` omits two arguments and

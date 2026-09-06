@@ -17,7 +17,7 @@ pub struct ImagePyramid {
 impl ImagePyramid {
     /// Build pyramid by fused Gaussian blur + 2x downsample at each level.
     ///
-    /// Uses a 6-tap binomial kernel `[1, 5, 10, 10, 5, 1] / 32` applied separably.
+    /// Uses the 6-tap sigma-1.0 Gaussian kernel `GAUSS6_1D` applied separably.
     /// The even width places the filter center between two input pixels, producing
     /// properly centered samples for 2x downsampling. The horizontal pass fuses the
     /// blur and horizontal downsample into a single step.

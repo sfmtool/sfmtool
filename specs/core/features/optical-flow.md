@@ -164,7 +164,19 @@ each level (sigma = 1.0, separable, even tap count for between-pixel centering).
 **`dis.rs`** runs DIS at a single pyramid level: grid creation, patch inverse search
 (parallelized via rayon), outlier rejection, densification, and optionally variational
 refinement. Densification uses photometric-error-weighted averaging where each patch's
-weight is `w = 1 / max(1, |intensity_difference|)`.
+weight is `w = 1 / max(1, |intensity_difference|)`, with the difference on the paper's
+0–255 intensity scale. That scale is load-bearing rather than cosmetic: `GrayImage`
+stores [0, 1], on which the clamp would always bind, every weight would equal 1.0, and
+densification would silently reduce to an unweighted box average over the 4 (default
+preset) to 16 (`high_quality`) patches covering each pixel. `interp.rs`'s
+`INTENSITY_SCALE` converts at the clamp, and `densify.wgsl` repeats the constant
+because a shader cannot import it; `gpu/tests.rs` holds the two together.
+
+Changes to flow accuracy are judged with
+[`scripts/benchmark_flow_accuracy.py`](../../../scripts/benchmark_flow_accuracy.py),
+which scores endpoint error against closed-form ground truth (affine warps of the
+test-data images, plus a two-layer scene carrying a motion boundary) — the counterpart
+to `benchmark_optical_flow.py`, which measures only time.
 
 **`variational.rs`** minimizes the energy functional via Jacobi iteration with
 double-buffered ping-pong. The Jacobi solver enables per-row parallelism (rayon) and

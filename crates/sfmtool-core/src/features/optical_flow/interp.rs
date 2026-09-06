@@ -63,12 +63,25 @@ pub(crate) fn warp_image(img: &GrayImage, flow: &FlowField) -> GrayImage {
     GrayImage::new(w, h, data)
 }
 
+/// Converts a [`GrayImage`] intensity difference to the 8-bit scale the DIS paper's
+/// densification weight is written on.
+///
+/// Eq. 3's weight is `1 / max(1, d)`, and the paper's `d` is a difference between
+/// 0–255 intensities, so the clamp's knee sits at one quantization level and the
+/// weight spans the full 1/255 … 1 range. [`GrayImage`] stores [0, 1] instead, where
+/// `d` never exceeds 1, the clamp always binds, and the weight collapses to the
+/// constant 1.0 — a plain box average over every patch covering the pixel, which is
+/// what this code did until the scale was restored. Anything reading `diff` against a
+/// literal `1.0` is asserting 8-bit units; keep the conversion adjacent to the clamp.
+const INTENSITY_SCALE: f32 = 255.0;
+
 /// Densify sparse patch flow updates to a full dense field using
 /// photometric-error-weighted averaging (Eq. 3 from the paper).
 ///
 /// Each patch's contribution at pixel x is weighted by:
 ///   w = 1 / max(1, ||d_i(x)||_2)
-/// where d_i(x) is the per-pixel intensity difference between warped query and template.
+/// where d_i(x) is the per-pixel intensity difference between warped query and template,
+/// measured on the paper's **8-bit intensity scale** — see [`INTENSITY_SCALE`].
 pub(crate) fn densify_flow(
     patches: &[PatchResult],
     ref_image: &GrayImage,
@@ -107,7 +120,7 @@ pub(crate) fn densify_flow(
                 let sx = col as f32 + 0.5 + fdx;
                 let sy = row as f32 + 0.5 + fdy;
                 let tgt_val = sample_bilinear(tgt_image, sx, sy);
-                let diff = (tgt_val - ref_val).abs();
+                let diff = (tgt_val - ref_val).abs() * INTENSITY_SCALE;
                 let weight = 1.0 / diff.max(1.0);
 
                 let idx = row * w + col;

@@ -4,8 +4,15 @@
 // computes photometric-error-weighted contributions, and normalizes.
 //
 // Matches the CPU densify_flow() in interp.rs:
-//   weight = 1 / max(1, |tgt_val - ref_val|)
+//   weight = 1 / max(1, INTENSITY_SCALE * |tgt_val - ref_val|)
 //   flow = sum(weight * patch_flow) / sum(weight)
+//
+// INTENSITY_SCALE puts the difference on the DIS paper's 0-255 intensity scale,
+// where the clamp's knee is one quantization level. Images arrive normalized to
+// [0, 1], on which the clamp would always bind and the weight would be a constant.
+// It must stay identical to interp.rs's constant: gpu/tests.rs asserts CPU/GPU parity.
+
+const INTENSITY_SCALE: f32 = 255.0;
 
 struct Params {
     width: u32,
@@ -102,7 +109,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 let sx = f32(col) + 0.5 + fdx;
                 let sy = f32(row) + 0.5 + fdy;
                 let tgt_val = sample_bilinear(sx, sy);
-                let diff = abs(tgt_val - ref_val);
+                let diff = abs(tgt_val - ref_val) * INTENSITY_SCALE;
                 let weight = 1.0 / max(1.0, diff);
 
                 sum_dx += weight * fdx;
