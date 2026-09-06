@@ -11,10 +11,45 @@ use std::path::PathBuf;
 use sfmr_format::{self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions};
 
 use crate::helpers::{
-    extract_cameras_as_sfmr, extract_rig_frame_data, get_item, get_optional_item, py_to_serde,
-    py_to_u128_bytes, rig_frame_data_to_py, serde_to_py, u128_bytes_to_py,
+    dtype_name, extract_cameras_as_sfmr, extract_rig_frame_data, get_item, get_optional_item,
+    py_to_serde, py_to_u128_bytes, rig_frame_data_to_py, serde_to_py, u128_bytes_to_py,
 };
 use crate::PyCameraIntrinsics;
+
+/// Extract an optional numpy array from a data dict: `None` for a missing key
+/// or an explicit `None`, otherwise the array copied into standard (C) layout.
+///
+/// `expected` describes the dtype and rank the caller wants (`"a 2D float32
+/// array"`), and is reported alongside the offending key and the value's actual
+/// type/dtype, so a wrong-dtype column is named rather than surfacing as a bare
+/// numpy conversion failure. Shape constraints beyond the rank are the caller's.
+fn optional_array<'py, T, D>(
+    data: &Bound<'py, PyDict>,
+    key: &str,
+    expected: &str,
+) -> PyResult<Option<ndarray::Array<T, D>>>
+where
+    T: numpy::Element + Clone,
+    D: ndarray::Dimension,
+{
+    let Some(value) = get_optional_item(data, key)? else {
+        return Ok(None);
+    };
+    let array = value
+        .extract::<numpy::PyReadonlyArray<'py, T, D>>()
+        .map_err(|_| {
+            let actual_type = value
+                .get_type()
+                .qualname()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            let actual_dtype = dtype_name(&value).unwrap_or_else(|_| "unknown".to_string());
+            pyo3::exceptions::PyTypeError::new_err(format!(
+                "'{key}' must be {expected}, got {actual_type} with dtype {actual_dtype}"
+            ))
+        })?;
+    Ok(Some(array.as_array().as_standard_layout().into_owned()))
+}
 
 /// Read a complete .sfmr file, returning a dict with numpy arrays and metadata.
 ///
@@ -34,13 +69,26 @@ use crate::PyCameraIntrinsics;
 /// Returns a dict with keys:
 ///   metadata, content_hash, cameras, depth_statistics (dicts/lists),
 ///   image_names (list[str]),
-///   feature_tool_hashes, sift_content_hashes (`list[bytes]`, 16 bytes each),
+///   feature_tool_hashes, sift_content_hashes, image_file_hashes
+///   (`list[bytes]`, 16 bytes each),
 ///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyzw,
-///   colors_rgb, reprojection_errors, normals_xyz,
-///   image_indexes, feature_indexes, point_indexes, observation_counts,
-///   observed_depth_histogram_counts (numpy arrays).
+///   colors_rgb, reprojection_errors, normals_xyz, normal_confidence,
+///   patch_u_halfvec_xyz, patch_v_halfvec_xyz, patch_bitmaps_y_x_rgba,
+///   image_indexes, feature_indexes, keypoints_xy, observation_confidence,
+///   point_indexes, observation_counts, observed_depth_histogram_counts,
+///   thumbnails_y_x_rgb (numpy arrays).
 ///
-/// `positions_xyzw` is the homogeneous `(P, 4)` point array.
+/// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
+/// column is emitted as `None` when the file does not carry it: the normals and
+/// their `(P,)` uint8 `normal_confidence`, the per-point patch frame
+/// (`(P, 3)` float32 `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` and the
+/// `(P, R, R, 4)` uint8 `patch_bitmaps_y_x_rgba`), the mode-dependent
+/// observation columns, and the `(M,)` uint8 `observation_confidence`.
+///
+/// Everything `write_sfmr` stores is emitted here, so
+/// `write_sfmr(out, read_sfmr(path))` round-trips a file of either observation
+/// source — including an `embedded_patches` one, whose write validation demands
+/// the patch frame.
 #[pyfunction]
 pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     let data = sfmr_format::read_sfmr(&path)
@@ -108,6 +156,24 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         Some(n) => dict.set_item("normals_xyz", n.into_pyarray(py))?,
         None => dict.set_item("normals_xyz", py.None())?,
     }
+    match data.normal_confidence {
+        Some(c) => dict.set_item("normal_confidence", c.into_pyarray(py))?,
+        None => dict.set_item("normal_confidence", py.None())?,
+    }
+    // The per-point patch frame: `u` and `v` are present or absent together and
+    // the bitmaps require them, so all three ride along as a set.
+    match data.patch_u_halfvec_xyz {
+        Some(u) => dict.set_item("patch_u_halfvec_xyz", u.into_pyarray(py))?,
+        None => dict.set_item("patch_u_halfvec_xyz", py.None())?,
+    }
+    match data.patch_v_halfvec_xyz {
+        Some(v) => dict.set_item("patch_v_halfvec_xyz", v.into_pyarray(py))?,
+        None => dict.set_item("patch_v_halfvec_xyz", py.None())?,
+    }
+    match data.patch_bitmaps_y_x_rgba {
+        Some(b) => dict.set_item("patch_bitmaps_y_x_rgba", b.into_pyarray(py))?,
+        None => dict.set_item("patch_bitmaps_y_x_rgba", py.None())?,
+    }
     dict.set_item("image_indexes", data.image_indexes.into_pyarray(py))?;
     // feature_indexes is the sift_files column and keypoints_xy the
     // embedded_patches one, except that a sift_files file may also carry
@@ -119,6 +185,10 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     match data.keypoints_xy {
         Some(k) => dict.set_item("keypoints_xy", k.into_pyarray(py))?,
         None => dict.set_item("keypoints_xy", py.None())?,
+    }
+    match data.observation_confidence {
+        Some(c) => dict.set_item("observation_confidence", c.into_pyarray(py))?,
+        None => dict.set_item("observation_confidence", py.None())?,
     }
     dict.set_item("point_indexes", data.point_indexes.into_pyarray(py))?;
     dict.set_item(
@@ -261,6 +331,45 @@ pub(crate) fn parse_sfmr_data_from_dict(
             )
         };
 
+    // Per-point confidence in the normal, and the per-observation photometric
+    // confidence: independent optional columns, passed through untouched.
+    let normal_confidence =
+        optional_array::<u8, ndarray::Ix1>(data, "normal_confidence", "a 1D uint8 array")?;
+    let observation_confidence =
+        optional_array::<u8, ndarray::Ix1>(data, "observation_confidence", "a 1D uint8 array")?;
+
+    // The per-point patch frame. `patch_u_halfvec_xyz`/`patch_v_halfvec_xyz`
+    // must be present together and the bitmaps require them; those cross-array
+    // rules and the row counts are the format writer's to enforce, so only the
+    // per-array dtype and trailing extent are checked here.
+    let patch_u_halfvec_xyz =
+        optional_array::<f32, ndarray::Ix2>(data, "patch_u_halfvec_xyz", "a 2D float32 array")?;
+    let patch_v_halfvec_xyz =
+        optional_array::<f32, ndarray::Ix2>(data, "patch_v_halfvec_xyz", "a 2D float32 array")?;
+    for (key, halfvec) in [
+        ("patch_u_halfvec_xyz", &patch_u_halfvec_xyz),
+        ("patch_v_halfvec_xyz", &patch_v_halfvec_xyz),
+    ] {
+        if let Some(arr) = halfvec {
+            if arr.shape()[1] != 3 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "'{key}' must have shape (P, 3), got shape {:?}",
+                    arr.shape()
+                )));
+            }
+        }
+    }
+    let patch_bitmaps_y_x_rgba =
+        optional_array::<u8, ndarray::Ix4>(data, "patch_bitmaps_y_x_rgba", "a 4D uint8 array")?;
+    if let Some(arr) = &patch_bitmaps_y_x_rgba {
+        let shape = arr.shape();
+        if shape[1] != shape[2] || shape[3] != 4 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "'patch_bitmaps_y_x_rgba' must have shape (P, R, R, 4), got shape {shape:?}"
+            )));
+        }
+    }
+
     // Extract optional rig/frame data from the dict
     let rig_frame_data = extract_rig_frame_data(py, data)?;
 
@@ -303,16 +412,14 @@ pub(crate) fn parse_sfmr_data_from_dict(
             .as_standard_layout()
             .into_owned(),
         normals_xyz,
-        // The dict-based columnar API carries neither confidence column nor
-        // patch data; the full-fidelity path is `SfmrReconstruction`.
-        normal_confidence: None,
-        observation_confidence: None,
-        patch_u_halfvec_xyz: None,
-        patch_v_halfvec_xyz: None,
-        patch_bitmaps_y_x_rgba: None,
+        normal_confidence,
+        patch_u_halfvec_xyz,
+        patch_v_halfvec_xyz,
+        patch_bitmaps_y_x_rgba,
         image_indexes: image_indexes.as_array().as_standard_layout().into_owned(),
         feature_indexes,
         keypoints_xy,
+        observation_confidence,
         point_indexes: point_indexes.as_array().as_standard_layout().into_owned(),
         observation_counts: observation_counts
             .as_array()
@@ -327,6 +434,16 @@ pub(crate) fn parse_sfmr_data_from_dict(
 ///
 /// The dict should have the same keys as returned by `read_sfmr`.
 /// The `content_hash` key is ignored (recomputed on write).
+///
+/// Every optional column `read_sfmr` emits is read back here, so a dict that
+/// came from `read_sfmr` writes out whatever the source file carried: the
+/// normals and their `normal_confidence`, the per-observation
+/// `observation_confidence`, and the per-point patch frame
+/// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional
+/// `patch_bitmaps_y_x_rgba`). A missing or `None` value means the column is
+/// absent — which is what a `sift_files` dict carries for the patch frame,
+/// while an `embedded_patches` dict must carry it, since the format requires
+/// the frame there.
 ///
 /// KNOWN LIMITATION: this always writes the current
 /// [`sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`
