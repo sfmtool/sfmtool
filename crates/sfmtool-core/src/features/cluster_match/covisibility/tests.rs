@@ -212,6 +212,144 @@ fn seed_pair_is_the_groups_maximum_shared_pair() {
                 );
             }
         }
+        // The same invariant restated through the enriched yield: the seed
+        // pair's condensed entry is `seed_shared`, and nothing exceeds it.
+        assert_eq!(
+            g.pair_shared[condensed_index(&g.images, i, j)],
+            g.seed_shared
+        );
+        assert_eq!(g.pair_shared.iter().copied().max(), Some(g.seed_shared));
+    }
+}
+
+/// The condensed upper-triangle index `SeedImageGroup::pair_shared` and
+/// `SeedImageGroup::pair_displacement` are ordered by, for the pair of image
+/// indexes `(x, y)` — written from the documented formula rather than by
+/// re-deriving the enumeration.
+fn condensed_index(images: &[u32], x: u32, y: u32) -> usize {
+    let pos = |v: u32| images.iter().position(|&g| g == v).expect("image in group");
+    let (a, b) = (pos(x.min(y)), pos(x.max(y)));
+    let len = images.len();
+    a * (2 * len - a - 1) / 2 + (b - a - 1)
+}
+
+#[test]
+fn pair_shared_is_the_condensed_upper_triangle() {
+    // Six distinct edge weights on four images, so every condensed entry is
+    // distinguishable from every other: any ordering mistake shows up.
+    let cov = from_edges(
+        4,
+        &[
+            (0, 1, 20),
+            (0, 2, 19),
+            (0, 3, 18),
+            (1, 2, 17),
+            (1, 3, 16),
+            (2, 3, 15),
+        ],
+    );
+    let params = SeedImageGroupParams {
+        group_size: 4,
+        min_shared: 8,
+    };
+    let groups: Vec<_> = cov.seed_image_groups(&params).collect();
+    assert_eq!(groups.len(), 1);
+    let g = &groups[0];
+    assert_eq!(g.images, vec![0, 1, 2, 3]);
+    // The documented order: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3).
+    assert_eq!(g.pair_shared, vec![20, 19, 18, 17, 16, 15]);
+    // And each entry against a direct count(i, j) at its formula index.
+    for a in 0..g.images.len() {
+        for b in (a + 1)..g.images.len() {
+            let (x, y) = (g.images[a], g.images[b]);
+            assert_eq!(
+                g.pair_shared[condensed_index(&g.images, x, y)],
+                cov.count(x, y),
+                "pair ({x}, {y})"
+            );
+        }
+    }
+    // Consistency with the founding edge.
+    assert_eq!(g.seed_pair, (0, 1));
+    assert_eq!(
+        g.pair_shared[condensed_index(&g.images, 0, 1)],
+        g.seed_shared
+    );
+    assert_eq!(g.pair_shared.iter().copied().max(), Some(g.seed_shared));
+    // No positions were supplied, so there is no displacement to report.
+    assert_eq!(g.pair_displacement, None);
+}
+
+#[test]
+fn pair_displacement_reads_the_neighborhood() {
+    // Distinct per-edge displacements over the same four-image graph: each
+    // two-member cluster forces its pair, so the neighborhood's exhaustive
+    // mean for an edge is exactly that edge's distance.
+    let edges = [
+        (0u32, 1u32, 20u32, 5.0f32),
+        (0, 2, 19, 7.0),
+        (0, 3, 18, 9.0),
+        (1, 2, 17, 11.0),
+        (1, 3, 16, 13.0),
+        (2, 3, 15, 3.0),
+    ];
+    let cov = from_positioned_edges(4, &edges);
+    let params = SeedImageGroupParams {
+        group_size: 4,
+        min_shared: 8,
+    };
+    let g = cov.seed_image_groups(&params).next().unwrap();
+    assert_eq!(g.images, vec![0, 1, 2, 3]);
+    let disp = g.pair_displacement.as_ref().expect("positioned build");
+    assert_eq!(disp.len(), g.pair_shared.len());
+    assert_eq!(*disp, vec![5.0, 7.0, 9.0, 11.0, 13.0, 3.0]);
+    // Every entry is the neighborhood's own answer for that pair, and the
+    // exhaustive means differ from the sampled tables' storage layout.
+    let nb = cov.displacement_neighborhood().expect("positioned build");
+    for a in 0..g.images.len() {
+        for b in (a + 1)..g.images.len() {
+            let (x, y) = (g.images[a], g.images[b]);
+            let (shared, mean) = nb.pair(x, y).expect("realized pair");
+            assert_eq!(
+                disp[condensed_index(&g.images, x, y)],
+                mean,
+                "pair ({x}, {y})"
+            );
+            assert_eq!(g.pair_shared[condensed_index(&g.images, x, y)], shared);
+        }
+    }
+}
+
+#[test]
+fn pair_displacement_reads_zero_for_an_unrealized_pair() {
+    // `min_shared = 0` lets the extension take an image sharing nothing with
+    // the group, so the group holds a pair the neighborhood never realized.
+    let cov = from_positioned_edges(3, &[(0, 1, 5, 4.0)]);
+    let params = SeedImageGroupParams {
+        group_size: 3,
+        min_shared: 0,
+    };
+    let g = cov.seed_image_groups(&params).next().unwrap();
+    assert_eq!(g.images, vec![0, 1, 2]);
+    assert_eq!(g.pair_shared, vec![5, 0, 0]);
+    let nb = cov.displacement_neighborhood().expect("positioned build");
+    assert_eq!(nb.pair(0, 2), None);
+    assert_eq!(g.pair_displacement, Some(vec![4.0, 0.0, 0.0]));
+}
+
+#[test]
+fn pair_displacement_absent_without_positions() {
+    let cov = from_edges(3, &[(0, 1, 10), (0, 2, 10), (1, 2, 10)]);
+    let params = SeedImageGroupParams {
+        group_size: 3,
+        min_shared: 8,
+    };
+    for g in cov.seed_image_groups(&params) {
+        assert_eq!(g.pair_displacement, None);
+        assert_eq!(
+            g.pair_shared.len(),
+            g.images.len() * (g.images.len() - 1) / 2
+        );
     }
 }
 

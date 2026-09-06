@@ -169,11 +169,15 @@ impl ClusterCovisibility {
 pub struct SeedImageGroups<'a> { /* covis, excluded: Vec<bool>, params */ }
 impl Iterator for SeedImageGroups<'_> { type Item = SeedImageGroup; }
 
-/// A group of images plus the edge it was grown from.
+/// A group of images, the edge it was grown from, and the covisibility
+/// evidence for the group's internal pairs. Not `Eq` — the displacements
+/// are `f64`.
 pub struct SeedImageGroup {
     pub images: Vec<u32>,      // sorted ascending
     pub seed_pair: (u32, u32), // i < j
     pub seed_shared: u32,      // W[seed_pair]
+    pub pair_shared: Vec<u32>,               // condensed upper triangle
+    pub pair_displacement: Option<Vec<f64>>, // same order; None unpositioned
 }
 
 pub struct SeedImageGroupParams {
@@ -189,6 +193,28 @@ makes it a set of clusters.
 `seed_pair` and `seed_shared` are the founding edge the algorithm's first
 step already picked, carried out rather than discarded, so a caller that
 wants the group's best-supported pair pays nothing for it.
+
+`pair_shared` and `pair_displacement` carry out what the receiver already
+holds about the group's **internal** pairs, so a consumer classifying the
+group's motion regime reads the group rather than querying the matrix pair by
+pair. Both are the group's condensed upper triangle over `images`: for
+indexes `a < b` into `images`, the entry sits at
+`a·(2·len − a − 1)/2 + (b − a − 1)` — the pairs enumerated
+`(0,1), (0,2), …, (0,len−1), (1,2), …` — and both vectors have length
+`len·(len−1)/2`.
+
+- `pair_shared[k]` is `W` for that pair, read straight off the counts matrix.
+  The entry for `seed_pair` is `seed_shared`, and by the maximum-shared-pair
+  property below it is the vector's maximum.
+- `pair_displacement[k]` is the mean pixel displacement of the pair's
+  shared-cluster keypoints, read off the sparse `DisplacementNeighborhood`
+  (`pose-verification.md`) — the exhaustive per-pair mean, not the seeded
+  one-sample-per-cluster tables behind `pair_displacement()`. The whole field
+  is `None` when the matrix was built without positions, since there is then
+  no neighborhood; within a positioned build, a pair the neighborhood holds
+  no entry for reads `0.0` — it shares no accepted cluster, so there are no
+  keypoints to average. Such a pair only occurs at `min_shared = 0`, which
+  lets the extension take an image sharing nothing with the group.
 
 `min_shared = 8` is carried over from the experiments unvalidated; a
 data-derived constructor (`SeedImageGroupParams::derive`, e.g. a fraction of the
@@ -208,7 +234,8 @@ all later consideration. Each `next()`:
    *minimum*-vs-group criterion keeps groups mutually covisible rather
    than hub-and-spokes.
 3. Yield the group — its images sorted ascending, alongside the founding
-   edge `(i, j)` and its weight — and mark its images excluded.
+   edge `(i, j)`, its weight, and the group's internal-pair counts and
+   displacements in condensed order — and mark its images excluded.
 
 Guarantees: the sequence depends only on the input arrays (no RNG, no
 iteration-order dependence); groups are disjoint; the first `k` groups are
@@ -247,8 +274,17 @@ cov.rank_by_covisibility(image, candidates)   # numpy uint32
 yields a dict in the `estimate_intrinsics` result style:
 
 ```python
-{"images": [3, 7, 11, 12, 15], "seed_pair": (7, 12), "seed_shared": 214}
+{"images": [3, 7, 11, 12, 15], "seed_pair": (7, 12), "seed_shared": 214,
+ "pair_shared": [31, 44, 39, 12, 118, 214, 63, 190, 57, 88],
+ "pair_displacement": [104.2, 61.8, 77.0, 210.5, 44.1,
+                       18.9, 96.3, 25.4, 71.7, 52.6]}
 ```
+
+`pair_shared` is a `list[int]` and `pair_displacement` a `list[float]` (None
+without positions), both the condensed upper triangle over `images` in the
+order above — the order `scipy.spatial.distance.pdist` uses, so
+`scipy.spatial.distance.squareform` reshapes either into a dense
+group-local matrix.
 
 `min_shared` is keyword-only: a bare second positional integer reads as a
 count of groups rather than as an edge-weight floor.
@@ -273,11 +309,16 @@ storing the pairwise backbone raises `ValueError`. Custom masks use
   stability (the first `k` groups match whether `k` or all are consumed),
   the hub-vs-mutual distinction (a star topology must not form a group),
   the maximum-shared-pair invariant over a tie-dense graph, dense bound
-  error.
+  error, the condensed pair ordering against direct `count(i, j)` calls over
+  a group whose pairs all differ, `pair_displacement` against direct
+  neighborhood pair queries on a positioned build (and `None` on an
+  unpositioned one).
 - Bindings test (`tests/rust_bindings/`): array and file constructors on a
-  small generated file; numpy round-trip; parity of `seed_image_groups`
-  with a numpy reference implementation, the maximum-shared-pair invariant,
-  and `seed_shared` against a direct count of the clusters whose accepted
+  small generated file; numpy round-trip; parity of `seed_image_groups` —
+  the enriched yield included — with a numpy reference implementation over
+  several `(group_size, min_shared)` settings, positioned and not; the
+  maximum-shared-pair invariant restated through `pair_shared`; and
+  `seed_shared` against a direct count of the clusters whose accepted
   members reach both seed-pair images.
 - First consumer: `exp_pinhole_bootstrap.py` swaps its `covisibility()` and
   `pick_seed_groups()` for the binding — campaign parity on seoul is the

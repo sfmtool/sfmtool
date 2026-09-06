@@ -426,10 +426,23 @@ impl PyClusterCovisibility {
     /// ``min_shared``.
     ///
     /// Each step yields a dict ``{"images": list[int] sorted ascending,
-    /// "seed_pair": (i, j) with i < j, "seed_shared": int}``. The seed pair
+    /// "seed_pair": (i, j) with i < j, "seed_shared": int, "pair_shared":
+    /// list[int], "pair_displacement": list[float] | None}``. The seed pair
     /// is the edge the group grew from and is the group's maximum-shared
     /// pair, so a caller wanting the best-supported pair reads it instead of
     /// re-scanning the group.
+    ///
+    /// ``pair_shared`` and ``pair_displacement`` carry the covisibility
+    /// evidence for the group's *internal* pairs, both in the condensed
+    /// upper-triangle order over ``images``: for ``a < b`` indexing
+    /// ``images``, the entry sits at ``a*(2*len - a - 1)//2 + (b - a - 1)``
+    /// — the pairs enumerated ``(0,1), (0,2), …, (0,len-1), (1,2), …``, the
+    /// same order ``scipy.spatial.distance.pdist`` uses. ``pair_shared``
+    /// holds the shared-cluster counts (its entry for ``seed_pair`` is
+    /// ``seed_shared``, the vector's maximum); ``pair_displacement`` holds
+    /// the sparse neighborhood's exhaustive mean keypoint displacement in
+    /// pixels, ``0.0`` for a pair sharing no accepted cluster, and is None
+    /// when the matrix was constructed without ``positions_xy``.
     ///
     /// Args:
     ///     group_size: Maximum images per group (default 5).
@@ -486,6 +499,8 @@ impl PySeedImageGroups {
         d.set_item("images", group.images)?;
         d.set_item("seed_pair", group.seed_pair)?;
         d.set_item("seed_shared", group.seed_shared)?;
+        d.set_item("pair_shared", group.pair_shared)?;
+        d.set_item("pair_displacement", group.pair_displacement)?;
         Ok(Some(d))
     }
 }

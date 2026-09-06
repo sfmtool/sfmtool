@@ -59,11 +59,15 @@ def _ref_covisibility(starts, images, num_images, accepted=None):
     return counts
 
 
-def _ref_seed_image_groups(counts, group_size=5, min_shared=8):
+def _ref_seed_image_groups(counts, group_size=5, min_shared=8, pair_mean=None):
     """Numpy reference implementation of the spec's seed-group algorithm.
 
     Yields the same dicts the binding does: ``images``, ``seed_pair``,
-    ``seed_shared``.
+    ``seed_shared``, ``pair_shared`` and ``pair_displacement``. The last two
+    are the group's internal pairs in condensed upper-triangle order, the
+    order ``scipy.spatial.distance.pdist`` uses. ``pair_mean`` is a dense
+    (N, N) matrix of the displacement neighborhood's per-pair means (0 for an
+    unrealized pair); None reproduces a matrix built without positions.
     """
     n = len(counts)
     excluded = np.zeros(n, dtype=bool)
@@ -93,14 +97,30 @@ def _ref_seed_image_groups(counts, group_size=5, min_shared=8):
                 break
             group.append(best_k[1])
         group.sort()
+        pairs = [(a, b) for a in range(len(group)) for b in range(a + 1, len(group))]
         groups.append(
             {
                 "images": group,
                 "seed_pair": (best[1], best[2]),
                 "seed_shared": best[0],
+                "pair_shared": [int(counts[group[a], group[b]]) for a, b in pairs],
+                "pair_displacement": (
+                    None
+                    if pair_mean is None
+                    else [float(pair_mean[group[a], group[b]]) for a, b in pairs]
+                ),
             }
         )
         excluded[group] = True
+
+
+def _condensed_index(images, x, y):
+    """Index of the pair ``(x, y)`` in a group's condensed upper triangle,
+    written from the documented formula rather than by re-deriving the
+    enumeration."""
+    a, b = sorted((images.index(x), images.index(y)))
+    n = len(images)
+    return a * (2 * n - a - 1) // 2 + (b - a - 1)
 
 
 def _write_cluster_matches(path, with_patches):
@@ -431,8 +451,16 @@ class TestSeedImageGroups:
             "images": [0, 1, 2],
             "seed_pair": (0, 1),
             "seed_shared": 10,
+            "pair_shared": [10, 10, 10],
+            "pair_displacement": None,
         }
-        assert next(it) == {"images": [3, 4], "seed_pair": (3, 4), "seed_shared": 9}
+        assert next(it) == {
+            "images": [3, 4],
+            "seed_pair": (3, 4),
+            "seed_shared": 9,
+            "pair_shared": [9],
+            "pair_displacement": None,
+        }
         with pytest.raises(StopIteration):
             next(it)
 
@@ -491,6 +519,92 @@ class TestSeedImageGroups:
             assert counts[i, j] == g["seed_shared"] >= 5
             within = counts[np.ix_(g["images"], g["images"])]
             assert within.max() == g["seed_shared"]
+            # The same invariant through the enriched yield.
+            at = _condensed_index(g["images"], i, j)
+            assert g["pair_shared"][at] == g["seed_shared"]
+            assert max(g["pair_shared"]) == g["seed_shared"]
+
+    def test_pair_shared_is_the_condensed_upper_triangle(self):
+        # Six distinct edge weights on four images: any ordering mistake in
+        # the condensed triangle shows up as a mismatched entry.
+        edges = [(0, 1, 20), (0, 2, 19), (0, 3, 18), (1, 2, 17), (1, 3, 16), (2, 3, 15)]
+        starts, images = _edges_to_arrays(4, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 4)
+        groups = list(cov.seed_image_groups(4, min_shared=8))
+        assert len(groups) == 1
+        g = groups[0]
+        assert g["images"] == [0, 1, 2, 3]
+        # The documented order: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3).
+        assert g["pair_shared"] == [20, 19, 18, 17, 16, 15]
+        assert all(isinstance(v, int) for v in g["pair_shared"])
+        counts = cov.counts
+        for a, x in enumerate(g["images"]):
+            for y in g["images"][a + 1 :]:
+                assert (
+                    g["pair_shared"][_condensed_index(g["images"], x, y)]
+                    == (counts[x, y])
+                ), (x, y)
+        # Without positions there is no displacement to report.
+        assert g["pair_displacement"] is None
+
+    def test_pair_displacement_parity_on_a_positioned_build(self):
+        # Distinct per-edge displacements: each two-member cluster forces its
+        # pair, so the neighborhood's exhaustive mean for an edge is exactly
+        # that edge's distance.
+        edges = [
+            (0, 1, 20, 5.0),
+            (0, 2, 19, 7.0),
+            (0, 3, 18, 9.0),
+            (1, 2, 17, 11.0),
+            (1, 3, 16, 13.0),
+            (2, 3, 15, 3.0),
+            (3, 4, 12, 21.0),
+        ]
+        starts, images, positions = _positioned_edges_to_arrays(5, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 5, positions_xy=positions)
+        # Dense per-pair means, straight from the neighborhood serialization.
+        arrs = cov.neighborhood_arrays()
+        pair_mean = np.zeros((5, 5))
+        pair_mean[arrs["i"], arrs["j"]] = arrs["mean_disp"]
+        pair_mean[arrs["j"], arrs["i"]] = arrs["mean_disp"]
+        for group_size, min_shared in [(5, 8), (4, 8), (3, 4), (2, 1)]:
+            got = list(cov.seed_image_groups(group_size, min_shared=min_shared))
+            want = _ref_seed_image_groups(
+                cov.counts,
+                group_size=group_size,
+                min_shared=min_shared,
+                pair_mean=pair_mean,
+            )
+            assert got == want, (group_size, min_shared)
+        # And each entry is the neighborhood's own pair answer.
+        for g in list(cov.seed_image_groups(5, min_shared=8)):
+            assert all(isinstance(v, float) for v in g["pair_displacement"])
+            for a, x in enumerate(g["images"]):
+                for y in g["images"][a + 1 :]:
+                    at = _condensed_index(g["images"], x, y)
+                    shared, mean = cov.pair_stats(x, y)
+                    assert g["pair_displacement"][at] == mean, (x, y)
+                    assert g["pair_shared"][at] == shared
+
+    def test_pair_displacement_zero_for_an_unrealized_pair(self):
+        # min_shared=0 lets the extension take an image sharing nothing with
+        # the group, so the group holds a pair the neighborhood never saw.
+        starts, images, positions = _positioned_edges_to_arrays(3, [(0, 1, 5, 4.0)])
+        cov = ClusterCovisibility.from_arrays(starts, images, 3, positions_xy=positions)
+        (g,) = list(cov.seed_image_groups(3, min_shared=0))
+        assert g["images"] == [0, 1, 2]
+        assert g["pair_shared"] == [5, 0, 0]
+        assert cov.pair_stats(0, 2) is None
+        assert g["pair_displacement"] == [4.0, 0.0, 0.0]
+
+    def test_pair_displacement_is_none_without_positions(self):
+        edges = [(0, 1, 10), (0, 2, 10), (1, 2, 10)]
+        starts, images = _edges_to_arrays(3, edges)
+        cov = ClusterCovisibility.from_arrays(starts, images, 3)
+        for g in cov.seed_image_groups(3, min_shared=8):
+            assert g["pair_displacement"] is None
+            n = len(g["images"])
+            assert len(g["pair_shared"]) == n * (n - 1) // 2
 
     def test_seed_shared_counts_clusters_in_both_seed_images(self, tmp_path):
         # The identity a consumer relies on: seed_shared is the number of
@@ -512,11 +626,14 @@ class TestSeedImageGroups:
             assert shared == g["seed_shared"]
         # The fixture's own numbers: (0, 2) is the strongest edge at 2
         # clusters, and image 1 joins on its single shared cluster each way.
-        assert groups[0] == {
+        keys = ("images", "seed_pair", "seed_shared")
+        assert {k: groups[0][k] for k in keys} == {
             "images": [0, 1, 2],
             "seed_pair": (0, 2),
             "seed_shared": 2,
         }
+        # The internal pairs, condensed: (0, 1), (0, 2), (1, 2).
+        assert groups[0]["pair_shared"] == [1, 2, 1]
 
 
 # ── Selection queries (specs/core/features/covisibility-selection.md) ──────────────

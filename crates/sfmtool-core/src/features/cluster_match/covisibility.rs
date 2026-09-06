@@ -136,8 +136,8 @@ impl Default for SeedImageGroupParams {
     }
 }
 
-/// One greedy mutually-covisible seed group: its images plus the edge it
-/// was grown from.
+/// One greedy mutually-covisible seed group: its images, the edge it was
+/// grown from, and the covisibility evidence for the group's internal pairs.
 ///
 /// The seed pair is the group's **maximum-shared pair**: the founding edge
 /// was the strongest among all non-excluded pairs at that step, and every
@@ -145,7 +145,14 @@ impl Default for SeedImageGroupParams {
 /// `count(a, b) <= seed_shared` holds for every pair `(a, b)` drawn from
 /// [`Self::images`]. A caller that wants the group's best-supported pair
 /// therefore reads [`Self::seed_pair`] instead of re-scanning the group.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// [`Self::pair_shared`] and [`Self::pair_displacement`] carry out what the
+/// matrix already holds about the group's internal pairs, so a consumer
+/// classifying the group's motion regime reads it here rather than querying
+/// the covisibility object pair by pair.
+///
+/// Not `Eq`: [`Self::pair_displacement`] holds `f64` means.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SeedImageGroup {
     /// The group's image indexes, sorted ascending.
     pub images: Vec<u32>,
@@ -154,6 +161,25 @@ pub struct SeedImageGroup {
     pub seed_pair: (u32, u32),
     /// That pair's shared-cluster count.
     pub seed_shared: u32,
+    /// Shared-cluster count for every pair of [`Self::images`], as the
+    /// condensed upper triangle in ascending-pair order: for indexes
+    /// `a < b` into [`Self::images`], the entry sits at
+    /// `a·(2·len − a − 1)/2 + (b − a − 1)` (the standard condensed
+    /// ordering, i.e. the pairs enumerated `(0,1), (0,2), …, (0,len−1),
+    /// (1,2), …`). Length `len·(len−1)/2`. Read straight off the counts
+    /// matrix, so `pair_shared[k]` equals [`ClusterCovisibility::count`] on
+    /// that pair; the entry for [`Self::seed_pair`] is [`Self::seed_shared`],
+    /// which is the maximum over the whole vector.
+    pub pair_shared: Vec<u32>,
+    /// Mean keypoint displacement (pixels) for the same pairs in the same
+    /// condensed order, read off the sparse
+    /// [`DisplacementNeighborhood`] — the exhaustive per-pair mean over the
+    /// pair's shared-cluster keypoints, not the seeded one-sample-per-cluster
+    /// tables behind [`ClusterCovisibility::pair_displacement`]. `None` when
+    /// the covisibility was built without positions (no neighborhood). A pair
+    /// the neighborhood holds no entry for reads `0.0`: it shares no accepted
+    /// clusters.
+    pub pair_displacement: Option<Vec<f64>>,
 }
 
 /// Deterministic 64-bit generator (splitmix64) behind the sampled
@@ -524,8 +550,9 @@ impl ClusterCovisibility {
     /// One step of the seed-group algorithm against an external exclusion
     /// mask: find the strongest non-excluded edge, greedily extend it, mark
     /// the yielded group excluded, and return it with its images sorted
-    /// ascending alongside the founding edge. `None` when the strongest
-    /// remaining edge is below `min_shared` (or no edge remains).
+    /// ascending alongside the founding edge and the group's internal-pair
+    /// counts and displacements (see [`SeedImageGroup`]). `None` when the
+    /// strongest remaining edge is below `min_shared` (or no edge remains).
     ///
     /// This is the single implementation the borrowing [`SeedImageGroups`]
     /// iterator and external lazy iterators (e.g. the Python binding, which
@@ -594,10 +621,32 @@ impl ClusterCovisibility {
         for &g in &group {
             excluded[g as usize] = true;
         }
+
+        // 4. The group's internal pairs, condensed upper triangle: the same
+        //    `a < b` enumeration fills both vectors, so they stay parallel.
+        let n_pairs = group.len() * (group.len() - 1) / 2;
+        let mut pair_shared = Vec::with_capacity(n_pairs);
+        let mut pair_displacement = self
+            .neighborhood
+            .as_ref()
+            .map(|_| Vec::with_capacity(n_pairs));
+        for (a, &ia) in group.iter().enumerate() {
+            for &ib in &group[a + 1..] {
+                pair_shared.push(self.counts[ia as usize * n + ib as usize]);
+                if let (Some(disp), Some(nb)) = (pair_displacement.as_mut(), &self.neighborhood) {
+                    // An unrealized pair shares no accepted cluster, so its
+                    // displacement has no keypoints to average: 0.0.
+                    disp.push(nb.pair(ia, ib).map_or(0.0, |(_, d)| d));
+                }
+            }
+        }
+
         Some(SeedImageGroup {
             images: group,
             seed_pair: (i as u32, j as u32),
             seed_shared: w,
+            pair_shared,
+            pair_displacement,
         })
     }
 }
