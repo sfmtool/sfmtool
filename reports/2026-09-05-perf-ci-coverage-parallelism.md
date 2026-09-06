@@ -191,6 +191,13 @@ transient double-generation and stop caching the cheapest of them. The 1.41 GB
 `pixi-win-64` entry is also worth re-deriving — it buys ~38 s on one job for 14 % of the
 budget, a trade struck before the target caches were this large.
 
+> _Status (2026-09-05): Done, by a third route —
+> [#389](https://github.com/sfmtool/sfmtool/pull/389) adds a `prune-caches` job that deletes
+> the superseded generation once the current one exists, which is what actually bounds the
+> total, and drops the `pixi-win-64` cache as extra margin (28 s/GB against a target
+> cache's ~165 s/GB). Steady state 9.56 GB → ~7.0 GB. Shrinking what the target caches hold
+> was not needed and is not done._
+
 **3. Decide, explicitly, whether Rust-coverage-from-Python is worth its price.** It is
 ~318 s per run today (594 s instrumented against 276 s for the same suite uninstrumented on
 the same runner class), and ~144 s after fix 1. Dropping it would mean running pytest
