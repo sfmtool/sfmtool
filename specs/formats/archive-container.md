@@ -148,6 +148,18 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
 pub fn read_uint128_array<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str, count: usize)
     -> Result<Vec<[u8; 16]>, ArchiveIoError>;
 
+// Reading a whole archive: one sequential pass, then parallel decompression
+pub struct DecodedEntries { /* … */ }
+impl DecodedEntries {
+    pub fn read_all<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<Self, ArchiveIoError>;
+    pub fn zst_entry(&self, name: &str) -> Result<&[u8], ArchiveIoError>;
+    pub fn json_entry<T: DeserializeOwned>(&self, name: &str) -> Result<T, ArchiveIoError>;
+    pub fn binary_array<T: bytemuck::Pod>(&self, name: &str, expected_len: usize)
+        -> Result<Vec<T>, ArchiveIoError>;
+    pub fn uint128_array(&self, name: &str, count: usize)
+        -> Result<Vec<[u8; 16]>, ArchiveIoError>;
+}
+
 // Raw buffer reinterpretation, for verifiers working from bytes they hashed
 pub fn raw_to_u32(raw: &[u8]) -> Cow<'_, [u32]>;
 pub fn raw_to_f32(raw: &[u8]) -> Cow<'_, [f32]>;
@@ -170,7 +182,8 @@ pub fn format_hash(digest: u128) -> String;                   // 32-char lowerca
 ```
 
 **Why this shape.** The surface is entry-at-a-time rather than a
-"Container" object with an entry table, because the four formats disagree about
+"Container" object with an entry table — even `DecodedEntries`, which holds a
+whole file, is keyed by name and knows no schema — because the four formats disagree about
 almost everything above the entry: which entries exist, whether one is optional,
 what a section is, what the metadata means. What they genuinely share is one
 entry's worth of work — compress it, store it, fold it into a hash — so that is
@@ -194,6 +207,32 @@ Three consequences of that choice are visible in the signatures:
   hands them back for hashing; a binary entry's bytes are the caller's own buffer
   — a whole column of positions, thumbnails or patch bitmaps — so returning a
   copy would double the peak memory of a large write for nothing.
+
+### Reading a whole archive
+
+A read that consumes most of a file goes through `DecodedEntries` instead of
+asking for entries one at a time. `read_all` walks the ZIP once, collecting each
+entry's stored bytes in archive order, and then expands the zstd frames — which
+are independent of one another — in parallel; the typed accessors serve the
+resulting buffers by name. They mirror `read_json_entry`, `read_binary_array`
+and `read_uint128_array` and share their conversion and length checks, so the
+two paths return the same values and the same errors, down to the entry name in
+the message and the `Zip` `FileNotFound` for an entry the archive does not hold.
+An optional entry is therefore still just an entry a format crate does not ask
+for.
+
+This is a separate entry point rather than a change of behaviour inside
+`read_zst_entry` so that the parallel region is something a format crate opts
+into. A crate whose read path is a handful of small entries, or one called from
+inside a caller's own parallel region, keeps the sequential readers and pays
+nothing. [matches-format](../../crates/matches-format/)'s
+[`read_matches`](../../crates/matches-format/src/read.rs) is the caller: its
+sections between them consume every entry in the file, and its largest columns
+are tens of megabytes.
+
+The batch holds the whole decompressed file at once, where the sequential
+readers hold one entry at a time. That is the cost of the shape and the reason
+it is opt-in.
 
 Errors are one enum rather than `Result<_, String>` so each format crate can map
 variant to variant into its own public error (`SfmrError`, `MatchesError`,
@@ -256,6 +295,19 @@ decompressed buffer lands aligned is the allocator's choice, which is why
 guaranteed-misaligned slice and calls the helper directly, so folding it back
 into its caller would leave the fallback untested.
 
+**A batch read reports the first unreadable entry in archive order.** Decoding
+runs concurrently, so "the error" would otherwise be whichever worker lost the
+race, and a file with two corrupt entries would report differently from run to
+run. `read_all` collects one `Result` per entry and reassembles them in the
+order the ZIP lists, so the entry a caller is told about is a property of the
+file.
+
+**Decompressing in parallel is a scheduling change and nothing else.** A zstd
+frame expands to the same bytes wherever it is expanded, so a format crate that
+moves its read path onto `DecodedEntries` parses byte-identical arrays; the
+shared conversion helpers behind `binary_array` and `uint128_array` are what
+keeps the rest identical too.
+
 **Neither the hasher nor the compressor is re-exported.** Format crates depend
 on `xxhash-rust` themselves, because `write_binary_entry_hashed` takes an `Xxh3`
 by reference and the section-level hashing lives in their write paths. A format crate that wants
@@ -275,6 +327,15 @@ entry whose payload is not JSON a `Json` error. One test pins that
 show: a repetitive buffer bottoms out at the same size at every level and
 incompressible noise comes back byte-identical, so it uses pseudo-random data
 over a four-symbol alphabet, where the extra search effort pays.
+
+`DecodedEntries` is tested against the entry-at-a-time readers rather than on
+its own terms, over an archive holding one of every kind of entry a format crate
+reads — JSON, a `u32` column, an `f32` column compared by bit pattern, a digest
+column, an empty one. Every buffer must equal what `read_zst_entry` returns for
+the same entry, every typed accessor must equal its free-function counterpart,
+and the length-mismatch and missing-entry errors must render the same string.
+The archive-order rule gets a file with two unreadable entries, read repeatedly,
+which must name the earlier one every time.
 
 Two properties get dedicated tests because everything above rests on them:
 `write_binary_entry_hashed` must produce the same digest as hashing the two

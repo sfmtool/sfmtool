@@ -1010,6 +1010,13 @@ Every entry of a `.matches` file is written at the same zstandard level:
 defaults to 3. The rest is the container's; see
 [archive-container.md](archive-container.md).
 
+A full read consumes every entry the file holds, so `read_matches` takes the
+container's whole-archive path — one pass over the ZIP, then the frames expanded
+in parallel — and each section reader looks its entries up by name in that
+batch. `verify_matches` and `read_matches_metadata` do not: the verifier walks
+the archive in the order the hashes were taken, and a metadata-only read wants
+one small entry.
+
 ## Integrity Verification
 
 The hashes are the ones described under

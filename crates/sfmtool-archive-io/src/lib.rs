@@ -19,8 +19,10 @@ compile_error!(
 );
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 
+use rayon::prelude::*;
 use xxhash_rust::xxh3::Xxh3;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
@@ -58,8 +60,13 @@ pub fn read_zst_entry<R: Read + Seek>(
     let mut entry = archive.by_name(name)?;
     let mut compressed = Vec::new();
     entry.read_to_end(&mut compressed)?;
+    decode_zst(name, &compressed)
+}
+
+/// Expand one entry's stored zstd frame, naming the entry in the error.
+fn decode_zst(name: &str, compressed: &[u8]) -> Result<Vec<u8>, ArchiveIoError> {
     let mut decompressed = Vec::new();
-    zstd::stream::copy_decode(&compressed[..], &mut decompressed).map_err(|e| {
+    zstd::stream::copy_decode(compressed, &mut decompressed).map_err(|e| {
         ArchiveIoError::InvalidFormat(format!("zstd decompression failed for {name}: {e}"))
     })?;
     Ok(decompressed)
@@ -82,7 +89,19 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
     name: &str,
     expected_len: usize,
 ) -> Result<Vec<T>, ArchiveIoError> {
-    let bytes = read_zst_entry(archive, name)?;
+    bytes_to_array(name, &read_zst_entry(archive, name)?, expected_len)
+}
+
+/// Validate a decompressed entry's length and reinterpret it as `T` values.
+///
+/// The length check is the format's shape check, so it names the entry; both
+/// [`read_binary_array`] and [`DecodedEntries::binary_array`] route through
+/// here so the two paths cannot drift on either the check or the message.
+fn bytes_to_array<T: bytemuck::Pod>(
+    name: &str,
+    bytes: &[u8],
+    expected_len: usize,
+) -> Result<Vec<T>, ArchiveIoError> {
     let expected_bytes = expected_len * std::mem::size_of::<T>();
     if bytes.len() != expected_bytes {
         return Err(ArchiveIoError::ShapeMismatch(format!(
@@ -90,7 +109,7 @@ pub fn read_binary_array<R: Read + Seek, T: bytemuck::Pod>(
             bytes.len()
         )));
     }
-    Ok(cast_or_copy(&bytes, expected_len))
+    Ok(cast_or_copy(bytes, expected_len))
 }
 
 /// Reinterpret `bytes` as `expected_len` values of `T`, copying once.
@@ -128,7 +147,15 @@ pub fn read_uint128_array<R: Read + Seek>(
     name: &str,
     count: usize,
 ) -> Result<Vec<[u8; 16]>, ArchiveIoError> {
-    let bytes = read_zst_entry(archive, name)?;
+    bytes_to_uint128(name, &read_zst_entry(archive, name)?, count)
+}
+
+/// [`bytes_to_array`] for the raw 16-byte digest columns.
+fn bytes_to_uint128(
+    name: &str,
+    bytes: &[u8],
+    count: usize,
+) -> Result<Vec<[u8; 16]>, ArchiveIoError> {
     let expected = count * 16;
     if bytes.len() != expected {
         return Err(ArchiveIoError::ShapeMismatch(format!(
@@ -143,6 +170,100 @@ pub fn read_uint128_array<R: Read + Seek>(
         hashes.push(hash);
     }
     Ok(hashes)
+}
+
+// ── Whole-archive reading ───────────────────────────────────────────────
+
+/// Every entry of one archive, decompressed and held by name.
+///
+/// A format crate whose read path consumes most of a file builds one of these
+/// instead of reaching for the entry-at-a-time readers, then asks it for the
+/// entries its metadata says are there. The typed accessors mirror
+/// [`read_json_entry`], [`read_binary_array`] and [`read_uint128_array`] and
+/// share their validation, so a caller reading through here gets the same
+/// values and the same errors — including an [`ArchiveIoError::Zip`]
+/// `FileNotFound` for an entry the archive does not hold.
+///
+/// See `specs/formats/archive-container.md` § "Reading a whole archive".
+pub struct DecodedEntries {
+    entries: HashMap<String, Vec<u8>>,
+}
+
+// Hand-written rather than derived: the payloads are whole decompressed
+// columns, so the derived form would print megabytes.
+impl std::fmt::Debug for DecodedEntries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let bytes: usize = self.entries.values().map(Vec::len).sum();
+        f.debug_struct("DecodedEntries")
+            .field("entries", &self.entries.len())
+            .field("decompressed_bytes", &bytes)
+            .finish()
+    }
+}
+
+impl DecodedEntries {
+    /// Read and decompress every entry of `archive`.
+    ///
+    /// One sequential pass collects each entry's stored bytes; the zstd frames
+    /// are then expanded in parallel, which is the point of the type.
+    pub fn read_all<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<Self, ArchiveIoError> {
+        let mut stored: Vec<(String, Vec<u8>)> = Vec::with_capacity(archive.len());
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index)?;
+            if entry.is_dir() {
+                continue;
+            }
+            let name = entry.name().to_string();
+            // STORE method throughout, so the stored size is what we read.
+            let mut compressed = Vec::with_capacity(entry.compressed_size() as usize);
+            entry.read_to_end(&mut compressed)?;
+            stored.push((name, compressed));
+        }
+
+        let decoded: Vec<Result<Vec<u8>, ArchiveIoError>> = stored
+            .par_iter()
+            .map(|(name, compressed)| decode_zst(name, compressed))
+            .collect();
+
+        // Reassembled in archive order, so an archive with several unreadable
+        // entries always reports the same one rather than whichever thread
+        // finished first.
+        let mut entries = HashMap::with_capacity(stored.len());
+        for ((name, _), bytes) in stored.into_iter().zip(decoded) {
+            entries.insert(name, bytes?);
+        }
+        Ok(Self { entries })
+    }
+
+    /// The decompressed bytes of `name`.
+    pub fn zst_entry(&self, name: &str) -> Result<&[u8], ArchiveIoError> {
+        self.entries
+            .get(name)
+            .map(Vec::as_slice)
+            .ok_or(ArchiveIoError::Zip(zip::result::ZipError::FileNotFound))
+    }
+
+    /// [`read_json_entry`] against an already-decompressed entry.
+    pub fn json_entry<T: serde::de::DeserializeOwned>(
+        &self,
+        name: &str,
+    ) -> Result<T, ArchiveIoError> {
+        serde_json::from_slice(self.zst_entry(name)?).map_err(|e| e.into())
+    }
+
+    /// [`read_binary_array`] against an already-decompressed entry.
+    pub fn binary_array<T: bytemuck::Pod>(
+        &self,
+        name: &str,
+        expected_len: usize,
+    ) -> Result<Vec<T>, ArchiveIoError> {
+        bytes_to_array(name, self.zst_entry(name)?, expected_len)
+    }
+
+    /// [`read_uint128_array`] against an already-decompressed entry.
+    pub fn uint128_array(&self, name: &str, count: usize) -> Result<Vec<[u8; 16]>, ArchiveIoError> {
+        bytes_to_uint128(name, self.zst_entry(name)?, count)
+    }
 }
 
 // ── Raw buffer reinterpretation ─────────────────────────────────────────

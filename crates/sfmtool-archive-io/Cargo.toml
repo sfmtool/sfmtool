@@ -11,6 +11,7 @@ description = "Shared ZIP + zstd container I/O for sfmtool's archive-based file 
 
 [dependencies]
 bytemuck = "1.25"
+rayon = "1.12"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = "0.13"
 serde = { version = "1", features = ["derive"] }

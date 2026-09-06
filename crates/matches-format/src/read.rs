@@ -3,15 +3,13 @@
 
 //! `.matches` file reading.
 
-use std::io::Seek;
 use std::path::Path;
 
 use ndarray::{Array1, Array2, Array3};
-use zip::ZipArchive;
 
 use crate::entries;
 use crate::types::*;
-use sfmtool_archive_io::{read_binary_array, read_json_entry, read_uint128_array};
+use sfmtool_archive_io::{read_json_entry, DecodedEntries};
 
 /// Read only the top-level metadata from a `.matches` file (fast, no binary data).
 pub fn read_matches_metadata(path: &Path) -> Result<MatchesMetadata, MatchesError> {
@@ -58,10 +56,14 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         source: e,
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
+    // A full read consumes every entry the file holds, so they are all
+    // decompressed in one batch rather than one at a time; the section readers
+    // below then look up the entries this file's metadata says exist.
+    let decoded = DecodedEntries::read_all(&mut archive)?;
 
     // Top-level metadata
-    let mut metadata: MatchesMetadata = read_json_entry(&mut archive, entries::metadata())?;
-    let content_hash: MatchesContentHash = read_json_entry(&mut archive, entries::content_hash())?;
+    let mut metadata: MatchesMetadata = decoded.json_entry(entries::metadata())?;
+    let content_hash: MatchesContentHash = decoded.json_entry(entries::content_hash())?;
 
     // Reject versions newer than this build understands; their semantics are
     // unknown so reading with current-version assumptions would mislead.
@@ -118,7 +120,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     let image_count = metadata.image_count as usize;
 
     // Cross-check images section metadata
-    let images_meta: serde_json::Value = read_json_entry(&mut archive, entries::images_metadata())?;
+    let images_meta: serde_json::Value = decoded.json_entry(entries::images_metadata())?;
     if images_meta.get("image_count").and_then(|v| v.as_u64()) != Some(image_count as u64) {
         return Err(MatchesError::InvalidFormat(
             "images/metadata.json.zst image_count doesn't match top-level metadata".into(),
@@ -126,7 +128,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     }
 
     // === Images ===
-    let image_names: Vec<String> = read_json_entry(&mut archive, entries::images_names())?;
+    let image_names: Vec<String> = decoded.json_entry(entries::images_names())?;
     if image_names.len() != image_count {
         return Err(MatchesError::ShapeMismatch(format!(
             "image names count {} != image_count {image_count}",
@@ -134,33 +136,25 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
         )));
     }
 
-    let feature_tool_hashes = read_uint128_array(
-        &mut archive,
+    let feature_tool_hashes = decoded.uint128_array(
         &entries::images_feature_tool_hashes(image_count),
         image_count,
     )?;
 
-    let sift_content_hashes = read_uint128_array(
-        &mut archive,
+    let sift_content_hashes = decoded.uint128_array(
         &entries::images_sift_content_hashes(image_count),
         image_count,
     )?;
 
-    let feature_counts_vec: Vec<u32> = read_binary_array(
-        &mut archive,
-        &entries::images_feature_counts(image_count),
-        image_count,
-    )?;
+    let feature_counts_vec: Vec<u32> =
+        decoded.binary_array(&entries::images_feature_counts(image_count), image_count)?;
     let feature_counts = Array1::from_vec(feature_counts_vec);
 
     // Per-image dimensions: mandatory since version 4; version ≤ 3 files
     // never stored them.
     let image_dims = if stored_version >= 4 {
-        let dims_vec: Vec<u32> = read_binary_array(
-            &mut archive,
-            &entries::images_image_dims(image_count),
-            image_count * 2,
-        )?;
+        let dims_vec: Vec<u32> =
+            decoded.binary_array(&entries::images_image_dims(image_count), image_count * 2)?;
         Some(
             Array2::from_shape_vec((image_count, 2), dims_vec)
                 .map_err(|e| MatchesError::ShapeMismatch(format!("image_dims reshape: {e}")))?,
@@ -183,18 +177,18 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
                 "pairwise file must not set metadata.cluster_count / cluster_member_count".into(),
             ));
         }
-        Some(read_pairs_section(&mut archive, &metadata)?)
+        Some(read_pairs_section(&decoded, &metadata)?)
     };
 
     let clusters = if metadata.has_clusters {
-        Some(read_clusters_section(&mut archive, &metadata)?)
+        Some(read_clusters_section(&decoded, &metadata)?)
     } else {
         None
     };
 
     // === Cluster patches (optional) ===
     let cluster_patches = if metadata.has_cluster_patches {
-        Some(read_cluster_patches_section(&mut archive, &metadata)?)
+        Some(read_cluster_patches_section(&decoded, &metadata)?)
     } else {
         None
     };
@@ -202,7 +196,7 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     // === Two-view geometries (optional) ===
     let two_view_geometries = if metadata.has_two_view_geometries {
         let pair_count = metadata.image_pair_count.unwrap_or(0) as usize;
-        let mut tvg = read_tvg_section(&mut archive, pair_count)?;
+        let mut tvg = read_tvg_section(&decoded, pair_count)?;
         // Version 1 → 2 upgrade: relative poses were stored in the COLMAP
         // camera convention; S-conjugate them to canonical. F/E/H are
         // pixel-space and unchanged.
@@ -235,8 +229,8 @@ pub fn read_matches(path: &Path) -> Result<MatchesData, MatchesError> {
     })
 }
 
-fn read_pairs_section<R: std::io::Read + Seek>(
-    archive: &mut ZipArchive<R>,
+fn read_pairs_section(
+    decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
 ) -> Result<PairsData, MatchesError> {
     let pair_count = metadata.image_pair_count.ok_or_else(|| {
@@ -251,7 +245,7 @@ fn read_pairs_section<R: std::io::Read + Seek>(
     })? as usize;
 
     // Cross-check pairs section metadata
-    let pairs_meta: serde_json::Value = read_json_entry(archive, entries::image_pairs_metadata())?;
+    let pairs_meta: serde_json::Value = decoded.json_entry(entries::image_pairs_metadata())?;
     if pairs_meta.get("image_pair_count").and_then(|v| v.as_u64()) != Some(pair_count as u64) {
         return Err(MatchesError::InvalidFormat(
             "image_pairs/metadata.json.zst image_pair_count doesn't match top-level metadata"
@@ -264,31 +258,25 @@ fn read_pairs_section<R: std::io::Read + Seek>(
         ));
     }
 
-    let image_index_pairs_vec: Vec<u32> = read_binary_array(
-        archive,
+    let image_index_pairs_vec: Vec<u32> = decoded.binary_array(
         &entries::image_pairs_image_index_pairs(pair_count),
         pair_count * 2,
     )?;
     let image_index_pairs = Array2::from_shape_vec((pair_count, 2), image_index_pairs_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("image_index_pairs reshape: {e}")))?;
 
-    let match_counts_vec: Vec<u32> = read_binary_array(
-        archive,
-        &entries::image_pairs_match_counts(pair_count),
-        pair_count,
-    )?;
+    let match_counts_vec: Vec<u32> =
+        decoded.binary_array(&entries::image_pairs_match_counts(pair_count), pair_count)?;
     let match_counts = Array1::from_vec(match_counts_vec);
 
-    let match_feature_indexes_vec: Vec<u32> = read_binary_array(
-        archive,
+    let match_feature_indexes_vec: Vec<u32> = decoded.binary_array(
         &entries::image_pairs_match_feature_indexes(match_count),
         match_count * 2,
     )?;
     let match_feature_indexes = Array2::from_shape_vec((match_count, 2), match_feature_indexes_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("match_feature_indexes reshape: {e}")))?;
 
-    let match_descriptor_distances_vec: Vec<f32> = read_binary_array(
-        archive,
+    let match_descriptor_distances_vec: Vec<f32> = decoded.binary_array(
         &entries::image_pairs_match_descriptor_distances(match_count),
         match_count,
     )?;
@@ -302,8 +290,8 @@ fn read_pairs_section<R: std::io::Read + Seek>(
     })
 }
 
-fn read_clusters_section<R: std::io::Read + Seek>(
-    archive: &mut ZipArchive<R>,
+fn read_clusters_section(
+    decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
 ) -> Result<ClustersData, MatchesError> {
     let cluster_count = metadata.cluster_count.ok_or_else(|| {
@@ -322,7 +310,7 @@ fn read_clusters_section<R: std::io::Read + Seek>(
     })? as usize;
 
     // Cross-check clusters section metadata
-    let clusters_meta: serde_json::Value = read_json_entry(archive, entries::clusters_metadata())?;
+    let clusters_meta: serde_json::Value = decoded.json_entry(entries::clusters_metadata())?;
     if clusters_meta.get("cluster_count").and_then(|v| v.as_u64()) != Some(cluster_count as u64) {
         return Err(MatchesError::InvalidFormat(
             "clusters/metadata.json.zst cluster_count doesn't match top-level metadata".into(),
@@ -338,22 +326,17 @@ fn read_clusters_section<R: std::io::Read + Seek>(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let cluster_starts_vec: Vec<u32> = read_binary_array(
-        archive,
+    let cluster_starts_vec: Vec<u32> = decoded.binary_array(
         &entries::clusters_cluster_starts(cluster_count),
         cluster_count + 1,
     )?;
     let cluster_starts = Array1::from_vec(cluster_starts_vec);
 
-    let member_images_vec: Vec<u32> = read_binary_array(
-        archive,
-        &entries::clusters_member_images(member_count),
-        member_count,
-    )?;
+    let member_images_vec: Vec<u32> =
+        decoded.binary_array(&entries::clusters_member_images(member_count), member_count)?;
     let member_images = Array1::from_vec(member_images_vec);
 
-    let member_features_vec: Vec<u32> = read_binary_array(
-        archive,
+    let member_features_vec: Vec<u32> = decoded.binary_array(
         &entries::clusters_member_features(member_count),
         member_count,
     )?;
@@ -361,16 +344,14 @@ fn read_clusters_section<R: std::io::Read + Seek>(
 
     // The members' geometry, mandatory since version 6 (older cluster files
     // are refused before this point).
-    let positions_vec: Vec<f32> = read_binary_array(
-        archive,
+    let positions_vec: Vec<f32> = decoded.binary_array(
         &entries::clusters_member_positions(member_count),
         member_count * 2,
     )?;
     let member_positions = Array2::from_shape_vec((member_count, 2), positions_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("member_positions reshape: {e}")))?;
 
-    let shapes_vec: Vec<f32> = read_binary_array(
-        archive,
+    let shapes_vec: Vec<f32> = decoded.binary_array(
         &entries::clusters_member_affine_shapes(member_count),
         member_count * 4,
     )?;
@@ -389,15 +370,15 @@ fn read_clusters_section<R: std::io::Read + Seek>(
     })
 }
 
-fn read_cluster_patches_section<R: std::io::Read + Seek>(
-    archive: &mut ZipArchive<R>,
+fn read_cluster_patches_section(
+    decoded: &DecodedEntries,
     metadata: &MatchesMetadata,
 ) -> Result<ClusterPatchData, MatchesError> {
     let cluster_count = metadata.cluster_count.unwrap_or(0) as usize;
     let member_count = metadata.cluster_member_count.unwrap_or(0) as usize;
 
     // Cross-check cluster_patches section metadata
-    let cp_meta: serde_json::Value = read_json_entry(archive, entries::cluster_patches_metadata())?;
+    let cp_meta: serde_json::Value = decoded.json_entry(entries::cluster_patches_metadata())?;
     if cp_meta.get("cluster_count").and_then(|v| v.as_u64()) != Some(cluster_count as u64) {
         return Err(MatchesError::InvalidFormat(
             "cluster_patches/metadata.json.zst cluster_count doesn't match top-level metadata"
@@ -415,36 +396,31 @@ fn read_cluster_patches_section<R: std::io::Read + Seek>(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let reference_members_vec: Vec<u32> = read_binary_array(
-        archive,
+    let reference_members_vec: Vec<u32> = decoded.binary_array(
         &entries::cluster_patches_reference_members(cluster_count),
         cluster_count,
     )?;
     let reference_members = Array1::from_vec(reference_members_vec);
 
-    let member_status_vec: Vec<u8> = read_binary_array(
-        archive,
+    let member_status_vec: Vec<u8> = decoded.binary_array(
         &entries::cluster_patches_member_status(member_count),
         member_count,
     )?;
     let member_status = Array1::from_vec(member_status_vec);
 
-    let member_zncc_vec: Vec<f32> = read_binary_array(
-        archive,
+    let member_zncc_vec: Vec<f32> = decoded.binary_array(
         &entries::cluster_patches_member_zncc(member_count),
         member_count,
     )?;
     let member_zncc = Array1::from_vec(member_zncc_vec);
 
-    let member_shift_px_vec: Vec<f32> = read_binary_array(
-        archive,
+    let member_shift_px_vec: Vec<f32> = decoded.binary_array(
         &entries::cluster_patches_member_shift_px(member_count),
         member_count,
     )?;
     let member_shift_px = Array1::from_vec(member_shift_px_vec);
 
-    let member_consistency_vec: Vec<f32> = read_binary_array(
-        archive,
+    let member_consistency_vec: Vec<f32> = decoded.binary_array(
         &entries::cluster_patches_member_consistency_residual(member_count),
         member_count,
     )?;
@@ -460,12 +436,11 @@ fn read_cluster_patches_section<R: std::io::Read + Seek>(
     })
 }
 
-fn read_tvg_section<R: std::io::Read + Seek>(
-    archive: &mut ZipArchive<R>,
+fn read_tvg_section(
+    decoded: &DecodedEntries,
     pair_count: usize,
 ) -> Result<TwoViewGeometryData, MatchesError> {
-    let tvg_metadata: TvgMetadata =
-        read_json_entry(archive, entries::two_view_geometries_metadata())?;
+    let tvg_metadata: TvgMetadata = decoded.json_entry(entries::two_view_geometries_metadata())?;
     let inlier_count = tvg_metadata.inlier_count as usize;
 
     if tvg_metadata.image_pair_count as usize != pair_count {
@@ -477,15 +452,14 @@ fn read_tvg_section<R: std::io::Read + Seek>(
 
     // config_types.json
     let config_type_strings: Vec<String> =
-        read_json_entry(archive, entries::two_view_geometries_config_types())?;
+        decoded.json_entry(entries::two_view_geometries_config_types())?;
     let config_types: Vec<TwoViewGeometryConfig> = config_type_strings
         .iter()
         .map(|s| s.parse())
         .collect::<Result<_, _>>()?;
 
     // config_indexes
-    let config_indexes_vec: Vec<u8> = read_binary_array(
-        archive,
+    let config_indexes_vec: Vec<u8> = decoded.binary_array(
         &entries::two_view_geometries_config_indexes(pair_count),
         pair_count,
     )?;
@@ -502,16 +476,14 @@ fn read_tvg_section<R: std::io::Read + Seek>(
     }
 
     // inlier_counts
-    let inlier_counts_vec: Vec<u32> = read_binary_array(
-        archive,
+    let inlier_counts_vec: Vec<u32> = decoded.binary_array(
         &entries::two_view_geometries_inlier_counts(pair_count),
         pair_count,
     )?;
     let inlier_counts = Array1::from_vec(inlier_counts_vec);
 
     // inlier_feature_indexes
-    let inlier_fi_vec: Vec<u32> = read_binary_array(
-        archive,
+    let inlier_fi_vec: Vec<u32> = decoded.binary_array(
         &entries::two_view_geometries_inlier_feature_indexes(inlier_count),
         inlier_count * 2,
     )?;
@@ -519,24 +491,21 @@ fn read_tvg_section<R: std::io::Read + Seek>(
         .map_err(|e| MatchesError::ShapeMismatch(format!("inlier_feature_indexes reshape: {e}")))?;
 
     // Matrices
-    let f_vec: Vec<f64> = read_binary_array(
-        archive,
+    let f_vec: Vec<f64> = decoded.binary_array(
         &entries::two_view_geometries_f_matrices(pair_count),
         pair_count * 9,
     )?;
     let f_matrices = Array3::from_shape_vec((pair_count, 3, 3), f_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("f_matrices reshape: {e}")))?;
 
-    let e_vec: Vec<f64> = read_binary_array(
-        archive,
+    let e_vec: Vec<f64> = decoded.binary_array(
         &entries::two_view_geometries_e_matrices(pair_count),
         pair_count * 9,
     )?;
     let e_matrices = Array3::from_shape_vec((pair_count, 3, 3), e_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("e_matrices reshape: {e}")))?;
 
-    let h_vec: Vec<f64> = read_binary_array(
-        archive,
+    let h_vec: Vec<f64> = decoded.binary_array(
         &entries::two_view_geometries_h_matrices(pair_count),
         pair_count * 9,
     )?;
@@ -544,16 +513,14 @@ fn read_tvg_section<R: std::io::Read + Seek>(
         .map_err(|e| MatchesError::ShapeMismatch(format!("h_matrices reshape: {e}")))?;
 
     // Quaternions and translations
-    let quat_vec: Vec<f64> = read_binary_array(
-        archive,
+    let quat_vec: Vec<f64> = decoded.binary_array(
         &entries::two_view_geometries_quaternions_wxyz(pair_count),
         pair_count * 4,
     )?;
     let quaternions_wxyz = Array2::from_shape_vec((pair_count, 4), quat_vec)
         .map_err(|e| MatchesError::ShapeMismatch(format!("quaternions reshape: {e}")))?;
 
-    let trans_vec: Vec<f64> = read_binary_array(
-        archive,
+    let trans_vec: Vec<f64> = decoded.binary_array(
         &entries::two_view_geometries_translations_xyz(pair_count),
         pair_count * 3,
     )?;

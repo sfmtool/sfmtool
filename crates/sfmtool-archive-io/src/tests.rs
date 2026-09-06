@@ -294,6 +294,152 @@ fn missing_entry_is_a_zip_error() {
     assert!(matches!(err, ArchiveIoError::Zip(_)), "unexpected: {err}");
 }
 
+/// Build an archive holding one of every kind of entry a format crate reads:
+/// JSON, a `u32` column, an `f32` column, a digest column, and an empty one.
+fn mixed_archive() -> ZipArchive<Cursor<Vec<u8>>> {
+    let counts: Vec<u32> = (0..4096).map(|i| i * 3 + 1).collect();
+    let residuals: Vec<f32> = (0..4096).map(|i| i as f32 * -0.25).collect();
+    let digests: Vec<u8> = (0u8..64).flat_map(|i| [i; 16]).collect();
+    round_trip(|zip| {
+        write_json_entry(
+            zip,
+            "metadata.json.zst",
+            &serde_json::json!({"version": 6}),
+            LEVEL,
+        )?;
+        write_json_entry(zip, "images/names.json.zst", &vec!["a.jpg", "b.jpg"], LEVEL)?;
+        write_binary_entry(
+            zip,
+            "counts.4096.uint32.zst",
+            bytemuck::cast_slice(&counts),
+            LEVEL,
+        )?;
+        write_binary_entry(
+            zip,
+            "residuals.4096.float32.zst",
+            bytemuck::cast_slice(&residuals),
+            LEVEL,
+        )?;
+        write_binary_entry(zip, "hashes.64.uint128.zst", &digests, LEVEL)?;
+        write_binary_entry(zip, "empty.0.uint32.zst", &[], LEVEL)
+    })
+}
+
+#[test]
+fn decoded_entries_are_byte_identical_to_the_entry_at_a_time_reads() {
+    // The bit-identity claim the batch path rests on: parallel decoding is a
+    // scheduling change, so every buffer it hands out must equal the one
+    // `read_zst_entry` produces for the same entry, and the typed accessors
+    // must agree with the free functions built on it.
+    let mut archive = mixed_archive();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().to_string())
+        .collect();
+
+    let decoded = DecodedEntries::read_all(&mut archive).unwrap();
+    for name in &names {
+        assert_eq!(
+            decoded.zst_entry(name).unwrap(),
+            read_zst_entry(&mut archive, name).unwrap(),
+            "{name} decoded differently"
+        );
+    }
+
+    let meta: serde_json::Value = decoded.json_entry("metadata.json.zst").unwrap();
+    assert_eq!(
+        meta,
+        read_json_entry::<_, serde_json::Value>(&mut archive, "metadata.json.zst").unwrap()
+    );
+    assert_eq!(
+        decoded
+            .binary_array::<u32>("counts.4096.uint32.zst", 4096)
+            .unwrap(),
+        read_binary_array::<_, u32>(&mut archive, "counts.4096.uint32.zst", 4096).unwrap()
+    );
+    let batch_f32 = decoded
+        .binary_array::<f32>("residuals.4096.float32.zst", 4096)
+        .unwrap();
+    let seq_f32 =
+        read_binary_array::<_, f32>(&mut archive, "residuals.4096.float32.zst", 4096).unwrap();
+    assert!(
+        batch_f32
+            .iter()
+            .map(|v| v.to_bits())
+            .eq(seq_f32.iter().map(|v| v.to_bits())),
+        "float column decoded differently"
+    );
+    assert_eq!(
+        decoded.uint128_array("hashes.64.uint128.zst", 64).unwrap(),
+        read_uint128_array(&mut archive, "hashes.64.uint128.zst", 64).unwrap()
+    );
+    assert!(decoded
+        .binary_array::<u32>("empty.0.uint32.zst", 0)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn decoded_entries_reject_a_wrong_element_count_like_the_sequential_read() {
+    let mut archive = mixed_archive();
+    let decoded = DecodedEntries::read_all(&mut archive).unwrap();
+
+    let batch = decoded
+        .binary_array::<u32>("counts.4096.uint32.zst", 4095)
+        .unwrap_err();
+    let sequential =
+        read_binary_array::<_, u32>(&mut archive, "counts.4096.uint32.zst", 4095).unwrap_err();
+    assert_eq!(batch.to_string(), sequential.to_string());
+
+    let batch = decoded
+        .uint128_array("hashes.64.uint128.zst", 63)
+        .unwrap_err();
+    let sequential = read_uint128_array(&mut archive, "hashes.64.uint128.zst", 63).unwrap_err();
+    assert_eq!(batch.to_string(), sequential.to_string());
+}
+
+#[test]
+fn a_missing_entry_is_a_zip_error_on_the_batch_path_too() {
+    let mut archive = mixed_archive();
+    let decoded = DecodedEntries::read_all(&mut archive).unwrap();
+    let err = decoded.zst_entry("absent.zst").unwrap_err();
+    assert!(matches!(err, ArchiveIoError::Zip(_)), "unexpected: {err}");
+    assert_eq!(
+        err.to_string(),
+        read_zst_entry(&mut archive, "absent.zst")
+            .unwrap_err()
+            .to_string()
+    );
+}
+
+#[test]
+fn several_unreadable_entries_report_the_first_in_archive_order() {
+    // Decoding runs concurrently, so the failure a caller sees must come from
+    // the archive's own order rather than from whichever worker finished
+    // first — otherwise the same broken file reports differently run to run.
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+    for name in ["a_bad.zst", "b_good.zst", "c_bad.zst"] {
+        zip.start_file(name, stored).unwrap();
+        if name.ends_with("bad.zst") {
+            std::io::Write::write_all(&mut zip, b"not a zstd frame").unwrap();
+        } else {
+            std::io::Write::write_all(&mut zip, &zstd_compress(b"payload", LEVEL).unwrap())
+                .unwrap();
+        }
+    }
+    let buf = zip.finish().unwrap().into_inner();
+
+    for _ in 0..8 {
+        let mut archive = ZipArchive::new(Cursor::new(buf.clone())).unwrap();
+        let err = DecodedEntries::read_all(&mut archive).unwrap_err();
+        assert!(
+            matches!(err, ArchiveIoError::InvalidFormat(ref m) if m.contains("a_bad.zst")),
+            "unexpected: {err}"
+        );
+    }
+}
+
 #[test]
 fn corrupt_zst_payload_is_an_invalid_format_error() {
     // An entry whose bytes are not a zstd frame at all.
