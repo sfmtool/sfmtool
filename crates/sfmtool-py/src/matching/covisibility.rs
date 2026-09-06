@@ -14,7 +14,8 @@ use pyo3::prelude::*;
 
 use pyo3::types::PyDict;
 use sfmtool_core::features::cluster_match::covisibility::{
-    ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedImageGroupParams,
+    ClusterCovisibility as CoreClusterCovisibility, DisplacementNeighborhood, SeedImageGroup,
+    SeedImageGroupParams,
 };
 
 use crate::io::matches_file::PyMatchesFile;
@@ -425,24 +426,8 @@ impl PyClusterCovisibility {
     /// are disjoint; ends when the strongest remaining edge is below
     /// ``min_shared``.
     ///
-    /// Each step yields a dict ``{"images": list[int] sorted ascending,
-    /// "seed_pair": (i, j) with i < j, "seed_shared": int, "pair_shared":
-    /// list[int], "pair_displacement": list[float] | None}``. The seed pair
-    /// is the edge the group grew from and is the group's maximum-shared
-    /// pair, so a caller wanting the best-supported pair reads it instead of
-    /// re-scanning the group.
-    ///
-    /// ``pair_shared`` and ``pair_displacement`` carry the covisibility
-    /// evidence for the group's *internal* pairs, both in the condensed
-    /// upper-triangle order over ``images``: for ``a < b`` indexing
-    /// ``images``, the entry sits at ``a*(2*len - a - 1)//2 + (b - a - 1)``
-    /// — the pairs enumerated ``(0,1), (0,2), …, (0,len-1), (1,2), …``, the
-    /// same order ``scipy.spatial.distance.pdist`` uses. ``pair_shared``
-    /// holds the shared-cluster counts (its entry for ``seed_pair`` is
-    /// ``seed_shared``, the vector's maximum); ``pair_displacement`` holds
-    /// the sparse neighborhood's exhaustive mean keypoint displacement in
-    /// pixels, ``0.0`` for a pair sharing no accepted cluster, and is None
-    /// when the matrix was constructed without ``positions_xy``.
+    /// Each step yields a ``SeedImageGroup``, whose numpy-array attributes a
+    /// consumer does its arithmetic on directly.
     ///
     /// Args:
     ///     group_size: Maximum images per group (default 5).
@@ -466,6 +451,84 @@ impl PyClusterCovisibility {
     }
 }
 
+/// One greedy mutually-covisible group of images: the group itself, the edge
+/// it was grown from, and the covisibility evidence for the group's internal
+/// pairs. Yielded by ``ClusterCovisibility.seed_image_groups``.
+///
+/// ``pair_shared`` and ``pair_displacement`` are condensed upper triangles
+/// over ``images``, so a consumer classifying the group's motion regime does
+/// numpy arithmetic on them (an ``argmax``, a boolean mask) rather than
+/// querying the covisibility object pair by pair.
+#[pyclass(name = "SeedImageGroup", module = "sfmtool.matching", frozen)]
+pub struct PySeedImageGroup {
+    inner: SeedImageGroup,
+}
+
+#[pymethods]
+impl PySeedImageGroup {
+    /// The group's image indexes, sorted ascending, as a uint32 numpy array.
+    #[getter]
+    fn images<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
+        PyArray1::from_slice(py, &self.inner.images)
+    }
+
+    /// The strongest-edge pair the group was grown from, ``(i, j)`` with
+    /// ``i < j``. It is the group's maximum-shared pair, so a caller wanting
+    /// the best-supported pair reads it instead of re-scanning the group.
+    #[getter]
+    fn seed_pair(&self) -> (u32, u32) {
+        self.inner.seed_pair
+    }
+
+    /// That pair's shared-cluster count, the maximum over ``pair_shared``.
+    #[getter]
+    fn seed_shared(&self) -> u32 {
+        self.inner.seed_shared
+    }
+
+    /// Shared-cluster count for every internal pair of ``images``, as a
+    /// uint32 numpy array in condensed upper-triangle order: for ``a < b``
+    /// indexing ``images``, the entry sits at
+    /// ``a*(2*len - a - 1)//2 + (b - a - 1)`` — the pairs enumerated
+    /// ``(0,1), (0,2), …, (0,len-1), (1,2), …``, the same order
+    /// ``scipy.spatial.distance.pdist`` uses, so
+    /// ``scipy.spatial.distance.squareform`` reshapes it into a dense
+    /// group-local matrix. Length ``len*(len-1)//2``. Read straight off the
+    /// counts matrix; its entry for ``seed_pair`` is ``seed_shared``.
+    #[getter]
+    fn pair_shared<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
+        PyArray1::from_slice(py, &self.inner.pair_shared)
+    }
+
+    /// Mean keypoint displacement in pixels for the same pairs in the same
+    /// condensed order, as a float32 numpy array — the sparse displacement
+    /// neighborhood's exhaustive per-pair mean, not the seeded
+    /// one-sample-per-cluster tables behind
+    /// ``ClusterCovisibility.pair_displacement()``. ``0.0`` for a pair
+    /// sharing no accepted cluster. None when the matrix was constructed
+    /// without ``positions_xy``.
+    #[getter]
+    fn pair_displacement<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f32>>> {
+        self.inner
+            .pair_displacement
+            .as_ref()
+            .map(|d| PyArray1::from_slice(py, d))
+    }
+
+    fn __repr__(&self) -> String {
+        let g = &self.inner;
+        let (i, j) = g.seed_pair;
+        let span = match (g.images.first(), g.images.last()) {
+            (Some(lo), Some(hi)) => format!("{} images {lo}..{hi}", g.images.len()),
+            _ => "0 images".to_string(),
+        };
+        format!(
+            "SeedImageGroup({span}, seed_pair=({i}, {j}), seed_shared={})",
+            g.seed_shared
+        )
+    }
+}
+
 /// Lazy iterator over a [`PyClusterCovisibility`]'s seed image groups. Holds
 /// a reference to its parent plus the excluded-image mask; each ``__next__``
 /// re-runs the shared core step function against the parent's counts, so the
@@ -486,27 +549,18 @@ impl PySeedImageGroups {
         slf
     }
 
-    fn __next__<'py>(&mut self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(group) = self
-            .parent
+    fn __next__(&mut self) -> Option<PySeedImageGroup> {
+        self.parent
             .get()
             .inner
             .next_seed_image_group(&mut self.excluded, &self.params)
-        else {
-            return Ok(None);
-        };
-        let d = PyDict::new(py);
-        d.set_item("images", group.images)?;
-        d.set_item("seed_pair", group.seed_pair)?;
-        d.set_item("seed_shared", group.seed_shared)?;
-        d.set_item("pair_shared", group.pair_shared)?;
-        d.set_item("pair_displacement", group.pair_displacement)?;
-        Ok(Some(d))
+            .map(|inner| PySeedImageGroup { inner })
     }
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClusterCovisibility>()?;
+    m.add_class::<PySeedImageGroup>()?;
     m.add_class::<PySeedImageGroups>()?;
     Ok(())
 }

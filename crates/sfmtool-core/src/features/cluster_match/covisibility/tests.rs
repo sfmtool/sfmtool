@@ -310,9 +310,11 @@ fn pair_displacement_reads_the_neighborhood() {
         for b in (a + 1)..g.images.len() {
             let (x, y) = (g.images[a], g.images[b]);
             let (shared, mean) = nb.pair(x, y).expect("realized pair");
+            // The reported width is `f32`: the neighborhood's `f64` mean
+            // rounded once, so the comparison is exact against `mean as f32`.
             assert_eq!(
                 disp[condensed_index(&g.images, x, y)],
-                mean,
+                mean as f32,
                 "pair ({x}, {y})"
             );
             assert_eq!(g.pair_shared[condensed_index(&g.images, x, y)], shared);

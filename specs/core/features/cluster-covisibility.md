@@ -171,13 +171,13 @@ impl Iterator for SeedImageGroups<'_> { type Item = SeedImageGroup; }
 
 /// A group of images, the edge it was grown from, and the covisibility
 /// evidence for the group's internal pairs. Not `Eq` — the displacements
-/// are `f64`.
+/// are floating-point.
 pub struct SeedImageGroup {
     pub images: Vec<u32>,      // sorted ascending
     pub seed_pair: (u32, u32), // i < j
     pub seed_shared: u32,      // W[seed_pair]
     pub pair_shared: Vec<u32>,               // condensed upper triangle
-    pub pair_displacement: Option<Vec<f64>>, // same order; None unpositioned
+    pub pair_displacement: Option<Vec<f32>>, // same order; None unpositioned
 }
 
 pub struct SeedImageGroupParams {
@@ -215,6 +215,13 @@ indexes `a < b` into `images`, the entry sits at
   no entry for reads `0.0` — it shares no accepted cluster, so there are no
   keypoints to average. Such a pair only occurs at `min_shared = 0`, which
   lets the extension take an image sharing nothing with the group.
+
+  The reported width is `f32`, one rounding of the neighborhood's `f64` mean
+  per entry: the quantity is a mean over keypoint coordinates the `.matches`
+  backbone stores at single precision, so there is no double-precision
+  content to carry. The neighborhood keeps its own `f64` accumulation and
+  mean — pose verification reads those — and the narrowing happens only
+  where the group is filled.
 
 `min_shared = 8` is carried over from the experiments unvalidated; a
 data-derived constructor (`SeedImageGroupParams::derive`, e.g. a fraction of the
@@ -263,7 +270,7 @@ ClusterCovisibility.from_arrays(cluster_starts, member_images, num_images,
 
 cov.num_images          # getter
 cov.counts              # numpy (N, N) uint32 copy; errors above dense bound
-cov.seed_image_groups(group_size=5, *, min_shared=8)  # iterator of dicts
+cov.seed_image_groups(group_size=5, *, min_shared=8)  # iterator of groups
 cov.rank_by_covisibility(image, candidates)   # numpy uint32
 ```
 
@@ -271,20 +278,26 @@ cov.rank_by_covisibility(image, candidates)   # numpy uint32
 `ClusterCovisibility` plus the excluded-image state), so
 `for group in cov.seed_image_groups(...):` consumes lazily and
 `list(cov.seed_image_groups(...))` recovers the eager behavior. Each step
-yields a dict in the `estimate_intrinsics` result style:
+yields a `sfmtool._sfmtool.matching.SeedImageGroup`, a frozen object over the
+core struct whose getters carry the vectors as numpy arrays:
 
 ```python
-{"images": [3, 7, 11, 12, 15], "seed_pair": (7, 12), "seed_shared": 214,
- "pair_shared": [31, 44, 39, 12, 118, 214, 63, 190, 57, 88],
- "pair_displacement": [104.2, 61.8, 77.0, 210.5, 44.1,
-                       18.9, 96.3, 25.4, 71.7, 52.6]}
+group.images             # (len,) uint32, sorted ascending
+group.seed_pair          # (i, j) tuple of int, i < j
+group.seed_shared        # int
+group.pair_shared        # (len*(len-1)//2,) uint32, condensed upper triangle
+group.pair_displacement  # same shape, float32 — or None without positions
+repr(group)              # 'SeedImageGroup(5 images 3..15, seed_pair=(7, 12), …)'
 ```
 
-`pair_shared` is a `list[int]` and `pair_displacement` a `list[float]` (None
-without positions), both the condensed upper triangle over `images` in the
-order above — the order `scipy.spatial.distance.pdist` uses, so
-`scipy.spatial.distance.squareform` reshapes either into a dense
-group-local matrix.
+The arrays are what a consumer does its arithmetic on — an `argmax` over
+`pair_displacement`, a boolean mask over `pair_shared` — with no list
+conversion in between. Both are the condensed upper triangle over `images`,
+the order `scipy.spatial.distance.pdist` uses, so
+`scipy.spatial.distance.squareform` reshapes either into a dense group-local
+matrix. `pair_displacement` reports at the core struct's `f32` width; `repr`
+identifies the group by its image span and seed pair without printing the
+arrays.
 
 `min_shared` is keyword-only: a bare second positional integer reads as a
 count of groups rather than as an edge-weight floor.

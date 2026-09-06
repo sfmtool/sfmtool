@@ -151,7 +151,7 @@ impl Default for SeedImageGroupParams {
 /// classifying the group's motion regime reads it here rather than querying
 /// the covisibility object pair by pair.
 ///
-/// Not `Eq`: [`Self::pair_displacement`] holds `f64` means.
+/// Not `Eq`: [`Self::pair_displacement`] holds floating-point means.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SeedImageGroup {
     /// The group's image indexes, sorted ascending.
@@ -179,7 +179,14 @@ pub struct SeedImageGroup {
     /// the covisibility was built without positions (no neighborhood). A pair
     /// the neighborhood holds no entry for reads `0.0`: it shares no accepted
     /// clusters.
-    pub pair_displacement: Option<Vec<f64>>,
+    ///
+    /// `f32`, one rounding of the neighborhood's `f64` mean per entry: the
+    /// quantity is a mean over keypoint coordinates the `.matches` backbone
+    /// stores at single precision, so there is no double-precision content to
+    /// carry. The neighborhood keeps its own `f64` accumulation and mean —
+    /// pose verification reads those — and this field is only the narrowed
+    /// report to a consumer classifying the group's motion regime.
+    pub pair_displacement: Option<Vec<f32>>,
 }
 
 /// Deterministic 64-bit generator behind the sampled displacement pass.
@@ -634,8 +641,9 @@ impl ClusterCovisibility {
                 pair_shared.push(self.counts[ia as usize * n + ib as usize]);
                 if let (Some(disp), Some(nb)) = (pair_displacement.as_mut(), &self.neighborhood) {
                     // An unrealized pair shares no accepted cluster, so its
-                    // displacement has no keypoints to average: 0.0.
-                    disp.push(nb.pair(ia, ib).map_or(0.0, |(_, d)| d));
+                    // displacement has no keypoints to average: 0.0. The one
+                    // narrowing to the reported `f32` width happens here.
+                    disp.push(nb.pair(ia, ib).map_or(0.0, |(_, d)| d as f32));
                 }
             }
         }
