@@ -1087,15 +1087,15 @@ def test_constraint_kwargs_at_their_off_position_change_nothing():
         {},
         {
             "held": None,
-            "range": None,
-            "range_origin": None,
+            "distance": None,
+            "distance_from": None,
             "free_points_cross": False,
             "noise_floor_scale": 2.0,
         },
         {
             "held": np.zeros(30, dtype=bool),
-            "range": np.full(30, np.nan),
-            "range_origin": np.full(30, -1, dtype=np.int64),
+            "distance": np.full(30, np.nan),
+            "distance_from": np.full(30, -1, dtype=np.int64),
         },
     ):
         s = _perturbed_scene()
@@ -1142,7 +1142,7 @@ def test_held_point_comes_back_bit_unchanged():
     assert np.all(np.isfinite(out["residual_norms"][obs]))
 
 
-def test_ranged_point_sits_at_its_distance_from_the_reference_camera():
+def test_ranged_point_sits_at_its_distance_from_the_reference_image():
     s = _perturbed_scene()
     p, k = 4, 2
     centre = _camera_center(s["quats"][k], s["trans"][k])
@@ -1153,7 +1153,7 @@ def test_ranged_point_sits_at_its_distance_from_the_reference_camera():
     origin = np.full(len(s["points"]), -1, dtype=np.int64)
     origin[p] = k
 
-    out = _run(s, range=rng, range_origin=origin)
+    out = _run(s, distance=rng, distance_from=origin)
     centre_out = _camera_center(out["quaternions_wxyz"][k], out["translations"][k])
     npt.assert_allclose(np.linalg.norm(out["points"][p] - centre_out), r, rtol=1e-9)
     assert not out["point_at_infinity"][p]
@@ -1172,7 +1172,7 @@ def test_ranged_point_accepts_a_mean_of_two_camera_centres():
     origins = [-1] * len(s["points"])
     origins[p] = ks
 
-    out = _run(s, range=rng, range_origin=origins)
+    out = _run(s, distance=rng, distance_from=origins)
     centre_out = np.mean(
         [
             _camera_center(out["quaternions_wxyz"][k], out["translations"][k])
@@ -1183,16 +1183,16 @@ def test_ranged_point_accepts_a_mean_of_two_camera_centres():
     npt.assert_allclose(np.linalg.norm(out["points"][p] - centre_out), r, rtol=1e-9)
 
 
-def test_infinite_range_is_reported_as_a_direction():
+def test_infinite_distance_is_reported_as_a_direction():
     s = _scene(n_img=6, n_pt=20)
     rng_gen = np.random.default_rng(5)
     mask = _add_direction_tracks(s, 3, rng_gen)
     far = int(np.flatnonzero(mask)[0])
 
-    ranges = np.full(len(s["points"]), np.nan)
-    ranges[far] = np.inf
-    # The caller's mask says nothing about this point; the range decides.
-    out = _run(s, range=ranges)
+    distances = np.full(len(s["points"]), np.nan)
+    distances[far] = np.inf
+    # The caller's mask says nothing about this point; the distance decides.
+    out = _run(s, distance=distances)
 
     assert out["point_at_infinity"][far]
     npt.assert_allclose(np.linalg.norm(out["points"][far]), 1.0, atol=1e-9)
@@ -1219,47 +1219,47 @@ def test_held_and_ranged_on_one_point_is_rejected():
     s = _perturbed_scene()
     held = np.zeros(len(s["points"]), dtype=bool)
     held[2] = True
-    ranges = np.full(len(s["points"]), np.nan)
-    ranges[2] = np.inf
+    distances = np.full(len(s["points"]), np.nan)
+    distances[2] = np.inf
     with pytest.raises(ValueError, match="both held and ranged"):
-        _run(s, held=held, range=ranges)
+        _run(s, held=held, distance=distances)
 
 
-def test_finite_range_without_an_origin_is_rejected():
+def test_finite_distance_without_an_origin_is_rejected():
     s = _perturbed_scene()
-    ranges = np.full(len(s["points"]), np.nan)
-    ranges[2] = 5.0
-    with pytest.raises(ValueError, match="needs a range_origin"):
-        _run(s, range=ranges)
+    distances = np.full(len(s["points"]), np.nan)
+    distances[2] = 5.0
+    with pytest.raises(ValueError, match="needs a distance_from"):
+        _run(s, distance=distances)
 
 
 @pytest.mark.parametrize("bad", [0.0, -3.0])
-def test_non_positive_range_is_rejected(bad):
+def test_non_positive_distance_is_rejected(bad):
     s = _perturbed_scene()
-    ranges = np.full(len(s["points"]), np.nan)
-    ranges[2] = bad
+    distances = np.full(len(s["points"]), np.nan)
+    distances[2] = bad
     with pytest.raises(ValueError, match="strictly positive"):
-        _run(s, range=ranges)
+        _run(s, distance=distances)
 
 
-def test_range_origin_past_the_image_set_is_rejected():
+def test_distance_from_past_the_image_set_is_rejected():
     s = _perturbed_scene()
-    ranges = np.full(len(s["points"]), np.nan)
-    ranges[2] = 5.0
+    distances = np.full(len(s["points"]), np.nan)
+    distances[2] = 5.0
     origin = np.full(len(s["points"]), -1, dtype=np.int64)
     origin[2] = 99
     with pytest.raises(ValueError, match="past the 6 images"):
-        _run(s, range=ranges, range_origin=origin)
+        _run(s, distance=distances, distance_from=origin)
 
 
 def test_constraint_shape_validation():
     s = _perturbed_scene()
     with pytest.raises(ValueError, match=r"held must have shape"):
         _run(s, held=np.zeros(3, dtype=bool))
-    with pytest.raises(ValueError, match=r"range must have shape"):
-        _run(s, range=np.full(3, np.nan))
+    with pytest.raises(ValueError, match=r"distance must have shape"):
+        _run(s, distance=np.full(3, np.nan))
     with pytest.raises(ValueError, match="one entry per point"):
-        _run(s, range_origin=np.full(3, -1, dtype=np.int64))
+        _run(s, distance_from=np.full(3, -1, dtype=np.int64))
 
 
 @pytest.mark.parametrize("bad_scale", [0.0, -1.0, np.inf, np.nan])

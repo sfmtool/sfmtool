@@ -95,9 +95,9 @@ pub(crate) fn clone_with_changes(
     // The constraint triple, collected here and applied once the point count is
     // settled. The outer `Option` is "was the kwarg passed", the inner one
     // "with an array, or with `None` to drop the set".
-    let mut new_point_kind: Option<Option<Vec<u8>>> = None;
-    let mut new_point_range: Option<Option<Vec<f64>>> = None;
-    let mut new_point_range_camera: Option<Option<Vec<u32>>> = None;
+    let mut new_point_constraints: Option<Option<Vec<u8>>> = None;
+    let mut new_constraint_distances: Option<Option<Vec<f64>>> = None;
+    let mut new_constraint_reference_images: Option<Option<Vec<u32>>> = None;
     let old_point_count = recon.points.len();
 
     for (key, value) in kw.iter() {
@@ -257,27 +257,27 @@ pub(crate) fn clone_with_changes(
             // the three columns are one statement and the point count may still
             // be changing in this same call, so they are settled together after
             // the loop.
-            "point_kind" => {
-                new_point_kind = Some(if value.is_none() {
+            "point_constraints" => {
+                new_point_constraints = Some(if value.is_none() {
                     None
                 } else {
-                    let arr = extract_array1!(value, "point_kind", u8)?;
+                    let arr = extract_array1!(value, "point_constraints", u8)?;
                     Some(to_contiguous!(arr).into_owned())
                 });
             }
-            "point_range" => {
-                new_point_range = Some(if value.is_none() {
+            "constraint_distances" => {
+                new_constraint_distances = Some(if value.is_none() {
                     None
                 } else {
-                    let arr = extract_array1!(value, "point_range", f64)?;
+                    let arr = extract_array1!(value, "constraint_distances", f64)?;
                     Some(to_contiguous!(arr).into_owned())
                 });
             }
-            "point_range_camera" => {
-                new_point_range_camera = Some(if value.is_none() {
+            "constraint_reference_images" => {
+                new_constraint_reference_images = Some(if value.is_none() {
                     None
                 } else {
-                    let arr = extract_array1!(value, "point_range_camera", u32)?;
+                    let arr = extract_array1!(value, "constraint_reference_images", u32)?;
                     Some(to_contiguous!(arr).into_owned())
                 });
             }
@@ -696,9 +696,9 @@ pub(crate) fn clone_with_changes(
     apply_point_constraints(
         &mut recon,
         old_point_count,
-        new_point_kind,
-        new_point_range,
-        new_point_range_camera,
+        new_point_constraints,
+        new_constraint_distances,
+        new_constraint_reference_images,
     )?;
 
     // Recompute derived fields
@@ -713,7 +713,7 @@ pub(crate) fn clone_with_changes(
         pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
     })?;
     // The same guard on the point axis: the constraint columns can be replaced
-    // in the same call that replaces the images a range references.
+    // in the same call that replaces the images a distance references.
     recon.validate_point_columns().map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("clone_with_changes(): {e}"))
     })?;
@@ -725,7 +725,7 @@ pub(crate) fn clone_with_changes(
 ///
 /// The three columns are one statement, so they are replaced together or
 /// dropped together; passing one of them alone is refused rather than merged
-/// into whatever the source carried, which would leave a kind describing a
+/// into whatever the source carried, which would leave a constraint describing a
 /// distance the caller never wrote.
 ///
 /// A call that changes the point count without supplying new constraints drops
@@ -736,11 +736,15 @@ pub(crate) fn clone_with_changes(
 fn apply_point_constraints(
     recon: &mut SfmrReconstruction,
     old_point_count: usize,
-    kind: Option<Option<Vec<u8>>>,
-    range: Option<Option<Vec<f64>>>,
-    range_camera: Option<Option<Vec<u32>>>,
+    point_constraints: Option<Option<Vec<u8>>>,
+    constraint_distances: Option<Option<Vec<f64>>>,
+    constraint_reference_images: Option<Option<Vec<u32>>>,
 ) -> PyResult<()> {
-    let given = [kind.is_some(), range.is_some(), range_camera.is_some()];
+    let given = [
+        point_constraints.is_some(),
+        constraint_distances.is_some(),
+        constraint_reference_images.is_some(),
+    ];
     if given.iter().all(|&g| !g) {
         if recon.points.len() != old_point_count {
             recon.point_constraints = None;
@@ -749,20 +753,31 @@ fn apply_point_constraints(
     }
     if !given.iter().all(|&g| g) {
         return Err(pyo3::exceptions::PyValueError::new_err(
-            "clone_with_changes(): 'point_kind', 'point_range' and \
-             'point_range_camera' are one statement and must be passed together",
+            "clone_with_changes(): 'point_constraints', 'constraint_distances' and \
+             'constraint_reference_images' are one statement and must be passed together",
         ));
     }
-    let (kind, range, range_camera) = (kind.unwrap(), range.unwrap(), range_camera.unwrap());
-    let (Some(kind), Some(range), Some(range_camera)) = (kind, range, range_camera) else {
+    let (point_constraints, constraint_distances, constraint_reference_images) = (
+        point_constraints.unwrap(),
+        constraint_distances.unwrap(),
+        constraint_reference_images.unwrap(),
+    );
+    let (Some(point_constraints), Some(constraint_distances), Some(constraint_reference_images)) = (
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
+    ) else {
         recon.point_constraints = None;
         return Ok(());
     };
     let n_pt = recon.points.len();
     for (name, len) in [
-        ("point_kind", kind.len()),
-        ("point_range", range.len()),
-        ("point_range_camera", range_camera.len()),
+        ("point_constraints", point_constraints.len()),
+        ("constraint_distances", constraint_distances.len()),
+        (
+            "constraint_reference_images",
+            constraint_reference_images.len(),
+        ),
     ] {
         if len != n_pt {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -771,9 +786,9 @@ fn apply_point_constraints(
         }
     }
     recon.point_constraints = Some(sfmtool_core::PointConstraintColumns {
-        kind,
-        range,
-        range_camera,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
     });
     Ok(())
 }

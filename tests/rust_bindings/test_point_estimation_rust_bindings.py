@@ -518,7 +518,7 @@ def test_the_inputs_are_checked():
         )
 
 
-# ── The range rule ────────────────────────────────────────────────────────
+# ── The distance rule ─────────────────────────────────────────────────────
 
 RANGED = VERDICT_CODES["ranged"]
 
@@ -529,7 +529,7 @@ def test_a_ranged_track_keeps_its_distance_and_reads_only_its_direction():
     distance = float(np.linalg.norm(WORLD[0] - origin))
     rule = np.array([[distance, *origin]])
 
-    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=rule)
+    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=rule)
 
     npt.assert_array_equal(out["verdicts"], [RANGED])
     assert out["census"]["ranged"] == 1
@@ -541,29 +541,29 @@ def test_a_ranged_track_keeps_its_distance_and_reads_only_its_direction():
     npt.assert_allclose(got, WORLD[0], atol=1e-6)
 
 
-def test_an_all_nan_range_row_leaves_its_track_to_the_solve():
+def test_an_all_nan_distance_row_leaves_its_track_to_the_solve():
     cam = _cam()
     rule = np.full((1, 4), np.nan)
-    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=rule)
+    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=rule)
     plain = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)])
     npt.assert_array_equal(out["verdicts"], plain["verdicts"])
     npt.assert_array_equal(out["xyzw"], plain["xyzw"])
 
 
-def test_the_range_rule_needs_the_observation_form():
+def test_the_distance_rule_needs_the_observation_form():
     dirs = np.array([[0.0, 0.0, -1.0], [0.2, 0.0, -1.0]])
     with pytest.raises(ValueError, match="needs the observation form"):
         estimate_points(
             dirs=dirs,
             centres=PAIR,
             offsets=np.array([0, 2], np.int64),
-            range=np.array([[5.0, 0.0, 0.0, 0.0]]),
+            distance=np.array([[5.0, 0.0, 0.0, 0.0]]),
         )
 
 
-def test_the_range_rule_is_shape_checked():
+def test_the_distance_rule_is_shape_checked():
     cam = _cam()
     with pytest.raises(ValueError, match=r"shape \(n_track, 4\)"):
-        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=np.zeros((1, 3)))
+        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=np.zeros((1, 3)))
     with pytest.raises(ValueError, match="one row per track"):
-        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=np.full((2, 4), np.nan))
+        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], distance=np.full((2, 4), np.nan))

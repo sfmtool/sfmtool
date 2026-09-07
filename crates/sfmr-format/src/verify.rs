@@ -279,14 +279,22 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &mut archive,
         &entries::points3d_colors_rgb(point_count),
     )?);
-    // points3d/kind (optional, version 7+; sorts after colors_rgb, before
-    // metadata.json)
-    let kind_raw = if has_point_constraints {
-        let raw = read_zst_entry(&mut archive, &entries::points3d_kind(point_count))?;
-        points3d_hasher.update(&raw);
-        Some(raw)
+    // points3d/constraint_distances and points3d/constraint_reference_images
+    // (optional, version 7+; sort after colors_rgb, before metadata.json)
+    let (distances_raw, reference_images_raw) = if has_point_constraints {
+        let distances = read_zst_entry(
+            &mut archive,
+            &entries::points3d_constraint_distances(point_count),
+        )?;
+        points3d_hasher.update(&distances);
+        let reference_images = read_zst_entry(
+            &mut archive,
+            &entries::points3d_constraint_reference_images(point_count),
+        )?;
+        points3d_hasher.update(&reference_images);
+        (Some(distances), Some(reference_images))
     } else {
-        None
+        (None, None)
     };
     // points3d/metadata.json
     points3d_hasher.update(&points3d_meta_raw);
@@ -319,21 +327,22 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
             &entries::points3d_patch_v_halfvec_xyz(point_count),
         )?);
     }
+    // points3d/point_constraints (optional, version 7+; sorts after the patch
+    // frame, before positions_xyzw)
+    let constraints_raw = if has_point_constraints {
+        let raw = read_zst_entry(
+            &mut archive,
+            &entries::points3d_point_constraints(point_count),
+        )?;
+        points3d_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
     // points3d/positions_xyz (version 1) or positions_xyzw (version 2)
     let positions_name = entries::points3d_positions(is_v1, point_count);
     let positions_raw = read_zst_entry(&mut archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
-    // points3d/range and points3d/range_camera (optional, version 7+; sort
-    // after positions_xyzw, before reprojection_errors)
-    let (range_raw, range_camera_raw) = if has_point_constraints {
-        let range = read_zst_entry(&mut archive, &entries::points3d_range(point_count))?;
-        points3d_hasher.update(&range);
-        let camera = read_zst_entry(&mut archive, &entries::points3d_range_camera(point_count))?;
-        points3d_hasher.update(&camera);
-        (Some(range), Some(camera))
-    } else {
-        (None, None)
-    };
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
@@ -396,15 +405,21 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // The rules are the reader's and the writer's, stated once in
     // `validate_point_constraints`; here they are re-read straight off the
     // archive bytes, positions included, so a hand-edited file is caught.
-    if let (Some(kind), Some(range), Some(camera)) = (&kind_raw, &range_raw, &range_camera_raw) {
+    if let (Some(constraints), Some(distances), Some(reference_images)) =
+        (&constraints_raw, &distances_raw, &reference_images_raw)
+    {
         let expect = |name: &str, got: usize, row: usize| {
             (got == point_count * row).then_some(()).ok_or(format!(
                 "points3d/{name} byte length {got} != point_count {point_count} * {row}"
             ))
         };
-        let check = expect("kind", kind.len(), 1)
-            .and(expect("range", range.len(), 8))
-            .and(expect("range_camera", camera.len(), 4))
+        let check = expect("point_constraints", constraints.len(), 1)
+            .and(expect("constraint_distances", distances.len(), 8))
+            .and(expect(
+                "constraint_reference_images",
+                reference_images.len(),
+                4,
+            ))
             .and(expect("positions_xyzw", positions_raw.len(), 32))
             .and_then(|()| {
                 let floats: Vec<f64> = positions_raw
@@ -414,16 +429,16 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
                     .map(|b| f64::from_le_bytes(*b))
                     .collect();
                 let positions = ndarray::Array2::from_shape_vec((point_count, 4), floats).unwrap();
-                let ranges: Vec<f64> = range
+                let distances: Vec<f64> = distances
                     .as_chunks::<8>()
                     .0
                     .iter()
                     .map(|b| f64::from_le_bytes(*b))
                     .collect();
                 validate_point_constraints(
-                    Some(kind),
-                    Some(&ranges),
-                    Some(raw_to_u32(camera).as_ref()),
+                    Some(constraints),
+                    Some(&distances),
+                    Some(raw_to_u32(reference_images).as_ref()),
                     &positions,
                     point_count,
                     image_count,

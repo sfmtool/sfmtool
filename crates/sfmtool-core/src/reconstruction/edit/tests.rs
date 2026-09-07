@@ -9,7 +9,9 @@ use crate::geometry::RotQuaternion;
 use crate::Se3Transform;
 use nalgebra::{UnitQuaternion, Vector3 as V3};
 use ndarray::{Array2, Array4};
-use sfmr_format::{NO_RANGE_CAMERA, POINT_KIND_FREE, POINT_KIND_HELD, POINT_KIND_RANGED};
+use sfmr_format::{
+    NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
+};
 
 /// A demo reconstruction with a per-point patch frame attached: `u` along
 /// +x and `v` along +y (so `u × v` is +z), plus distinct-per-cell bitmaps.
@@ -106,10 +108,10 @@ fn filter_keeps_patch_rows_for_surviving_points() {
 fn demo_with_constraints() -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(4);
     let mut constraints = PointConstraintColumns::all_free(recon.points.len());
-    constraints.kind[1] = POINT_KIND_HELD;
-    constraints.kind[3] = POINT_KIND_RANGED;
-    constraints.range[3] = 10.0;
-    constraints.range_camera[3] = 5;
+    constraints.point_constraints[1] = POINT_CONSTRAINT_HELD;
+    constraints.point_constraints[3] = POINT_CONSTRAINT_RANGED;
+    constraints.constraint_distances[3] = 10.0;
+    constraints.constraint_reference_images[3] = 5;
     recon.point_constraints = Some(constraints);
     recon
 }
@@ -122,24 +124,27 @@ fn filter_keeps_constraint_rows_for_surviving_points() {
     let c = out.point_constraints.as_ref().unwrap();
     assert_eq!(c.len(), 2);
     // The source's points 1 and 3, in order and unchanged.
-    assert_eq!(c.kind, vec![POINT_KIND_HELD, POINT_KIND_RANGED]);
-    assert!(c.range[0].is_nan());
-    assert_eq!(c.range[1], 10.0);
-    assert_eq!(c.range_camera, vec![NO_RANGE_CAMERA, 5]);
+    assert_eq!(
+        c.point_constraints,
+        vec![POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED]
+    );
+    assert!(c.constraint_distances[0].is_nan());
+    assert_eq!(c.constraint_distances[1], 10.0);
+    assert_eq!(c.constraint_reference_images, vec![NO_REFERENCE_IMAGE, 5]);
     out.validate_point_columns().unwrap();
 }
 
 #[test]
-fn subset_remaps_a_range_reference_onto_the_kept_images() {
+fn subset_remaps_a_distance_reference_onto_the_kept_images() {
     let recon = demo_with_constraints();
     // Keep images 5, 0 and 2, in that order: the reference image survives at a
-    // new index, which is what the range has to follow.
+    // new index, which is what the distance has to follow.
     let out = recon.subset_by_image_indices(&[5, 0, 2], false).unwrap();
 
     let c = out.point_constraints.as_ref().unwrap();
-    assert_eq!(c.kind[3], POINT_KIND_RANGED);
-    assert_eq!(c.range[3], 10.0);
-    assert_eq!(c.range_camera[3], 0);
+    assert_eq!(c.point_constraints[3], POINT_CONSTRAINT_RANGED);
+    assert_eq!(c.constraint_distances[3], 10.0);
+    assert_eq!(c.constraint_reference_images[3], 0);
     out.validate_point_columns().unwrap();
 }
 
@@ -150,16 +155,16 @@ fn subset_frees_a_point_whose_reference_image_is_dropped() {
     let out = recon.subset_by_image_indices(&[0, 1, 2], false).unwrap();
 
     let c = out.point_constraints.as_ref().unwrap();
-    assert_eq!(c.kind[3], POINT_KIND_FREE);
-    assert!(c.range[3].is_nan());
-    assert_eq!(c.range_camera[3], NO_RANGE_CAMERA);
+    assert_eq!(c.point_constraints[3], POINT_CONSTRAINT_FREE);
+    assert!(c.constraint_distances[3].is_nan());
+    assert_eq!(c.constraint_reference_images[3], NO_REFERENCE_IMAGE);
     // A held point names no image, so the same subset leaves it held.
-    assert_eq!(c.kind[1], POINT_KIND_HELD);
+    assert_eq!(c.point_constraints[1], POINT_CONSTRAINT_HELD);
     out.validate_point_columns().unwrap();
 }
 
 #[test]
-fn se3_transform_scales_a_range_with_the_scene() {
+fn se3_transform_scales_a_distance_with_the_scene() {
     let recon = demo_with_constraints();
     let rot = RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
         &V3::z_axis(),
@@ -169,9 +174,9 @@ fn se3_transform_scales_a_range_with_the_scene() {
 
     let c = out.point_constraints.as_ref().unwrap();
     // The distance is in the solve's own units, which the similarity rescales.
-    approx(c.range[3], 20.0);
-    assert_eq!(c.range_camera[3], 5);
-    assert!(c.range[1].is_nan());
+    approx(c.constraint_distances[3], 20.0);
+    assert_eq!(c.constraint_reference_images[3], 5);
+    assert!(c.constraint_distances[1].is_nan());
 }
 
 #[test]

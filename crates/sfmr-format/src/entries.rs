@@ -188,29 +188,27 @@ pub(crate) fn points3d_normal_confidence(point_count: impl std::fmt::Display) ->
     format!("points3d/normal_confidence.{point_count}.uint8.zst")
 }
 
-/// `points3d/kind` — solve-constraint kind per point (v7+, optional).
+/// `points3d/point_constraints` — the constraint code per point (v7+,
+/// optional).
 ///
-/// The three constraint entries drop the `point_` prefix their [`SfmrData`]
-/// fields carry (`point_kind`, `point_range`, `point_range_camera`): the
-/// `points3d/` directory already says what they are per, and the prefix exists
-/// on the struct only because its fields sit in one flat namespace with the
-/// per-image and per-observation columns.
+/// Each of the three constraint entries is named for the [`SfmrData`] field
+/// that carries it, the way every other column in this format is.
 ///
 /// [`SfmrData`]: crate::SfmrData
-pub(crate) fn points3d_kind(point_count: impl std::fmt::Display) -> String {
-    format!("points3d/kind.{point_count}.uint8.zst")
+pub(crate) fn points3d_point_constraints(point_count: impl std::fmt::Display) -> String {
+    format!("points3d/point_constraints.{point_count}.uint8.zst")
 }
 
-/// `points3d/range` — a ranged point's distance from its reference (v7+,
-/// optional). See [`points3d_kind`] for the naming.
-pub(crate) fn points3d_range(point_count: impl std::fmt::Display) -> String {
-    format!("points3d/range.{point_count}.float64.zst")
+/// `points3d/constraint_distances` — a ranged point's distance from its
+/// reference (v7+, optional).
+pub(crate) fn points3d_constraint_distances(point_count: impl std::fmt::Display) -> String {
+    format!("points3d/constraint_distances.{point_count}.float64.zst")
 }
 
-/// `points3d/range_camera` — the image a finite range is measured from (v7+,
-/// optional). See [`points3d_kind`] for the naming.
-pub(crate) fn points3d_range_camera(point_count: impl std::fmt::Display) -> String {
-    format!("points3d/range_camera.{point_count}.uint32.zst")
+/// `points3d/constraint_reference_images` — the image a finite distance is
+/// measured from (v7+, optional).
+pub(crate) fn points3d_constraint_reference_images(point_count: impl std::fmt::Display) -> String {
+    format!("points3d/constraint_reference_images.{point_count}.uint32.zst")
 }
 
 /// `points3d/patch_u_halfvec_xyz` — patch-frame `u` half-axis per point.

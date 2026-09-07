@@ -39,8 +39,8 @@ Two forms, both CSR over tracks in the order the caller supplies:
 Per track the caller may also pass an incoming state: a position and a flag
 saying the point is currently a direction. The state is read only by the
 `marks` rule below and is never modified; the result is a new array. The
-`range` rule carries its own per-track state, a distance and an origin, and it
-too is only read.
+`distance` rule carries its own per-track state, a distance and an origin, and
+it too is only read.
 
 ## Rules
 
@@ -51,7 +51,7 @@ nothing else.
 | rule | option | what it decides |
 |---|---|---|
 | **few** | `bearing` or `absent` | a track with fewer than two usable observations. `bearing`: its single ray is its direction, or the fixed fallback direction when it has none. `absent` (the off position): the estimate is NaN, the track is not observed at this geometry. |
-| **range** | a distance and an origin per track | a track the caller holds at a known distance from a known world point keeps that distance: only its direction is read from the observations, and the estimate is that direction carried at that distance. `+∞` is a direction. Off, and per track where the distance is not strictly positive, nothing is held. |
+| **distance** | a distance and an origin per track | a track the caller holds at a known distance from a known world point keeps that distance: only its direction is read from the observations, and the estimate is that direction carried at that distance. `+∞` is a direction. Off, and per track where the distance is not strictly positive, nothing is held. |
 | **marks** | incoming direction flags | a track flagged as a direction is not solved: its estimate is the normalized mean of its rays. Off, every track is solved. |
 | **floor** | an angle | a track whose widest ray pair subtends less than the floor is THIN and becomes a bearing (the normalized mean ray). The pair angle is the minimum cosine over every ray pair of the track, read as a pairwise statistic and not from the solve's spectrum, so that a track's verdict depends on its rays alone and not on the count of them. Off, no track is thin. |
 | **cheirality** | on / off | a solved point that lands behind any camera that observes it (non-positive depth along that camera's ray) is BEHIND and becomes a bearing. Off, the point is kept and the flag is reported. |
@@ -75,7 +75,7 @@ own re-estimation does with it. A ranged track of one observation reads the
 same way: its direction is determined by that one pixel, but `few` is the rule
 that has already decided it.
 
-`range` sits directly under `few` because a caller's distance is a statement
+`distance` sits directly under `few` because a caller's distance is a statement
 about the track that outranks both the representation it currently carries and
 what its own rays would say: a ranged track is neither marked nor thin, and it
 reaches the rules under it only through the solve its start direction is read
@@ -99,7 +99,7 @@ The minimization starts from the free solve of the track's own rays where that
 lands finite and in front of every observing camera, and from the mean ray
 otherwise. The free point is the best statement the rays alone make about where
 the track is, and its direction from `O` is inside the basin of the constrained
-optimum whenever the range and the rays agree at all; the operation holds no
+optimum whenever the distance and the rays agree at all; the operation holds no
 incoming direction of its own, so this is the whole start rule. That is also why
 a ranged track is solved rather than decided early -- the solve is where its
 start comes from.
@@ -194,8 +194,8 @@ one.
   reads `marks` off for those tracks and turns on the `floor` at the round's
   noise-floor angle and `cheirality`, so every free track's representation is
   re-decided from its own rays; the adjustment carries a ranged point through
-  the `range` rule at the origin its reference resolves to at the round's
-  poses, and holds a held point's estimate back. See "Point kinds" in
+  the `distance` rule at the origin its reference resolves to at the round's
+  poses, and holds a held point's estimate back. See "Point constraints" in
   [bundle-adjustment.md](../geometry/bundle-adjustment.md).
 
   The adjustment holds no copy of the arithmetic: its round is this call. The
@@ -239,17 +239,17 @@ observations given, and the census as a dict. Arrays are accepted in
 either memory order and returned C-contiguous.
 
 `prune_behind` with `cheirality` off is refused rather than accepted and
-ignored: it names a reading of a rule the call has turned off. The `range` rule
-on a ray set is refused the same way, since it reads pixels the ray form does
-not carry.
+ignored: it names a reading of a rule the call has turned off. The `distance`
+rule on a ray set is refused the same way, since it reads pixels the ray form
+does not carry.
 
-The `range` keyword is an `(n_track, 4)` float64 array whose rows are
+The `distance` keyword is an `(n_track, 4)` float64 array whose rows are
 `(distance, ox, oy, oz)`, with an all-`NaN` row for a track the rule says
 nothing about. One array rather than two keeps a distance and the origin it is
 measured from in one shape, which is how a caller builds them; the Rust
 interface
 ([point_estimation.rs](../../../crates/sfmtool-core/src/reconstruction/point_estimation.rs))
-carries the same thing as one `PointRange` per track on the rules. The
+carries the same thing as one `PointDistance` per track on the rules. The
 `ranged` verdict appears in the exposed code table and its count in the census
 alongside every other rule's.
 
@@ -290,10 +290,10 @@ The in-front flag comes back beside the verdicts, which is what makes
   survivors fall inside the floor, or whose reduced solve lands past the bar, is
   refused and leaves the whole-track verdict. The prune with `cheirality` off is
   the same result as the prune off.
-- **Range.** A ranged track comes back at exactly its distance from its origin
-  and, on noiseless observations, at the position that distance and its own
-  pixels imply; a far track whose rays barely cross recovers its bearing to
-  rounding where its free depth does not survive. An infinite range is the
+- **Distance.** A ranged track comes back at exactly its distance from its
+  origin and, on noiseless observations, at the position that distance and its
+  own pixels imply; a far track whose rays barely cross recovers its bearing to
+  rounding where its free depth does not survive. An infinite distance is the
   marked bearing bit for bit. The rule outranks both the mark and the floor, a
   track it says nothing about is decided as if it were off, and a ranged track
   of one observation reads `few`. The rule on a ray set is refused.

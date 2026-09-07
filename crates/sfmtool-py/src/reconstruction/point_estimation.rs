@@ -11,7 +11,7 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::reconstruction::point_estimation::{
     estimate_points_from_observations, estimate_points_from_rays, FewObservations, ObservationSet,
-    PointRange, PointRules, PointVerdict, RaySet,
+    PointDistance, PointRules, PointVerdict, RaySet,
 };
 
 use crate::geometry::PyCameraIntrinsics;
@@ -55,7 +55,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///     n_points: How many tracks the result indexes, observation form.
 ///     marks: (n_track,) bool incoming direction flags, or None for the rule
 ///         off. A marked track is not solved.
-///     range: (n_track, 4) float64 ``(distance, ox, oy, oz)`` per track, or
+///     distance: (n_track, 4) float64 ``(distance, ox, oy, oz)`` per track, or
 ///         None for the rule off. A row whose distance is strictly positive
 ///         ranges its track: the distance is kept and what comes back is the
 ///         direction from the world origin ``(ox, oy, oz)`` that best explains
@@ -97,7 +97,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     translations=None,
     n_points=None,
     marks=None,
-    range=None,
+    distance=None,
     floor_rad=None,
     cheirality=false,
     prune_behind=false,
@@ -118,7 +118,7 @@ pub fn estimate_points<'py>(
     translations: Option<PyReadonlyArray2<'py, f64>>,
     n_points: Option<usize>,
     marks: Option<PyReadonlyArray1<'py, bool>>,
-    range: Option<PyReadonlyArray2<'py, f64>>,
+    distance: Option<PyReadonlyArray2<'py, f64>>,
     floor_rad: Option<f64>,
     cheirality: bool,
     prune_behind: bool,
@@ -128,11 +128,11 @@ pub fn estimate_points<'py>(
     // The rule is `(distance, origin)` per track; the binding takes it as one
     // `(n_track, 4)` array so a caller can build it with numpy in one shape
     // rather than keeping two columns aligned by hand.
-    let ranges: Option<Vec<PointRange>> = match &range {
+    let distances: Option<Vec<PointDistance>> = match &distance {
         Some(r) => {
             if r.shape()[1] != 4 {
                 return Err(PyValueError::new_err(
-                    "range must have shape (n_track, 4): (distance, ox, oy, oz)",
+                    "distance must have shape (n_track, 4): (distance, ox, oy, oz)",
                 ));
             }
             Some(
@@ -140,7 +140,7 @@ pub fn estimate_points<'py>(
                     .as_chunks::<4>()
                     .0
                     .iter()
-                    .map(|c| PointRange {
+                    .map(|c| PointDistance {
                         distance: c[0],
                         origin: [c[1], c[2], c[3]],
                     })
@@ -154,7 +154,7 @@ pub fn estimate_points<'py>(
         cheirality,
         prune_behind,
         bar_px,
-        range: ranges.as_deref(),
+        distance: distances.as_deref(),
         few: match few {
             "absent" => FewObservations::Absent,
             "bearing" => FewObservations::Bearing,
@@ -206,9 +206,9 @@ pub fn estimate_points<'py>(
                 "bar_px needs the observation form: the ray form carries no pixels",
             ));
         }
-        if ranges.is_some() {
+        if distances.is_some() {
             return Err(PyValueError::new_err(
-                "range needs the observation form: the rule minimizes a reprojection \
+                "distance needs the observation form: the rule minimizes a reprojection \
                  residual and the ray form carries no pixels",
             ));
         }
@@ -272,10 +272,10 @@ pub fn estimate_points<'py>(
         if let Some(m) = &mask {
             check_marks(m.len(), n_tracks)?;
         }
-        if let Some(r) = &ranges {
+        if let Some(r) = &distances {
             if r.len() != n_tracks {
                 return Err(PyValueError::new_err(format!(
-                    "range must have one row per track: {} given for {n_tracks} tracks",
+                    "distance must have one row per track: {} given for {n_tracks} tracks",
                     r.len()
                 )));
             }

@@ -25,8 +25,8 @@ use crate::camera::distortion::bspline::{
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::reconstruction::point_estimation::{
-    estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet, PointRange,
-    PointRules,
+    estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet,
+    PointDistance, PointRules,
 };
 use crate::CameraIntrinsics;
 
@@ -71,9 +71,9 @@ pub const DEFAULT_NOISE_FLOOR_SCALE: f64 = 2.0;
 /// What the solve owns of a point, orthogonal to the representation the point
 /// currently carries.
 ///
-/// See "The three kinds" in `specs/core/geometry/bundle-adjustment.md`.
+/// See "Point constraints" in `specs/core/geometry/bundle-adjustment.md`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PointKind {
+pub enum PointConstraint {
     /// The solve owns the point: its position moves, and under
     /// [`FreePointPolicy::cross`] its representation is re-decided from its
     /// rays between rounds.
@@ -91,73 +91,80 @@ pub enum PointKind {
 /// Where a ranged point's distance is measured from.
 ///
 /// A reference is a function of the camera poses, never a fixed world point: a
-/// range measured from a coordinate the cameras are free to move away from
+/// distance measured from a coordinate the cameras are free to move away from
 /// constrains nothing about the cameras, because the adjustment's gauge is
 /// free. Both forms resolve to a world position through
 /// `C_k = −R_kᵀ · t_k` at whatever poses the round holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RangeReference {
-    /// One image's centre: "the landmark is `r` from where this photograph was
-    /// taken".
-    Camera(u32),
-    /// The mean of several image centres, `O = (1/|K|)·Σ C_k`: a capture
-    /// station whose frames sit close together and none of which is the survey
-    /// point on its own.
-    CameraMean(Vec<u32>),
+pub enum DistanceReference {
+    /// One image's camera centre: "the landmark is `r` from where this
+    /// photograph was taken".
+    Image(u32),
+    /// The mean of several images' camera centres, `O = (1/|K|)·Σ C_k`: a
+    /// capture station whose frames sit close together and none of which is the
+    /// survey point on its own.
+    ImageMean(Vec<u32>),
 }
 
-impl RangeReference {
-    /// The image indices whose centres are averaged, in the caller's order.
+impl DistanceReference {
+    /// The image indices whose camera centres are averaged, in the caller's
+    /// order.
     pub fn images(&self) -> &[u32] {
         match self {
-            Self::Camera(k) => std::slice::from_ref(k),
-            Self::CameraMean(ks) => ks,
+            Self::Image(k) => std::slice::from_ref(k),
+            Self::ImageMean(ks) => ks,
         }
     }
 }
 
-/// The kind of every point, and what the ranged ones are held at.
+/// The constraint on every point, and what the ranged ones are held at.
 ///
-/// The three arrays are parallel to the adjustment's `points`. `range` and
-/// `reference` are read only where `kind` is [`PointKind::Ranged`]: `range`
-/// carries the distance (`+∞` for a direction, which needs no reference) and
-/// `reference` the pose-relative origin it is measured from.
+/// The three arrays are parallel to the adjustment's `points`. `distance` and
+/// `reference` are read only where `constraint` is [`PointConstraint::Ranged`]:
+/// `distance` carries the distance (`+∞` for a direction, which needs no
+/// reference) and `reference` the pose-relative origin it is measured from.
 ///
 /// [`PointConstraints::all_free`] plus the two setters is the intended way to
 /// build one, so a caller states only the points it owns.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PointConstraints {
-    /// One kind per point.
-    pub kind: Vec<PointKind>,
-    /// One distance per point; read where the kind is ranged, `NaN` elsewhere.
-    pub range: Vec<f64>,
-    /// One reference per point; read where the kind is ranged at a finite
+    /// One constraint per point.
+    pub constraint: Vec<PointConstraint>,
+    /// One distance per point; read where the constraint is ranged, `NaN`
+    /// elsewhere.
+    pub distance: Vec<f64>,
+    /// One reference per point; read where the constraint is ranged at a finite
     /// distance, `None` elsewhere.
-    pub reference: Vec<Option<RangeReference>>,
+    pub reference: Vec<Option<DistanceReference>>,
 }
 
 impl PointConstraints {
     /// `n_pt` free points: the state a caller starts from and edits.
     pub fn all_free(n_pt: usize) -> Self {
         Self {
-            kind: vec![PointKind::Free; n_pt],
-            range: vec![f64::NAN; n_pt],
+            constraint: vec![PointConstraint::Free; n_pt],
+            distance: vec![f64::NAN; n_pt],
             reference: vec![None; n_pt],
         }
     }
 
     /// Hold point `p` at whatever coordinate the caller hands the adjustment.
     pub fn hold(&mut self, p: usize) {
-        self.kind[p] = PointKind::Held;
-        self.range[p] = f64::NAN;
+        self.constraint[p] = PointConstraint::Held;
+        self.distance[p] = f64::NAN;
         self.reference[p] = None;
     }
 
     /// Range point `p` at `distance` from `reference`, the solve keeping only
     /// its direction. `f64::INFINITY` is a direction and takes no reference.
-    pub fn range_at(&mut self, p: usize, distance: f64, reference: Option<RangeReference>) {
-        self.kind[p] = PointKind::Ranged;
-        self.range[p] = distance;
+    pub fn constrain_distance(
+        &mut self,
+        p: usize,
+        distance: f64,
+        reference: Option<DistanceReference>,
+    ) {
+        self.constraint[p] = PointConstraint::Ranged;
+        self.distance[p] = distance;
         self.reference[p] = reference;
     }
 }
@@ -473,10 +480,11 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// infinity" in `specs/core/geometry/bundle-adjustment.md`. An absent mask is an
 /// all-`false` mask, which reduces the solve to the finite-only one.
 ///
-/// `constraints` optionally states a kind per point (free, ranged or held)
-/// and what the ranged ones are held at; an absent one is every point free.
-/// `free_points` says whether a free point's representation is re-decided from
-/// its rays between rounds and at what noise floor. See "The three kinds" in
+/// `constraints` optionally states a constraint per point (free, ranged or
+/// held) and what the ranged ones are held at; an absent one is every point
+/// free. `free_points` says whether a free point's representation is re-decided
+/// from its rays between rounds and at what noise floor. See "Point
+/// constraints" in
 /// `specs/core/geometry/bundle-adjustment.md`. Absent constraints and a default
 /// [`FreePointPolicy`] reproduce the kernel without them bit for bit.
 ///
@@ -556,8 +564,8 @@ pub fn bundle_adjust(
     // distance is, a direction at `r = ∞`, whatever the caller's mask says.
     let mut is_dir_state: Vec<bool> = is_dir.to_vec();
     for (p, dir) in is_dir_state.iter_mut().enumerate() {
-        if cons.kind[p] == PointKind::Ranged {
-            *dir = !cons.range[p].is_finite();
+        if cons.constraint[p] == PointConstraint::Ranged {
+            *dir = !cons.distance[p].is_finite();
         }
     }
     bundle_adjust_staged(
@@ -597,10 +605,10 @@ pub fn bundle_adjust(
 /// per point, validated once at the entry point, with a ranged point's
 /// reference flattened to the image indices whose centres are averaged.
 struct Constraints {
-    kind: Vec<PointKind>,
+    constraint: Vec<PointConstraint>,
     /// A ranged point's distance from its reference; `NaN` for every other
     /// point.
-    range: Vec<f64>,
+    distance: Vec<f64>,
     /// A ranged point's reference images, deduplicated in the caller's order.
     /// Empty for every other point and at `r = ∞`, which needs no reference.
     refs: Vec<Vec<usize>>,
@@ -613,8 +621,8 @@ impl Constraints {
     /// state every branch below is inert under.
     fn all_free(n_pt: usize) -> Self {
         Self {
-            kind: vec![PointKind::Free; n_pt],
-            range: vec![f64::NAN; n_pt],
+            constraint: vec![PointConstraint::Free; n_pt],
+            distance: vec![f64::NAN; n_pt],
             refs: vec![Vec::new(); n_pt],
             any_ranged: false,
             any_held: false,
@@ -628,19 +636,27 @@ impl Constraints {
         let Some(c) = constraints else {
             return Self::all_free(n_pt);
         };
-        assert_eq!(c.kind.len(), n_pt, "constraint kinds and points mismatch");
+        assert_eq!(
+            c.constraint.len(),
+            n_pt,
+            "point constraints and points mismatch"
+        );
         let mut out = Self::all_free(n_pt);
         for p in 0..n_pt {
-            out.kind[p] = c.kind[p];
-            match c.kind[p] {
-                PointKind::Free => {}
-                PointKind::Held => out.any_held = true,
-                PointKind::Ranged => {
+            out.constraint[p] = c.constraint[p];
+            match c.constraint[p] {
+                PointConstraint::Free => {}
+                PointConstraint::Held => out.any_held = true,
+                PointConstraint::Ranged => {
                     out.any_ranged = true;
-                    assert_eq!(c.range.len(), n_pt, "constraint ranges and points mismatch");
-                    let r = c.range[p];
+                    assert_eq!(
+                        c.distance.len(),
+                        n_pt,
+                        "constraint distances and points mismatch"
+                    );
+                    let r = c.distance[p];
                     assert!(r > 0.0, "point {p} is ranged at a non-positive distance");
-                    out.range[p] = r;
+                    out.distance[p] = r;
                     if !r.is_finite() {
                         continue;
                     }
@@ -671,22 +687,24 @@ impl Constraints {
     /// Whether point `p` is held, so that it owns no parameters.
     #[inline]
     fn held(&self, p: usize) -> bool {
-        self.any_held && self.kind[p] == PointKind::Held
+        self.any_held && self.constraint[p] == PointConstraint::Held
     }
 
     /// A ranged point's distance where it is finite: the scale on its tangent
     /// Jacobian block, and the radius its position is rebuilt at.
     #[inline]
-    fn finite_range(&self, p: usize) -> Option<f64> {
-        (self.any_ranged && self.kind[p] == PointKind::Ranged && self.range[p].is_finite())
-            .then(|| self.range[p])
+    fn finite_distance(&self, p: usize) -> Option<f64> {
+        (self.any_ranged
+            && self.constraint[p] == PointConstraint::Ranged
+            && self.distance[p].is_finite())
+        .then(|| self.distance[p])
     }
 }
 
 /// A ranged point's reference as one round's solve reads it: the reference
 /// cameras the round can move, the constant part of the sum from the ones it
 /// cannot, and `1/|K|`.
-struct RangeOrigin {
+struct DistanceOrigin {
     /// Compact image indices of the reference cameras the round is solving.
     live: Vec<usize>,
     /// `Σ C_k` over reference cameras no kept observation touches, which the
@@ -791,8 +809,8 @@ fn residual_norms_depths(
 /// whole solve), and `Some(θ_floor)` re-decides it from the rays at this
 /// geometry -- marks off, the floor at `θ_floor`, cheirality on -- and writes
 /// the verdict back into `is_dir` for the next linearization. A ranged point is
-/// carried by the range rule at whatever origin its reference resolves to now,
-/// and a held point is not re-estimated at all.
+/// carried by the distance rule at whatever origin its reference resolves to
+/// now, and a held point is not re-estimated at all.
 #[allow(clippy::too_many_arguments)]
 fn reestimate_points(
     cam: &CameraIntrinsics,
@@ -818,7 +836,7 @@ fn reestimate_points(
     // marks of the points the crossing does not touch are what they were.
     let marks: Vec<bool> = (0..points.len())
         .map(|p| {
-            if cross_floor.is_some() && cons.kind[p] == PointKind::Free {
+            if cross_floor.is_some() && cons.constraint[p] == PointConstraint::Free {
                 false
             } else {
                 is_dir[p]
@@ -827,19 +845,19 @@ fn reestimate_points(
         .collect();
     // A ranged point's origin is a function of the poses, read here at the
     // round's own geometry.
-    let ranges: Option<Vec<PointRange>> = cons.any_ranged.then(|| {
+    let distances: Option<Vec<PointDistance>> = cons.any_ranged.then(|| {
         (0..points.len())
             .map(|p| {
-                if cons.kind[p] != PointKind::Ranged {
-                    return PointRange::NOT_RANGED;
+                if cons.constraint[p] != PointConstraint::Ranged {
+                    return PointDistance::NONE;
                 }
                 let mut o = Vector3::zeros();
                 for &k in &cons.refs[p] {
                     o += camera_centre(&quats[k], &trans[k]);
                 }
                 let n = cons.refs[p].len().max(1) as f64;
-                PointRange {
-                    distance: cons.range[p],
+                PointDistance {
+                    distance: cons.distance[p],
                     origin: [o.x / n, o.y / n, o.z / n],
                 }
             })
@@ -857,7 +875,7 @@ fn reestimate_points(
         },
         Some(&marks),
         PointRules {
-            range: ranges.as_deref(),
+            distance: distances.as_deref(),
             floor_rad: cross_floor,
             cheirality: cross_floor.is_some(),
             few: FewObservations::Absent,
@@ -872,8 +890,9 @@ fn reestimate_points(
         *row = [e[0], e[1], e[2]];
         // The crossing verdict, where the estimate says anything: an absent
         // track (`NaN`) leaves the representation it had, so a track that
-        // momentarily loses its observations does not also change kind.
-        if cross_floor.is_some() && cons.kind[p] == PointKind::Free && e[3].is_finite() {
+        // momentarily loses its observations does not also change representation.
+        if cross_floor.is_some() && cons.constraint[p] == PointConstraint::Free && e[3].is_finite()
+        {
             is_dir[p] = e[3] == 0.0;
         }
     }
@@ -957,7 +976,7 @@ struct LinState<'a> {
     bases: &'a [(Vector3<f64>, Vector3<f64>)],
     cp_dir: &'a [bool],
     cp_held: &'a [bool],
-    cp_origin: &'a [Option<RangeOrigin>],
+    cp_origin: &'a [Option<DistanceOrigin>],
     /// Every supplied observation's pixel, indexed by the caller's own index.
     uv: &'a [[f64; 2]],
     /// Width of the reduced system's shared-parameter head.
@@ -1148,7 +1167,7 @@ fn observation_blocks<const CAM_COLS: usize>(
 /// whose kept observations carry no translation Jacobian have their
 /// translation slots pinned in the reduced system (frozen for the round).
 ///
-/// `cons` carries the point kinds. A ranged point at a finite distance takes
+/// `cons` carries the point constraints. A ranged point at a finite distance takes
 /// the same 2-DOF tangent parameters as a direction -- its state here IS that
 /// direction, its position `O(pose) + r·d` resolved wherever a position is
 /// wanted -- with its Jacobian block scaled by the distance and its reference
@@ -1224,9 +1243,9 @@ fn solve_lm<const CAM_COLS: usize>(
     // two tangent DOFs -- with its Jacobian block scaled by that distance, so
     // the two families share the tangent basis, the 2×2 Schur block and the
     // normalizing update.
-    let cp_range: Vec<Option<f64>> = pt_ids.iter().map(|&p| cons.finite_range(p)).collect();
+    let cp_distance: Vec<Option<f64>> = pt_ids.iter().map(|&p| cons.finite_distance(p)).collect();
     let cp_tangent: Vec<bool> = (0..n_pt)
-        .map(|c| cp_dir[c] || cp_range[c].is_some())
+        .map(|c| cp_dir[c] || cp_distance[c].is_some())
         .collect();
 
     // Translation observability: an image whose kept observations are all
@@ -1260,17 +1279,17 @@ fn solve_lm<const CAM_COLS: usize>(
         .map(|&p| Vector3::new(points[p][0], points[p][1], points[p][2]))
         .collect();
 
-    // Ranged points: their reference set, split into the cameras this round
+    // Ranged points: their reference set, split into the images this round
     // solves and the ones it does not (a reference no kept observation touches
     // cannot move, so its centre folds into a constant). Their state is the
     // direction `d`, so the incoming position is read as one -- a caller whose
     // position does not sit at exactly `r` from the reference is snapped onto
-    // the sphere the range names.
-    let cp_origin: Vec<Option<RangeOrigin>> = pt_ids
+    // the sphere the distance names.
+    let cp_origin: Vec<Option<DistanceOrigin>> = pt_ids
         .iter()
         .enumerate()
         .map(|(c, &p)| {
-            let distance = cp_range[c]?;
+            let distance = cp_distance[c]?;
             let mut live = Vec::new();
             let mut fixed_sum = Vector3::zeros();
             for &k in &cons.refs[p] {
@@ -1279,7 +1298,7 @@ fn solve_lm<const CAM_COLS: usize>(
                     None => fixed_sum += camera_centre(&quats[k], &trans[k]),
                 }
             }
-            Some(RangeOrigin {
+            Some(DistanceOrigin {
                 live,
                 fixed_sum,
                 inv_k: 1.0 / cons.refs[p].len() as f64,
@@ -1289,7 +1308,7 @@ fn solve_lm<const CAM_COLS: usize>(
         .collect();
     let has_ranged = cp_origin.iter().any(Option::is_some);
     // The reference origin at a candidate state.
-    let origin_of = |o: &RangeOrigin, q: &[UnitQuaternion<f64>], t: &[Vector3<f64>]| {
+    let origin_of = |o: &DistanceOrigin, q: &[UnitQuaternion<f64>], t: &[Vector3<f64>]| {
         let mut s = o.fixed_sum;
         for &c in &o.live {
             s += camera_centre(&q[c], &t[c]);

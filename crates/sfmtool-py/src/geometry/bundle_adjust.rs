@@ -11,35 +11,35 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::camera::CameraModel;
 use sfmtool_core::geometry::{
-    bundle_adjust as core_bundle_adjust, BaSchedule, FreePointPolicy, PointConstraints,
-    RangeReference,
+    bundle_adjust as core_bundle_adjust, BaSchedule, DistanceReference, FreePointPolicy,
+    PointConstraints,
 };
 
 use crate::geometry::PyCameraIntrinsics;
 
-/// Read the `range_origin` argument into one optional reference per point.
+/// Read the `distance_from` argument into one optional reference per point.
 ///
 /// The argument is a sequence of `n_pt` entries, each an image index or a
-/// sequence of image indices whose centres are averaged; a negative index (the
-/// documented `-1`) is "no origin". One iteration covers every accepted form,
-/// because a numpy integer array yields scalars that convert to an index and a
-/// list of lists yields sequences -- so the caller can pass the flat array that
-/// covers the common single-camera case without the binding growing a second
+/// sequence of image indices whose camera centres are averaged; a negative index
+/// (the documented `-1`) is "no origin". One iteration covers every accepted
+/// form, because a numpy integer array yields scalars that convert to an index
+/// and a list of lists yields sequences -- so the caller can pass the flat array
+/// that covers the common single-image case without the binding growing a second
 /// path for it.
-fn parse_range_origin(
+fn parse_distance_from(
     obj: &Bound<'_, PyAny>,
     n_pt: usize,
-) -> PyResult<Vec<Option<RangeReference>>> {
-    let mut out: Vec<Option<RangeReference>> = Vec::with_capacity(n_pt);
+) -> PyResult<Vec<Option<DistanceReference>>> {
+    let mut out: Vec<Option<DistanceReference>> = Vec::with_capacity(n_pt);
     for (p, item) in obj.try_iter()?.enumerate() {
         let item = item?;
         if let Ok(k) = item.extract::<i64>() {
-            out.push((k >= 0).then_some(RangeReference::Camera(k as u32)));
+            out.push((k >= 0).then_some(DistanceReference::Image(k as u32)));
             continue;
         }
         let ks: Vec<i64> = item.extract().map_err(|_| {
             pyo3::exceptions::PyValueError::new_err(format!(
-                "range_origin[{p}] must be an image index or a sequence of image \
+                "distance_from[{p}] must be an image index or a sequence of image \
                  indices, got {}",
                 item.get_type()
                     .qualname()
@@ -50,15 +50,15 @@ fn parse_range_origin(
         let kept: Vec<u32> = ks.iter().filter(|&&k| k >= 0).map(|&k| k as u32).collect();
         if kept.len() != ks.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "range_origin[{p}] mixes a negative index into a set of cameras; \
+                "distance_from[{p}] mixes a negative index into a set of images; \
                  a set is averaged, so every member has to be a real image"
             )));
         }
-        out.push((!kept.is_empty()).then_some(RangeReference::CameraMean(kept)));
+        out.push((!kept.is_empty()).then_some(DistanceReference::ImageMean(kept)));
     }
     if out.len() != n_pt {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "range_origin must have one entry per point: {} given for {n_pt} points",
+            "distance_from must have one entry per point: {} given for {n_pt} points",
             out.len()
         )));
     }
@@ -70,8 +70,8 @@ fn parse_range_origin(
 /// parity requirement is stated against.
 fn build_constraints(
     held: Option<&[bool]>,
-    range: Option<&[f64]>,
-    origins: &[Option<RangeReference>],
+    distance: Option<&[f64]>,
+    origins: &[Option<DistanceReference>],
     n_pt: usize,
     n_img: usize,
 ) -> PyResult<Option<PointConstraints>> {
@@ -79,12 +79,12 @@ fn build_constraints(
     let mut any = false;
     for p in 0..n_pt {
         let is_held = held.is_some_and(|h| h[p]);
-        let r = range.map_or(f64::NAN, |r| r[p]);
+        let r = distance.map_or(f64::NAN, |d| d[p]);
         let is_ranged = !r.is_nan();
         if is_held && is_ranged {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "point {p} is both held and ranged; a held point owns its whole \
-                 coordinate, so there is no direction left for a range to constrain"
+                 coordinate, so there is no direction left for a distance to constrain"
             )));
         }
         if is_held {
@@ -97,21 +97,21 @@ fn build_constraints(
         }
         if r <= 0.0 {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "range[{p}] = {r} is not a distance; a ranged point needs a strictly \
+                "distance[{p}] = {r} is not a distance; a ranged point needs a strictly \
                  positive one, +inf for a direction, or NaN to be left free"
             )));
         }
         let reference = if r.is_finite() {
             let reference = origins.get(p).cloned().flatten().ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err(format!(
-                    "range[{p}] = {r} is finite and needs a range_origin: a distance \
+                    "distance[{p}] = {r} is finite and needs a distance_from: a distance \
                      is measured from a camera centre, not from the world frame"
                 ))
             })?;
             for &k in reference.images() {
                 if k as usize >= n_img {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "range_origin[{p}] names image {k}, past the {n_img} images"
+                        "distance_from[{p}] names image {k}, past the {n_img} images"
                     )));
                 }
             }
@@ -121,7 +121,7 @@ fn build_constraints(
             // read as the caller stating a reference the geometry never needs.
             None
         };
-        constraints.range_at(p, r, reference);
+        constraints.constrain_distance(p, r, reference);
         any = true;
     }
     Ok(any.then_some(constraints))
@@ -157,16 +157,16 @@ fn build_constraints(
 ///         owns no parameters, the re-estimation skips it, and it comes back
 ///         exactly as it went in. Absent or all-``False`` is every point
 ///         unheld.
-///     range: Optional (n_pt,) float64 array of ranged points' distances --
+///     distance: Optional (n_pt,) float64 array of ranged points' distances --
 ///         a strictly positive world-unit distance, ``+inf`` for a direction,
 ///         and ``NaN`` for a point this rule says nothing about. A ranged
 ///         point is ``X = O + r * d``: the caller owns ``r``, the solve owns
-///         the unit direction ``d``, and ``O`` comes from ``range_origin``.
+///         the unit direction ``d``, and ``O`` comes from ``distance_from``.
 ///         Held and ranged are exclusive on one point.
-///     range_origin: Optional (n_pt,) sequence naming where each finite range
-///         is measured from: an image index, or a sequence of image indices
-///         whose camera centres are averaged, with ``-1`` (or an empty
-///         sequence) where there is none. A finite ``range`` requires one --
+///     distance_from: Optional (n_pt,) sequence naming where each finite
+///         distance is measured from: an image index, or a sequence of image
+///         indices whose camera centres are averaged, with ``-1`` (or an empty
+///         sequence) where there is none. A finite ``distance`` requires one --
 ///         the adjustment's gauge is free, so a distance from a fixed world
 ///         coordinate would constrain nothing -- while ``+inf`` and ``NaN``
 ///         rows ignore it.
@@ -245,8 +245,8 @@ fn build_constraints(
     obs_point,
     point_at_infinity=None,
     held=None,
-    range=None,
-    range_origin=None,
+    distance=None,
+    distance_from=None,
     free_points_cross=false,
     noise_floor_scale=sfmtool_core::geometry::DEFAULT_NOISE_FLOOR_SCALE,
     protected=None,
@@ -271,8 +271,8 @@ pub fn bundle_adjust<'py>(
     obs_point: PyReadonlyArray1<'py, u32>,
     point_at_infinity: Option<PyReadonlyArray1<'py, bool>>,
     held: Option<PyReadonlyArray1<'py, bool>>,
-    range: Option<PyReadonlyArray1<'py, f64>>,
-    range_origin: Option<Bound<'py, PyAny>>,
+    distance: Option<PyReadonlyArray1<'py, f64>>,
+    distance_from: Option<Bound<'py, PyAny>>,
     free_points_cross: bool,
     noise_floor_scale: f64,
     protected: Option<PyReadonlyArray1<'py, bool>>,
@@ -391,10 +391,10 @@ pub fn bundle_adjust<'py>(
             ));
         }
     }
-    if let Some(ref r) = range {
+    if let Some(ref r) = distance {
         if r.shape()[0] != n_pt {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "range must have shape (n_pt,)",
+                "distance must have shape (n_pt,)",
             ));
         }
     }
@@ -416,14 +416,14 @@ pub fn bundle_adjust<'py>(
         ));
     }
     let held_mask: Option<Vec<bool>> = held.map(|m| to_contiguous!(m).into_owned());
-    let range_values: Option<Vec<f64>> = range.map(|r| to_contiguous!(r).into_owned());
-    let origins = match &range_origin {
-        Some(obj) => parse_range_origin(obj, n_pt)?,
+    let distance_values: Option<Vec<f64>> = distance.map(|r| to_contiguous!(r).into_owned());
+    let origins = match &distance_from {
+        Some(obj) => parse_distance_from(obj, n_pt)?,
         None => vec![None; n_pt],
     };
     let constraints = build_constraints(
         held_mask.as_deref(),
-        range_values.as_deref(),
+        distance_values.as_deref(),
         &origins,
         n_pt,
         n_img,

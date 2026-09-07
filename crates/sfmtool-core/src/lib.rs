@@ -53,7 +53,9 @@ pub use sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata}
 /// Re-exported alongside [`PointConstraintColumns`], whose entries are these
 /// codes: a consumer reading or building the constraint columns needs to name
 /// them without depending on `sfmr-format` itself.
-pub use sfmr_format::{NO_RANGE_CAMERA, POINT_KIND_FREE, POINT_KIND_HELD, POINT_KIND_RANGED};
+pub use sfmr_format::{
+    NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
+};
 
 // `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
 // the two formats' thumbnail extents must agree. Neither format crate depends

@@ -135,9 +135,9 @@ fn make_test_data() -> SfmrData {
             .unwrap(),
         ),
         normal_confidence: None,
-        point_kind: None,
-        point_range: None,
-        point_range_camera: None,
+        point_constraints: None,
+        constraint_distances: None,
+        constraint_reference_images: None,
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
@@ -925,9 +925,9 @@ fn test_empty_reconstruction() {
         reprojection_errors: Array1::from_vec(vec![]),
         normals_xyz: Some(Array2::zeros((0, 3))),
         normal_confidence: None,
-        point_kind: None,
-        point_range: None,
-        point_range_camera: None,
+        point_constraints: None,
+        constraint_distances: None,
+        constraint_reference_images: None,
         patch_u_halfvec_xyz: None,
         patch_v_halfvec_xyz: None,
         patch_bitmaps_y_x_rgba: None,
@@ -1171,29 +1171,29 @@ fn rewrite_without_meta_key(
 /// point 2 ranged at 12.5 m from image 2, point 3 ranged at infinity (so its
 /// `w` is set to 0 by the caller), and the rest free.
 fn with_point_constraints(data: &mut SfmrData) {
-    data.point_kind = Some(Array1::from_vec(vec![
-        POINT_KIND_FREE,
-        POINT_KIND_HELD,
-        POINT_KIND_RANGED,
-        POINT_KIND_RANGED,
-        POINT_KIND_FREE,
+    data.point_constraints = Some(Array1::from_vec(vec![
+        POINT_CONSTRAINT_FREE,
+        POINT_CONSTRAINT_HELD,
+        POINT_CONSTRAINT_RANGED,
+        POINT_CONSTRAINT_RANGED,
+        POINT_CONSTRAINT_FREE,
     ]));
-    data.point_range = Some(Array1::from_vec(vec![
+    data.constraint_distances = Some(Array1::from_vec(vec![
         f64::NAN,
         f64::NAN,
         12.5,
         f64::INFINITY,
         f64::NAN,
     ]));
-    data.point_range_camera = Some(Array1::from_vec(vec![
-        NO_RANGE_CAMERA,
-        NO_RANGE_CAMERA,
+    data.constraint_reference_images = Some(Array1::from_vec(vec![
+        NO_REFERENCE_IMAGE,
+        NO_REFERENCE_IMAGE,
         2,
-        NO_RANGE_CAMERA,
-        NO_RANGE_CAMERA,
+        NO_REFERENCE_IMAGE,
+        NO_REFERENCE_IMAGE,
     ]));
-    // A ranged point at infinite range is a direction, which is what its `w`
-    // has to say.
+    // A ranged point at an infinite distance is a direction, which is what its
+    // `w` has to say.
     data.positions_xyzw[[3, 3]] = 0.0;
     data.metadata.infinity_point_count = 1;
 }
@@ -1205,8 +1205,8 @@ fn test_point_constraints_round_trip() {
     let mut data = make_test_data();
     with_point_constraints(&mut data);
     let expected = (
-        data.point_kind.clone().unwrap(),
-        data.point_range_camera.clone().unwrap(),
+        data.point_constraints.clone().unwrap(),
+        data.constraint_reference_images.clone().unwrap(),
     );
 
     let dir = std::env::temp_dir().join("sfmr_test_point_constraints");
@@ -1216,20 +1216,20 @@ fn test_point_constraints_round_trip() {
     write_sfmr(&path, &mut data).unwrap();
 
     let loaded = read_sfmr(&path).unwrap();
-    assert_eq!(loaded.point_kind, Some(expected.0));
-    assert_eq!(loaded.point_range_camera, Some(expected.1));
+    assert_eq!(loaded.point_constraints, Some(expected.0));
+    assert_eq!(loaded.constraint_reference_images, Some(expected.1));
     // NaN is not equal to itself, so the distances are compared bit for bit.
-    let range = loaded.point_range.unwrap();
-    assert!(range[0].is_nan() && range[1].is_nan() && range[4].is_nan());
-    assert_eq!(range[2], 12.5);
-    assert_eq!(range[3], f64::INFINITY);
+    let distances = loaded.constraint_distances.unwrap();
+    assert!(distances[0].is_nan() && distances[1].is_nan() && distances[4].is_nan());
+    assert_eq!(distances[2], 12.5);
+    assert_eq!(distances[3], f64::INFINITY);
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     for name in [
-        "points3d/kind.5.uint8.zst",
-        "points3d/range.5.float64.zst",
-        "points3d/range_camera.5.uint32.zst",
+        "points3d/point_constraints.5.uint8.zst",
+        "points3d/constraint_distances.5.float64.zst",
+        "points3d/constraint_reference_images.5.uint32.zst",
     ] {
         assert!(archive.by_name(name).is_ok(), "missing {name}");
     }
@@ -1245,9 +1245,9 @@ fn test_all_free_point_constraints_are_not_written() {
     // A set in which every point is free says exactly what carrying no set
     // says, so the writer drops it and the reader reports `None`.
     let mut data = make_test_data();
-    data.point_kind = Some(Array1::from_vec(vec![POINT_KIND_FREE; 5]));
-    data.point_range = Some(Array1::from_vec(vec![f64::NAN; 5]));
-    data.point_range_camera = Some(Array1::from_vec(vec![NO_RANGE_CAMERA; 5]));
+    data.point_constraints = Some(Array1::from_vec(vec![POINT_CONSTRAINT_FREE; 5]));
+    data.constraint_distances = Some(Array1::from_vec(vec![f64::NAN; 5]));
+    data.constraint_reference_images = Some(Array1::from_vec(vec![NO_REFERENCE_IMAGE; 5]));
 
     let dir = std::env::temp_dir().join("sfmr_test_all_free_constraints");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1256,13 +1256,15 @@ fn test_all_free_point_constraints_are_not_written() {
     write_sfmr(&path, &mut data).unwrap();
 
     let loaded = read_sfmr(&path).unwrap();
-    assert!(loaded.point_kind.is_none());
-    assert!(loaded.point_range.is_none());
-    assert!(loaded.point_range_camera.is_none());
+    assert!(loaded.point_constraints.is_none());
+    assert!(loaded.constraint_distances.is_none());
+    assert!(loaded.constraint_reference_images.is_none());
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
-    assert!(archive.by_name("points3d/kind.5.uint8.zst").is_err());
+    assert!(archive
+        .by_name("points3d/point_constraints.5.uint8.zst")
+        .is_err());
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -1271,7 +1273,7 @@ fn test_all_free_point_constraints_are_not_written() {
 fn test_round_trip_without_point_constraints() {
     // Absent by default: no entries, no flag, and every point reads as free.
     let mut data = make_test_data();
-    assert!(data.point_kind.is_none());
+    assert!(data.point_constraints.is_none());
 
     let dir = std::env::temp_dir().join("sfmr_test_no_point_constraints");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1280,16 +1282,16 @@ fn test_round_trip_without_point_constraints() {
     write_sfmr(&path, &mut data).unwrap();
 
     let loaded = read_sfmr(&path).unwrap();
-    assert!(loaded.point_kind.is_none());
-    assert!(loaded.point_range.is_none());
-    assert!(loaded.point_range_camera.is_none());
+    assert!(loaded.point_constraints.is_none());
+    assert!(loaded.constraint_distances.is_none());
+    assert!(loaded.constraint_reference_images.is_none());
 
     let file = std::fs::File::open(&path).unwrap();
     let mut archive = zip::ZipArchive::new(file).unwrap();
     for name in [
-        "points3d/kind.5.uint8.zst",
-        "points3d/range.5.float64.zst",
-        "points3d/range_camera.5.uint32.zst",
+        "points3d/point_constraints.5.uint8.zst",
+        "points3d/constraint_distances.5.float64.zst",
+        "points3d/constraint_reference_images.5.uint32.zst",
     ] {
         assert!(archive.by_name(name).is_err(), "unexpected {name}");
     }
@@ -1299,8 +1301,8 @@ fn test_round_trip_without_point_constraints() {
 
 #[test]
 fn test_point_constraints_covered_by_points3d_hash() {
-    // Changing a kind changes the section digest, so the columns are inside the
-    // integrity envelope rather than beside it.
+    // Changing a constraint changes the section digest, so the columns are
+    // inside the integrity envelope rather than beside it.
     let dir = std::env::temp_dir().join("sfmr_test_point_constraints_hash");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1312,7 +1314,7 @@ fn test_point_constraints_covered_by_points3d_hash() {
 
     let mut b = make_test_data();
     with_point_constraints(&mut b);
-    b.point_kind.as_mut().unwrap()[0] = POINT_KIND_HELD;
+    b.point_constraints.as_mut().unwrap()[0] = POINT_CONSTRAINT_HELD;
     let pb = dir.join("b.sfmr");
     write_sfmr(&pb, &mut b).unwrap();
 
@@ -1343,57 +1345,57 @@ fn test_malformed_point_constraints_rejected() {
     type Case = (&'static str, Box<dyn Fn(&mut SfmrData)>, &'static str);
     let cases: Vec<Case> = vec![
         (
-            "only the kind column",
+            "only the constraint column",
             Box::new(|d: &mut SfmrData| {
-                d.point_range = None;
-                d.point_range_camera = None;
+                d.constraint_distances = None;
+                d.constraint_reference_images = None;
             }),
             "present together",
         ),
         (
-            "a kind code the format does not define",
-            Box::new(|d: &mut SfmrData| d.point_kind.as_mut().unwrap()[0] = 3),
+            "a constraint code the format does not define",
+            Box::new(|d: &mut SfmrData| d.point_constraints.as_mut().unwrap()[0] = 3),
             "not one of",
         ),
         (
             "a distance on a free row",
-            Box::new(|d: &mut SfmrData| d.point_range.as_mut().unwrap()[0] = 4.0),
-            "carries no range",
+            Box::new(|d: &mut SfmrData| d.constraint_distances.as_mut().unwrap()[0] = 4.0),
+            "carries no distance",
         ),
         (
             "a reference on a held row",
-            Box::new(|d: &mut SfmrData| d.point_range_camera.as_mut().unwrap()[1] = 0),
+            Box::new(|d: &mut SfmrData| d.constraint_reference_images.as_mut().unwrap()[1] = 0),
             "measured from nothing",
         ),
         (
             "a ranged row with no distance",
-            Box::new(|d: &mut SfmrData| d.point_range.as_mut().unwrap()[2] = f64::NAN),
+            Box::new(|d: &mut SfmrData| d.constraint_distances.as_mut().unwrap()[2] = f64::NAN),
             "strictly positive distance",
         ),
         (
-            "a finite range measured from no image",
+            "a finite distance measured from no image",
             Box::new(|d: &mut SfmrData| {
-                d.point_range_camera.as_mut().unwrap()[2] = NO_RANGE_CAMERA
+                d.constraint_reference_images.as_mut().unwrap()[2] = NO_REFERENCE_IMAGE
             }),
             "past the 3 images",
         ),
         (
-            "a finite range measured from an image past the end",
-            Box::new(|d: &mut SfmrData| d.point_range_camera.as_mut().unwrap()[2] = 3),
+            "a finite distance measured from an image past the end",
+            Box::new(|d: &mut SfmrData| d.constraint_reference_images.as_mut().unwrap()[2] = 3),
             "past the 3 images",
         ),
         (
-            "a `w` that disagrees with an infinite range",
+            "a `w` that disagrees with an infinite distance",
             Box::new(|d: &mut SfmrData| {
                 d.positions_xyzw[[3, 3]] = 1.0;
                 d.metadata.infinity_point_count = 0;
             }),
-            "a direction exactly at infinite range",
+            "a direction exactly at an infinite distance",
         ),
         (
             "a short column",
             Box::new(|d: &mut SfmrData| {
-                d.point_kind = Some(Array1::from_vec(vec![POINT_KIND_FREE; 4]))
+                d.point_constraints = Some(Array1::from_vec(vec![POINT_CONSTRAINT_FREE; 4]))
             }),
             "len 4 != point_count 5",
         ),
@@ -2296,11 +2298,17 @@ fn entry_names_are_pinned() {
         e::tracks_observation_counts(13),
         "tracks/observation_counts.13.uint32.zst"
     );
-    assert_eq!(e::points3d_kind(13), "points3d/kind.13.uint8.zst");
-    assert_eq!(e::points3d_range(13), "points3d/range.13.float64.zst");
     assert_eq!(
-        e::points3d_range_camera(13),
-        "points3d/range_camera.13.uint32.zst"
+        e::points3d_point_constraints(13),
+        "points3d/point_constraints.13.uint8.zst"
+    );
+    assert_eq!(
+        e::points3d_constraint_distances(13),
+        "points3d/constraint_distances.13.float64.zst"
+    );
+    assert_eq!(
+        e::points3d_constraint_reference_images(13),
+        "points3d/constraint_reference_images.13.uint32.zst"
     );
 
     // Version-dependent names: both spellings, since `read` and `verify` still
@@ -2379,12 +2387,12 @@ fn archive_entry_names_pin_call_sites() {
         "images/translations_xyz.3.3.float64.zst",
         "metadata.json.zst",
         "points3d/colors_rgb.5.3.uint8.zst",
-        "points3d/kind.5.uint8.zst",
+        "points3d/constraint_distances.5.float64.zst",
+        "points3d/constraint_reference_images.5.uint32.zst",
         "points3d/metadata.json.zst",
         "points3d/normals_xyz.5.3.float32.zst",
+        "points3d/point_constraints.5.uint8.zst",
         "points3d/positions_xyzw.5.4.float64.zst",
-        "points3d/range.5.float64.zst",
-        "points3d/range_camera.5.uint32.zst",
         "points3d/reprojection_errors.5.float32.zst",
         "tracks/feature_indexes.8.uint32.zst",
         "tracks/image_indexes.8.uint32.zst",

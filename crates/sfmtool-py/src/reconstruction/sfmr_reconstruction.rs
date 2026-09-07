@@ -453,15 +453,15 @@ impl PySfmrReconstruction {
     /// free.
     ///
     /// ``0`` is free (the solve owns the point outright), ``1`` is ranged (the
-    /// caller owns the distance in :attr:`point_range`, the solve owns the
+    /// caller owns the distance in :attr:`constraint_distances`, the solve owns the
     /// direction) and ``2`` is held (the caller owns the whole coordinate). The
     /// three constraint columns travel as a set: set them with
-    /// ``clone_with_changes(point_kind=..., point_range=...,
-    /// point_range_camera=...)``, and they are stored and written untouched.
+    /// ``clone_with_changes(point_constraints=..., constraint_distances=...,
+    /// constraint_reference_images=...)``, and they are stored and written untouched.
     #[getter]
-    fn point_kind<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
+    fn point_constraints<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
         let constraints = self.inner.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(py, &constraints.kind))
+        Some(PyArray1::from_slice(py, &constraints.point_constraints))
     }
 
     /// The distance each ranged point sits at from its reference, shape
@@ -469,24 +469,30 @@ impl PySfmrReconstruction {
     /// point.
     ///
     /// A strictly positive world-unit distance, or ``+inf`` where the point is
-    /// a direction; ``NaN`` on every free and held row. See :attr:`point_kind`.
+    /// a direction; ``NaN`` on every free and held row. See :attr:`point_constraints`.
     #[getter]
-    fn point_range<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+    fn constraint_distances<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
         let constraints = self.inner.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(py, &constraints.range))
+        Some(PyArray1::from_slice(py, &constraints.constraint_distances))
     }
 
-    /// The image each finite range is measured from, shape ``(N,)`` ``uint32``,
-    /// or ``None`` when this reconstruction constrains no point.
+    /// The image each finite distance is measured from, shape ``(N,)``
+    /// ``uint32``, or ``None`` when this reconstruction constrains no point.
     ///
     /// The distance runs from that image's camera centre at whatever pose the
     /// reader holds. ``0xFFFFFFFF`` marks a row that names no image: every free
-    /// and held point, and a ranged point at infinite range. See
-    /// :attr:`point_kind`.
+    /// and held point, and a ranged point at an infinite distance. See
+    /// :attr:`point_constraints`.
     #[getter]
-    fn point_range_camera<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u32>>> {
+    fn constraint_reference_images<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> Option<Bound<'py, PyArray1<u32>>> {
         let constraints = self.inner.point_constraints.as_ref()?;
-        Some(PyArray1::from_slice(py, &constraints.range_camera))
+        Some(PyArray1::from_slice(
+            py,
+            &constraints.constraint_reference_images,
+        ))
     }
 
     /// The attached oriented-patch cloud, or ``None`` when this reconstruction
@@ -1059,7 +1065,7 @@ impl PySfmrReconstruction {
     /// ``quaternions_wxyz``, ``translations``, ``track_image_indexes``,
     /// ``track_feature_indexes``, ``track_point_indexes``, ``observation_counts``,
     /// ``normals``, ``normal_confidence`` (an ``(N,)`` uint8 array or ``None``
-    /// to drop it), ``point_kind`` / ``point_range`` / ``point_range_camera``
+    /// to drop it), ``point_constraints`` / ``constraint_distances`` / ``constraint_reference_images``
     /// (the constraint triple: pass all three together, or any one as ``None``
     /// to drop the set), ``patches`` (a ``PatchCloud`` or ``None``),
     /// ``patch_bitmaps`` (an ``(N, R, R, 4)`` uint8 array or ``None``; requires

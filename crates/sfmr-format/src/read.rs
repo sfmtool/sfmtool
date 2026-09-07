@@ -305,39 +305,39 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     // Optional per-point constraint triple (version 7+), flagged as one set.
     // Absent means every point is free, so an older file — which carries
     // neither the flag nor the arrays — simply reads as `None`.
-    let (point_kind, point_range, point_range_camera) = if points3d_meta
+    let (point_constraints, constraint_distances, constraint_reference_images) = if points3d_meta
         .get("has_point_constraints")
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        let kind: Vec<u8> = read_binary_array(
+        let point_constraints: Vec<u8> = read_binary_array(
             &mut archive,
-            &entries::points3d_kind(point_count),
+            &entries::points3d_point_constraints(point_count),
             point_count,
         )?;
-        let range: Vec<f64> = read_binary_array(
+        let constraint_distances: Vec<f64> = read_binary_array(
             &mut archive,
-            &entries::points3d_range(point_count),
+            &entries::points3d_constraint_distances(point_count),
             point_count,
         )?;
-        let range_camera: Vec<u32> = read_binary_array(
+        let constraint_reference_images: Vec<u32> = read_binary_array(
             &mut archive,
-            &entries::points3d_range_camera(point_count),
+            &entries::points3d_constraint_reference_images(point_count),
             point_count,
         )?;
         validate_point_constraints(
-            Some(&kind),
-            Some(&range),
-            Some(&range_camera),
+            Some(&point_constraints),
+            Some(&constraint_distances),
+            Some(&constraint_reference_images),
             &positions_xyzw,
             point_count,
             image_count,
         )
         .map_err(SfmrError::InvalidFormat)?;
         (
-            Some(Array1::from_vec(kind)),
-            Some(Array1::from_vec(range)),
-            Some(Array1::from_vec(range_camera)),
+            Some(Array1::from_vec(point_constraints)),
+            Some(Array1::from_vec(constraint_distances)),
+            Some(Array1::from_vec(constraint_reference_images)),
         )
     } else {
         (None, None, None)
@@ -603,9 +603,9 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         reprojection_errors,
         normals_xyz,
         normal_confidence,
-        point_kind,
-        point_range,
-        point_range_camera,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
         patch_u_halfvec_xyz,
         patch_v_halfvec_xyz,
         patch_bitmaps_y_x_rgba,

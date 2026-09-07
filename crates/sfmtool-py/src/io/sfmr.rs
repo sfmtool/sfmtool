@@ -73,7 +73,7 @@ where
 ///   (`list[bytes]`, 16 bytes each),
 ///   camera_indexes, quaternions_wxyz, translations_xyz, positions_xyzw,
 ///   colors_rgb, reprojection_errors, normals_xyz, normal_confidence,
-///   point_kind, point_range, point_range_camera,
+///   point_constraints, constraint_distances, constraint_reference_images,
 ///   patch_u_halfvec_xyz, patch_v_halfvec_xyz, patch_bitmaps_y_x_rgba,
 ///   image_indexes, feature_indexes, keypoints_xy, observation_confidence,
 ///   point_indexes, observation_counts, observed_depth_histogram_counts,
@@ -82,9 +82,10 @@ where
 /// `positions_xyzw` is the homogeneous `(P, 4)` point array. Every optional
 /// column is emitted as `None` when the file does not carry it: the normals and
 /// their `(P,)` uint8 `normal_confidence`, the per-point constraint triple
-/// (`(P,)` uint8 `point_kind`, `(P,)` float64 `point_range` and `(P,)` uint32
-/// `point_range_camera`, which the archive names `points3d/kind`,
-/// `points3d/range` and `points3d/range_camera`), the per-point patch frame
+/// (`(P,)` uint8 `point_constraints`, `(P,)` float64 `constraint_distances` and
+/// `(P,)` uint32 `constraint_reference_images`, which the archive names
+/// `points3d/point_constraints`, `points3d/constraint_distances` and
+/// `points3d/constraint_reference_images`), the per-point patch frame
 /// (`(P, 3)` float32 `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz` and the
 /// `(P, R, R, 4)` uint8 `patch_bitmaps_y_x_rgba`), the mode-dependent
 /// observation columns, and the `(M,)` uint8 `observation_confidence`.
@@ -166,17 +167,17 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
     }
     // The per-point constraint triple: present together or absent together,
     // absent meaning every point is free.
-    match data.point_kind {
-        Some(k) => dict.set_item("point_kind", k.into_pyarray(py))?,
-        None => dict.set_item("point_kind", py.None())?,
+    match data.point_constraints {
+        Some(k) => dict.set_item("point_constraints", k.into_pyarray(py))?,
+        None => dict.set_item("point_constraints", py.None())?,
     }
-    match data.point_range {
-        Some(r) => dict.set_item("point_range", r.into_pyarray(py))?,
-        None => dict.set_item("point_range", py.None())?,
+    match data.constraint_distances {
+        Some(r) => dict.set_item("constraint_distances", r.into_pyarray(py))?,
+        None => dict.set_item("constraint_distances", py.None())?,
     }
-    match data.point_range_camera {
-        Some(c) => dict.set_item("point_range_camera", c.into_pyarray(py))?,
-        None => dict.set_item("point_range_camera", py.None())?,
+    match data.constraint_reference_images {
+        Some(c) => dict.set_item("constraint_reference_images", c.into_pyarray(py))?,
+        None => dict.set_item("constraint_reference_images", py.None())?,
     }
     // The per-point patch frame: `u` and `v` are present or absent together and
     // the bitmaps require them, so all three ride along as a set.
@@ -357,14 +358,18 @@ pub(crate) fn parse_sfmr_data_from_dict(
         optional_array::<u8, ndarray::Ix1>(data, "observation_confidence", "a 1D uint8 array")?;
 
     // The per-point constraint triple. Its cross-array rules -- present
-    // together, kind codes, a finite range naming a real image, a ranged row's
+    // together, constraint codes, a finite distance naming a real image, a ranged row's
     // `w` agreeing with its distance -- are the format writer's to enforce, so
     // only the per-array dtype and rank are checked here.
-    let point_kind = optional_array::<u8, ndarray::Ix1>(data, "point_kind", "a 1D uint8 array")?;
-    let point_range =
-        optional_array::<f64, ndarray::Ix1>(data, "point_range", "a 1D float64 array")?;
-    let point_range_camera =
-        optional_array::<u32, ndarray::Ix1>(data, "point_range_camera", "a 1D uint32 array")?;
+    let point_constraints =
+        optional_array::<u8, ndarray::Ix1>(data, "point_constraints", "a 1D uint8 array")?;
+    let constraint_distances =
+        optional_array::<f64, ndarray::Ix1>(data, "constraint_distances", "a 1D float64 array")?;
+    let constraint_reference_images = optional_array::<u32, ndarray::Ix1>(
+        data,
+        "constraint_reference_images",
+        "a 1D uint32 array",
+    )?;
 
     // The per-point patch frame. `patch_u_halfvec_xyz`/`patch_v_halfvec_xyz`
     // must be present together and the bitmaps require them; those cross-array
@@ -441,9 +446,9 @@ pub(crate) fn parse_sfmr_data_from_dict(
             .into_owned(),
         normals_xyz,
         normal_confidence,
-        point_kind,
-        point_range,
-        point_range_camera,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
         patch_u_halfvec_xyz,
         patch_v_halfvec_xyz,
         patch_bitmaps_y_x_rgba,
@@ -469,8 +474,8 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// Every optional column `read_sfmr` emits is read back here, so a dict that
 /// came from `read_sfmr` writes out whatever the source file carried: the
 /// normals and their `normal_confidence`, the per-observation
-/// `observation_confidence`, the constraint triple (`point_kind`,
-/// `point_range`, `point_range_camera` -- written only when some point is not
+/// `observation_confidence`, the constraint triple (`point_constraints`,
+/// `constraint_distances`, `constraint_reference_images` -- written only when some point is not
 /// free, since an all-free set is the same statement as none at all), and the
 /// per-point patch frame
 /// (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz` and the optional

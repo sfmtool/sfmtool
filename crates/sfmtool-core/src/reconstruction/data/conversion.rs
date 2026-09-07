@@ -290,12 +290,18 @@ impl SfmrReconstruction {
             // stored `w`. The convention upgrade above leaves it alone: a
             // distance is a scalar and a reference is an index, so neither
             // depends on which handedness the file was written in.
-            point_constraints: match (data.point_kind, data.point_range, data.point_range_camera) {
-                (Some(kind), Some(range), Some(range_camera)) => Some(PointConstraintColumns {
-                    kind: kind.to_vec(),
-                    range: range.to_vec(),
-                    range_camera: range_camera.to_vec(),
-                }),
+            point_constraints: match (
+                data.point_constraints,
+                data.constraint_distances,
+                data.constraint_reference_images,
+            ) {
+                (Some(constraints), Some(distances), Some(reference_images)) => {
+                    Some(PointConstraintColumns {
+                        point_constraints: constraints.to_vec(),
+                        constraint_distances: distances.to_vec(),
+                        constraint_reference_images: reference_images.to_vec(),
+                    })
+                }
                 _ => None,
             },
             observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
@@ -467,18 +473,18 @@ impl SfmrReconstruction {
                 .normal_confidence
                 .as_ref()
                 .map(|c| Array1::from_vec(c.clone())),
-            point_kind: self
+            point_constraints: self
                 .point_constraints
                 .as_ref()
-                .map(|c| Array1::from_vec(c.kind.clone())),
-            point_range: self
+                .map(|c| Array1::from_vec(c.point_constraints.clone())),
+            constraint_distances: self
                 .point_constraints
                 .as_ref()
-                .map(|c| Array1::from_vec(c.range.clone())),
-            point_range_camera: self
+                .map(|c| Array1::from_vec(c.constraint_distances.clone())),
+            constraint_reference_images: self
                 .point_constraints
                 .as_ref()
-                .map(|c| Array1::from_vec(c.range_camera.clone())),
+                .map(|c| Array1::from_vec(c.constraint_reference_images.clone())),
             image_indexes,
             feature_indexes,
             keypoints_xy,

@@ -457,13 +457,21 @@ pub fn write_sfmr_with_options(
         &mut points3d_hasher,
     )?;
 
-    // points3d/kind (optional, version 7+; lexicographically after colors_rgb,
-    // before metadata.json). The first of the constraint triple.
-    if let Some((kind, _, _)) = constraints {
+    // points3d/constraint_distances and points3d/constraint_reference_images
+    // (optional, version 7+; lexicographically after colors_rgb, before
+    // metadata.json). Two of the constraint triple; the third sorts much later.
+    if let Some((_, constraint_distances, constraint_reference_images)) = constraints {
         write_binary_entry_hashed(
             &mut zip,
-            &entries::points3d_kind(point_count),
-            kind,
+            &entries::points3d_constraint_distances(point_count),
+            bytemuck::cast_slice(constraint_distances),
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::points3d_constraint_reference_images(point_count),
+            bytemuck::cast_slice(constraint_reference_images),
             options.zstd_level,
             &mut points3d_hasher,
         )?;
@@ -544,6 +552,19 @@ pub fn write_sfmr_with_options(
         )?;
     }
 
+    // points3d/point_constraints (optional, version 7+; lexicographically after
+    // the patch frame, before positions_xyzw). The third of the constraint
+    // triple.
+    if let Some((point_constraints, _, _)) = constraints {
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::points3d_point_constraints(point_count),
+            point_constraints,
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+    }
+
     // points3d/positions_xyzw
     write_binary_entry_hashed(
         &mut zip,
@@ -552,25 +573,6 @@ pub fn write_sfmr_with_options(
         options.zstd_level,
         &mut points3d_hasher,
     )?;
-
-    // points3d/range and points3d/range_camera (optional, version 7+;
-    // lexicographically after positions_xyzw, before reprojection_errors).
-    if let Some((_, range, range_camera)) = constraints {
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::points3d_range(point_count),
-            bytemuck::cast_slice(range),
-            options.zstd_level,
-            &mut points3d_hasher,
-        )?;
-        write_binary_entry_hashed(
-            &mut zip,
-            &entries::points3d_range_camera(point_count),
-            bytemuck::cast_slice(range_camera),
-            options.zstd_level,
-            &mut points3d_hasher,
-        )?;
-    }
 
     // points3d/reprojection_errors
     write_binary_entry_hashed(
@@ -700,8 +702,8 @@ pub fn write_sfmr_with_options(
     Ok(())
 }
 
-/// The three constraint columns as borrowed slices, in archive order: kind,
-/// range, range camera.
+/// The three constraint columns as borrowed slices: the constraint per point,
+/// the distance it is held at, and the image that distance is measured from.
 type PointConstraintSlices<'a> = (&'a [u8], &'a [f64], &'a [u32]);
 
 /// The per-point constraint triple to write, or `None` when the file carries
@@ -717,28 +719,45 @@ fn point_constraints_to_write(
     point_count: usize,
     image_count: usize,
 ) -> Result<Option<PointConstraintSlices<'_>>, SfmrError> {
-    let kind = data.point_kind.as_ref().map(|a| a.as_slice().unwrap());
-    let range = data.point_range.as_ref().map(|a| a.as_slice().unwrap());
-    let range_camera = data
-        .point_range_camera
+    let point_constraints = data
+        .point_constraints
+        .as_ref()
+        .map(|a| a.as_slice().unwrap());
+    let constraint_distances = data
+        .constraint_distances
+        .as_ref()
+        .map(|a| a.as_slice().unwrap());
+    let constraint_reference_images = data
+        .constraint_reference_images
         .as_ref()
         .map(|a| a.as_slice().unwrap());
     validate_point_constraints(
-        kind,
-        range,
-        range_camera,
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
         &data.positions_xyzw,
         point_count,
         image_count,
     )
     .map_err(SfmrError::InvalidFormat)?;
-    let (Some(kind), Some(range), Some(range_camera)) = (kind, range, range_camera) else {
+    let (Some(point_constraints), Some(constraint_distances), Some(constraint_reference_images)) = (
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
+    ) else {
         return Ok(None);
     };
-    if kind.iter().all(|&k| k == POINT_KIND_FREE) {
+    if point_constraints
+        .iter()
+        .all(|&k| k == POINT_CONSTRAINT_FREE)
+    {
         return Ok(None);
     }
-    Ok(Some((kind, range, range_camera)))
+    Ok(Some((
+        point_constraints,
+        constraint_distances,
+        constraint_reference_images,
+    )))
 }
 
 /// Validate the optional per-point patch frame arrays: `patch_u_halfvec_xyz`

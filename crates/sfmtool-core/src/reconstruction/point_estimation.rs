@@ -47,7 +47,7 @@ pub enum FewObservations {
 /// its own poses before the call, so this operation reads one geometry and
 /// nothing about how the origin was arrived at.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PointRange {
+pub struct PointDistance {
     /// Distance from [`Self::origin`], in world units. `+∞` is a direction, and
     /// any value that is not strictly positive -- `NaN` included -- says the
     /// track is not ranged, which is the rule's off position per track.
@@ -56,9 +56,9 @@ pub struct PointRange {
     pub origin: [f64; 3],
 }
 
-impl PointRange {
-    /// The entry of a track the range rule does not apply to.
-    pub const NOT_RANGED: Self = Self {
+impl PointDistance {
+    /// The entry of a track the distance rule does not apply to.
+    pub const NONE: Self = Self {
         distance: f64::NAN,
         origin: [f64::NAN; 3],
     };
@@ -76,14 +76,14 @@ impl PointRange {
 /// batch triangulation solve.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PointRules<'a> {
-    /// The ranged rule: one entry per track holding the distance the track sits
-    /// at from a world origin, with [`PointRange::NOT_RANGED`] for the tracks it
-    /// says nothing about. `None` is off. A ranged track is not solved for a
+    /// The distance rule: one entry per track holding the distance the track
+    /// sits at from a world origin, with [`PointDistance::NONE`] for the tracks
+    /// it says nothing about. `None` is off. A ranged track is not solved for a
     /// position: the distance is the caller's, and what comes back is the
     /// direction from the origin that best explains the track's pixels at this
     /// geometry, carried at that distance. Reading it needs the observation
     /// form.
-    pub range: Option<&'a [PointRange]>,
+    pub distance: Option<&'a [PointDistance]>,
     /// The angular floor, in radians. A track whose widest ray pair subtends
     /// less than this is thin. `None` is off.
     pub floor_rad: Option<f64>,
@@ -228,7 +228,7 @@ struct Track {
     /// Whether the caller marked this track a direction.
     marked: bool,
     /// The distance and origin the caller ranged this track at, where it did.
-    range: Option<PointRange>,
+    distance: Option<PointDistance>,
 }
 
 /// Re-estimate every track of a ray set.
@@ -249,7 +249,7 @@ pub fn estimate_points_from_rays(
     if let Some(m) = marks {
         assert_eq!(m.len(), n_tracks, "marks must have one entry per track");
     }
-    check_ranges(rules.range, n_tracks, false);
+    check_distances(rules.distance, n_tracks, false);
     let tracks: Vec<Track> = (0..n_tracks)
         .map(|t| {
             let (lo, hi) = (rays.offsets[t], rays.offsets[t + 1]);
@@ -275,7 +275,7 @@ pub fn estimate_points_from_rays(
                 centres,
                 rows,
                 marked: marks.is_some_and(|m| m[t]),
-                range: ranged_entry(rules.range, t),
+                distance: distance_entry(rules.distance, t),
             }
         })
         .collect();
@@ -301,7 +301,7 @@ pub fn estimate_points_from_observations(
     if let Some(m) = marks {
         assert_eq!(m.len(), obs.n_tracks, "marks must have one entry per track");
     }
-    check_ranges(rules.range, obs.n_tracks, true);
+    check_distances(rules.distance, obs.n_tracks, true);
     let n_img = obs.quats_wxyz.len() / 4;
     assert_eq!(
         obs.translations.len(),
@@ -343,7 +343,7 @@ pub fn estimate_points_from_observations(
                 centres: Vec::new(),
                 rows: Vec::new(),
                 marked: marks.is_some_and(|m| m[p as usize]),
-                range: ranged_entry(rules.range, p as usize),
+                distance: distance_entry(rules.distance, p as usize),
             });
             prev = Some(p);
         }
@@ -367,30 +367,34 @@ pub fn estimate_points_from_observations(
                 centres: Vec::new(),
                 rows: Vec::new(),
                 marked: marks.is_some_and(|m| m[slot]),
-                range: ranged_entry(rules.range, slot),
+                distance: distance_entry(rules.distance, slot),
             });
         }
     }
     decide(&tracks, obs.n_tracks, n_obs, Some((cam, obs)), rules)
 }
 
-/// The range entry of one track, or `None` where the rule says nothing about
+/// The distance entry of one track, or `None` where the rule says nothing about
 /// it.
-fn ranged_entry(ranges: Option<&[PointRange]>, slot: usize) -> Option<PointRange> {
-    ranges.map(|r| r[slot]).filter(PointRange::is_ranged)
+fn distance_entry(distances: Option<&[PointDistance]>, slot: usize) -> Option<PointDistance> {
+    distances.map(|r| r[slot]).filter(PointDistance::is_ranged)
 }
 
-/// Check the range rule's shape, and that the form it was handed can read it.
+/// Check the distance rule's shape, and that the form it was handed can read it.
 ///
 /// The rule minimizes a reprojection residual, so it needs pixels and a camera:
 /// a ray set carries neither, and asking for the rule there is refused rather
 /// than accepted and ignored.
-fn check_ranges(ranges: Option<&[PointRange]>, n_tracks: usize, observation_form: bool) {
-    let Some(r) = ranges else { return };
-    assert_eq!(r.len(), n_tracks, "range must have one entry per track");
+fn check_distances(distances: Option<&[PointDistance]>, n_tracks: usize, observation_form: bool) {
+    let Some(r) = distances else { return };
+    assert_eq!(
+        r.len(),
+        n_tracks,
+        "the distance rule must have one entry per track"
+    );
     assert!(
-        observation_form || !r.iter().any(PointRange::is_ranged),
-        "the range rule reads pixels and needs the observation form"
+        observation_form || !r.iter().any(PointDistance::is_ranged),
+        "the distance rule reads pixels and needs the observation form"
     );
 }
 
@@ -449,9 +453,9 @@ fn decide(
             }
             // A ranged track's distance is the caller's statement about it and
             // outranks both its incoming mark and the floor: it goes to the
-            // solve, whose result is only the starting direction the range rule
+            // solve, whose result is only the starting direction the distance rule
             // refines from.
-            if t.range.is_some() {
+            if t.distance.is_some() {
                 return (None, None);
             }
             if t.marked {
@@ -488,8 +492,8 @@ fn decide(
             let t = &tracks[k];
             let p = tri.point.coords;
             let front = tri.in_front_of_all_cameras;
-            if let Some(range) = t.range {
-                return ranged(t, range, p, front, reproject);
+            if let Some(at) = t.distance {
+                return ranged(t, at, p, front, reproject);
             }
             if rules.cheirality && !front {
                 if rules.prune_behind {
@@ -592,15 +596,15 @@ fn decide(
     }
 }
 
-/// How many Gauss-Newton steps the range rule takes on the sphere, and how many
-/// dampings it tries per step.
-const RANGE_STEPS: usize = 8;
-const RANGE_DAMPINGS: usize = 6;
+/// How many Gauss-Newton steps the distance rule takes on the sphere, and how
+/// many dampings it tries per step.
+const DISTANCE_STEPS: usize = 8;
+const DISTANCE_DAMPINGS: usize = 6;
 
-/// The squared-pixel cost the range rule charges an observation the camera
+/// The squared-pixel cost the distance rule charges an observation the camera
 /// model refuses to project, so a step that pushes an observation out of the
 /// domain is never cheaper than one that keeps it in.
-const RANGE_PENALTY: f64 = 1e12;
+const DISTANCE_PENALTY: f64 = 1e12;
 
 /// A ranged track: the caller's distance kept, the direction from the caller's
 /// origin read from the observations.
@@ -615,16 +619,16 @@ const RANGE_PENALTY: f64 = 1e12;
 /// front of every observing camera, and from the track's mean ray otherwise:
 /// the free point is the best statement the rays alone make about where the
 /// track is, and its direction from `O` is within the basin of the constrained
-/// optimum whenever the range and the rays agree at all. The operation holds no
-/// incoming direction of its own, so this is the whole start rule.
+/// optimum whenever the distance and the rays agree at all. The operation holds
+/// no incoming direction of its own, so this is the whole start rule.
 fn ranged(
     track: &Track,
-    range: PointRange,
+    at: PointDistance,
     free: Vector3<f64>,
     free_in_front: bool,
     reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
 ) -> Solved {
-    if !range.distance.is_finite() {
+    if !at.distance.is_finite() {
         return Solved {
             verdict: PointVerdict::Ranged,
             value: bearing(&track.dirs),
@@ -633,7 +637,7 @@ fn ranged(
             cos_widest: None,
         };
     }
-    let origin = Vector3::new(range.origin[0], range.origin[1], range.origin[2]);
+    let origin = Vector3::new(at.origin[0], at.origin[1], at.origin[2]);
     let start = {
         let from_free = free - origin;
         let n = from_free.norm();
@@ -646,13 +650,13 @@ fn ranged(
     };
     let d = match reproject {
         Some((cam, obs)) => {
-            refine_ranged_direction(cam, obs, &track.rows, origin, range.distance, start)
+            refine_ranged_direction(cam, obs, &track.rows, origin, at.distance, start)
         }
-        // `check_ranges` refuses the ray form, so this is unreachable for a
+        // `check_distances` refuses the ray form, so this is unreachable for a
         // ranged track; the start direction is the honest answer if it ever is.
         None => start,
     };
-    let x = origin + range.distance * d;
+    let x = origin + at.distance * d;
     let front =
         (0..track.dirs.len()).all(|i| (x - track.centres[i].coords).dot(&track.dirs[i]) > 0.0);
     Solved {
@@ -671,7 +675,7 @@ fn ranged(
 /// and the row block `J_uv · R · r · B(d)`. The step is damped like the
 /// adjustment's, and only a step that lowers the summed squared residual is
 /// taken, so the rule cannot walk a track away from its pixels however badly
-/// the range and the rays disagree.
+/// the distance and the rays disagree.
 fn refine_ranged_direction(
     cam: &CameraIntrinsics,
     obs: ObservationSet<'_>,
@@ -707,7 +711,7 @@ fn refine_ranged_direction(
                     let dv = v - obs.uv[2 * k + 1];
                     c += du * du + dv * dv;
                 }
-                None => c += RANGE_PENALTY,
+                None => c += DISTANCE_PENALTY,
             }
         }
         c
@@ -715,7 +719,7 @@ fn refine_ranged_direction(
     let mut d = start;
     let mut best = cost(&d);
     let mut lambda = 1e-6;
-    for _ in 0..RANGE_STEPS {
+    for _ in 0..DISTANCE_STEPS {
         let (b1, b2) = tangent_basis(&d);
         let x = origin + distance * d;
         let mut h = Matrix2::zeros();
@@ -743,7 +747,7 @@ fn refine_ranged_direction(
             g += j.transpose() * res;
         }
         let mut stepped = false;
-        for _ in 0..RANGE_DAMPINGS {
+        for _ in 0..DISTANCE_DAMPINGS {
             let mut hd = h;
             for dd in 0..2 {
                 hd[(dd, dd)] += lambda * h[(dd, dd)].max(1e-12);

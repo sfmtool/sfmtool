@@ -3673,7 +3673,7 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
     );
 }
 
-// ── Point kinds: free crossing, ranged points, held points ──────────────────
+// ── Point constraints: free crossing, ranged points, held points ───────────
 
 /// The bit patterns of a point array, so a parity assertion survives `NaN`.
 fn point_bits(points: &[[f64; 3]]) -> Vec<[u64; 3]> {
@@ -3709,7 +3709,7 @@ fn res_bits(res: &[f64]) -> Vec<u64> {
 
 /// [`run`] over the whole point-constraint surface.
 #[allow(clippy::too_many_arguments)]
-fn run_kinds(
+fn run_constrained(
     s: &mut Scene,
     mask: Option<&[bool]>,
     cons: Option<&PointConstraints>,
@@ -3798,7 +3798,7 @@ fn constraints_off_reproduce_the_unconstrained_kernel() {
         (s, mask, prot)
     };
     let (mut a, mask_a, prot_a) = build();
-    let out_a = run_kinds(
+    let out_a = run_constrained(
         &mut a,
         Some(&mask_a),
         None,
@@ -3809,7 +3809,7 @@ fn constraints_off_reproduce_the_unconstrained_kernel() {
     );
     let (mut b, mask_b, prot_b) = build();
     let cons = PointConstraints::all_free(b.points.len());
-    let out_b = run_kinds(
+    let out_b = run_constrained(
         &mut b,
         Some(&mask_b),
         Some(&cons),
@@ -3857,7 +3857,7 @@ fn fd_poses() -> (Vec<UnitQuaternion<f64>>, Vec<Vector3<f64>>) {
 /// The parameter vector is the reduced camera system's own, `[f, k1, six per
 /// image]` with the point's three slots appended, and the perturbations are
 /// applied exactly as an accepted step applies them: `exp(δθ)·R`, `t + δt`, and
-/// `normalize(d + B(d)·δ)` for the direction the range carries.
+/// `normalize(d + B(d)·δ)` for the direction the distance carries.
 fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
     let cam = simple_pinhole(500.0);
     let (quats, trans) = fd_poses();
@@ -3870,7 +3870,7 @@ fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
         }
         o / refs.len() as f64
     };
-    // The landmark, and the range and direction that carry it.
+    // The landmark, and the distance and direction that carry it.
     let world = Vector3::new(0.35, -0.2, 0.4);
     let origin0 = mean_centre(&quats, &trans);
     let distance = (world - origin0).norm();
@@ -3912,7 +3912,7 @@ fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
     // The analytic blocks, at a loss scale wide enough that the robust
     // weighting is the identity to well inside the difference's own noise.
     let s2 = 1e18;
-    let origin = RangeOrigin {
+    let origin = DistanceOrigin {
         live: refs.to_vec(),
         fixed_sum: Vector3::zeros(),
         inv_k: 1.0 / refs.len() as f64,
@@ -4010,7 +4010,7 @@ fn free_points_cross_in_both_directions() {
         let n = (truth[p][0].powi(2) + truth[p][1].powi(2) + truth[p][2].powi(2)).sqrt();
         s.points[p] = [truth[p][0] / n, truth[p][1] / n, truth[p][2] / n];
     }
-    let out = run_kinds(
+    let out = run_constrained(
         &mut s,
         Some(&mask),
         None,
@@ -4034,7 +4034,7 @@ fn free_points_cross_in_both_directions() {
     // floor: the re-estimation reads it as a bearing.
     let mut t = make_scene(6, 40);
     let far = add_far_track(&mut t, 20000.0, 0.0, 909);
-    let out = run_kinds(&mut t, None, None, policy, None, false, &DEFAULT_SCHEDULE);
+    let out = run_constrained(&mut t, None, None, policy, None, false, &DEFAULT_SCHEDULE);
     assert!(
         out.point_at_infinity[far],
         "the far track stayed finite inside the noise floor"
@@ -4119,7 +4119,7 @@ fn the_noise_floor_moves_with_its_constant_and_the_focal() {
     let crosses = |scale: f64, focal: f64| -> bool {
         let mut s = make_axial_scene(focal);
         let far = add_far_track(&mut s, 392.0, 0.0, 313);
-        let out = run_kinds(
+        let out = run_constrained(
             &mut s,
             None,
             None,
@@ -4162,7 +4162,7 @@ fn held_points_keep_their_coordinates_and_their_residuals() {
         cons.hold(p);
     }
     let before = point_bits(&s.points);
-    let out = run_kinds(
+    let out = run_constrained(
         &mut s,
         None,
         Some(&cons),
@@ -4176,7 +4176,8 @@ fn held_points_keep_their_coordinates_and_their_residuals() {
         assert_eq!(before[p], after[p], "held point {p} moved");
     }
     assert!(
-        (0..s.points.len()).any(|p| cons.kind[p] != PointKind::Held && before[p] != after[p]),
+        (0..s.points.len())
+            .any(|p| cons.constraint[p] != PointConstraint::Held && before[p] != after[p]),
         "no free point moved, so the fixture proves nothing"
     );
     for k in 0..s.uv.len() {
@@ -4225,7 +4226,7 @@ fn one_held_finite_point_unfreezes_a_translation() {
     let mut cons = PointConstraints::all_free(held_scene.points.len());
     cons.hold(p);
     let before = held_scene.trans[1];
-    let out = run_kinds(
+    let out = run_constrained(
         &mut held_scene,
         Some(&mask),
         Some(&cons),
@@ -4254,7 +4255,7 @@ fn one_held_finite_point_unfreezes_a_translation() {
     let mut cons = PointConstraints::all_free(dir_scene.points.len());
     cons.hold(p);
     let before = dir_scene.trans[1];
-    run_kinds(
+    run_constrained(
         &mut dir_scene,
         Some(&all_dirs),
         Some(&cons),
@@ -4270,9 +4271,9 @@ fn one_held_finite_point_unfreezes_a_translation() {
     );
 }
 
-/// A ranged point at infinite range is a marked direction, to the bit.
+/// A ranged point at an infinite distance is a marked direction, to the bit.
 #[test]
-fn an_infinite_range_reproduces_a_marked_direction() {
+fn an_infinite_distance_reproduces_a_marked_direction() {
     let build = || {
         let mut s = make_scene(6, 30);
         let ids = add_direction_tracks(&mut s, 10, 121, 0.2);
@@ -4287,7 +4288,7 @@ fn an_infinite_range_reproduces_a_marked_direction() {
         (s, mask, ids)
     };
     let (mut a, mask_a, _) = build();
-    let out_a = run_kinds(
+    let out_a = run_constrained(
         &mut a,
         Some(&mask_a),
         None,
@@ -4299,9 +4300,9 @@ fn an_infinite_range_reproduces_a_marked_direction() {
     let (mut b, _, ids) = build();
     let mut cons = PointConstraints::all_free(b.points.len());
     for &p in &ids {
-        cons.range_at(p, f64::INFINITY, None);
+        cons.constrain_distance(p, f64::INFINITY, None);
     }
-    let out_b = run_kinds(
+    let out_b = run_constrained(
         &mut b,
         None,
         Some(&cons),
@@ -4330,7 +4331,7 @@ fn a_ranged_point_sits_at_its_range_from_the_reference() {
         - centre(&s.quats[0], &s.trans[0]))
     .norm();
     let mut cons = PointConstraints::all_free(s.points.len());
-    cons.range_at(p, distance, Some(RangeReference::Camera(0)));
+    cons.constrain_distance(p, distance, Some(DistanceReference::Image(0)));
     // Start the landmark somewhere else entirely.
     s.points[p] = [
         s.points[p][0] * 1.4 + 0.2,
@@ -4340,7 +4341,7 @@ fn a_ranged_point_sits_at_its_range_from_the_reference() {
     for i in 1..s.quats.len() {
         s.trans[i] += Vector3::new(0.02, -0.01, 0.03);
     }
-    run_kinds(
+    run_constrained(
         &mut s,
         None,
         Some(&cons),
@@ -4358,16 +4359,16 @@ fn a_ranged_point_sits_at_its_range_from_the_reference() {
     );
 }
 
-/// A landmark started at a wrong direction but its true range converges to the
+/// A landmark started at a wrong direction but its true distance converges to the
 /// true direction, where the same track free converges to a wrong depth.
 ///
 /// The bearing is read in the reference camera's own frame, which is what the
-/// observations see and the only gauge-free statement available: a range in
+/// observations see and the only gauge-free statement available: a distance in
 /// world units fights the adjustment's free scale gauge, so a solve carrying
 /// one moves the whole reconstruction under it, which is the point of ranging
 /// a point, not an artifact.
 #[test]
-fn a_true_range_recovers_a_direction_a_free_point_cannot() {
+fn a_true_distance_recovers_a_direction_a_free_point_cannot() {
     let centre = |q: &UnitQuaternion<f64>, t: &Vector3<f64>| -(q.inverse() * t);
     let build = || {
         let mut s = make_scene(6, 40);
@@ -4388,8 +4389,8 @@ fn a_true_range_recovers_a_direction_a_free_point_cannot() {
 
     let (mut ranged, far, distance, seen) = build();
     let mut cons = PointConstraints::all_free(ranged.points.len());
-    cons.range_at(far, distance, Some(RangeReference::Camera(0)));
-    run_kinds(
+    cons.constrain_distance(far, distance, Some(DistanceReference::Image(0)));
+    run_constrained(
         &mut ranged,
         None,
         Some(&cons),
@@ -4416,12 +4417,12 @@ fn a_true_range_recovers_a_direction_a_free_point_cannot() {
     let got = (x - centre(&ranged.quats[0], &ranged.trans[0])).norm();
     assert!(
         (got - distance).abs() <= 1e-9 * distance,
-        "the ranged landmark left its range ({got} for {distance})"
+        "the ranged landmark left its distance ({got} for {distance})"
     );
 
     let (mut free, far, distance, _) = build();
     let before = centre(&free.quats[0], &free.trans[0]);
-    run_kinds(
+    run_constrained(
         &mut free,
         None,
         None,
@@ -4445,6 +4446,6 @@ fn a_true_range_recovers_a_direction_a_free_point_cannot() {
     assert!(
         rel > 0.15,
         "the free landmark recovered its depth ({free_distance} vs {distance}), \
-         so the contrast the range is for is not in this fixture"
+         so the contrast the distance is for is not in this fixture"
     );
 }

@@ -181,7 +181,7 @@ impl SfmrReconstruction {
             // the scene.
             point_constraints: self.point_constraints.as_ref().map(|c| {
                 let mut c = c.clone();
-                for r in c.range.iter_mut() {
+                for r in c.constraint_distances.iter_mut() {
                     if r.is_finite() {
                         *r *= transform.scale;
                     }
@@ -391,7 +391,7 @@ impl SfmrReconstruction {
             )
         };
 
-        // A range is measured from an image's centre, so it has to follow the
+        // A distance is measured from an image's camera centre, so it has to follow the
         // images through their re-indexing -- and a point whose reference image
         // this subset drops loses the statement entirely and comes back free.
         let new_point_constraints = kept_point_constraints.map(|mut c| {

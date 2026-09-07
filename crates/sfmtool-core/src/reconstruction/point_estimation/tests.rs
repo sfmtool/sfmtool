@@ -535,7 +535,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
         prune_behind: false,
         bar_px: Some(1.0),
         few: FewObservations::Bearing,
-        range: None,
+        distance: None,
     };
     let a = estimate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
     assert_eq!(a.census.finite, 3);
@@ -926,7 +926,7 @@ fn the_rescued_angle_is_the_survivors_own_widest_pair() {
     assert!((got - want).abs() < 1e-9, "{got} vs {want}");
 }
 
-// ── The range rule ────────────────────────────────────────────────────────
+// ── The distance rule ─────────────────────────────────────────────────────
 
 /// Five cameras spread along the x axis, wide enough that a near track solves
 /// and a far one does not.
@@ -949,13 +949,13 @@ fn a_ranged_track_keeps_its_distance_and_reads_its_direction() {
         + (world[1] - origin[1]).powi(2)
         + (world[2] - origin[2]).powi(2))
     .sqrt();
-    let rows = vec![PointRange { distance, origin }];
+    let rows = vec![PointDistance { distance, origin }];
     let out = estimate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             ..Default::default()
         },
     );
@@ -985,13 +985,13 @@ fn a_ranged_track_recovers_a_direction_its_rays_barely_carry() {
     let (q, t) = views(&SPREAD);
     let origin = [0.0, 0.0, 0.0];
     let distance = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
-    let rows = vec![PointRange { distance, origin }];
+    let rows = vec![PointDistance { distance, origin }];
     let out = estimate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             ..Default::default()
         },
     );
@@ -1015,7 +1015,7 @@ fn an_infinite_range_is_the_marked_bearing() {
         Some(&[true]),
         PointRules::default(),
     );
-    let rows = vec![PointRange {
+    let rows = vec![PointDistance {
         distance: f64::INFINITY,
         origin: [f64::NAN; 3],
     }];
@@ -1024,7 +1024,7 @@ fn an_infinite_range_is_the_marked_bearing() {
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             ..Default::default()
         },
     );
@@ -1046,17 +1046,17 @@ fn the_range_rule_outranks_the_mark_and_the_floor() {
     let (uv, img, pt) = one_track(&cam, &SPREAD, world);
     let (q, t) = views(&SPREAD);
     let distance = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
-    let rows = vec![PointRange {
+    let rows = vec![PointDistance {
         distance,
         origin: [0.0, 0.0, 0.0],
     }];
-    // Marked, and inside a floor that would call it thin: the range decides.
+    // Marked, and inside a floor that would call it thin: the distance decides.
     let out = estimate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             floor_rad: Some(1.0),
             ..Default::default()
         },
@@ -1064,13 +1064,13 @@ fn the_range_rule_outranks_the_mark_and_the_floor() {
     assert_eq!(out.verdicts, vec![PointVerdict::Ranged]);
     assert_eq!(out.xyzw[0][3], 1.0);
     // A track the rule says nothing about is decided as it would be otherwise.
-    let quiet = vec![PointRange::NOT_RANGED];
+    let quiet = vec![PointDistance::NONE];
     let out = estimate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
         PointRules {
-            range: Some(&quiet),
+            distance: Some(&quiet),
             floor_rad: Some(1.0),
             ..Default::default()
         },
@@ -1084,7 +1084,7 @@ fn a_ranged_track_of_one_observation_is_decided_by_few() {
     let world = [0.4, -0.25, -6.0];
     let (uv, img, pt) = one_track(&cam, &SPREAD[..1], world);
     let (q, t) = views(&SPREAD[..1]);
-    let rows = vec![PointRange {
+    let rows = vec![PointDistance {
         distance: 6.0,
         origin: [0.0, 0.0, 0.0],
     }];
@@ -1093,7 +1093,7 @@ fn a_ranged_track_of_one_observation_is_decided_by_few() {
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             ..Default::default()
         },
     );
@@ -1106,7 +1106,7 @@ fn a_ranged_track_of_one_observation_is_decided_by_few() {
 fn the_range_rule_refuses_the_ray_form() {
     let dirs = [0.0, 0.0, -1.0, 0.1, 0.0, -1.0];
     let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let rows = vec![PointRange {
+    let rows = vec![PointDistance {
         distance: 5.0,
         origin: [0.0, 0.0, 0.0],
     }];
@@ -1118,7 +1118,7 @@ fn the_range_rule_refuses_the_ray_form() {
         },
         None,
         PointRules {
-            range: Some(&rows),
+            distance: Some(&rows),
             ..Default::default()
         },
     );

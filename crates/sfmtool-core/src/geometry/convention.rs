@@ -237,8 +237,8 @@ pub fn sfmr_data_colmap_to_canonical(data: &mut SfmrData) {
     }
     // `normal_confidence` is deliberately untouched: it is a scalar per point,
     // frame-independent, so no convention change affects it. So is the
-    // constraint triple: a kind is a code, a range is a length, and a reference
-    // is an image index, none of which the handedness reaches.
+    // constraint triple: a constraint is a code, a distance is a length, and a
+    // reference is an image index, none of which the handedness reaches.
 }
 
 #[cfg(test)]

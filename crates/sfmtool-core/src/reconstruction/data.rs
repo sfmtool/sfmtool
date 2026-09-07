@@ -24,8 +24,8 @@ use ndarray::{Array2, Array4};
 
 use sfmr_format::{
     ContentHash, DepthStatistics, RigFrameData, SfmrMetadata, FEATURE_SOURCE_EMBEDDED_PATCHES,
-    FEATURE_SOURCE_SIFT_FILES, NO_RANGE_CAMERA, POINT_KIND_FREE, POINT_KIND_HELD,
-    POINT_KIND_RANGED,
+    FEATURE_SOURCE_SIFT_FILES, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
+    POINT_CONSTRAINT_RANGED,
 };
 
 use crate::camera::CameraIntrinsics;
@@ -80,7 +80,7 @@ pub struct Point3D {
     /// Euclidean position (finite point) or unit direction (point at infinity),
     /// in world coordinates. Disambiguated by `w`.
     pub position: Point3<f64>,
-    /// Homogeneous coordinate kind: `1.0` for a finite point, `0.0` for a point
+    /// Homogeneous coordinate: `1.0` for a finite point, `0.0` for a point
     /// at infinity.
     pub w: f64,
     /// RGB color (0-255 each).
@@ -101,31 +101,33 @@ impl Point3D {
 
 /// What the solve owns of each point, and what a caller-owned distance is
 /// measured from -- the in-memory form of the `.sfmr` constraint triple
-/// (`points3d/kind`, `points3d/range`, `points3d/range_camera`, version 7+).
+/// (`points3d/point_constraints`, `points3d/constraint_distances`,
+/// `points3d/constraint_reference_images`, version 7+).
 ///
 /// The three vectors are parallel to [`SfmrReconstruction::points`] and travel
-/// as a set, because a kind that named no distance and a distance that named no
-/// kind would each be half a statement. A reconstruction that carries no
-/// constraints at all holds `None`, which is every point [free]; the columns
-/// exist to say something other than that.
+/// as a set, because a constraint that named no distance and a distance that
+/// named no constraint would each be half a statement. A reconstruction that
+/// carries no constraints at all holds `None`, which is every point [free]; the
+/// columns exist to say something other than that.
 ///
-/// The codes are the format's own ([`POINT_KIND_FREE`], [`POINT_KIND_RANGED`],
-/// [`POINT_KIND_HELD`], [`NO_RANGE_CAMERA`]) rather than a Rust enum, so this
+/// The codes are the format's own ([`POINT_CONSTRAINT_FREE`],
+/// [`POINT_CONSTRAINT_RANGED`], [`POINT_CONSTRAINT_HELD`],
+/// [`NO_REFERENCE_IMAGE`]) rather than a Rust enum, so this
 /// layer neither re-encodes nor re-validates what the file states; the kernel's
 /// `PointConstraints` is where a caller builds the adjustment's own typed form.
 ///
-/// [free]: POINT_KIND_FREE
+/// [free]: POINT_CONSTRAINT_FREE
 #[derive(Debug, Clone, PartialEq)]
 pub struct PointConstraintColumns {
-    /// One kind per point: [`POINT_KIND_FREE`], [`POINT_KIND_RANGED`] or
-    /// [`POINT_KIND_HELD`].
-    pub kind: Vec<u8>,
-    /// One distance per point: positive world units or `+∞` where the kind is
-    /// ranged, `NaN` everywhere else.
-    pub range: Vec<f64>,
-    /// One image index per point where a finite range is measured from that
-    /// image's centre, [`NO_RANGE_CAMERA`] everywhere else.
-    pub range_camera: Vec<u32>,
+    /// One constraint per point: [`POINT_CONSTRAINT_FREE`],
+    /// [`POINT_CONSTRAINT_RANGED`] or [`POINT_CONSTRAINT_HELD`].
+    pub point_constraints: Vec<u8>,
+    /// One distance per point: positive world units or `+∞` where the
+    /// constraint is ranged, `NaN` everywhere else.
+    pub constraint_distances: Vec<f64>,
+    /// One image index per point where a finite distance is measured from that
+    /// image's camera centre, [`NO_REFERENCE_IMAGE`] everywhere else.
+    pub constraint_reference_images: Vec<u32>,
 }
 
 impl PointConstraintColumns {
@@ -133,33 +135,35 @@ impl PointConstraintColumns {
     /// base a caller edits.
     pub fn all_free(n_pt: usize) -> Self {
         Self {
-            kind: vec![POINT_KIND_FREE; n_pt],
-            range: vec![f64::NAN; n_pt],
-            range_camera: vec![NO_RANGE_CAMERA; n_pt],
+            point_constraints: vec![POINT_CONSTRAINT_FREE; n_pt],
+            constraint_distances: vec![f64::NAN; n_pt],
+            constraint_reference_images: vec![NO_REFERENCE_IMAGE; n_pt],
         }
     }
 
     /// How many points the columns describe.
     pub fn len(&self) -> usize {
-        self.kind.len()
+        self.point_constraints.len()
     }
 
     /// Whether the columns describe no points at all.
     pub fn is_empty(&self) -> bool {
-        self.kind.is_empty()
+        self.point_constraints.is_empty()
     }
 
     /// Whether every point is free, which is the same statement as carrying no
     /// columns. The writer drops the columns in that case.
     pub fn is_all_free(&self) -> bool {
-        self.kind.iter().all(|&k| k == POINT_KIND_FREE)
+        self.point_constraints
+            .iter()
+            .all(|&k| k == POINT_CONSTRAINT_FREE)
     }
 
     /// Release point `p`: free, at no distance, from no image.
     pub fn free(&mut self, p: usize) {
-        self.kind[p] = POINT_KIND_FREE;
-        self.range[p] = f64::NAN;
-        self.range_camera[p] = NO_RANGE_CAMERA;
+        self.point_constraints[p] = POINT_CONSTRAINT_FREE;
+        self.constraint_distances[p] = f64::NAN;
+        self.constraint_reference_images[p] = NO_REFERENCE_IMAGE;
     }
 
     /// The rows at `idx`, in the order given -- the selection every edit that
@@ -167,9 +171,12 @@ impl PointConstraintColumns {
     /// so the rows travel verbatim.
     pub fn select(&self, idx: &[usize]) -> Self {
         Self {
-            kind: idx.iter().map(|&i| self.kind[i]).collect(),
-            range: idx.iter().map(|&i| self.range[i]).collect(),
-            range_camera: idx.iter().map(|&i| self.range_camera[i]).collect(),
+            point_constraints: idx.iter().map(|&i| self.point_constraints[i]).collect(),
+            constraint_distances: idx.iter().map(|&i| self.constraint_distances[i]).collect(),
+            constraint_reference_images: idx
+                .iter()
+                .map(|&i| self.constraint_reference_images[i])
+                .collect(),
         }
     }
 
@@ -183,12 +190,12 @@ impl PointConstraintColumns {
     /// would hand the next adjustment a constraint it cannot resolve.
     pub fn remap_images(&mut self, old_to_new: &[Option<u32>]) {
         for p in 0..self.len() {
-            let old = self.range_camera[p];
-            if old == NO_RANGE_CAMERA {
+            let old = self.constraint_reference_images[p];
+            if old == NO_REFERENCE_IMAGE {
                 continue;
             }
             match old_to_new.get(old as usize).copied().flatten() {
-                Some(new) => self.range_camera[p] = new,
+                Some(new) => self.constraint_reference_images[p] = new,
                 None => self.free(p),
             }
         }
@@ -351,7 +358,8 @@ pub struct SfmrReconstruction {
     /// untouched: nothing here synthesises or updates it when normals change.
     pub normal_confidence: Option<Vec<u8>>,
     /// Optional per-point solve constraints (parallel to `points`), persisted as
-    /// the `points3d/kind`, `points3d/range` and `points3d/range_camera` triple
+    /// the `points3d/point_constraints`, `points3d/constraint_distances` and
+    /// `points3d/constraint_reference_images` triple
     /// (version 7+). `None` is every point free, which is what a file below
     /// version 7 carries and what the writer emits again when nothing is
     /// constrained.
@@ -539,7 +547,7 @@ impl SfmrReconstruction {
     }
 
     /// Check that the optional per-point constraint columns are parallel to
-    /// `points`, carry a kind this format defines, and reference only images
+    /// `points`, carry a constraint this format defines, and reference only images
     /// this reconstruction holds. Returns a message describing the first
     /// violation.
     ///
@@ -554,9 +562,15 @@ impl SfmrReconstruction {
         };
         let n_pt = self.points.len();
         for (name, len) in [
-            ("kind", constraints.kind.len()),
-            ("range", constraints.range.len()),
-            ("range_camera", constraints.range_camera.len()),
+            ("point_constraints", constraints.point_constraints.len()),
+            (
+                "constraint_distances",
+                constraints.constraint_distances.len(),
+            ),
+            (
+                "constraint_reference_images",
+                constraints.constraint_reference_images.len(),
+            ),
         ] {
             if len != n_pt {
                 return Err(format!(
@@ -567,16 +581,19 @@ impl SfmrReconstruction {
         }
         let n_img = self.images.len();
         for p in 0..n_pt {
-            let k = constraints.kind[p];
-            if !matches!(k, POINT_KIND_FREE | POINT_KIND_RANGED | POINT_KIND_HELD) {
+            let k = constraints.point_constraints[p];
+            if !matches!(
+                k,
+                POINT_CONSTRAINT_FREE | POINT_CONSTRAINT_RANGED | POINT_CONSTRAINT_HELD
+            ) {
                 return Err(format!(
-                    "point {p} has constraint kind {k}, which is not defined"
+                    "point {p} has constraint {k}, which is not defined"
                 ));
             }
-            let c = constraints.range_camera[p];
-            if c != NO_RANGE_CAMERA && c as usize >= n_img {
+            let c = constraints.constraint_reference_images[p];
+            if c != NO_REFERENCE_IMAGE && c as usize >= n_img {
                 return Err(format!(
-                    "point {p} measures its range from image {c}, past the {n_img} images"
+                    "point {p} measures its distance from image {c}, past the {n_img} images"
                 ));
             }
         }
