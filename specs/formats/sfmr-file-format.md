@@ -1039,12 +1039,11 @@ need to know which rows are claims and which are placeholders.
 
 #### Per-point constraints (Optional, version 7+)
 
-Three parallel columns saying what a bundle adjustment owns of each point, and
-what a caller-owned distance is measured from. They annotate `positions_xyzw`
-without changing its meaning: `w = 0` is still a direction and `w != 0` still a
-finite point, whatever the constraint. See
-[Free, ranged and held points](../core/geometry/bundle-adjustment.md#point-constraints)
-for what the kernel does with them.
+Three parallel columns stating, for each point, which part of its coordinate
+is a fixed statement by whoever wrote the file and which part a consumer that
+re-estimates the reconstruction is free to change. They annotate
+`positions_xyzw` without changing its meaning: `w = 0` is still a direction and
+`w != 0` still a finite point, whatever the constraint.
 
 ##### `points3d/point_constraints.{N}.uint8.zst`
 
@@ -1054,12 +1053,22 @@ for what the kernel does with them.
   which is the file's own legend for this column. A code past the end of that
   list is invalid; nothing else about the numbering is fixed by this format, so
   a reader resolves every code through the list the file carries.
-- **Names**: `free` -- the solve owns the point outright. `ranged` -- the caller
-  owns the distance in `constraint_distances` and the solve owns the direction.
-  `held` -- the caller owns the whole coordinate. These are the only names this
-  format defines.
+- **Names**: these are the only names this format defines, and each is a
+  statement about the point's row of `positions_xyzw`:
+  - `free` -- the stored coordinate is an estimate and nothing about it is
+    fixed. A consumer may move the point and may change its representation
+    between finite and direction.
+  - `ranged` -- the point's distance from a reference is fixed at the value in
+    `constraint_distances`, measured from the camera centre of the image in
+    `constraint_reference_images`; only its direction from that reference is an
+    estimate. The point is `X = C + r * d` with `C` that camera centre, `r` the
+    stored distance and `d` a unit vector, and a consumer may change `d` but
+    not `r`. An infinite distance makes the point a direction (`w = 0`) that is
+    measured from nowhere, so it names no reference image.
+  - `held` -- the whole stored coordinate, finite or direction, is fixed. A
+    consumer may not move the point or change its representation.
 - **Canonical order**: a writer always states the whole legend in the order
-  `["free", "ranged", "held"]`, so a file this tool writes stores `0` free, `1`
+  `["free", "ranged", "held"]`, so a conforming writer stores `0` free, `1`
   ranged, `2` held. A reader accepts any legend, in any order and naming any
   subset of the defined names (a file with no ranged point may carry
   `["held", "free"]`), and **normalises the column onto the canonical order as
@@ -1078,17 +1087,15 @@ for what the kernel does with them.
 
 - **Shape**: `(N,)` where N = point_count
 - **Data type**: `uint32` (little-endian)
-- **Format**: the image index a finite distance is measured from. The distance
-  runs from that image's camera centre at whatever pose the reader holds, so a
-  distance survives a solve that moves the cameras. `0xFFFFFFFF` marks a row
-  that names
+- **Format**: the index into the `images/` section of the image a finite
+  distance is measured from. The distance runs from that image's camera centre
+  at whatever pose the file holds for it, so the statement stays true of the
+  scene when a consumer moves the cameras. `0xFFFFFFFF` marks a row that names
   no image: every free and held point, and a ranged point at an infinite
-  distance,
-  which is measured from nothing.
+  distance, which is measured from nowhere.
 
-  The file carries the **single-image** reference only. An adjustment can also
-  measure a distance from the mean of several camera centres; that form is a
-  call-time construct of the kernel, not stored state.
+  The reference is always a **single image**. A distance measured from the
+  mean of several camera centres is not representable in this format.
 
 **Presence and validity.** The three columns appear together or not at all, all
 flagged by `has_point_constraints`, and that same flag promises the
@@ -1114,8 +1121,8 @@ satisfies:
   `constraint_distances` is
   infinite -- a ranged point is a direction precisely at an infinite distance.
 
-A reader and a writer both enforce all of these, and `verify_sfmr` re-reads them
-off the archive bytes. The legend lives in `points3d/metadata.json`, which is
+A reader and a writer both enforce all of these, and a verifier checks them off
+the archive bytes. The legend lives in `points3d/metadata.json`, which is
 already hashed into `points3d_xxh128` in its own lexicographic slot, so it needs
 no hash slot of its own: an edited legend changes the section digest exactly as
 an edited column does.
@@ -1133,17 +1140,9 @@ metadata, present exactly when the column is, every code resolved through the
 file's own list rather than a numbering a reader assumes, and the column
 normalised onto the canonical order at load so one numbering reaches consumers.
 
-**In the bindings.** `read_sfmr` hands back `point_constraints` as a `uint8`
-array in the canonical numbering and `write_sfmr` takes it the same way -- the
-legend is a file-level concern, and neither the dict nor
-`SfmrReconstruction.point_constraints` carries one.
-`sfmtool._sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical legend as a tuple
-of names, so a consumer labels a code with `POINT_CONSTRAINT_NAMES[code]` rather
-than hard-coding the numbers.
-
-**What an edit does to them.** The columns are per-point state, so every pass
-that reshapes a reconstruction has to carry them, and the rules follow from what
-each column claims:
+**What an edit does to them.** The columns are per-point state, so a consumer
+that reshapes a reconstruction and writes it back has to carry them, and the
+rules follow from what each column claims:
 
 - **Dropping or reordering points** selects the three rows the same way it
   selects `colors_rgb` and `normal_confidence`. A constraint describes its own
@@ -1156,7 +1155,7 @@ each column claims:
   image's camera centre, and a reconstruction that no longer holds the image
   cannot
   honour it. Keeping a distance measured from nothing would hand the next
-  adjustment a constraint it cannot resolve. A held point names no image, so the
+  consumer a constraint it cannot resolve. A held point names no image, so the
   same edit leaves it held.
 - **A similarity transform** scales every finite distance by the transform's
   scale
@@ -1172,21 +1171,16 @@ each column claims:
   which is every point free. There is no mapping from the old point set to the
   new one for the columns to follow.
 
-These are the reconstruction editors' rules, enforced in
-[edit.rs](../../crates/sfmtool-core/src/reconstruction/edit.rs) and
-[convert.rs](../../crates/sfmtool-core/src/analysis/infinity/convert.rs).
-
-**Why an image and not a world point**: an adjustment's gauge is free, so a
-distance measured from a fixed world coordinate constrains nothing about the
-cameras, which are free to move away from it. A camera centre moves with the
-solve, so the statement "this landmark is 1045 m from where the photograph was
-taken" stays true of the scene rather than of one particular gauge.
+**Why an image and not a world point**: a reconstruction's frame is arbitrary
+up to a similarity, so a distance measured from a fixed world coordinate says
+nothing that survives a consumer moving the cameras away from it. A camera
+centre moves with the cameras, so the statement "this landmark is 1045 m from
+where the photograph was taken" stays true of the scene in every frame.
 
 **Why `w` and the constraint are separate**: `w = 0` states that the stored
-estimate is
-a direction; a constraint states who owns the point. A free point can be either
-representation and can change between them as a solve runs, and a held point can
-be either and change between neither.
+coordinate is a direction; a constraint states which part of it is fixed. A
+free point can be either representation and a consumer may change it between
+them, and a held point can be either and stays as it is.
 
 #### Per-point patch frame (Optional, version 3+)
 

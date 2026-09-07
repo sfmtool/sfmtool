@@ -324,6 +324,16 @@ nothing.
 and is the only way a caller learns the outcome of a crossing: `True` where the
 returned row is a direction, `False` where it is a position.
 
+A reconstruction read from a `.sfmr` carries its constraints as the
+`point_constraints` column, a `uint8` array in the canonical numbering (`0`
+free, `1` ranged, `2` held) whatever legend the file stored, and `write_sfmr`
+takes it the same way; the file's legend never reaches the dict or
+`SfmrReconstruction.point_constraints`.
+`sfmtool._sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical numbering as a
+tuple of names, so a consumer labels a code with
+`POINT_CONSTRAINT_NAMES[code]` rather than hard-coding the numbers, and a caller
+building `held=` and `distance=` from the column compares against those codes.
+
 Shapes are validated like `reprojection_residuals`; observation indices out
 of range raise. The returned arrays are new (inputs are not mutated from
 Python's point of view).
