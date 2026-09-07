@@ -1056,3 +1056,214 @@ def test_opt_f_rejection_names_the_spline_pinhole():
     )
     with pytest.raises(ValueError, match="SFMTOOL_PINHOLE camera"):
         _run(s, opt_f=True)
+
+
+# ── Free, ranged and held points ──────────────────────────────────────────
+
+
+def _camera_center(quat_wxyz, t):
+    """The camera centre `C = -Rᵀ t` of one world-to-camera pose."""
+    return -_quat_to_matrix(quat_wxyz).T @ np.asarray(t, dtype=np.float64)
+
+
+def _perturbed_scene(seed=11, n_img=6, n_pt=30):
+    """A scene whose points and poses have been nudged off truth, so an
+    unconstrained solve visibly moves both."""
+    s = _scene(n_img=n_img, n_pt=n_pt)
+    rng = np.random.default_rng(seed)
+    s["points_true"] = s["points"].copy()
+    s["points"] = s["points"] + rng.uniform(-0.08, 0.08, s["points"].shape)
+    s["trans"] = s["trans"] + np.concatenate(
+        [np.zeros((1, 3)), rng.uniform(-0.03, 0.03, (n_img - 1, 3))]
+    )
+    return s
+
+
+def test_constraint_kwargs_at_their_off_position_change_nothing():
+    # The parity requirement: the off position of every new argument is the
+    # kernel as it stood, bit for bit.
+    runs = []
+    for kw in (
+        {},
+        {
+            "held": None,
+            "range": None,
+            "range_origin": None,
+            "free_points_cross": False,
+            "noise_floor_scale": 2.0,
+        },
+        {
+            "held": np.zeros(30, dtype=bool),
+            "range": np.full(30, np.nan),
+            "range_origin": np.full(30, -1, dtype=np.int64),
+        },
+    ):
+        s = _perturbed_scene()
+        runs.append(_run(s, opt_f=True, **kw))
+    ref = runs[0]
+    for out in runs[1:]:
+        assert out["focal"] == ref["focal"]
+        npt.assert_array_equal(out["quaternions_wxyz"], ref["quaternions_wxyz"])
+        npt.assert_array_equal(out["translations"], ref["translations"])
+        npt.assert_array_equal(out["points"], ref["points"])
+        npt.assert_array_equal(out["residual_norms"], ref["residual_norms"])
+        npt.assert_array_equal(out["point_at_infinity"], ref["point_at_infinity"])
+
+
+def test_point_at_infinity_is_reported_and_echoes_the_input_mask():
+    # With the crossing off, the reported representation is the caller's own
+    # mask: nothing re-decides it.
+    s = _scene(n_img=6, n_pt=20)
+    rng = np.random.default_rng(5)
+    mask = _add_direction_tracks(s, 4, rng)
+    out = _run(s, point_at_infinity=mask)
+    npt.assert_array_equal(out["point_at_infinity"], mask)
+    # A reported direction is a unit row of `points`; a reported position is not
+    # normalized to anything.
+    for p in np.flatnonzero(out["point_at_infinity"]):
+        npt.assert_allclose(np.linalg.norm(out["points"][p]), 1.0, atol=1e-9)
+
+
+def test_held_point_comes_back_bit_unchanged():
+    s = _perturbed_scene()
+    held = np.zeros(len(s["points"]), dtype=bool)
+    held[3] = True
+    before = s["points"][3].copy()
+
+    free = _run(s)
+    out = _run(s, held=held)
+
+    npt.assert_array_equal(out["points"][3], before)
+    # The same point moves when nothing holds it, so the test is not vacuous.
+    assert np.linalg.norm(free["points"][3] - before) > 1e-6
+    # A held point still forms residuals: its observations are scored.
+    obs = np.flatnonzero(s["obs_point"] == 3)
+    assert obs.size >= 2
+    assert np.all(np.isfinite(out["residual_norms"][obs]))
+
+
+def test_ranged_point_sits_at_its_distance_from_the_reference_camera():
+    s = _perturbed_scene()
+    p, k = 4, 2
+    centre = _camera_center(s["quats"][k], s["trans"][k])
+    r = float(np.linalg.norm(s["points_true"][p] - centre))
+
+    rng = np.full(len(s["points"]), np.nan)
+    rng[p] = r
+    origin = np.full(len(s["points"]), -1, dtype=np.int64)
+    origin[p] = k
+
+    out = _run(s, range=rng, range_origin=origin)
+    centre_out = _camera_center(out["quaternions_wxyz"][k], out["translations"][k])
+    npt.assert_allclose(np.linalg.norm(out["points"][p] - centre_out), r, rtol=1e-9)
+    assert not out["point_at_infinity"][p]
+
+
+def test_ranged_point_accepts_a_mean_of_two_camera_centres():
+    s = _perturbed_scene()
+    p, ks = 4, [1, 2]
+    origin_world = np.mean(
+        [_camera_center(s["quats"][k], s["trans"][k]) for k in ks], axis=0
+    )
+    r = float(np.linalg.norm(s["points_true"][p] - origin_world))
+
+    rng = np.full(len(s["points"]), np.nan)
+    rng[p] = r
+    origins = [-1] * len(s["points"])
+    origins[p] = ks
+
+    out = _run(s, range=rng, range_origin=origins)
+    centre_out = np.mean(
+        [
+            _camera_center(out["quaternions_wxyz"][k], out["translations"][k])
+            for k in ks
+        ],
+        axis=0,
+    )
+    npt.assert_allclose(np.linalg.norm(out["points"][p] - centre_out), r, rtol=1e-9)
+
+
+def test_infinite_range_is_reported_as_a_direction():
+    s = _scene(n_img=6, n_pt=20)
+    rng_gen = np.random.default_rng(5)
+    mask = _add_direction_tracks(s, 3, rng_gen)
+    far = int(np.flatnonzero(mask)[0])
+
+    ranges = np.full(len(s["points"]), np.nan)
+    ranges[far] = np.inf
+    # The caller's mask says nothing about this point; the range decides.
+    out = _run(s, range=ranges)
+
+    assert out["point_at_infinity"][far]
+    npt.assert_allclose(np.linalg.norm(out["points"][far]), 1.0, atol=1e-9)
+    assert not out["point_at_infinity"][0]
+
+
+def test_crossing_promotes_a_direction_whose_rays_carry_parallax():
+    # A near point handed in marked as a direction: with the crossing off the
+    # mark stands for the whole solve, and with it on the re-estimation reads
+    # the parallax its own rays carry and makes it finite.
+    s = _scene(n_img=8, n_pt=40)
+    mask = np.zeros(len(s["points"]), dtype=bool)
+    mask[7] = True
+
+    kept = _run(s, point_at_infinity=mask)
+    assert kept["point_at_infinity"][7]
+
+    crossed = _run(s, point_at_infinity=mask, free_points_cross=True)
+    assert not crossed["point_at_infinity"][7]
+    npt.assert_allclose(crossed["points"][7], s["points"][7], atol=1e-3)
+
+
+def test_held_and_ranged_on_one_point_is_rejected():
+    s = _perturbed_scene()
+    held = np.zeros(len(s["points"]), dtype=bool)
+    held[2] = True
+    ranges = np.full(len(s["points"]), np.nan)
+    ranges[2] = np.inf
+    with pytest.raises(ValueError, match="both held and ranged"):
+        _run(s, held=held, range=ranges)
+
+
+def test_finite_range_without_an_origin_is_rejected():
+    s = _perturbed_scene()
+    ranges = np.full(len(s["points"]), np.nan)
+    ranges[2] = 5.0
+    with pytest.raises(ValueError, match="needs a range_origin"):
+        _run(s, range=ranges)
+
+
+@pytest.mark.parametrize("bad", [0.0, -3.0])
+def test_non_positive_range_is_rejected(bad):
+    s = _perturbed_scene()
+    ranges = np.full(len(s["points"]), np.nan)
+    ranges[2] = bad
+    with pytest.raises(ValueError, match="strictly positive"):
+        _run(s, range=ranges)
+
+
+def test_range_origin_past_the_image_set_is_rejected():
+    s = _perturbed_scene()
+    ranges = np.full(len(s["points"]), np.nan)
+    ranges[2] = 5.0
+    origin = np.full(len(s["points"]), -1, dtype=np.int64)
+    origin[2] = 99
+    with pytest.raises(ValueError, match="past the 6 images"):
+        _run(s, range=ranges, range_origin=origin)
+
+
+def test_constraint_shape_validation():
+    s = _perturbed_scene()
+    with pytest.raises(ValueError, match=r"held must have shape"):
+        _run(s, held=np.zeros(3, dtype=bool))
+    with pytest.raises(ValueError, match=r"range must have shape"):
+        _run(s, range=np.full(3, np.nan))
+    with pytest.raises(ValueError, match="one entry per point"):
+        _run(s, range_origin=np.full(3, -1, dtype=np.int64))
+
+
+@pytest.mark.parametrize("bad_scale", [0.0, -1.0, np.inf, np.nan])
+def test_noise_floor_scale_validation(bad_scale):
+    s = _perturbed_scene()
+    with pytest.raises(ValueError, match="noise_floor_scale"):
+        _run(s, noise_floor_scale=bad_scale)

@@ -265,6 +265,12 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         .get("patch_bitmap_resolution")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
+    // The per-point constraint triple is optional from version 7 (default
+    // `false`), and the three columns are flagged together.
+    let has_point_constraints = points3d_meta
+        .get("has_point_constraints")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut points3d_hasher = Xxh3::new();
 
@@ -273,6 +279,15 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         &mut archive,
         &entries::points3d_colors_rgb(point_count),
     )?);
+    // points3d/kind (optional, version 7+; sorts after colors_rgb, before
+    // metadata.json)
+    let kind_raw = if has_point_constraints {
+        let raw = read_zst_entry(&mut archive, &entries::points3d_kind(point_count))?;
+        points3d_hasher.update(&raw);
+        Some(raw)
+    } else {
+        None
+    };
     // points3d/metadata.json
     points3d_hasher.update(&points3d_meta_raw);
     // points3d/normal_confidence (optional, version 5+; sorts before normals_xyz)
@@ -308,6 +323,17 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     let positions_name = entries::points3d_positions(is_v1, point_count);
     let positions_raw = read_zst_entry(&mut archive, &positions_name)?;
     points3d_hasher.update(&positions_raw);
+    // points3d/range and points3d/range_camera (optional, version 7+; sort
+    // after positions_xyzw, before reprojection_errors)
+    let (range_raw, range_camera_raw) = if has_point_constraints {
+        let range = read_zst_entry(&mut archive, &entries::points3d_range(point_count))?;
+        points3d_hasher.update(&range);
+        let camera = read_zst_entry(&mut archive, &entries::points3d_range_camera(point_count))?;
+        points3d_hasher.update(&camera);
+        (Some(range), Some(camera))
+    } else {
+        (None, None)
+    };
     // points3d/reprojection_errors
     points3d_hasher.update(&read_zst_entry(
         &mut archive,
@@ -363,6 +389,48 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
                 "positions_xyzw byte length {} != point_count {point_count} * 32",
                 positions_raw.len()
             ));
+        }
+    }
+
+    // === Validate the per-point constraint triple (version 7+) ===
+    // The rules are the reader's and the writer's, stated once in
+    // `validate_point_constraints`; here they are re-read straight off the
+    // archive bytes, positions included, so a hand-edited file is caught.
+    if let (Some(kind), Some(range), Some(camera)) = (&kind_raw, &range_raw, &range_camera_raw) {
+        let expect = |name: &str, got: usize, row: usize| {
+            (got == point_count * row).then_some(()).ok_or(format!(
+                "points3d/{name} byte length {got} != point_count {point_count} * {row}"
+            ))
+        };
+        let check = expect("kind", kind.len(), 1)
+            .and(expect("range", range.len(), 8))
+            .and(expect("range_camera", camera.len(), 4))
+            .and(expect("positions_xyzw", positions_raw.len(), 32))
+            .and_then(|()| {
+                let floats: Vec<f64> = positions_raw
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|b| f64::from_le_bytes(*b))
+                    .collect();
+                let positions = ndarray::Array2::from_shape_vec((point_count, 4), floats).unwrap();
+                let ranges: Vec<f64> = range
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|b| f64::from_le_bytes(*b))
+                    .collect();
+                validate_point_constraints(
+                    Some(kind),
+                    Some(&ranges),
+                    Some(raw_to_u32(camera).as_ref()),
+                    &positions,
+                    point_count,
+                    image_count,
+                )
+            });
+        if let Err(e) = check {
+            errors.push(e);
         }
     }
 

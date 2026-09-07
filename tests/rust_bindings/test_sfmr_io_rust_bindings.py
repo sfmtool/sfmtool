@@ -13,7 +13,7 @@ frame.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.io import read_sfmr, write_sfmr
+from sfmtool._sfmtool.io import read_sfmr, verify_sfmr, write_sfmr
 from sfmtool._sfmtool.patches import PatchCloud
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
@@ -29,6 +29,9 @@ ARRAY_KEYS = (
     "reprojection_errors",
     "normals_xyz",
     "normal_confidence",
+    "point_kind",
+    "point_range",
+    "point_range_camera",
     "patch_u_halfvec_xyz",
     "patch_v_halfvec_xyz",
     "patch_bitmaps_y_x_rgba",
@@ -201,3 +204,131 @@ class TestPatchColumnValidation:
             ValueError, match=r"'patch_bitmaps_y_x_rgba' must have shape"
         ):
             write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
+
+
+# ── Per-point constraints (points3d/kind, /range, /range_camera) ───────────
+
+_NO_RANGE_CAMERA = np.uint32(0xFFFFFFFF)
+_FREE, _RANGED, _HELD = 0, 1, 2
+
+
+def _constraint_columns(positions_xyzw, n_img):
+    """Hold the first finite point and range the second at 12.5 from image 0.
+
+    Returns the triple, plus the two point indexes it constrained, so a caller
+    can assert on the rows it wrote rather than on a fixed index.
+    """
+    n = positions_xyzw.shape[0]
+    finite = np.flatnonzero(positions_xyzw[:, 3] != 0.0)
+    assert finite.size >= 2 and n_img >= 1
+    held, ranged = int(finite[0]), int(finite[1])
+
+    kind = np.zeros(n, dtype=np.uint8)
+    kind[held] = _HELD
+    kind[ranged] = _RANGED
+    distance = np.full(n, np.nan)
+    distance[ranged] = 12.5
+    camera = np.full(n, _NO_RANGE_CAMERA, dtype=np.uint32)
+    camera[ranged] = 0
+    return (kind, distance, camera), held, ranged
+
+
+class TestPointConstraints:
+    def test_dict_round_trip(self, seoul_bull_sfmr_only, tmp_path):
+        # The three columns go out through `write_sfmr` and come back through
+        # `read_sfmr` unchanged, and the file still verifies.
+        data = read_sfmr(seoul_bull_sfmr_only)
+        assert data["point_kind"] is None
+        (kind, distance, camera), _held, ranged = _constraint_columns(
+            data["positions_xyzw"], len(data["image_names"])
+        )
+        data["point_kind"] = kind
+        data["point_range"] = distance
+        data["point_range_camera"] = camera
+
+        out = tmp_path / "constrained.sfmr"
+        write_sfmr(out, data, skip_recompute_depth_stats=True)
+        _assert_columns_identical(data, read_sfmr(out))
+
+        valid, errors = verify_sfmr(out)
+        assert valid, errors
+        assert read_sfmr(out)["point_range"][ranged] == 12.5
+
+    def test_all_free_columns_are_dropped(self, seoul_bull_sfmr_only, tmp_path):
+        # An all-free set says what carrying no set says, so it is not written.
+        data = read_sfmr(seoul_bull_sfmr_only)
+        n = data["positions_xyzw"].shape[0]
+        data["point_kind"] = np.zeros(n, dtype=np.uint8)
+        data["point_range"] = np.full(n, np.nan)
+        data["point_range_camera"] = np.full(n, _NO_RANGE_CAMERA, dtype=np.uint32)
+
+        out = tmp_path / "free.sfmr"
+        write_sfmr(out, data, skip_recompute_depth_stats=True)
+        assert read_sfmr(out)["point_kind"] is None
+
+    def test_finite_range_needs_a_real_image(self, seoul_bull_sfmr_only, tmp_path):
+        data = read_sfmr(seoul_bull_sfmr_only)
+        (kind, distance, camera), _held, ranged = _constraint_columns(
+            data["positions_xyzw"], len(data["image_names"])
+        )
+        camera[ranged] = 10_000
+        data["point_kind"] = kind
+        data["point_range"] = distance
+        data["point_range_camera"] = camera
+        with pytest.raises(OSError, match="past the"):
+            write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
+
+    def test_columns_survive_a_point_filter(self, seoul_bull_sfmr_only, tmp_path):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        (kind, distance, camera), held, ranged = _constraint_columns(
+            np.asarray(recon.positions_xyzw), len(recon.image_names)
+        )
+        recon = recon.clone_with_changes(
+            point_kind=kind, point_range=distance, point_range_camera=camera
+        )
+
+        # Drop everything but the two constrained points, in their own order.
+        mask = np.zeros(recon.point_count, dtype=bool)
+        mask[[held, ranged]] = True
+        out = recon.filter_points_by_mask(mask)
+
+        assert out.point_count == 2
+        npt = np.asarray(out.point_kind)
+        assert list(npt) == [_HELD, _RANGED]
+        assert np.isnan(np.asarray(out.point_range)[0])
+        assert np.asarray(out.point_range)[1] == 12.5
+        assert list(np.asarray(out.point_range_camera)) == [_NO_RANGE_CAMERA, 0]
+
+    def test_dropping_the_referenced_image_frees_the_point(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        (kind, distance, camera), held, ranged = _constraint_columns(
+            np.asarray(recon.positions_xyzw), len(recon.image_names)
+        )
+        recon = recon.clone_with_changes(
+            point_kind=kind, point_range=distance, point_range_camera=camera
+        )
+        n_img = len(recon.image_names)
+
+        # Image 0 kept, at a new index: the range follows it.
+        order = np.array(list(range(1, n_img)) + [0], dtype=np.uint32)
+        kept = recon.subset_by_image_indices(order, False)
+        assert np.asarray(kept.point_kind)[ranged] == _RANGED
+        assert np.asarray(kept.point_range_camera)[ranged] == n_img - 1
+
+        # Image 0 gone: nothing is left to measure the distance from, so the
+        # point is released.
+        dropped = recon.subset_by_image_indices(
+            np.arange(1, n_img, dtype=np.uint32), False
+        )
+        assert np.asarray(dropped.point_kind)[ranged] == _FREE
+        assert np.isnan(np.asarray(dropped.point_range)[ranged])
+        assert np.asarray(dropped.point_range_camera)[ranged] == _NO_RANGE_CAMERA
+        # A held point names no image, so the same subset leaves it held.
+        assert np.asarray(dropped.point_kind)[held] == _HELD
+
+    def test_the_triple_must_be_passed_together(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        with pytest.raises(ValueError, match="passed together"):
+            recon.clone_with_changes(
+                point_kind=np.zeros(recon.point_count, dtype=np.uint8)
+            )

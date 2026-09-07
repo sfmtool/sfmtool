@@ -286,6 +286,7 @@ def test_the_verdict_code_table_is_exposed():
         "over_bar": 4,
         "few": 5,
         "finite_pruned": 6,
+        "ranged": 7,
     }
 
 
@@ -515,3 +516,54 @@ def test_the_inputs_are_checked():
             centres=np.zeros((4, 3)),
             offsets=np.array([0, 3, 1], np.int64),
         )
+
+
+# ── The range rule ────────────────────────────────────────────────────────
+
+RANGED = VERDICT_CODES["ranged"]
+
+
+def test_a_ranged_track_keeps_its_distance_and_reads_only_its_direction():
+    cam = _cam()
+    origin = np.array([0.5, 0.0, 0.0])
+    distance = float(np.linalg.norm(WORLD[0] - origin))
+    rule = np.array([[distance, *origin]])
+
+    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=rule)
+
+    npt.assert_array_equal(out["verdicts"], [RANGED])
+    assert out["census"]["ranged"] == 1
+    assert out["xyzw"][0][3] == 1.0
+    got = out["xyzw"][0][:3]
+    npt.assert_allclose(np.linalg.norm(got - origin), distance, rtol=1e-9)
+    # The pixels the track was built from name its true direction, so the
+    # distance the caller kept lands it back on the true point.
+    npt.assert_allclose(got, WORLD[0], atol=1e-6)
+
+
+def test_an_all_nan_range_row_leaves_its_track_to_the_solve():
+    cam = _cam()
+    rule = np.full((1, 4), np.nan)
+    out = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=rule)
+    plain = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)])
+    npt.assert_array_equal(out["verdicts"], plain["verdicts"])
+    npt.assert_array_equal(out["xyzw"], plain["xyzw"])
+
+
+def test_the_range_rule_needs_the_observation_form():
+    dirs = np.array([[0.0, 0.0, -1.0], [0.2, 0.0, -1.0]])
+    with pytest.raises(ValueError, match="needs the observation form"):
+        estimate_points(
+            dirs=dirs,
+            centres=PAIR,
+            offsets=np.array([0, 2], np.int64),
+            range=np.array([[5.0, 0.0, 0.0, 0.0]]),
+        )
+
+
+def test_the_range_rule_is_shape_checked():
+    cam = _cam()
+    with pytest.raises(ValueError, match=r"shape \(n_track, 4\)"):
+        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=np.zeros((1, 3)))
+    with pytest.raises(ValueError, match="one row per track"):
+        _call(cam, PAIR, WORLD, [(0, 0), (1, 0)], range=np.full((2, 4), np.nan))

@@ -38,8 +38,8 @@ pub mod spherical;
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use reconstruction::{
-    ObservationSource, Point3D, ReconstructionError, SfmrImage, SfmrReconstruction,
-    TrackObservation,
+    ObservationSource, Point3D, PointConstraintColumns, ReconstructionError, SfmrImage,
+    SfmrReconstruction, TrackObservation,
 };
 /// Re-exported so consumers of [`SfmrReconstruction::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on
@@ -50,6 +50,10 @@ pub use sfmr_format::THUMBNAIL_SIZE;
 /// consumer wanting to read — or build — a rig had to depend on `sfmr-format`
 /// itself to say what it was holding.
 pub use sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
+/// Re-exported alongside [`PointConstraintColumns`], whose entries are these
+/// codes: a consumer reading or building the constraint columns needs to name
+/// them without depending on `sfmr-format` itself.
+pub use sfmr_format::{NO_RANGE_CAMERA, POINT_KIND_FREE, POINT_KIND_HELD, POINT_KIND_RANGED};
 
 // `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
 // the two formats' thumbnail extents must agree. Neither format crate depends

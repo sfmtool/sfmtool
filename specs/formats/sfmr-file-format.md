@@ -205,6 +205,9 @@ reconstruction.sfmr (ZIP archive)
 │   ├── metadata.json.zst                      # Points metadata
 │   ├── normals_xyz.{N}.3.float32.zst          # (Optional) per-point surface normals
 │   ├── normal_confidence.{N}.uint8.zst        # (Optional) per-point normal confidence
+│   ├── kind.{N}.uint8.zst                     # (Optional) per-point solve-constraint kind (version 7+)
+│   ├── range.{N}.float64.zst                  # (Optional) a ranged point's distance (version 7+)
+│   ├── range_camera.{N}.uint32.zst            # (Optional) the image a finite range is measured from (version 7+)
 │   ├── patch_u_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector u (version 3+)
 │   ├── patch_v_halfvec_xyz.{N}.3.float32.zst          # (Optional) in-plane half-extent vector v (version 3+)
 │   └── patch_bitmaps_y_x_rgba.{N}.{R}.{R}.4.uint8.zst # (Optional) R×R RGBA patch textures, alpha = confidence (version 3+)
@@ -244,7 +247,7 @@ JSON structure describing the reconstruction:
 
 ```json
 {
-  "version": 6,
+  "version": 7,
   "feature_source": "sift_files",
   "operation": "sfm_solve",
   "tool": "colmap",
@@ -394,7 +397,7 @@ a section digest is taken and how the digests combine into `content_xxh128`.
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
 - `images_xxh128`: The `images/` section hash (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
-- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
+- `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `kind` / `range` / `range_camera` (in their lexicographic slots: `kind` after `colors_rgb`, `range` and `range_camera` after `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
 - `content_xxh128`: The whole-file digest over all present section hashes, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
@@ -904,6 +907,7 @@ already normalised.
   "point_count": 2107,
   "has_normals": true,
   "has_normal_confidence": false,
+  "has_point_constraints": false,
   "has_uv_frames": true,
   "has_patch_bitmaps": true,
   "patch_bitmap_resolution": 24
@@ -917,6 +921,10 @@ already normalised.
 - `has_normal_confidence`: (version 5+) Whether the optional
   `normal_confidence` array is present. See
   [Normal confidence](#points3dnormal_confidencenuint8zst-optional).
+- `has_point_constraints`: (version 7+) Whether the optional per-point
+  constraint triple (`kind`, `range`, `range_camera`) is present -- one flag for
+  all three, which appear together. See
+  [Per-point constraints](#per-point-constraints-optional-version-7).
 - `has_uv_frames`: (version 3+) Whether the optional per-point patch
   frame (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) is present. See
   [Per-point patch frame](#per-point-patch-frame-optional-version-3).
@@ -925,8 +933,9 @@ already normalised.
   bitmaps, or `null` when `has_patch_bitmaps` is `false`.
 
 A version-3 file includes all four original flags (`false` / `null` when the
-data is absent), and a version-5 file may additionally include
-`has_normal_confidence`. A missing flag defaults to `false` (a missing `has_normals` means no
+data is absent), a version-5 file may additionally include
+`has_normal_confidence`, and a version-7 file `has_point_constraints`. A
+missing flag defaults to `false` (a missing `has_normals` means no
 normals) — but since versions 1 and 2 carry none of these keys yet always
 include normals, an upgraded version 1 or 2 file is read with `has_normals` as
 `true`.
@@ -1010,6 +1019,103 @@ Per-point confidence in the stored normal.
 one in `normals_xyz`. Downstream passes that re-fit, filter, or render normals
 need to know which rows are claims and which are placeholders.
 
+#### Per-point constraints (Optional, version 7+)
+
+Three parallel columns saying what a bundle adjustment owns of each point, and
+what a caller-owned distance is measured from. They annotate `positions_xyzw`
+without changing its meaning: `w = 0` is still a direction and `w != 0` still a
+finite point, whatever the kind. See
+[Free, ranged and held points](../core/geometry/bundle-adjustment.md#the-three-kinds)
+for what the kernel does with them.
+
+##### `points3d/kind.{N}.uint8.zst`
+
+- **Shape**: `(N,)` where N = point_count
+- **Data type**: `uint8`
+- **Format**: `0` **free** -- the solve owns the point outright. `1` **ranged**
+  -- the caller owns the distance in `range` and the solve owns the direction.
+  `2` **held** -- the caller owns the whole coordinate. No other value is valid.
+
+##### `points3d/range.{N}.float64.zst`
+
+- **Shape**: `(N,)` where N = point_count
+- **Data type**: `float64` (little-endian)
+- **Format**: a ranged point's distance from its reference, in world units: a
+  strictly positive value, or `+inf` where the point is a direction. `NaN` on
+  every free and held row.
+
+##### `points3d/range_camera.{N}.uint32.zst`
+
+- **Shape**: `(N,)` where N = point_count
+- **Data type**: `uint32` (little-endian)
+- **Format**: the image index a finite range is measured from. The distance runs
+  from that image's camera centre at whatever pose the reader holds, so a range
+  survives a solve that moves the cameras. `0xFFFFFFFF` marks a row that names
+  no image: every free and held point, and a ranged point at infinite range,
+  which is measured from nothing.
+
+  The file carries the **single-image** reference only. An adjustment can also
+  measure a range from the mean of several camera centres; that form is a
+  call-time construct of the kernel, not stored state.
+
+**Presence and validity.** The three columns appear together or not at all, all
+flagged by `has_point_constraints`. A set in which every point is free says
+exactly what carrying no set says, so a writer emits nothing in that case and a
+reader of an absent set treats every point as free, which is what every file
+below version 7 is. Beyond the per-column formats above, a valid set satisfies:
+
+- every `kind` is one of `0`, `1`, `2`;
+- a free or held row has `range = NaN` and `range_camera = 0xFFFFFFFF`;
+- a ranged row has a strictly positive `range`, and a finite one names a
+  `range_camera` below `image_count` while an infinite one names none;
+- a ranged row's `w` in `positions_xyzw` is `0` exactly when its `range` is
+  infinite -- a ranged point is a direction precisely at infinite range.
+
+A reader and a writer both enforce all of these, and `verify_sfmr` re-reads them
+off the archive bytes.
+
+**What an edit does to them.** The columns are per-point state, so every pass
+that reshapes a reconstruction has to carry them, and the rules follow from what
+each column claims:
+
+- **Dropping or reordering points** selects the three rows the same way it
+  selects `colors_rgb` and `normal_confidence`. A constraint describes its own
+  point, so a surviving row travels verbatim.
+- **Dropping or reindexing images** moves every `range_camera` onto the new
+  image indices. A point whose reference image is gone becomes **free** -- kind
+  `0`, `NaN` range, `0xFFFFFFFF` camera: the distance was a statement about that
+  camera's centre, and a reconstruction that no longer holds the camera cannot
+  honour it. Keeping a distance measured from nothing would hand the next
+  adjustment a constraint it cannot resolve. A held point names no image, so the
+  same edit leaves it held.
+- **A similarity transform** scales every finite range by the transform's scale
+  and leaves the reference alone. The distance is in the scene's own units, so
+  scaling it is what keeps the constraint saying the same thing about the scene.
+  An infinite range is unaffected.
+- **Rewriting a point's representation** (promoting a direction to a position or
+  demoting a position to a direction) releases that point's constraint. A ranged
+  point's distance described a coordinate the pass has just replaced, and a held
+  coordinate has been overwritten, so neither statement still holds.
+- **Rebuilding the point set from scratch** -- a merge, a COLMAP import, an
+  in-place replacement that changes the point count -- carries no constraints,
+  which is every point free. There is no mapping from the old point set to the
+  new one for the columns to follow.
+
+These are the reconstruction editors' rules, enforced in
+[edit.rs](../../crates/sfmtool-core/src/reconstruction/edit.rs) and
+[convert.rs](../../crates/sfmtool-core/src/analysis/infinity/convert.rs).
+
+**Why a camera and not a world point**: an adjustment's gauge is free, so a
+distance measured from a fixed world coordinate constrains nothing about the
+cameras, which are free to move away from it. A camera centre moves with the
+solve, so the statement "this landmark is 1045 m from where the photograph was
+taken" stays true of the scene rather than of one particular gauge.
+
+**Why `w` and `kind` are separate**: `w = 0` states that the stored estimate is
+a direction; a kind states who owns the point. A free point can be either
+representation and can change between them as a solve runs, and a held point can
+be either and change between neither.
+
 #### Per-point patch frame (Optional, version 3+)
 
 A **patch** is an oriented surface element (surfel) centred on a 3D point. Only
@@ -1068,12 +1174,14 @@ constrains only array shapes — not handedness, that `normalize(u × v)` matche
 `normals_xyz`, or that unpatched rows are exactly zero. A consumer relying on these
 must not assume an arbitrary v3 file honours them.
 
-Per-point surface data has four independently optional pieces, each flagged in
+Optional per-point data has five independent pieces, each flagged in
 `points3d/metadata.json`:
 
 - **Normals** (`has_normals`, version 3+) — the `normals_xyz` array.
 - **Normal confidence** (`has_normal_confidence`, version 5+) — the
   `normal_confidence` array.
+- **Constraints** (`has_point_constraints`, version 7+) — `kind`, `range` and
+  `range_camera` (all three appear together; one alone is half a statement).
 - **Patch frame** (`has_uv_frames`, version 3+) — `patch_u_halfvec_xyz` and
   `patch_v_halfvec_xyz` (the two always appear together; one without the other
   is not a frame).
@@ -1083,7 +1191,8 @@ The **only** presence rules between them are: **patch bitmaps require the patch
 frame** (a texture is meaningless without the `u`/`v` it is parameterised over),
 and **normal confidence requires normals** (a confidence rates a stored claim;
 without `normals_xyz` there is nothing for it to rate). Every other combination
-is valid — normals without a frame, a frame without normals, both, or neither.
+is valid — normals without a frame, a frame without normals, constraints without
+either, or none of them.
 
 ##### `points3d/patch_u_halfvec_xyz.{N}.3.float32.zst` and `points3d/patch_v_halfvec_xyz.{N}.3.float32.zst`
 
@@ -1760,6 +1869,19 @@ is byte-equivalent to a v3 file apart from the `version` / `feature_source`
 metadata keys and the new `tracks/metadata.json` `has_*` keys.
 `embedded_patches` is a new mode with no v3 equivalent.
 
+### Version 6 → Version 7
+
+| Change | Detail |
+|---|---|
+| `points3d/kind`, `points3d/range`, `points3d/range_camera` | New **optional** per-point triple, flagged together by `has_point_constraints` in `points3d/metadata.json` and folded into `points3d_xxh128`. See [Per-point constraints](#per-point-constraints-optional-version-7). |
+
+Migration is mechanical and lossless in both directions. A version 6 file carries
+neither the flag nor the arrays, and reads as every point free; a version 7 file
+whose points are all free writes no arrays and is byte-identical in the points3d
+section to the version 6 file it came from apart from the added `false` flag.
+Nothing else moves, and no existing array changes meaning: `positions_xyzw` in
+particular keeps `w = 0` as "the estimate is a direction" and nothing more.
+
 ### Version 5 → Version 6
 
 | Change | Detail |
@@ -1801,6 +1923,10 @@ its camera.
 
 ## Version History
 
+- **Version 7**: Optional per-point constraint triple `points3d/kind`,
+  `points3d/range` and `points3d/range_camera`: what a bundle adjustment owns
+  of each point and what a caller-owned distance is measured from, flagged
+  together by `has_point_constraints`.
 - **Version 6**: Optional per-observation `tracks/observation_confidence` —
   photometric sharpness of an observation relative to its track's consensus,
   flagged by `has_observation_confidence`.

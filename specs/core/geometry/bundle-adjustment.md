@@ -265,6 +265,18 @@ bundle_adjust(
     point_at_infinity=None,    # (n_pt,) bool; a marked row of `points` is a
                                # world-frame direction. None/all-False
                                # reproduces the finite-only kernel bit for bit
+    held=None,                 # (n_pt,) bool; a held point's coordinate is the
+                               # caller's for the whole solve
+    range=None,                # (n_pt,) float64; a ranged point's distance,
+                               # +inf for a direction, NaN where not ranged
+    range_origin=None,         # (n_pt,) image index, or a sequence of image
+                               # indices to average, with -1 where there is
+                               # none; a finite `range` requires one
+    free_points_cross=False,   # re-decide every free point's representation at
+                               # each inter-round re-estimation
+    noise_floor_scale=2.0,     # the constant c in theta_floor = c*s/f
+                               # (positive and finite); read only under
+                               # `free_points_cross`
     protected=None,            # (n_obs,) bool; protected observations survive
                                # every trim gate and take the wider loss scale.
                                # None/all-False reproduces the unprotected
@@ -284,7 +296,8 @@ bundle_adjust(
 ) -> dict                      # focal, k1, bspline_coefficients (n_coeffs,),
                                # quaternions_wxyz (n_img, 4),
                                # translations (n_img, 3), points (n_pt, 3),
-                               # residual_norms (n_obs,)
+                               # residual_norms (n_obs,),
+                               # point_at_infinity (n_pt,)
 ```
 
 `bspline_coefficients` is always present: the coefficients after the solve —
@@ -294,6 +307,20 @@ one. `opt_bspline` raises for a camera that is neither `SFMTOOL_FISHEYE` nor
 `SFMTOOL_PINHOLE`, and for an undefined spline; `opt_k1` together with
 `opt_bspline` raises first, so the caller sees the exclusion rather than
 whichever model gate happens to fire.
+
+`held`, `range` and `range_origin` are the flat form of the kernel's
+`PointConstraints`: the binding assembles them, so a caller states each point's
+kind in the same array layout it states the rest of its per-point data. A row
+is ranged where `range` is not `NaN`; `range_origin` naming a single index is
+`RangeReference::Camera` and one naming a sequence is `RangeReference::CameraMean`.
+The binding raises for a point that is both held and ranged, a range that is not
+strictly positive, a finite range with no origin, an origin past the image set,
+and a non-positive or non-finite `noise_floor_scale`. `range_origin` is ignored
+on a `NaN` or `+inf` row, which is measured from nothing.
+
+`point_at_infinity` in the result is the representation each point ended with,
+and is the only way a caller learns the outcome of a crossing: `True` where the
+returned row is a direction, `False` where it is a position.
 
 Shapes are validated like `reprojection_residuals`; observation indices out
 of range raise. The returned arrays are new (inputs are not mutated from
@@ -523,12 +550,13 @@ bundle_adjust(cam, quats, trans, points, uv, obs_img, obs_pt,
 
 An absent `constraints` is every point free, and with a default
 `FreePointPolicy` (`cross = false`) the kernel is the one the sections above
-describe, bit for bit. The kinds and the crossing policy reach the Python
-binding with the file columns that carry them; that part is
-[a change proposal](../../drafts/bundle-adjust-free-and-held-points-amendment.md),
-and the Rust interface is
+describe, bit for bit. The Rust interface is
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
-(`PointKind`, `PointConstraints`, `RangeReference`, `FreePointPolicy`).
+(`PointKind`, `PointConstraints`, `RangeReference`, `FreePointPolicy`); the
+Python binding takes the same three kinds as flat per-point arrays (see
+[Bindings](#bindings)), and a reconstruction carries them in the `.sfmr`
+constraint triple (see
+[Per-point constraints](../../formats/sfmr-file-format.md#per-point-constraints-optional-version-7)).
 
 ### Free points: crossing between representations
 
@@ -645,6 +673,12 @@ directions keeps its translation live, which is what a surveyed landmark is for.
   at the final pose; and a landmark started at a wrong bearing but its true
   range recovers the bearing the reference camera sees, where the same track
   free converges to a wrong depth.
+- **The binding**: its off position (absent arguments, and explicitly-off ones)
+  agrees bit for bit; a held point comes back unchanged while a free one moves;
+  a ranged point lands at exactly its distance from the reference read at the
+  final pose, for a single camera and for the mean of two; an infinite range is
+  reported as a direction; the crossing promotes a marked near point; and every
+  rejection above raises `ValueError`.
 
 ## Protected observations
 

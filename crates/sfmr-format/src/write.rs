@@ -441,6 +441,11 @@ pub fn write_sfmr_with_options(
     // `patch_v_halfvec_xyz`, and an optional `patch_bitmaps_y_x_rgba`) lives in
     // this section, beside the normal.
     validate_patch_dimensions(data, point_count)?;
+    // The constraint triple is written only when it says something: a set in
+    // which every point is free is exactly the absent set, and dropping it
+    // keeps a file whose caller never used constraints byte-identical to one
+    // written before the columns existed.
+    let constraints = point_constraints_to_write(data, point_count, image_count)?;
     let mut points3d_hasher = Xxh3::new();
 
     // points3d/colors_rgb
@@ -452,12 +457,25 @@ pub fn write_sfmr_with_options(
         &mut points3d_hasher,
     )?;
 
+    // points3d/kind (optional, version 7+; lexicographically after colors_rgb,
+    // before metadata.json). The first of the constraint triple.
+    if let Some((kind, _, _)) = constraints {
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::points3d_kind(point_count),
+            kind,
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+    }
+
     // points3d/metadata.json (records which optional per-point arrays are present)
     let patch_bitmap_resolution = data.patch_bitmaps_y_x_rgba.as_ref().map(|b| b.shape()[1]);
     let points3d_meta = serde_json::json!({
         "point_count": point_count,
         "has_normals": normals_xyz.is_some(),
         "has_normal_confidence": data.normal_confidence.is_some(),
+        "has_point_constraints": constraints.is_some(),
         "has_uv_frames": data.patch_u_halfvec_xyz.is_some(),
         "has_patch_bitmaps": data.patch_bitmaps_y_x_rgba.is_some(),
         "patch_bitmap_resolution": patch_bitmap_resolution,
@@ -534,6 +552,25 @@ pub fn write_sfmr_with_options(
         options.zstd_level,
         &mut points3d_hasher,
     )?;
+
+    // points3d/range and points3d/range_camera (optional, version 7+;
+    // lexicographically after positions_xyzw, before reprojection_errors).
+    if let Some((_, range, range_camera)) = constraints {
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::points3d_range(point_count),
+            bytemuck::cast_slice(range),
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+        write_binary_entry_hashed(
+            &mut zip,
+            &entries::points3d_range_camera(point_count),
+            bytemuck::cast_slice(range_camera),
+            options.zstd_level,
+            &mut points3d_hasher,
+        )?;
+    }
 
     // points3d/reprojection_errors
     write_binary_entry_hashed(
@@ -661,6 +698,47 @@ pub fn write_sfmr_with_options(
 
     zip.finish()?;
     Ok(())
+}
+
+/// The three constraint columns as borrowed slices, in archive order: kind,
+/// range, range camera.
+type PointConstraintSlices<'a> = (&'a [u8], &'a [f64], &'a [u32]);
+
+/// The per-point constraint triple to write, or `None` when the file carries
+/// none.
+///
+/// Validates the triple through [`validate_point_constraints`] and then drops it
+/// when every point is free, which is the same statement as its absence: a
+/// caller that never constrained a point writes the archive a pre-version-7
+/// writer would have. The slices borrow `data`, so the caller writes them
+/// directly.
+fn point_constraints_to_write(
+    data: &SfmrData,
+    point_count: usize,
+    image_count: usize,
+) -> Result<Option<PointConstraintSlices<'_>>, SfmrError> {
+    let kind = data.point_kind.as_ref().map(|a| a.as_slice().unwrap());
+    let range = data.point_range.as_ref().map(|a| a.as_slice().unwrap());
+    let range_camera = data
+        .point_range_camera
+        .as_ref()
+        .map(|a| a.as_slice().unwrap());
+    validate_point_constraints(
+        kind,
+        range,
+        range_camera,
+        &data.positions_xyzw,
+        point_count,
+        image_count,
+    )
+    .map_err(SfmrError::InvalidFormat)?;
+    let (Some(kind), Some(range), Some(range_camera)) = (kind, range, range_camera) else {
+        return Ok(None);
+    };
+    if kind.iter().all(|&k| k == POINT_KIND_FREE) {
+        return Ok(None);
+    }
+    Ok(Some((kind, range, range_camera)))
 }
 
 /// Validate the optional per-point patch frame arrays: `patch_u_halfvec_xyz`

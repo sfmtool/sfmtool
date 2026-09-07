@@ -302,6 +302,47 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
+    // Optional per-point constraint triple (version 7+), flagged as one set.
+    // Absent means every point is free, so an older file — which carries
+    // neither the flag nor the arrays — simply reads as `None`.
+    let (point_kind, point_range, point_range_camera) = if points3d_meta
+        .get("has_point_constraints")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let kind: Vec<u8> = read_binary_array(
+            &mut archive,
+            &entries::points3d_kind(point_count),
+            point_count,
+        )?;
+        let range: Vec<f64> = read_binary_array(
+            &mut archive,
+            &entries::points3d_range(point_count),
+            point_count,
+        )?;
+        let range_camera: Vec<u32> = read_binary_array(
+            &mut archive,
+            &entries::points3d_range_camera(point_count),
+            point_count,
+        )?;
+        validate_point_constraints(
+            Some(&kind),
+            Some(&range),
+            Some(&range_camera),
+            &positions_xyzw,
+            point_count,
+            image_count,
+        )
+        .map_err(SfmrError::InvalidFormat)?;
+        (
+            Some(Array1::from_vec(kind)),
+            Some(Array1::from_vec(range)),
+            Some(Array1::from_vec(range_camera)),
+        )
+    } else {
+        (None, None, None)
+    };
+
     // Optional per-point patch frame (version 3+), stored beside the normals.
     // Takes the entry name rather than a field stem, so the name comes from
     // `entries` like every other read. The stem for the error message is
@@ -562,6 +603,9 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         reprojection_errors,
         normals_xyz,
         normal_confidence,
+        point_kind,
+        point_range,
+        point_range_camera,
         patch_u_halfvec_xyz,
         patch_v_halfvec_xyz,
         patch_bitmaps_y_x_rgba,

@@ -213,8 +213,124 @@ pub fn validate_keypoints(
     Ok(())
 }
 
+/// `points3d/kind` code: the solve owns the point outright.
+pub const POINT_KIND_FREE: u8 = 0;
+/// `points3d/kind` code: the caller owns the point's distance from a reference
+/// image and the solve owns its direction.
+pub const POINT_KIND_RANGED: u8 = 1;
+/// `points3d/kind` code: the caller owns the point's coordinate outright.
+pub const POINT_KIND_HELD: u8 = 2;
+/// `points3d/range_camera` value for a row that names no image: every free and
+/// held point, and a ranged point at infinite range, which needs no reference.
+pub const NO_RANGE_CAMERA: u32 = u32::MAX;
+
+/// Validate the per-point constraint triple against the positions it annotates.
+///
+/// The three columns are present together or absent together, so this takes the
+/// three `Option`s and reports the first violation as a message the caller wraps
+/// in its own error type. Read, write and verify all route through it, so the
+/// rules are stated once.
+///
+/// With all three absent every point is free and there is nothing to check.
+pub fn validate_point_constraints(
+    kind: Option<&[u8]>,
+    range: Option<&[f64]>,
+    range_camera: Option<&[u32]>,
+    positions_xyzw: &Array2<f64>,
+    point_count: usize,
+    image_count: usize,
+) -> Result<(), String> {
+    let present = [kind.is_some(), range.is_some(), range_camera.is_some()];
+    if present.iter().all(|&p| !p) {
+        return Ok(());
+    }
+    if !present.iter().all(|&p| p) {
+        return Err(format!(
+            "points3d/kind, points3d/range and points3d/range_camera are present \
+             together or absent together (kind={}, range={}, range_camera={})",
+            present[0], present[1], present[2]
+        ));
+    }
+    let (kind, range, range_camera) = (kind.unwrap(), range.unwrap(), range_camera.unwrap());
+    for (name, len) in [
+        ("kind", kind.len()),
+        ("range", range.len()),
+        ("range_camera", range_camera.len()),
+    ] {
+        if len != point_count {
+            return Err(format!(
+                "points3d/{name} len {len} != point_count {point_count}"
+            ));
+        }
+    }
+    let has_w = positions_xyzw.nrows() == point_count && positions_xyzw.ncols() == 4;
+    for p in 0..point_count {
+        let (k, r, c) = (kind[p], range[p], range_camera[p]);
+        match k {
+            POINT_KIND_FREE | POINT_KIND_HELD => {
+                if !r.is_nan() {
+                    return Err(format!(
+                        "points3d/range row {p} is {r} on a kind-{k} point, which carries \
+                         no range (expected NaN)"
+                    ));
+                }
+                if c != NO_RANGE_CAMERA {
+                    return Err(format!(
+                        "points3d/range_camera row {p} names image {c} on a kind-{k} point, \
+                         which is measured from nothing"
+                    ));
+                }
+            }
+            POINT_KIND_RANGED => {
+                if r.is_nan() || r <= 0.0 {
+                    return Err(format!(
+                        "points3d/range row {p} is {r} on a ranged point, which needs a \
+                         strictly positive distance (+inf for a direction)"
+                    ));
+                }
+                if r.is_finite() {
+                    if c as usize >= image_count {
+                        return Err(format!(
+                            "points3d/range_camera row {p} = {c} is past the {image_count} \
+                             images, and a finite range is measured from one of them"
+                        ));
+                    }
+                } else if c != NO_RANGE_CAMERA {
+                    return Err(format!(
+                        "points3d/range_camera row {p} names image {c} on a point at infinite \
+                         range, which is measured from nothing"
+                    ));
+                }
+                if has_w {
+                    let w_is_zero = positions_xyzw[[p, 3]] == 0.0;
+                    if w_is_zero != r.is_infinite() {
+                        return Err(format!(
+                            "positions_xyzw row {p} has w = {} but its range is {r}: a ranged \
+                             point is a direction exactly at infinite range",
+                            positions_xyzw[[p, 3]]
+                        ));
+                    }
+                }
+            }
+            other => {
+                return Err(format!(
+                    "points3d/kind row {p} is {other}, not one of {POINT_KIND_FREE} (free), \
+                     {POINT_KIND_RANGED} (ranged) or {POINT_KIND_HELD} (held)"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
+///
+/// Version 7 added the optional per-point constraint triple
+/// `points3d/kind`, `points3d/range` and `points3d/range_camera`, flagged
+/// together by `points3d/metadata.json`'s `has_point_constraints` (see
+/// [`SfmrData::point_kind`]). Older files carry neither the flag nor the
+/// arrays and read as `None`, which is every point free.
 ///
 /// Version 6 added the optional per-observation array
 /// `tracks/observation_confidence`, flagged by `tracks/metadata.json`'s
@@ -231,7 +347,7 @@ pub fn validate_keypoints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 6;
+pub const SFMR_FORMAT_VERSION: u32 = 7;
 
 /// The first `.sfmr` version whose stored poses and world data are in the
 /// canonical convention (right-handed Z-up world, cameras looking down −Z).
@@ -432,6 +548,38 @@ pub struct SfmrData {
     /// when `points3d/metadata.json`'s `has_normal_confidence` is `true`). The
     /// writer passes it through untouched.
     pub normal_confidence: Option<Array1<u8>>,
+
+    // Per-point solve constraints (optional, version 7+): what an adjustment
+    // owns of each point, and what a caller-owned distance is measured from.
+    // The three columns are present together or absent together, and absent is
+    // "every point free", which is what every file below version 7 is. They
+    // annotate `positions_xyzw` without changing its meaning: `w = 0` is still
+    // a direction and `w != 0` still a finite point, whatever the kind.
+    /// `(P,)` constraint kind per point: [`POINT_KIND_FREE`],
+    /// [`POINT_KIND_RANGED`] or [`POINT_KIND_HELD`]. `None` when the file
+    /// carries no constraints, which is every point free.
+    ///
+    /// On disk this is `points3d/kind` (version 7+, present only when
+    /// `points3d/metadata.json`'s `has_point_constraints` is `true`).
+    pub point_kind: Option<Array1<u8>>,
+    /// `(P,)` distance a ranged point sits at from its reference: a positive
+    /// world-unit distance, or `+inf` for a direction (which needs no
+    /// reference). `NaN` on every free and held row. `None` together with
+    /// [`Self::point_kind`].
+    ///
+    /// On disk this is `points3d/range` (version 7+).
+    pub point_range: Option<Array1<f64>>,
+    /// `(P,)` image index a finite range is measured from -- the distance runs
+    /// from that image's camera centre at whatever pose the reader holds.
+    /// [`NO_RANGE_CAMERA`] on every row that names no image: free, held, and
+    /// ranged at infinite range. `None` together with [`Self::point_kind`].
+    ///
+    /// The file carries the single-image reference only. An adjustment can also
+    /// measure a range from the mean of several camera centres, which is a
+    /// call-time construct of the kernel rather than stored state.
+    ///
+    /// On disk this is `points3d/range_camera` (version 7+).
+    pub point_range_camera: Option<Array1<u32>>,
 
     // Per-point oriented-patch ("surfel") frame (optional, version 3+), stored
     // alongside the other `points3d/` arrays. A patch is centred on its 3D point

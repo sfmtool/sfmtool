@@ -22,8 +22,8 @@ use sfmr_format::{
 use crate::camera::CameraIntrinsics;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ObservationSource, Point3D, SfmrImage,
-    SfmrReconstruction, TrackObservation,
+    compute_observation_offsets, count_points_at_infinity, ObservationSource, Point3D,
+    PointConstraintColumns, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 
 /// Unit quaternion from raw WXYZ components, keeping the caller's bits when
@@ -285,6 +285,19 @@ impl SfmrReconstruction {
             // Rides along as stored; the convention upgrade above leaves it
             // alone because a confidence is frame-independent.
             normal_confidence: data.normal_confidence.map(|c| c.to_vec()),
+            // The triple travels as a set; the format reader has already
+            // checked that the three columns agree with each other and with the
+            // stored `w`. The convention upgrade above leaves it alone: a
+            // distance is a scalar and a reference is an index, so neither
+            // depends on which handedness the file was written in.
+            point_constraints: match (data.point_kind, data.point_range, data.point_range_camera) {
+                (Some(kind), Some(range), Some(range_camera)) => Some(PointConstraintColumns {
+                    kind: kind.to_vec(),
+                    range: range.to_vec(),
+                    range_camera: range_camera.to_vec(),
+                }),
+                _ => None,
+            },
             observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
             observations,
             image_feature_to_point,
@@ -298,6 +311,9 @@ impl SfmrReconstruction {
         // before handing back a reconstruction.
         recon
             .validate_observation_columns()
+            .map_err(SfmrError::InvalidFormat)?;
+        recon
+            .validate_point_columns()
             .map_err(SfmrError::InvalidFormat)?;
         Ok(recon)
     }
@@ -451,6 +467,18 @@ impl SfmrReconstruction {
                 .normal_confidence
                 .as_ref()
                 .map(|c| Array1::from_vec(c.clone())),
+            point_kind: self
+                .point_constraints
+                .as_ref()
+                .map(|c| Array1::from_vec(c.kind.clone())),
+            point_range: self
+                .point_constraints
+                .as_ref()
+                .map(|c| Array1::from_vec(c.range.clone())),
+            point_range_camera: self
+                .point_constraints
+                .as_ref()
+                .map(|c| Array1::from_vec(c.range_camera.clone())),
             image_indexes,
             feature_indexes,
             keypoints_xy,

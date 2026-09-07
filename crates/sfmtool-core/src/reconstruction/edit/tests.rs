@@ -9,6 +9,7 @@ use crate::geometry::RotQuaternion;
 use crate::Se3Transform;
 use nalgebra::{UnitQuaternion, Vector3 as V3};
 use ndarray::{Array2, Array4};
+use sfmr_format::{NO_RANGE_CAMERA, POINT_KIND_FREE, POINT_KIND_HELD, POINT_KIND_RANGED};
 
 /// A demo reconstruction with a per-point patch frame attached: `u` along
 /// +x and `v` along +y (so `u × v` is +z), plus distinct-per-cell bitmaps.
@@ -97,6 +98,80 @@ fn filter_keeps_patch_rows_for_surviving_points() {
     approx(u1[[0, 0]] as f64, u0[[0, 0]] as f64);
     approx(u1[[1, 0]] as f64, u0[[2, 0]] as f64);
     assert_eq!(out.patch_bitmaps_y_x_rgba.as_ref().unwrap().shape()[0], 2);
+}
+
+/// A four-point demo whose points 1 and 3 are constrained: point 1 held, point
+/// 3 ranged at 10 m from image 5. The reference is a late image so an image
+/// subset that keeps only the early ones drops it.
+fn demo_with_constraints() -> SfmrReconstruction {
+    let mut recon = SfmrReconstruction::demo(4);
+    let mut constraints = PointConstraintColumns::all_free(recon.points.len());
+    constraints.kind[1] = POINT_KIND_HELD;
+    constraints.kind[3] = POINT_KIND_RANGED;
+    constraints.range[3] = 10.0;
+    constraints.range_camera[3] = 5;
+    recon.point_constraints = Some(constraints);
+    recon
+}
+
+#[test]
+fn filter_keeps_constraint_rows_for_surviving_points() {
+    let recon = demo_with_constraints();
+    let out = recon.filter_points_by_mask(&[false, true, false, true]);
+
+    let c = out.point_constraints.as_ref().unwrap();
+    assert_eq!(c.len(), 2);
+    // The source's points 1 and 3, in order and unchanged.
+    assert_eq!(c.kind, vec![POINT_KIND_HELD, POINT_KIND_RANGED]);
+    assert!(c.range[0].is_nan());
+    assert_eq!(c.range[1], 10.0);
+    assert_eq!(c.range_camera, vec![NO_RANGE_CAMERA, 5]);
+    out.validate_point_columns().unwrap();
+}
+
+#[test]
+fn subset_remaps_a_range_reference_onto_the_kept_images() {
+    let recon = demo_with_constraints();
+    // Keep images 5, 0 and 2, in that order: the reference image survives at a
+    // new index, which is what the range has to follow.
+    let out = recon.subset_by_image_indices(&[5, 0, 2], false).unwrap();
+
+    let c = out.point_constraints.as_ref().unwrap();
+    assert_eq!(c.kind[3], POINT_KIND_RANGED);
+    assert_eq!(c.range[3], 10.0);
+    assert_eq!(c.range_camera[3], 0);
+    out.validate_point_columns().unwrap();
+}
+
+#[test]
+fn subset_frees_a_point_whose_reference_image_is_dropped() {
+    let recon = demo_with_constraints();
+    // Image 5 is gone, so nothing is left to measure the distance from.
+    let out = recon.subset_by_image_indices(&[0, 1, 2], false).unwrap();
+
+    let c = out.point_constraints.as_ref().unwrap();
+    assert_eq!(c.kind[3], POINT_KIND_FREE);
+    assert!(c.range[3].is_nan());
+    assert_eq!(c.range_camera[3], NO_RANGE_CAMERA);
+    // A held point names no image, so the same subset leaves it held.
+    assert_eq!(c.kind[1], POINT_KIND_HELD);
+    out.validate_point_columns().unwrap();
+}
+
+#[test]
+fn se3_transform_scales_a_range_with_the_scene() {
+    let recon = demo_with_constraints();
+    let rot = RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
+        &V3::z_axis(),
+        std::f64::consts::FRAC_PI_2,
+    ));
+    let out = recon.apply_se3_transform(&Se3Transform::new(rot, V3::new(1.0, 2.0, 3.0), 2.0));
+
+    let c = out.point_constraints.as_ref().unwrap();
+    // The distance is in the solve's own units, which the similarity rescales.
+    approx(c.range[3], 20.0);
+    assert_eq!(c.range_camera[3], 5);
+    assert!(c.range[1].is_nan());
 }
 
 #[test]

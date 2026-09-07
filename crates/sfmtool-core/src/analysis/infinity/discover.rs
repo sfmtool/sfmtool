@@ -31,6 +31,7 @@ use crate::reconstruction::data::observation_reprojection_error;
 use crate::reconstruction::{
     ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
 };
+use sfmr_format::{NO_RANGE_CAMERA, POINT_KIND_FREE};
 
 /// Parameters governing the points-at-infinity search.
 #[derive(Debug, Clone, Copy)]
@@ -578,6 +579,14 @@ impl SfmrReconstruction {
             // "no data-derived support" code rather than inheriting anything.
             if let Some(confidence) = recon.observation_confidence.as_mut() {
                 confidence.extend(std::iter::repeat_n(0u8, track.members.len()));
+            }
+            // Nothing outside the solve owns a track this pass discovered, so
+            // its constraint row is free -- the row the reconstruction would
+            // hold for it if it carried no constraint columns at all.
+            if let Some(constraints) = recon.point_constraints.as_mut() {
+                constraints.kind.push(POINT_KIND_FREE);
+                constraints.range.push(f64::NAN);
+                constraints.range_camera.push(NO_RANGE_CAMERA);
             }
             recon.observation_counts.push(track.members.len() as u32);
         }

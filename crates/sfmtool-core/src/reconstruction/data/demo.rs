@@ -211,6 +211,7 @@ impl SfmrReconstruction {
             patch_bitmaps_y_x_rgba: None,
             has_normals: true,
             normal_confidence: None,
+            point_constraints: None,
             observation_confidence: None,
             observations: ObservationSource::SiftFiles {
                 feature_indexes,

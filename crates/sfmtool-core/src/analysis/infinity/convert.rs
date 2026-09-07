@@ -44,6 +44,22 @@ enum PatchFix {
     Clear,
 }
 
+/// Free the constraint of every point a representation change touched, `fixes`
+/// being the patch-fix list both passes already keep of exactly those points.
+///
+/// A ranged or held point states something about a coordinate the caller owns;
+/// a pass that rewrites the coordinate has ended that statement, so the honest
+/// outcome is to release the point rather than leave a distance describing where
+/// it used to be. Freeing an already-free point is a no-op, so this touches only
+/// what a caller constrained.
+fn release_touched_constraints(recon: &mut SfmrReconstruction, fixes: &[(usize, PatchFix)]) {
+    if let Some(constraints) = recon.point_constraints.as_mut() {
+        for (pidx, _) in fixes {
+            constraints.free(*pidx);
+        }
+    }
+}
+
 fn apply_patch_fix(
     u: &mut Option<Array2<f32>>,
     v: &mut Option<Array2<f32>>,
@@ -508,6 +524,13 @@ impl SfmrReconstruction {
             }
         }
 
+        // A demoted point is no longer the point its constraint described: a
+        // ranged one sits at a distance this pass just declared unmeasurable,
+        // and a held coordinate has been overwritten. Release both, the same
+        // rule a dropped reference image gets — a statement the reconstruction
+        // has moved out from under is not one to keep.
+        release_touched_constraints(&mut recon, &patch_fixes);
+
         for (pidx, fix) in patch_fixes {
             apply_patch_fix(
                 &mut recon.patch_u_halfvec_xyz,
@@ -590,6 +613,10 @@ impl SfmrReconstruction {
             // rescale in `classify_points_at_infinity`).
             patch_fixes.push((pidx, PatchFix::Scale(t)));
         }
+
+        // Promotion rewrites the point's representation, so its constraint is
+        // released for the reason the demotion above releases one.
+        release_touched_constraints(&mut recon, &patch_fixes);
 
         for (pidx, fix) in patch_fixes {
             apply_patch_fix(

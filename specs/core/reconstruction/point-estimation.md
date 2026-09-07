@@ -241,11 +241,17 @@ either memory order and returned C-contiguous.
 `prune_behind` with `cheirality` off is refused rather than accepted and
 ignored: it names a reading of a rule the call has turned off. The `range` rule
 on a ray set is refused the same way, since it reads pixels the ray form does
-not carry. The rule's own binding is
-[a change proposal](../../drafts/bundle-adjust-free-and-held-points-amendment.md),
-not yet a keyword of `estimate_points`; the Rust interface
+not carry.
+
+The `range` keyword is an `(n_track, 4)` float64 array whose rows are
+`(distance, ox, oy, oz)`, with an all-`NaN` row for a track the rule says
+nothing about. One array rather than two keeps a distance and the origin it is
+measured from in one shape, which is how a caller builds them; the Rust
+interface
 ([point_estimation.rs](../../../crates/sfmtool-core/src/reconstruction/point_estimation.rs))
-carries it as one entry per track on the rules.
+carries the same thing as one `PointRange` per track on the rules. The
+`ranged` verdict appears in the exposed code table and its count in the census
+alongside every other rule's.
 
 The observation form takes the poses as world-to-camera quaternions and
 translations, and the track count, since the observation indices alone do not

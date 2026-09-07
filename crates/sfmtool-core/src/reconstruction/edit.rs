@@ -173,6 +173,21 @@ impl SfmrReconstruction {
             has_normals: self.has_normals,
             // Rotating a normal does not change how well-supported it is.
             normal_confidence: self.normal_confidence.clone(),
+            // A similarity moves the cameras and the points together, so a
+            // distance from a camera centre survives it up to the scale factor
+            // and a reference index survives it outright. The kernel resolves a
+            // reference from the poses it is handed, so scaling the stored
+            // distance is what keeps the constraint saying the same thing about
+            // the scene.
+            point_constraints: self.point_constraints.as_ref().map(|c| {
+                let mut c = c.clone();
+                for r in c.range.iter_mut() {
+                    if r.is_finite() {
+                        *r *= transform.scale;
+                    }
+                }
+                c
+            }),
             observation_confidence: self.observation_confidence.clone(),
             // A 3D similarity leaves the 2D image keypoints, feature indices, and
             // image identity untouched, so the observation source passes through
@@ -302,6 +317,7 @@ impl SfmrReconstruction {
             new_patch_v,
             new_patch_bitmaps,
             new_normal_confidence,
+            kept_point_constraints,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
             let mut per_point_count = vec![0u32; self.points.len()];
@@ -355,6 +371,7 @@ impl SfmrReconstruction {
                 select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx),
                 select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx),
                 select_normal_confidence(&self.normal_confidence, &keep_idx),
+                self.point_constraints.as_ref().map(|c| c.select(&keep_idx)),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
@@ -370,8 +387,17 @@ impl SfmrReconstruction {
                 self.patch_v_halfvec_xyz.clone(),
                 self.patch_bitmaps_y_x_rgba.clone(),
                 self.normal_confidence.clone(),
+                self.point_constraints.clone(),
             )
         };
+
+        // A range is measured from an image's centre, so it has to follow the
+        // images through their re-indexing -- and a point whose reference image
+        // this subset drops loses the statement entirely and comes back free.
+        let new_point_constraints = kept_point_constraints.map(|mut c| {
+            c.remap_images(&old_to_new);
+            c
+        });
 
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
@@ -461,6 +487,7 @@ impl SfmrReconstruction {
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
             normal_confidence: new_normal_confidence,
+            point_constraints: new_point_constraints,
             observation_confidence: new_observation_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,
@@ -506,6 +533,9 @@ impl SfmrReconstruction {
         let new_patch_v = select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx);
         let new_patch_bitmaps = select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx);
         let new_normal_confidence = select_normal_confidence(&self.normal_confidence, &keep_idx);
+        // A constraint describes its own point and the images are untouched, so
+        // the surviving rows travel verbatim.
+        let new_point_constraints = self.point_constraints.as_ref().map(|c| c.select(&keep_idx));
 
         let new_observation_counts: Vec<u32> = self
             .observation_counts
@@ -604,6 +634,7 @@ impl SfmrReconstruction {
             patch_bitmaps_y_x_rgba: new_patch_bitmaps,
             has_normals: self.has_normals,
             normal_confidence: new_normal_confidence,
+            point_constraints: new_point_constraints,
             observation_confidence: new_observation_confidence,
             observations: new_observations,
             image_feature_to_point: new_image_feature_to_point,

@@ -11,7 +11,7 @@ use pyo3::types::PyDict;
 
 use sfmtool_core::reconstruction::point_estimation::{
     estimate_points_from_observations, estimate_points_from_rays, FewObservations, ObservationSet,
-    PointRules, PointVerdict, RaySet,
+    PointRange, PointRules, PointVerdict, RaySet,
 };
 
 use crate::geometry::PyCameraIntrinsics;
@@ -26,6 +26,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     d.set_item("over_bar", PointVerdict::OverBar.code())?;
     d.set_item("few", PointVerdict::Few.code())?;
     d.set_item("finite_pruned", PointVerdict::FinitePruned.code())?;
+    d.set_item("ranged", PointVerdict::Ranged.code())?;
     Ok(d)
 }
 
@@ -54,6 +55,16 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///     n_points: How many tracks the result indexes, observation form.
 ///     marks: (n_track,) bool incoming direction flags, or None for the rule
 ///         off. A marked track is not solved.
+///     range: (n_track, 4) float64 ``(distance, ox, oy, oz)`` per track, or
+///         None for the rule off. A row whose distance is strictly positive
+///         ranges its track: the distance is kept and what comes back is the
+///         direction from the world origin ``(ox, oy, oz)`` that best explains
+///         the track's pixels at this geometry, carried at that distance. Use
+///         an all-``NaN`` row for a track the rule says nothing about. The
+///         origin is a world position at the geometry being estimated under, so
+///         a caller ranging from a camera centre resolves that centre from its
+///         own poses first. Needs the observation form, which is where the
+///         pixels are.
 ///     floor_rad: Angular floor in radians, or None for the rule off.
 ///     cheirality: Demote a point behind any observing camera (default False).
 ///     prune_behind: Read that demotion per observation (default False). Where
@@ -86,6 +97,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     translations=None,
     n_points=None,
     marks=None,
+    range=None,
     floor_rad=None,
     cheirality=false,
     prune_behind=false,
@@ -106,18 +118,43 @@ pub fn estimate_points<'py>(
     translations: Option<PyReadonlyArray2<'py, f64>>,
     n_points: Option<usize>,
     marks: Option<PyReadonlyArray1<'py, bool>>,
+    range: Option<PyReadonlyArray2<'py, f64>>,
     floor_rad: Option<f64>,
     cheirality: bool,
     prune_behind: bool,
     bar_px: Option<f64>,
     few: &str,
 ) -> PyResult<Py<PyAny>> {
+    // The rule is `(distance, origin)` per track; the binding takes it as one
+    // `(n_track, 4)` array so a caller can build it with numpy in one shape
+    // rather than keeping two columns aligned by hand.
+    let ranges: Option<Vec<PointRange>> = match &range {
+        Some(r) => {
+            if r.shape()[1] != 4 {
+                return Err(PyValueError::new_err(
+                    "range must have shape (n_track, 4): (distance, ox, oy, oz)",
+                ));
+            }
+            Some(
+                to_contiguous!(r)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| PointRange {
+                        distance: c[0],
+                        origin: [c[1], c[2], c[3]],
+                    })
+                    .collect(),
+            )
+        }
+        None => None,
+    };
     let rules = PointRules {
         floor_rad,
         cheirality,
         prune_behind,
         bar_px,
-        range: None,
+        range: ranges.as_deref(),
         few: match few {
             "absent" => FewObservations::Absent,
             "bearing" => FewObservations::Bearing,
@@ -167,6 +204,12 @@ pub fn estimate_points<'py>(
         if bar_px.is_some() {
             return Err(PyValueError::new_err(
                 "bar_px needs the observation form: the ray form carries no pixels",
+            ));
+        }
+        if ranges.is_some() {
+            return Err(PyValueError::new_err(
+                "range needs the observation form: the rule minimizes a reprojection \
+                 residual and the ray form carries no pixels",
             ));
         }
         let dd = to_contiguous!(d);
@@ -228,6 +271,14 @@ pub fn estimate_points<'py>(
         }
         if let Some(m) = &mask {
             check_marks(m.len(), n_tracks)?;
+        }
+        if let Some(r) = &ranges {
+            if r.len() != n_tracks {
+                return Err(PyValueError::new_err(format!(
+                    "range must have one row per track: {} given for {n_tracks} tracks",
+                    r.len()
+                )));
+            }
         }
         let uu = to_contiguous!(u);
         let ii = to_contiguous!(oi);
@@ -299,6 +350,7 @@ pub fn estimate_points<'py>(
     census.set_item("seen", c.seen)?;
     census.set_item("finite", c.finite)?;
     census.set_item("marked", c.marked)?;
+    census.set_item("ranged", c.ranged)?;
     census.set_item("thin", c.thin)?;
     census.set_item("behind", c.behind)?;
     census.set_item("over_bar", c.over_bar)?;
