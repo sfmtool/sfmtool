@@ -342,6 +342,148 @@ fn from_patch_infinity_ignores_camera_translation() {
 }
 
 // ---------------------------------------------------------------------------
+// `OrientedPatch::anchored_at_keypoint`
+// ---------------------------------------------------------------------------
+
+/// A pose that is neither axis-aligned nor at the origin, so no anchoring test
+/// can pass on a symmetry of the canonical frame.
+fn tilted_pose() -> RigidTransform {
+    let q = UnitQuaternion::from_euler_angles(0.12, -0.2, 0.07);
+    RigidTransform::from_wxyz_translation([q.w, q.i, q.j, q.k], [0.35, -0.22, 0.4])
+}
+
+/// Where a patch's centre lands in a view — the anchor these tests displace
+/// from, and what they re-measure after anchoring.
+fn project_center(
+    patch: &OrientedPatch,
+    cam: &CameraIntrinsics,
+    pose: &RigidTransform,
+) -> [f64; 2] {
+    let p = pose.transform_point_homogeneous(patch.center.coords, patch.w);
+    let (x, y) = cam
+        .ray_to_pixel([p.x, p.y, p.z])
+        .expect("the patch centre projects into the view");
+    [x, y]
+}
+
+/// A finite patch tilted away from fronto-parallel, in front of [`tilted_pose`].
+fn oblique_patch() -> OrientedPatch {
+    OrientedPatch::from_center_normal(
+        Point3::new(0.1, -0.05, -5.0),
+        Vector3::new(0.15, 0.2, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.4, 0.4],
+    )
+}
+
+#[test]
+fn anchoring_at_the_centres_own_projection_is_a_no_op() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = tilted_pose();
+    let patch = oblique_patch();
+    let keypoint = project_center(&patch, &cam, &pose);
+
+    let anchored = patch
+        .anchored_at_keypoint(&cam, &pose, keypoint)
+        .expect("the centre's own ray meets the patch");
+
+    assert!(
+        (anchored.center - patch.center).norm() < 1e-9,
+        "centre moved by {}",
+        (anchored.center - patch.center).norm()
+    );
+    // Only the centre may move: the frame the tile is rendered in is otherwise
+    // the stored one.
+    assert_eq!(anchored.u_axis, patch.u_axis);
+    assert_eq!(anchored.v_axis, patch.v_axis);
+    assert_eq!(anchored.half_extent, patch.half_extent);
+    assert_eq!(anchored.w, patch.w);
+}
+
+#[test]
+fn anchoring_a_finite_patch_re_projects_onto_the_keypoint() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = tilted_pose();
+    let patch = oblique_patch();
+    let projection = project_center(&patch, &cam, &pose);
+    let keypoint = [projection[0] + 7.0, projection[1] - 3.0];
+
+    let anchored = patch
+        .anchored_at_keypoint(&cam, &pose, keypoint)
+        .expect("the displaced ray meets the patch plane");
+
+    // The centre moved, and it moved *in the plane* — the offset carries no
+    // component along the normal, so the patch still sits on the same surface.
+    let shift = anchored.center - patch.center;
+    assert!(shift.norm() > 1e-6, "the centre did not move: {shift:?}");
+    assert!(
+        shift.dot(&patch.normal()).abs() < 1e-9,
+        "the centre left the plane by {}",
+        shift.dot(&patch.normal())
+    );
+
+    let re = project_center(&anchored, &cam, &pose);
+    assert!(
+        (re[0] - keypoint[0]).abs() < 1e-6 && (re[1] - keypoint[1]).abs() < 1e-6,
+        "re-projected to {re:?}, expected {keypoint:?}"
+    );
+}
+
+#[test]
+fn anchoring_a_direction_patch_re_projects_and_stays_a_unit_direction() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    let pose = tilted_pose();
+    let patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+    let projection = project_center(&patch, &cam, &pose);
+    let keypoint = [projection[0] + 7.0, projection[1] - 3.0];
+
+    let anchored = patch
+        .anchored_at_keypoint(&cam, &pose, keypoint)
+        .expect("the displaced ray still points along the patch direction");
+
+    assert_eq!(anchored.w, 0.0);
+    // The centre of a direction patch *is* the bearing, and rendering reads it
+    // as a unit one — the tangent-sphere shift must not rescale it.
+    assert!(
+        (anchored.center.coords.norm() - 1.0).abs() < 1e-12,
+        "direction norm is {}",
+        anchored.center.coords.norm()
+    );
+    assert!((anchored.center - patch.center).norm() > 1e-6);
+
+    let re = project_center(&anchored, &cam, &pose);
+    assert!(
+        (re[0] - keypoint[0]).abs() < 1e-6 && (re[1] - keypoint[1]).abs() < 1e-6,
+        "re-projected to {re:?}, expected {keypoint:?}"
+    );
+}
+
+#[test]
+fn a_ray_pointing_away_from_a_direction_patch_refuses_to_anchor() {
+    let cam = pinhole(600.0, 320.0, 240.0, 640, 480);
+    // `d = +Z` sits behind an identity-pose canonical camera (which looks down
+    // −Z), so every pixel's ray points away from it: there is no tangent-sphere
+    // offset that would put this patch under the keypoint.
+    let pose = RigidTransform::identity();
+    let patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+
+    assert!(patch
+        .anchored_at_keypoint(&cam, &pose, [320.0, 240.0])
+        .is_none());
+    assert!(patch
+        .anchored_at_keypoint(&cam, &pose, [10.0, 470.0])
+        .is_none());
+}
+
+// ---------------------------------------------------------------------------
 // `PatchCloud::from_tracks` (the array-fed counterpart of `from_reconstruction`)
 // ---------------------------------------------------------------------------
 

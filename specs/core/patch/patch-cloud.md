@@ -133,12 +133,44 @@ impl OrientedPatch {
     /// always front-facing (its normal `normalize(-d)` faces every observer;
     /// cheirality is enforced by the projection).
     pub fn is_front_facing(&self, cam_from_world: &RigidTransform) -> bool;
+
+    /// This patch re-centred in its own plane — on its tangent sphere for a
+    /// point at infinity — so that its centre projects exactly onto `keypoint`
+    /// in the given view. `w`, both axes and both half-extents are preserved;
+    /// only `center` moves, by an in-plane vector for a finite patch and to the
+    /// re-normalized direction `normalize(d + a·û + b·v̂)` at infinity, which
+    /// keeps `center` the unit direction rendering reads it as. `None` when the
+    /// keypoint's ray cannot meet the patch: parallel to the plane, meeting it
+    /// behind the camera under a ray-path model, or pointing away from a
+    /// direction patch.
+    pub fn anchored_at_keypoint(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<OrientedPatch>;
 }
 ```
 
 The `up_hint` resolves the one remaining degree of freedom (rotation about the
 normal). For visualization a stable, view-independent choice (e.g. world up, or
 the first observing camera's up axis) keeps a track's patches mutually aligned.
+
+`anchored_at_keypoint` is stated in world units on the patch's own axes, with no
+grid resolution in the signature, because the callers that need it are otherwise
+unrelated: keypoint localization scales the same offset into its search grid's
+steps (`seed_offset`), while the Explorer's per-observation patch tiles
+([point-track-detail.md](../../gui/point-track-detail.md)) warp straight through
+the returned frame so a track's tiles show the pixels that were aligned rather
+than the point's geometric projection. Both share one unprojection, so a seed and
+a rendered tile cannot disagree about where a keypoint puts the patch:
+
+```rust
+// Render an observation's tile through the frame that view sees the content in,
+// falling back to the stored geometry when the ray cannot meet the patch.
+let anchored = patch.anchored_at_keypoint(camera, &cam_from_world, [1024.3, 512.7]);
+let map = WarpMap::from_patch(anchored.as_ref().unwrap_or(&patch), camera, &cam_from_world, 64);
+```
 
 ## `PatchCloud`
 
@@ -355,10 +387,11 @@ its nature — a `w = 0` patch is first-class throughout:
   front-facing; cheirality is `R·d` forward), and vetting renders through the
   homogeneous `WarpMap` path.
 - **Keypoint localization** handles them: `project`, the grazing pre-filter,
-  `render_context`, and `seed_offset` all branch on `w`. For `w = 0` the keypoint
-  is the projection of the direction, the seed→offset inversion is angular
-  (`a = (ray·û)/(ray·d)`), and re-centring shifts the direction within its tangent
-  frame.
+  `render_context`, and the keypoint unprojection (`anchored_at_keypoint`, which
+  `seed_offset` scales into grid steps) all branch on `w`. For `w = 0` the
+  keypoint is the projection of the direction, the keypoint→offset inversion is
+  angular (`a = (ray·û)/(ray·d)`), and re-centring shifts the direction within its
+  tangent frame, re-normalizing so the centre stays a unit direction.
 - **Included by default.** Since every operation handles them, the binding
   defaults `exclude_points_at_infinity = false`, so a cloud built from a
   reconstruction carries its points at infinity. Operations that are finite by

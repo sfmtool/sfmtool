@@ -48,7 +48,7 @@ use crate::patch::normal_refine::{
 #[cfg(test)]
 use crate::patch::normal_refine::{weighted_moments_pub, PatchWindow, FLAT_NORM_SQ_EPS};
 use crate::reconstruction::SfmrReconstruction;
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 use rayon::prelude::*;
 
 // Public API, re-exported at the historical `keypoint_localize::` paths.
@@ -1195,8 +1195,16 @@ fn register_tail(
 }
 
 /// Unproject a starting keypoint onto the patch plane and express the in-plane
-/// offset of its hit point (from the patch centre) in patch-grid px. `None` when
-/// the ray is parallel to the plane.
+/// offset of its hit point (from the patch centre) in patch-grid px.
+///
+/// The world-space unprojection itself is
+/// [`OrientedPatch::anchored_at_keypoint`]'s — the same offset the renderer
+/// re-anchors a frame by — so a seed and a re-anchored frame can never disagree
+/// about where a keypoint puts the patch. `None` on each of that method's
+/// refusals (ray parallel to the plane, a ray-path hit behind the camera, a ray
+/// pointing away from a direction patch), and on a degenerate patch whose zero
+/// extent makes `wpp` zero: seeding at the projection (`acc = 0`) beats
+/// propagating a NaN/inf offset.
 pub(super) fn seed_offset(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
@@ -1204,48 +1212,10 @@ pub(super) fn seed_offset(
     wpp_u: f64,
     wpp_v: f64,
 ) -> Option<[f64; 2]> {
-    let ray_cam = view.camera.pixel_to_ray(keypoint[0], keypoint[1]);
-    let r = view.cam_from_world.to_rotation_matrix();
-    // World ray direction: R^T · ray_cam (camera-to-world rotation).
-    let dir = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
-    // A zero patch extent would make `wpp` zero; guard so a degenerate patch seeds
-    // at the projection (`acc = 0`) rather than propagating a NaN/inf offset.
     if wpp_u <= 0.0 || wpp_v <= 0.0 {
         return None;
     }
-    let off = if patch.w == 0.0 {
-        // Point at infinity: `center` is the unit direction `d`, the patch corner
-        // `d + a·û + b·v̂` is a direction, and the observed ray is parallel to it:
-        // `dir ∝ d + a·û + b·v̂`. With `û, v̂ ⊥ d`, `a = (dir·û)/(dir·d)` and
-        // `b = (dir·v̂)/(dir·d)`. `dir·d ≤ 0` means the ray points away from `d`.
-        let d = patch.center.coords;
-        let denom = dir.dot(&d);
-        if denom <= 1e-12 {
-            return None;
-        }
-        patch.u_axis * (dir.dot(&patch.u_axis) / denom)
-            + patch.v_axis * (dir.dot(&patch.v_axis) / denom)
-    } else {
-        // Finite point: intersect the ray with the patch plane and offset from the
-        // centre.
-        let cam_c = view.cam_from_world.inverse_translation_origin();
-        let n = patch.normal();
-        let denom = dir.dot(&n);
-        if denom.abs() < 1e-12 {
-            return None;
-        }
-        let s = (patch.center - cam_c).dot(&n) / denom;
-        // The plane must be hit FORWARD along the bearing. Under a perspective
-        // camera the upstream cheirality gates already guarantee `s > 0`, so
-        // this only ever bites on a ray-path model, where a periphery bearing
-        // can meet the plane behind the camera centre — a mirrored "hit" that
-        // is not an observation of this patch at all.
-        if view.camera.model.needs_ray_path() && s <= 0.0 {
-            return None;
-        }
-        let hit = cam_c + dir * s;
-        hit - patch.center
-    };
+    let off = patch.keypoint_plane_offset(view.camera, view.cam_from_world, keypoint)?;
     // Grid rows count downward from `+v̂` (they map to `−v_axis`), so the
     // v-grid coordinate negates the in-plane `v̂` component — the inverse of
     // `shifted_center`.

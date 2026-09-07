@@ -3,19 +3,21 @@
 
 //! Oriented-patch construction and texture rendering for the selected point.
 //!
-//! Three pieces, all specific to embedded-patches reconstructions:
+//! Four pieces, all specific to embedded-patches reconstructions:
 //! [`build_patch_frame`] recovers the point's oriented frame from the stored
 //! half-vectors (it gates the table's "Patch" column),
 //! [`build_stored_patch_texture`] turns the stored bitmap into the header tile,
-//! and [`PointTrackDetail::ensure_rendered_patch`] warps each observation's
-//! full-res image through that frame to produce the per-row tiles.
+//! [`render_frame`] re-anchors the point's frame on one observation's stored
+//! keypoint, and [`PointTrackDetail::ensure_rendered_patch`] warps that
+//! observation's full-res image through the re-anchored frame to produce the
+//! per-row tiles.
 
 use std::collections::HashMap;
 
 use nalgebra::Vector3;
 use ndarray::Axis;
 use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
-use sfmtool_core::camera::WarpMap;
+use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::SfmrReconstruction;
@@ -30,10 +32,17 @@ const PATCH_RES: u32 = 64;
 impl PointTrackDetail {
     /// Render the patch tile for one observation if not already cached: warp
     /// the observation's full-res image through the selected point's patch
-    /// frame (`WarpMap::from_patch` + `remap_bilinear`). A patch not visible in
-    /// this view warps to an all-black tile and is drawn as such. A missing
-    /// source image is not cached (the dock pre-caches full-res images, so this
-    /// only happens transiently).
+    /// frame (`WarpMap::from_patch` + `remap_bilinear`), **re-anchored so the
+    /// frame's centre projects onto this observation's stored keypoint**
+    /// ([`OrientedPatch::anchored_at_keypoint`]). The tiles of a photometrically
+    /// aligned track then show the same content whatever the point's geometric
+    /// residual is; that residual is the Error column's business, not the
+    /// tile's. The stored geometric frame is used unchanged when the
+    /// reconstruction carries no keypoints (a `sift_files` reconstruction, which
+    /// never reaches this column) or when the keypoint's ray cannot meet the
+    /// patch. A patch not visible in this view warps to an all-black tile and is
+    /// drawn as such. A missing source image is not cached (the dock pre-caches
+    /// full-res images, so this only happens transiently).
     pub(super) fn ensure_rendered_patch(
         &mut self,
         ctx: &egui::Context,
@@ -44,13 +53,14 @@ impl PointTrackDetail {
         if self.rendered_patch_textures.contains_key(&image_ref) {
             return;
         }
+        let img_idx = image_ref.index();
+        let keypoint = self.observation_keypoint(recon, img_idx);
         let Some(frame) = self.patch_frame.as_ref() else {
             return;
         };
         let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_ref()) else {
             return;
         };
-        let img_idx = image_ref.index();
         let image = &recon.images[img_idx];
         let camera = &recon.cameras[image.camera_index as usize];
         let q = image.quaternion_wxyz.quaternion();
@@ -62,7 +72,8 @@ impl PointTrackDetail {
                 image.translation_xyz.z,
             ],
         );
-        let map = WarpMap::from_patch(frame, camera, &cam_from_world, PATCH_RES);
+        let frame = render_frame(frame, camera, &cam_from_world, keypoint);
+        let map = WarpMap::from_patch(&frame, camera, &cam_from_world, PATCH_RES);
         let tile = remap_bilinear(src, &map);
         // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
         let (w, h) = (tile.width() as usize, tile.height() as usize);
@@ -79,6 +90,42 @@ impl PointTrackDetail {
         );
         self.rendered_patch_textures.insert(image_ref, texture);
     }
+
+    /// The keypoint this track stores in image `img_idx`, in source-image
+    /// pixels, or `None` when the reconstruction has no stored keypoints at all
+    /// (`sift_files`, where the prepared `feature_xy` is a SIFT feature position
+    /// rather than a keypoint of this patch) or the image is not in the track.
+    ///
+    /// A track should observe an image once; if one somehow observes it twice,
+    /// the first prepared row wins — two tiles cannot be drawn in one cell
+    /// anyway, and picking a row beats panicking on the surprise.
+    pub(super) fn observation_keypoint(
+        &self,
+        recon: &SfmrReconstruction,
+        img_idx: usize,
+    ) -> Option<[f64; 2]> {
+        recon.keypoints_xy()?;
+        self.observations
+            .iter()
+            .find(|obs| obs.image_index == img_idx)
+            .map(|obs| [obs.feature_xy[0] as f64, obs.feature_xy[1] as f64])
+    }
+}
+
+/// The frame one observation's tile is rendered through: the point's patch
+/// re-anchored so its centre projects onto `keypoint`, or the stored geometric
+/// frame when the observation has no keypoint to anchor on or the keypoint's ray
+/// cannot meet the patch (parallel to its plane, behind the camera under a
+/// ray-path model, or pointing away from a direction patch).
+pub(super) fn render_frame(
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    keypoint: Option<[f64; 2]>,
+) -> OrientedPatch {
+    keypoint
+        .and_then(|kp| frame.anchored_at_keypoint(camera, cam_from_world, kp))
+        .unwrap_or_else(|| frame.clone())
 }
 
 /// Build the selected point's oriented patch frame from the stored patch

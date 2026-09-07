@@ -152,7 +152,7 @@ Below the header, the panel shows a vertically scrollable table of observations
 | Column | Content |
 |--------|---------|
 | Thumbnail | Small thumbnail of the image (from `recon.thumbnails_y_x_rgb`), with a dot overlay at the feature position, tinted by that observation's reprojection error. |
-| Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
+| Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image, through the frame re-anchored on that observation's stored keypoint (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
 | Image | Image index in the reconstruction. |
 | Name | Image filename (truncated with leading `…/` for long paths). |
 | Feat # | Feature index within the image's SIFT file (or the observation index for embedded-keypoint reconstructions with no SIFT file). |
@@ -200,6 +200,21 @@ index. When the patch is not visible in that view it warps to an all-black tile,
 which is still inserted into the cache and drawn as such — the tile is always
 rendered (a future N/A flag may distinguish "not visible" from a genuinely dark
 surface). Stored bitmaps are **not** required for this column — only the frame.
+
+**The frame is re-anchored on the observation's stored keypoint**
+(`OrientedPatch::anchored_at_keypoint`, [patch-cloud.md](../core/patch/patch-cloud.md)):
+the patch centre is slid within its own plane — on its tangent sphere for a point
+at infinity — so that it projects exactly onto the keypoint this observation
+carries, and the tile is warped through that frame. This is a photometric
+comparison, so it is anchored at the pixels the keypoint localizer aligned rather
+than at the point's geometric projection: the tiles of a well-localized track then
+show the same content, and match each other, whatever discrepancy the geometry
+carries. That discrepancy is what the **Error** column reports, so reading a row
+means reading the tiles against each other and the number beside them — a
+column of matching tiles with a large error is a well-aligned patch whose 3D
+position or pose is off, not a bad match. The stored geometric frame is used
+unchanged when the reconstruction has no keypoints (`sift_files`, which never
+reaches this column) or when the keypoint's ray cannot meet the patch.
 
 **Shared full-resolution image cache**: the source pixels come from
 `AppState::full_res_cache`, a CPU-side cache of decoded full-res images (RGB

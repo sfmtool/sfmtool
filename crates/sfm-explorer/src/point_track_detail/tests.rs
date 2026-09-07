@@ -18,11 +18,16 @@
 
 use std::collections::HashMap;
 
+use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array4};
 use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::SfmrReconstruction;
 
+use super::patch::render_frame;
 use super::table::format_feature_size;
 use super::{PointTrackDetail, PointTrackDetailResponse};
 use crate::platform::ScrollInput;
@@ -86,6 +91,25 @@ fn with_content_hash(mut recon: SfmrReconstruction, hash: &str) -> SfmrReconstru
     recon
 }
 
+/// Attach patch half-vectors without touching the observation source, so the
+/// "Patch" column turns on while `keypoints_xy` stays absent — the `sift_files`
+/// shape the tile anchoring falls back for.
+fn with_patch_frames(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+    let n = recon.points.len();
+    // A patch spanning X and Z: the demo cameras ring the XY plane, so this is
+    // never exactly edge-on to all of them.
+    let mut u = Array2::<f32>::zeros((n, 3));
+    let mut v = Array2::<f32>::zeros((n, 3));
+    for i in 0..n {
+        u[[i, 0]] = 0.1;
+        v[[i, 2]] = 0.1;
+    }
+    recon.patch_u_halfvec_xyz = Some(u);
+    recon.patch_v_halfvec_xyz = Some(v);
+    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
+    recon
+}
+
 /// Swap the observation source to embedded keypoints and attach patch
 /// half-vectors, so the panel takes the `keypoints_xy` branch and the "Patch"
 /// column turns on.
@@ -95,12 +119,12 @@ fn with_content_hash(mut recon: SfmrReconstruction, hash: &str) -> SfmrReconstru
 /// back-projected ray meets the patch plane, so an arbitrary pixel puts the
 /// anchor behind the camera and every reported feature size silently
 /// degenerates to the `unwrap_or(0.0)` fallback.
-fn with_embedded_patches(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+fn with_embedded_patches(recon: SfmrReconstruction) -> SfmrReconstruction {
+    let mut recon = with_patch_frames(recon);
     let obs_count = recon.tracks.len();
-    let n = recon.points.len();
 
     let mut keypoints = Array2::<f32>::zeros((obs_count, 2));
-    for point_idx in 0..n {
+    for point_idx in 0..recon.points.len() {
         let start = recon.observation_offsets[point_idx];
         let position = recon.points[point_idx].position;
         for (k, obs) in recon.observations_for_point(point_idx).iter().enumerate() {
@@ -115,22 +139,54 @@ fn with_embedded_patches(mut recon: SfmrReconstruction) -> SfmrReconstruction {
         }
     }
 
-    // A patch spanning X and Z: the demo cameras ring the XY plane, so this is
-    // never exactly edge-on to all of them.
-    let mut u = Array2::<f32>::zeros((n, 3));
-    let mut v = Array2::<f32>::zeros((n, 3));
-    for i in 0..n {
-        u[[i, 0]] = 0.1;
-        v[[i, 2]] = 0.1;
-    }
-    recon.patch_u_halfvec_xyz = Some(u);
-    recon.patch_v_halfvec_xyz = Some(v);
-    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
     recon.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; recon.images.len()],
     };
     recon
+}
+
+/// Shift every stored keypoint by `delta` pixels, so the keypoints disagree
+/// with the points' geometric projections — the case the patch tiles have to
+/// follow the keypoint through.
+fn with_displaced_keypoints(mut recon: SfmrReconstruction, delta: [f32; 2]) -> SfmrReconstruction {
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations else {
+        panic!("the fixture must carry embedded keypoints");
+    };
+    for i in 0..keypoints_xy.nrows() {
+        keypoints_xy[[i, 0]] += delta[0];
+        keypoints_xy[[i, 1]] += delta[1];
+    }
+    recon
+}
+
+/// One image's camera model and `cam_from_world` pose, as the patch tile
+/// rendering reads them.
+fn view_of(recon: &SfmrReconstruction, img_idx: usize) -> (&CameraIntrinsics, RigidTransform) {
+    let image = &recon.images[img_idx];
+    let q = image.quaternion_wxyz.quaternion();
+    let pose = RigidTransform::from_wxyz_translation(
+        [q.w, q.i, q.j, q.k],
+        [
+            image.translation_xyz.x,
+            image.translation_xyz.y,
+            image.translation_xyz.z,
+        ],
+    );
+    (&recon.cameras[image.camera_index as usize], pose)
+}
+
+/// Where a frame's centre lands in a view — the pixel the tile is centred on.
+fn project_center(
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+) -> [f64; 2] {
+    let p = pose.transform_point_homogeneous(frame.center.coords, frame.w);
+    let (x, y) = camera
+        .ray_to_pixel([p.x, p.y, p.z])
+        .expect("the frame centre projects into the view");
+    [x, y]
 }
 
 /// Full-resolution sources for `indices`, sized to the reconstruction's own
@@ -704,6 +760,111 @@ fn a_missing_full_res_image_leaves_its_patch_tile_uncached() {
     // once the dock finishes pre-caching rather than being memoized as absent.
     assert_eq!(panel.rendered_patch_textures.len(), 1);
     assert!(panel.rendered_patch_textures.contains_key(&image(0)));
+}
+
+#[test]
+fn the_tile_frame_is_anchored_on_the_observations_own_keypoint() {
+    // Keypoints displaced from the points' projections: the geometric frame and
+    // the photometric one now disagree, which is exactly when the anchoring
+    // decides what the tiles show.
+    let recon = with_displaced_keypoints(
+        with_embedded_patches(SfmrReconstruction::demo(12)),
+        [6.0, -4.0],
+    );
+    let full_res = full_res_images(&recon, &[0, 1]);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+
+    run_frame(
+        &mut panel,
+        &ctx,
+        &recon,
+        Some(0),
+        &HashMap::new(),
+        &full_res,
+        Vec::new(),
+    );
+
+    let frame = panel.patch_frame.clone().expect("the point has a frame");
+    assert_eq!(panel.observations.len(), 2);
+    for obs in &panel.observations {
+        let keypoint = panel
+            .observation_keypoint(&recon, obs.image_index)
+            .expect("the row's stored keypoint");
+        assert_eq!(
+            keypoint,
+            [obs.feature_xy[0] as f64, obs.feature_xy[1] as f64],
+            "the row and the renderer must read the same keypoint"
+        );
+        let (camera, pose) = view_of(&recon, obs.image_index);
+
+        // The stored frame projects to the geometric position, which the
+        // displacement put several pixels off the keypoint — so this fixture
+        // really does distinguish the two anchors.
+        let geometric = project_center(&frame, camera, &pose);
+        let miss = (geometric[0] - keypoint[0]).hypot(geometric[1] - keypoint[1]);
+        assert!(miss > 1.0, "geometric frame missed by only {miss} px");
+
+        // The frame the tile is rendered through lands on the keypoint instead.
+        let anchored = render_frame(&frame, camera, &pose, Some(keypoint));
+        let centre = project_center(&anchored, camera, &pose);
+        assert!(
+            (centre[0] - keypoint[0]).abs() < 1e-6 && (centre[1] - keypoint[1]).abs() < 1e-6,
+            "anchored frame centred at {centre:?}, expected {keypoint:?}"
+        );
+    }
+    // And the tiles themselves still render, one per observed image.
+    assert_eq!(panel.rendered_patch_textures.len(), 2);
+}
+
+#[test]
+fn a_reconstruction_without_stored_keypoints_renders_the_geometric_frame() {
+    // Patch frames without embedded keypoints — a `sift_files` reconstruction.
+    // There is no keypoint to anchor on, so the tiles keep the stored frame.
+    let recon = with_patch_frames(SfmrReconstruction::demo(12));
+    let full_res = full_res_images(&recon, &[0, 1]);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+
+    run_frame(
+        &mut panel,
+        &ctx,
+        &recon,
+        Some(0),
+        &sift_cache(8, 16),
+        &full_res,
+        Vec::new(),
+    );
+
+    let frame = panel.patch_frame.clone().expect("the point has a frame");
+    for obs in &panel.observations {
+        assert_eq!(panel.observation_keypoint(&recon, obs.image_index), None);
+        let (camera, pose) = view_of(&recon, obs.image_index);
+        let rendered = render_frame(&frame, camera, &pose, None);
+        assert_eq!(rendered.center, frame.center);
+    }
+    assert_eq!(panel.rendered_patch_textures.len(), 2);
+}
+
+#[test]
+fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_frame() {
+    // A direction patch pointing behind the camera: no tangent-sphere shift can
+    // put it under any pixel, so anchoring refuses and the tile is rendered
+    // through the stored frame rather than not at all.
+    let recon = with_embedded_patches(SfmrReconstruction::demo(12));
+    let (camera, pose) = view_of(&recon, 0);
+    let behind = OrientedPatch::from_infinity_direction(
+        Point3::from(-(pose.to_rotation_matrix().transpose() * Vector3::new(0.0, 0.0, -1.0))),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.02, 0.02],
+    );
+
+    assert!(behind
+        .anchored_at_keypoint(camera, &pose, [320.0, 240.0])
+        .is_none());
+    let rendered = render_frame(&behind, camera, &pose, Some([320.0, 240.0]));
+    assert_eq!(rendered.center, behind.center);
+    assert_eq!(rendered.w, behind.w);
 }
 
 #[test]

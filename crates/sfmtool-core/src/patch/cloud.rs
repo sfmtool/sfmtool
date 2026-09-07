@@ -217,6 +217,123 @@ impl OrientedPatch {
         let cam_center = cam_from_world.inverse_translation_origin();
         (cam_center - self.center).dot(&self.normal()) > 0.0
     }
+
+    /// This patch re-centred in its own plane (or, for a point at infinity, on
+    /// its tangent sphere) so that its centre projects exactly onto `keypoint`
+    /// in the view described by `camera` and `cam_from_world`.
+    ///
+    /// `w`, both axes and both half-extents are preserved; only
+    /// [`center`](Self::center) moves — by an in-plane vector on `u_axis` /
+    /// `v_axis` for a finite patch, and to the re-normalized direction
+    /// `normalize(d + a·û + b·v̂)` for a point at infinity, which keeps `center`
+    /// the unit direction that rendering and projection read it as.
+    ///
+    /// The offset is world-space and expressed on the patch's own axes, with no
+    /// grid resolution in the signature, so any caller holding a view and a
+    /// measured keypoint gets the frame that view actually sees the patch
+    /// content in — a photometric renderer as much as a registration loop, which
+    /// would otherwise each carry their own copy of this unprojection.
+    ///
+    /// `None` when the keypoint's ray cannot meet the patch: parallel to the
+    /// plane, meeting it behind the camera under a ray-path (fisheye /
+    /// equirectangular) model, or pointing away from a direction patch.
+    ///
+    /// ```
+    /// # use sfmtool_core::camera::CameraIntrinsics;
+    /// # use sfmtool_core::geometry::RigidTransform;
+    /// # use sfmtool_core::patch::cloud::OrientedPatch;
+    /// # fn render_tile(
+    /// #     patch: &OrientedPatch,
+    /// #     camera: &CameraIntrinsics,
+    /// #     cam_from_world: &RigidTransform,
+    /// #     keypoint: [f64; 2],
+    /// # ) {
+    /// // Render this observation's tile through the keypoint-anchored frame,
+    /// // falling back to the geometric one when the ray cannot meet the patch.
+    /// let anchored = patch.anchored_at_keypoint(camera, cam_from_world, keypoint);
+    /// let frame = anchored.as_ref().unwrap_or(patch);
+    /// # let _ = frame;
+    /// # }
+    /// ```
+    pub fn anchored_at_keypoint(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<Self> {
+        let offset = self.keypoint_plane_offset(camera, cam_from_world, keypoint)?;
+        let mut out = self.clone();
+        out.center = self.center + offset;
+        if self.w == 0.0 {
+            // `center` is a *direction*, and `d + a·û + b·v̂` is that direction
+            // scaled by `1/(ray·d)`. Rendering (`WarpMap::from_patch`) and the
+            // half-extents are stated against a unit `d`, so restore the norm;
+            // the pixel it projects to is unchanged, since scaling a bearing
+            // does not move its ray.
+            let norm = out.center.coords.norm();
+            if norm <= 1e-12 {
+                return None;
+            }
+            out.center = Point3::from(out.center.coords / norm);
+        }
+        Some(out)
+    }
+
+    /// The world-space offset from `center` to where `keypoint`'s back-projected
+    /// ray meets this patch: the in-plane hit point for a finite patch, and
+    /// `a·û + b·v̂` with `a = (ray·û)/(ray·d)`, `b = (ray·v̂)/(ray·d)` for a
+    /// direction patch (`w == 0`), whose sum with `d` is the ray's own bearing.
+    ///
+    /// The shared body of [`Self::anchored_at_keypoint`] and the keypoint
+    /// localizer's seed offset, which scales it into patch-grid steps. `None` on
+    /// the three refusals `anchored_at_keypoint` documents.
+    pub(crate) fn keypoint_plane_offset(
+        &self,
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+    ) -> Option<Vector3<f64>> {
+        let ray_cam = camera.pixel_to_ray(keypoint[0], keypoint[1]);
+        let r = cam_from_world.to_rotation_matrix();
+        // World ray direction: R^T · ray_cam (camera-to-world rotation).
+        let dir = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
+        if self.w == 0.0 {
+            // Point at infinity: `center` is the unit direction `d`, the patch
+            // corner `d + a·û + b·v̂` is a direction, and the observed ray is
+            // parallel to it: `dir ∝ d + a·û + b·v̂`. With `û, v̂ ⊥ d`,
+            // `a = (dir·û)/(dir·d)` and `b = (dir·v̂)/(dir·d)`. `dir·d ≤ 0` means
+            // the ray points away from `d`.
+            let d = self.center.coords;
+            let denom = dir.dot(&d);
+            if denom <= 1e-12 {
+                return None;
+            }
+            Some(
+                self.u_axis * (dir.dot(&self.u_axis) / denom)
+                    + self.v_axis * (dir.dot(&self.v_axis) / denom),
+            )
+        } else {
+            // Finite point: intersect the ray with the patch plane and offset
+            // from the centre.
+            let cam_c = cam_from_world.inverse_translation_origin();
+            let n = self.normal();
+            let denom = dir.dot(&n);
+            if denom.abs() < 1e-12 {
+                return None;
+            }
+            let s = (self.center - cam_c).dot(&n) / denom;
+            // The plane must be hit FORWARD along the bearing. Under a
+            // perspective camera the caller's cheirality gates already guarantee
+            // `s > 0`, so this only ever bites on a ray-path model, where a
+            // periphery bearing can meet the plane behind the camera centre — a
+            // mirrored "hit" that is not an observation of this patch at all.
+            if camera.model.needs_ray_path() && s <= 0.0 {
+                return None;
+            }
+            let hit = cam_c + dir * s;
+            Some(hit - self.center)
+        }
+    }
 }
 
 fn normalize_or(v: Vector3<f64>, fallback: Vector3<f64>) -> Vector3<f64> {
