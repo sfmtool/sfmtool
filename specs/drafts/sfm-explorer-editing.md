@@ -91,9 +91,12 @@ Files into: `specs/core/reconstruction/shared-columns.md` (new).
 
 ### Change detection by identity
 
-A node today carries one `needs_upload` boolean and the app re-uploads points,
-thumbnails and patches together when it is set; a transform change is noticed
-through a separate epoch counter. With shared columns the upload phase keeps,
+The 3D viewport draws from GPU buffers the app fills from the node's
+reconstruction: the point instance buffer, the frustum and image-quad
+geometry, the thumbnail atlas, and the patch instances with their bitmap
+atlas. A node today carries one `needs_upload` boolean and, when it is set,
+the app's per-frame upload phase rebuilds all of those from the reconstruction
+at once; a transform change is noticed through a separate epoch counter. With shared columns the upload phase keeps,
 per GPU resource, the identity of the column it last uploaded from, and
 compares identities each frame. Undoing a point edit re-uploads the point
 buffer and nothing else; a pose edit re-uploads frustums; undoing to a version
