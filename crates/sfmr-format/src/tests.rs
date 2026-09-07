@@ -1438,6 +1438,68 @@ fn test_point_constraints_read_through_a_permuted_legend() {
 }
 
 #[test]
+fn test_point_constraints_read_through_a_subset_legend() {
+    // A legend names only the constraints its file uses: a file with no ranged
+    // point may carry `["held", "free"]`, two codes, and the reader still
+    // normalises onto the canonical numbering.
+    let dir = std::env::temp_dir().join("sfmr_test_subset_constraint_legend");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("good.sfmr");
+    let mut data = make_test_data();
+    data.point_constraints = Some(Array1::from_vec(vec![
+        POINT_CONSTRAINT_FREE,
+        POINT_CONSTRAINT_HELD,
+        POINT_CONSTRAINT_FREE,
+        POINT_CONSTRAINT_HELD,
+        POINT_CONSTRAINT_FREE,
+    ]));
+    data.constraint_distances = Some(Array1::from_vec(vec![f64::NAN; 5]));
+    data.constraint_reference_images = Some(Array1::from_vec(vec![NO_REFERENCE_IMAGE; 5]));
+    write_sfmr(&good, &mut data).unwrap();
+
+    // held = 0, free = 1 in this file; ranged has no code at all.
+    let subset = [PointConstraint::Held, PointConstraint::Free];
+    let subset_path = dir.join("subset.sfmr");
+    rewrite_entries(&good, &subset_path, |name, raw| {
+        if name == "points3d/metadata.json.zst" {
+            let mut json: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            json.as_object_mut().unwrap().insert(
+                "point_constraint_names".into(),
+                serde_json::json!(subset.map(|k| k.name())),
+            );
+            Some(serde_json::to_vec(&json).unwrap())
+        } else if name == "points3d/point_constraints.5.uint8.zst" {
+            Some(
+                raw.iter()
+                    .map(|&code| {
+                        let constraint = PointConstraint::ALL[code as usize];
+                        subset.iter().position(|&k| k == constraint).unwrap() as u8
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        }
+    });
+
+    let loaded = read_sfmr(&subset_path).unwrap();
+    assert_eq!(
+        loaded.point_constraints.unwrap().to_vec(),
+        vec![
+            POINT_CONSTRAINT_FREE,
+            POINT_CONSTRAINT_HELD,
+            POINT_CONSTRAINT_FREE,
+            POINT_CONSTRAINT_HELD,
+            POINT_CONSTRAINT_FREE,
+        ]
+    );
+    verify_sfmr(&subset_path).unwrap();
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn test_malformed_point_constraint_legend_rejected() {
     // Every rule the legend is held to, applied to the archive bytes of a file
     // that was valid when written -- which is where a hand-edited or

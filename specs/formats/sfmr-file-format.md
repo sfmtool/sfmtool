@@ -1060,9 +1060,11 @@ for what the kernel does with them.
   format defines.
 - **Canonical order**: a writer always states the whole legend in the order
   `["free", "ranged", "held"]`, so a file this tool writes stores `0` free, `1`
-  ranged, `2` held. A reader accepts any legend and **normalises the column onto
-  that canonical order as it loads**, so a file's own numbering stops at the I/O
-  boundary and everything above it holds one numbering.
+  ranged, `2` held. A reader accepts any legend, in any order and naming any
+  subset of the defined names (a file with no ranged point may carry
+  `["held", "free"]`), and **normalises the column onto the canonical order as
+  it loads**, so a file's own numbering stops at the I/O boundary and
+  everything above it holds one numbering.
 
 ##### `points3d/constraint_distances.{N}.float64.zst`
 
@@ -1096,7 +1098,8 @@ and a reader of an absent set treats every point as free, which is what every
 file below version 7 is. Beyond the per-column formats above, a valid set
 satisfies:
 
-- the legend is present, is a list of names, and names at least one constraint;
+- the legend is present, is a list of names, and names at least one constraint
+  (it need not name all three);
 - every name in the legend is one this format defines (`free`, `ranged`,
   `held`), and no name appears twice -- a repeat would give one constraint two
   codes;
