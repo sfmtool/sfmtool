@@ -117,27 +117,57 @@ next step if the between-round rule turns out to lag the poses.
 ## Ranged points: a direction at a distance
 
 A ranged point is `X = O + r · d`, with `r` fixed by the caller and `d` the
-parameter. The reference `O` is one of: a camera index (the point's distance is
-measured from that camera's centre at its current pose, so `O` moves with the
-solve), or a world point (a fixed coordinate). `r = ∞` needs no reference and
-the point degenerates to a direction.
+parameter. `r = ∞` needs no reference and the point degenerates to a
+direction. For a finite `r` the reference `O` is a point the solve knows the
+position of *relative to the cameras*, which in an adjustment whose cameras
+all move means a function of the camera poses:
+
+- **A camera's centre**, `O = C_k = −R_kᵀ · t_k`: the distance is measured
+  from camera `k` wherever the solve puts it. This is the form for "the
+  landmark is 1045 m from where the photograph was taken".
+- **The mean of a set of camera centres**, `O = (1/|K|) · Σ_{k∈K} C_k`: the
+  distance from a capture station whose frames sit within a few metres of each
+  other, where no single frame is the survey point.
+
+A fixed world coordinate is deliberately not a reference. The adjustment has
+gauge freedom, and a range measured from a point that the cameras are free to
+move away from constrains nothing about the cameras: it is a held point with
+its direction released, meaningful only if some other constraint has already
+pinned the frame. When the frame is pinned (a held point, or the caller's own
+gauge fixing), the caller can express the same thing as a camera-referenced
+range, so the kernel offers only the two forms above.
 
 Residual and derivatives, for a finite `r`:
 
-- `uv = ray_to_pixel(R_i · (O + r · d) + t_i)`, the finite projection with the
-  point's position substituted.
-- **Parameters.** `d` perturbs in its 2-DOF tangent plane exactly as a
-  direction does, `d ← normalize(d + B(d) · δ)`, and the point's Jacobian block
-  is `r · J_X · B(d)` where `J_X` is the finite point's position Jacobian; its
-  Schur block is 2×2.
-- **Camera blocks.** The rotation and translation blocks are those of a finite
-  point at `X`. When `O` is camera `k`'s centre, `X` also depends on camera
-  `k`'s pose, and that dependence is accumulated into camera `k`'s block for
-  every observation of the point, including camera `k`'s own. A world-point `O`
-  adds nothing.
+- `uv = ray_to_pixel(R_i · X + t_i)` with `X = O + r · d`, the finite
+  projection with the point's position substituted.
+- **Point block.** `d` perturbs in its 2-DOF tangent plane exactly as a
+  direction does, `d ← normalize(d + B(d) · δ)`, and the point's Jacobian
+  block is `r · J_X · B(d)` where `J_X = ∂uv/∂X` is the finite point's
+  position Jacobian; its Schur block is 2×2.
+- **Observing camera's block.** The rotation and translation blocks of a
+  finite point at `X`, unchanged.
+- **Reference cameras' blocks.** `X` depends on every pose in the reference
+  set through `O`, so each observation of the point also contributes
+  `J_X · ∂O/∂(pose_k)` to camera `k`'s block for every `k ∈ K`, with
+  `∂C_k/∂t_k = −R_kᵀ` and `∂C_k/∂ω_k` the derivative of `−R_kᵀ · t_k` under
+  the kernel's rotation perturbation, scaled by `1/|K|` for a mean reference.
+  When the observing camera is itself in `K`, both contributions land in the
+  same block and add. After the Schur complement over the point's 2×2 block,
+  the reduced camera system gains couplings between every observing camera and
+  every reference camera; the reduced system is already dense and solved by a
+  generic factorization, so this changes what is accumulated, not how it is
+  solved.
 - **At `r = ∞`** every one of these reduces to the standing spec's direction
-  rows: the position Jacobian scaled by `r` becomes the direction's tangent
-  Jacobian in the limit, and the translation block is zero.
+  rows: `r · J_X · B(d)` becomes the direction's tangent Jacobian in the
+  limit, the translation block and the reference blocks vanish.
+
+Because `r` is held in the solve's own units, ranged points carry metric
+scale into an adjustment that otherwise has none: several ranged points on
+one reference set fix the scale gauge, and a range that disagrees with the
+caller's other scale evidence (a walk length, say) shows up as residual
+rather than being absorbed. That is the intended behaviour: a surveyed range
+is better scale evidence than a paced baseline.
 
 Re-estimation between rounds keeps `r` and re-solves `d`: at infinite range
 the normalized mean of the back-rotated rays, as today; at a finite range the
