@@ -914,6 +914,16 @@ already normalised.
 }
 ```
 
+A file that does carry constraints states the legend their codes index beside
+the flag:
+
+```json
+{
+  "has_point_constraints": true,
+  "point_constraint_names": ["free", "ranged", "held"]
+}
+```
+
 **Field descriptions:**
 - `point_count`: Number of 3D points.
 - `has_normals`: (version 3+) Whether the optional `normals_xyz` array is
@@ -926,6 +936,12 @@ already normalised.
   `constraint_reference_images`) is present -- one flag for
   all three, which appear together. See
   [Per-point constraints](#per-point-constraints-optional-version-7).
+- `point_constraint_names`: (version 7+) The legend `point_constraints` indexes,
+  one name per code in code order. Present exactly when `has_point_constraints`
+  is `true`. A writer always states the whole list in the canonical order
+  `["free", "ranged", "held"]`; a reader accepts any legend and normalises the
+  column onto that order. See
+  [Per-point constraints](#per-point-constraints-optional-version-7).
 - `has_uv_frames`: (version 3+) Whether the optional per-point patch
   frame (`patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`) is present. See
   [Per-point patch frame](#per-point-patch-frame-optional-version-3).
@@ -935,7 +951,8 @@ already normalised.
 
 A version-3 file includes all four original flags (`false` / `null` when the
 data is absent), a version-5 file may additionally include
-`has_normal_confidence`, and a version-7 file `has_point_constraints`. A
+`has_normal_confidence`, and a version-7 file `has_point_constraints` with the
+`point_constraint_names` that flag promises whenever it is `true`. A
 missing flag defaults to `false` (a missing `has_normals` means no
 normals) — but since versions 1 and 2 carry none of these keys yet always
 include normals, an upgraded version 1 or 2 file is read with `has_normals` as
@@ -1033,10 +1050,19 @@ for what the kernel does with them.
 
 - **Shape**: `(N,)` where N = point_count
 - **Data type**: `uint8`
-- **Format**: `0` **free** -- the solve owns the point outright. `1` **ranged**
-  -- the caller owns the distance in `constraint_distances` and the solve owns
-  the direction.
-  `2` **held** -- the caller owns the whole coordinate. No other value is valid.
+- **Format**: an index into `points3d/metadata.json`'s `point_constraint_names`,
+  which is the file's own legend for this column. A code past the end of that
+  list is invalid; nothing else about the numbering is fixed by this format, so
+  a reader resolves every code through the list the file carries.
+- **Names**: `free` -- the solve owns the point outright. `ranged` -- the caller
+  owns the distance in `constraint_distances` and the solve owns the direction.
+  `held` -- the caller owns the whole coordinate. These are the only names this
+  format defines.
+- **Canonical order**: a writer always states the whole legend in the order
+  `["free", "ranged", "held"]`, so a file this tool writes stores `0` free, `1`
+  ranged, `2` held. A reader accepts any legend and **normalises the column onto
+  that canonical order as it loads**, so a file's own numbering stops at the I/O
+  boundary and everything above it holds one numbering.
 
 ##### `points3d/constraint_distances.{N}.float64.zst`
 
@@ -1063,12 +1089,19 @@ for what the kernel does with them.
   call-time construct of the kernel, not stored state.
 
 **Presence and validity.** The three columns appear together or not at all, all
-flagged by `has_point_constraints`. A set in which every point is free says
-exactly what carrying no set says, so a writer emits nothing in that case and a
-reader of an absent set treats every point as free, which is what every file
-below version 7 is. Beyond the per-column formats above, a valid set satisfies:
+flagged by `has_point_constraints`, and that same flag promises the
+`point_constraint_names` legend beside them. A set in which every point is free
+says exactly what carrying no set says, so a writer emits nothing in that case
+and a reader of an absent set treats every point as free, which is what every
+file below version 7 is. Beyond the per-column formats above, a valid set
+satisfies:
 
-- every `point_constraints` row is one of `0`, `1`, `2`;
+- the legend is present, is a list of names, and names at least one constraint;
+- every name in the legend is one this format defines (`free`, `ranged`,
+  `held`), and no name appears twice -- a repeat would give one constraint two
+  codes;
+- every `point_constraints` row is below the legend's length, and so names one
+  of its entries;
 - a free or held row has `constraint_distances = NaN` and
   `constraint_reference_images = 0xFFFFFFFF`;
 - a ranged row has a strictly positive `constraint_distances`, and a finite one
@@ -1079,7 +1112,31 @@ below version 7 is. Beyond the per-column formats above, a valid set satisfies:
   infinite -- a ranged point is a direction precisely at an infinite distance.
 
 A reader and a writer both enforce all of these, and `verify_sfmr` re-reads them
-off the archive bytes.
+off the archive bytes. The legend lives in `points3d/metadata.json`, which is
+already hashed into `points3d_xxh128` in its own lexicographic slot, so it needs
+no hash slot of its own: an edited legend changes the section digest exactly as
+an edited column does.
+
+**A legend-indexed column is how this format enumerates.** The camera model is a
+string on disk (`"model": "PINHOLE"` in `cameras/metadata.json`) because a
+one-per-file field costs nothing to spell out; a per-element enumeration cannot
+afford that, since a million points would carry a million strings. So it is
+stored the other way round: the elements carry small integers and the section's
+`metadata.json` carries the legend those integers index, which is one string per
+name for the whole file. `point_constraints` and `point_constraint_names` are
+the first pair shaped this way, and any per-element enumeration added later
+follows them: a numeric column, a `*_names` legend in the same section's
+metadata, present exactly when the column is, every code resolved through the
+file's own list rather than a numbering a reader assumes, and the column
+normalised onto the canonical order at load so one numbering reaches consumers.
+
+**In the bindings.** `read_sfmr` hands back `point_constraints` as a `uint8`
+array in the canonical numbering and `write_sfmr` takes it the same way -- the
+legend is a file-level concern, and neither the dict nor
+`SfmrReconstruction.point_constraints` carries one.
+`sfmtool._sfmtool.io.POINT_CONSTRAINT_NAMES` is that canonical legend as a tuple
+of names, so a consumer labels a code with `POINT_CONSTRAINT_NAMES[code]` rather
+than hard-coding the numbers.
 
 **What an edit does to them.** The columns are per-point state, so every pass
 that reshapes a reconstruction has to carry them, and the rules follow from what
@@ -1091,9 +1148,8 @@ each column claims:
 - **Dropping or reindexing images** moves every `constraint_reference_images`
   row onto the new
   image indices. A point whose reference image is gone becomes **free** --
-  constraint
-  `0`, `NaN` distance, `0xFFFFFFFF` reference: the distance was a statement
-  about that
+  the `free` constraint, `NaN` distance, `0xFFFFFFFF` reference: the distance
+  was a statement about that
   image's camera centre, and a reconstruction that no longer holds the image
   cannot
   honour it. Keeping a distance measured from nothing would hand the next
@@ -1195,7 +1251,8 @@ Optional per-point data has five independent pieces, each flagged in
   `normal_confidence` array.
 - **Constraints** (`has_point_constraints`, version 7+) — `point_constraints`,
   `constraint_distances` and `constraint_reference_images` (all three appear
-  together; one alone is half a statement).
+  together; one alone is half a statement), plus the `point_constraint_names`
+  legend the first of them indexes.
 - **Patch frame** (`has_uv_frames`, version 3+) — `patch_u_halfvec_xyz` and
   `patch_v_halfvec_xyz` (the two always appear together; one without the other
   is not a frame).
@@ -1888,11 +1945,13 @@ metadata keys and the new `tracks/metadata.json` `has_*` keys.
 | Change | Detail |
 |---|---|
 | `points3d/point_constraints`, `points3d/constraint_distances`, `points3d/constraint_reference_images` | New **optional** per-point triple, flagged together by `has_point_constraints` in `points3d/metadata.json` and folded into `points3d_xxh128`. See [Per-point constraints](#per-point-constraints-optional-version-7). |
+| `points3d/metadata.json` `point_constraint_names` | New key, present exactly when `has_point_constraints` is `true`: the legend `points3d/point_constraints` indexes. It rides inside `metadata.json`, which is already hashed, so no hash slot changes. |
 
 Migration is mechanical and lossless in both directions. A version 6 file carries
 neither the flag nor the arrays, and reads as every point free; a version 7 file
-whose points are all free writes no arrays and is byte-identical in the points3d
-section to the version 6 file it came from apart from the added `false` flag.
+whose points are all free writes no arrays, no legend, and is byte-identical in
+the points3d section to the version 6 file it came from apart from the added
+`false` flag.
 Nothing else moves, and no existing array changes meaning: `positions_xyzw` in
 particular keeps `w = 0` as "the estimate is a direction" and nothing more.
 
@@ -1942,7 +2001,8 @@ its camera.
   `points3d/constraint_distances` and `points3d/constraint_reference_images`:
   what a bundle adjustment owns
   of each point and what a caller-owned distance is measured from, flagged
-  together by `has_point_constraints`.
+  together by `has_point_constraints` and read through the
+  `point_constraint_names` legend beside it.
 - **Version 6**: Optional per-observation `tracks/observation_confidence` —
   photometric sharpness of an observation relative to its track's consensus,
   flagged by `has_observation_confidence`.

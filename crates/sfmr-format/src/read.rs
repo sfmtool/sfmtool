@@ -302,7 +302,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         None
     };
 
-    // Optional per-point constraint triple (version 7+), flagged as one set.
+    // Optional per-point constraint triple (version 7+), flagged as one set and
+    // read through the same metadata entry's `point_constraint_names` legend.
     // Absent means every point is free, so an older file — which carries
     // neither the flag nor the arrays — simply reads as `None`.
     let (point_constraints, constraint_distances, constraint_reference_images) = if points3d_meta
@@ -310,6 +311,8 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
+        let legend =
+            read_point_constraint_legend(&points3d_meta).map_err(SfmrError::InvalidFormat)?;
         let point_constraints: Vec<u8> = read_binary_array(
             &mut archive,
             &entries::points3d_point_constraints(point_count),
@@ -325,8 +328,14 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
             &entries::points3d_constraint_reference_images(point_count),
             point_count,
         )?;
+        // The legend settles what each code means; the triple's own rules are
+        // then checked on the constraints it named. The column is handed back on
+        // the canonical numbering rather than the file's, so a consumer reads it
+        // with the constants and the file's legend stops at this boundary.
+        let resolved = resolve_point_constraints(&point_constraints, &legend)
+            .map_err(SfmrError::InvalidFormat)?;
         validate_point_constraints(
-            Some(&point_constraints),
+            Some(&resolved),
             Some(&constraint_distances),
             Some(&constraint_reference_images),
             &positions_xyzw,
@@ -335,7 +344,9 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
         )
         .map_err(SfmrError::InvalidFormat)?;
         (
-            Some(Array1::from_vec(point_constraints)),
+            Some(Array1::from_vec(
+                resolved.iter().map(|k| k.code()).collect(),
+            )),
             Some(Array1::from_vec(constraint_distances)),
             Some(Array1::from_vec(constraint_reference_images)),
         )

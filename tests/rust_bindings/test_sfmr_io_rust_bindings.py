@@ -13,7 +13,12 @@ frame.
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.io import read_sfmr, verify_sfmr, write_sfmr
+from sfmtool._sfmtool.io import (
+    POINT_CONSTRAINT_NAMES,
+    read_sfmr,
+    verify_sfmr,
+    write_sfmr,
+)
 from sfmtool._sfmtool.patches import PatchCloud
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
@@ -210,6 +215,8 @@ class TestPatchColumnValidation:
 #    /constraint_distances, /constraint_reference_images) ──────────────────
 
 _NO_REFERENCE_IMAGE = np.uint32(0xFFFFFFFF)
+# The column is numeric, and this is the numbering every column reaching Python
+# is on -- the module constant is what a consumer labels a code with.
 _FREE, _RANGED, _HELD = 0, 1, 2
 
 
@@ -240,7 +247,7 @@ class TestPointConstraints:
         # `read_sfmr` unchanged, and the file still verifies.
         data = read_sfmr(seoul_bull_sfmr_only)
         assert data["point_constraints"] is None
-        (constraints, distance, reference), _held, ranged = _constraint_columns(
+        (constraints, distance, reference), held, ranged = _constraint_columns(
             data["positions_xyzw"], len(data["image_names"])
         )
         data["point_constraints"] = constraints
@@ -249,11 +256,20 @@ class TestPointConstraints:
 
         out = tmp_path / "constrained.sfmr"
         write_sfmr(out, data, skip_recompute_depth_stats=True)
-        _assert_columns_identical(data, read_sfmr(out))
+        reloaded = read_sfmr(out)
+        _assert_columns_identical(data, reloaded)
 
         valid, errors = verify_sfmr(out)
         assert valid, errors
-        assert read_sfmr(out)["constraint_distances"][ranged] == 12.5
+        assert reloaded["constraint_distances"][ranged] == 12.5
+
+        # The column stays a uint8 array, and the module constant is what names
+        # its codes.
+        codes = reloaded["point_constraints"]
+        assert codes.dtype == np.uint8
+        assert POINT_CONSTRAINT_NAMES == ("free", "ranged", "held")
+        assert POINT_CONSTRAINT_NAMES[codes[held]] == "held"
+        assert POINT_CONSTRAINT_NAMES[codes[ranged]] == "ranged"
 
     def test_all_free_columns_are_dropped(self, seoul_bull_sfmr_only, tmp_path):
         # An all-free set says what carrying no set says, so it is not written.
@@ -345,3 +361,19 @@ class TestPointConstraints:
             recon.clone_with_changes(
                 point_constraints=np.zeros(recon.point_count, dtype=np.uint8)
             )
+
+    def test_a_code_outside_the_numbering_is_refused(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        # The codes are the canonical numbering, so a column carrying anything
+        # else has no name and is not written.
+        data = read_sfmr(seoul_bull_sfmr_only)
+        (constraints, distance, reference), _held, _ranged = _constraint_columns(
+            data["positions_xyzw"], len(data["image_names"])
+        )
+        constraints[0] = len(POINT_CONSTRAINT_NAMES)
+        data["point_constraints"] = constraints
+        data["constraint_distances"] = distance
+        data["constraint_reference_images"] = reference
+        with pytest.raises(OSError, match="its legend gives"):
+            write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)

@@ -266,11 +266,25 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
     // The per-point constraint triple is optional from version 7 (default
-    // `false`), and the three columns are flagged together.
+    // `false`), and the three columns are flagged together. The flag also
+    // promises the `point_constraint_names` legend the codes index; a file that
+    // sets the flag without a readable legend says nothing about its own column,
+    // which is an error rather than a reason to guess a numbering.
     let has_point_constraints = points3d_meta
         .get("has_point_constraints")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let point_constraint_legend = if has_point_constraints {
+        match read_point_constraint_legend(&points3d_meta) {
+            Ok(legend) => Some(legend),
+            Err(e) => {
+                errors.push(e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let mut points3d_hasher = Xxh3::new();
 
@@ -405,9 +419,12 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     // The rules are the reader's and the writer's, stated once in
     // `validate_point_constraints`; here they are re-read straight off the
     // archive bytes, positions included, so a hand-edited file is caught.
-    if let (Some(constraints), Some(distances), Some(reference_images)) =
-        (&constraints_raw, &distances_raw, &reference_images_raw)
-    {
+    if let (Some(constraints), Some(legend), Some(distances), Some(reference_images)) = (
+        &constraints_raw,
+        &point_constraint_legend,
+        &distances_raw,
+        &reference_images_raw,
+    ) {
         let expect = |name: &str, got: usize, row: usize| {
             (got == point_count * row).then_some(()).ok_or(format!(
                 "points3d/{name} byte length {got} != point_count {point_count} * {row}"
@@ -435,8 +452,9 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
                     .iter()
                     .map(|b| f64::from_le_bytes(*b))
                     .collect();
+                let resolved = resolve_point_constraints(constraints, legend)?;
                 validate_point_constraints(
-                    Some(constraints),
+                    Some(&resolved),
                     Some(&distances),
                     Some(raw_to_u32(reference_images).as_ref()),
                     &positions,

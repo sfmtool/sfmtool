@@ -115,6 +115,10 @@ impl Point3D {
 /// [`NO_REFERENCE_IMAGE`]) rather than a Rust enum, so this
 /// layer neither re-encodes nor re-validates what the file states; the kernel's
 /// `PointConstraints` is where a caller builds the adjustment's own typed form.
+/// A file may number the constraints differently and states its own legend for
+/// them, but that stops at the format boundary: the reader resolves a stored
+/// code through the file's legend and hands back these codes, so what this layer
+/// holds is always the canonical numbering.
 ///
 /// [free]: POINT_CONSTRAINT_FREE
 #[derive(Debug, Clone, PartialEq)]

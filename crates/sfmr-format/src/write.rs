@@ -477,9 +477,11 @@ pub fn write_sfmr_with_options(
         )?;
     }
 
-    // points3d/metadata.json (records which optional per-point arrays are present)
+    // points3d/metadata.json (records which optional per-point arrays are
+    // present, and -- when the constraint columns are -- the legend their codes
+    // index).
     let patch_bitmap_resolution = data.patch_bitmaps_y_x_rgba.as_ref().map(|b| b.shape()[1]);
-    let points3d_meta = serde_json::json!({
+    let mut points3d_meta = serde_json::json!({
         "point_count": point_count,
         "has_normals": normals_xyz.is_some(),
         "has_normal_confidence": data.normal_confidence.is_some(),
@@ -488,6 +490,12 @@ pub fn write_sfmr_with_options(
         "has_patch_bitmaps": data.patch_bitmaps_y_x_rgba.is_some(),
         "patch_bitmap_resolution": patch_bitmap_resolution,
     });
+    if constraints.is_some() {
+        points3d_meta.as_object_mut().unwrap().insert(
+            "point_constraint_names".into(),
+            serde_json::json!(PointConstraint::NAMES),
+        );
+    }
     let bytes = write_json_entry(
         &mut zip,
         entries::points3d_metadata(),
@@ -709,11 +717,16 @@ type PointConstraintSlices<'a> = (&'a [u8], &'a [f64], &'a [u32]);
 /// The per-point constraint triple to write, or `None` when the file carries
 /// none.
 ///
-/// Validates the triple through [`validate_point_constraints`] and then drops it
-/// when every point is free, which is the same statement as its absence: a
-/// caller that never constrained a point writes the archive a pre-version-7
-/// writer would have. The slices borrow `data`, so the caller writes them
-/// directly.
+/// The column arrives on the canonical numbering -- what a reader hands back,
+/// and what this writer states as the file's `point_constraint_names` -- so
+/// resolving it through [`PointConstraint::ALL`] both refuses a code outside
+/// that numbering and gives [`validate_point_constraints`] the constraints to
+/// hold the rest of the triple to.
+///
+/// The triple is then dropped when every point is free, which is the same
+/// statement as its absence: a caller that never constrained a point writes the
+/// archive a pre-version-7 writer would have. The slices borrow `data`, so the
+/// caller writes them directly.
 fn point_constraints_to_write(
     data: &SfmrData,
     point_count: usize,
@@ -723,6 +736,10 @@ fn point_constraints_to_write(
         .point_constraints
         .as_ref()
         .map(|a| a.as_slice().unwrap());
+    let resolved = point_constraints
+        .map(|c| resolve_point_constraints(c, &PointConstraint::ALL))
+        .transpose()
+        .map_err(SfmrError::InvalidFormat)?;
     let constraint_distances = data
         .constraint_distances
         .as_ref()
@@ -732,7 +749,7 @@ fn point_constraints_to_write(
         .as_ref()
         .map(|a| a.as_slice().unwrap());
     validate_point_constraints(
-        point_constraints,
+        resolved.as_deref(),
         constraint_distances,
         constraint_reference_images,
         &data.positions_xyzw,

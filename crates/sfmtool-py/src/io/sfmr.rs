@@ -166,7 +166,10 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
         None => dict.set_item("normal_confidence", py.None())?,
     }
     // The per-point constraint triple: present together or absent together,
-    // absent meaning every point is free.
+    // absent meaning every point is free. The column is numeric -- a
+    // million-point reconstruction is not a million strings -- and in the
+    // canonical numbering `POINT_CONSTRAINT_NAMES` labels, whatever legend the
+    // file itself stored it on.
     match data.point_constraints {
         Some(k) => dict.set_item("point_constraints", k.into_pyarray(py))?,
         None => dict.set_item("point_constraints", py.None())?,
@@ -518,6 +521,13 @@ pub fn verify_sfmr(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // The name of each `point_constraints` code, in code order, so a consumer
+    // can label a column without hard-coding the numbering: a code indexes a
+    // legend on disk, and this is the legend every column reaching Python is on.
+    m.add(
+        "POINT_CONSTRAINT_NAMES",
+        pyo3::types::PyTuple::new(m.py(), sfmr_format::PointConstraint::NAMES)?,
+    )?;
     m.add_function(wrap_pyfunction!(read_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(read_sfmr_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(read_sfmr_content_hash, m)?)?;

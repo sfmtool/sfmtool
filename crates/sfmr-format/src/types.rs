@@ -213,18 +213,156 @@ pub fn validate_keypoints(
     Ok(())
 }
 
-/// `points3d/point_constraints` code: the solve owns the point outright.
-pub const POINT_CONSTRAINT_FREE: u8 = 0;
-/// `points3d/point_constraints` code: the caller owns the point's distance from
-/// a reference image and the solve owns its direction.
-pub const POINT_CONSTRAINT_RANGED: u8 = 1;
-/// `points3d/point_constraints` code: the caller owns the point's coordinate
-/// outright.
-pub const POINT_CONSTRAINT_HELD: u8 = 2;
+/// What a solve owns of one point -- the meaning behind a
+/// `points3d/point_constraints` code.
+///
+/// The stored column is numeric, and a number is only as self-describing as the
+/// legend beside it: `points3d/metadata.json` carries `point_constraint_names`,
+/// and a stored code is an index into *that* list rather than a number the file
+/// format fixes. The legend is a file-level concern, though: a reader resolves
+/// every code through it and hands back the **canonical** numbering this enum
+/// defines ([`POINT_CONSTRAINT_FREE`], [`POINT_CONSTRAINT_RANGED`],
+/// [`POINT_CONSTRAINT_HELD`]), and a writer states that same canonical legend.
+/// So in memory there is exactly one numbering, and a consumer of
+/// [`SfmrData::point_constraints`] reads it with the constants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PointConstraint {
+    /// The solve owns the point outright.
+    Free = 0,
+    /// The caller owns the point's distance from a reference image and the
+    /// solve owns its direction.
+    Ranged = 1,
+    /// The caller owns the point's coordinate outright.
+    Held = 2,
+}
+
+impl PointConstraint {
+    /// Every constraint this format defines, in canonical order: a constraint's
+    /// position here is its [`Self::code`], and this is the legend a writer
+    /// states and a reader normalises onto.
+    pub const ALL: [PointConstraint; 3] = [Self::Free, Self::Ranged, Self::Held];
+
+    /// The canonical legend, one name per entry of [`Self::ALL`].
+    pub const NAMES: [&'static str; 3] = ["free", "ranged", "held"];
+
+    /// The canonical code for this constraint: its index in [`Self::ALL`].
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// The legend name for this constraint.
+    pub const fn name(self) -> &'static str {
+        Self::NAMES[self.code() as usize]
+    }
+
+    /// The constraint a legend name denotes, or `None` for a name this format
+    /// does not define.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.name() == name)
+    }
+}
+
+/// In-memory [`SfmrData::point_constraints`] code for [`PointConstraint::Free`].
+pub const POINT_CONSTRAINT_FREE: u8 = PointConstraint::Free.code();
+/// In-memory [`SfmrData::point_constraints`] code for [`PointConstraint::Ranged`].
+pub const POINT_CONSTRAINT_RANGED: u8 = PointConstraint::Ranged.code();
+/// In-memory [`SfmrData::point_constraints`] code for [`PointConstraint::Held`].
+pub const POINT_CONSTRAINT_HELD: u8 = PointConstraint::Held.code();
 /// `points3d/constraint_reference_images` value for a row that names no image:
 /// every free and held point, and a ranged point at an infinite distance, which
 /// needs no reference.
 pub const NO_REFERENCE_IMAGE: u32 = u32::MAX;
+
+/// The constraint each legend name denotes, in the order given -- the legend a
+/// stored code indexes.
+///
+/// A legend has to name at least one constraint, name only constraints this
+/// format defines, and name each of them once: a repeat would give one
+/// constraint two codes and leave the file saying which of them a row means
+/// only by accident. Read and verify both resolve their codes through a legend
+/// this accepted, so a file states its own numbering and a reader normalises it
+/// away rather than assuming one.
+pub(crate) fn parse_point_constraint_names<S: AsRef<str>>(
+    names: &[S],
+) -> Result<Vec<PointConstraint>, String> {
+    if names.is_empty() {
+        return Err("point_constraint_names is empty, so it names no constraint at all".into());
+    }
+    let mut legend = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        let name = name.as_ref();
+        let constraint = PointConstraint::from_name(name).ok_or_else(|| {
+            format!(
+                "point_constraint_names[{i}] is {name:?}, not one of {:?}",
+                PointConstraint::NAMES
+            )
+        })?;
+        if legend.contains(&constraint) {
+            return Err(format!(
+                "point_constraint_names[{i}] repeats {name:?}, which already has a code"
+            ));
+        }
+        legend.push(constraint);
+    }
+    Ok(legend)
+}
+
+/// The `point_constraint_names` legend of a `points3d/metadata.json` that flags
+/// the constraint columns present.
+///
+/// The legend is part of that metadata entry, which is inside the `points3d`
+/// section hash, so it is covered by the same integrity envelope as the column
+/// it describes.
+pub(crate) fn read_point_constraint_legend(
+    points3d_meta: &serde_json::Value,
+) -> Result<Vec<PointConstraint>, String> {
+    let value = points3d_meta.get("point_constraint_names").ok_or_else(|| {
+        "points3d/metadata.json says has_point_constraints but carries no \
+         point_constraint_names to read the codes through"
+            .to_string()
+    })?;
+    let names: Vec<String> = value
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .map(|v| Some(v.as_str()?.to_string()))
+                .collect::<Option<Vec<String>>>()
+        })
+        .ok_or_else(|| {
+            format!(
+                "points3d/metadata.json's point_constraint_names is {value}, not a list of names"
+            )
+        })?;
+    parse_point_constraint_names(&names)
+}
+
+/// The constraint each code names, resolved through `legend`.
+///
+/// A code past the legend's end is the one thing a legend cannot explain, so it
+/// is rejected here rather than guessed at. The reader passes the file's legend
+/// and so normalises the column onto [`PointConstraint::ALL`]; the writer passes
+/// [`PointConstraint::ALL`] itself, which is the same call refusing a code
+/// outside the canonical numbering it is about to state.
+pub(crate) fn resolve_point_constraints(
+    codes: &[u8],
+    legend: &[PointConstraint],
+) -> Result<Vec<PointConstraint>, String> {
+    codes
+        .iter()
+        .enumerate()
+        .map(|(p, &code)| {
+            legend.get(code as usize).copied().ok_or_else(|| {
+                format!(
+                    "points3d/point_constraints row {p} is {code}, past the {} names its \
+                     legend gives",
+                    legend.len()
+                )
+            })
+        })
+        .collect()
+}
 
 /// Validate the per-point constraint triple against the positions it annotates.
 ///
@@ -233,9 +371,13 @@ pub const NO_REFERENCE_IMAGE: u32 = u32::MAX;
 /// in its own error type. Read, write and verify all route through it, so the
 /// rules are stated once.
 ///
+/// The constraints arrive resolved through the file's legend
+/// ([`resolve_point_constraints`]), so what a stored code meant is settled
+/// before any of these rules is applied.
+///
 /// With all three absent every point is free and there is nothing to check.
-pub fn validate_point_constraints(
-    point_constraints: Option<&[u8]>,
+pub(crate) fn validate_point_constraints(
+    point_constraints: Option<&[PointConstraint]>,
     constraint_distances: Option<&[f64]>,
     constraint_reference_images: Option<&[u32]>,
     positions_xyzw: &Array2<f64>,
@@ -285,22 +427,23 @@ pub fn validate_point_constraints(
             constraint_distances[p],
             constraint_reference_images[p],
         );
+        let name = k.name();
         match k {
-            POINT_CONSTRAINT_FREE | POINT_CONSTRAINT_HELD => {
+            PointConstraint::Free | PointConstraint::Held => {
                 if !r.is_nan() {
                     return Err(format!(
-                        "points3d/constraint_distances row {p} is {r} on a constraint-{k} \
+                        "points3d/constraint_distances row {p} is {r} on a {name} \
                          point, which carries no distance (expected NaN)"
                     ));
                 }
                 if c != NO_REFERENCE_IMAGE {
                     return Err(format!(
                         "points3d/constraint_reference_images row {p} names image {c} on a \
-                         constraint-{k} point, which is measured from nothing"
+                         {name} point, which is measured from nothing"
                     ));
                 }
             }
-            POINT_CONSTRAINT_RANGED => {
+            PointConstraint::Ranged => {
                 if r.is_nan() || r <= 0.0 {
                     return Err(format!(
                         "points3d/constraint_distances row {p} is {r} on a ranged point, \
@@ -332,13 +475,6 @@ pub fn validate_point_constraints(
                     }
                 }
             }
-            other => {
-                return Err(format!(
-                    "points3d/point_constraints row {p} is {other}, not one of \
-                     {POINT_CONSTRAINT_FREE} (free), {POINT_CONSTRAINT_RANGED} (ranged) \
-                     or {POINT_CONSTRAINT_HELD} (held)"
-                ));
-            }
         }
     }
     Ok(())
@@ -350,9 +486,10 @@ pub fn validate_point_constraints(
 /// Version 7 added the optional per-point constraint triple
 /// `points3d/point_constraints`, `points3d/constraint_distances` and
 /// `points3d/constraint_reference_images`, flagged together by
-/// `points3d/metadata.json`'s `has_point_constraints` (see
-/// [`SfmrData::point_constraints`]). Older files carry neither the flag nor the
-/// arrays and read as `None`, which is every point free.
+/// `points3d/metadata.json`'s `has_point_constraints` and read through that same
+/// entry's `point_constraint_names` legend (see [`SfmrData::point_constraints`]
+/// and [`PointConstraint`]). Older files carry neither the flag nor the arrays
+/// and read as `None`, which is every point free.
 ///
 /// Version 6 added the optional per-observation array
 /// `tracks/observation_confidence`, flagged by `tracks/metadata.json`'s
@@ -577,12 +714,17 @@ pub struct SfmrData {
     // "every point free", which is what every file below version 7 is. They
     // annotate `positions_xyzw` without changing its meaning: `w = 0` is still
     // a direction and `w != 0` still a finite point, whatever the constraint.
-    /// `(P,)` constraint per point: [`POINT_CONSTRAINT_FREE`],
-    /// [`POINT_CONSTRAINT_RANGED`] or [`POINT_CONSTRAINT_HELD`]. `None` when the
-    /// file carries no constraints, which is every point free.
+    /// `(P,)` constraint per point in the canonical numbering:
+    /// [`POINT_CONSTRAINT_FREE`], [`POINT_CONSTRAINT_RANGED`] or
+    /// [`POINT_CONSTRAINT_HELD`]. `None` when the file carries no constraints,
+    /// which is every point free.
     ///
     /// On disk this is `points3d/point_constraints` (version 7+, present only
-    /// when `points3d/metadata.json`'s `has_point_constraints` is `true`).
+    /// when `points3d/metadata.json`'s `has_point_constraints` is `true`), where
+    /// a code indexes that entry's `point_constraint_names` legend instead. The
+    /// reader resolves every code through the legend the file carries and hands
+    /// back the canonical numbering, and the writer states the canonical legend,
+    /// so the file's own numbering never reaches a consumer.
     pub point_constraints: Option<Array1<u8>>,
     /// `(P,)` distance a ranged point sits at from its reference: a positive
     /// world-unit distance, or `+inf` for a direction (which needs no

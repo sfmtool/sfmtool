@@ -454,8 +454,10 @@ impl PySfmrReconstruction {
     ///
     /// ``0`` is free (the solve owns the point outright), ``1`` is ranged (the
     /// caller owns the distance in :attr:`constraint_distances`, the solve owns the
-    /// direction) and ``2`` is held (the caller owns the whole coordinate). The
-    /// three constraint columns travel as a set: set them with
+    /// direction) and ``2`` is held (the caller owns the whole coordinate) --
+    /// the numbering ``sfmtool._sfmtool.io.POINT_CONSTRAINT_NAMES`` labels,
+    /// whichever legend the file this was loaded from stored its own column on.
+    /// The three constraint columns travel as a set: set them with
     /// ``clone_with_changes(point_constraints=..., constraint_distances=...,
     /// constraint_reference_images=...)``, and they are stored and written untouched.
     #[getter]
