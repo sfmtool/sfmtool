@@ -57,13 +57,15 @@ recovers it by unprojecting the keypoint onto the patch plane.
   and each is seeded from what it has. A view set in which no view carries a
   keypoint is the all-projection case, identical to supplying no seeds at all.
 - **Drop thresholds** — the per-view gates the refiner uses to drop a view
-  in-loop (below), in two families. The **absolute** gates judge one view on its
-  own and their verdicts stand: `max_member_keypoint_uncertainty` (the view's own
-  tile pins no 2D position), `max_shift_px` (its keypoint sits too far from the
-  projection), `min_absolute_zncc` (its leave-one-out ZNCC is below a fixed
-  floor), and the grazing cutoff. The **relative** gate,
-  `min_relative_zncc`, asks whether a view agrees as well as its peers, and the
-  two-view LOO floor restores the two best when it drops everything. The caller
+  in-loop (below), in two families. The **photometric** gates judge one view's
+  pixels on their own and their verdicts stand: `max_member_keypoint_uncertainty`
+  (the view's own tile pins no 2D position), `min_absolute_zncc` (its
+  leave-one-out ZNCC is below a fixed floor), and the grazing cutoff. The
+  **positional** gate `max_shift_px` (its keypoint sits too far from the
+  projection) and the **relative** gate `min_relative_zncc` (does a view agree
+  as well as its peers?) are judgements about the geometry and the consensus
+  rather than the pixels, and the two-view LOO floor restores the two best when
+  they drop everything. The caller
   supplies them all; the refiner reports what survived, which can be fewer than
   two views, and the per-point `min_views` cull is the caller's.
 
@@ -130,11 +132,14 @@ step restores it. Then each round:
    consensus is rebuilt from the survivors, so the remaining views register
    against a cleaner template.
 
-   The **two-view floor** is the relative bar's remedy alone: when fewer than two
-   views clear all the gates, the two best-scoring views *among those the absolute
-   gates left standing* are kept anyway, so a set that merely disagrees uniformly
-   still produces a pair. A view the absolute gates rejected is never restored,
-   and a point can therefore end a round with one view or none. This is what makes
+   The **two-view floor** is the remedy for the positional and relative gates
+   alone: when fewer than two views clear all the gates, the two best-scoring
+   views *among those the photometric gates left standing* are kept anyway, so a
+   set that merely disagrees uniformly, or whose projection came from a wrong
+   pose, still produces a pair -- members that match each other survive the
+   geometry and keep reporting the contradiction through their residual. A view
+   the photometric gates rejected is never restored, and a point can therefore
+   end a round with one view or none. This is what makes
    the gates bite on a **two-view point**, where the relative bar is decorative:
    each view's leave-one-out template *is* the other view, so both score the same
    pairwise correlation, `min_relative_zncc × median` reduces to a fraction of

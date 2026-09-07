@@ -22,11 +22,12 @@
 //! moves the read position — keeping every read exact). Views that pin no 2D
 //! position of their own, drift too far, leave the frame, or stop agreeing are
 //! dropped in-loop, so the survivors register against a cleaner template. The
-//! per-view gates split into **absolute** verdicts (member localizability,
-//! `max_shift_px`, the absolute leave-one-out floor), which nothing undoes and
-//! which can leave a point with fewer than two views for the caller's
-//! `min_views` cull, and the **relative** agreement bar, whose two-best fallback
-//! keeps a point alive when the whole set disagrees equally.
+//! per-view gates split into **photometric** verdicts (member localizability,
+//! the absolute leave-one-out floor), which nothing undoes and which can leave a
+//! point with fewer than two views for the caller's `min_views` cull, and the
+//! **positional** (`max_shift_px`) and **relative** agreement gates, whose
+//! two-best fallback keeps a point alive when the whole set disagrees equally or
+//! the geometry it was projected from is wrong.
 //!
 //! The render → z-normalize → robust-consensus machinery is the same as
 //! [normal refinement](super::normal_refine) and
@@ -961,8 +962,10 @@ pub fn localize_patch_keypoints_with_basis(
         //    The two gates differ in what can undo them. The relative bar asks a
         //    consensus question ("does this view agree as well as its peers?"),
         //    and its answer is meaningless once every view fails it — so the
-        //    two-view floor restores the two best when *only* that bar dropped
-        //    them. `max_shift_px` and `min_absolute_zncc` are absolute per-view
+        //    two-view floor restores the two best when only that bar, or the
+        //    positional `max_shift_px` gate (a verdict on the pose the view was
+        //    projected from, not on its pixels), dropped them. `min_absolute_zncc`
+        //    and the member-localizability gate are photometric per-view
         //    verdicts, so a view they reject is out for good; that is what makes
         //    them bite on a two-view point, where the relative bar reduces to
         //    `min_relative_zncc ×` the same pairwise correlation it is testing.
@@ -1001,12 +1004,19 @@ pub fn localize_patch_keypoints_with_basis(
             if below_floor {
                 prof::count(&prof::N_DROP_ABS_ZNCC, 1);
             }
-            let absolute_ok = shift_px <= params.max_shift_px && !below_floor;
-            if absolute_ok && st.loo.is_finite() && st.loo >= bar {
+            if shift_px <= params.max_shift_px
+                && !below_floor
+                && st.loo.is_finite()
+                && st.loo >= bar
+            {
                 kept.push(si);
             }
-            // Only a view the absolute gates cleared is eligible for the floor.
-            if absolute_ok {
+            // Only a view the photometric gates cleared is eligible for the floor.
+            // A keypoint far from the projection is a geometry contradiction, not
+            // a photometric verdict, so the floor may still restore it: a track
+            // whose members agree with each other survives a wrong pose and keeps
+            // reporting the disagreement through its residual.
+            if !below_floor {
                 let rank = if st.loo.is_finite() { st.loo } else { -1.0 };
                 fallback.push((rank, si));
             }
