@@ -41,8 +41,9 @@ consumer that rewrites a file must preserve, which is what a save is).
 
 ### The reconstruction is a value
 
-The model is the one in Sean Parent's *Value Semantics and Concept-based
-Polymorphism* (2013): the document is a regular type, an edit is a function
+The model is the one in Sean Parent's
+[*Value Semantics and Concept-based Polymorphism*](https://sean-parent.stlab.cc/presentations/2013-09-24-value-semantics/value-semantics.pdf)
+(2013): the document is a regular type, an edit is a function
 from one document value to the next, and undo is a vector of document values
 with a cursor. Nothing in the model has identity that an edit mutates in place;
 the *node* has identity (its `ReconId`, its label, its display state), and it
