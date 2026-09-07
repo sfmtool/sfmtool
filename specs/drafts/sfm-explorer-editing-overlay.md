@@ -34,27 +34,25 @@ An edited reconstruction has three parts:
 - **The base**: a shared, immutable `SfmrReconstruction`. It is what was
   loaded, or the last materialisation. Every version in a run of edits shares
   it.
-- **The deleted set**: which of the base's points are gone, as a bitset over
-  the base's point indexes, and which of its images are gone, as a bitset over
-  its image indexes.
+- **The deleted set**: which of the base's points are gone, as a hash set of
+  the base's point indexes. A set, not a mask over the base: the overlay
+  exists for individual point edits, so the set holds a handful of indexes
+  against a million-point base, and its size is the size of the edit rather
+  than the size of the base.
 - **The additions**: the points that exist in this version and not in the base,
   as a point set of their own with the same columns the base's point side has:
   points, CSR tracks, the per-observation columns, the patch frames and
   bitmaps, the constraints. Their observations refer to the base's image table.
 
-The images and cameras are the base's, with per-version overrides for the
-small columns (a pose that moved). Those columns are copied whole on edit, as
-the umbrella's column model says, because a thousand images is nothing.
+The images and cameras are the base's, unchanged. An edit to the image table
+is not an overlay edit (below).
 
 ```rust
 /// A reconstruction value that is a shared base plus what this version
 /// changed. Equal bases and equal edits are equal values.
 pub struct EditedReconstruction {
     pub base: Arc<SfmrReconstruction>,
-    pub deleted_points: BitSet,
-    pub deleted_images: BitSet,
-    /// Poses, cameras and names that differ from the base's, copied whole.
-    pub images: Option<Arc<[SfmrImage]>>,
+    pub deleted_points: HashSet<u32>,
     pub added: PointSet,
 }
 ```
@@ -66,31 +64,46 @@ split is the structural change this draft asks for; the alternative, an
 additions type that mirrors the point columns by hand, would be a second copy
 of the schema that drifts.
 
-### Every edit is delete-and-re-add
+### Two kinds of edit
 
-A point that changes in any way, its position, its constraint, its normal or
-frame, its track, is deleted from the base and re-added to the additions with
-its whole record and whole track. The cost of an edit is the size of the
-records it touches, never the size of the base:
+An edit is either a **point edit**, which lives in the overlay, or a **bulk
+edit**, which produces a new immutable base. The line between them is the
+footprint: a point edit touches a handful of points, and a bulk edit touches
+an image's worth of structure or more.
+
+A **point edit** is delete-and-re-add. A point that changes in any way, its
+position, its constraint, its normal or frame, its track, is deleted from the
+base and re-added to the additions with its whole record and whole track. The
+cost of the edit is the size of the records it touches, never the size of the
+base:
 
 - **Add an observation to a track**: delete the point, re-add it with its
   observations plus one. Tens of rows.
-- **Remove an observation, split a track, merge two tracks, refit a point**:
-  the same.
-- **Delete a point**: one bit.
-- **Move a pose**: the image column is overridden, and every point the image
-  observes is re-triangulated at the new pose, so all of those points are
-  deleted and re-added with their new positions. Thousands of rows for a
-  well-observed image, still far below the base.
-- **Delete an image**: one bit, and the same re-triangulation of what it
-  observed, minus its observations; a point left with fewer than two
-  observations is deleted and not re-added.
-- **Bundle adjust**: every point moves, so this is a materialisation by
-  construction (below).
+- **Remove an observation, split a track, merge two tracks, refit a point,
+  set a constraint**: the same.
+- **Delete a point**: one index in the set.
 
-There is no third category. An edit never writes a row into the base's
-columns, so the base's identity, and everything keyed on it, holds for as long
-as the base does.
+A point edit never writes a row into the base's columns, so the base's
+identity, and everything keyed on it, holds for as long as the base does.
+
+A **bulk edit** is a function from a plain reconstruction to a plain
+reconstruction, the umbrella draft's column model with nothing in between:
+it materialises the current version if it has to, runs, and its output is the
+next version's base with an empty overlay.
+
+- **Delete an image**: the image row goes, its observations go, every point it
+  observed is re-triangulated without it, and a point left under two
+  observations goes with them. Image indexes after it shift, which is the
+  renumbering the overlay is built to avoid and a bulk edit is allowed.
+- **Move a pose**: the image column changes and every point the image observes
+  is re-triangulated at the new pose. Thousands of points for a well-observed
+  image, so it is bulk, though it renumbers nothing.
+- **Bundle adjust**: every point moves.
+- **Bake the node transform**: every point and every pose moves.
+
+There is no third category, and the two compose: a run of point edits on a
+base, then a bulk edit that materialises them into the next base, then more
+point edits on that.
 
 ### Indexes are stable
 
@@ -113,16 +126,16 @@ so it is cheap either way.
 ## Materialisation
 
 Materialising an edited reconstruction produces a plain `SfmrReconstruction`:
-the base minus its deleted points and images, with the additions appended and
-the whole re-sorted into CSR, derived indexes rebuilt, image indexes
-compacted if images were deleted. It is one full copy and it produces a **row
-map** from the edited indexes to the new ones, which the selection and the GPU
-buffers consume.
+the base minus its deleted points, with the additions appended and the whole
+re-sorted into CSR, derived indexes rebuilt. The image table is the base's,
+untouched. It is one full copy and it produces a **row map** from the edited
+point indexes to the new ones, which the selection and the GPU buffers
+consume.
 
 It happens when:
 
-- an algorithm that takes a plain reconstruction runs: bundle adjustment, the
-  census, alignment, a save;
+- a bulk edit or an algorithm that takes a plain reconstruction runs: bundle
+  adjustment, deleting an image, the census, alignment, a save;
 - the edits have grown past a fraction of the base, so that looking through
   the overlay no longer pays;
 - explicitly, as a "flatten" the user or an agent asks for.
@@ -162,7 +175,8 @@ per-point or per-column, which is what the rendering path is today.
 
 The base's buffers keep their identity, so the umbrella's identity-based
 upload sees no change on the base and uploads nothing for it. The deleted set
-uploads as a small per-point mask the point shader reads. The additions upload
+reaches the point shader as a per-point mask built from the set, a few bytes
+written into a buffer that is otherwise zero. The additions upload
 as a second instance buffer drawn after the base's, with the same per-node
 uniforms. A materialisation replaces both with one buffer, through the row
 map. No edit re-uploads a million points.
@@ -183,15 +197,17 @@ decision is not made here.
 - An edited reconstruction and its materialisation agree: every per-point
   read through the overlay equals the same read on the materialised value
   under the row map, for random edit sequences.
-- Delete-and-re-add is total: every edit family produces a value whose base is
-  the same `Arc` as before the edit.
+- Delete-and-re-add is total for point edits: every point-edit family
+  produces a value whose base is the same `Arc` as before the edit, and
+  every bulk-edit family produces a value with an empty overlay.
 - Stable indexes: after any edit that is not a materialisation, every index
   that resolved before and was not deleted or modified resolves to the same
   record.
 - Materialisation is deterministic and idempotent, and its row map is a
   bijection from the surviving edited indexes onto the new ones.
-- A pose edit's re-triangulation matches the batch triangulation of the same
-  points at the same poses.
+- A pose edit's and an image deletion's re-triangulation matches the batch
+  triangulation of the same points at the same poses, and an image deletion's
+  output equals the offline image-drop transform on the same input.
 
 ## Non-goals
 
