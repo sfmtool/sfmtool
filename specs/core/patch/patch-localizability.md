@@ -79,6 +79,31 @@ channel** — no per-pixel masking. (If a future change scores a wider window or
 admits partially-covered patches, revisit: the fix would be to zero the window where
 `alpha == 0`.)
 
+### The per-member counterpart
+
+The consensus score grades a **point**. The same scorer, on the same `R×R`
+window with the same `σ_noise` and the same `τ` units, also grades a single
+**member**: one view's own rendered core tile, scored before that view is allowed
+to vote. Two gates use it that way, and both refuse a member rather than a point:
+
+- [Keypoint localization](patch-keypoint-localization.md) scores each view's core
+  at its seed offset and drops the view when `σ_pos` exceeds
+  `max_member_keypoint_uncertainty` (same default `0.35` grid px). A member that
+  pins no 2D position on its own — a flat sky or water crop, a lone straight edge
+  — correlates to noise against any template, so its ZNCC carries no information
+  about whether it registered. Refusing it is not a consensus judgement and the
+  localizer's two-view floor does not restore it.
+- [Cluster-patch refinement](cluster-patch-refinement.md) does the same for a
+  cluster member's own template-grid patch (`max_keypoint_uncertainty`, status
+  `rejected_unlocalizable`).
+
+The two levels are complementary, not redundant: a point whose members are each
+localizable can still fuse a consensus that slides (the aperture case the
+consensus gate exists for), and a point with one textureless member can still
+fuse a perfectly sharp consensus from the others. The member gate runs where
+the tile is already in hand, so it costs one structure tensor per member and no
+extra render.
+
 ## Two normalizations, and why noise-normalized wins
 
 The tensor can be normalized two ways, and the choice is load-bearing:
@@ -187,11 +212,13 @@ The scorer lives in
 as `PatchCloud.score_localizability`, with the reconstruction-level filter in
 [_filter_by_localizability.py](../../../src/sfmtool/xform/_filter_by_localizability.py).
 
-One scorer, three entry points (plus an internal consumer: the
-[cluster-patch refinement](cluster-patch-refinement.md) kernel gates each
-cluster member on the localizability of its own template-grid patch —
-`max_keypoint_uncertainty`, same default `τ`, status
-`rejected_unlocalizable`):
+One scorer, three entry points (plus two internal consumers, the member-level
+gates of [The per-member counterpart](#the-per-member-counterpart): the
+[cluster-patch refinement](cluster-patch-refinement.md) kernel's
+`max_keypoint_uncertainty` and the [keypoint
+localizer](patch-keypoint-localization.md)'s
+`max_member_keypoint_uncertainty`, both calling `patch_localizability` directly
+on the member's own tile with the shared `localizability::SIGMA_NOISE`):
 
 1. **Crate function** (a submodule sibling of `keypoint_localize` /
    `normal_refine`):
@@ -288,6 +315,7 @@ the round-1-vs-final mis-cull delta is measured.
 | `window` | `gaussian_disk` | scoring window (shared with the rest of the pipeline) |
 | `sigma_noise` | ~3 gray levels (global constant) | sets the absolute px scale of `σ_pos`; only the *ranking* is scale-free |
 | `max_keypoint_uncertainty` (`τ`) | `0.35` grid px | drop points with `σ_pos > τ` (**grid px** — transfers across resolution, see [Threshold](#threshold)); conservative self-limiting tail cut |
+| `max_member_keypoint_uncertainty` (`τ`) | `0.35` grid px | the member-level gate: drop a *view* whose own tile scores `σ_pos > τ`, in the localizer (see [The per-member counterpart](#the-per-member-counterpart)) |
 
 ## Evidence (prototype)
 

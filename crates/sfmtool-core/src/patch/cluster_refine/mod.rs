@@ -50,7 +50,11 @@ use ndarray::{Array2, Array3};
 use rayon::prelude::*;
 
 use crate::camera::remap::ImageU8Pyramid;
-use crate::patch::localizability::patch_localizability;
+// `SIGMA_NOISE` is the shared absolute-px scale of every in-crate `σ_pos` gate;
+// aliased here for the local call site's readability.
+use crate::patch::localizability::{
+    patch_localizability, SIGMA_NOISE as LOCALIZABILITY_SIGMA_NOISE,
+};
 use crate::patch::normal_refine::{
     build_support, weighted_moments_pub, znorm_write, Support, FLAT_NORM_SQ_EPS,
 };
@@ -69,12 +73,6 @@ const MIN_ABS_DET: f64 = 1e-9;
 /// Log-scale clamp of the similarity stage (`σ ∈ [−1.5, 1.5]`, the
 /// prototype's bound).
 const SIGMA_CLAMP: f64 = 1.5;
-
-/// Global photometric-noise constant (intensity units) for the
-/// localizability gate — sets the absolute px scale of `σ_pos`, matching
-/// the `score_localizability` / `embed-patches` default (see
-/// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)").
-const LOCALIZABILITY_SIGMA_NOISE: f64 = 3.0;
 
 // ── Small 2×2 matrix helpers ────────────────────────────────────────────────
 

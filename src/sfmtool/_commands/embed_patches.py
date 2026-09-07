@@ -29,6 +29,35 @@ from .._cli_utils import timed_command
     ),
 )
 @click.option(
+    "--min-absolute-zncc",
+    type=float,
+    default=0.5,
+    show_default=True,
+    help=(
+        "Refuse an observation whose leave-one-out ZNCC is below this absolute "
+        "floor, however few views the point has left. --min-relative-zncc asks "
+        "whether a view agrees as well as its peers, so on a two-view point it "
+        "compares the single pairwise correlation against a fraction of itself "
+        "and always passes; this floor is what refuses a pair of unrelated "
+        "surfaces. 0 disables it."
+    ),
+)
+@click.option(
+    "--max-member-keypoint-uncertainty",
+    type=float,
+    default=0.35,
+    show_default=True,
+    help=(
+        "Refuse an observation whose OWN patch tile pins no 2D position: "
+        "structure-tensor weak-axis uncertainty sigma_pos above this, in "
+        "patch-grid pixels. The per-observation counterpart of "
+        "--max-keypoint-uncertainty's per-point cull, same scorer and units — it "
+        "throws out the flat sky or water crop whose correlation to anything is "
+        "noise, before it is scored. 0 disables it. See "
+        "specs/core/patch/patch-localizability.md."
+    ),
+)
+@click.option(
     "--max-iters",
     type=int,
     default=5,
@@ -237,6 +266,8 @@ def embed_patches_command(
     input_path,
     output_path,
     min_relative_zncc,
+    min_absolute_zncc,
+    max_member_keypoint_uncertainty,
     max_iters,
     search,
     max_shift_px,
@@ -347,6 +378,8 @@ def embed_patches_command(
             recon,
             images,
             min_relative_zncc=min_relative_zncc,
+            min_absolute_zncc=min_absolute_zncc,
+            max_member_keypoint_uncertainty=max_member_keypoint_uncertainty,
             patch_size=patch_size,
             max_shift_px=max_shift_px,
             min_views=min_views,
@@ -368,7 +401,36 @@ def embed_patches_command(
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         click.echo(f"Writing {result.point_count} points to {output_path}...")
-        result.save(str(output_path), operation="embed-patches")
+        # Record embed's own knobs. `save` MERGES into `metadata.tool_options`,
+        # so without this the written file advertises the upstream solve's
+        # options as if they were this run's — and the gates below decide which
+        # observations survive, which is exactly what a reader of the file needs
+        # to know.
+        result.save(
+            str(output_path),
+            operation="embed-patches",
+            tool_options={
+                "patch_size": patch_size,
+                "rounds": rounds,
+                "subpixel": subpixel,
+                "min_views": min_views,
+                "max_iters": max_iters,
+                "search": search,
+                "search_resolution_multiplier": search_resolution_multiplier,
+                "max_shift_px": max_shift_px,
+                "min_relative_zncc": min_relative_zncc,
+                "min_absolute_zncc": min_absolute_zncc,
+                "max_member_keypoint_uncertainty": max_member_keypoint_uncertainty,
+                "max_keypoint_uncertainty": max_keypoint_uncertainty,
+                "max_obliquity_deg": max_obliquity_deg,
+                "obliquity_weight_power": obliquity_weight_power,
+                "fronto_prior_weight": fronto_prior_weight,
+                "refine_max_views": refine_max_views,
+                "localize_search_strategy": localize_search_strategy,
+                "localize_basis_views": localize_basis_views,
+                "sampler": sampler,
+            },
+        )
         click.echo("\nWrote embedded_patches reconstruction:")
         click.echo(f"  {output_path}")
         click.echo(f"  Points: {result.point_count}  Images: {result.image_count}")

@@ -45,6 +45,8 @@ as `OUTPUT`.
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `--min-relative-zncc` | float | 0.7 | Minimum ZNCC a view must reach, as a fraction of the reference's own agreement — used both to admit candidate views (vs the track) and to drop poorly-registering views during congealing (vs the views' median LOO ZNCC). |
+| `--min-absolute-zncc` | float | `0.5` | Discard an **observation** whose leave-one-out ZNCC is below this absolute floor, however few views the point has left. `--min-relative-zncc` asks whether a view agrees as well as its peers, so on a two-view point it compares the single pairwise correlation against a fraction of itself and always passes — and the localizer's two-view floor would restore the pair anyway. This floor is the verdict that stands: it is what refuses a pair of unrelated surfaces, and a point it leaves below `--min-views` is dropped whole. `0` disables it. |
+| `--max-member-keypoint-uncertainty` | float | `0.35` | Discard an **observation** whose own patch tile pins no 2D position — structure-tensor weak-axis uncertainty `σ_pos` above this `τ`, in **patch-grid** pixels. The per-observation counterpart of `--max-keypoint-uncertainty`'s per-point cull: same scorer, same units, applied to one view's tile before it is scored against anything, so a flat sky or water crop never votes in the consensus. `0` disables it. See [`specs/core/patch/patch-localizability.md`](../../core/patch/patch-localizability.md). |
 | `--max-iters` | int | 5 | Max congealing rounds per point (stops early at convergence). |
 | `--search` | float | 6 | Max total per-view in-plane drift, in **patch-grid** pixels. |
 | `--max-shift-px` | float | 3.0 | Discard an **observation** whose keypoint sits more than this from the point's projection, in **source-image** pixels (an absolute distance, not the move from the seed). |
@@ -80,9 +82,14 @@ input track reshaped (expanded by vetting, trimmed by drops), not copied through
   convergence; emit `keypoint = project_i(X_p) + δ`. Views that won't co-register
   are dropped *as it goes*, so the survivors refine against a cleaner consensus.
 - **Observation thresholds.** A view is dropped, in-loop, if it can't be localized
-  cleanly (grazing view, out-of-frame keypoint), if its keypoint sits more than
-  `--max-shift-px` from the point's projection, or if its leave-one-out ZNCC
-  agreement falls below `--min-relative-zncc` of the views' median LOO ZNCC.
+  cleanly (grazing view, out-of-frame keypoint), if its own tile pins no 2D
+  position (`σ_pos` above `--max-member-keypoint-uncertainty`), if its keypoint
+  sits more than `--max-shift-px` from the point's projection, if its
+  leave-one-out ZNCC is below `--min-absolute-zncc`, or if its leave-one-out
+  ZNCC agreement falls below `--min-relative-zncc` of the views' median LOO
+  ZNCC. Only that last, *relative* verdict is softened by the localizer's
+  two-view floor; the absolute ones stand, so a point can come out of
+  localization below `--min-views` and be dropped whole.
 - **Reference bitmaps.** Each surviving point's stored bitmap is the cross-view
   **consensus texture fused in the sub-pixel keypoint-refinement stage** at the
   final per-view keypoints (`refine_keypoints(render_bitmaps=True)`; with

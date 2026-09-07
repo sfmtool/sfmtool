@@ -6,8 +6,9 @@
 Unlike ``RefineKeypointsTransform`` (a pure in-place modifier), this op is
 **structural**: ``PatchCloud.localize_keypoints`` congeals each point's
 per-view keypoints by a discrete cross-view search and **drops views that
-won't co-register** (drift too far, leave the frame, graze the patch plane, or
-stop agreeing with the leave-one-out consensus). After a ``min_views`` cull the
+won't co-register** (drift too far, leave the frame, graze the patch plane, pin
+no 2D position of their own, or stop agreeing with the leave-one-out
+consensus). After a ``min_views`` cull the
 survivors are renumbered and the reconstruction is rebuilt — ``keypoints_xy``
 and all three track arrays — via :func:`compact_to_embedded_patches`, the same
 helper the ``embed-patches`` pipeline uses. The output therefore has fewer
@@ -72,6 +73,8 @@ class LocalizeKeypointsTransform:
         search: float = 6.0,
         max_shift_px: float = 3.0,
         min_relative_zncc: float = 0.7,
+        min_absolute_zncc: float = 0.5,
+        max_member_keypoint_uncertainty: float = 0.35,
         min_grazing_cos: float = 0.1,
         resolution: int = 24,
         window: str = "gaussian_disk",
@@ -94,6 +97,15 @@ class LocalizeKeypointsTransform:
         if not 0 <= min_relative_zncc <= 1:
             raise ValueError(
                 f"min_relative_zncc must be in [0, 1], got {min_relative_zncc}"
+            )
+        if not 0 <= min_absolute_zncc <= 1:
+            raise ValueError(
+                f"min_absolute_zncc must be in [0, 1], got {min_absolute_zncc}"
+            )
+        if max_member_keypoint_uncertainty < 0:
+            raise ValueError(
+                f"max_member_keypoint_uncertainty must be >= 0, "
+                f"got {max_member_keypoint_uncertainty}"
             )
         if not 0 <= min_grazing_cos <= 1:
             raise ValueError(
@@ -129,6 +141,8 @@ class LocalizeKeypointsTransform:
         self.search = search
         self.max_shift_px = max_shift_px
         self.min_relative_zncc = min_relative_zncc
+        self.min_absolute_zncc = min_absolute_zncc
+        self.max_member_keypoint_uncertainty = max_member_keypoint_uncertainty
         self.min_grazing_cos = min_grazing_cos
         self.resolution = resolution
         self.window = window
@@ -173,6 +187,8 @@ class LocalizeKeypointsTransform:
             search=self.search,
             max_shift_px=self.max_shift_px,
             min_relative_zncc=self.min_relative_zncc,
+            min_absolute_zncc=self.min_absolute_zncc,
+            max_member_keypoint_uncertainty=self.max_member_keypoint_uncertainty,
             min_grazing_cos=self.min_grazing_cos,
             resolution=self.resolution,
             window=self.window,

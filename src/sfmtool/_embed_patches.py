@@ -376,6 +376,8 @@ def embed_patches(
     images: list[np.ndarray],
     *,
     min_relative_zncc: float = 0.7,
+    min_absolute_zncc: float = 0.5,
+    max_member_keypoint_uncertainty: float = 0.35,
     patch_size: float = 11.0,
     max_shift_px: float = 3.0,
     min_views: int = 2,
@@ -414,7 +416,8 @@ def embed_patches(
        track-seeded template — the track views again rendered at their stored
        keypoints, both when fusing that template and when scoring against it.
     3. **Congeal** each view's keypoint to sub-pixel, dropping views that
-       won't co-register (grazing, out-of-frame, ``max_shift_px``, low LOO ZNCC).
+       won't co-register (grazing, out-of-frame, textureless in their own right,
+       ``max_shift_px``, low LOO ZNCC absolutely or relative to their peers).
        Each observed view seeds at its stored keypoint; a view step 2 added has no
        observation, so it seeds at the point's projection.
        The final round's sub-pixel pass also fuses each point's **consensus
@@ -444,6 +447,20 @@ def embed_patches(
             the grazing cull for marginal gains.
         min_relative_zncc, max_shift_px, min_views, max_iters, search: The pipeline
             knobs documented in ``specs/cli/reconstruction/embed-patches-command.md``.
+        min_absolute_zncc: Localizer gate — drop a view whose leave-one-out ZNCC is
+            finite and below this **absolute** floor, however many views remain.
+            Unlike ``min_relative_zncc`` (a consensus question, whose two-view floor
+            restores the two best when every view fails it) this verdict stands, so
+            it is what refuses a two-view point made of two unrelated surfaces —
+            there the relative bar is a fraction of the very pairwise correlation it
+            is testing and always passes. ``0`` disables it.
+        max_member_keypoint_uncertainty: Localizer gate — drop a view whose **own**
+            rendered tile pins no 2D position (structure-tensor weak-axis ``σ_pos``
+            above this ``τ``, patch-grid px). The member-level counterpart of
+            ``max_keypoint_uncertainty``'s per-point consensus cull, same scorer,
+            same units, same default: a flat sky or water crop correlates to noise,
+            so it is refused before it is scored and never restored by the two-view
+            floor. ``0`` disables it.
         resolution: The ``R × R`` patch grid the kernels render/score on.
         sampler: Pyramid sampler for every photometric kernel in the pipeline
             (normal refinement, view selection, the discrete localizer, and the
@@ -657,6 +674,8 @@ def embed_patches(
             search=search,
             max_shift_px=max_shift_px,
             min_relative_zncc=min_relative_zncc,
+            min_absolute_zncc=min_absolute_zncc,
+            max_member_keypoint_uncertainty=max_member_keypoint_uncertainty,
             resolution=resolution,
             search_resolution_multiplier=search_resolution_multiplier,
             search_strategy=localize_search_strategy,

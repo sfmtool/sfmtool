@@ -489,3 +489,48 @@ def test_embed_patches_cli_localize_basis_views_forwards(
         result = CliRunner().invoke(main, args)
     assert result.exit_code != 0
     assert "localize-basis-views" in result.output.lower()
+
+
+def test_embed_patches_cli_absolute_localizer_gates_forward(
+    monkeypatch, seoul_bull_workspace, tmp_path
+):
+    """`--min-absolute-zncc` and `--max-member-keypoint-uncertainty` parse and
+    reach `embed_patches` as their matching kwargs, and the written file records
+    them in its own `tool_options` (the merge would otherwise leave only the
+    upstream solve's options there)."""
+    captured: dict = {}
+    real = ep.embed_patches
+
+    def spy(recon, images, **kwargs):
+        captured.update(
+            {
+                k: kwargs.get(k)
+                for k in ("min_absolute_zncc", "max_member_keypoint_uncertainty")
+            }
+        )
+        return real(recon, images, **{**kwargs, "resolution": 12})
+
+    monkeypatch.setattr(ep, "embed_patches", spy)
+
+    out = tmp_path / "gates.sfmr"
+    args = [
+        "embed-patches",
+        str(seoul_bull_workspace),
+        str(out),
+        "--min-absolute-zncc",
+        "0.25",
+        "--max-member-keypoint-uncertainty",
+        "0.5",
+    ]
+    with mock_patch("sys.argv", ["sfm"] + args):
+        result = CliRunner().invoke(main, args)
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "min_absolute_zncc": 0.25,
+        "max_member_keypoint_uncertainty": 0.5,
+    }
+
+    reloaded = SfmrReconstruction.load(str(out))
+    opts = reloaded.metadata()["tool_options"]
+    assert opts["min_absolute_zncc"] == 0.25
+    assert opts["max_member_keypoint_uncertainty"] == 0.5

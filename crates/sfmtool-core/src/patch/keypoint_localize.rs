@@ -19,9 +19,14 @@
 //! view is never aligned to a template its own pixels polluted). The integer
 //! argmax moves the cache-read accumulator while the parabolic sub-pixel residual
 //! rides alongside (it gates convergence and seeds the final keypoint but never
-//! moves the read position — keeping every read exact). Views that drift too far,
-//! leave the frame, or stop agreeing are dropped in-loop, so the survivors
-//! register against a cleaner template.
+//! moves the read position — keeping every read exact). Views that pin no 2D
+//! position of their own, drift too far, leave the frame, or stop agreeing are
+//! dropped in-loop, so the survivors register against a cleaner template. The
+//! per-view gates split into **absolute** verdicts (member localizability,
+//! `max_shift_px`, the absolute leave-one-out floor), which nothing undoes and
+//! which can leave a point with fewer than two views for the caller's
+//! `min_views` cull, and the **relative** agreement bar, whose two-best fallback
+//! keeps a point alive when the whole set disagrees equally.
 //!
 //! The render → z-normalize → robust-consensus machinery is the same as
 //! [normal refinement](super::normal_refine) and
@@ -39,6 +44,7 @@ use crate::camera::remap::{remap_aniso_with_pyramid, remap_bilinear, remap_bilin
 use crate::camera::WarpMap;
 use crate::numeric::median_in_place;
 use crate::patch::cloud::{OrientedPatch, PatchCloud};
+use crate::patch::localizability::{patch_localizability, SIGMA_NOISE};
 use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
     ConsensusScratch, ProjectedImage, Sampler, Support,
@@ -315,6 +321,77 @@ fn extract_core(
         }
     }
     true
+}
+
+/// Extract the **full** `R×R` core grid of `tile` at window offset `(oy, ox)` into
+/// `out` as an *interleaved* `[pixel · channels + channel]` patch — the layout
+/// [`patch_localizability`] scores.
+///
+/// Unlike [`extract_core`] this reads every grid pixel, not just the windowed
+/// support (the structure tensor's central differences reach one pixel outside
+/// the support disk), and it never refuses: a pixel out of frame was rendered
+/// black and reads back as that black, exactly what a re-render at this offset
+/// would hand the scorer. A core entirely out of frame is therefore all-zero,
+/// which the scorer reports as the unscorable `NaN`.
+fn extract_core_grid(tile: &ContextTile, resolution: usize, oy: usize, ox: usize, out: &mut [f32]) {
+    let ch = tile.channels;
+    let istride = tile.istride;
+    for row in 0..resolution {
+        let src = (oy + row) * istride + ox;
+        let dst = row * resolution * ch;
+        for col in 0..resolution {
+            for (c, plane) in tile.planes.iter().enumerate() {
+                // The planes are centered; add the channel mean back to recover
+                // the source value the scorer's gradients are defined on.
+                out[dst + col * ch + c] = plane[src + col] + tile.means[c];
+            }
+        }
+    }
+}
+
+/// Whether a leave-one-out ZNCC fails the **absolute** floor: finite and below
+/// `floor`. A `NaN` (no round scored this view) has no verdict to fail, and a
+/// `floor` of `0.0` or below disables the gate exactly — a negative correlation
+/// is only refused when the caller asks for a positive floor.
+#[inline]
+fn below_absolute_floor(loo: f64, floor: f64) -> bool {
+    floor > 0.0 && loo.is_finite() && loo < floor
+}
+
+/// Whether one view's **own** core tile pins a 2D position well enough to take
+/// part: the weak-axis positional uncertainty `σ_pos` (patch-grid px) of its
+/// structure tensor, at or below `tau`. This is the member-level counterpart of
+/// the per-point consensus localizability cull — the same scorer, the same
+/// `σ_noise` scale, the same `τ` units — applied to a single view's appearance
+/// rather than to the cross-view consensus, so a flat sky tile or a lone straight
+/// edge is refused before its ZNCC (pure noise) can vote.
+///
+/// `tau <= 0`, or a non-finite `tau`, disables the gate exactly. An unscorable
+/// tile (all-black: fully out of frame) scores `NaN`, which compares false and is
+/// kept — the same benefit of the doubt the consensus cull gives an empty
+/// consensus. `scratch` is the caller's reusable interleaved-grid buffer.
+fn member_is_localizable(
+    tile: &ContextTile,
+    support: &Support,
+    resolution: usize,
+    oy: usize,
+    ox: usize,
+    tau: f64,
+    scratch: &mut Vec<f32>,
+) -> bool {
+    if !tau.is_finite() || tau <= 0.0 {
+        return true;
+    }
+    scratch.clear();
+    scratch.resize(resolution * resolution * tile.channels, 0.0);
+    extract_core_grid(tile, resolution, oy, ox, scratch);
+    let loc = patch_localizability(scratch, resolution, tile.channels, support, SIGMA_NOISE);
+    // An unscorable tile scores `NaN`, which is incomparable rather than
+    // `Greater`, so it is kept.
+    !matches!(
+        loc.sigma_pos_grid.partial_cmp(&tau),
+        Some(std::cmp::Ordering::Greater)
+    )
 }
 
 /// z-normalize a raw core (`raw[channel * n + k]`) over the kept original
@@ -689,6 +766,43 @@ pub fn localize_patch_keypoints_with_basis(
         }
     });
 
+    // Member localizability gate. A view whose own tile pins no 2D position — a
+    // flat sky/water crop, a lone straight edge — correlates to noise against
+    // anything, so it is refused *before* it can join a consensus or be scored
+    // against one. Scored once, on the tile at the view's seed offset: the
+    // property is the member's appearance, not the round's, and dropping it up
+    // front keeps it out of every round's template. Nothing below restores it —
+    // the two-view floor is a consensus remedy and this is not a consensus
+    // question.
+    {
+        let tau = params.max_member_keypoint_uncertainty;
+        let mut scratch: Vec<f32> = Vec::new();
+        let mut member_ok: Vec<bool> = Vec::with_capacity(states.len());
+        for (si, st) in states.iter().enumerate() {
+            let ox = (cache_c0 as i64 + st.iacc[0]) as usize;
+            let oy = (cache_c0 as i64 + st.iacc[1]) as usize;
+            member_ok.push(member_is_localizable(
+                &caches[si],
+                &support,
+                r,
+                oy,
+                ox,
+                tau,
+                &mut scratch,
+            ));
+        }
+        prof::count(
+            &prof::N_DROP_UNLOCALIZABLE,
+            member_ok.iter().filter(|&&ok| !ok).count() as u64,
+        );
+        let mut i = 0;
+        retain_states_and_caches(&mut states, &mut caches, |_| {
+            let keep = member_ok[i];
+            i += 1;
+            keep
+        });
+    }
+
     let mut loo = LooScratch::default();
     let mut search = SearchScratch::default();
     let mut rounds_run = 0u32;
@@ -841,8 +955,17 @@ pub fn localize_patch_keypoints_with_basis(
         }
 
         // 5. Drop failing views (out-of-frame already removed above): keypoint too
-        //    far from the projection, or leave-one-out ZNCC below the relative bar.
-        //    Stop dropping once only two views (the leave-one-out floor) remain.
+        //    far from the projection, leave-one-out ZNCC below the **absolute**
+        //    floor, or below the relative bar.
+        //
+        //    The two gates differ in what can undo them. The relative bar asks a
+        //    consensus question ("does this view agree as well as its peers?"),
+        //    and its answer is meaningless once every view fails it — so the
+        //    two-view floor restores the two best when *only* that bar dropped
+        //    them. `max_shift_px` and `min_absolute_zncc` are absolute per-view
+        //    verdicts, so a view they reject is out for good; that is what makes
+        //    them bite on a two-view point, where the relative bar reduces to
+        //    `min_relative_zncc ×` the same pairwise correlation it is testing.
         let mut live_loo: Vec<f64> = live
             .iter()
             .map(|&si| states[si].loo)
@@ -857,7 +980,8 @@ pub fn localize_patch_keypoints_with_basis(
         let live_idx: std::collections::HashSet<u32> =
             live.iter().map(|&si| states[si].idx).collect();
         // Keep only live views (drops out-of-frame from this round) that also pass
-        // the shift / agreement gates; guarantee at least the top-two by ZNCC.
+        // the shift / agreement gates; guarantee at least the top-two by ZNCC
+        // among the views the absolute gates left standing.
         let mut kept: Vec<usize> = Vec::new();
         let mut fallback: Vec<(f64, usize)> = Vec::new();
         for (si, st) in states.iter().enumerate() {
@@ -871,12 +995,21 @@ pub fn localize_patch_keypoints_with_basis(
                 None => f64::INFINITY, // keypoint left the frame
             };
             // `shift_px <= max_shift_px` already rejects the out-of-frame INFINITY.
-            let ok = shift_px <= params.max_shift_px && st.loo.is_finite() && st.loo >= bar;
-            if ok {
+            // The absolute floor reads "finite and below": a view no round scored
+            // (`NaN`) has no verdict to fail, exactly as for the relative bar.
+            let below_floor = below_absolute_floor(st.loo, params.min_absolute_zncc);
+            if below_floor {
+                prof::count(&prof::N_DROP_ABS_ZNCC, 1);
+            }
+            let absolute_ok = shift_px <= params.max_shift_px && !below_floor;
+            if absolute_ok && st.loo.is_finite() && st.loo >= bar {
                 kept.push(si);
             }
-            let rank = if st.loo.is_finite() { st.loo } else { -1.0 };
-            fallback.push((rank, si));
+            // Only a view the absolute gates cleared is eligible for the floor.
+            if absolute_ok {
+                let rank = if st.loo.is_finite() { st.loo } else { -1.0 };
+                fallback.push((rank, si));
+            }
         }
         if kept.len() < 2 {
             // Honor the leave-one-out floor: retain the two best-agreeing views.
@@ -1041,10 +1174,14 @@ fn within_max_shift(
 /// `R_s + 2·margin` — it searches one `±margin` window around that seed and so
 /// needs no drift headroom (basis caches keep the `R_s + 4·margin` sizing that
 /// covers a whole round loop). The gates are the loop's verbatim: drop a view
-/// whose refined keypoint sits more than `max_shift_px` from the projection, or
-/// whose ZNCC falls below `min_relative_zncc ×` the **basis members'** median
-/// final ZNCC (the same threshold rule as the round loop, measured against a
-/// different reference — the no-holdout basis template).
+/// whose own tile fails the member localizability gate (scored before the search,
+/// so an unlocalizable tail view is never even registered), whose refined
+/// keypoint sits more than `max_shift_px` from the projection, whose ZNCC is
+/// below the absolute `min_absolute_zncc` floor, or whose ZNCC falls below
+/// `min_relative_zncc ×` the **basis members'** median final ZNCC (the same
+/// threshold rule as the round loop, measured against a different reference —
+/// the no-holdout basis template). There is no two-view floor here: the basis
+/// already carries the point, so a failing tail view is simply not registered.
 ///
 /// **Mixed channel counts.** The template's channel space is the one
 /// [`basis_template`] built, i.e. the minimum over the *basis* caches. A tail
@@ -1082,7 +1219,10 @@ fn register_tail(
         // agreement gate cannot be evaluated without a template, but the
         // positional one can and still must be — a seed can already sit further
         // than `max_shift_px` from the projection, and nothing downstream would
-        // catch it.
+        // catch it. The member localizability gate needs a rendered tile, and
+        // this path renders none (that is the cost it exists to avoid), so it is
+        // not applied; the point has already collapsed below two in-frame basis
+        // views, and `min_views` is what decides its fate.
         prof::count(&prof::N_TAIL_NO_BASIS, tail.len() as u64);
         tail.retain(|st| {
             within_max_shift(
@@ -1116,6 +1256,11 @@ fn register_tail(
     // its core at `margin`.
     let tail_c0 = geom.margin as usize;
     prof::count(&prof::N_RENDER, tail.len() as u64);
+    // Parallel to `tail`: whether the view cleared the member localizability
+    // gate. A view that did not is never searched and never kept, whatever it
+    // would have scored against the basis template.
+    let mut member_ok: Vec<bool> = Vec::with_capacity(tail.len());
+    let mut grid_scratch: Vec<f32> = Vec::new();
     for st in tail.iter_mut() {
         let view = &views[st.idx as usize];
         let cache = prof::RENDER.time(|| {
@@ -1131,6 +1276,24 @@ fn register_tail(
                 params.sampler,
             )
         });
+        // Member localizability gate, the loop's verbatim: score this view's own
+        // core tile (at its seed, where the cache is centred) and refuse a tile
+        // that pins no 2D position before it is scored against the template.
+        let ok = member_is_localizable(
+            &cache,
+            support,
+            r,
+            tail_c0,
+            tail_c0,
+            params.max_member_keypoint_uncertainty,
+            &mut grid_scratch,
+        );
+        member_ok.push(ok);
+        if !ok {
+            prof::count(&prof::N_DROP_UNLOCALIZABLE, 1);
+            st.loo = f64::NAN;
+            continue;
+        }
         // Score in the channel space this tail tile actually has (see the
         // "Mixed channel counts" note above); `sub_mask` is a prefix of the
         // template's mask, so `search.tmpl`'s leading rows still line up.
@@ -1181,8 +1344,15 @@ fn register_tail(
         }
     }
 
+    let mut i = 0;
     tail.retain(|st| {
-        within_max_shift(
+        let ok = member_ok[i];
+        i += 1;
+        if below_absolute_floor(st.loo, params.min_absolute_zncc) {
+            prof::count(&prof::N_DROP_ABS_ZNCC, 1);
+            return false;
+        }
+        ok && within_max_shift(
             patch,
             &views[st.idx as usize],
             st,

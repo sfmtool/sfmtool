@@ -48,7 +48,24 @@ impl PyPatchCloud {
     ///     max_shift_px: Drop a view whose refined keypoint sits more than this many
     ///         source-image px from the point's projection.
     ///     min_relative_zncc: Drop a view whose leave-one-out ZNCC falls below this
-    ///         fraction of the views' median leave-one-out ZNCC.
+    ///         fraction of the views' median leave-one-out ZNCC. A *consensus*
+    ///         question: when every view fails it, the two best are kept anyway.
+    ///     min_absolute_zncc: Drop a view whose leave-one-out ZNCC is finite and
+    ///         below this **absolute** floor, however many views remain — the
+    ///         two-view floor never restores it. Refuses the pair a two-view point
+    ///         makes of two unrelated surfaces, which the relative bar cannot see
+    ///         (each view's leave-one-out template is the other view, so the bar
+    ///         reduces to a fraction of the very correlation it is testing).
+    ///         Default ``0.5``; ``0`` disables it exactly.
+    ///     max_member_keypoint_uncertainty: Drop a view whose **own** rendered core
+    ///         tile does not pin a 2D position — structure-tensor weak-axis
+    ///         uncertainty ``σ_pos`` (patch-grid px) above this ``τ``. The
+    ///         member-level counterpart of the per-point consensus cull
+    ///         (``score_localizability`` / ``embed-patches``'s
+    ///         ``max_keypoint_uncertainty``), same units, same default ``0.35``:
+    ///         a flat sky tile or a lone straight edge correlates to noise, so it
+    ///         is refused before it is scored and is never restored by the
+    ///         two-view floor. ``0`` disables it exactly.
     ///     min_grazing_cos: Grazing cutoff; drop a view whose ray is near-parallel
     ///         to the patch plane (``|d·n|`` below this).
     ///     resolution: The R×R patch grid the consensus / ZNCC are scored on.
@@ -121,14 +138,19 @@ impl PyPatchCloud {
     ///     a view no round scored (a lone input view, or a view kept by the two-view
     ///     floor before any consensus was built), so guard before reducing it.
     ///     ``is_basis`` marks the consensus-basis members (all ``True`` unless
-    ///     ``basis_max_views`` capped that point's view set).
+    ///     ``basis_max_views`` capped that point's view set). ``K`` can be **below
+    ///     two**: the absolute gates (``max_shift_px``, ``min_absolute_zncc``,
+    ///     ``max_member_keypoint_uncertainty``) are not undone by the two-view
+    ///     floor, so a point whose members individually fail them is reported with
+    ///     one view or none for the caller's ``min_views`` cull to remove.
     // This is a Python docstring (rendered by `help()`), not Rust prose: its
     // indented `Args:` / `Returns:` continuation paragraphs read as Markdown
     // indented code blocks, which rustdoc then tries to parse as Rust.
     #[allow(rustdoc::invalid_rust_codeblocks)]
     #[pyo3(signature = (
         recon, images, *, view_sets=None, max_iters=5, search=6.0, max_shift_px=3.0,
-        min_relative_zncc=0.7, min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
+        min_relative_zncc=0.7, min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
+        min_grazing_cos=0.1, resolution=24, window="gaussian_disk",
         window_sigma=0.6, sampler="bilinear_mip", robust_iters=3, convergence_px=0.05,
         point_indexes=None, starting_keypoints=None, search_resolution_multiplier=1.0,
         search_strategy="plus_descent", basis_max_views=8, basis_force_track_views=true,
@@ -145,6 +167,8 @@ impl PyPatchCloud {
         search: f64,
         max_shift_px: f64,
         min_relative_zncc: f64,
+        min_absolute_zncc: f64,
+        max_member_keypoint_uncertainty: f64,
         min_grazing_cos: f64,
         resolution: u32,
         window: &str,
@@ -223,6 +247,8 @@ impl PyPatchCloud {
             search,
             max_shift_px,
             min_relative_zncc,
+            min_absolute_zncc,
+            max_member_keypoint_uncertainty,
             min_grazing_cos,
             resolution,
             window,

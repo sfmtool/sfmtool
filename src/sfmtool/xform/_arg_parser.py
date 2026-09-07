@@ -251,6 +251,8 @@ _LOCALIZE_KEYPOINTS_KEYS: dict[str, Callable[[str], object]] = {
     "search": float,
     "max_shift_px": float,
     "min_relative_zncc": float,
+    "min_absolute_zncc": float,
+    "max_member_keypoint_uncertainty": float,
     "min_grazing_cos": float,
     "resolution": int,
     "window": str,

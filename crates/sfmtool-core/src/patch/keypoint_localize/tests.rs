@@ -191,6 +191,16 @@ fn params() -> KeypointLocalizeParams {
     }
 }
 
+/// [`params`] with both **absolute** per-view gates disabled — the behaviour
+/// before they existed, which `0.0` must reproduce exactly.
+fn gates_off() -> KeypointLocalizeParams {
+    KeypointLocalizeParams {
+        min_absolute_zncc: 0.0,
+        max_member_keypoint_uncertainty: 0.0,
+        ..params()
+    }
+}
+
 /// The index into `res.views` where image `i` was kept, if any.
 fn pos(res: &KeypointLocalization, i: u32) -> Option<usize> {
     res.views.iter().position(|&v| v == i)
@@ -881,6 +891,134 @@ fn two_view_floor_keeps_exactly_two_when_all_fail() {
         "floor keeps exactly two: {:?}",
         res.views
     );
+    // …and the floor is a *relative*-bar remedy only: raise the absolute floor
+    // above what these views actually score and nothing is restored.
+    let strict = KeypointLocalizeParams {
+        min_absolute_zncc: 1.5,
+        ..p
+    };
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1, 2], None, &strict);
+    assert!(
+        res.views.len() < 2,
+        "the absolute floor is never undone by the two-view floor: {:?} {:?}",
+        res.views,
+        res.loo_zncc
+    );
+}
+
+#[test]
+fn two_view_flat_member_is_dropped_as_unlocalizable() {
+    // A two-view point whose second member is a textureless tile (flat sky /
+    // water). Its own structure tensor pins no 2D position, so `σ_pos` is
+    // enormous and the member localizability gate refuses it before any ZNCC is
+    // computed — leaving the point with one view, which the caller's `min_views`
+    // cull removes. With the gate off both views survive, because on a two-view
+    // point the relative bar is `min_relative_zncc ×` the very correlation it is
+    // testing and the two-view floor would restore the pair regardless.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
+    let offs = [[0.0; 2]; 2];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, flat_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &params());
+    assert!(
+        pos(&res, 1).is_none(),
+        "the flat member must be dropped as unlocalizable: {:?}",
+        res.views
+    );
+    assert!(
+        res.views.len() < 2,
+        "the point is left below min_views: {:?}",
+        res.views
+    );
+
+    let off_gates = localize_patch_keypoints(&patch, &views, &[0, 1], None, &gates_off());
+    assert_eq!(
+        off_gates.views,
+        vec![0, 1],
+        "with the gates disabled the flat member survives (the old behaviour)"
+    );
+}
+
+#[test]
+fn two_view_disagreeing_pair_is_dropped_by_the_absolute_floor() {
+    // Two views of *different* surfaces. Both tiles are perfectly localizable on
+    // their own, so only the correlation between them can refuse the pair — and
+    // the relative bar cannot: each view's leave-one-out template IS the other
+    // view, so both score the same pairwise ZNCC and each clears
+    // `min_relative_zncc ×` itself. The absolute floor is what sees the pair for
+    // what it is.
+    let centers = [[0.4, 0.0, 0.0], [-0.4, 0.0, 0.0]];
+    let offs = [[0.0; 2]; 2];
+    let texs: Vec<fn(f64, f64) -> f64> = vec![texture, occluder_texture];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    // `max_shift_px` off in both arms: a view chasing a match on the wrong
+    // surface can wander past it, and the point of this test is the ZNCC gates.
+    let loose = KeypointLocalizeParams {
+        max_shift_px: 1e6,
+        ..params()
+    };
+    let off_gates = localize_patch_keypoints(
+        &patch,
+        &views,
+        &[0, 1],
+        None,
+        &KeypointLocalizeParams {
+            max_shift_px: 1e6,
+            ..gates_off()
+        },
+    );
+    assert_eq!(
+        off_gates.views,
+        vec![0, 1],
+        "without the floor the mismatched pair survives (the old behaviour)"
+    );
+    assert!(
+        off_gates.loo_zncc.iter().all(|&z| z < 0.5),
+        "the pair's mutual ZNCC is well under the 0.5 floor: {:?}",
+        off_gates.loo_zncc
+    );
+
+    let res = localize_patch_keypoints(&patch, &views, &[0, 1], None, &loose);
+    assert!(
+        res.views.len() < 2,
+        "the absolute floor must break the mismatched pair: {:?} {:?}",
+        res.views,
+        res.loo_zncc
+    );
+}
+
+#[test]
+fn absolute_gates_at_zero_reproduce_the_ungated_run() {
+    // `0.0` disables each absolute gate *exactly*: on a scene none of them bite
+    // on, the gated defaults and the fully-disabled params agree bit for bit,
+    // arrays included — so the gates add a refusal and change nothing else.
+    let centers = [
+        [0.4, 0.0, 0.0],
+        [-0.4, 0.0, 0.0],
+        [0.0, 0.4, 0.0],
+        [0.0, -0.4, 0.0],
+    ];
+    let offs = [[0.0; 2]; 4];
+    let texs = vec![texture as fn(f64, f64) -> f64; 4];
+    let scene = Scene::new(&centers, &offs, &texs);
+    let views = scene.views();
+    let patch = plane_patch();
+
+    let gated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &params());
+    let ungated = localize_patch_keypoints(&patch, &views, &[0, 1, 2, 3], None, &gates_off());
+
+    assert_eq!(gated.views, ungated.views);
+    assert_eq!(gated.keypoints, ungated.keypoints);
+    assert_eq!(gated.offsets_px, ungated.offsets_px);
+    assert_eq!(gated.loo_zncc, ungated.loo_zncc);
+    assert_eq!(gated.is_basis, ungated.is_basis);
+    assert_eq!(gated.rounds, ungated.rounds);
 }
 
 #[test]
@@ -2201,8 +2339,11 @@ fn empty_view_scores_fall_back_to_the_grazing_rank() {
     assert_eq!(batch[0].is_basis, none.is_basis);
 }
 
-/// A textureless surface: every channel is flat, so the z-normalization finds
-/// no channel to score on and no consensus template can be built.
+/// A textureless surface — flat sky or water. Every channel is flat, so the
+/// z-normalization finds no channel to score on and no consensus template can be
+/// built; every gradient is zero too, so the structure tensor's weak eigenvalue
+/// is zero and a member rendering this has an unbounded `σ_pos` (it pins no 2D
+/// position, and its ZNCC to anything is noise).
 fn flat_texture(_x: f64, _y: f64) -> f64 {
     128.0
 }
@@ -2241,6 +2382,10 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
         BasisEvidence::default(),
         &KeypointLocalizeParams {
             max_shift_px: 1e6,
+            // Hold the member localizability gate off: it would refuse these
+            // flat tiles outright, and the path under test is the one the
+            // *z-normalization* bail reaches.
+            max_member_keypoint_uncertainty: 0.0,
             ..capped(3)
         },
     );
@@ -2262,6 +2407,7 @@ fn tail_without_a_basis_template_still_faces_the_shift_gate() {
         BasisEvidence::default(),
         &KeypointLocalizeParams {
             max_shift_px: 0.5,
+            max_member_keypoint_uncertainty: 0.0,
             ..capped(3)
         },
     );

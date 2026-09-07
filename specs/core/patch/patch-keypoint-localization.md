@@ -57,10 +57,15 @@ recovers it by unprojecting the keypoint onto the patch plane.
   and each is seeded from what it has. A view set in which no view carries a
   keypoint is the all-projection case, identical to supplying no seeds at all.
 - **Drop thresholds** — the per-view gates the refiner uses to drop a view
-  in-loop (below): `max_shift_px`, `min_relative_zncc`, and the grazing cutoff. The caller
-  supplies them; the refiner stops dropping once only the LOO floor of two views
-  remains and reports what survived (the per-point `min_views` cull is the
-  caller's).
+  in-loop (below), in two families. The **absolute** gates judge one view on its
+  own and their verdicts stand: `max_member_keypoint_uncertainty` (the view's own
+  tile pins no 2D position), `max_shift_px` (its keypoint sits too far from the
+  projection), `min_absolute_zncc` (its leave-one-out ZNCC is below a fixed
+  floor), and the grazing cutoff. The **relative** gate,
+  `min_relative_zncc`, asks whether a view agrees as well as its peers, and the
+  two-view LOO floor restores the two best when it drops everything. The caller
+  supplies them all; the refiner reports what survived, which can be fewer than
+  two views, and the per-point `min_views` cull is the caller's.
 
 ## Algorithm: group-wise translation registration (congealing)
 
@@ -74,7 +79,18 @@ cap register once against the finished consensus instead of joining it — see
 Then maintain a per-view in-plane
 coordinate `acc[v]` (patch-grid units) for the patch centre on `Π_p`, measured
 from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
-(zero when the seed is the point's own projection). Each round:
+(zero when the seed is the point's own projection).
+
+Before the first round, each surviving view's own tile faces the **member
+localizability gate**: its `R×R` core at its seed offset is scored by the
+[patch-localizability](patch-localizability.md) structure tensor, and a view
+whose weak-axis positional uncertainty `σ_pos` exceeds
+`max_member_keypoint_uncertainty` is dropped. A member that pins no 2D position
+of its own — a flat sky or water crop, a lone straight edge — has a ZNCC to
+anything that is noise, so refusing it up front keeps it out of every round's
+template rather than letting it vote and then be judged by the votes. It is
+scored once, on the member's appearance rather than the round's, and no later
+step restores it. Then each round:
 
 1. **Render** every view's patch tile from its source image at its accumulated
    offset `acc[v]` — a *single* resample of the source, with the patch centre
@@ -107,11 +123,24 @@ from `X_p` and **initialized by unprojecting the starting keypoint onto `Π_p`**
 5. **Drop failing views.** Remove any view whose keypoint has left the frame,
    whose keypoint sits more than `max_shift_px` from the point's projection
    (`|acc[v]|` mapped to source-image px — an *absolute* distance from
-   `project_i(X_p)`, not the move from the seed), or whose leave-one-out ZNCC
-   falls below `min_relative_zncc` of the views' median LOO ZNCC (relative, so a
-   low-texture patch isn't over-dropped); the next round's consensus is rebuilt
-   from the survivors, so the remaining views register against a cleaner
-   template. Stop dropping once only two views (the LOO floor) remain.
+   `project_i(X_p)`, not the move from the seed), whose leave-one-out ZNCC is
+   finite and below the absolute floor `min_absolute_zncc`, or whose
+   leave-one-out ZNCC falls below `min_relative_zncc` of the views' median LOO
+   ZNCC (relative, so a low-texture patch isn't over-dropped); the next round's
+   consensus is rebuilt from the survivors, so the remaining views register
+   against a cleaner template.
+
+   The **two-view floor** is the relative bar's remedy alone: when fewer than two
+   views clear all the gates, the two best-scoring views *among those the absolute
+   gates left standing* are kept anyway, so a set that merely disagrees uniformly
+   still produces a pair. A view the absolute gates rejected is never restored,
+   and a point can therefore end a round with one view or none. This is what makes
+   the gates bite on a **two-view point**, where the relative bar is decorative:
+   each view's leave-one-out template *is* the other view, so both score the same
+   pairwise correlation, `min_relative_zncc × median` reduces to a fraction of
+   that same number, and the floor would restore the pair regardless. Two
+   unrelated surfaces are refused by `min_absolute_zncc`; a textureless member is
+   refused by the localizability gate before the round begins.
 6. **Repeat** to convergence or a small iteration cap (default 5). Convergence
    is the mean **round-over-round change** of each view's refined position
    (integer accumulator + sub-pixel residual, this round vs the previous one)
@@ -166,7 +195,9 @@ ray∩plane), so a producer and a reader round-trip.
 The algorithm returns:
 
 - the **kept views** — a mask over the input `G` of which views survived the
-  in-loop drops (grazing, out-of-frame, large-shift, low-agreement);
+  in-loop drops (grazing, unlocalizable on their own, out-of-frame, large-shift,
+  low-agreement absolutely or relative to their peers). It can hold fewer than
+  two views, since the absolute gates are not undone by the two-view floor;
 - per kept view, its **refined keypoint** (`project_i(X_p) + δ_j` in the format's
   terms) and **quality signals** — its offset from the point's projection
   (`acc[v]` mapped to source-image px) and the final leave-one-out ZNCC against
@@ -194,7 +225,9 @@ existing patch machinery:
 | `max_iters` | 5 | max congealing rounds (stops early at convergence) |
 | `search` | 6 px | max total per-view drift from the projection (patch-grid px), bounds runaway; also the context-tile margin |
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
-| `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC |
+| `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it) |
+| `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
+| `max_member_keypoint_uncertainty` | 0.35 | drop a view whose own tile scores `σ_pos` above this `τ` (patch-grid px, the [patch-localizability](patch-localizability.md) scorer); `0` disables |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
 | `resolution` | 24 | the `R×R` patch grid the consensus / ZNCC are scored on |
 | `robust_iters` | 3 | IRLS passes for the robust consensus |
@@ -211,6 +244,7 @@ half-vectors).
 
 `PatchCloud.localize_keypoints(recon, images, *, view_sets=None,
 max_iters=5, search=6.0, max_shift_px=3.0, min_relative_zncc=0.7,
+min_absolute_zncc=0.5, max_member_keypoint_uncertainty=0.35,
 min_grazing_cos=0.1, resolution=24, …, point_indexes=None)` returns a per-point
 `{point_index, views, keypoints, offsets_px, loo_zncc}`. Each round renders a
 **context tile** per view (the scored `R×R` core extended by `±⌈search⌉` px so the
@@ -219,12 +253,17 @@ compacted channel space (a channel flat in any view is dropped, as in normal
 refinement), builds the leave-one-out IRLS consensus of the *other* views, and
 runs a full-res integer windowed-ZNCC search refined by a separable parabolic fit;
 the per-view offset accumulates and is clipped to `±search`. A view is dropped when
-its core leaves the frame (any window-support pixel out of frame), its keypoint
-sits more than `max_shift_px` from the projection, or its leave-one-out ZNCC falls
-below `min_relative_zncc ×` the views' median — all subject to the two-view
-leave-one-out floor (when the gates would leave fewer than two, the two
-best-agreeing views are kept, so a kept pair can exceed `max_shift_px`). Grazing
-views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
+its own tile scores `σ_pos > max_member_keypoint_uncertainty` (checked once, on the
+tile at its seed, before the first round), when its core leaves the frame (any
+window-support pixel out of frame), its keypoint sits more than `max_shift_px`
+from the projection, its leave-one-out ZNCC is finite and below
+`min_absolute_zncc`, or its leave-one-out ZNCC falls below `min_relative_zncc ×`
+the views' median. Only the last of those is subject to the two-view
+leave-one-out floor: when it would leave fewer than two, the two best-agreeing
+views *that cleared the absolute gates* are kept, so the result can carry one view
+or none and the caller's `min_views` cull removes the point. Setting
+`min_absolute_zncc` or `max_member_keypoint_uncertainty` to `0` disables that gate
+exactly. Grazing views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
 order-preserving, and seeds default to the point's own projection (`acc = 0`); a
 supplied starting keypoint is unprojected onto the plane to initialize `acc`. The
 render → z-normalize → robust-consensus primitives are shared with `normal_refine`

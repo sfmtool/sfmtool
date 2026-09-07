@@ -28,6 +28,13 @@ pub(in crate::patch) use scorer::patch_localizability;
 
 use crate::patch::normal_refine::{window_weights as kernel_window_weights, PatchWindow};
 
+/// Global photometric-noise constant `σ_noise` (intensity units) the in-crate
+/// gates score with — the value that sets the absolute px scale of `σ_pos`. It
+/// matches the `score_localizability` binding's / `embed-patches`' default (see
+/// `specs/core/patch/patch-localizability.md`, "σ_noise (v1: global constant)"),
+/// so a member-level gate and the per-point consensus cull read the same scale.
+pub const SIGMA_NOISE: f64 = 3.0;
+
 /// The scorer's `R×R` window weights (row-major) for `window` — the shared patch
 /// kernel, exposed so callers (the Python binding, tests) score against the same
 /// window the scorer uses rather than reimplementing it.

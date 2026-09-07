@@ -119,9 +119,14 @@ first).
   `R + 2·margin` — it searches one `±margin` window around the seed, so it
   needs no drift headroom (basis caches keep the `R + 4·margin` sizing).
 - **Search + gates.** One shift search (same `search_strategy`) against the
-  basis template. The existing per-view gates apply verbatim: drop when the
-  refined keypoint moves `> max_shift_px` from the projection, or when the ZNCC
-  falls below `min_relative_zncc ×` the **basis members'** median final ZNCC.
+  basis template — preceded, as in the basis path, by the member localizability
+  gate on the tail view's own tile at its seed, so a view that pins no 2D
+  position is never even searched. The remaining per-view gates apply verbatim:
+  drop when the refined keypoint moves `> max_shift_px` from the projection, when
+  the ZNCC is finite and below `min_absolute_zncc`, or when it falls below
+  `min_relative_zncc ×` the **basis members'** median final ZNCC. There is no
+  two-view floor here: the basis already carries the point, so a failing tail
+  view is simply not registered.
   That is the same *threshold rule* the round loop applies, but not the same
   measurement: a basis member's ZNCC is against a leave-one-out consensus of the
   other members, a tail view's against the no-holdout template of all of them,
@@ -143,10 +148,13 @@ first).
   distribution is the quality signal the validation below reads.
 - **No usable basis.** When the round loop collapses below two in-frame views,
   or leaves no textured channel, there is no template to register against and
-  the tail keeps its seed offsets with an unknown ZNCC. The agreement gate
-  cannot be evaluated without a template, but the positional one still is: a
+  the tail keeps its seed offsets with an unknown ZNCC. The agreement gates
+  cannot be evaluated without a template (and an unknown ZNCC is not "finite and
+  below" the absolute floor either), but the positional one still is: a
   seed can already sit further than `max_shift_px` from the projection and
-  nothing downstream would catch it. This is *not* the same as the round loop's
+  nothing downstream would catch it. The member localizability gate needs a
+  rendered tile and this path renders none — that render is the cost it exists
+  to avoid — so it does not apply here. This is *not* the same as the round loop's
   own early exits, whose survivors have at least been read in frame and, past
   round 1, already faced both gates — so `N_TAIL_NO_BASIS` reports how many tail
   views took it (244 of 475,645 on the capture measured below).

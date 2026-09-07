@@ -81,7 +81,29 @@ pub struct KeypointLocalizeParams {
     /// Drop a view whose leave-one-out ZNCC falls below this fraction of the
     /// views' *median* leave-one-out ZNCC (relative, so a uniformly low-texture
     /// patch is not over-dropped).
+    ///
+    /// This is a **consensus** question, so the two-view floor can restore a view
+    /// that fails only this bar (see [`min_absolute_zncc`](Self::min_absolute_zncc)
+    /// for the gate it cannot restore).
     pub min_relative_zncc: f64,
+    /// Drop a view whose leave-one-out ZNCC is finite and **below this absolute
+    /// floor**, however many views remain. The relative bar alone is decorative on
+    /// a two-view point — each view's leave-one-out template is simply the other
+    /// view, so both scores are the same pairwise correlation and the bar reduces
+    /// to `min_relative_zncc × itself` — and the two-view floor would restore the
+    /// pair anyway. This gate is never undone by that floor. `0.0` (or a
+    /// non-finite value) disables it exactly.
+    pub min_absolute_zncc: f64,
+    /// Drop a view whose **own** rendered core tile is not localizable: the
+    /// weak-axis positional uncertainty `σ_pos` of its structure tensor
+    /// (patch-grid px, from [`patch_localizability`](crate::patch::localizability))
+    /// above this `τ`. The member-level counterpart of the per-point consensus
+    /// gate (`specs/core/patch/patch-localizability.md`) and the same units and
+    /// default: a flat or edge-only member pins no 2D position, so its ZNCC to
+    /// anything is noise. Scored once per view on the tile at its seed offset,
+    /// before any ZNCC, and never undone by the two-view floor. `0.0` (or a
+    /// non-finite value) disables it exactly.
+    pub max_member_keypoint_uncertainty: f64,
     /// Grazing cutoff: drop a view whose viewing ray is near-parallel to the
     /// patch plane (`|d̂ · n̂|` below this), where the in-plane anchor is
     /// ill-conditioned and the view would only contaminate the consensus.
@@ -141,6 +163,8 @@ impl Default for KeypointLocalizeParams {
             search: 6.0,
             max_shift_px: 3.0,
             min_relative_zncc: 0.7,
+            min_absolute_zncc: 0.5,
+            max_member_keypoint_uncertainty: 0.35,
             min_grazing_cos: 0.1,
             resolution: 24,
             window: PatchWindow::GaussianDisk { sigma: 0.6 },
@@ -158,7 +182,15 @@ impl Default for KeypointLocalizeParams {
 
 /// The localized keypoints for one point — parallel arrays over the **kept**
 /// views (a subset of the input view set, in the input's order; grazing /
-/// out-of-frame / large-shift / low-agreement views are dropped in-loop).
+/// out-of-frame / unlocalizable / large-shift / low-agreement views are dropped
+/// in-loop).
+///
+/// The kept set can be **shorter than two**: the absolute gates
+/// ([`min_absolute_zncc`](KeypointLocalizeParams::min_absolute_zncc),
+/// [`max_member_keypoint_uncertainty`](KeypointLocalizeParams::max_member_keypoint_uncertainty),
+/// [`max_shift_px`](KeypointLocalizeParams::max_shift_px)) are not undone by the
+/// two-view floor, so a point whose members individually fail them is reported
+/// with one view or none, for the caller's `min_views` cull to remove.
 #[derive(Debug, Clone, Default)]
 pub struct KeypointLocalization {
     /// The kept image indices (into the `views` slice), a subset of the input

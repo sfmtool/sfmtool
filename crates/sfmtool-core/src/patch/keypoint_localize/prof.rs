@@ -144,6 +144,14 @@ pub static N_TAIL: AtomicU64 = AtomicU64::new(0);
 /// seed offsets and face only the `max_shift_px` gate. A large share here means
 /// the cap's reported keypoints are partly un-refined seeds.
 pub static N_TAIL_NO_BASIS: AtomicU64 = AtomicU64::new(0);
+/// Views dropped by the member localizability gate
+/// ([`max_member_keypoint_uncertainty`](super::KeypointLocalizeParams::max_member_keypoint_uncertainty)),
+/// summed over points — their own tile pins no 2D position.
+pub static N_DROP_UNLOCALIZABLE: AtomicU64 = AtomicU64::new(0);
+/// Views dropped by the absolute leave-one-out floor
+/// ([`min_absolute_zncc`](super::KeypointLocalizeParams::min_absolute_zncc)),
+/// summed over points and rounds.
+pub static N_DROP_ABS_ZNCC: AtomicU64 = AtomicU64::new(0);
 
 /// Count one event on `c` when profiling is on.
 #[inline]
@@ -185,6 +193,8 @@ pub fn reset() {
         &N_BASIS,
         &N_TAIL,
         &N_TAIL_NO_BASIS,
+        &N_DROP_UNLOCALIZABLE,
+        &N_DROP_ABS_ZNCC,
     ] {
         c.store(0, Ordering::Relaxed);
     }
@@ -235,7 +245,7 @@ pub fn report(patches: usize, wall_secs: f64) {
     let n_cells = N_CELLS.load(Ordering::Relaxed);
     eprintln!(
         "[sfmtool-profile]   rounds {}  renders {}  searches {}  cells {} ({:.2}/search)  \
-         basis {}  tail {} (no-basis {})",
+         basis {}  tail {} (no-basis {})  dropped: unlocalizable {}, abs-zncc {}",
         N_ROUNDS.load(Ordering::Relaxed),
         N_RENDER.load(Ordering::Relaxed),
         n_search,
@@ -248,6 +258,8 @@ pub fn report(patches: usize, wall_secs: f64) {
         N_BASIS.load(Ordering::Relaxed),
         N_TAIL.load(Ordering::Relaxed),
         N_TAIL_NO_BASIS.load(Ordering::Relaxed),
+        N_DROP_UNLOCALIZABLE.load(Ordering::Relaxed),
+        N_DROP_ABS_ZNCC.load(Ordering::Relaxed),
     );
     crate::camera::remap::prof::report();
 }
