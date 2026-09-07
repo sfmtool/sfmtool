@@ -1,14 +1,16 @@
-# Free and held points in bundle adjustment (amendment)
+# Free, ranged and held points in bundle adjustment (amendment)
 
-**Status:** Draft. Decided: the two point kinds and their names, that a free
+**Status:** Draft. Decided: the three point kinds and their names, that a free
 point's representation is chosen by the inter-round re-estimation and can cross
-in either direction, that a held point contributes residuals but owns no
+in either direction, that a ranged point keeps its distance from a reference
+and lets the triangulation own its direction (infinite range being the
+direction case), that a held point contributes residuals but owns no
 parameters, that "at infinity" in a file means "the estimate is a direction" and
 nothing more, and that the change ships behind a switch whose off position is
 bit-identical to the kernel as it stands. Not decided: the constant in the
 noise-floor angle, whether a free point should later be parameterized so it can
-cross inside a round rather than between rounds, and how the viewer marks a held
-point.
+cross inside a round rather than between rounds, and how the viewer marks a
+ranged or held point.
 
 Amends [`../core/geometry/bundle-adjustment.md`](../core/geometry/bundle-adjustment.md)
 (the "Points at infinity" and "Protected observations" sections and the binding),
@@ -47,24 +49,36 @@ The mask also overloads one word. In a stored reconstruction `w = 0` means
 means "hold this at infinity". Those are different statements, and a point can
 satisfy one without the other.
 
-## The two kinds
+## The three kinds
 
-Every point is one of two kinds, orthogonal to its current representation:
+Every point is one of three kinds, orthogonal to its current representation:
 
 - **Free.** The solve owns the point. Its representation, finite `(x, y, z)` or
   direction `d`, is whatever its rays support at the current geometry, decided
   by the re-estimation between rounds and allowed to change in either direction
   as the poses move. `w = 0` on output reports that the final estimate is a
   direction.
+- **Ranged.** The caller owns one number, the point's distance `r` from a
+  reference the caller names; the solve owns the direction. The point is
+  `X = O + r · d` with `d` a unit vector and `O` the reference, and `d` is the
+  point's only parameter, two degrees of freedom on the sphere. `r = ∞` is
+  allowed and is exactly a direction: the point contributes rotation-and-lens
+  rows and nothing else. A finite `r` is how a landmark whose distance is known
+  (a surveyed range, a map distance from the capture point) enters without a
+  georeferenced frame, and how a far-field track can be carried at a depth the
+  caller trusts more than a 5 m baseline can measure, while the solve still
+  decides where on the sky it sits.
 - **Held.** The caller owns the point. Its homogeneous coordinate, finite or
   direction, is fixed for the whole solve. Its observations still form
   residuals and still feed the camera and lens blocks, but the point has no
   parameters and no Schur block, and re-estimation skips it. A held point is
-  how a surveyed landmark, a certified bearing, or a far-field track carried at
-  a depth the caller trusts more than the solve, enters the adjustment.
+  how a landmark with a known position in the solve's frame enters.
 
-`protected` is unchanged and orthogonal: it is about whether an observation can
-be trimmed, not about whether a point can move.
+The kinds nest: a held point is a ranged point that has also given up its
+direction, and a ranged point at infinite range with no reference is what the
+standing kernel calls a marked point. `protected` is unchanged and orthogonal:
+it is about whether an observation can be trimmed, not about whether a point
+can move.
 
 ## Free points: crossing between representations
 
@@ -100,6 +114,41 @@ Schur structure, and the between-round crossing above captures the behaviour
 that matters. This draft does not propose it; it records it as the natural
 next step if the between-round rule turns out to lag the poses.
 
+## Ranged points: a direction at a distance
+
+A ranged point is `X = O + r · d`, with `r` fixed by the caller and `d` the
+parameter. The reference `O` is one of: a camera index (the point's distance is
+measured from that camera's centre at its current pose, so `O` moves with the
+solve), or a world point (a fixed coordinate). `r = ∞` needs no reference and
+the point degenerates to a direction.
+
+Residual and derivatives, for a finite `r`:
+
+- `uv = ray_to_pixel(R_i · (O + r · d) + t_i)`, the finite projection with the
+  point's position substituted.
+- **Parameters.** `d` perturbs in its 2-DOF tangent plane exactly as a
+  direction does, `d ← normalize(d + B(d) · δ)`, and the point's Jacobian block
+  is `r · J_X · B(d)` where `J_X` is the finite point's position Jacobian; its
+  Schur block is 2×2.
+- **Camera blocks.** The rotation and translation blocks are those of a finite
+  point at `X`. When `O` is camera `k`'s centre, `X` also depends on camera
+  `k`'s pose, and that dependence is accumulated into camera `k`'s block for
+  every observation of the point, including camera `k`'s own. A world-point `O`
+  adds nothing.
+- **At `r = ∞`** every one of these reduces to the standing spec's direction
+  rows: the position Jacobian scaled by `r` becomes the direction's tangent
+  Jacobian in the limit, and the translation block is zero.
+
+Re-estimation between rounds keeps `r` and re-solves `d`: at infinite range
+the normalized mean of the back-rotated rays, as today; at a finite range the
+direction from `O` that minimizes the reprojection error at the current
+geometry, which the point-estimation operation gains as a rule (`range` with
+an off position, read before `floor`). A ranged point never crosses kinds: its
+representation is finite whenever `r` is, a direction when `r = ∞`.
+
+Trim, `min_track` and `min_obs` treat a ranged point's observations exactly
+like any other's.
+
 ## Held points: residuals without parameters
 
 A held point's observations project exactly as today for its representation:
@@ -125,11 +174,16 @@ translation live, which is what a surveyed landmark is for.
 ## Format
 
 `positions_xyzw` keeps its meaning exactly: `w = 0` is a direction, `w ≠ 0` a
-finite point, and the value is an estimate. One optional per-point column is
+finite point, and the value is an estimate. Two optional per-point columns are
 added:
 
-- `points3d/held.{N}.uint8.zst`: `1` for a held point, `0` for a free one.
-  Absent means every point is free, so every existing file reads unchanged.
+- `points3d/kind.{N}.uint8.zst`: `0` free, `1` ranged, `2` held. Absent means
+  every point is free, so every existing file reads unchanged.
+- `points3d/range.{N}.4.float64.zst`: for a ranged point, `(r, ox, oy, oz)`
+  with `r = +inf` for a direction; the reference is a world point when the
+  row's `ox, oy, oz` are finite and a camera index, stored in `ox`, when
+  `oy = oz = NaN`. Rows of free and held points are NaN. Absent when no point
+  is ranged.
 
 `infinity_point_count` and every other count are unchanged; they count
 representations, not kinds.
@@ -142,6 +196,11 @@ bundle_adjust(camera, quaternions_wxyz, translations, points, uv, obs_image,
               point_at_infinity=None,   # (n_pt,) bool: the INITIAL representation
               held=None,                # (n_pt,) bool: a held point keeps its
                                         # coordinate; None = all free
+              range=None,               # (n_pt,) float: a ranged point's distance,
+                                        # +inf for a direction, NaN = not ranged
+              range_origin=None,        # (n_pt,) int camera index, or (n_pt, 3)
+                                        # world points; ignored where range is NaN
+                                        # or +inf
               free_points_cross=False,  # True: free points are re-estimated with
                                         # marks off and the noise floor; False:
                                         # the mask is honoured for the whole solve
@@ -152,8 +211,9 @@ bundle_adjust(camera, quaternions_wxyz, translations, points, uv, obs_image,
 ```
 
 The result gains `point_at_infinity` (`(n_pt,)` bool), the representation each
-point ended with; a held point's entry is its input value. With `held=None` and
-`free_points_cross=False` the kernel is bit-identical to the standing spec,
+point ended with; a held point's entry is its input value, a ranged point's is
+`r = +inf`. With `held=None`, `range=None` and `free_points_cross=False` the
+kernel is bit-identical to the standing spec,
 which is the parity requirement for the transition. When the seed and release
 paths have moved to `free_points_cross=True`, the default flips and the switch
 stays as the kill switch.
@@ -167,11 +227,16 @@ stays as the kill switch.
   translations are frozen because nothing carries a translation Jacobian) and
   gains nothing but the ability to promote a track once a later stage supplies
   baseline.
-- **Ground-truth construction.** Surveyed landmarks enter as held finite points
-  in the world frame; the near field is free; the far field is free and reports
+- **Ground-truth construction.** A landmark with a surveyed distance from the
+  capture point enters as a ranged point referenced to the capture's camera
+  (or its centroid as a world point); one with a known position in the solve's
+  frame enters held; the near field is free; the far field is free and reports
   whichever representation it converges to. The five GPS-pinned landmarks of
-  the `south_lake_union_parallax` capture are the first acceptance case.
-- **Viewer.** A held point wants a visible mark; how is not decided here.
+  the `south_lake_union_parallax` capture, whose distances (0.9-3.4 km) are
+  known but whose bearings are not georeferenced to the solve, are the first
+  acceptance case, as ranged points.
+- **Viewer.** A ranged or held point wants a visible mark; how is not decided
+  here.
 
 ## Testing requirements
 
@@ -188,9 +253,15 @@ stays as the kill switch.
 - Held points: coordinates are returned unchanged to the bit; their residuals
   appear in `residual_norms`; a scene whose only translation evidence is one
   held finite point solves that image's translation.
-- Acceptance on real data: with the pins held, the near field of the walk
-  capture stays sub-pixel and the free far field triangulates at its surveyed
-  distance to within the pins' own uncertainty.
+- Ranged points: the returned position sits at exactly `r` from the reference
+  (camera-referenced ones re-read at the final pose); at `r = +inf` a ranged
+  point reproduces a marked direction bit for bit; a planted landmark at a
+  wrong initial direction but the true range converges to the true direction
+  while a free point at the same start converges to a wrong depth.
+- Acceptance on real data: with the pins ranged at their surveyed distances,
+  the near field of the walk capture stays sub-pixel, the pins' directions
+  agree with their GPS mutual angles, and the free far field triangulates near
+  its surveyed distance rather than at a shell.
 
 ## Non-goals
 
