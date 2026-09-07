@@ -21,9 +21,9 @@ is retired with the last step.
 Decided: the document is a value (below), history stores values rather than
 commands, sharing is per column, change detection is by identity, node
 identity survives edits, the Action Log stays text and the history is the
-replayable thing. Not decided: the row-level edit problem (§ "The design
-challenge"), the selection-remapping rule, the history memory bound's value,
-and whether the history is per node or per scene.
+replayable thing. Not decided: the history memory bound's value, whether the
+history is per node or per scene, and what the row-level edit draft leaves
+open.
 
 Related standing specs, which will each carry a present-tense sentence pointing
 here once the first step lands: [`../gui/scene-graph.md`](../gui/scene-graph.md)
@@ -96,9 +96,9 @@ reconstruction: the point instance buffer, the frustum and image-quad
 geometry, the thumbnail atlas, and the patch instances with their bitmap
 atlas. A node today carries one `needs_upload` boolean and, when it is set,
 the app's per-frame upload phase rebuilds all of those from the reconstruction
-at once; a transform change is noticed through a separate epoch counter. With shared columns the upload phase keeps,
-per GPU resource, the identity of the column it last uploaded from, and
-compares identities each frame. Undoing a point edit re-uploads the point
+at once; a transform change is noticed through a separate epoch counter. With
+shared columns the upload phase keeps, per GPU resource, the identity of the
+column it last uploaded from, and compares identities each frame. Undoing a point edit re-uploads the point
 buffer and nothing else; a pose edit re-uploads frustums; undoing to a version
 whose columns are all the ones already on the GPU uploads nothing. The boolean
 and the epoch both go, replaced by one mechanism, and the GPU-side cost of an
@@ -119,9 +119,10 @@ an index into the current value, and an edit that deletes rows shifts the
 indexes after it. Options: clear the selection on any structural edit; remap
 it through the edit's row map; or key the selection by something stable. The
 history already knows what each structural edit removed, so remapping is
-cheap, and clearing is what a user would notice as a bug. Proposed: remap,
-and clear only when the selected row itself was removed. Left open until the
-first structural edit exists to test it against.
+cheap, and clearing is what a user would notice as a bug. The overlay draft
+([`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md))
+makes indexes stable across every edit but a materialisation, so remapping
+is needed only there, where the materialisation's row map supplies it.
 
 ---
 
@@ -217,73 +218,20 @@ What that edit does to the value:
 A make-mut on `tracks` clones ten million rows to insert one. That is tens of
 milliseconds and eighty megabytes per keystroke, and a hundred such edits in a
 history hold eight gigabytes of tracks that differ by a hundred rows in total.
-The naive column model fails exactly on the edit that matters. The questions
-below are what a design has to answer before step 6 in the plan can start;
-they are posed here, not solved.
+The naive column model fails exactly on the edit that matters.
 
-**Which representation makes a row edit cheap while keeping every algorithm's
-view of the data?** The algorithms in `sfmtool-core` and the bindings read
-`tracks` as a contiguous sorted slice with a prefix-sum index (CSR), and the
-bundle adjustment, triangulation, census and every analysis walk it that way.
-A representation that makes insertion cheap (a chunked or piece-table column,
-a persistent tree with a fan-out, an overlay of pending edits on a shared
-base) is not what those algorithms consume. Either every algorithm learns the
-new shape, or the edited representation is *materialised* back into CSR when
-an algorithm needs it. Materialisation is a full copy, so it has to be rare
-and it has to be shared: one materialised CSR per version that some algorithm
-actually ran on, not per edit.
-
-**Is an overlay the right model for the interactive case?** The interactive
-edits are few rows against a huge base. A version could be a shared base plus
-a small sorted set of row insertions and deletions, with the CSR view
-materialised lazily and cached on the version. Reads that only need one
-track (the Point Track Detail, the track rays, a single-point re-fit) can
-resolve through the overlay without materialising. A bundle adjustment
-materialises. The open question is how many read paths there are that would
-each need an overlay-aware accessor, versus how many can wait for the
-materialised view; the step 1 census counts them.
-
-**What is the value when the edit itself runs an algorithm?** The photometric
-fit reads the patch bitmap, the image, and the track's other observations,
-and writes the point and its frame. That is an algorithm on a value producing
-a value, which is the model; but it is also an algorithm that wants CSR
-access to one track, which is the overlay question again. And it reads the
-image file, which is not part of the value at all: the value has to name what
-it read (the image hash the observation source already carries) so that a
-version is reproducible, and the edit has to be a function of the value plus
-named external inputs, never of viewer state.
-
-**How does a row edit reach the GPU?** Identity-based change detection says
-the point buffer changed and re-uploads a million points for one moved point.
-The upload has to learn a row map, or a dirty range, from the version, which
-is the same information the selection remapping needs. One structure, two
-consumers.
-
-**How does a row edit reach the file?** The `.sfmr` format stores CSR. A save
-materialises, which is fine, once. But the format also carries per-image and
-per-observation hashes and identities that a consumer rewriting the file must
-keep consistent; adding an observation to a `sift_files` reconstruction from a
-pixel the user clicked has no feature index behind it. Whether such an edit
-converts the reconstruction's observation source, refuses on `sift_files`, or
-extends the format to carry an observation without a feature, is a format
-decision this draft does not make. The first track edits should be built on
+The answer is proposed in
+[`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md): an
+edited reconstruction is an immutable base plus a deleted set and an addition
+set, every edit reduces to deleting points from the base and re-adding them
+to the additions, indexes stay stable while the base lives, and the plain CSR
+form is materialised only when an algorithm, a save, or a size threshold asks
+for it. What that draft leaves open is the materialisation policy and which
+read paths look through the overlay. The first track edits are built on
 `embedded_patches` reconstructions, where an observation is a pixel and a
-patch and nothing else.
-
-**What is the unit of sharing for the patch bitmaps?** A fit that changes one
-patch's bitmap must not copy the bitmap column. Bitmaps are already per point
-and fixed-size, so the column is a natural candidate for chunked sharing
-(pages of N points, shared per page), which is also the representation the
-patch atlas upload would want. Whether the same chunking serves `tracks` is the
-first question again.
-
-These are the questions. The proposed order of attack is to build the
-column-level model first (steps 2 and 3), which is right for every non-row
-edit and is the foundation whatever the row answer is, then take the row
-problem on `embedded_patches` files with an overlay-plus-materialise design as
-the working hypothesis, measured against the interactive budget (one edit well
-under a frame at a million points) and the history budget before it is
-committed to.
+patch and nothing else; an added observation on a `sift_files` reconstruction
+has no feature index behind it, and whether the format grows to carry one is
+a format decision neither draft makes.
 
 ---
 
@@ -354,8 +302,10 @@ steps after it.
 4. **History panel.** Files into `gui/edit-history.md`, amends
    `gui/panel-layout.md`.
 5. **Saving.** Files `gui/saving.md`.
-6. **Row-level model.** Part 4's answer, on `embedded_patches` files, with the
-   add-observation edit as the proof. Amends `core/reconstruction/shared-columns.md`.
+6. **Row-level model.** The base-plus-edits representation of
+   [`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md), on
+   `embedded_patches` files, with the add-observation edit as the proof.
+   Amends `core/reconstruction/shared-columns.md`.
 7. **Edit families**, one PR each in Part 5's order, `gui/edits/`.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
@@ -373,10 +323,10 @@ Steps 2 and 3 are the groundwork; 4 and 5 are independent of each other and of
 
 ## Open questions
 
-- The selection rule on structural edits (Part 1).
 - The history memory budget's value (Part 2), after step 1's numbers.
 - Per node versus per scene history (Part 2).
-- Every question in Part 4.
+- The overlay draft's open questions (materialisation policy, whether a
+  modified point keeps its index, when the point-set split lands).
 - Whether `Reload from Disk` becomes "open the file as a new version at the
   cursor" so the id survives, or stays a fresh node. The former is consistent
   with node identity surviving edits.
