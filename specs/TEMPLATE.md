@@ -214,8 +214,55 @@ are settled — a stale open question reads as a live one.
   the module that implements it.
 - **`specs/formats/`** — the on-disk layout is the interface. The equivalent of
   "Rust API / why it is shaped this way" is the entry table plus the versioning
-  rules; keep Theory for the encoding decisions.
+  rules; keep Theory for the encoding decisions. A format spec is held to a
+  stricter standard than the others, below.
 - **`specs/gui/`** — describe the panel's behaviour and state, and the user-facing
   contract. A Rust API section is only warranted where other modules call in.
 
 Add a row to the area's `README.md` index when you file a new spec.
+
+### File format specs stand alone
+
+A file format outlives any one implementation of it. Another tool, in another
+language, must be able to read and write a conforming file from the spec alone,
+and a reader of the spec must be able to say what every byte means without
+opening this repository. So a spec under `specs/formats/` is written to a
+standard the other areas are not:
+
+- **Self-contained.** Every entry, field, flag and value is defined in the
+  format spec itself. It never defers to a `specs/core/`, `specs/gui/` or
+  `specs/cli/` document for what something *means*; those may link here, this
+  does not link there for meaning. Linking out for background a reader might
+  want after understanding the format is fine, as long as no sentence in the
+  format spec needs the link to parse.
+- **Meaning, not operations.** State what the data *is* -- what a stored value
+  asserts about the scene, what makes a file valid, what a consumer that
+  rewrites the file must preserve -- independently of any operation this
+  library performs on it. "A ranged point's distance from its reference image
+  is fixed at this value" is a format statement; "the bundle adjustment holds
+  the distance and solves the direction" is not, and belongs in the core spec
+  that describes that adjustment. Where an operation's effect on the data has
+  to be pinned down (what an edit that drops an image does to a column that
+  references images), state it as a rule any consumer must honour, phrased
+  about the data.
+- **Implementation-independent.** No function, type, module, binding or
+  keyword name of this library appears in a section that defines the format;
+  "the writer", "a reader", "a verifier" and "a consumer" are the actors. This
+  library's own implementation is named exactly once, in a short
+  **Implementations** section (the crate that implements the format, and the
+  binding through which it is reached), so a moved file shows up as one broken
+  link and a reader of the format proper never has to know the section exists.
+  A format spec never says "this tool writes"; it says what a conforming writer
+  writes.
+- **Enumerations are named in the file.** A per-file value is a string (a
+  camera model is `"PINHOLE"`, not `3`). A per-element enumeration is a small
+  integer column plus a legend in the section's metadata that the integers
+  index, present exactly when the column is, so the file explains its own
+  numbering; the spec states the canonical legend a conforming writer emits and
+  requires a reader to resolve codes through the file's own legend.
+- **Versioning is part of the format.** Every optional entry says which version
+  introduced it, and every version says what changed and how a file of the
+  previous version reads.
+
+The `audit-specs` skill checks format specs against these points in addition to
+the failures it checks every spec for.

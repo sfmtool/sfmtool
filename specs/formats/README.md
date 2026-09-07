@@ -5,6 +5,13 @@ those four formats are built on: they share the ZIP + zstd primitives in
 `sfmtool-archive-io`, specified once in
 [archive-container.md](archive-container.md).
 
+Every spec here is written to be read without this repository: it defines what
+each stored value means and what a conforming file is, independently of the
+operations this library performs on the data and of the code that implements
+it, which each spec names once under **Implementations**. The standard is
+stated in [../TEMPLATE.md](../TEMPLATE.md) ("File format specs stand alone")
+and audited by the `audit-specs` skill.
+
 | Document | Crate | Description |
 |----------|-------|-------------|
 | [archive-container.md](archive-container.md) | `sfmtool-archive-io` | The container all four formats are built on: ZIP with STORE, per-entry zstd, columnar binary entries, and the XXH128 section and whole-file hashes. |

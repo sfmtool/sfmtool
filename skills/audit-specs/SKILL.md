@@ -50,9 +50,10 @@ Report the seed, the pool size, and the selected list, so the run is reproducibl
 and the next one can see what it skipped. Raise `N` when the user asks for a
 deeper pass, and say in the report what budget was used.
 
-Two things override the sample: a spec the user names, and a spec covering code
+Three things override the sample: a spec the user names, a spec covering code
 that changed materially since the last audit — check `git log` over the
-implementing paths and pull those in.
+implementing paths and pull those in — and every format spec that mechanical
+check 6 flags.
 
 **Verify the sampled specs' `Non-goals` and deferral language against the code.**
 A `Non-goals` bullet or a "not yet implemented" / "a natural v2" aside is a claim
@@ -156,6 +157,37 @@ subject, say so in the report — that is a proposed amendment to
    converting or deleting, and check whether *Open questions* entries are still
    open — a settled one reads as live.
 
+6. **A format spec that does not stand alone.** This one applies to
+   `specs/formats/` only, and there it is as absolute as failure 1. A file
+   format outlives any one implementation, so its spec must let another tool
+   read and write a conforming file, and let a reader say what every byte means,
+   without this repository. `specs/TEMPLATE.md` ("File format specs stand
+   alone") states the standard; the failures are:
+
+   - **Deferred meaning.** A sentence that needs a followed link into
+     `specs/core/`, `specs/gui/` or `specs/cli/` to say what a field, flag or
+     value means ("see the bundle-adjustment spec for what the kernel does with
+     them"). Background links a reader might want *after* understanding the
+     format are fine; a link that carries the definition is the finding.
+   - **Operations where meaning belongs.** A field defined by what this
+     library's code does to it ("the solve holds the distance") rather than by
+     what the stored value asserts and what a consumer must preserve. The test:
+     would the sentence be false for a different tool reading the same file?
+   - **Implementation names in the format proper.** A function, type, module,
+     binding or keyword name of this library, or "this tool writes", inside a
+     section that defines the format. The actors are the writer, a reader, a
+     verifier, a consumer. Names belong in a single **Implementations** section,
+     and a repo path link anywhere else is a hit.
+   - **Unnamed enumerations.** A per-element code column with no legend in the
+     file, or a per-file enumeration stored as a number.
+   - **Versioning gaps.** An optional entry with no introducing version, or a
+     version with no migration statement.
+
+   Quote the sentence and say which of the four actors should replace the name,
+   or where the definition should be restated. When a format spec's only
+   account of a field is a link, the fix is to write the definition into the
+   format spec, not to shorten the link.
+
 Weigh these by how much a reader is misled, not by how far the spec is from the
 template. A spec whose interface section is missing but whose theory is exact is
 in better shape than one that fills every heading with prose that no longer
@@ -211,6 +243,18 @@ Each one narrows 131 specs to a handful worth close attention.
    grep finds — precise, true, and never says what the thing is for.
 5. **Coverage both ways.** Which specs are never cited from code, and which code
    surfaces cite no spec. Feeds the existing **Code without specs** section.
+6. **Format-spec independence.** Over `specs/formats/*.md` only, and every run,
+   because the corpus is small enough to cover whole: list every outbound link
+   to `../core/`, `../gui/`, `../cli/`, `../../crates/` or `../../src/`, and
+   every hit for a library identifier or actor in the format proper -- `::`,
+   `fn `, `pub `, `_sfmr(`, `sfmtool._sfmtool`, "the kernel", "the solve",
+   "this tool", "the binding" -- outside a heading named *Implementations*.
+   Each hit is a lead into failure 6: read the sentence and decide whether it
+   carries a definition (a finding), names an implementation where the format
+   is being defined (a finding), or is background a reader can skip (not one).
+   Report the per-file counts even when every hit is acquitted, so the next run
+   can see the trend. **Every format spec with a hit joins the sample**, on top
+   of the budget, since the deep read is what settles it.
 
 An `audit-hygiene` run may hand you file pairs from its own duplicate scan; treat
 those as leads into check 2, already narrowed.
@@ -228,7 +272,9 @@ all M.
 ```
 
 Then the corpus-wide **Mechanical findings** section: the defaults diff, the
-spec↔code duplicate-prose pairs, the shape scan, and the coverage counts. This is
+spec↔code duplicate-prose pairs, the shape scan, the coverage counts, and the
+format-independence table (one row per `specs/formats/` file: outbound links,
+identifier hits, verdict). This is
 tables and numbers, and it is the part that scales — every spec appears here even
 though only N were read.
 
