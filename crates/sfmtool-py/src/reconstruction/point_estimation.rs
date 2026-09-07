@@ -117,6 +117,7 @@ pub fn estimate_points<'py>(
         cheirality,
         prune_behind,
         bar_px,
+        range: None,
         few: match few {
             "absent" => FewObservations::Absent,
             "bearing" => FewObservations::Bearing,

@@ -45,7 +45,7 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use crate::features::cluster_match::covisibility::ClusterCovisibility;
 use crate::geometry::absolute_pose::{estimate_absolute_pose, AbsolutePoseOptions};
 use crate::geometry::bundle_adjust::{
-    bundle_adjust, BaSchedule, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
+    bundle_adjust, BaSchedule, FreePointPolicy, DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::numeric::{median, splitmix64};
@@ -656,6 +656,8 @@ pub fn grow_reconstruction(
             &obs_pt,
             None,
             None,
+            FreePointPolicy::default(),
+            None,
             DEFAULT_PROTECTED_LOSS_SCALE,
             false,
             false,
@@ -1053,6 +1055,8 @@ pub fn grow_reconstruction(
         &obs_img,
         &obs_pt,
         None,
+        None,
+        FreePointPolicy::default(),
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,

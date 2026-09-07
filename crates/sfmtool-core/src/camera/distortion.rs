@@ -1038,7 +1038,7 @@ impl CameraIntrinsics {
     ///
     /// `None` when `p_cam` (or a difference probe around it) falls outside the
     /// model's domain, or when `p_cam` is the origin.
-    fn pixel_jacobian(&self, p_cam: [f64; 3]) -> Option<[[f64; 3]; 2]> {
+    pub(crate) fn pixel_jacobian(&self, p_cam: [f64; 3]) -> Option<[[f64; 3]; 2]> {
         if self.model.supports_pixel_jacobian() {
             return self.ray_to_pixel_with_jacobian(p_cam).map(|(_, j)| j);
         }

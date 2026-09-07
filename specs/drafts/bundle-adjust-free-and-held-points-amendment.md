@@ -209,11 +209,12 @@ added:
 
 - `points3d/kind.{N}.uint8.zst`: `0` free, `1` ranged, `2` held. Absent means
   every point is free, so every existing file reads unchanged.
-- `points3d/range.{N}.4.float64.zst`: for a ranged point, `(r, ox, oy, oz)`
-  with `r = +inf` for a direction; the reference is a world point when the
-  row's `ox, oy, oz` are finite and a camera index, stored in `ox`, when
-  `oy = oz = NaN`. Rows of free and held points are NaN. Absent when no point
-  is ranged.
+- `points3d/range.{N}.4.float64.zst`: for a ranged point, `(r, k, NaN, NaN)`
+  with `r = +inf` for a direction and `k` the index of the image whose centre
+  the distance is measured from (`NaN` at infinite range, which needs no
+  reference). A file carries the single-camera reference only; the mean of a
+  set of centres is a core-side form a caller builds itself. Rows of free and
+  held points are NaN. Absent when no point is ranged.
 
 `infinity_point_count` and every other count are unchanged; they count
 representations, not kinds.
@@ -228,9 +229,9 @@ bundle_adjust(camera, quaternions_wxyz, translations, points, uv, obs_image,
                                         # coordinate; None = all free
               range=None,               # (n_pt,) float: a ranged point's distance,
                                         # +inf for a direction, NaN = not ranged
-              range_origin=None,        # (n_pt,) int camera index, or (n_pt, 3)
-                                        # world points; ignored where range is NaN
-                                        # or +inf
+              range_origin=None,        # (n_pt,) int camera index whose centre the
+                                        # distance is measured from; ignored where
+                                        # range is NaN or +inf
               free_points_cross=False,  # True: free points are re-estimated with
                                         # marks off and the noise floor; False:
                                         # the mask is honoured for the whole solve
@@ -259,7 +260,7 @@ stays as the kill switch.
   baseline.
 - **Ground-truth construction.** A landmark with a surveyed distance from the
   capture point enters as a ranged point referenced to the capture's camera
-  (or its centroid as a world point); one with a known position in the solve's
+  (or to the mean of that capture's camera centres); one with a known position in the solve's
   frame enters held; the near field is free; the far field is free and reports
   whichever representation it converges to. The five GPS-pinned landmarks of
   the `south_lake_union_parallax` capture, whose distances (0.9-3.4 km) are

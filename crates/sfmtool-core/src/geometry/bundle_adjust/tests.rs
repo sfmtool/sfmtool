@@ -106,6 +106,8 @@ fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment 
         &s.obs_pt,
         None,
         None,
+        FreePointPolicy::default(),
+        None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         false,
@@ -135,6 +137,8 @@ fn run_masked(
         &s.obs_pt,
         Some(mask),
         None,
+        FreePointPolicy::default(),
+        None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         false,
@@ -162,6 +166,8 @@ fn run_protected(
         &s.obs_img,
         &s.obs_pt,
         None,
+        None,
+        FreePointPolicy::default(),
         Some(protected),
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
@@ -963,6 +969,8 @@ fn directions_lock_rotations_for_focal_release() {
         &plain.obs_pt,
         None,
         None,
+        FreePointPolicy::default(),
+        None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
         false,
@@ -992,6 +1000,8 @@ fn directions_lock_rotations_for_focal_release() {
         &s.obs_img,
         &s.obs_pt,
         Some(&mask),
+        None,
+        FreePointPolicy::default(),
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         true,
@@ -1091,6 +1101,8 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
         &prot.obs_img,
         &prot.obs_pt,
         Some(&mask_b),
+        None,
+        FreePointPolicy::default(),
         Some(&vec![false; prot.uv.len()]),
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
@@ -1341,6 +1353,8 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         &s.obs_img,
         &s.obs_pt,
         Some(&mask),
+        None,
+        FreePointPolicy::default(),
         Some(&prot),
         DEFAULT_PROTECTED_LOSS_SCALE,
         false,
@@ -1537,6 +1551,8 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
             &s.obs_img,
             &s.obs_pt,
             None,
+            None,
+            FreePointPolicy::default(),
             prot,
             DEFAULT_PROTECTED_LOSS_SCALE,
             false,
@@ -2167,6 +2183,8 @@ fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> 
         &s.obs_pt,
         None,
         None,
+        FreePointPolicy::default(),
+        None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         opt_k1,
@@ -2195,6 +2213,8 @@ fn run_k1_masked(
         &s.obs_img,
         &s.obs_pt,
         Some(mask),
+        None,
+        FreePointPolicy::default(),
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
@@ -2598,6 +2618,8 @@ fn run_bspline(
         &s.obs_pt,
         None,
         None,
+        FreePointPolicy::default(),
+        None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
         false,
@@ -2626,6 +2648,8 @@ fn run_bspline_masked(
         &s.obs_img,
         &s.obs_pt,
         Some(mask),
+        None,
+        FreePointPolicy::default(),
         None,
         DEFAULT_PROTECTED_LOSS_SCALE,
         opt_f,
@@ -3646,5 +3670,781 @@ fn directions_participate_in_the_pinhole_bspline_rung() {
         err_finite > 3.0 * err,
         "the near-axis control recovered the spline too well ({err_finite} \
          vs {err} px) - the test no longer isolates the direction rows"
+    );
+}
+
+// ── Point kinds: free crossing, ranged points, held points ──────────────────
+
+/// The bit patterns of a point array, so a parity assertion survives `NaN`.
+fn point_bits(points: &[[f64; 3]]) -> Vec<[u64; 3]> {
+    points
+        .iter()
+        .map(|p| [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
+        .collect()
+}
+
+/// The bit patterns of a pose array, likewise.
+fn pose_bits(quats: &[UnitQuaternion<f64>], trans: &[Vector3<f64>]) -> Vec<[u64; 7]> {
+    quats
+        .iter()
+        .zip(trans)
+        .map(|(q, t)| {
+            [
+                q.w.to_bits(),
+                q.i.to_bits(),
+                q.j.to_bits(),
+                q.k.to_bits(),
+                t.x.to_bits(),
+                t.y.to_bits(),
+                t.z.to_bits(),
+            ]
+        })
+        .collect()
+}
+
+/// The bit patterns of a residual array.
+fn res_bits(res: &[f64]) -> Vec<u64> {
+    res.iter().map(|r| r.to_bits()).collect()
+}
+
+/// [`run`] over the whole point-constraint surface.
+#[allow(clippy::too_many_arguments)]
+fn run_kinds(
+    s: &mut Scene,
+    mask: Option<&[bool]>,
+    cons: Option<&PointConstraints>,
+    free_points: FreePointPolicy,
+    protected: Option<&[bool]>,
+    opt_f: bool,
+    schedule: &[BaSchedule],
+) -> BundleAdjustment {
+    bundle_adjust(
+        &s.cam,
+        &mut s.quats,
+        &mut s.trans,
+        &mut s.points,
+        &s.uv,
+        &s.obs_img,
+        &s.obs_pt,
+        mask,
+        cons,
+        free_points,
+        protected,
+        DEFAULT_PROTECTED_LOSS_SCALE,
+        opt_f,
+        false,
+        false,
+        schedule,
+        60,
+        2,
+        12,
+    )
+}
+
+/// One far track at `distance` along −Z from the world origin, observed by
+/// every image that images it.
+fn add_far_track(s: &mut Scene, distance: f64, noise: f64, salt: u64) -> usize {
+    let x = [0.0, 0.0, -distance];
+    let p = s.points.len();
+    s.points.push(x);
+    let mut n = 0;
+    for i in 0..s.quats.len() {
+        let c = s.quats[i] * Vector3::new(x[0], x[1], x[2]) + s.trans[i];
+        if c.z >= -0.5 {
+            continue;
+        }
+        let Some((u, v)) = s.cam.ray_to_pixel([c.x, c.y, c.z]) else {
+            continue;
+        };
+        if !(0.0..s.cam.width as f64).contains(&u) || !(0.0..s.cam.height as f64).contains(&v) {
+            continue;
+        }
+        let k = s.uv.len();
+        s.uv.push([u + noise * jitter(k, salt), v + noise * jitter(k, salt + 1)]);
+        s.obs_img.push(i as u32);
+        s.obs_pt.push(p as u32);
+        n += 1;
+    }
+    assert!(n >= 2, "far track observed only {n} times");
+    p
+}
+
+/// Absent constraints and an all-free [`PointConstraints`] are the same solve to
+/// the bit, on a fixture that mixes finite points, directions and protected
+/// observations: the parity the switch's off position is stated against.
+#[test]
+fn constraints_off_reproduce_the_unconstrained_kernel() {
+    let build = || {
+        let mut s = make_scene(6, 40);
+        let ids = add_direction_tracks(&mut s, 8, 77, 0.2);
+        let mask = dir_mask(&s, &ids);
+        for i in 1..s.quats.len() {
+            let d = Vector3::new(
+                0.02 * jitter(i, 401),
+                0.02 * jitter(i, 402),
+                0.02 * jitter(i, 403),
+            );
+            s.quats[i] = UnitQuaternion::from_scaled_axis(d) * s.quats[i];
+            s.trans[i] += Vector3::new(
+                0.04 * jitter(i, 404),
+                0.04 * jitter(i, 405),
+                0.04 * jitter(i, 406),
+            );
+        }
+        let mut prot = vec![false; s.uv.len()];
+        for k in (0..s.uv.len()).step_by(37) {
+            prot[k] = true;
+        }
+        (s, mask, prot)
+    };
+    let (mut a, mask_a, prot_a) = build();
+    let out_a = run_kinds(
+        &mut a,
+        Some(&mask_a),
+        None,
+        FreePointPolicy::default(),
+        Some(&prot_a),
+        true,
+        &DEFAULT_SCHEDULE,
+    );
+    let (mut b, mask_b, prot_b) = build();
+    let cons = PointConstraints::all_free(b.points.len());
+    let out_b = run_kinds(
+        &mut b,
+        Some(&mask_b),
+        Some(&cons),
+        // The noise-floor constant is read only under `cross`, so a wild one
+        // must change nothing here.
+        FreePointPolicy {
+            cross: false,
+            noise_floor_scale: 7.0,
+        },
+        Some(&prot_b),
+        true,
+        &DEFAULT_SCHEDULE,
+    );
+    assert_eq!(pose_bits(&a.quats, &a.trans), pose_bits(&b.quats, &b.trans));
+    assert_eq!(point_bits(&a.points), point_bits(&b.points));
+    assert_eq!(out_a.focal.to_bits(), out_b.focal.to_bits());
+    assert_eq!(out_a.k1.to_bits(), out_b.k1.to_bits());
+    assert_eq!(out_a.bspline, out_b.bspline);
+    assert_eq!(
+        res_bits(&out_a.residual_norms),
+        res_bits(&out_b.residual_norms)
+    );
+    assert_eq!(out_a.point_at_infinity, mask_a);
+    assert_eq!(out_a.point_at_infinity, out_b.point_at_infinity);
+}
+
+/// Three cameras on a short arc, for the ranged-point Jacobian check.
+fn fd_poses() -> (Vec<UnitQuaternion<f64>>, Vec<Vector3<f64>>) {
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..3 {
+        let ang = 0.2 * (i as f64 - 1.0);
+        let center = Vector3::new(6.0 * ang.sin(), 0.3 * (i as f64), 6.0 * ang.cos());
+        let r = UnitQuaternion::face_towards(&center, &Vector3::y()).inverse();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    (quats, trans)
+}
+
+/// One case of the ranged-point Jacobian check: the analytic blocks of every
+/// observation, assembled into a dense Jacobian, against a central difference
+/// of the residual vector they claim to differentiate.
+///
+/// The parameter vector is the reduced camera system's own, `[f, k1, six per
+/// image]` with the point's three slots appended, and the perturbations are
+/// applied exactly as an accepted step applies them: `exp(δθ)·R`, `t + δt`, and
+/// `normalize(d + B(d)·δ)` for the direction the range carries.
+fn check_ranged_jacobian(refs: &[usize], observers: &[usize], what: &str) {
+    let cam = simple_pinhole(500.0);
+    let (quats, trans) = fd_poses();
+    let n_im = quats.len();
+    let d_sys = 2 + 6 * n_im;
+    let mean_centre = |q: &[UnitQuaternion<f64>], t: &[Vector3<f64>]| {
+        let mut o = Vector3::zeros();
+        for &k in refs {
+            o += camera_centre(&q[k], &t[k]);
+        }
+        o / refs.len() as f64
+    };
+    // The landmark, and the range and direction that carry it.
+    let world = Vector3::new(0.35, -0.2, 0.4);
+    let origin0 = mean_centre(&quats, &trans);
+    let distance = (world - origin0).norm();
+    let d0 = (world - origin0) / distance;
+    let (b1, b2) = tangent_basis(&d0);
+    // Observed pixels, offset so the residual is not identically zero.
+    let uv: Vec<[f64; 2]> = observers
+        .iter()
+        .map(|&i| {
+            let p = quats[i] * world + trans[i];
+            let (u, v) = cam.ray_to_pixel([p.x, p.y, p.z]).expect("in domain");
+            [u + 1.3, v - 0.7]
+        })
+        .collect();
+    let n_obs = observers.len();
+
+    // The residual vector as a function of the whole parameter vector.
+    let residuals = |delta: &[f64]| -> Vec<f64> {
+        let mut qq = quats.clone();
+        let mut tt = trans.clone();
+        for i in 0..n_im {
+            let o = 2 + 6 * i;
+            let dth = Vector3::new(delta[o], delta[o + 1], delta[o + 2]);
+            qq[i] = UnitQuaternion::from_scaled_axis(dth) * quats[i];
+            tt[i] = trans[i] + Vector3::new(delta[o + 3], delta[o + 4], delta[o + 5]);
+        }
+        let dd = (d0 + b1 * delta[d_sys] + b2 * delta[d_sys + 1]).normalize();
+        let x = mean_centre(&qq, &tt) + distance * dd;
+        let mut out = Vec::with_capacity(2 * n_obs);
+        for (n, &i) in observers.iter().enumerate() {
+            let p = qq[i] * x + tt[i];
+            let (u, v) = cam.ray_to_pixel([p.x, p.y, p.z]).expect("in domain");
+            out.push(u - uv[n][0]);
+            out.push(v - uv[n][1]);
+        }
+        out
+    };
+
+    // The analytic blocks, at a loss scale wide enough that the robust
+    // weighting is the identity to well inside the difference's own noise.
+    let s2 = 1e18;
+    let origin = RangeOrigin {
+        live: refs.to_vec(),
+        fixed_sum: Vector3::zeros(),
+        inv_k: 1.0 / refs.len() as f64,
+        distance,
+    };
+    let xp = [origin0 + distance * d0];
+    let (cx, cy) = cam.principal_point();
+    let analytic = cam.model.supports_pixel_jacobian();
+    let st = LinState {
+        cam: &cam,
+        analytic,
+        cx,
+        cy,
+        f: 500.0,
+        opt_f: false,
+        opt_k1: false,
+        opt_bspline: false,
+        n_coeffs: 0,
+        d_max: 0.0,
+        radial: SplineRadial::IncidenceAngle,
+        q: &quats,
+        t: &trans,
+        xp: &xp,
+        bases: &[(b1, b2)],
+        cp_dir: &[false],
+        cp_held: &[false],
+        cp_origin: &[Some(origin)],
+        uv: &uv,
+        n_shared: 2,
+    };
+    let mut jac = vec![vec![0.0f64; d_sys + 3]; 2 * n_obs];
+    for (n, &i) in observers.iter().enumerate() {
+        let b = observation_blocks::<BASE_CAM_COLS>(&st, n, i, 0, s2);
+        for row in 0..2 {
+            for (c, &ic) in b.idx.iter().enumerate() {
+                jac[2 * n + row][ic] += b.cam_j[(row, c)];
+            }
+            for &(ic, col) in &b.ref_cols {
+                jac[2 * n + row][ic] += col[row];
+            }
+            for c in 0..3 {
+                jac[2 * n + row][d_sys + c] += b.pt_j[(row, c)];
+            }
+        }
+    }
+
+    // Every column against a central difference. The two shared slots carry no
+    // released parameter here and are exactly zero.
+    let h = 1e-6;
+    for col in 2..d_sys + 3 {
+        let mut plus = vec![0.0; d_sys + 3];
+        let mut minus = vec![0.0; d_sys + 3];
+        plus[col] = h;
+        minus[col] = -h;
+        let rp = residuals(&plus);
+        let rm = residuals(&minus);
+        for row in 0..2 * n_obs {
+            let fd = (rp[row] - rm[row]) / (2.0 * h);
+            let got = jac[row][col];
+            assert!(
+                (got - fd).abs() <= 1e-5 * (1.0 + fd.abs()),
+                "{what}: J[{row}][{col}] = {got}, difference {fd}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ranged_jacobian_matches_a_difference_of_the_residual() {
+    // The reference is a camera no observation of the point is taken from.
+    check_ranged_jacobian(&[2], &[0, 1], "reference apart from the observers");
+    // The reference is one of the observing cameras, so one camera block
+    // carries both contributions.
+    check_ranged_jacobian(&[0], &[0, 1, 2], "reference among the observers");
+    // The reference is the mean of two camera centres.
+    check_ranged_jacobian(&[0, 1], &[0, 1, 2], "mean of two references");
+}
+
+/// A free track started as a direction whose rays open past the floor comes
+/// back finite, and one whose rays close below it comes back a direction; the
+/// reported representation is the one the returned row carries.
+#[test]
+fn free_points_cross_in_both_directions() {
+    let policy = FreePointPolicy {
+        cross: true,
+        noise_floor_scale: DEFAULT_NOISE_FLOOR_SCALE,
+    };
+    // A near cloud started at infinity: wide rays, so the re-estimation makes
+    // every one of them finite.
+    let mut s = make_scene(6, 40);
+    let truth = s.points.clone();
+    let mut mask = vec![false; s.points.len()];
+    for p in (0..s.points.len()).step_by(5) {
+        mask[p] = true;
+        let n = (truth[p][0].powi(2) + truth[p][1].powi(2) + truth[p][2].powi(2)).sqrt();
+        s.points[p] = [truth[p][0] / n, truth[p][1] / n, truth[p][2] / n];
+    }
+    let out = run_kinds(
+        &mut s,
+        Some(&mask),
+        None,
+        policy,
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    for p in (0..truth.len()).step_by(5) {
+        assert!(
+            !out.point_at_infinity[p],
+            "point {p} stayed a direction with its rays wide open"
+        );
+        let err = (Vector3::new(s.points[p][0], s.points[p][1], s.points[p][2])
+            - Vector3::new(truth[p][0], truth[p][1], truth[p][2]))
+        .norm();
+        assert!(err < 0.05, "point {p} crossed to a wrong position ({err})");
+    }
+
+    // A far track started finite, at a distance whose parallax sits inside the
+    // floor: the re-estimation reads it as a bearing.
+    let mut t = make_scene(6, 40);
+    let far = add_far_track(&mut t, 20000.0, 0.0, 909);
+    let out = run_kinds(&mut t, None, None, policy, None, false, &DEFAULT_SCHEDULE);
+    assert!(
+        out.point_at_infinity[far],
+        "the far track stayed finite inside the noise floor"
+    );
+    let n = Vector3::new(t.points[far][0], t.points[far][1], t.points[far][2]).norm();
+    assert!(
+        (n - 1.0).abs() < 1e-12,
+        "a reported direction came back as a position of norm {n}"
+    );
+    for p in 0..40 {
+        assert!(
+            !out.point_at_infinity[p],
+            "near point {p} left the finite set"
+        );
+    }
+}
+
+/// Six cameras on a straight baseline of 3 world units, all looking along −Z
+/// over a tight cloud: a scene whose far track stays near the optical axis at
+/// any focal, so changing the focal changes the noise floor and not which
+/// observations the frame holds.
+fn make_axial_scene(focal: f64) -> Scene {
+    let cam = simple_pinhole(focal);
+    let mut quats = Vec::new();
+    let mut trans = Vec::new();
+    for i in 0..6 {
+        let center = Vector3::new(0.48 * (i as f64 - 2.5), 0.02 * jitter(i, 11), 8.0);
+        let r = UnitQuaternion::identity();
+        quats.push(r);
+        trans.push(-(r * center));
+    }
+    let mut points = Vec::new();
+    for p in 0..40 {
+        points.push([0.5 * jitter(p, 1), 0.4 * jitter(p, 2), 0.5 * jitter(p, 3)]);
+    }
+    let mut uv = Vec::new();
+    let mut obs_img = Vec::new();
+    let mut obs_pt = Vec::new();
+    for (p, x) in points.iter().enumerate() {
+        for i in 0..quats.len() {
+            let c = quats[i] * Vector3::new(x[0], x[1], x[2]) + trans[i];
+            let (u, v) = cam.ray_to_pixel([c.x, c.y, c.z]).expect("in domain");
+            assert!(
+                (0.0..cam.width as f64).contains(&u) && (0.0..cam.height as f64).contains(&v),
+                "point {p} leaves the frame at f = {focal}"
+            );
+            uv.push([u, v]);
+            obs_img.push(i as u32);
+            obs_pt.push(p as u32);
+        }
+    }
+    Scene {
+        cam,
+        quats,
+        trans,
+        points,
+        uv,
+        obs_img,
+        obs_pt,
+    }
+}
+
+/// The crossing boundary is the stage's own noise floor: the same track is
+/// finite at one `noise_floor_scale` and a bearing at twice it, and finite
+/// again when the focal doubles at the wider constant.
+#[test]
+fn the_noise_floor_moves_with_its_constant_and_the_focal() {
+    // The cameras span 2.4 world units, so a track 400 away subtends 0.006 rad,
+    // between 2·s/f and 4·s/f at f = 500, s = 1, and past 4·s/f once the focal
+    // doubles. The schedule holds one loss scale across its rounds so the floor
+    // the classification is read at is the one the assertions name.
+    let schedule = [
+        BaSchedule {
+            trim_px: 50.0,
+            loss_scale: 1.0,
+        },
+        BaSchedule {
+            trim_px: 12.0,
+            loss_scale: 1.0,
+        },
+    ];
+    let crosses = |scale: f64, focal: f64| -> bool {
+        let mut s = make_axial_scene(focal);
+        let far = add_far_track(&mut s, 392.0, 0.0, 313);
+        let out = run_kinds(
+            &mut s,
+            None,
+            None,
+            FreePointPolicy {
+                cross: true,
+                noise_floor_scale: scale,
+            },
+            None,
+            false,
+            &schedule,
+        );
+        out.point_at_infinity[far]
+    };
+    assert!(!crosses(2.0, 500.0), "the track should clear a 2·s/f floor");
+    assert!(
+        crosses(4.0, 500.0),
+        "the track should sit inside a 4·s/f floor"
+    );
+    assert!(
+        !crosses(4.0, 1000.0),
+        "doubling the focal halves the floor, so the same track clears it"
+    );
+}
+
+/// A held point's coordinate comes back to the bit, and its observations still
+/// carry residuals.
+#[test]
+fn held_points_keep_their_coordinates_and_their_residuals() {
+    let mut s = make_scene(6, 40);
+    for i in 1..s.quats.len() {
+        s.quats[i] = UnitQuaternion::from_scaled_axis(Vector3::new(
+            0.02 * jitter(i, 601),
+            0.02 * jitter(i, 602),
+            0.02 * jitter(i, 603),
+        )) * s.quats[i];
+    }
+    let mut cons = PointConstraints::all_free(s.points.len());
+    let held: Vec<usize> = (0..s.points.len()).step_by(4).collect();
+    for &p in &held {
+        cons.hold(p);
+    }
+    let before = point_bits(&s.points);
+    let out = run_kinds(
+        &mut s,
+        None,
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let after = point_bits(&s.points);
+    for &p in &held {
+        assert_eq!(before[p], after[p], "held point {p} moved");
+    }
+    assert!(
+        (0..s.points.len()).any(|p| cons.kind[p] != PointKind::Held && before[p] != after[p]),
+        "no free point moved, so the fixture proves nothing"
+    );
+    for k in 0..s.uv.len() {
+        if held.contains(&(s.obs_pt[k] as usize)) {
+            assert!(
+                out.residual_norms[k].is_finite() && out.residual_norms[k] < 5.0,
+                "held observation {k} has residual {}",
+                out.residual_norms[k]
+            );
+        }
+    }
+}
+
+/// An image whose only finite evidence is one held point solves its
+/// translation; with the same landmark a direction, nothing carries a
+/// translation Jacobian and the translation is frozen to the bit.
+#[test]
+fn one_held_finite_point_unfreezes_a_translation() {
+    // Every track of the scene is a far-field direction except one landmark,
+    // which every image sees.
+    let build = || {
+        let mut s = make_scene(4, 4);
+        s.points.clear();
+        s.uv.clear();
+        s.obs_img.clear();
+        s.obs_pt.clear();
+        let ids = add_direction_tracks(&mut s, 24, 555, 0.0);
+        let landmark = [0.4, -0.3, 0.6];
+        let p = s.points.len();
+        s.points.push(landmark);
+        for i in 0..s.quats.len() {
+            let c = s.quats[i] * Vector3::new(landmark[0], landmark[1], landmark[2]) + s.trans[i];
+            let (u, v) = s.cam.ray_to_pixel([c.x, c.y, c.z]).expect("in domain");
+            s.uv.push([u, v]);
+            s.obs_img.push(i as u32);
+            s.obs_pt.push(p as u32);
+        }
+        let mut mask = dir_mask(&s, &ids);
+        mask.resize(s.points.len(), false);
+        // Move one image off its truth so there is something to solve.
+        s.trans[1] += Vector3::new(0.05, -0.04, 0.03);
+        (s, mask, p)
+    };
+
+    let (mut held_scene, mask, p) = build();
+    let mut cons = PointConstraints::all_free(held_scene.points.len());
+    cons.hold(p);
+    let before = held_scene.trans[1];
+    let out = run_kinds(
+        &mut held_scene,
+        Some(&mask),
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert!(
+        held_scene.trans[1] != before,
+        "the translation stayed frozen with a held finite point in view"
+    );
+    let res: Vec<f64> = (0..held_scene.uv.len())
+        .filter(|&k| held_scene.obs_pt[k] as usize == p && held_scene.obs_img[k] == 1)
+        .map(|k| out.residual_norms[k])
+        .collect();
+    assert!(
+        !res.is_empty() && res.iter().all(|r| *r < 0.5),
+        "the held landmark reprojects at {res:?} px in the moved image"
+    );
+
+    // The control: the same landmark as a direction carries no translation
+    // Jacobian, so the image is frozen.
+    let (mut dir_scene, mut all_dirs, p) = build();
+    all_dirs[p] = true;
+    let mut cons = PointConstraints::all_free(dir_scene.points.len());
+    cons.hold(p);
+    let before = dir_scene.trans[1];
+    run_kinds(
+        &mut dir_scene,
+        Some(&all_dirs),
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert_eq!(
+        pose_bits(&dir_scene.quats, &dir_scene.trans)[1][4..],
+        [before.x.to_bits(), before.y.to_bits(), before.z.to_bits()],
+        "an all-direction image moved its translation"
+    );
+}
+
+/// A ranged point at infinite range is a marked direction, to the bit.
+#[test]
+fn an_infinite_range_reproduces_a_marked_direction() {
+    let build = || {
+        let mut s = make_scene(6, 30);
+        let ids = add_direction_tracks(&mut s, 10, 121, 0.2);
+        for i in 1..s.quats.len() {
+            s.quats[i] = UnitQuaternion::from_scaled_axis(Vector3::new(
+                0.02 * jitter(i, 701),
+                0.02 * jitter(i, 702),
+                0.02 * jitter(i, 703),
+            )) * s.quats[i];
+        }
+        let mask = dir_mask(&s, &ids);
+        (s, mask, ids)
+    };
+    let (mut a, mask_a, _) = build();
+    let out_a = run_kinds(
+        &mut a,
+        Some(&mask_a),
+        None,
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let (mut b, _, ids) = build();
+    let mut cons = PointConstraints::all_free(b.points.len());
+    for &p in &ids {
+        cons.range_at(p, f64::INFINITY, None);
+    }
+    let out_b = run_kinds(
+        &mut b,
+        None,
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    assert_eq!(pose_bits(&a.quats, &a.trans), pose_bits(&b.quats, &b.trans));
+    assert_eq!(point_bits(&a.points), point_bits(&b.points));
+    assert_eq!(out_a.point_at_infinity, out_b.point_at_infinity);
+    assert_eq!(
+        res_bits(&out_a.residual_norms),
+        res_bits(&out_b.residual_norms)
+    );
+}
+
+/// A ranged point comes back at exactly its distance from the reference, read
+/// at the pose the solve settled the reference camera on.
+#[test]
+fn a_ranged_point_sits_at_its_range_from_the_reference() {
+    let centre = |q: &UnitQuaternion<f64>, t: &Vector3<f64>| -(q.inverse() * t);
+    let mut s = make_scene(6, 40);
+    let p = 7;
+    let distance = (Vector3::new(s.points[p][0], s.points[p][1], s.points[p][2])
+        - centre(&s.quats[0], &s.trans[0]))
+    .norm();
+    let mut cons = PointConstraints::all_free(s.points.len());
+    cons.range_at(p, distance, Some(RangeReference::Camera(0)));
+    // Start the landmark somewhere else entirely.
+    s.points[p] = [
+        s.points[p][0] * 1.4 + 0.2,
+        s.points[p][1] * 1.4,
+        s.points[p][2] * 1.4,
+    ];
+    for i in 1..s.quats.len() {
+        s.trans[i] += Vector3::new(0.02, -0.01, 0.03);
+    }
+    run_kinds(
+        &mut s,
+        None,
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let got = (Vector3::new(s.points[p][0], s.points[p][1], s.points[p][2])
+        - centre(&s.quats[0], &s.trans[0]))
+    .norm();
+    assert!(
+        (got - distance).abs() <= 1e-9 * distance,
+        "the ranged point came back at {got}, not {distance}"
+    );
+}
+
+/// A landmark started at a wrong direction but its true range converges to the
+/// true direction, where the same track free converges to a wrong depth.
+///
+/// The bearing is read in the reference camera's own frame, which is what the
+/// observations see and the only gauge-free statement available: a range in
+/// world units fights the adjustment's free scale gauge, so a solve carrying
+/// one moves the whole reconstruction under it, which is the point of ranging
+/// a point, not an artifact.
+#[test]
+fn a_true_range_recovers_a_direction_a_free_point_cannot() {
+    let centre = |q: &UnitQuaternion<f64>, t: &Vector3<f64>| -(q.inverse() * t);
+    let build = || {
+        let mut s = make_scene(6, 40);
+        let far = add_far_track(&mut s, 3000.0, 1.5, 4242);
+        let o = centre(&s.quats[0], &s.trans[0]);
+        let truth = Vector3::new(s.points[far][0], s.points[far][1], s.points[far][2]);
+        let distance = (truth - o).norm();
+        let d_true = (truth - o) / distance;
+        // The bearing camera 0 sees, which no gauge motion changes.
+        let seen = (s.quats[0] * truth + s.trans[0]).normalize();
+        // Start two degrees off in the bearing, at the right distance.
+        let (b1, _) = tangent_basis(&d_true);
+        let d_start = (d_true + b1 * 2.0f64.to_radians().tan()).normalize();
+        let start = o + distance * d_start;
+        s.points[far] = [start.x, start.y, start.z];
+        (s, far, distance, seen)
+    };
+
+    let (mut ranged, far, distance, seen) = build();
+    let mut cons = PointConstraints::all_free(ranged.points.len());
+    cons.range_at(far, distance, Some(RangeReference::Camera(0)));
+    run_kinds(
+        &mut ranged,
+        None,
+        Some(&cons),
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let x = Vector3::new(
+        ranged.points[far][0],
+        ranged.points[far][1],
+        ranged.points[far][2],
+    );
+    let ang = (ranged.quats[0] * x + ranged.trans[0])
+        .normalize()
+        .dot(&seen)
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    assert!(
+        ang < 0.1,
+        "the ranged landmark ended {ang}° off its bearing"
+    );
+    let got = (x - centre(&ranged.quats[0], &ranged.trans[0])).norm();
+    assert!(
+        (got - distance).abs() <= 1e-9 * distance,
+        "the ranged landmark left its range ({got} for {distance})"
+    );
+
+    let (mut free, far, distance, _) = build();
+    let before = centre(&free.quats[0], &free.trans[0]);
+    run_kinds(
+        &mut free,
+        None,
+        None,
+        FreePointPolicy::default(),
+        None,
+        false,
+        &DEFAULT_SCHEDULE,
+    );
+    let after = centre(&free.quats[0], &free.trans[0]);
+    assert!(
+        (after - before).norm() < 0.05,
+        "the free solve moved its gauge, so the depths below are not comparable"
+    );
+    let free_distance = (Vector3::new(
+        free.points[far][0],
+        free.points[far][1],
+        free.points[far][2],
+    ) - after)
+        .norm();
+    let rel = (free_distance - distance).abs() / distance;
+    assert!(
+        rel > 0.15,
+        "the free landmark recovered its depth ({free_distance} vs {distance}), \
+         so the contrast the range is for is not in this fixture"
     );
 }

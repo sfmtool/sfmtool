@@ -42,7 +42,8 @@ callers refill).
 
 The kernel lives in
 [bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
-(`bundle_adjust`, `BaSchedule`, `BundleAdjustment`), bound as
+(`bundle_adjust`, `BaSchedule`, `BundleAdjustment`, `PointKind`,
+`PointConstraints`, `RangeReference`, `FreePointPolicy`), bound as
 `sfmtool._sfmtool.geometry.bundle_adjust`.
 
 ```rust
@@ -59,6 +60,11 @@ pub fn bundle_adjust(
     uv: &[[f64; 2]],                     // n_obs
     obs_img: &[u32],                     // n_obs
     obs_pt: &[u32],                      // n_obs
+    point_at_infinity: Option<&[bool]>,  // n_pt, the INITIAL representation
+    constraints: Option<&PointConstraints>,  // n_pt kinds; None = all free
+    free_points: FreePointPolicy,        // crossing switch + noise-floor constant
+    protected: Option<&[bool]>,          // n_obs
+    protected_loss_scale: f64,
     opt_f: bool,
     opt_k1: bool,
     opt_bspline: bool,
@@ -66,7 +72,8 @@ pub fn bundle_adjust(
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
-) -> BundleAdjustment;                   // { focal, k1, bspline, residual_norms }
+) -> BundleAdjustment;                   // { focal, k1, bspline, residual_norms,
+                                         //   point_at_infinity }
 ```
 
 Per schedule round, mirroring the experiment scripts exactly:
@@ -76,7 +83,9 @@ Per schedule round, mirroring the experiment scripts exactly:
    estimation operation
    ([point-estimation.md](../reconstruction/point-estimation.md)) with `marks`
    on for the round's direction mask, `few = absent`, and the floor, cheirality
-   and bar rules off: world rays `R_iᵀ · pixel_to_ray(uv)` and centers
+   and bar rules off, the settings a free point crossing representations moves
+   off, and a ranged or held point never reads (see "Point kinds"): world rays
+   `R_iᵀ · pixel_to_ray(uv)` and centers
    `−R_iᵀ t_i` per observation, grouped by point with a STABLE sort so a track
    accumulates its own observations in the order the caller listed them, and
    solved through [`reconstruction::triangulation::triangulate_batch`]. A track
@@ -400,8 +409,9 @@ focal.
   mask skips every direction branch — so both are exactly the finite-only
   solve.
 - Directions live in the same `points` array; the mask is the only
-  distinction, and it is not modified — classification belongs to the
-  caller.
+  distinction. The caller's array is not modified: the representation each
+  point ended with comes back as the result's own `point_at_infinity`, which
+  is the input mask unless a free point crossed (see "Point kinds").
 
 ### Residuals and derivatives
 
@@ -420,10 +430,12 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
   Jacobian as finite points, and the `opt_f` derivative applies
   unchanged.
 - **Translation observability.** Infinity observations constrain no
-  translation, so an image whose surviving observations are all directions
-  has its translation frozen for that round (its rotation still updates);
-  otherwise the reduced camera system would carry a zero-curvature
-  translation block. The `min_obs` degenerate-exit floor is independent of
+  translation, so an image's translation is frozen for a round when no
+  surviving observation of it carries a translation Jacobian: every
+  direction, free or held, carries none, while a finite point does whoever
+  owns it (a held finite point and a ranged point at a finite distance
+  included). Its rotation still updates; otherwise the reduced camera system
+  would carry a zero-curvature translation block. The `min_obs` degenerate-exit floor is independent of
   that and counts **every trim survivor**, finite and direction alike: it
   measures whether the round retained enough evidence to solve on, and a
   direction constrains the rotations and the shared camera parameters just
@@ -469,6 +481,170 @@ All other shapes, validation, and outputs are unchanged.
 - **Re-estimation**: a `NaN` direction with ≥ 2 observations is reborn in
   round 2 as the mean back-rotated ray.
 - **Memory order and binding parity** as for the kernel above.
+
+## Point kinds
+
+`point_at_infinity` says what a point's coordinate *is*; `constraints` says who
+*owns* it. The two are orthogonal, and every point is one of three kinds.
+
+- **Free.** The solve owns the point. Its representation is whatever its rays
+  support at the current geometry, decided by the re-estimation between rounds
+  under `FreePointPolicy` and allowed to change in either direction as the
+  poses move.
+- **Ranged.** The caller owns one number, the point's distance `r` from a
+  reference it names; the solve owns the direction. The point is `X = O + r · d`
+  with `d` a unit vector, and `d` is its only parameter -- two degrees of
+  freedom on the sphere. `r = ∞` needs no reference and is exactly a direction.
+- **Held.** The caller owns the point. Its coordinate, finite or direction, is
+  fixed for the whole solve. Its observations still form residuals and still
+  feed the camera and lens blocks, but the point has no parameters and no Schur
+  block, and the re-estimation skips it.
+
+The kinds nest: a held point is a ranged point that has also given up its
+direction, and a ranged point at infinite range is what the mask alone calls a
+marked point. `protected` stays orthogonal to both, being about whether an
+observation can be trimmed, not about whether a point can move. Trim,
+`min_track` and `min_obs` treat a ranged or held point's observations exactly
+like any other's.
+
+A caller states only the points it owns, and leaves the rest free:
+
+```rust
+let mut kinds = PointConstraints::all_free(points.len());
+kinds.hold(survey_marker);                       // known in the solve's frame
+kinds.range_at(spire, 1045.0, Some(RangeReference::Camera(shot)));
+kinds.range_at(sky, f64::INFINITY, None);        // a bearing, no reference
+bundle_adjust(cam, quats, trans, points, uv, obs_img, obs_pt,
+              None, Some(&kinds),
+              FreePointPolicy { cross: true, noise_floor_scale: 2.0 },
+              None, DEFAULT_PROTECTED_LOSS_SCALE,
+              true, false, false, &DEFAULT_SCHEDULE, 60, 2, 12);
+```
+
+An absent `constraints` is every point free, and with a default
+`FreePointPolicy` (`cross = false`) the kernel is the one the sections above
+describe, bit for bit. The kinds and the crossing policy reach the Python
+binding with the file columns that carry them; that part is
+[a change proposal](../../drafts/bundle-adjust-free-and-held-points-amendment.md),
+and the Rust interface is
+[bundle_adjust.rs](../../../crates/sfmtool-core/src/geometry/bundle_adjust.rs)
+(`PointKind`, `PointConstraints`, `RangeReference`, `FreePointPolicy`).
+
+### Free points: crossing between representations
+
+Within a round nothing changes: a finite point perturbs in three Euclidean
+degrees of freedom and a direction in the two of its tangent plane. The crossing
+happens where the representation is already re-read, the inter-round
+re-estimation, which under `cross` runs the point-estimation operation with
+`marks` **off** for free points, `cheirality` **on**, `few = absent`, and the
+`floor` at the round's noise-floor angle
+
+```
+θ_floor = noise_floor_scale · s / f
+```
+
+with `s` the round's `loss_scale` in pixels and `f` the camera's current focal
+(the mean of the two where a model carries two). That is the parallax the
+stage's own residual scale cannot tell from noise, so a wide-baseline stage
+keeps more tracks finite than a tight one, and the boundary walks with a
+released focal. A direction whose rays open past it becomes finite at the next
+re-estimation, a finite point whose rays close below it becomes a direction, and
+both are ordinary outcomes rather than events. The verdict is written into the
+mask the next linearization reads; the first round has no re-estimation, so the
+caller's input mask is what the first linearization uses. A track whose estimate
+comes back absent keeps the representation it had, so momentarily losing its
+observations does not also change its kind.
+
+Ranged and held points do not cross. A free point that ends as a direction comes
+back as a unit row, as any direction does.
+
+### Ranged points: a direction at a distance
+
+A reference is a function of the camera poses, never a fixed world coordinate:
+the adjustment's gauge is free, so a range measured from a point the cameras can
+move away from constrains nothing about the cameras. The two forms are one
+camera's centre, `O = C_k = −R_kᵀ · t_k`, and the mean of a set of them,
+`O = (1/|K|) · Σ_{k∈K} C_k`, a capture station whose frames sit close together
+and none of which is the survey point on its own.
+
+Residual and derivatives at a finite `r`:
+
+- `uv = ray_to_pixel(R_i · X + t_i)` with `X = O + r · d`, the finite
+  projection with the point's position substituted. The caller's row of
+  `points` is a position, read as `d = normalize(X − O)` at the round's poses,
+  so a row that does not sit at exactly `r` from the reference is snapped onto
+  the sphere the range names; the row written back is `O + r · d` at the poses
+  the round settled on.
+- **Point block.** `d` perturbs in its 2-DOF tangent plane exactly as a
+  direction does, and the block is `r · J_X · B(d)` with `J_X = ∂uv/∂X` the
+  finite point's position Jacobian. Its Schur block is 2×2.
+- **Observing camera's block.** The rotation, translation and lens blocks of a
+  finite point at `X`, unchanged.
+- **Reference cameras' blocks.** `X` moves with `O`, so every observation of the
+  point also contributes `J_X · ∂C_k/∂(pose_k) / |K|` to camera `k`'s block for
+  every `k ∈ K`, with `∂C_k/∂t_k = −R_kᵀ` and `∂C_k/∂ω_k = −R_kᵀ · [t_k]ₓ`,
+  the derivative of `−Rᵀ·t` under this kernel's own rotation update
+  `R ← exp(ω)·R`, which leaves `C' = −Rᵀ·exp(−ω)·t`. Where the observing camera
+  is itself in `K` the two contributions land in the same block and add. A
+  reference camera no surviving observation touches has no slot in the round's
+  reduced system, so the round holds it fixed and its centre enters `O` as a
+  constant.
+- **At `r = ∞`** every one of these is the direction case: the point block is
+  the tangent Jacobian, the translation block and the reference blocks vanish,
+  and the re-estimation returns the normalized mean of the back-rotated rays.
+
+Because `r` is held in the solve's own units, ranged points carry metric scale
+into an adjustment that otherwise has none: several ranged points on one
+reference set fix the scale gauge, and a range that disagrees with the caller's
+other scale evidence shows up as residual rather than being absorbed. The
+converse is worth expecting: a solve carrying one range moves the whole
+reconstruction under it until the scale fits.
+
+Re-estimation between rounds keeps `r` and re-solves `d` through the
+point-estimation operation's `range` rule at the origin the reference resolves
+to at the round's poses ([point-estimation.md](../reconstruction/point-estimation.md)).
+
+### Held points: residuals without parameters
+
+A held point's observations project exactly as any observation of its
+representation does, and the camera Jacobian blocks are formed the same way. The
+point's own Jacobian block is absent: nothing is accumulated into a point block,
+no Schur complement is taken for it, no update is back-substituted, and its
+coordinates are copied through to the output untouched. A held direction row is
+normalized on input like any direction row; a held finite row passes through as
+it came.
+
+Trim applies to a held point's observations as to any other's; a held point does
+not make an observation `protected`, and a caller that wants both marks both. A
+held point that loses every observation contributes nothing and is still
+returned unchanged. An image observing one held finite point and otherwise only
+directions keeps its translation live, which is what a surveyed landmark is for.
+
+### Testing requirements (additional)
+
+- **Parity**: on a fixture mixing finite points, directions and protected
+  observations, an absent `constraints` and an all-free one under a default
+  policy agree on every output field to the bit (poses, points, focal,
+  residual norms and the reported representation) with a wild
+  `noise_floor_scale` that `cross = false` must ignore.
+- **The ranged Jacobian**: the analytic blocks of every observation, assembled
+  into a dense Jacobian, match a central difference of the whole residual
+  vector on a small ranged scene, with the reference camera apart from the
+  observers, among them, and as the mean of two.
+- **Crossing, both directions**: a near cloud started at infinity comes back
+  finite at its true positions, and a far track started finite comes back as a
+  unit direction, with the reported representation matching the row.
+- **The noise floor**: the same track is finite at one `noise_floor_scale` and
+  a bearing at twice it, and finite again when the focal doubles.
+- **Held points**: their coordinates come back to the bit while free points
+  move, and their observations still carry residuals; an image whose only
+  finite evidence is one held point solves its translation, where the same
+  landmark as a direction leaves the translation frozen to the bit.
+- **Ranged points**: an infinite range reproduces a marked direction bit for
+  bit; a finite one comes back at exactly its distance from the reference read
+  at the final pose; and a landmark started at a wrong bearing but its true
+  range recovers the bearing the reference camera sees, where the same track
+  free converges to a wrong depth.
 
 ## Protected observations
 

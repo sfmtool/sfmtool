@@ -535,6 +535,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
         prune_behind: false,
         bar_px: Some(1.0),
         few: FewObservations::Bearing,
+        range: None,
     };
     let a = estimate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
     assert_eq!(a.census.finite, 3);
@@ -599,7 +600,7 @@ fn lines_at(p: [f64; 3], views: &[([f64; 3], bool)]) -> (Vec<f64>, Vec<f64>) {
 }
 
 /// The rules the prune is read under: cheirality on, the prune on top of it.
-fn prune_rules() -> PointRules {
+fn prune_rules() -> PointRules<'static> {
     PointRules {
         cheirality: true,
         prune_behind: true,
@@ -923,4 +924,202 @@ fn the_rescued_angle_is_the_survivors_own_widest_pair() {
     let want = (5.0_f64 / 26.0_f64.sqrt()).acos().to_degrees();
     let got = out.census.triangulation_angle_median_deg.unwrap();
     assert!((got - want).abs() < 1e-9, "{got} vs {want}");
+}
+
+// ── The range rule ────────────────────────────────────────────────────────
+
+/// Five cameras spread along the x axis, wide enough that a near track solves
+/// and a far one does not.
+const SPREAD: [[f64; 3]; 5] = [
+    [0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0],
+    [1.0, 0.0, 0.0],
+    [1.5, 0.0, 0.0],
+    [2.0, 0.0, 0.0],
+];
+
+#[test]
+fn a_ranged_track_keeps_its_distance_and_reads_its_direction() {
+    let cam = camera();
+    let world = [0.4, -0.25, -6.0];
+    let (uv, img, pt) = one_track(&cam, &SPREAD, world);
+    let (q, t) = views(&SPREAD);
+    let origin = [0.0, 0.0, 0.0];
+    let distance = ((world[0] - origin[0]).powi(2)
+        + (world[1] - origin[1]).powi(2)
+        + (world[2] - origin[2]).powi(2))
+    .sqrt();
+    let rows = vec![PointRange { distance, origin }];
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            range: Some(&rows),
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::Ranged]);
+    assert_eq!(out.census.ranged, 1);
+    assert_eq!(out.xyzw[0][3], 1.0);
+    let got = [out.xyzw[0][0], out.xyzw[0][1], out.xyzw[0][2]];
+    let r = (got[0] * got[0] + got[1] * got[1] + got[2] * got[2]).sqrt();
+    assert!((r - distance).abs() < 1e-12, "the estimate sits at {r}");
+    for c in 0..3 {
+        assert!(
+            (got[c] - world[c]).abs() < 1e-6,
+            "component {c}: {} for {}",
+            got[c],
+            world[c]
+        );
+    }
+}
+
+#[test]
+fn a_ranged_track_recovers_a_direction_its_rays_barely_carry() {
+    let cam = camera();
+    // A far track: its rays are nearly parallel, so the free solve's depth is
+    // whatever the pixel grid rounds to, while its bearing is well observed.
+    let world = [3.0, -1.0, -900.0];
+    let (uv, img, pt) = one_track(&cam, &SPREAD, world);
+    let (q, t) = views(&SPREAD);
+    let origin = [0.0, 0.0, 0.0];
+    let distance = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
+    let rows = vec![PointRange { distance, origin }];
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            range: Some(&rows),
+            ..Default::default()
+        },
+    );
+    let got = Vector3::new(out.xyzw[0][0], out.xyzw[0][1], out.xyzw[0][2]);
+    let truth = Vector3::new(world[0], world[1], world[2]);
+    let ang = (got.normalize().dot(&truth.normalize()))
+        .clamp(-1.0, 1.0)
+        .acos();
+    assert!(ang < 1e-6, "the ranged bearing is {ang} rad off");
+    assert!((got.norm() - distance).abs() < 1e-9 * distance);
+}
+
+#[test]
+fn an_infinite_range_is_the_marked_bearing() {
+    let cam = camera();
+    let (uv, img, pt) = one_track(&cam, &SPREAD, [0.4, -0.25, -6.0]);
+    let (q, t) = views(&SPREAD);
+    let marked = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        Some(&[true]),
+        PointRules::default(),
+    );
+    let rows = vec![PointRange {
+        distance: f64::INFINITY,
+        origin: [f64::NAN; 3],
+    }];
+    let ranged = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            range: Some(&rows),
+            ..Default::default()
+        },
+    );
+    assert_eq!(marked.verdicts, vec![PointVerdict::Marked]);
+    assert_eq!(ranged.verdicts, vec![PointVerdict::Ranged]);
+    for c in 0..4 {
+        assert_eq!(
+            marked.xyzw[0][c].to_bits(),
+            ranged.xyzw[0][c].to_bits(),
+            "component {c}"
+        );
+    }
+}
+
+#[test]
+fn the_range_rule_outranks_the_mark_and_the_floor() {
+    let cam = camera();
+    let world = [0.4, -0.25, -6.0];
+    let (uv, img, pt) = one_track(&cam, &SPREAD, world);
+    let (q, t) = views(&SPREAD);
+    let distance = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
+    let rows = vec![PointRange {
+        distance,
+        origin: [0.0, 0.0, 0.0],
+    }];
+    // Marked, and inside a floor that would call it thin: the range decides.
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        Some(&[true]),
+        PointRules {
+            range: Some(&rows),
+            floor_rad: Some(1.0),
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::Ranged]);
+    assert_eq!(out.xyzw[0][3], 1.0);
+    // A track the rule says nothing about is decided as it would be otherwise.
+    let quiet = vec![PointRange::NOT_RANGED];
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        Some(&[true]),
+        PointRules {
+            range: Some(&quiet),
+            floor_rad: Some(1.0),
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::Marked]);
+}
+
+#[test]
+fn a_ranged_track_of_one_observation_is_decided_by_few() {
+    let cam = camera();
+    let world = [0.4, -0.25, -6.0];
+    let (uv, img, pt) = one_track(&cam, &SPREAD[..1], world);
+    let (q, t) = views(&SPREAD[..1]);
+    let rows = vec![PointRange {
+        distance: 6.0,
+        origin: [0.0, 0.0, 0.0],
+    }];
+    let out = estimate_points_from_observations(
+        &cam,
+        obs(&uv, &img, &pt, &q, &t, 1),
+        None,
+        PointRules {
+            range: Some(&rows),
+            ..Default::default()
+        },
+    );
+    assert_eq!(out.verdicts, vec![PointVerdict::Few]);
+    assert!(out.xyzw[0][0].is_nan());
+}
+
+#[test]
+#[should_panic(expected = "needs the observation form")]
+fn the_range_rule_refuses_the_ray_form() {
+    let dirs = [0.0, 0.0, -1.0, 0.1, 0.0, -1.0];
+    let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let rows = vec![PointRange {
+        distance: 5.0,
+        origin: [0.0, 0.0, 0.0],
+    }];
+    estimate_points_from_rays(
+        RaySet {
+            dirs: &dirs,
+            centres: &centres,
+            offsets: &[0, 2],
+        },
+        None,
+        PointRules {
+            range: Some(&rows),
+            ..Default::default()
+        },
+    );
 }

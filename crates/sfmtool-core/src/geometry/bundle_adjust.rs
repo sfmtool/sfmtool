@@ -25,7 +25,8 @@ use crate::camera::distortion::bspline::{
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::reconstruction::point_estimation::{
-    estimate_points_from_observations, FewObservations, ObservationSet, PointRules,
+    estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet, PointRange,
+    PointRules,
 };
 use crate::CameraIntrinsics;
 
@@ -63,6 +64,132 @@ pub const DEFAULT_SCHEDULE: [BaSchedule; 3] = [
 /// observations (see [`bundle_adjust`]'s `protected`).
 pub const DEFAULT_PROTECTED_LOSS_SCALE: f64 = 3.0;
 
+/// Default constant `c` in the noise-floor angle `θ_floor = c·s/f` a crossing
+/// free point is classified by (see [`FreePointPolicy`]).
+pub const DEFAULT_NOISE_FLOOR_SCALE: f64 = 2.0;
+
+/// What the solve owns of a point, orthogonal to the representation the point
+/// currently carries.
+///
+/// See "The three kinds" in `specs/core/geometry/bundle-adjustment.md`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PointKind {
+    /// The solve owns the point: its position moves, and under
+    /// [`FreePointPolicy::cross`] its representation is re-decided from its
+    /// rays between rounds.
+    #[default]
+    Free,
+    /// The caller owns the point's distance from a reference and the solve owns
+    /// its direction: the point is `X = O + r·d` with `d` its only parameter.
+    Ranged,
+    /// The caller owns the point: its coordinate is fixed for the whole solve,
+    /// its observations still form residuals and camera blocks, and it has no
+    /// parameters.
+    Held,
+}
+
+/// Where a ranged point's distance is measured from.
+///
+/// A reference is a function of the camera poses, never a fixed world point: a
+/// range measured from a coordinate the cameras are free to move away from
+/// constrains nothing about the cameras, because the adjustment's gauge is
+/// free. Both forms resolve to a world position through
+/// `C_k = −R_kᵀ · t_k` at whatever poses the round holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangeReference {
+    /// One image's centre: "the landmark is `r` from where this photograph was
+    /// taken".
+    Camera(u32),
+    /// The mean of several image centres, `O = (1/|K|)·Σ C_k`: a capture
+    /// station whose frames sit close together and none of which is the survey
+    /// point on its own.
+    CameraMean(Vec<u32>),
+}
+
+impl RangeReference {
+    /// The image indices whose centres are averaged, in the caller's order.
+    pub fn images(&self) -> &[u32] {
+        match self {
+            Self::Camera(k) => std::slice::from_ref(k),
+            Self::CameraMean(ks) => ks,
+        }
+    }
+}
+
+/// The kind of every point, and what the ranged ones are held at.
+///
+/// The three arrays are parallel to the adjustment's `points`. `range` and
+/// `reference` are read only where `kind` is [`PointKind::Ranged`]: `range`
+/// carries the distance (`+∞` for a direction, which needs no reference) and
+/// `reference` the pose-relative origin it is measured from.
+///
+/// [`PointConstraints::all_free`] plus the two setters is the intended way to
+/// build one, so a caller states only the points it owns.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PointConstraints {
+    /// One kind per point.
+    pub kind: Vec<PointKind>,
+    /// One distance per point; read where the kind is ranged, `NaN` elsewhere.
+    pub range: Vec<f64>,
+    /// One reference per point; read where the kind is ranged at a finite
+    /// distance, `None` elsewhere.
+    pub reference: Vec<Option<RangeReference>>,
+}
+
+impl PointConstraints {
+    /// `n_pt` free points: the state a caller starts from and edits.
+    pub fn all_free(n_pt: usize) -> Self {
+        Self {
+            kind: vec![PointKind::Free; n_pt],
+            range: vec![f64::NAN; n_pt],
+            reference: vec![None; n_pt],
+        }
+    }
+
+    /// Hold point `p` at whatever coordinate the caller hands the adjustment.
+    pub fn hold(&mut self, p: usize) {
+        self.kind[p] = PointKind::Held;
+        self.range[p] = f64::NAN;
+        self.reference[p] = None;
+    }
+
+    /// Range point `p` at `distance` from `reference`, the solve keeping only
+    /// its direction. `f64::INFINITY` is a direction and takes no reference.
+    pub fn range_at(&mut self, p: usize, distance: f64, reference: Option<RangeReference>) {
+        self.kind[p] = PointKind::Ranged;
+        self.range[p] = distance;
+        self.reference[p] = reference;
+    }
+}
+
+/// How a free point's representation is decided.
+///
+/// [`FreePointPolicy::default`] is the off position: the caller's
+/// `point_at_infinity` mask is honoured for the whole solve, which is the
+/// kernel the parity requirement is stated against.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FreePointPolicy {
+    /// Re-decide every free point's representation at each inter-round
+    /// re-estimation, from its own rays at the current geometry: a track whose
+    /// widest ray pair opens past the noise floor is finite, one that closes
+    /// below it is a direction, and so is one that solves behind a camera that
+    /// observes it.
+    pub cross: bool,
+    /// The constant `c` in the noise-floor angle `θ_floor = c·s/f`, with `s`
+    /// the round's loss scale in pixels and `f` the camera's current focal.
+    /// Read only when [`Self::cross`] is set.
+    pub noise_floor_scale: f64,
+}
+
+impl Default for FreePointPolicy {
+    fn default() -> Self {
+        Self {
+            cross: false,
+            noise_floor_scale: DEFAULT_NOISE_FLOOR_SCALE,
+        }
+    }
+}
+
 /// Result of [`bundle_adjust`]. Poses and points are refined in place; this
 /// carries what has no in-place home.
 #[derive(Clone, Debug)]
@@ -82,6 +209,13 @@ pub struct BundleAdjustment {
     /// exit (fewer than `min_obs` observations, finite and direction alike,
     /// survived a trim).
     pub residual_norms: Vec<f64>,
+    /// The representation each point ended with, one entry per point: `true`
+    /// where the returned row is a world-frame direction and `false` where it
+    /// is a position. A free point's entry is the caller's input mask unless
+    /// [`FreePointPolicy::cross`] let the re-estimation re-decide it, a held
+    /// point's is its input value, and a ranged point's is whether its distance
+    /// is infinite.
+    pub point_at_infinity: Vec<bool>,
 }
 
 /// Soft-L1 robust cost of a squared-residual-over-scale² argument:
@@ -151,6 +285,14 @@ struct ObsBlocks<const CAM_COLS: usize> {
     /// always pinned under the spline release, so its exactly-zero column
     /// accumulates exact zeros there.
     idx: [usize; CAM_COLS],
+    /// The reference-camera columns of a ranged point's observation: the
+    /// reduced-system column and its `∂(u, v)/∂parameter`, one entry per DOF of
+    /// every reference camera the round is solving. Empty for every observation
+    /// of a free or held point, and for a ranged point whose reference cameras
+    /// no kept observation touches. A column here may share its reduced-system
+    /// slot with one of [`Self::idx`] -- the observing camera can be its own
+    /// reference -- and the two then simply add.
+    ref_cols: Vec<(usize, Vector2<f64>)>,
 }
 
 /// Width of one observation's camera-side Jacobian block in the base
@@ -331,6 +473,13 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// infinity" in `specs/core/geometry/bundle-adjustment.md`. An absent mask is an
 /// all-`false` mask, which reduces the solve to the finite-only one.
 ///
+/// `constraints` optionally states a kind per point (free, ranged or held)
+/// and what the ranged ones are held at; an absent one is every point free.
+/// `free_points` says whether a free point's representation is re-decided from
+/// its rays between rounds and at what noise floor. See "The three kinds" in
+/// `specs/core/geometry/bundle-adjustment.md`. Absent constraints and a default
+/// [`FreePointPolicy`] reproduce the kernel without them bit for bit.
+///
 /// `protected` optionally marks per-observation protection (parallel to the
 /// observation arrays): a protected observation is never removed by the
 /// inter-round trim gates — it stays in the solve set every round regardless
@@ -362,6 +511,8 @@ pub fn bundle_adjust(
     obs_img: &[u32],
     obs_pt: &[u32],
     point_at_infinity: Option<&[bool]>,
+    constraints: Option<&PointConstraints>,
+    free_points: FreePointPolicy,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     opt_f: bool,
@@ -400,6 +551,15 @@ pub fn bundle_adjust(
             &no_directions
         }
     };
+    let cons = Constraints::resolve(constraints, n_pt, quats.len());
+    // A ranged point's representation is its distance's: finite where the
+    // distance is, a direction at `r = ∞`, whatever the caller's mask says.
+    let mut is_dir_state: Vec<bool> = is_dir.to_vec();
+    for (p, dir) in is_dir_state.iter_mut().enumerate() {
+        if cons.kind[p] == PointKind::Ranged {
+            *dir = !cons.range[p].is_finite();
+        }
+    }
     bundle_adjust_staged(
         cam,
         quats,
@@ -408,7 +568,9 @@ pub fn bundle_adjust(
         uv,
         obs_img,
         obs_pt,
-        is_dir,
+        &mut is_dir_state,
+        &cons,
+        free_points,
         protected,
         protected_loss_scale,
         opt_f,
@@ -431,6 +593,123 @@ pub fn bundle_adjust(
 // row marked, every direction branch is skipped and what remains is the
 // finite-only solve.
 
+/// The caller's [`PointConstraints`] as the staged loop reads them: one entry
+/// per point, validated once at the entry point, with a ranged point's
+/// reference flattened to the image indices whose centres are averaged.
+struct Constraints {
+    kind: Vec<PointKind>,
+    /// A ranged point's distance from its reference; `NaN` for every other
+    /// point.
+    range: Vec<f64>,
+    /// A ranged point's reference images, deduplicated in the caller's order.
+    /// Empty for every other point and at `r = ∞`, which needs no reference.
+    refs: Vec<Vec<usize>>,
+    any_ranged: bool,
+    any_held: bool,
+}
+
+impl Constraints {
+    /// Every point free: what an absent [`PointConstraints`] means, and the
+    /// state every branch below is inert under.
+    fn all_free(n_pt: usize) -> Self {
+        Self {
+            kind: vec![PointKind::Free; n_pt],
+            range: vec![f64::NAN; n_pt],
+            refs: vec![Vec::new(); n_pt],
+            any_ranged: false,
+            any_held: false,
+        }
+    }
+
+    /// Validate the caller's constraints against the state arrays and flatten
+    /// them. A ranged point needs a strictly positive distance, and a finite
+    /// one needs a reference naming images the adjustment holds.
+    fn resolve(constraints: Option<&PointConstraints>, n_pt: usize, n_img: usize) -> Self {
+        let Some(c) = constraints else {
+            return Self::all_free(n_pt);
+        };
+        assert_eq!(c.kind.len(), n_pt, "constraint kinds and points mismatch");
+        let mut out = Self::all_free(n_pt);
+        for p in 0..n_pt {
+            out.kind[p] = c.kind[p];
+            match c.kind[p] {
+                PointKind::Free => {}
+                PointKind::Held => out.any_held = true,
+                PointKind::Ranged => {
+                    out.any_ranged = true;
+                    assert_eq!(c.range.len(), n_pt, "constraint ranges and points mismatch");
+                    let r = c.range[p];
+                    assert!(r > 0.0, "point {p} is ranged at a non-positive distance");
+                    out.range[p] = r;
+                    if !r.is_finite() {
+                        continue;
+                    }
+                    assert_eq!(
+                        c.reference.len(),
+                        n_pt,
+                        "constraint references and points mismatch"
+                    );
+                    let reference = c.reference[p]
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("point {p} is ranged at {r} with no reference"));
+                    let mut images: Vec<usize> = Vec::new();
+                    for &k in reference.images() {
+                        let k = k as usize;
+                        assert!(k < n_img, "point {p} references image {k} of {n_img}");
+                        if !images.contains(&k) {
+                            images.push(k);
+                        }
+                    }
+                    assert!(!images.is_empty(), "point {p} references no image");
+                    out.refs[p] = images;
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether point `p` is held, so that it owns no parameters.
+    #[inline]
+    fn held(&self, p: usize) -> bool {
+        self.any_held && self.kind[p] == PointKind::Held
+    }
+
+    /// A ranged point's distance where it is finite: the scale on its tangent
+    /// Jacobian block, and the radius its position is rebuilt at.
+    #[inline]
+    fn finite_range(&self, p: usize) -> Option<f64> {
+        (self.any_ranged && self.kind[p] == PointKind::Ranged && self.range[p].is_finite())
+            .then(|| self.range[p])
+    }
+}
+
+/// A ranged point's reference as one round's solve reads it: the reference
+/// cameras the round can move, the constant part of the sum from the ones it
+/// cannot, and `1/|K|`.
+struct RangeOrigin {
+    /// Compact image indices of the reference cameras the round is solving.
+    live: Vec<usize>,
+    /// `Σ C_k` over reference cameras no kept observation touches, which the
+    /// round holds fixed.
+    fixed_sum: Vector3<f64>,
+    /// `1/|K|` over the whole reference set, live and fixed alike.
+    inv_k: f64,
+    /// The distance the direction is carried at.
+    distance: f64,
+}
+
+/// One image's centre `C = −Rᵀ·t`.
+#[inline]
+fn camera_centre(q: &UnitQuaternion<f64>, t: &Vector3<f64>) -> Vector3<f64> {
+    -(q.inverse() * t)
+}
+
+/// `[v]ₓ`, the cross-product matrix.
+#[inline]
+fn skew(v: Vector3<f64>) -> Matrix3<f64> {
+    Matrix3::new(0.0, -v.z, v.y, v.z, 0.0, -v.x, -v.y, v.x, 0.0)
+}
+
 /// Normalize a direction row. Zero-norm and non-finite rows come back `NaN`
 /// (a `NaN` direction behaves like a `NaN` finite point: invalid until
 /// re-estimated).
@@ -441,19 +720,6 @@ fn normalized_dir(p: [f64; 3]) -> [f64; 3] {
     } else {
         [f64::NAN; 3]
     }
-}
-
-/// An orthonormal basis `B(d) = [b1 | b2]` of the tangent plane `d⊥` of a
-/// unit direction (rebuilt at each linearization).
-fn tangent_basis(d: &Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
-    let anchor = if d.x.abs() < 0.9 {
-        Vector3::x()
-    } else {
-        Vector3::y()
-    };
-    let b1 = d.cross(&anchor).normalize();
-    let b2 = d.cross(&b1);
-    (b1, b2)
 }
 
 /// Mixed-path residual norms and in-front measures. Finite observations
@@ -519,16 +785,26 @@ fn residual_norms_depths(
 /// The operation builds its CSR grouping with a **stable** sort, so a track's
 /// observations accumulate in the order the caller listed them and the result
 /// is defined by the input order rather than by a sort's tie-breaking.
+///
+/// `cross_floor` is the crossing policy for free points: `None` keeps every
+/// free point's representation as it came in (the mask is honoured for the
+/// whole solve), and `Some(θ_floor)` re-decides it from the rays at this
+/// geometry -- marks off, the floor at `θ_floor`, cheirality on -- and writes
+/// the verdict back into `is_dir` for the next linearization. A ranged point is
+/// carried by the range rule at whatever origin its reference resolves to now,
+/// and a held point is not re-estimated at all.
 #[allow(clippy::too_many_arguments)]
 fn reestimate_points(
     cam: &CameraIntrinsics,
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
     points: &mut [[f64; 3]],
-    is_dir: &[bool],
+    is_dir: &mut [bool],
     uv: &[[f64; 2]],
     obs_img: &[u32],
     obs_pt: &[u32],
+    cons: &Constraints,
+    cross_floor: Option<f64>,
 ) {
     let mut quats_wxyz = Vec::with_capacity(quats.len() * 4);
     for q in quats {
@@ -538,6 +814,37 @@ fn reestimate_points(
     for t in trans {
         translations.extend_from_slice(&[t.x, t.y, t.z]);
     }
+    // A crossing free point is solved from its rays, so it carries no mark; the
+    // marks of the points the crossing does not touch are what they were.
+    let marks: Vec<bool> = (0..points.len())
+        .map(|p| {
+            if cross_floor.is_some() && cons.kind[p] == PointKind::Free {
+                false
+            } else {
+                is_dir[p]
+            }
+        })
+        .collect();
+    // A ranged point's origin is a function of the poses, read here at the
+    // round's own geometry.
+    let ranges: Option<Vec<PointRange>> = cons.any_ranged.then(|| {
+        (0..points.len())
+            .map(|p| {
+                if cons.kind[p] != PointKind::Ranged {
+                    return PointRange::NOT_RANGED;
+                }
+                let mut o = Vector3::zeros();
+                for &k in &cons.refs[p] {
+                    o += camera_centre(&quats[k], &trans[k]);
+                }
+                let n = cons.refs[p].len().max(1) as f64;
+                PointRange {
+                    distance: cons.range[p],
+                    origin: [o.x / n, o.y / n, o.z / n],
+                }
+            })
+            .collect()
+    });
     let est = estimate_points_from_observations(
         cam,
         ObservationSet {
@@ -548,21 +855,35 @@ fn reestimate_points(
             translations: &translations,
             n_tracks: points.len(),
         },
-        Some(is_dir),
+        Some(&marks),
         PointRules {
+            range: ranges.as_deref(),
+            floor_rad: cross_floor,
+            cheirality: cross_floor.is_some(),
             few: FewObservations::Absent,
             ..Default::default()
         },
     );
-    for (p, e) in points.iter_mut().zip(&est.xyzw) {
-        *p = [e[0], e[1], e[2]];
+    for (p, (row, e)) in points.iter_mut().zip(&est.xyzw).enumerate() {
+        // A held point owns its coordinate; the estimate for it is discarded.
+        if cons.held(p) {
+            continue;
+        }
+        *row = [e[0], e[1], e[2]];
+        // The crossing verdict, where the estimate says anything: an absent
+        // track (`NaN`) leaves the representation it had, so a track that
+        // momentarily loses its observations does not also change kind.
+        if cross_floor.is_some() && cons.kind[p] == PointKind::Free && e[3].is_finite() {
+            is_dir[p] = e[3] == 0.0;
+        }
     }
 }
 
-/// Robust cost over the kept observations at a candidate state. `cp_dir`
-/// flags direction points by compact index; `s2s` is the per-kept-observation
-/// squared loss scale (uniform except where a protected observation widens
-/// it).
+/// Robust cost over the kept observations at a candidate state. `points` are
+/// world positions by compact index -- a ranged point's already resolved
+/// through its reference and distance; `cp_dir` flags direction points; `s2s`
+/// is the per-kept-observation squared loss scale (uniform except where a
+/// protected observation widens it).
 #[allow(clippy::too_many_arguments)]
 fn robust_cost(
     cam: &CameraIntrinsics,
@@ -605,12 +926,235 @@ fn robust_cost(
         .sum()
 }
 
+/// Everything one linearization of the solve reads that does not vary from
+/// observation to observation: the camera at the current shared state, the
+/// current poses and points, and the per-point flags that say what each point's
+/// block looks like.
+///
+/// It exists so the per-observation blocks are built by a function a test can
+/// call, which is how the reference-camera columns of a ranged point are
+/// checked against a difference of the residual they claim to differentiate.
+struct LinState<'a> {
+    cam: &'a CameraIntrinsics,
+    /// Whether the model carries an analytic pixel Jacobian.
+    analytic: bool,
+    cx: f64,
+    cy: f64,
+    f: f64,
+    opt_f: bool,
+    opt_k1: bool,
+    opt_bspline: bool,
+    n_coeffs: usize,
+    d_max: f64,
+    radial: SplineRadial,
+    /// Compact poses.
+    q: &'a [UnitQuaternion<f64>],
+    t: &'a [Vector3<f64>],
+    /// Compact world positions -- a ranged point's already resolved through its
+    /// reference and distance.
+    xp: &'a [Vector3<f64>],
+    /// Tangent bases of the points parameterized on the sphere.
+    bases: &'a [(Vector3<f64>, Vector3<f64>)],
+    cp_dir: &'a [bool],
+    cp_held: &'a [bool],
+    cp_origin: &'a [Option<RangeOrigin>],
+    /// Every supplied observation's pixel, indexed by the caller's own index.
+    uv: &'a [[f64; 2]],
+    /// Width of the reduced system's shared-parameter head.
+    n_shared: usize,
+}
+
+impl LinState<'_> {
+    /// First pose slot of compact image `ci` in the reduced camera system.
+    #[inline]
+    fn img_slot(&self, ci: usize) -> usize {
+        self.n_shared + 6 * ci
+    }
+}
+
+/// Linearize one observation: its weighted residual and the camera-side,
+/// point-side and reference-camera blocks that differentiate it.
+///
+/// `k` is the observation's index in the caller's arrays, `ci` and `cp` its
+/// compact image and point, and `s2` the squared loss scale it is weighted at.
+fn observation_blocks<const CAM_COLS: usize>(
+    st: &LinState<'_>,
+    k: usize,
+    ci: usize,
+    cp: usize,
+    s2: f64,
+) -> ObsBlocks<CAM_COLS> {
+    // First pose column within an observation's camera block.
+    let pose_c = CAM_COLS - 6;
+    let (q, t, xp, uv, cam) = (st.q, st.t, st.xp, st.uv, st.cam);
+    let f = st.f;
+    let dir = st.cp_dir[cp];
+    let rot_pt = q[ci] * xp[cp];
+    let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
+    let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
+    let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
+    let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
+    let mut ref_cols: Vec<(usize, Vector2<f64>)> = Vec::new();
+    // Column indices: `[f, k1, (spline), δθ×3, δt×3]`. Spline
+    // slots start at the pinned K1_SLOT dummy and are pointed at
+    // their coefficient's shared slot below, where the
+    // observation actually carries one.
+    let mut idx = [K1_SLOT; CAM_COLS];
+    idx[F_SLOT] = F_SLOT;
+    let o = st.img_slot(ci);
+    for (j, slot) in idx[pose_c..].iter_mut().enumerate() {
+        *slot = o + j;
+    }
+    // A non-finite point (protected observations only — the trim
+    // never excludes them) keeps the penalized residual and zero
+    // Jacobian rows: penalized, never steering.
+    let proj = if xp[cp].x.is_finite() && xp[cp].y.is_finite() && xp[cp].z.is_finite() {
+        project_with_jac(cam, p_cam, st.analytic)
+    } else {
+        None
+    };
+    if let Some(((u, v), jp)) = proj {
+        res = Vector2::new(u - uv[k][0], v - uv[k][1]);
+        let jp = SMatrix::<f64, 2, 3>::from_rows(&[
+            SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
+            SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
+        ]);
+        if st.opt_f {
+            // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
+            // admits: the focal is a pure multiplier of an
+            // `f`-independent distorted coordinate, so the
+            // derivative is that coordinate.
+            cam_j[(0, F_SLOT)] = (u - st.cx) / f;
+            cam_j[(1, F_SLOT)] = (v - st.cy) / f;
+        }
+        if st.opt_k1 {
+            // ∂(u, v)/∂k1 = f·θ³·û — direction rows included,
+            // they project through the same map.
+            let (du, dv) = k1_column(f, p_cam);
+            cam_j[(0, K1_SLOT)] = du;
+            cam_j[(1, K1_SLOT)] = dv;
+        }
+        if st.opt_bspline {
+            // ∂(u, v)/∂cᵢ = f·Bᵢ(θ)·û for the ≤ 4 active basis
+            // functions — direction rows included, they project
+            // through the same map. Gauge-anchored functions
+            // (full index < 2) carry no coefficient: their slot
+            // keeps the pinned K1_SLOT dummy and their column
+            // stays exactly zero.
+            let (first, cols) = bspline_columns(f, st.n_coeffs, st.d_max, st.radial, p_cam);
+            for (j, col) in cols.iter().enumerate() {
+                let full = first + j;
+                if full < 2 {
+                    continue;
+                }
+                idx[2 + j] = BSPLINE_SLOT0 + (full - 2);
+                cam_j[(0, 2 + j)] = col[0];
+                cam_j[(1, 2 + j)] = col[1];
+            }
+        }
+        // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite) or
+        // −[R·d]ₓ (direction) — same composition either way.
+        let nskew = Matrix3::new(
+            0.0, rot_pt.z, -rot_pt.y, //
+            -rot_pt.z, 0.0, rot_pt.x, //
+            rot_pt.y, -rot_pt.x, 0.0,
+        );
+        cam_j
+            .fixed_view_mut::<2, 3>(0, pose_c)
+            .copy_from(&(jp * nskew));
+        let r_mat: Matrix3<f64> = q[ci].to_rotation_matrix().into_inner();
+        if dir {
+            // Translation block: zero (a direction observes no
+            // translation). Point block: 2-DOF tangent-plane
+            // parameters, ∂p_cam/∂δ = R·B(d) (columns b1, b2;
+            // the third slot stays exactly zero). A held direction
+            // owns no parameters, so it takes no point block.
+            if !st.cp_held[cp] {
+                let (b1, b2) = st.bases[cp];
+                let col0 = jp * (r_mat * b1);
+                let col1 = jp * (r_mat * b2);
+                pt_j.set_column(0, &col0);
+                pt_j.set_column(1, &col1);
+            }
+        } else if let Some(origin) = &st.cp_origin[cp] {
+            // A ranged point at a finite distance. Translation
+            // block: identity, as for any finite point.
+            cam_j.fixed_view_mut::<2, 3>(0, pose_c + 3).copy_from(&jp);
+            // Point block: r·J_X·B(d), the direction's tangent
+            // columns scaled by the distance the caller holds.
+            let (b1, b2) = st.bases[cp];
+            let col0 = jp * (r_mat * b1) * origin.distance;
+            let col1 = jp * (r_mat * b2) * origin.distance;
+            pt_j.set_column(0, &col0);
+            pt_j.set_column(1, &col1);
+            // Reference cameras: X moves with O, so every
+            // observation of the point also lands
+            // J_X·∂O/∂pose_k / |K| in each reference camera's own
+            // block, with ∂C/∂t = −Rᵀ and ∂C/∂ω = −Rᵀ·[t]ₓ under
+            // this kernel's R ← exp(ω)·R update.
+            let jx = jp * r_mat;
+            for &c in &origin.live {
+                let rct = q[c].to_rotation_matrix().into_inner().transpose();
+                let d_omega = -(rct * skew(t[c])) * origin.inv_k;
+                let d_trans = -rct * origin.inv_k;
+                let b_omega = jx * d_omega;
+                let b_trans = jx * d_trans;
+                let o = st.img_slot(c);
+                for j in 0..3 {
+                    ref_cols.push((o + j, Vector2::new(b_omega[(0, j)], b_omega[(1, j)])));
+                }
+                for j in 0..3 {
+                    ref_cols.push((o + 3 + j, Vector2::new(b_trans[(0, j)], b_trans[(1, j)])));
+                }
+            }
+        } else {
+            // Translation block: identity.
+            cam_j.fixed_view_mut::<2, 3>(0, pose_c + 3).copy_from(&jp);
+            // Point block: ∂p_cam/∂X = R. A held point owns no
+            // parameters and takes none.
+            if !st.cp_held[cp] {
+                pt_j.copy_from(&(jp * r_mat));
+            }
+        }
+    }
+    for row in 0..2 {
+        let z = res[row] * res[row] / s2;
+        let (js, rs) = robust_scales(z);
+        res[row] *= rs;
+        for col in 0..CAM_COLS {
+            cam_j[(row, col)] *= js;
+        }
+        for col in 0..3 {
+            pt_j[(row, col)] *= js;
+        }
+        for (_, col) in ref_cols.iter_mut() {
+            col[row] *= js;
+        }
+    }
+    ObsBlocks {
+        cp,
+        res,
+        cam_j,
+        pt_j,
+        idx,
+        ref_cols,
+    }
+}
+
 /// One robust sparse LM solve over the kept observations with mixed finite
 /// and direction points. Direction points use 2-DOF tangent-plane parameters
 /// stored in the first two slots of the uniform 3-wide point block (the third
 /// slot carries exact zeros and is pinned at the Schur inversion); images
-/// whose kept observations are all directions have their translation slots
-/// pinned in the reduced system (frozen for the round).
+/// whose kept observations carry no translation Jacobian have their
+/// translation slots pinned in the reduced system (frozen for the round).
+///
+/// `cons` carries the point kinds. A ranged point at a finite distance takes
+/// the same 2-DOF tangent parameters as a direction -- its state here IS that
+/// direction, its position `O(pose) + r·d` resolved wherever a position is
+/// wanted -- with its Jacobian block scaled by the distance and its reference
+/// cameras' own blocks accumulated alongside the observing camera's. A held
+/// point takes no point block, no Schur block and no update, so it comes back
+/// exactly as it went in.
 ///
 /// `CAM_COLS` selects the per-observation camera-block width:
 /// [`BASE_CAM_COLS`] for every solve without the spline release (the
@@ -635,6 +1179,7 @@ fn solve_lm<const CAM_COLS: usize>(
     obs_img: &[u32],
     obs_pt: &[u32],
     kept: &[usize],
+    cons: &Constraints,
     opt_f: bool,
     opt_k1: bool,
     loss_scale: f64,
@@ -672,6 +1217,17 @@ fn solve_lm<const CAM_COLS: usize>(
         .collect();
     let obs_cp: Vec<usize> = kept.iter().map(|&k| cp_of[&(obs_pt[k] as usize)]).collect();
     let cp_dir: Vec<bool> = pt_ids.iter().map(|&p| is_dir[p]).collect();
+    // A held point owns no parameters: no point block, no Schur block, no
+    // update.
+    let cp_held: Vec<bool> = pt_ids.iter().map(|&p| cons.held(p)).collect();
+    // A ranged point at a finite distance is parameterized like a direction --
+    // two tangent DOFs -- with its Jacobian block scaled by that distance, so
+    // the two families share the tangent basis, the 2×2 Schur block and the
+    // normalizing update.
+    let cp_range: Vec<Option<f64>> = pt_ids.iter().map(|&p| cons.finite_range(p)).collect();
+    let cp_tangent: Vec<bool> = (0..n_pt)
+        .map(|c| cp_dir[c] || cp_range[c].is_some())
+        .collect();
 
     // Translation observability: an image whose kept observations are all
     // directions gets its translation pinned for this round (a direction
@@ -704,6 +1260,58 @@ fn solve_lm<const CAM_COLS: usize>(
         .map(|&p| Vector3::new(points[p][0], points[p][1], points[p][2]))
         .collect();
 
+    // Ranged points: their reference set, split into the cameras this round
+    // solves and the ones it does not (a reference no kept observation touches
+    // cannot move, so its centre folds into a constant). Their state is the
+    // direction `d`, so the incoming position is read as one -- a caller whose
+    // position does not sit at exactly `r` from the reference is snapped onto
+    // the sphere the range names.
+    let cp_origin: Vec<Option<RangeOrigin>> = pt_ids
+        .iter()
+        .enumerate()
+        .map(|(c, &p)| {
+            let distance = cp_range[c]?;
+            let mut live = Vec::new();
+            let mut fixed_sum = Vector3::zeros();
+            for &k in &cons.refs[p] {
+                match ci_of.get(&k) {
+                    Some(&ci) => live.push(ci),
+                    None => fixed_sum += camera_centre(&quats[k], &trans[k]),
+                }
+            }
+            Some(RangeOrigin {
+                live,
+                fixed_sum,
+                inv_k: 1.0 / cons.refs[p].len() as f64,
+                distance,
+            })
+        })
+        .collect();
+    let has_ranged = cp_origin.iter().any(Option::is_some);
+    // The reference origin at a candidate state.
+    let origin_of = |o: &RangeOrigin, q: &[UnitQuaternion<f64>], t: &[Vector3<f64>]| {
+        let mut s = o.fixed_sum;
+        for &c in &o.live {
+            s += camera_centre(&q[c], &t[c]);
+        }
+        s * o.inv_k
+    };
+    // The world positions a state stands for: the state itself, except that a
+    // ranged point holds its direction and sits at `O(pose) + r·d`.
+    let positions = |x: &[Vector3<f64>], q: &[UnitQuaternion<f64>], t: &[Vector3<f64>]| {
+        let mut out = x.to_vec();
+        for (c, o) in cp_origin.iter().enumerate() {
+            if let Some(o) = o {
+                out[c] = origin_of(o, q, t) + o.distance * x[c];
+            }
+        }
+        out
+    };
+    for (c, o) in cp_origin.iter().enumerate() {
+        if let Some(o) = o {
+            x[c] = (x[c] - origin_of(o, &q, &t)).normalize();
+        }
+    }
     // Reduced camera system: [f | k1 | (spline coefficients) | 6 per image];
     // the scalar shared slots are always present (pinned when unreleased) to
     // keep the indexing uniform, the coefficient slots only under the
@@ -712,8 +1320,6 @@ fn solve_lm<const CAM_COLS: usize>(
     let d = n_shared + 6 * n_im;
     // First pose slot of compact image `ci` in the reduced camera system.
     let img_slot = |ci: usize| n_shared + 6 * ci;
-    // First pose column within an observation's camera block.
-    let pose_c = CAM_COLS - 6;
     // The camera at a candidate shared state. Off the spline instantiation
     // this is exactly the scalar builder (a fixed spline
     // rides along inside `cam0` untouched).
@@ -746,10 +1352,24 @@ fn solve_lm<const CAM_COLS: usize>(
             _ => s2,
         })
         .collect();
+    // The robust cost at a candidate state, read through the positions above.
+    let cost_at = |cam: &CameraIntrinsics,
+                   q: &[UnitQuaternion<f64>],
+                   t: &[Vector3<f64>],
+                   x: &[Vector3<f64>]| {
+        let owned;
+        let xp: &[Vector3<f64>] = if has_ranged {
+            owned = positions(x, q, t);
+            &owned
+        } else {
+            x
+        };
+        robust_cost(cam, q, t, xp, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s)
+    };
     let mut lambda = 1e-3;
     let mut tiny_steps = 0usize;
     let mut cam = build_cam(f, k1, &bspline);
-    let mut prev_cost = robust_cost(&cam, &q, &t, &x, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s);
+    let mut prev_cost = cost_at(&cam, &q, &t, &x);
 
     let analytic = cam.model.supports_pixel_jacobian();
     for _ in 0..max_iters {
@@ -758,7 +1378,7 @@ fn solve_lm<const CAM_COLS: usize>(
         // each linearization.
         let bases: Vec<(Vector3<f64>, Vector3<f64>)> = x
             .iter()
-            .zip(&cp_dir)
+            .zip(&cp_tangent)
             .map(|(xd, &dir)| {
                 if dir {
                     tangent_basis(xd)
@@ -767,125 +1387,44 @@ fn solve_lm<const CAM_COLS: usize>(
                 }
             })
             .collect();
+        // A ranged point's state is a direction; its position is where the
+        // reference and the distance put it at this linearization.
+        let owned_positions;
+        let xp: &[Vector3<f64>] = if has_ranged {
+            owned_positions = positions(&x, &q, &t);
+            &owned_positions
+        } else {
+            &x
+        };
         let (cx, cy) = cam.principal_point();
-        let blocks: Vec<ObsBlocks<CAM_COLS>> = kept
-            .iter()
-            .enumerate()
-            .map(|(kk, &k)| {
-                let ci = obs_ci[kk];
-                let cp = obs_cp[kk];
-                let s2 = s2s[kk];
-                let dir = cp_dir[cp];
-                let rot_pt = q[ci] * x[cp];
-                let p_cam = if dir { rot_pt } else { rot_pt + t[ci] };
-                let mut res = Vector2::new(INVALID_RESIDUAL, 0.0);
-                let mut cam_j = SMatrix::<f64, 2, CAM_COLS>::zeros();
-                let mut pt_j = SMatrix::<f64, 2, 3>::zeros();
-                // Column indices: `[f, k1, (spline), δθ×3, δt×3]`. Spline
-                // slots start at the pinned K1_SLOT dummy and are pointed at
-                // their coefficient's shared slot below, where the
-                // observation actually carries one.
-                let mut idx = [K1_SLOT; CAM_COLS];
-                idx[F_SLOT] = F_SLOT;
-                let o = img_slot(ci);
-                for (j, slot) in idx[pose_c..].iter_mut().enumerate() {
-                    *slot = o + j;
-                }
-                // A non-finite point (protected observations only — the trim
-                // never excludes them) keeps the penalized residual and zero
-                // Jacobian rows: penalized, never steering.
-                let proj = if x[cp].x.is_finite() && x[cp].y.is_finite() && x[cp].z.is_finite() {
-                    project_with_jac(&cam, p_cam, analytic)
-                } else {
-                    None
-                };
-                if let Some(((u, v), jp)) = proj {
-                    res = Vector2::new(u - uv[k][0], v - uv[k][1]);
-                    let jp = SMatrix::<f64, 2, 3>::from_rows(&[
-                        SMatrix::<f64, 1, 3>::from_row_slice(&jp[0]),
-                        SMatrix::<f64, 1, 3>::from_row_slice(&jp[1]),
-                    ]);
-                    if opt_f {
-                        // ∂(u, v)/∂f. Exact for every model the `opt_f` gate
-                        // admits: the focal is a pure multiplier of an
-                        // `f`-independent distorted coordinate, so the
-                        // derivative is that coordinate.
-                        cam_j[(0, F_SLOT)] = (u - cx) / f;
-                        cam_j[(1, F_SLOT)] = (v - cy) / f;
-                    }
-                    if opt_k1 {
-                        // ∂(u, v)/∂k1 = f·θ³·û — direction rows included,
-                        // they project through the same map.
-                        let (du, dv) = k1_column(f, p_cam);
-                        cam_j[(0, K1_SLOT)] = du;
-                        cam_j[(1, K1_SLOT)] = dv;
-                    }
-                    if opt_bspline {
-                        // ∂(u, v)/∂cᵢ = f·Bᵢ(θ)·û for the ≤ 4 active basis
-                        // functions — direction rows included, they project
-                        // through the same map. Gauge-anchored functions
-                        // (full index < 2) carry no coefficient: their slot
-                        // keeps the pinned K1_SLOT dummy and their column
-                        // stays exactly zero.
-                        let (first, cols) = bspline_columns(f, n_coeffs, d_max, radial, p_cam);
-                        for (j, col) in cols.iter().enumerate() {
-                            let full = first + j;
-                            if full < 2 {
-                                continue;
-                            }
-                            idx[2 + j] = BSPLINE_SLOT0 + (full - 2);
-                            cam_j[(0, 2 + j)] = col[0];
-                            cam_j[(1, 2 + j)] = col[1];
-                        }
-                    }
-                    // Rotation block: ∂p_cam/∂δθ = −[R·X]ₓ (finite) or
-                    // −[R·d]ₓ (direction) — same composition either way.
-                    let nskew = Matrix3::new(
-                        0.0, rot_pt.z, -rot_pt.y, //
-                        -rot_pt.z, 0.0, rot_pt.x, //
-                        rot_pt.y, -rot_pt.x, 0.0,
-                    );
-                    cam_j
-                        .fixed_view_mut::<2, 3>(0, pose_c)
-                        .copy_from(&(jp * nskew));
-                    let r_mat: Matrix3<f64> = q[ci].to_rotation_matrix().into_inner();
-                    if dir {
-                        // Translation block: zero (a direction observes no
-                        // translation). Point block: 2-DOF tangent-plane
-                        // parameters, ∂p_cam/∂δ = R·B(d) (columns b1, b2;
-                        // the third slot stays exactly zero).
-                        let (b1, b2) = bases[cp];
-                        let col0 = jp * (r_mat * b1);
-                        let col1 = jp * (r_mat * b2);
-                        pt_j.set_column(0, &col0);
-                        pt_j.set_column(1, &col1);
-                    } else {
-                        // Translation block: identity.
-                        cam_j.fixed_view_mut::<2, 3>(0, pose_c + 3).copy_from(&jp);
-                        // Point block: ∂p_cam/∂X = R.
-                        pt_j.copy_from(&(jp * r_mat));
-                    }
-                }
-                for row in 0..2 {
-                    let z = res[row] * res[row] / s2;
-                    let (js, rs) = robust_scales(z);
-                    res[row] *= rs;
-                    for col in 0..CAM_COLS {
-                        cam_j[(row, col)] *= js;
-                    }
-                    for col in 0..3 {
-                        pt_j[(row, col)] *= js;
-                    }
-                }
-                ObsBlocks {
-                    cp,
-                    res,
-                    cam_j,
-                    pt_j,
-                    idx,
-                }
-            })
-            .collect();
+        let blocks: Vec<ObsBlocks<CAM_COLS>> = {
+            let st = LinState {
+                cam: &cam,
+                analytic,
+                cx,
+                cy,
+                f,
+                opt_f,
+                opt_k1,
+                opt_bspline,
+                n_coeffs,
+                d_max,
+                radial,
+                q: &q,
+                t: &t,
+                xp,
+                bases: &bases,
+                cp_dir: &cp_dir,
+                cp_held: &cp_held,
+                cp_origin: &cp_origin,
+                uv,
+                n_shared,
+            };
+            kept.iter()
+                .enumerate()
+                .map(|(kk, &k)| observation_blocks(&st, k, obs_ci[kk], obs_cp[kk], s2s[kk]))
+                .collect()
+        };
 
         // ── Accumulate the normal-equation blocks ────────────────────────
         let mut h_cc = DMatrix::<f64>::zeros(d, d);
@@ -893,6 +1432,13 @@ fn solve_lm<const CAM_COLS: usize>(
         let mut v_pp: Vec<Matrix3<f64>> = vec![Matrix3::zeros(); n_pt];
         let mut g_p: Vec<Vector3<f64>> = vec![Vector3::zeros(); n_pt];
         let mut w_cp: Vec<SMatrix<f64, CAM_COLS, 3>> = Vec::with_capacity(blocks.len());
+        // The reference columns' own rows of `W`, parallel to `w_cp`; empty
+        // unless a ranged point is in the solve.
+        let mut w_ref: Vec<Vec<(usize, Vector3<f64>)>> = if has_ranged {
+            Vec::with_capacity(blocks.len())
+        } else {
+            Vec::new()
+        };
         for b in &blocks {
             let idx = &b.idx;
             let h_local = b.cam_j.transpose() * b.cam_j;
@@ -903,9 +1449,33 @@ fn solve_lm<const CAM_COLS: usize>(
                     h_cc[(ia, ic)] += h_local[(a, c)];
                 }
             }
+            // The reference columns are extra columns of the same camera-side
+            // Jacobian, so they carry the same three products: their own square,
+            // their cross terms with the observing camera's block (both
+            // triangles, which is what makes an observing camera that is its own
+            // reference come out right), and their gradient entry.
+            for &(ij, cj) in &b.ref_cols {
+                g_c[ij] += cj.dot(&b.res);
+                for (a, &ia) in idx.iter().enumerate() {
+                    let v = cj[0] * b.cam_j[(0, a)] + cj[1] * b.cam_j[(1, a)];
+                    h_cc[(ia, ij)] += v;
+                    h_cc[(ij, ia)] += v;
+                }
+                for &(il, cl) in &b.ref_cols {
+                    h_cc[(ij, il)] += cj.dot(&cl);
+                }
+            }
             v_pp[b.cp] += b.pt_j.transpose() * b.pt_j;
             g_p[b.cp] += b.pt_j.transpose() * b.res;
             w_cp.push(b.cam_j.transpose() * b.pt_j);
+            if has_ranged {
+                w_ref.push(
+                    b.ref_cols
+                        .iter()
+                        .map(|&(ij, cj)| (ij, b.pt_j.transpose() * cj))
+                        .collect(),
+                );
+            }
         }
 
         // ── Damping ladder: re-damp and re-solve from this linearization ──
@@ -923,11 +1493,18 @@ fn solve_lm<const CAM_COLS: usize>(
             let mut v_inv: Vec<Matrix3<f64>> = Vec::with_capacity(n_pt);
             let mut singular = false;
             for (p, v) in v_pp.iter().enumerate() {
+                // A held point has no point block at all; the identity keeps
+                // the uniform indexing while its zero gradient and zero `W`
+                // make every contribution exactly zero.
+                if cp_held[p] {
+                    v_inv.push(Matrix3::identity());
+                    continue;
+                }
                 let mut vd = *v;
                 for dd in 0..3 {
                     vd[(dd, dd)] += lambda * v[(dd, dd)].max(1e-12);
                 }
-                if cp_dir[p] {
+                if cp_tangent[p] {
                     vd[(2, 2)] = 1.0;
                 }
                 match vd.try_inverse() {
@@ -943,6 +1520,10 @@ fn solve_lm<const CAM_COLS: usize>(
                 continue;
             }
             for (p, obs) in pt_obs.iter().enumerate() {
+                // A held point is eliminated by having no block to eliminate.
+                if cp_held[p] {
+                    continue;
+                }
                 let y = v_inv[p] * g_p[p];
                 for &a in obs {
                     let wa = &w_cp[a];
@@ -957,6 +1538,38 @@ fn solve_lm<const CAM_COLS: usize>(
                         for (r, &ir) in ia.iter().enumerate() {
                             for (c, &ic) in ib.iter().enumerate() {
                                 s[(ir, ic)] -= m[(r, c)];
+                            }
+                        }
+                    }
+                }
+                // The reference columns take the same elimination, over the
+                // three blocks the fixed loop above does not reach: reference
+                // against camera, camera against reference, and reference
+                // against reference.
+                if has_ranged {
+                    for &a in obs {
+                        for &(ir, ra) in &w_ref[a] {
+                            let rv: Vector3<f64> = v_inv[p].transpose() * ra;
+                            g_red[ir] -= ra.dot(&y);
+                            for &b in obs {
+                                let ib = &blocks[b].idx;
+                                let m = w_cp[b] * rv;
+                                for (c, &ic) in ib.iter().enumerate() {
+                                    s[(ir, ic)] -= m[c];
+                                }
+                                for &(jc, rb) in &w_ref[b] {
+                                    s[(ir, jc)] -= rv.dot(&rb);
+                                }
+                            }
+                        }
+                        let wa = &w_cp[a];
+                        let ia = &blocks[a].idx;
+                        for &b in obs {
+                            for &(jc, rb) in &w_ref[b] {
+                                let m = wa * (v_inv[p] * rb);
+                                for (r, &ir) in ia.iter().enumerate() {
+                                    s[(ir, jc)] -= m[r];
+                                }
                             }
                         }
                     }
@@ -1060,6 +1673,10 @@ fn solve_lm<const CAM_COLS: usize>(
             }
             let mut x_cand = x.clone();
             for (p, obs) in pt_obs.iter().enumerate() {
+                // A held point does not move.
+                if cp_held[p] {
+                    continue;
+                }
                 // δp = −V⁻¹(g_p + Wᵀ δc), the Wᵀδc gathered over the point's
                 // observations' camera blocks.
                 let mut wt_dc = Vector3::zeros();
@@ -1070,9 +1687,14 @@ fn solve_lm<const CAM_COLS: usize>(
                         dc[r] = delta[ir];
                     }
                     wt_dc += w_cp[a].transpose() * dc;
+                    if has_ranged {
+                        for &(ir, ra) in &w_ref[a] {
+                            wt_dc += ra * delta[ir];
+                        }
+                    }
                 }
                 let dxp = v_inv[p] * (g_p[p] + wt_dc);
-                if cp_dir[p] {
+                if cp_tangent[p] {
                     // d ← normalize(d + B(d)·δ), the 2-DOF tangent update.
                     let (b1, b2) = bases[p];
                     x_cand[p] = (x[p] - (b1 * dxp[0] + b2 * dxp[1])).normalize();
@@ -1085,9 +1707,7 @@ fn solve_lm<const CAM_COLS: usize>(
                 Some(pc) => build_cam(f_cand, k1_cand, pc),
                 None => build_cam(f_cand, k1_cand, &bspline),
             };
-            let new_cost = robust_cost(
-                &cam_cand, &q_cand, &t_cand, &x_cand, &cp_dir, uv, kept, &obs_ci, &obs_cp, &s2s,
-            );
+            let new_cost = cost_at(&cam_cand, &q_cand, &t_cand, &x_cand);
             if new_cost < prev_cost {
                 let rel = (prev_cost - new_cost) / prev_cost.max(1e-300);
                 f = f_cand;
@@ -1126,13 +1746,25 @@ fn solve_lm<const CAM_COLS: usize>(
         }
     }
 
-    // Scatter the compact state back.
+    // Scatter the compact state back. A ranged point comes back as the
+    // position its distance and its reference put it at, re-read at the poses
+    // the round settled on; a held point is not written at all.
+    let owned_final;
+    let xf: &[Vector3<f64>] = if has_ranged {
+        owned_final = positions(&x, &q, &t);
+        &owned_final
+    } else {
+        &x
+    };
     for (c, &i) in img_ids.iter().enumerate() {
         quats[i] = q[c];
         trans[i] = t[c];
     }
     for (c, &p) in pt_ids.iter().enumerate() {
-        points[p] = [x[c].x, x[c].y, x[c].z];
+        if cp_held[c] {
+            continue;
+        }
+        points[p] = [xf[c].x, xf[c].y, xf[c].z];
     }
     (f, k1, bspline)
 }
@@ -1149,7 +1781,9 @@ fn bundle_adjust_staged(
     uv: &[[f64; 2]],
     obs_img: &[u32],
     obs_pt: &[u32],
-    is_dir: &[bool],
+    is_dir: &mut [bool],
+    cons: &Constraints,
+    free_points: FreePointPolicy,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
     opt_f: bool,
@@ -1242,8 +1876,28 @@ fn bundle_adjust_staged(
         } else {
             cam.with_focal_k1(f, k1)
         };
+        // The noise floor a crossing free point is classified at: the parallax
+        // this stage's own residual scale cannot tell from noise, `c·s/f` in
+        // radians, so a wide-baseline stage keeps more tracks finite than a
+        // tight one and the boundary moves with the focal as the release walks
+        // it.
+        let cross_floor = free_points.cross.then(|| {
+            let (fx, fy) = cam_now.focal_lengths();
+            free_points.noise_floor_scale * stage.loss_scale / (0.5 * (fx + fy))
+        });
         if rnd > 0 {
-            reestimate_points(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
+            reestimate_points(
+                &cam_now,
+                quats,
+                trans,
+                points,
+                is_dir,
+                uv,
+                obs_img,
+                obs_pt,
+                cons,
+                cross_floor,
+            );
         }
         let (norms, depths) =
             residual_norms_depths(&cam_now, quats, trans, points, is_dir, uv, obs_img, obs_pt);
@@ -1287,6 +1941,7 @@ fn bundle_adjust_staged(
                 k1,
                 bspline,
                 residual_norms: vec![f64::INFINITY; n_obs],
+                point_at_infinity: is_dir.to_vec(),
             };
         }
         (f, k1, bspline) = if opt_bspline {
@@ -1303,6 +1958,7 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 &kept,
+                cons,
                 opt_f,
                 opt_k1,
                 stage.loss_scale,
@@ -1324,6 +1980,7 @@ fn bundle_adjust_staged(
                 obs_img,
                 obs_pt,
                 &kept,
+                cons,
                 opt_f,
                 opt_k1,
                 stage.loss_scale,
@@ -1357,6 +2014,7 @@ fn bundle_adjust_staged(
         k1,
         bspline,
         residual_norms,
+        point_at_infinity: is_dir.to_vec(),
     }
 }
 

@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::camera::CameraModel;
-use sfmtool_core::geometry::{bundle_adjust as core_bundle_adjust, BaSchedule};
+use sfmtool_core::geometry::{bundle_adjust as core_bundle_adjust, BaSchedule, FreePointPolicy};
 
 use crate::geometry::PyCameraIntrinsics;
 
@@ -299,6 +299,9 @@ pub fn bundle_adjust<'py>(
             &oi,
             &op,
             inf_mask.as_deref(),
+            // Point kinds and the free-point crossing policy are not bound yet.
+            None,
+            FreePointPolicy::default(),
             prot_mask.as_deref(),
             protected_loss_scale,
             opt_f,
