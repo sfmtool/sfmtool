@@ -54,6 +54,11 @@ pub struct EditedReconstruction {
     pub base: Arc<SfmrReconstruction>,
     pub deleted_points: HashSet<u32>,
     pub added: PointSet,
+    /// For each added point, the base index it replaces (a modified point),
+    /// or `None` for a point that is new. What puts a modified point back in
+    /// its place at materialisation, and what the version graph's point map
+    /// is read from.
+    pub replaces: Vec<Option<u32>>,
 }
 ```
 
@@ -114,7 +119,8 @@ edit shifts no index: the selection, the Point Track Detail panel, a
 `pt3d_<hash>_<index>` id, the MCP addressing, and the GPU instance buffers all
 survive an edit unchanged, and the umbrella's open question about selection
 remapping is closed by construction rather than by a rule. Materialisation is
-the one operation that renumbers, and it is where a remap is produced.
+the one operation that renumbers, and then only the points after a deletion
+and the points that are new; it is where a remap is produced.
 
 A point re-added after a modification gets a new index, and the edit records
 the old one against it: the point's identity continues across the
@@ -125,12 +131,27 @@ the panel follow it, and its id does not change.
 
 ## Materialisation
 
-Materialising an edited reconstruction produces a plain `SfmrReconstruction`:
-the base minus its deleted points, with the additions appended and the whole
-re-sorted into CSR, derived indexes rebuilt. The image table is the base's,
-untouched. It is one full copy and it produces a **row map** from the edited
-point indexes to the new ones, which the selection and the GPU buffers
-consume.
+Materialising an edited reconstruction produces a plain `SfmrReconstruction`
+in which **every point keeps its place**: a modified point goes back to the
+base index it replaced, carrying its new record and track; a deleted point's
+slot closes up, shifting the points after it down by one; and only a point
+that is new to this base is appended, after the last base point, in the
+order the additions were made. The tracks are re-sorted into CSR around
+that order and the derived indexes rebuilt. The image table is the base's,
+untouched.
+
+Keeping places is what makes the materialised file readable beside the one
+it came from: a point that was edited is at the same row in both, a point
+that was not is at the same row unless something before it was deleted, and
+a diff of the two files is the edit. It is also what makes the **row map**
+cheap: for base points it is the identity minus a prefix count of
+deletions, monotone, so it is stored as the sorted deleted set and inverted
+by the same count; for additions it is one index each. The selection and
+the GPU buffers consume it. A merge of two tracks keeps the lower index and
+deletes the higher; a split keeps the first half in place and appends the
+second.
+
+It is one full copy.
 
 It happens when:
 
@@ -279,7 +300,8 @@ re-added under, and which indexes were deleted. A point's identity is
 preserved across a modification: adding an observation to a track changes
 the record, not which point it is, so the map says old index to new index
 and the panel follows it. Deletion ends an identity, and materialisation
-renumbers it.
+gives a modified point its base index back, shifts the points after a
+deletion, and numbers the new ones.
 
 The maps are kept for every version ever minted, including versions an undo
 followed by a new edit discarded. They are tiny (the size of the edits, or of
