@@ -6,8 +6,8 @@ Answers Part 4 of [`sfm-explorer-editing.md`](sfm-explorer-editing.md), the
 umbrella draft for editing a loaded reconstruction in place, which poses the
 row-level edit problem without solving it. That draft's Part 4 links here and
 shrinks to a pointer; when this ships, its content files into
-`core/reconstruction/shared-columns.md` beside the column model it builds on,
-and the umbrella's step 6 is deleted.
+`core/reconstruction/edited-reconstruction.md`, and the umbrella's steps 2
+and 3 are deleted.
 
 A reconstruction in memory is a million points and ten million track
 observations, stored as sorted columns with a prefix-sum index (CSR), and the
@@ -92,7 +92,7 @@ A point edit never writes a row into the base's columns, so the base's
 identity, and everything keyed on it, holds for as long as the base does.
 
 A **bulk edit** is a function from a plain reconstruction to a plain
-reconstruction, the umbrella draft's column model with nothing in between:
+reconstruction, a plain value in and a plain value out:
 it materialises the current version if it has to, runs, and its output is the
 next version's base with an empty overlay.
 
@@ -411,5 +411,3 @@ sentence) and metadata (the lineage entry).
 - Whether the version graph's maps are stored per version as they are minted
   or compacted into one map per base once a base is superseded; the walk is
   the same either way, and the first is simpler.
-- Whether the `PointSet` split lands as part of the shared-columns step or as
-  its own step before the first row-level edit.

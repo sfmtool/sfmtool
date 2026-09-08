@@ -19,8 +19,8 @@ where it belongs, so this file is always exactly the unbuilt remainder, and it
 is retired with the last step.
 
 Decided: the document is a value (below), history stores values rather than
-commands, sharing is per column, change detection is by identity, node
-identity survives edits, the Action Log stays text and the history is the
+commands, a version is a base plus its point edits, change detection is by
+identity, node identity survives edits, the Action Log stays text and the history is the
 replayable thing, and the history is per node. Not decided: the history
 memory bound's value, and what the row-level edit draft leaves open.
 
@@ -56,37 +56,38 @@ million observations, and patch bitmaps and thumbnails that dominate memory by
 an order of magnitude over everything else. A whole-struct clone per edit is
 out.
 
-### Sharing is per column
+### A base plus its edits
 
-`SfmrReconstruction` in
-[`data.rs`](../../crates/sfmtool-core/src/reconstruction/data.rs) is already
-columnar: `points`, `tracks`, `observation_counts`, the observation-source
-columns, `patch_u_halfvec_xyz` / `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba`,
-`thumbnails_y_x_rgb`, `normal_confidence`, `point_constraints`,
-`observation_confidence`, and the derived `observation_offsets`,
-`image_feature_to_point`, `max_track_feature_index`. Each of these becomes a
-shared column: a newtype over `Arc<…>` that dereferences to the inner type for
-reading, so no read site in the workspace changes, and exposes an explicit
-make-mut for writing, which clones the column only when it is shared. A version
-that moved one image's pose owns a fresh `images` column and shares every other
-column with its predecessor.
+A version is an **edited reconstruction**
+([`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md)): a
+shared, immutable base `SfmrReconstruction` in
+[`data.rs`](../../crates/sfmtool-core/src/reconstruction/data.rs), held by
+`Arc`, plus the small set of point edits made on top of it, a set of deleted
+base indexes and an addition point set. A point edit (a track gains an
+observation, a point is deleted, a constraint is set) touches the edits and
+never the base, so a run of point edits shares one base across every version
+and costs the size of the edits. A bulk edit (delete an image, move a pose,
+bundle adjust, bake a transform) is a function from a plain reconstruction to
+a plain reconstruction whose output is the next version's base. The plain
+CSR form that every algorithm consumes is **materialised** from base plus
+edits only when a bulk edit, a save or a size threshold asks for it, and the
+materialisation keeps every point in its place.
 
-This lives in `sfmtool-core`, not the viewer, because the struct is core's and
-is what the PyO3 bindings and every pipeline hold. The write sites are the cost
-of the step: every `recon.points.push`, `recon.tracks[i] = …`, and
-`clone_with_changes` in the workspace goes through the make-mut. The census in
-step 1 sizes that. The bindings' behaviour does not change: a Python caller
-still receives arrays and hands back arrays; whether the Rust side shares or
-copies underneath is invisible from Python.
+Under it, `SfmrReconstruction` splits into an image table and a point set,
+so the base's point side and the addition set are one type and per-point
+algorithms take a point set rather than the whole. That split lives in
+`sfmtool-core`, because the struct is core's and is what the PyO3 bindings
+and every pipeline hold; the bindings' behaviour does not change.
 
-The derived indexes are columns like any other and are shared like any other.
-They are part of the value: a version whose `tracks` column is unchanged shares
-its offsets and feature maps too, and only an edit that touches the track
-structure pays to rebuild them. `rebuild_derived_indexes` remains the single
-place that knows how, and the make-mut on `tracks` or `observation_counts` is
-where the obligation to call it attaches (§ Implementation notes, when filed).
+A bulk edit copies the base, and the base's heaviest parts are the patch
+bitmaps and the thumbnails, an order of magnitude over everything else, so
+those two columns are held by `Arc` and a bulk edit that does not touch them
+(every bulk edit but a refit of the patches) shares them with its
+predecessor. That is the whole of the column sharing this design needs: the
+light columns are copied whole by a bulk edit, which is already a full copy
+of the tracks, and the point edits never copy a column at all.
 
-Files into: `specs/core/reconstruction/shared-columns.md` (new).
+Files into: `specs/core/reconstruction/edited-reconstruction.md` (new).
 
 ### Change detection by identity
 
@@ -96,12 +97,17 @@ geometry, the thumbnail atlas, and the patch instances with their bitmap
 atlas. A node today carries one `needs_upload` boolean and, when it is set,
 the app's per-frame upload phase rebuilds all of those from the reconstruction
 at once; a transform change is noticed through a separate epoch counter. With
-shared columns the upload phase keeps, per GPU resource, the identity of the
-column it last uploaded from, and compares identities each frame. Undoing a point edit re-uploads the point
-buffer and nothing else; a pose edit re-uploads frustums; undoing to a version
-whose columns are all the ones already on the GPU uploads nothing. The boolean
-and the epoch both go, replaced by one mechanism, and the GPU-side cost of an
-undo is proportional to what the undo changed.
+a version being a base plus its edits, the upload phase keeps, per node, the
+identity of the base it last uploaded from and compares it each frame. A
+point edit leaves the base's buffers alone: the deleted set reaches the point
+shader as a small mask, and the additions are a second instance buffer drawn
+after the base's. A bulk edit changes the base, and re-uploads what changed
+in it, which the shared bitmap and thumbnail columns identify by identity as
+well: a pose edit re-uploads points and frustums and leaves the atlases.
+Undoing to a version whose base is the one on the GPU uploads the mask and
+the additions and nothing else. The boolean and the epoch both go, replaced
+by one mechanism, and the GPU-side cost of an undo is proportional to what
+the undo changed.
 
 Files into: `specs/gui/document-model.md` (new), amending the upload sections
 of [`../gui/scene-graph.md`](../gui/scene-graph.md).
@@ -142,8 +148,9 @@ Log recorded for the edit), a timestamp, and the unshared bytes it holds
 relative to its neighbours, which is what the memory bound is measured in.
 
 The history is bounded by a memory budget, not by a version count: a hundred
-pose edits share everything but the images column and cost nothing, while one
-edit that touches the bitmaps costs the bitmaps. When the budget is exceeded
+point edits on one base cost the size of the edits, a bulk edit costs a copy
+of the light columns, and only an edit that touches the bitmaps costs the
+bitmaps. When the budget is exceeded
 the oldest versions are dropped from the front. The budget's value is open;
 the measurement in step 1 informs it.
 
@@ -198,9 +205,10 @@ Files into: `specs/gui/saving.md` (new).
 
 ## Part 4: the design challenge: row-level edits under value semantics
 
-Column sharing solves the easy edits: a pose moves, a point moves, a constraint
-changes, a column is replaced whole and the rest is shared. It does not, on its
-own, solve the edit that is the reason to build this at all.
+A plain value per version, with the heavy columns shared, solves the bulk
+edits: a pose moves, an image goes, a bundle adjustment runs, and the version
+is a copy of the light columns. It does not, on its own, solve the edit that
+is the reason to build this at all.
 
 Consider the first track edit we want. Select a point in the Point Track Detail
 panel, then select an image that is not in its track. Right-click in that image
@@ -221,10 +229,11 @@ What that edit does to the value:
 - The point's position, error, normal, and patch frame may all move after the
   fit.
 
-A make-mut on `tracks` clones ten million rows to insert one. That is tens of
+A version that is a plain value clones ten million rows of `tracks` to
+insert one. That is tens of
 milliseconds and eighty megabytes per keystroke, and a hundred such edits in a
 history hold eight gigabytes of tracks that differ by a hundred rows in total.
-The naive column model fails exactly on the edit that matters.
+A plain value per version fails exactly on the edit that matters.
 
 The answer is proposed in
 [`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md): an
@@ -291,32 +300,43 @@ Files into: [`../gui/mcp-server.md`](../gui/mcp-server.md).
 Each step is one PR, has its own spec change, and is verifiable without the
 steps after it.
 
-1. **Census and measurement.** List every write site of a reconstruction
-   column across the workspace and every read path that walks `tracks` as CSR;
-   time a full clone of the largest real reconstruction with and without
-   bitmaps; measure a ten-million-row insertion. The numbers go into this
-   draft (the memory budget, the overlay decision) before step 2 starts.
-2. **Shared columns in core.** The column newtype, every write site converted,
-   the derived indexes as columns, bindings unchanged. Byte parity on the full
-   Python and Rust suites is the acceptance test. Files
-   `core/reconstruction/shared-columns.md`.
-3. **Document model, undo and redo, one edit.** History as values on the node,
-   identity-based upload replacing `needs_upload` and the transform epoch, Edit
-   menu, shortcuts, Action Log entries, delete-selected-point as the one edit
-   that proves the loop. Files `gui/document-model.md` and
+1. **Census and measurement.** List every read path in the viewer that walks
+   a reconstruction, and whether it reads one point or the whole; time a full
+   clone of the largest real reconstruction with and without its bitmaps and
+   thumbnails; time a materialisation of a base with a handful of edits. The
+   numbers go into the two drafts (the memory budget, the materialisation
+   threshold) before step 2 starts.
+2. **The point-set split and the shared heavy columns, in core.**
+   `SfmrReconstruction` becomes an image table plus a point set; the bitmap
+   and thumbnail columns become `Arc`-held. Bindings unchanged; byte parity on
+   the full Python and Rust suites is the acceptance test. Files the first
+   half of `core/reconstruction/edited-reconstruction.md`.
+3. **The edited reconstruction, in core.** The base-plus-edits value, the
+   point edits as delete-and-re-add, the per-point accessor that looks through
+   the overlay, materialisation with every point in its place and its row map,
+   the base and edit hashes, bound so an offline caller can build and
+   materialise one. Files the rest of
+   `core/reconstruction/edited-reconstruction.md`.
+4. **Document model, undo and redo, one edit of each kind.** History as
+   versions on the node, the version graph and its point maps, base-identity
+   upload with the deleted mask and the additions buffer replacing
+   `needs_upload` and the transform epoch, Edit menu, shortcuts, Action Log
+   entries. Delete-selected-point is the point edit and delete-image the bulk
+   edit that together prove the loop. Files `gui/document-model.md` and
    `gui/edit-history.md`, amends `gui/scene-graph.md` and `gui/action-log.md`.
-4. **History panel.** Files into `gui/edit-history.md`, amends
+5. **History panel.** Files into `gui/edit-history.md`, amends
    `gui/panel-layout.md`.
-5. **Saving.** Files `gui/saving.md`.
-6. **Row-level model.** The base-plus-edits representation of
-   [`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md), on
-   `embedded_patches` files, with the add-observation edit as the proof.
-   Amends `core/reconstruction/shared-columns.md`.
-7. **Edit families**, one PR each in Part 5's order, `gui/edits/`.
+6. **Saving and point ids.** Save, Save As, Revert, the dirty marker, the
+   lineage metadata; the session id form, the earliest rule, Go to Point over
+   the version graph. Files `gui/saving.md`, amends `gui/goto-point.md` and
+   the format spec.
+7. **Edit families**, one PR each in Part 5's order, `gui/edits/`. The
+   add-observation track edit, on `embedded_patches` files, is the first,
+   since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
-Steps 2 and 3 are the groundwork; 4 and 5 are independent of each other and of
-6; 7 interleaves with 6 as each family's needs are met.
+Steps 2 to 4 are the groundwork; 5 and 6 are independent of each other; 7
+follows 4 and interleaves with 5 and 6.
 
 ## Non-goals
 
