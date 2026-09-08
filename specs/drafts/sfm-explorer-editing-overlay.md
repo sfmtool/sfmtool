@@ -116,10 +116,10 @@ survive an edit unchanged, and the umbrella's open question about selection
 remapping is closed by construction rather than by a rule. Materialisation is
 the one operation that renumbers, and it is where a remap is produced.
 
-A point re-added after a modification gets a new index. Whether the panel
-follows a modified point across that (select the re-added record when the
-selected one was modified) is a panel rule, and the edit knows both indexes,
-so it is cheap either way.
+A point re-added after a modification gets a new index, and the edit records
+the old one against it: the point's identity continues across the
+modification (§ "The version graph" under Point ids), so the selection and
+the panel follow it, and its id does not change.
 
 ---
 
@@ -350,9 +350,8 @@ sentence) and metadata (the lineage entry).
 
 - The materialisation fraction, and whether it is measured in points, in
   observations, or in unshared bytes.
-- Whether a modified point keeps its index (re-add in place, with a
-  per-version "modified" set beside "deleted") rather than taking a new one.
-  It would spare the panel rule above at the cost of a third structure; the
-  first track edit decides it.
+- Whether the version graph's maps are stored per version as they are minted
+  or compacted into one map per base once a base is superseded; the walk is
+  the same either way, and the first is simpler.
 - Whether the `PointSet` split lands as part of the shared-columns step or as
   its own step before the first row-level edit.
