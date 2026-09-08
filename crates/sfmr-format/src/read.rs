@@ -22,7 +22,29 @@ pub fn read_sfmr_metadata(path: &Path) -> Result<SfmrMetadata, SfmrError> {
         source: e,
     })?;
     let mut archive = zip::ZipArchive::new(file)?;
-    Ok(read_json_entry(&mut archive, entries::metadata())?)
+    let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    restore_write_timestamp(&mut archive, &mut metadata)?;
+    Ok(metadata)
+}
+
+/// Put the write timestamp back on the in-memory metadata, wherever this file
+/// keeps it.
+///
+/// From version 8 it is in `written.json`, outside the content digest; below
+/// that it is a field of `metadata.json` and has already been deserialised into
+/// place. Reading whichever is there, rather than the version number, is what
+/// lets an older file load with exactly the timestamp and the hashes it stores:
+/// nothing is recomputed and nothing is rewritten.
+fn restore_write_timestamp<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    metadata: &mut SfmrMetadata,
+) -> Result<(), SfmrError> {
+    if archive.index_for_name(entries::written()).is_none() {
+        return Ok(());
+    }
+    let record: WriteRecord = read_json_entry(archive, entries::written())?;
+    metadata.timestamp = record.timestamp;
+    Ok(())
 }
 
 /// Read only the content-integrity hashes from a `.sfmr` file.
@@ -51,6 +73,7 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
 
     // Top-level metadata
     let mut metadata: SfmrMetadata = read_json_entry(&mut archive, entries::metadata())?;
+    restore_write_timestamp(&mut archive, &mut metadata)?;
     let content_hash: ContentHash = read_json_entry(&mut archive, entries::content_hash())?;
 
     // Reject versions newer than this build understands; their layout is unknown

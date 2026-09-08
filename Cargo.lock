@@ -4950,6 +4950,7 @@ version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
+ "chrono",
  "dunce",
  "nalgebra",
  "ndarray",

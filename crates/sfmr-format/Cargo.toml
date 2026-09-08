@@ -20,6 +20,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 thiserror = "2"
 nalgebra = "0.35"
 dunce = "1"
+# The write-time timestamp in `written.json`, in the same RFC 3339 spelling
+# every other writer in this repository uses.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 approx = "0.5"

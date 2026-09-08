@@ -9,6 +9,8 @@ gives under the row map, the row map is a bijection on the survivors, and a
 materialised value's hash is the file's after a save.
 """
 
+import time
+
 import numpy as np
 import pytest
 
@@ -181,6 +183,24 @@ class TestMaterialisation:
 
 
 class TestHashes:
+    def test_a_materialised_value_carries_no_files_hash(self, edited):
+        edited.delete_point(0)
+        recon, _, _ = edited.materialize()
+        assert recon.content_xxh128 == ""
+
+    def test_two_saves_agree_on_the_hash_and_differ_on_the_clock(
+        self, edited, tmp_path
+    ):
+        recon, _, _ = edited.materialize()
+        first, second = tmp_path / "first.sfmr", tmp_path / "second.sfmr"
+        recon.save(first)
+        time.sleep(0.02)
+        recon.save(second)
+        a = SfmrReconstruction.load(first)
+        b = SfmrReconstruction.load(second)
+        assert a.content_xxh128 == b.content_xxh128
+        assert a.metadata()["timestamp"] != b.metadata()["timestamp"]
+
     def test_the_base_hash_is_the_files_hash_after_a_save(self, edited, tmp_path):
         edited.delete_point(0)
         recon, _, _ = edited.materialize()

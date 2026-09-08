@@ -84,7 +84,7 @@ v = fy · y_d + cy
 Equivalently: convert the camera-space point to the OpenCV optical frame with
 `S = diag(1, −1, −1)` (a 180° rotation about X) and apply the classic
 COLMAP/OpenCV projection. The camera models and parameters in
-[Cameras](#3-cameras-camerasmetadatajsonzst) are exactly COLMAP's; only the
+[Cameras](#4-cameras-camerasmetadatajsonzst) are exactly COLMAP's; only the
 camera-space axes differ.
 
 ### Rationale
@@ -174,6 +174,7 @@ The `.sfmr` file is a ZIP archive (using STORE method) with the following struct
 reconstruction.sfmr (ZIP archive)
 ├── metadata.json.zst                          # Top-level reconstruction metadata
 ├── content_hash.json.zst                      # Integrity verification hashes
+├── written.json.zst                           # When the file was written (v8+)
 ├── cameras/
 │   └── metadata.json.zst                      # Camera intrinsics and parameters
 ├── rigs/                                      # (Optional) Camera rig definitions
@@ -271,7 +272,6 @@ JSON structure describing the reconstruction:
       "feature_prefix_dir": "features/sift-colmap-d1245b460906df27ee4730273e0aba41"
     }
   },
-  "timestamp": "2025-12-21T14:32:15.123456Z",
   "image_count": 18,
   "point_count": 2107,
   "infinity_point_count": 12,
@@ -284,7 +284,7 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number (`1`–`5`).
+- `version`: Format version number (`1` to `8`).
   See [Versioning and Migration](#versioning-and-migration) for the relationship
   to earlier versions.
 - `feature_source`: (version 4+) How each observation's 2D coordinate is carried
@@ -313,7 +313,10 @@ JSON structure describing the reconstruction:
     - `feature_type`: Feature type (e.g. `"sift"`)
     - `feature_options`: Feature extraction options (see `.sift` format spec for details)
     - `feature_prefix_dir`: Relative path from each image's parent directory to the features subdirectory (e.g., `"features/sift-colmap-d1245b460906df27ee4730273e0aba41"`). Used to locate `.sift` files.
-- `timestamp`: ISO 8601 format with timezone
+- `timestamp`: (version 1 to 7 only) ISO 8601 format with timezone. From
+  version 8 the write timestamp lives in
+  [`written.json.zst`](#3-write-record-writtenjsonzst) instead, and this key
+  is absent. A reader takes it from whichever entry the file carries.
 - `image_count`: Number of registered images in reconstruction
 - `point_count`: Number of points (finite points and points at infinity combined)
 - `infinity_point_count`: Number of points at infinity (rows of `positions_xyzw`
@@ -401,11 +404,45 @@ a section digest is taken and how the digests combine into `content_xxh128`.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
 - `content_xxh128`: The whole-file digest over all present section hashes, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
 
+**Note**: The two top-level entries `content_hash.json.zst` and, from
+version 8, `written.json.zst` are outside every section hash and so outside
+`content_xxh128`. One of them is the digest itself and the other records the
+act of writing; neither is content the digest describes.
+
 **Note**: Per-section metadata files (`images/metadata.json.zst`, `points3d/metadata.json.zst`, `tracks/metadata.json.zst`) are included in their respective section hashes.
 
 **Note**: The `metadata_xxh128` includes the workspace configuration, so changing workspace paths will invalidate the hash. This is intentional - the workspace context is part of the reconstruction's identity.
 
-### 3. Cameras (`cameras/metadata.json.zst`)
+### 3. Write Record (`written.json.zst`)
+
+(Version 8+.) What is true of the act of writing the file, as against what the
+file says about the reconstruction:
+
+```json
+{
+  "timestamp": "2025-12-21T14:32:15.123456+00:00"
+}
+```
+
+**Field descriptions:**
+- `timestamp`: When the file was written, ISO 8601 with a timezone offset.
+
+Like `content_hash.json.zst`, this entry is **outside every section hash** and
+so contributes nothing to `content_xxh128`. That is why it exists. A
+reconstruction's hash names the reconstruction, so two saves of one unchanged
+value agree on it however far apart they happen, and a value held in memory has
+the hash its file will have before anyone decides to write it. Only facts about
+the writing belong here; anything the reconstruction asserts about itself,
+including `operation`, `tool` and the workspace configuration, stays in
+`metadata.json.zst` and stays hashed.
+
+A file below version 8 has no `written.json.zst` and carries `timestamp` in
+`metadata.json.zst`, where it was part of `metadata_xxh128`. A reader takes the
+timestamp from `written.json.zst` when the entry is present and from
+`metadata.json.zst` when it is not, and never recomputes or rewrites an older
+file's stored hashes.
+
+### 4. Cameras (`cameras/metadata.json.zst`)
 
 Array of camera intrinsic parameters:
 
@@ -504,7 +541,7 @@ the normalized image-plane radius `ρ = tan θ`, so its domain end is named
 `bspline_rho_max` and an all-zero (or absent) spline is exactly the
 `SIMPLE_PINHOLE` map, bit for bit.
 
-### 4. Rigs (Optional)
+### 5. Rigs (Optional)
 
 The `rigs/` section stores camera rig definitions — abstract templates describing which sensors
 exist and their relative poses. This section is optional; when absent, every camera is treated as
@@ -570,7 +607,7 @@ The `rigs/` and `frames/` sections must both be present or both be absent.
   position relative to the reference sensor in the rig coordinate frame.
   The reference sensor has translation `[0, 0, 0]`.
 
-### 5. Frames (Optional)
+### 6. Frames (Optional)
 
 The `frames/` section stores frame instances — temporal groupings that say "these images were
 captured at the same instant by this rig." This section is optional and must be present if and
@@ -650,7 +687,7 @@ equivalent to writing:
 When both sections are present, `images/camera_indexes` and `rigs/sensor_camera_indexes`
 must be consistent (i.e., `camera_indexes[j]` = `sensor_camera_indexes[image_sensor_indexes[j]]`).
 
-### 6. Images
+### 7. Images
 
 #### `images/metadata.json.zst`
 
@@ -852,7 +889,7 @@ Histogram counts for observed points (points with track observations):
 - **Format**: Row `i` contains 128 bucket counts for image `i`
 - **Bucket edges**: Defined by `histogram_min_z` and `histogram_max_z` in `depth_statistics.json.zst`
 
-### 7. Points3D
+### 8. Points3D
 
 Every point — finite or at infinity — is one homogeneous coordinate
 `(x, y, z, w)`:
@@ -1283,7 +1320,7 @@ either, or none of them.
   for points with no patch are zero. Present only when `has_patch_bitmaps` is
   `true`.
 
-### 8. Tracks
+### 9. Tracks
 
 Tracks link 2D feature observations to 3D points. Each observation has three components stored in separate columnar files.
 
@@ -1881,13 +1918,13 @@ All extensions should:
 
 ## Versioning and Migration
 
-The format spans five versions (`1`–`5`), all valid; each extends the previous,
+The format spans eight versions (`1` to `8`), all valid; each extends the previous,
 and how an older file maps to the current model is given below.
 
 ### Version 1 → Version 2 (history)
 
 Version 2 replaced the version 1 point representation with the unified
-homogeneous model described in [Points3D](#7-points3d). The differences:
+homogeneous model described in [Points3D](#8-points3d). The differences:
 
 | Version 1 | Version 2 |
 |-----------|-----------|
@@ -1993,6 +2030,13 @@ its camera.
 
 ## Version History
 
+- **Version 8**: The write timestamp moves out of `metadata.json` into the
+  top-level `written.json`, which is outside every section hash and so
+  outside `content_xxh128`. Two saves of one unchanged value then write the
+  same content hash, and a value can be hashed before it is written. A file
+  below version 8 keeps its timestamp in `metadata.json`, where it was
+  hashed; a reader takes the timestamp from whichever entry is present and
+  leaves an older file's stored hashes alone.
 - **Version 7**: Optional per-point constraint triple
   `points3d/point_constraints`,
   `points3d/constraint_distances` and `points3d/constraint_reference_images`:

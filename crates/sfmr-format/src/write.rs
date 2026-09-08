@@ -4,17 +4,131 @@
 //! `.sfmr` file writing.
 
 use std::borrow::Cow;
-use std::io::{Cursor, Seek, Write};
+use std::io::{Seek, Write};
 use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
 use zip::ZipWriter;
 
-use sfmtool_archive_io::{format_hash, write_binary_entry_hashed, write_json_entry};
+use sfmtool_archive_io::{format_hash, json_entry_bytes, write_binary_entry, write_json_entry};
 
 use crate::depth_stats::{compute_depth_statistics, DepthStatsResult};
 use crate::entries;
 use crate::types::*;
+
+/// Where one section entry's **uncompressed** bytes go.
+///
+/// A `.sfmr` section hash is defined over the uncompressed bytes of the
+/// entries in that section, in lexicographic path order, and
+/// `content_xxh128` over the section digests. So the bytes are the whole of
+/// what a hash needs, and the archive container and its zstd frames are the
+/// whole of what a hash does *not* need. Both consumers -- the writer, which
+/// hashes each entry's bytes then compresses and stores them, and
+/// [`content_hash_of`], which hashes them and drops them -- run the one
+/// serialisation in [`write_sfmr_into`] through this trait, so there is one
+/// rule for what the bytes are and one rule for what is hashed.
+trait EntrySink {
+    /// Serialise `value` as JSON, hand the entry over, and give back the
+    /// uncompressed bytes so the caller can fold them into a section hash.
+    fn write_json(
+        &mut self,
+        name: &str,
+        value: &impl serde::Serialize,
+    ) -> Result<Vec<u8>, SfmrError>;
+
+    /// Hand over an entry whose bytes the caller already holds.
+    fn write_binary(&mut self, name: &str, data: &[u8]) -> Result<(), SfmrError>;
+
+    /// The record of this act of writing, or `None` when nothing is being
+    /// written and so there is no act to record.
+    ///
+    /// It is the sink that knows, because a hash is a statement about a value
+    /// and a timestamp is a statement about a save: only the sink that produces
+    /// a file has one to make.
+    fn write_record(&self) -> Option<WriteRecord>;
+
+    /// Close whatever the entries went into.
+    fn finish(self) -> Result<(), SfmrError>;
+}
+
+/// The sink that builds the file: every entry is zstd-compressed into the ZIP.
+struct ArchiveSink<W: Write + Seek> {
+    zip: ZipWriter<W>,
+    zstd_level: i32,
+}
+
+impl<W: Write + Seek> EntrySink for ArchiveSink<W> {
+    fn write_json(
+        &mut self,
+        name: &str,
+        value: &impl serde::Serialize,
+    ) -> Result<Vec<u8>, SfmrError> {
+        Ok(write_json_entry(
+            &mut self.zip,
+            name,
+            value,
+            self.zstd_level,
+        )?)
+    }
+
+    fn write_binary(&mut self, name: &str, data: &[u8]) -> Result<(), SfmrError> {
+        write_binary_entry(&mut self.zip, name, data, self.zstd_level)?;
+        Ok(())
+    }
+
+    fn write_record(&self) -> Option<WriteRecord> {
+        Some(WriteRecord {
+            timestamp: chrono::Local::now().to_rfc3339(),
+        })
+    }
+
+    fn finish(self) -> Result<(), SfmrError> {
+        self.zip.finish()?;
+        Ok(())
+    }
+}
+
+/// The sink that keeps nothing: the JSON is still serialised, because those
+/// bytes are what a section hash is over, and every entry is then dropped. No
+/// compression runs and no archive is built.
+struct HashOnlySink;
+
+impl EntrySink for HashOnlySink {
+    fn write_json(
+        &mut self,
+        _name: &str,
+        value: &impl serde::Serialize,
+    ) -> Result<Vec<u8>, SfmrError> {
+        Ok(json_entry_bytes(value)?)
+    }
+
+    fn write_binary(&mut self, _name: &str, _data: &[u8]) -> Result<(), SfmrError> {
+        Ok(())
+    }
+
+    fn write_record(&self) -> Option<WriteRecord> {
+        None
+    }
+
+    fn finish(self) -> Result<(), SfmrError> {
+        Ok(())
+    }
+}
+
+/// Hand `data` to the sink and fold its bytes into the running section hash.
+///
+/// The two happen together at every call site, so keeping them together is
+/// what stops an entry being written without being hashed.
+fn binary_hashed(
+    sink: &mut impl EntrySink,
+    name: &str,
+    data: &[u8],
+    hasher: &mut Xxh3,
+) -> Result<(), SfmrError> {
+    sink.write_binary(name, data)?;
+    hasher.update(data);
+    Ok(())
+}
 
 /// Options for writing a `.sfmr` file.
 #[derive(Debug, Clone)]
@@ -108,10 +222,14 @@ pub fn write_sfmr_with_options(
                 source: e,
             })?;
         }
-        std::fs::File::create(path).map_err(|e| SfmrError::IoPath {
+        let file = std::fs::File::create(path).map_err(|e| SfmrError::IoPath {
             operation: "Failed to create file",
             path: path.to_path_buf(),
             source: e,
+        })?;
+        Ok(ArchiveSink {
+            zip: ZipWriter::new(file),
+            zstd_level: options.zstd_level,
         })
     })?;
     Ok(())
@@ -120,32 +238,35 @@ pub fn write_sfmr_with_options(
 /// The [`ContentHash`] a [`write_sfmr_with_options`] of `data` would write,
 /// computed without touching the filesystem.
 ///
-/// The archive is built into memory and discarded, through the *same* code path
-/// a file write takes, so the returned hash is the one a subsequent write of
-/// `data` stores -- there is no second hashing rule that could drift from the
-/// writer's. `data` is normalised exactly as a write normalises it (tracks
-/// sorted, format version and `infinity_point_count` refreshed, depth
-/// statistics recomputed unless the options skip them), which is why it is
-/// taken by `&mut`.
+/// This runs the *same* serialisation and the *same* hashing the write runs
+/// (through the one `EntrySink` both take), so the returned hash is the one a
+/// subsequent write of `data` stores, and there is no second rule that could
+/// drift from the writer's. What it does not run is the compression and the archive
+/// container, which a hash defined over uncompressed section bytes has no use
+/// for. `data` is normalised exactly as a write normalises it (tracks sorted,
+/// format version and `infinity_point_count` refreshed, depth statistics and
+/// missing normals recomputed unless the options skip them), which is why it
+/// is taken by `&mut`.
 ///
-/// The cost is a full serialisation and compression of the value, dominated by
-/// the patch bitmaps; a caller that asks repeatedly caches the answer.
+/// The cost is one serialisation of the value plus one XXH128 pass over it,
+/// with no compression; the patch bitmaps dominate both. A caller that asks
+/// repeatedly caches the answer.
 pub fn content_hash_of(
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<ContentHash, SfmrError> {
-    write_sfmr_into(data, options, || Ok(Cursor::new(Vec::new())))
+    write_sfmr_into(data, options, || Ok(HashOnlySink))
 }
 
-/// Serialise `data` into a fresh archive on the sink `open_sink` returns, and
-/// give back the [`ContentHash`] written into it.
+/// Serialise `data` once into the sink `open_sink` returns, and give back the
+/// [`ContentHash`] over what was serialised.
 ///
 /// The sink is opened only once every validation has passed, so a rejected
 /// write leaves no file behind.
-fn write_sfmr_into<W: Write + Seek>(
+fn write_sfmr_into<S: EntrySink>(
     data: &mut SfmrData,
     options: &WriteOptions,
-    open_sink: impl FnOnce() -> Result<W, SfmrError>,
+    open_sink: impl FnOnce() -> Result<S, SfmrError>,
 ) -> Result<ContentHash, SfmrError> {
     // Validate the feature_source and that the mode-appropriate columns are
     // present (and the others absent) before mutating or writing anything.
@@ -219,27 +340,31 @@ fn write_sfmr_into<W: Write + Seek>(
         num_buckets,
     )?;
 
-    let mut zip = ZipWriter::new(open_sink()?);
+    let mut sink = open_sink()?;
     let has_rigs = data.rig_frame_data.is_some();
     let mut section_digests: Vec<u128> = Vec::with_capacity(if has_rigs { 7 } else { 5 });
 
+    // === Written (version 8+, top level, outside every digest) ===
+    // Stamped here, at the moment of writing, and stored before the metadata so
+    // it is impossible to read the code as if the timestamp were an input to
+    // the hash below. The in-memory metadata gets the same stamp, so a caller
+    // that saves and then reads its own metadata sees what went to disk.
+    if let Some(record) = sink.write_record() {
+        sink.write_json(entries::written(), &record)?;
+        data.metadata.timestamp = record.timestamp;
+    }
+
     // === Top-level metadata ===
-    let metadata_bytes = write_json_entry(
-        &mut zip,
-        entries::metadata(),
-        &data.metadata,
-        options.zstd_level,
-    )?;
+    // Written from a copy with the timestamp cleared: `written.json` above owns
+    // it, and `SfmrMetadata::timestamp` drops out of the JSON when empty.
+    let mut metadata_entry = data.metadata.clone();
+    metadata_entry.timestamp = String::new();
+    let metadata_bytes = sink.write_json(entries::metadata(), &metadata_entry)?;
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
     section_digests.push(metadata_hash);
 
     // === Cameras ===
-    let cameras_bytes = write_json_entry(
-        &mut zip,
-        entries::cameras_metadata(),
-        &data.cameras,
-        options.zstd_level,
-    )?;
+    let cameras_bytes = sink.write_json(entries::cameras_metadata(), &data.cameras)?;
     let cameras_hash = xxhash_rust::xxh3::xxh3_128(&cameras_bytes);
     section_digests.push(cameras_hash);
 
@@ -253,38 +378,30 @@ fn write_sfmr_into<W: Write + Seek>(
         let mut rigs_hasher = Xxh3::new();
 
         // rigs/metadata.json
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::rigs_metadata(),
-            &rf.rigs_metadata,
-            options.zstd_level,
-        )?;
+        let bytes = sink.write_json(entries::rigs_metadata(), &rf.rigs_metadata)?;
         rigs_hasher.update(&bytes);
 
         // rigs/sensor_camera_indexes
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::rigs_sensor_camera_indexes(sensor_count),
             bytemuck::cast_slice(rf.sensor_camera_indexes.as_slice().unwrap()),
-            options.zstd_level,
             &mut rigs_hasher,
         )?;
 
         // rigs/sensor_quaternions_wxyz
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::rigs_sensor_quaternions_wxyz(sensor_count),
             bytemuck::cast_slice(rf.sensor_quaternions_wxyz.as_slice().unwrap()),
-            options.zstd_level,
             &mut rigs_hasher,
         )?;
 
         // rigs/sensor_translations_xyz
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::rigs_sensor_translations_xyz(sensor_count),
             bytemuck::cast_slice(rf.sensor_translations_xyz.as_slice().unwrap()),
-            options.zstd_level,
             &mut rigs_hasher,
         )?;
 
@@ -296,38 +413,30 @@ fn write_sfmr_into<W: Write + Seek>(
         let mut frames_hasher = Xxh3::new();
 
         // frames/image_frame_indexes
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::frames_image_frame_indexes(image_count),
             bytemuck::cast_slice(rf.image_frame_indexes.as_slice().unwrap()),
-            options.zstd_level,
             &mut frames_hasher,
         )?;
 
         // frames/image_sensor_indexes
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::frames_image_sensor_indexes(image_count),
             bytemuck::cast_slice(rf.image_sensor_indexes.as_slice().unwrap()),
-            options.zstd_level,
             &mut frames_hasher,
         )?;
 
         // frames/metadata.json
-        let bytes = write_json_entry(
-            &mut zip,
-            entries::frames_metadata(),
-            &rf.frames_metadata,
-            options.zstd_level,
-        )?;
+        let bytes = sink.write_json(entries::frames_metadata(), &rf.frames_metadata)?;
         frames_hasher.update(&bytes);
 
         // frames/rig_indexes
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::frames_rig_indexes(frame_count),
             bytemuck::cast_slice(rf.rig_indexes.as_slice().unwrap()),
-            options.zstd_level,
             &mut frames_hasher,
         )?;
 
@@ -343,21 +452,15 @@ fn write_sfmr_into<W: Write + Seek>(
     let mut images_hasher = Xxh3::new();
 
     // images/camera_indexes
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::images_camera_indexes(image_count),
         bytemuck::cast_slice(data.camera_indexes.as_slice().unwrap()),
-        options.zstd_level,
         &mut images_hasher,
     )?;
 
     // images/depth_statistics.json
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::images_depth_statistics(),
-        depth_statistics,
-        options.zstd_level,
-    )?;
+    let bytes = sink.write_json(entries::images_depth_statistics(), depth_statistics)?;
     images_hasher.update(&bytes);
 
     // images/feature_tool_hashes (sift_files) or images/image_file_hashes
@@ -371,11 +474,10 @@ fn write_sfmr_into<W: Write + Seek>(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::images_image_file_hashes(image_count),
             &hash_bytes,
-            options.zstd_level,
             &mut images_hasher,
         )?;
     } else {
@@ -386,11 +488,10 @@ fn write_sfmr_into<W: Write + Seek>(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::images_feature_tool_hashes(image_count),
             &hash_bytes,
-            options.zstd_level,
             &mut images_hasher,
         )?;
     }
@@ -398,38 +499,26 @@ fn write_sfmr_into<W: Write + Seek>(
     // images/metadata.json
     let images_meta =
         serde_json::json!({"image_count": image_count, "thumbnail_size": THUMBNAIL_SIZE});
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::images_metadata(),
-        &images_meta,
-        options.zstd_level,
-    )?;
+    let bytes = sink.write_json(entries::images_metadata(), &images_meta)?;
     images_hasher.update(&bytes);
 
     // images/names.json
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::images_names(),
-        &data.image_names,
-        options.zstd_level,
-    )?;
+    let bytes = sink.write_json(entries::images_names(), &data.image_names)?;
     images_hasher.update(&bytes);
 
     // images/observed_depth_histogram_counts
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
         bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
-        options.zstd_level,
         &mut images_hasher,
     )?;
 
     // images/quaternions_wxyz
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::images_quaternions_wxyz(image_count),
         bytemuck::cast_slice(data.quaternions_wxyz.as_slice().unwrap()),
-        options.zstd_level,
         &mut images_hasher,
     )?;
 
@@ -442,30 +531,27 @@ fn write_sfmr_into<W: Write + Seek>(
             .iter()
             .flat_map(|h| h.iter().copied())
             .collect();
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::images_sift_content_hashes(image_count),
             &hash_bytes,
-            options.zstd_level,
             &mut images_hasher,
         )?;
     }
 
     // images/thumbnails_y_x_rgb
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::images_thumbnails_y_x_rgb(image_count),
         data.thumbnails_y_x_rgb.as_slice().unwrap(),
-        options.zstd_level,
         &mut images_hasher,
     )?;
 
     // images/translations_xyz
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::images_translations_xyz(image_count),
         bytemuck::cast_slice(data.translations_xyz.as_slice().unwrap()),
-        options.zstd_level,
         &mut images_hasher,
     )?;
 
@@ -485,11 +571,10 @@ fn write_sfmr_into<W: Write + Seek>(
     let mut points3d_hasher = Xxh3::new();
 
     // points3d/colors_rgb
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::points3d_colors_rgb(point_count),
         data.colors_rgb.as_slice().unwrap(),
-        options.zstd_level,
         &mut points3d_hasher,
     )?;
 
@@ -497,18 +582,16 @@ fn write_sfmr_into<W: Write + Seek>(
     // (optional, version 7+; lexicographically after colors_rgb, before
     // metadata.json). Two of the constraint triple; the third sorts much later.
     if let Some((_, constraint_distances, constraint_reference_images)) = constraints {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_constraint_distances(point_count),
             bytemuck::cast_slice(constraint_distances),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_constraint_reference_images(point_count),
             bytemuck::cast_slice(constraint_reference_images),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
@@ -532,12 +615,7 @@ fn write_sfmr_into<W: Write + Seek>(
             serde_json::json!(PointConstraint::NAMES),
         );
     }
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::points3d_metadata(),
-        &points3d_meta,
-        options.zstd_level,
-    )?;
+    let bytes = sink.write_json(entries::points3d_metadata(), &points3d_meta)?;
     points3d_hasher.update(&bytes);
 
     // points3d/normal_confidence (optional, version 5+). Unlike the normals just
@@ -546,22 +624,20 @@ fn write_sfmr_into<W: Write + Seek>(
     // or adjusts a confidence value, not even for the normals it fills in. A
     // caller that supplies both is responsible for keeping them coherent.
     if let Some(normal_confidence) = &data.normal_confidence {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_normal_confidence(point_count),
             normal_confidence.as_slice().unwrap(),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
 
     // points3d/normals_xyz (optional; named estimated_normals_xyz in versions 1-2)
     if let Some(normals_xyz) = &normals_xyz {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_normals(false, point_count),
             bytemuck::cast_slice(normals_xyz.as_slice().unwrap()),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
@@ -569,29 +645,26 @@ fn write_sfmr_into<W: Write + Seek>(
     // Optional patch frame, in lexicographic order: bitmaps, u, v.
     if let Some(bitmaps) = &data.patch_bitmaps_y_x_rgba {
         let r = bitmaps.shape()[1];
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_patch_bitmaps_y_x_rgba(point_count, r),
             bitmaps.as_slice().unwrap(),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
     if let Some(u) = &data.patch_u_halfvec_xyz {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_patch_u_halfvec_xyz(point_count),
             bytemuck::cast_slice(u.as_slice().unwrap()),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
     if let Some(v) = &data.patch_v_halfvec_xyz {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_patch_v_halfvec_xyz(point_count),
             bytemuck::cast_slice(v.as_slice().unwrap()),
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
@@ -600,30 +673,27 @@ fn write_sfmr_into<W: Write + Seek>(
     // the patch frame, before positions_xyzw). The third of the constraint
     // triple.
     if let Some((point_constraints, _, _)) = constraints {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::points3d_point_constraints(point_count),
             point_constraints,
-            options.zstd_level,
             &mut points3d_hasher,
         )?;
     }
 
     // points3d/positions_xyzw
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::points3d_positions(false, point_count),
         bytemuck::cast_slice(data.positions_xyzw.as_slice().unwrap()),
-        options.zstd_level,
         &mut points3d_hasher,
     )?;
 
     // points3d/reprojection_errors
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::points3d_reprojection_errors(point_count),
         bytemuck::cast_slice(data.reprojection_errors.as_slice().unwrap()),
-        options.zstd_level,
         &mut points3d_hasher,
     )?;
 
@@ -635,21 +705,19 @@ fn write_sfmr_into<W: Write + Seek>(
 
     // tracks/feature_indexes (sift_files only; lexicographically before image_indexes)
     if !is_embedded {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::tracks_feature_indexes(observation_count),
             bytemuck::cast_slice(data.feature_indexes.as_ref().unwrap().as_slice().unwrap()),
-            options.zstd_level,
             &mut tracks_hasher,
         )?;
     }
 
     // tracks/image_indexes
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::tracks_image_indexes(observation_count),
         bytemuck::cast_slice(data.image_indexes.as_slice().unwrap()),
-        options.zstd_level,
         &mut tracks_hasher,
     )?;
 
@@ -657,11 +725,10 @@ fn write_sfmr_into<W: Write + Seek>(
     // inline copy under sift_files; lexicographically after image_indexes,
     // before metadata.json)
     if let Some(keypoints_xy) = &data.keypoints_xy {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::tracks_keypoints_xy(observation_count),
             bytemuck::cast_slice(keypoints_xy.as_slice().unwrap()),
-            options.zstd_level,
             &mut tracks_hasher,
         )?;
     }
@@ -673,12 +740,7 @@ fn write_sfmr_into<W: Write + Seek>(
         "has_keypoints_xy": data.keypoints_xy.is_some(),
         "has_observation_confidence": data.observation_confidence.is_some(),
     });
-    let bytes = write_json_entry(
-        &mut zip,
-        entries::tracks_metadata(),
-        &tracks_meta,
-        options.zstd_level,
-    )?;
+    let bytes = sink.write_json(entries::tracks_metadata(), &tracks_meta)?;
     tracks_hasher.update(&bytes);
 
     // tracks/observation_confidence (optional, version 6+; lexicographically
@@ -688,30 +750,27 @@ fn write_sfmr_into<W: Write + Seek>(
     // adjusts a confidence value, it only permutes it alongside the other
     // per-observation arrays when the tracks need sorting.
     if let Some(observation_confidence) = &data.observation_confidence {
-        write_binary_entry_hashed(
-            &mut zip,
+        binary_hashed(
+            &mut sink,
             &entries::tracks_observation_confidence(observation_count),
             observation_confidence.as_slice().unwrap(),
-            options.zstd_level,
             &mut tracks_hasher,
         )?;
     }
 
     // tracks/observation_counts
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::tracks_observation_counts(point_count),
         bytemuck::cast_slice(data.observation_counts.as_slice().unwrap()),
-        options.zstd_level,
         &mut tracks_hasher,
     )?;
 
     // tracks/point_indexes
-    write_binary_entry_hashed(
-        &mut zip,
+    binary_hashed(
+        &mut sink,
         &entries::tracks_point_indexes(false, observation_count),
         bytemuck::cast_slice(data.point_indexes.as_slice().unwrap()),
-        options.zstd_level,
         &mut tracks_hasher,
     )?;
 
@@ -735,14 +794,9 @@ fn write_sfmr_into<W: Write + Seek>(
         tracks_xxh128: format_hash(tracks_hash),
         content_xxh128: format_hash(content_hash_value),
     };
-    write_json_entry(
-        &mut zip,
-        entries::content_hash(),
-        &content_hash,
-        options.zstd_level,
-    )?;
+    sink.write_json(entries::content_hash(), &content_hash)?;
 
-    zip.finish()?;
+    sink.finish()?;
     Ok(content_hash)
 }
 

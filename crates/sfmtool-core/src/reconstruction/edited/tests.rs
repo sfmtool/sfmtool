@@ -342,6 +342,13 @@ fn the_materialised_hash_is_the_files_hash_after_a_save() {
     edited.add_point(new_record(4, 8)).unwrap();
     let (mat, _) = edited.materialize();
 
+    assert!(
+        mat.content_hash.content_xxh128.is_empty(),
+        "a materialised value is not the file its base came from, so it carries \
+         no file's hashes"
+    );
+    assert!(mat.content_hash.rigs_xxh128.is_none());
+
     let computed = mat.content_xxh128().expect("hashable");
     let path = std::env::temp_dir().join(format!(
         "sfmtool-edited-hash-{}-{:?}.sfmr",
@@ -382,4 +389,38 @@ fn a_point_edit_hash_is_a_function_of_the_records_and_the_base() {
         h1,
         other.point_edit_hash(std::slice::from_ref(&one)).unwrap()
     );
+}
+
+#[test]
+fn the_hash_survives_the_clock() {
+    // The write timestamp lives outside the content digest, so a value hashed
+    // now and saved later agrees with the file, and two saves agree with each
+    // other however much time passes between them.
+    let base = Arc::new(fixture(6));
+    let mut edited = EditedReconstruction::new(base);
+    edited.replace_point(0, new_record(6, 8)).unwrap();
+    let (mat, _) = edited.materialize();
+    let computed = mat.content_xxh128().expect("hashable");
+
+    let dir = std::env::temp_dir().join(format!(
+        "sfmtool-edited-clock-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let first = dir.join("first.sfmr");
+    let second = dir.join("second.sfmr");
+    mat.save(&first).expect("saved");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    mat.save(&second).expect("saved again");
+
+    let a = sfmr_format::read_sfmr_content_hash(&first).expect("read back");
+    let b = sfmr_format::read_sfmr_content_hash(&second).expect("read back");
+    let stamp_a = sfmr_format::read_sfmr_metadata(&first).expect("metadata");
+    let stamp_b = sfmr_format::read_sfmr_metadata(&second).expect("metadata");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(computed.content_xxh128, a.content_xxh128);
+    assert_eq!(a.content_xxh128, b.content_xxh128);
+    assert_ne!(stamp_a.timestamp, stamp_b.timestamp);
 }

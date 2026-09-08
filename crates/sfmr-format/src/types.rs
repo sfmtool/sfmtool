@@ -121,6 +121,21 @@ pub struct WorkspaceMetadata {
     pub contents: WorkspaceContents,
 }
 
+/// What `written.json.zst` records about the act of writing the file, as
+/// against what the file says about the reconstruction.
+///
+/// It sits outside every section digest, in the same standing as
+/// `content_hash.json.zst`, so nothing here reaches `content_xxh128`. That is
+/// the whole reason it exists: a reconstruction's hash names the
+/// reconstruction, so two saves of one value a moment apart agree, and a value
+/// held in memory can be hashed before anyone decides to write it. Only facts
+/// about the writing belong here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WriteRecord {
+    /// When the file was written, ISO 8601 with a timezone offset.
+    pub timestamp: String,
+}
+
 /// Top-level reconstruction metadata from `metadata.json.zst`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SfmrMetadata {
@@ -130,6 +145,18 @@ pub struct SfmrMetadata {
     pub tool_version: String,
     pub tool_options: BTreeMap<String, serde_json::Value>,
     pub workspace: WorkspaceMetadata,
+    /// When the file was written, ISO 8601 with a timezone offset.
+    ///
+    /// In memory it belongs to the metadata like anything else, and every
+    /// caller reads it here. On disk it is **not** part of `metadata.json`:
+    /// from version 8 it lives in `written.json`, outside the content digest,
+    /// because a value's hash cannot depend on the moment someone chose to save
+    /// it. So the writer clears this field on the copy it serialises (the
+    /// `skip_serializing_if` then drops the key entirely) and stores the
+    /// timestamp in the separate entry; the reader puts it back here from
+    /// whichever of the two a file carries, which is `written.json` at version
+    /// 8 and `metadata.json` below it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub timestamp: String,
     pub image_count: u32,
     /// Number of points (finite and at infinity combined).
@@ -483,6 +510,15 @@ pub(crate) fn validate_point_constraints(
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 8 moved the write timestamp out of `metadata.json` into a top-level
+/// `written.json` (see [`WriteRecord`]), which -- like `content_hash.json` --
+/// is outside every section digest. The content hashes then describe the
+/// reconstruction and nothing about the act of saving it, so two saves of one
+/// value a moment apart write the same `content_xxh128`, and a value's hash can
+/// be computed before it is written. A file below version 8 carries its
+/// timestamp in `metadata.json` and no `written.json`; the reader takes it from
+/// whichever is there, and never rewrites an older file's stored hashes.
+///
 /// Version 7 added the optional per-point constraint triple
 /// `points3d/point_constraints`, `points3d/constraint_distances` and
 /// `points3d/constraint_reference_images`, flagged together by
@@ -506,7 +542,15 @@ pub(crate) fn validate_point_constraints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 7;
+pub const SFMR_FORMAT_VERSION: u32 = 8;
+
+/// The first `.sfmr` version that stores its write timestamp in `written.json`
+/// rather than in `metadata.json`.
+///
+/// The reader takes the timestamp from `written.json` at or above this version
+/// and from `metadata.json` below it, so a file written before the split loads
+/// with the timestamp it stored and the hashes it stored.
+pub const SFMR_WRITE_RECORD_VERSION: u32 = 8;
 
 /// The first `.sfmr` version whose stored poses and world data are in the
 /// canonical convention (right-handed Z-up world, cameras looking down −Z).
@@ -537,7 +581,12 @@ fn default_feature_source() -> String {
 /// All hash values are plain 32-character lowercase hex strings.
 /// The `rigs_xxh128` and `frames_xxh128` fields are only present when the
 /// `.sfmr` file contains the corresponding optional section.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// [`Default`] is the "no file behind this value" state: every hash the empty
+/// string and both optional sections absent. It is what a reconstruction built
+/// in memory carries until it is written, and what a value derived from
+/// another carries once it stops being the file its source came from.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContentHash {
     pub metadata_xxh128: String,
     pub cameras_xxh128: String,

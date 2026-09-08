@@ -2743,12 +2743,171 @@ fn archive_entry_names_pin_call_sites() {
         "tracks/observation_confidence.8.uint8.zst",
         "tracks/observation_counts.5.uint32.zst",
         "tracks/point_indexes.8.uint32.zst",
+        "written.json.zst",
     ];
     assert_eq!(
         got, expected,
         "archive entry listing changed — a call site is passing a different \
          count, or an entry was added, removed or renamed"
     );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `make_test_data` with every optional column turned on, so the hash the two
+/// paths agree on covers every entry the format can carry.
+fn data_with_every_optional_column() -> SfmrData {
+    let mut data = make_test_data();
+    data.observation_confidence = Some(Array1::from_vec(vec![255u8; 8]));
+    data.normal_confidence = Some(Array1::from_vec(vec![7u8; 5]));
+    data.keypoints_xy = Some(Array2::<f32>::from_shape_fn((8, 2), |(i, c)| {
+        (i * 2 + c) as f32
+    }));
+    data.patch_u_halfvec_xyz = Some(Array2::<f32>::from_shape_fn((5, 3), |(i, c)| {
+        (i + c) as f32 * 0.25
+    }));
+    data.patch_v_halfvec_xyz = Some(Array2::<f32>::from_shape_fn((5, 3), |(i, c)| {
+        (i * 3 + c) as f32 * 0.5
+    }));
+    data.patch_bitmaps_y_x_rgba =
+        Some(Array4::<u8>::from_shape_fn((5, 2, 2, 4), |(p, y, x, c)| {
+            ((p * 17 + y * 5 + x * 3 + c) % 256) as u8
+        }));
+    with_point_constraints(&mut data);
+    data
+}
+
+#[test]
+fn content_hash_of_matches_what_a_write_stores() {
+    // The hash-only path runs no compression and builds no archive, so this is
+    // what pins that it still serialises and hashes exactly what the writer
+    // does, over every optional column the format has.
+    let dir = std::env::temp_dir().join("sfmr_test_content_hash_of");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hashed.sfmr");
+
+    let mut for_hash = data_with_every_optional_column();
+    let computed = content_hash_of(&mut for_hash, &WriteOptions::default()).unwrap();
+
+    let mut for_write = data_with_every_optional_column();
+    write_sfmr(&path, &mut for_write).unwrap();
+    let stored = read_sfmr_content_hash(&path).unwrap();
+
+    assert_eq!(computed.metadata_xxh128, stored.metadata_xxh128);
+    assert_eq!(computed.cameras_xxh128, stored.cameras_xxh128);
+    assert_eq!(computed.images_xxh128, stored.images_xxh128);
+    assert_eq!(computed.points3d_xxh128, stored.points3d_xxh128);
+    assert_eq!(computed.tracks_xxh128, stored.tracks_xxh128);
+    assert_eq!(computed.content_xxh128, stored.content_xxh128);
+    // And the file verifies against the hashes it stored.
+    assert!(verify_sfmr(&path).unwrap().0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn two_saves_a_moment_apart_differ_only_in_the_timestamp() {
+    let dir = std::env::temp_dir().join("sfmr_test_write_record");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let first = dir.join("first.sfmr");
+    let second = dir.join("second.sfmr");
+    let mut data = data_with_every_optional_column();
+    write_sfmr(&first, &mut data).unwrap();
+    // Far enough apart that `to_rfc3339`'s sub-second field has to move.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    write_sfmr(&second, &mut data).unwrap();
+
+    let a = read_sfmr_metadata(&first).unwrap();
+    let b = read_sfmr_metadata(&second).unwrap();
+    assert!(!a.timestamp.is_empty(), "the write stamps a timestamp");
+    assert_ne!(a.timestamp, b.timestamp, "two saves, two moments");
+    assert_eq!(
+        read_sfmr_content_hash(&first).unwrap().content_xxh128,
+        read_sfmr_content_hash(&second).unwrap().content_xxh128,
+        "the clock is outside the content digest"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
+    // Author a version-7 file: the timestamp back in metadata.json, no
+    // written.json, and the version field rolled back. Everything else is the
+    // archive a current write produces, so the stored hashes are the ones this
+    // reader must accept unchanged.
+    use sfmtool_archive_io::{write_json_entry, zstd_compress};
+
+    let dir = std::env::temp_dir().join("sfmr_test_pre_split");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let current = dir.join("current.sfmr");
+    let legacy = dir.join("legacy.sfmr");
+
+    let mut data = data_with_every_optional_column();
+    write_sfmr(&current, &mut data).unwrap();
+
+    let stamp = "2025-12-21T14:32:15.123456+00:00";
+    let mut legacy_metadata = data.metadata.clone();
+    legacy_metadata.version = SFMR_WRITE_RECORD_VERSION - 1;
+    legacy_metadata.timestamp = stamp.into();
+    let metadata_bytes = serde_json::to_vec(&legacy_metadata).unwrap();
+    let legacy_metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
+
+    // Copy every entry across but the two the rewrite touches, then re-derive
+    // the content hash the way the writer does, over the section digests.
+    let source = std::fs::File::open(&current).unwrap();
+    let mut archive = zip::ZipArchive::new(source).unwrap();
+    let stored = read_sfmr_content_hash(&current).unwrap();
+    let out = std::fs::File::create(&legacy).unwrap();
+    let mut zip = zip::ZipWriter::new(out);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().to_string();
+        if name == "metadata.json.zst"
+            || name == "written.json.zst"
+            || name == "content_hash.json.zst"
+        {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
+        zip.start_file(&name, options).unwrap();
+        std::io::Write::write_all(&mut zip, &bytes).unwrap();
+    }
+    zip.start_file("metadata.json.zst", options).unwrap();
+    std::io::Write::write_all(&mut zip, &zstd_compress(&metadata_bytes, 3).unwrap()).unwrap();
+
+    let digests: Vec<u128> = [
+        legacy_metadata_hash,
+        u128::from_str_radix(&stored.cameras_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.images_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.points3d_xxh128, 16).unwrap(),
+        u128::from_str_radix(&stored.tracks_xxh128, 16).unwrap(),
+    ]
+    .into();
+    let all: Vec<u8> = digests.iter().flat_map(|d| d.to_be_bytes()).collect();
+    let legacy_hash = ContentHash {
+        metadata_xxh128: format!("{legacy_metadata_hash:032x}"),
+        content_xxh128: format!("{:032x}", xxhash_rust::xxh3::xxh3_128(&all)),
+        ..stored
+    };
+    write_json_entry(&mut zip, "content_hash.json.zst", &legacy_hash, 3).unwrap();
+    zip.finish().unwrap();
+
+    // The reader takes the timestamp from metadata.json, leaves the version
+    // alone, and the stored hashes still verify: nothing was recomputed.
+    let read_back = read_sfmr_metadata(&legacy).unwrap();
+    assert_eq!(read_back.timestamp, stamp);
+    assert_eq!(read_back.version, SFMR_WRITE_RECORD_VERSION - 1);
+    assert_eq!(read_sfmr(&legacy).unwrap().metadata.timestamp, stamp);
+    let (ok, errors) = verify_sfmr(&legacy).unwrap();
+    assert!(ok, "a pre-split file verifies unchanged: {errors:?}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

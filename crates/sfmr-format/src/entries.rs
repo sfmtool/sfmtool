@@ -63,6 +63,14 @@ pub(crate) fn content_hash() -> &'static str {
     "content_hash.json.zst"
 }
 
+/// `written.json.zst` — when the file was written (version 8+).
+///
+/// Outside every section digest, like `content_hash.json.zst`, so nothing it
+/// holds reaches `content_xxh128`.
+pub(crate) fn written() -> &'static str {
+    "written.json.zst"
+}
+
 /// `cameras/metadata.json.zst` — the camera-intrinsics array.
 pub(crate) fn cameras_metadata() -> &'static str {
     "cameras/metadata.json.zst"

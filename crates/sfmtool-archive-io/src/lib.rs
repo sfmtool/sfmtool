@@ -332,6 +332,17 @@ pub fn zstd_compress(data: &[u8], level: i32) -> Result<Vec<u8>, ArchiveIoError>
         .map_err(|e| ArchiveIoError::InvalidFormat(format!("zstd compression failed: {e}")))
 }
 
+/// The uncompressed bytes of a JSON entry: what gets stored, and what a
+/// section hash is taken over.
+///
+/// The one serialization rule for a JSON entry, so a consumer that only wants
+/// the bytes -- a hash computed without building an archive -- takes exactly
+/// the bytes [`write_json_entry`] would store, rather than a second spelling of
+/// the same thing that could drift from it.
+pub fn json_entry_bytes(value: &impl serde::Serialize) -> Result<Vec<u8>, ArchiveIoError> {
+    Ok(serde_json::to_vec(value)?)
+}
+
 /// Write a zstandard-compressed JSON entry to a ZIP archive.
 ///
 /// Returns the uncompressed JSON bytes (for hashing). Unlike the binary
@@ -343,7 +354,7 @@ pub fn write_json_entry<W: Write + Seek>(
     value: &impl serde::Serialize,
     zstd_level: i32,
 ) -> Result<Vec<u8>, ArchiveIoError> {
-    let json_bytes = serde_json::to_vec(value)?;
+    let json_bytes = json_entry_bytes(value)?;
     let compressed = zstd_compress(&json_bytes, zstd_level)?;
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     zip.start_file(name, options)?;

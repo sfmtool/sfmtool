@@ -371,9 +371,13 @@ those rows replaced when only patches changed.
 Materialisation is deterministic (the same value materialises to the same value,
 with the same row map) and idempotent (materialising the result, whose overlay
 is empty, changes nothing and gives the identity map). It fixes the metadata
-counts a save would write, and it does not stamp an operation, a tool or a
-timestamp, which is what keeps it deterministic and keeps the base hash below
-stable.
+counts a save would write and stamps nothing else: the operation and the tool
+are the base's, and the write timestamp is the writer's business, not a value's.
+It clears `content_hash`, the field that records the hashes of the file a value
+was read from, to the empty state a never-written reconstruction carries: a
+materialised value holds the base's points only where the edits left them alone,
+so it is not the file the base came from and must not claim to be.
+`content_xxh128()` is the live answer for what it is.
 
 The result becomes the base of the next version, with empty edits. Older
 versions keep their own base and their own edits, so the history's budget counts
@@ -397,21 +401,34 @@ takes the materialisation: that is everything in `sfmtool-core` taking
 ## Hashes
 
 `SfmrReconstruction::content_xxh128` gives the content hashes a save of a value
-would write, computed from the value without touching the filesystem. It runs
-the `.sfmr` writer over an in-memory archive and discards the bytes, so there is
-no second hashing rule that could drift from the writer's: the returned
-`content_xxh128` is byte-for-byte the one a save of that value stores, including
-the normalisations the write performs on its way (tracks sorted, format version
-and infinity count refreshed, depth statistics and missing normals recomputed).
-The one condition is that nothing stamps new metadata onto the value between the
-hash and the save, because the metadata section is part of the hash. A base that
-was never written therefore has the hash a write of it would produce, which is
-what lets a point id name a point in a value that has no file yet.
+would write, computed from the value without touching the filesystem. A `.sfmr`
+section hash is defined over the **uncompressed** bytes of that section's
+entries, so those bytes are the whole of what a hash needs and the archive
+container and its zstd frames are the whole of what it does not. The writer
+serialises each section entry through one code path with two consumers: a save,
+which hashes each entry's bytes and then compresses and stores them, and
+`sfmr_format::content_hash_of`, which hashes them and drops them. So there is
+one serialisation rule and one hashing rule, and the returned `content_xxh128`
+is the one a save of that value stores, including the normalisations a write
+performs on its way (tracks sorted, format version and infinity count refreshed,
+depth statistics and missing normals recomputed).
+
+Nothing about the act of saving is in the hash. The write timestamp lives in the
+top-level `written.json` entry, which like `content_hash.json` sits outside every
+section digest
+([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md),
+version 8), so two saves of one unchanged value write the same content hash and
+a value hashed now still matches the file it becomes later. What a
+reconstruction asserts about itself, its operation, its tool, its workspace
+configuration, is inside the hash, so a caller that stamps a new operation onto
+a value changes the value's hash, which is right. A base that was never written
+has the hash a write of it would produce, which is what lets a point id name a
+point in a value that has no file yet.
 
 `EditedReconstruction::base_content_hash` computes that once, on first request,
-and keeps it. The cost is one serialisation and compression of the whole value,
-which the patch bitmaps dominate, so it is affordable on an event and not on a
-frame.
+and keeps it. The cost is one serialisation of the value plus one XXH128 pass
+over it, with no compression; the patch bitmaps dominate both. It is affordable
+on an event and not on a frame.
 
 `EditedReconstruction::point_edit_hash` hashes a point edit that creates points.
 It covers the base's `content_xxh128`, then each record's observations as the
@@ -540,8 +557,18 @@ invents one is a visible failure. What they pin:
 - A record is refused, with the addition set untouched, when it carries the
   wrong columns, an image the base does not hold, a bitmap of the wrong
   resolution, or no observations at all.
+- A materialised value carries no file's hashes: its `content_hash` is the empty
+  state.
 - The hash a materialised value reports equals the `content_xxh128` a save of it
-  writes, read back off the file.
+  writes, read back off the file, and two saves a moment apart write that same
+  hash and two different timestamps.
+
+`crates/sfmr-format/src/tests.rs` pins the hashing itself: that
+`content_hash_of` agrees section for section with what a write of the same data
+stores, over a reconstruction carrying every optional column; that two saves
+differ only in the timestamp; and that a file authored in the pre-version-8
+layout (timestamp in `metadata.json`, no `written.json`) loads with the
+timestamp it stored and verifies against the hashes it stored.
 
 ## Non-goals
 

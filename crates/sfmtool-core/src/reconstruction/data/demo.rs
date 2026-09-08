@@ -205,16 +205,8 @@ impl SfmrReconstruction {
         SfmrReconstruction {
             workspace_dir: PathBuf::new(),
             metadata,
-            content_hash: ContentHash {
-                metadata_xxh128: String::new(),
-                cameras_xxh128: String::new(),
-                rigs_xxh128: None,
-                frames_xxh128: None,
-                images_xxh128: String::new(),
-                points3d_xxh128: String::new(),
-                tracks_xxh128: String::new(),
-                content_xxh128: String::new(),
-            },
+            // No file behind this value, which is what the default state says.
+            content_hash: ContentHash::default(),
             image_table: ImageTable {
                 cameras,
                 images,

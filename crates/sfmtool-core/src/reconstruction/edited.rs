@@ -838,7 +838,13 @@ impl EditedReconstruction {
         let recon = SfmrReconstruction {
             workspace_dir: self.base.workspace_dir.clone(),
             metadata,
-            content_hash: self.base.content_hash.clone(),
+            // The hashes on a value describe the file it came from, and this
+            // value is not that file: it holds the base's points only where the
+            // edits left them alone. Carrying them over would name a file whose
+            // content this is not, so they are cleared to the state a
+            // never-written reconstruction carries.
+            // `SfmrReconstruction::content_xxh128` is the live answer.
+            content_hash: ContentHash::default(),
             // No overlay edit touches an image, so the whole table is the
             // base's, thumbnails shared rather than copied.
             image_table: ImageTable {
