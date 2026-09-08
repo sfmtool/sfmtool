@@ -13,6 +13,60 @@ Rust implementation (rather than wrapping OpenCV) gives us:
 - Integration with the existing rayon-parallel matching pipeline
 - GPU acceleration via wgpu compute shaders
 
+## Public Rust Interface
+
+The implementation lives in
+[optical_flow/](../../../crates/sfmtool-core/src/features/optical_flow). The two
+main entry points are `compute_optical_flow` (zero initialization) and
+`compute_optical_flow_with_init` (starts from a provided flow estimate). Both accept
+an optional `GpuFlowContext` for GPU acceleration — see
+[gpu-optical-flow.md](gpu-optical-flow.md).
+
+```rust
+pub fn compute_optical_flow(
+    img_a: &GrayImage,
+    img_b: &GrayImage,
+    params: &DisFlowParams,
+    gpu: Option<&gpu::GpuFlowContext>,
+) -> FlowField;
+
+pub fn compute_optical_flow_with_init(
+    img_a: &GrayImage,
+    img_b: &GrayImage,
+    params: &DisFlowParams,
+    initial_flow: &FlowField,
+    gpu: Option<&gpu::GpuFlowContext>,
+) -> FlowField;
+
+pub fn compose_flow(flow_ab: &FlowField, flow_bc: &FlowField) -> FlowField;
+```
+
+The image pair must have equal dimensions, and `initial_flow` must have those same
+dimensions. `None` selects the CPU path. A reusable GPU context can be passed when
+the crate's default `gpu` feature is enabled.
+
+```rust
+use sfmtool_core::features::optical_flow::{
+    compose_flow, compute_optical_flow, compute_optical_flow_with_init,
+    DisFlowParams, GrayImage,
+};
+
+let img_a = GrayImage::new_constant(64, 64, 0.5);
+let img_b = GrayImage::new_constant(64, 64, 0.5);
+let img_c = GrayImage::new_constant(64, 64, 0.5);
+let params = DisFlowParams::default_quality();
+
+let flow_ab = compute_optical_flow(&img_a, &img_b, &params, None);
+let flow_bc = compute_optical_flow(&img_b, &img_c, &params, None);
+let initial_ac = compose_flow(&flow_ab, &flow_bc);
+let flow_ac =
+    compute_optical_flow_with_init(&img_a, &img_c, &params, &initial_ac, None);
+assert_eq!((flow_ac.width(), flow_ac.height()), (64, 64));
+```
+
+`compose_flow` composes two flow fields: `result(x) = flow_ab(x) + flow_bc(x + flow_ab(x))`,
+used for chaining adjacent-frame flows into long-range estimates.
+
 ## Algorithm: Dense Inverse Search (DIS)
 
 Reference: Till Kroeger, Radu Timofte, Dengxin Dai, and Luc Van Gool, "Fast Optical Flow
@@ -117,16 +171,21 @@ Three quality/speed presets correspond to the DIS paper's operating points:
 
 ```
 sfmtool-core/src/features/optical_flow/
-├── mod.rs          # Public API: FlowField, compute_optical_flow(), presets
+├── mod.rs          # Public functions and re-exports
 ├── dis.rs          # DIS algorithm core
+├── flow_field.rs   # Owned and borrowed split-layout flow fields
+├── image.rs        # Normalized grayscale image type
+├── interp.rs       # Bilinear interpolation, image warping, flow densification
+├── params.rs       # Parameters, presets, and timing results
 ├── pyramid.rs      # Gaussian image pyramid
 ├── variational.rs  # Variational refinement
-├── interp.rs       # Bilinear interpolation, image warping, flow densification
+├── tests.rs        # End-to-end and composition unit tests
 └── gpu/            # GPU compute shader implementation (wgpu)
     ├── mod.rs
     ├── context.rs
     ├── dis_pipeline.rs
     ├── pyramid_pipeline.rs
+    ├── tests.rs
     ├── variational.rs
     └── shaders/
         ├── apply_flow_update.wgsl
@@ -139,6 +198,9 @@ sfmtool-core/src/features/optical_flow/
         ├── upsample_flow.wgsl
         └── warp_by_flow.wgsl
 ```
+
+The `dis`, `interp`, `pyramid`, and `variational` modules each keep their unit tests
+in a colocated `tests.rs` submodule.
 
 ### Key Types
 
@@ -185,33 +247,23 @@ per-pixel SIMD (SSE2 4-wide for interior rows).
 **`interp.rs`** provides bilinear sampling, image warping by flow fields, and flow
 densification from sparse patch results.
 
-### Public API
-
-The module lives in
-[optical_flow/](../../../crates/sfmtool-core/src/features/optical_flow), CPU and
-GPU paths side by side, and reaches Python as `sfmtool._sfmtool.flow` (below).
-
-The two main entry points are `compute_optical_flow` (zero initialization) and
-`compute_optical_flow_with_init` (starts from a provided flow estimate). Both accept
-an optional `GpuFlowContext` for GPU acceleration — see
-[gpu-optical-flow.md](gpu-optical-flow.md).
-
-`compose_flow` composes two flow fields: `result(x) = flow_ab(x) + flow_bc(x + flow_ab(x))`,
-used for chaining adjacent-frame flows into long-range estimates.
-
 ### Python Bindings
 
 The Python submodule `sfmtool._sfmtool.flow` exposes:
 
 - `compute_optical_flow(img_a, img_b, preset, use_gpu)` — returns `(flow_u, flow_v)`
   as two `(H, W)` float32 arrays
+- `compute_optical_flow_timed(img_a, img_b, preset, use_gpu)` — also returns a
+  per-stage timing dictionary
 - `compute_optical_flow_with_init(img_a, img_b, initial_flow_u, initial_flow_v, preset, use_gpu)` — same with initial flow
 - `compose_flow(flow_ab_u, flow_ab_v, flow_bc_u, flow_bc_v)` — returns composed `(flow_u, flow_v)`
 - `advect_points(points, flow_u, flow_v)` — advects `(N, 2)` float32 points through a flow field
 - `gpu_available()` — returns whether GPU acceleration is available
 
-Images accept `uint8` or `float32` numpy arrays. Flow fields use separate u/v arrays
-(not interleaved), matching the internal split layout.
+Images accept two-dimensional `uint8` numpy arrays. Flow fields use separate u/v arrays
+(not interleaved), matching the internal split layout. The Python `preset` strings are
+`"fast"`, `"default"`, and `"high_quality"`; `"default"` selects the Rust
+`DisFlowParams::default_quality()` preset.
 
 ## Initial Flow Support
 
@@ -271,25 +323,22 @@ datasets (dino_dog_toy 2040x1536, seattle_backyard 360x640):
 
 | Group | What it measures |
 |-------|-----------------|
-| `features/optical_flow/end_to_end` | Full pipeline, fast + default presets |
-| `features/optical_flow/pyramid` | Gaussian pyramid construction (8 levels) |
-| `features/optical_flow/dis_refine` | Single-level DIS refinement at full resolution |
-| `features/optical_flow/variational` | Variational refinement at full resolution |
-| `features/optical_flow/bilinear` | 1M bilinear samples |
+| `optical_flow/end_to_end` | Full pipeline, fast + default presets |
+| `optical_flow/pyramid` | Gaussian pyramid construction (8 levels) |
+| `optical_flow/dis_refine` | Single-level DIS refinement at full resolution |
+| `optical_flow/variational` | Variational refinement at full resolution |
+| `optical_flow/bilinear` | 1M bilinear samples |
 
-### Cross-Validation Against OpenCV
+The [CPU tests](../../../crates/sfmtool-core/src/features/optical_flow/tests.rs) cover
+identity and translated synthetic images, composition, and initial-flow refinement;
+the [GPU tests](../../../crates/sfmtool-core/src/features/optical_flow/gpu/tests.rs)
+check CPU/GPU agreement. Accuracy changes are evaluated with the synthetic-ground-truth
+benchmark linked in **Internal Modules**; there is no OpenCV DIS cross-validation suite.
 
-Python tests compare against OpenCV DIS on real image pairs:
+## Dependencies and Cargo Features
 
-| Test | Threshold | Worst actual |
-|------|-----------|-------------|
-| Seattle Backyard direction correlation (default) | > 0.95 | 0.989 |
-| Seattle Backyard median EPE (default) | < 2.0 px | 1.25 |
-| Fast preset direction correlation | > 0.7 | 0.838 |
-| Seoul Bull direction correlation (default) | > 0.2 | 0.299 |
-| Magnitude ratio (all pairs) | < 4.0 | 3.22 |
-
-## Dependencies
-
-No new crate dependencies. Uses `rayon` for parallelism, `image` for loading test
-images in benchmarks, and `criterion` (dev-dependency) for benchmarks.
+The `gpu` Cargo feature is enabled by default and activates the optional `wgpu`,
+`pollster`, and `bytemuck` dependencies. A `--no-default-features` build keeps the
+same function signatures but supplies an unconstructable `GpuFlowContext` stub, so
+callers use `None` and run on the CPU. The CPU implementation uses `rayon` for
+parallelism. Benchmarks use the `image` and `criterion` dev-dependencies.

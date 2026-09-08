@@ -200,6 +200,13 @@ Full surface table under **Code without specs**.
 ## Sampled specs (17 read against code)
 
 ### specs/core/features/optical-flow.md
+> _Status (2026-09-07): **Done (scoped recommendation).** The spec now gives the current Rust signatures and
+> a usable call example, distinguishes the Rust and Python default-preset names,
+> includes the timed Python binding, reflects the module tree and Cargo feature
+> contract, uses the registered Criterion group names, and replaces the nonexistent
+> OpenCV result table with the validation that exists. The audit's separate shape and
+> third-copy observations remain open._
+
 **Summary:** The pure-Rust DIS (Dense Inverse Search) dense optical flow in `sfmtool-core`: the algorithm and update rule, the parameter table and three presets, module layout, key types, the Rust and Python entry points, initial-flow chaining, four optimization layers, and benchmark/validation tables.
 **Implementing code:** `crates/sfmtool-core/src/features/optical_flow/` (`mod.rs`: `compute_optical_flow`, `_timed`, `_with_init`, `compose_flow`, `resize_flow_to`; `params.rs`: `DisFlowParams::{fast,default_quality,high_quality}`; `dis.rs`, `variational.rs`, `pyramid.rs`, `interp.rs::densify_flow`, `flow_field.rs`, `image.rs`); bindings `crates/sfmtool-py/src/flow/optical.rs`.
 **Inconsistencies:** (code is right in each)
