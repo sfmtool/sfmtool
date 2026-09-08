@@ -202,6 +202,21 @@ bulk edits in this sense. The two compose: a run of point edits on a base, then
 a bulk edit that materialises them into the next base, then more point edits on
 that.
 
+A bulk edit that drops points owes its caller the same thing a materialisation
+does: where the survivors went. The image subset therefore has a second spelling,
+`subset_by_image_indices_with_map`, which returns the subset and a [`RowMap`]
+alongside it -- `forward` from an index in the input to its index in the subset,
+`None` for a point the subset dropped as orphaned, and `inverse` back -- and the
+plain `subset_by_image_indices` is that call with the map dropped, so no existing
+caller changes. The map is `RowMap::compaction(point_count, dropped)`: the
+survivors keep their order and close up behind the holes, which is the shape a
+materialisation's map takes when nothing was modified or added, so a caller
+composing the two steps of "materialise, then subset" speaks one type for both.
+It is read off the same keep mask that builds the subset's own point
+renumbering, which is what stops the two from disagreeing; a caller that
+recomputed which points survived would be maintaining a second copy of that
+rule.
+
 ### Indexes are stable
 
 A base point keeps its index while the base lives; a deleted index is a hole
@@ -269,6 +284,13 @@ impl EditedReconstruction {
     pub fn materialize(&self) -> (SfmrReconstruction, RowMap);
 }
 
+impl SfmrReconstruction {
+    pub fn subset_by_image_indices(&self, image_indices: &[u32], drop_orphaned_points: bool)
+        -> Result<Self, String>;
+    pub fn subset_by_image_indices_with_map(&self, image_indices: &[u32],
+        drop_orphaned_points: bool) -> Result<(Self, RowMap), String>;
+}
+
 pub struct PointRecord {
     pub point: Point3D,
     pub observations: Vec<RecordObservation>,
@@ -287,6 +309,7 @@ pub struct RecordObservation {
 }
 
 impl RowMap {
+    pub fn compaction(point_count: u32, removed: Vec<u32>) -> Self;
     pub fn forward(&self, edited: u32) -> Option<u32>;
     pub fn inverse(&self, new: u32) -> Option<u32>;
     pub fn forward_dense(&self, index_bound: u32) -> Vec<Option<u32>>;
@@ -529,7 +552,10 @@ Python editor run before handing back a value.
 `crates/sfmtool-core/src/reconstruction/data/tests.rs` covers the round trip
 through `SfmrData` for both observation sources with every optional column
 present, which is what pins that each column lands in the right half and comes
-back unchanged; `crates/sfmtool-core/src/reconstruction/edit/tests.rs` covers the
+back unchanged, and that the image subset's row map is a bijection from the
+points it kept onto the subset's rows, agreeing point for point with the subset's
+own content and with the identity when nothing is dropped;
+`crates/sfmtool-core/src/reconstruction/edit/tests.rs` covers the
 three whole-value edits (transform, image subset, point mask) including the patch
 frame and bitmap columns; and
 `crates/sfmtool-core/src/analysis/infinity/convert/tests.rs` covers the passes
@@ -577,10 +603,12 @@ timestamp it stored and verifies against the hashes it stored.
 - Branching, or an edit applied to a version other than the one in hand. The
   overlay is one version's worth of edits on one base.
 - Persisting the overlay. A file is always a materialisation.
-- The policy that decides *when* to materialise, the GPU-side consequences of
-  the deleted set and the additions buffer, and the point-id version graph that
-  tracks a point's identity across versions. Those are proposed in
+- The policy that decides *when* to materialise, and the point-id minting and
+  resolution built on the version graph. Those are proposed in
   [`../../drafts/sfm-explorer-editing-overlay.md`](../../drafts/sfm-explorer-editing-overlay.md).
+  What the viewer does with the deleted set and the additions on the GPU, and
+  the per-node history the versions live in, are in
+  [`../../gui/document-model.md`](../../gui/document-model.md).
 - Sharing between reconstructions beyond the two heavy columns. The track
   columns are most of the remaining bytes and are untouched by every bulk edit
   but an image deletion, so they could be shared too; they are not, until there

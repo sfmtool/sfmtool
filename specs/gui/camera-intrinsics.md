@@ -147,7 +147,7 @@ The resulting behaviour, stated exhaustively so the tests can be read off it:
 | Clear image selection (click empty space, `Esc`) | `None` | **kept** |
 | Clear camera selection (`Esc` again) | **cleared** | `None` |
 | Select a different reconstruction | filtered to that recon | filtered to that recon |
-| Close / reload the owning node | cleared | cleared |
+| Close the owning node | cleared | cleared |
 
 The "clear camera" row is the invariant closing itself: an image implies its
 camera, so clearing the camera has to take the image with it, whatever order a
@@ -168,7 +168,7 @@ user's request implies:
   the user dismissed an image would be a surprise. `Esc` pressed twice clears
   both — the second press, seeing no image, clears the camera.
 
-`AppState::retain_recon` / `close_node` / `reload_node` filter `selected_camera`
+`AppState::retain_recon` / `close_node` and the edits filter `selected_camera`
 by `ReconId` exactly as they already filter the other three.
 
 ### `CameraModel::parameter_names`
@@ -1180,10 +1180,10 @@ family, and the arrow field is a few hundred round trips.
 
 | Product | Cost | Cached on | Invalidated by |
 |---------|------|-----------|----------------|
-| Distortion field | `cols × rows` ray round trips | `(CameraRef, cols, rows)` | camera change, grid density change, node reload |
-| Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node reload |
-| FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node reload |
-| Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node reload |
+| Distortion field | `cols × rows` ray round trips | `(CameraRef, cols, rows)` | camera change, grid density change, node close |
+| Radial profile | `samples × 32 azimuths` | `CameraRef` — the sample count is a constant, so it is not part of the key | camera change, node close |
+| FOV / derived rows | 4 corners + 4 edges | `CameraRef` | camera change, node close |
+| Trustworthy bound | a ~360-step sweep × 8 azimuths, refined | `CameraRef` | camera change, node close |
 | Axis polylines | ~1 sample per 4 panel px | `(CameraRef, zoom bucket)` | camera change, zoom crossing a bucket |
 | Hover readout | 1 round trip | not cached | — |
 

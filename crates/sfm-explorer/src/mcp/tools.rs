@@ -219,9 +219,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "open_reconstruction",
             description: "Load an .sfmr file into the scene as a new reconstruction, and select \
-                          it. Opening a path that is already open reloads that reconstruction in \
-                          place instead, keeping its label, display state and transform; \
-                          `reloaded` says which happened. Read the returned `label` back rather \
+                          it. Opening a path that is already open adds a second node for it, \
+                          with a history of its own; `already_open` says whether that happened. \
+                          Read the returned `label` back rather \
                           than assuming it — a colliding file stem is disambiguated as \
                           \"name (2)\".",
             kind: Write,
@@ -596,8 +596,8 @@ fn reconstruction_label_schema() -> Value {
         "type": "string",
         "description":
             "Which reconstruction, by the label get_scene reports. Omit for the selected one. A \
-             label is unique across the scene and survives a reload, which is why it rather than \
-             any internal id is the handle.",
+             label is unique across the scene and survives every edit, which is why it rather \
+             than any internal id is the handle.",
     })
 }
 

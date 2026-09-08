@@ -18,6 +18,7 @@ mod app;
 mod cli;
 mod colormap;
 mod dock;
+mod document;
 mod goto_point;
 mod image_browser;
 mod image_detail;
@@ -194,7 +195,6 @@ pub fn run() {
         prev_selected_camera: None,
         prev_selected_point: None,
         prev_hidden_image: None,
-        prev_transform_epoch: 0,
         quit_requested: false,
         applied_title: String::new(),
         no_default_layout: args.no_default_layout,
@@ -298,9 +298,6 @@ pub(crate) struct App {
     pub(crate) prev_selected_camera: Option<CameraRef>,
     pub(crate) prev_selected_point: Option<PointRef>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
-    /// `AppState::transform_epoch` as of the previous frame — how the upload
-    /// phase notices that a node transform was set or reset.
-    pub(crate) prev_transform_epoch: u64,
     /// Set by File > Quit and read by the event loop right after the frame it
     /// was clicked in, which then exits.
     pub(crate) quit_requested: bool,

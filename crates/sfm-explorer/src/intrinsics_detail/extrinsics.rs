@@ -63,7 +63,7 @@ impl Pose {
         camera: &CameraIntrinsics,
         frame: PoseFrame,
     ) -> Self {
-        let image = &node.recon.image_table.images[index];
+        let image = &node.recon().image_table.images[index];
         let transformed = frame == PoseFrame::NodeTransform && node.has_transform();
         let (quaternion, translation) = if transformed {
             node.transform.apply_to_camera_pose(
@@ -167,7 +167,7 @@ pub(super) fn show_extrinsics(
     ui.add_space(4.0);
 
     format::labelled_row(ui, "Quaternion w x y z", pose.quaternion_wxyz);
-    let centre_label = match node.recon.metadata.world_space_unit.as_deref() {
+    let centre_label = match node.recon().metadata.world_space_unit.as_deref() {
         Some(unit) => format!("Camera centre C ({unit})"),
         None => "Camera centre C".to_string(),
     };
@@ -205,7 +205,7 @@ pub(super) fn show_extrinsics(
         }
     }
 
-    show_rig_block(ui, &node.recon, index);
+    show_rig_block(ui, node.recon(), index);
     clicked
 }
 

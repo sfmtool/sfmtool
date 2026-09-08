@@ -56,6 +56,7 @@ struct VertexInput {
     @location(4) v_halfvec: vec3<f32>,    // instance: v axis × half-extent
     @location(5) atlas_layer: u32,        // instance: compacted atlas cell index
     @location(6) point_index: u32,        // instance: recon.points index (picking)
+    @location(7) alive: u32,              // instance: 0 = the version deleted this point
 }
 
 struct VertexOutput {
@@ -68,6 +69,12 @@ struct VertexOutput {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
+    // A deleted point's surfel collapses to a clipped vertex, the same way a
+    // back-facing one does below.
+    if in.alive == 0u {
+        out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+        return out;
+    }
     // Map patch coordinate to bitmap UV. Columns run with +u: s=-1 -> u=0.
     // Rows run *against* +v: the bitmap was baked with its top scanline toward
     // +v_axis (WarpMap::from_patch steps rows along −v), so t=+1 -> v=0 and

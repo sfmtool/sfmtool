@@ -115,6 +115,17 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PatchPipelineR
                         },
                     ],
                 }),
+                // Slot 2: per-patch liveness (per-instance), the deleted mask's
+                // patch half. See `upload::overlay`.
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<u32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Uint32,
+                        offset: 0,
+                        shader_location: 7,
+                    }],
+                }),
             ],
             compilation_options: Default::default(),
         },

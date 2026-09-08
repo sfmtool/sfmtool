@@ -244,6 +244,25 @@ impl SfmrReconstruction {
         image_indices: &[u32],
         drop_orphaned_points: bool,
     ) -> Result<Self, String> {
+        self.subset_by_image_indices_with_map(image_indices, drop_orphaned_points)
+            .map(|(subset, _)| subset)
+    }
+
+    /// The same subset, with the **point row map** it performed.
+    ///
+    /// [`RowMap::forward`] takes an index in this reconstruction to its index
+    /// in the subset, or `None` when the subset dropped it as orphaned;
+    /// [`RowMap::inverse`] takes it back. With `drop_orphaned_points` false
+    /// nothing is dropped and the map is the identity. A caller that holds a
+    /// point index across the edit -- a selection, a stored id, a constraint
+    /// row -- follows it through this rather than recomputing which points
+    /// survived, which is a rule that would then have to be kept in step with
+    /// the one below.
+    pub fn subset_by_image_indices_with_map(
+        &self,
+        image_indices: &[u32],
+        drop_orphaned_points: bool,
+    ) -> Result<(Self, RowMap), String> {
         // Works for both observation sources: the per-observation parallel
         // column (SiftFiles `feature_indexes` / EmbeddedPatches `keypoints_xy`
         // rows) is filtered in lockstep with the tracks below, and the per-image
@@ -338,6 +357,7 @@ impl SfmrReconstruction {
             new_patch_bitmaps,
             new_normal_confidence,
             kept_point_constraints,
+            dropped_points,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
             let mut per_point_count = vec![0u32; self.point_set.points.len()];
@@ -396,6 +416,15 @@ impl SfmrReconstruction {
                     .point_constraints
                     .as_ref()
                     .map(|c| c.select(&keep_idx)),
+                // The holes the renumbering above closed up, ascending, which
+                // is the row map's whole content. Read off the same mask that
+                // built `point_remap`, so the map cannot disagree with it.
+                keep_mask
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &keep)| !keep)
+                    .map(|(index, _)| index as u32)
+                    .collect(),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
@@ -412,6 +441,8 @@ impl SfmrReconstruction {
                 self.point_set.patch_bitmaps_y_x_rgba.clone(),
                 self.point_set.normal_confidence.clone(),
                 self.point_set.point_constraints.clone(),
+                // Nothing was dropped, so the map is the identity.
+                Vec::new(),
             )
         };
 
@@ -492,36 +523,40 @@ impl SfmrReconstruction {
             .map(|rf| subset_rig_frame_data(rf, image_indices));
 
         let infinity_point_count = count_points_at_infinity(&new_points);
-        Ok(SfmrReconstruction {
-            workspace_dir: self.workspace_dir.clone(),
-            metadata: self.metadata.clone(),
-            content_hash: self.content_hash.clone(),
-            image_table: ImageTable {
-                cameras: self.image_table.cameras.clone(),
-                images: new_images,
-                thumbnails_y_x_rgb: Arc::new(new_thumbnails),
-                depth_statistics: new_depth_statistics,
-                depth_histogram_counts: new_depth_histogram_counts,
-                rig_frame_data: new_rig_frame_data,
+        let row_map = RowMap::compaction(self.point_set.points.len() as u32, dropped_points);
+        Ok((
+            SfmrReconstruction {
+                workspace_dir: self.workspace_dir.clone(),
+                metadata: self.metadata.clone(),
+                content_hash: self.content_hash.clone(),
+                image_table: ImageTable {
+                    cameras: self.image_table.cameras.clone(),
+                    images: new_images,
+                    thumbnails_y_x_rgb: Arc::new(new_thumbnails),
+                    depth_statistics: new_depth_statistics,
+                    depth_histogram_counts: new_depth_histogram_counts,
+                    rig_frame_data: new_rig_frame_data,
+                },
+                point_set: PointSet {
+                    infinity_point_count,
+                    points: new_points,
+                    tracks: new_tracks,
+                    observation_counts: new_observation_counts,
+                    observation_offsets: new_observation_offsets,
+                    patch_u_halfvec_xyz: new_patch_u,
+                    patch_v_halfvec_xyz: new_patch_v,
+                    patch_bitmaps_y_x_rgba: new_patch_bitmaps,
+                    has_normals: self.point_set.has_normals,
+                    normal_confidence: new_normal_confidence,
+                    point_constraints: new_point_constraints,
+                    observation_confidence: new_observation_confidence,
+                    observations: new_observations,
+                    image_feature_to_point: new_image_feature_to_point,
+                    max_track_feature_index: new_max_track_feature_index,
+                },
             },
-            point_set: PointSet {
-                infinity_point_count,
-                points: new_points,
-                tracks: new_tracks,
-                observation_counts: new_observation_counts,
-                observation_offsets: new_observation_offsets,
-                patch_u_halfvec_xyz: new_patch_u,
-                patch_v_halfvec_xyz: new_patch_v,
-                patch_bitmaps_y_x_rgba: new_patch_bitmaps,
-                has_normals: self.point_set.has_normals,
-                normal_confidence: new_normal_confidence,
-                point_constraints: new_point_constraints,
-                observation_confidence: new_observation_confidence,
-                observations: new_observations,
-                image_feature_to_point: new_image_feature_to_point,
-                max_track_feature_index: new_max_track_feature_index,
-            },
-        })
+            row_map,
+        ))
     }
 
     /// Filter 3D points by a boolean mask, returning a new reconstruction.

@@ -328,10 +328,18 @@ impl SceneRenderer {
     /// scales the node's splat size), the union scene bounds, and the
     /// `length_scale` seed. Same no-op-before-upload rule as
     /// [`SceneRenderer::set_node_display`].
-    pub fn set_node_transform(&mut self, id: ReconId, transform: Se3Transform) {
-        if let Some(bundle) = self.recons.get_mut(&id) {
-            bundle.transform = transform;
-        }
+    /// Returns whether the transform it stored differs from the one the bundle
+    /// already held. That answer is the viewer's transform change detection:
+    /// the derived world-space state (the global `length_scale`, the frustum
+    /// geometry, the CPU-space track rays) is rebuilt exactly when a node's
+    /// transform moved, compared rather than announced through a counter.
+    pub fn set_node_transform(&mut self, id: ReconId, transform: Se3Transform) -> bool {
+        let Some(bundle) = self.recons.get_mut(&id) else {
+            return false;
+        };
+        let changed = !same_transform(&bundle.transform, &transform);
+        bundle.transform = transform;
+        changed
     }
 
     /// Decode a pick id read back from the GPU into the entity it addresses.
@@ -511,6 +519,17 @@ impl SceneRenderer {
             self.bg_image_bind_group_layout.as_ref().unwrap(),
         ));
     }
+}
+
+/// Whether two similarity transforms are the same one.
+///
+/// Compared exactly rather than with a tolerance, for the same reason
+/// [`crate::scene::SceneNode::has_transform`] is: the only two ways a node's
+/// transform is set are `Align to…`, which never lands on a bit-identical
+/// repeat by accident, and `Reset Transform`, which assigns the identity
+/// itself.
+fn same_transform(a: &Se3Transform, b: &Se3Transform) -> bool {
+    a.scale == b.scale && a.translation == b.translation && a.rotation == b.rotation
 }
 
 /// The smallest sphere containing both inputs.

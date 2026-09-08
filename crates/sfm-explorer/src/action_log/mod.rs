@@ -103,12 +103,15 @@ impl Actor {
 pub(crate) enum Kind {
     /// The viewer starting, and the endpoints it brought up with it.
     Session,
-    /// What is loaded: opened, reloaded, closed.
+    /// What is loaded: opened, closed.
     File,
     /// Which reconstruction, image, camera or point is selected.
     Selection,
     /// The scene graph: visibility, tint, solo, alignment, resection.
     Scene,
+    /// An edit to a reconstruction, and the undo or redo of one. See
+    /// [`crate::document`].
+    Edit,
     /// Where the 3D camera is looking.
     View,
     /// A viewport HUD control.
@@ -133,6 +136,7 @@ impl Kind {
             Kind::File => "File",
             Kind::Selection => "Selection",
             Kind::Scene => "Scene",
+            Kind::Edit => "Edit",
             Kind::View => "View",
             Kind::Display => "Display",
             Kind::Animation => "Animation",
@@ -155,6 +159,7 @@ impl Kind {
             Kind::File => "file",
             Kind::Selection => "selection",
             Kind::Scene => "scene",
+            Kind::Edit => "edit",
             Kind::View => "view",
             Kind::Display => "display",
             Kind::Animation => "animation",

@@ -112,7 +112,7 @@ handing back a picture.
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
-| `open_reconstruction` | write | Load an `.sfmr` into the scene (reload if already open) |
+| `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
 | `select_camera_image` | write | Select a camera image — and with it the intrinsics it was shot through |
@@ -452,17 +452,17 @@ a track will naturally send.
 
 ```jsonc
 // open_reconstruction { "path": "C:/work/global.sfmr" }
-// -> the new reconstruction's entry, as get_scene renders it, plus `reloaded`
-{ "label": "global", "reloaded": false, /* … */ }
+// -> the new reconstruction's entry, as get_scene renders it, plus `already_open`
+{ "label": "global", "already_open": false, /* … */ }
 
 // close_reconstruction { "reconstruction_label": "global" }  or  { "all": true }
 { "closed": ["global"] }
 ```
 
-`open_reconstruction` is `AppState::load_file` unchanged, including its
-already-loaded rule: opening a path that is already open **reloads that node in
-place**, keeping its label, display state and transform. `reloaded: true` says
-which happened. The returned `label` may differ from the file stem —
+`open_reconstruction` is `AppState::load_file`, which **always appends**:
+opening a path that is already open opens it a second time, as a second node
+with a history of its own. `already_open: true` says that happened. The
+returned `label` may differ from the file stem —
 `unique_label` disambiguates a collision as `global (2)` — so the agent must
 read the label back rather than assume it.
 
@@ -1279,18 +1279,19 @@ something in the GUI in between.
 
 **Reconstructions are addressed by label.** `scene::unique_label` guarantees
 labels are unique across the scene — that is why it exists — and a label
-survives `Reload from Disk`, which mints a fresh `ReconId`. An agent holding
-`"global"` still holds `"global"` after the human refreshes the file; an agent
-holding `ReconId(4)` holds nothing.
+survives every edit of the node it names, and a node replaced under a fresh
+`ReconId` -- which a repeated resection does -- keeps it. An agent holding
+`"global"` still holds `"global"` afterwards; an agent holding `ReconId(4)`
+holds nothing.
 
-The label is the whole of it: unique across the scene, stable across a reload,
+The label is the whole of it: unique across the scene, stable across an edit,
 and the only reconstruction handle the wire carries in either direction. The
 `ReconId` stays inside the process.
 
 To tell whether the data under a label changed, an agent compares
 `content_hash`, which `get_scene` reports for every reconstruction. That
-identifies the *contents*, which is the question worth asking — a reload of the
-same file leaves it untouched, and a different file changes it.
+identifies the *contents*, which is the question worth asking: a different file,
+or an edit that changed the value, changes it.
 
 **Camera images are addressed by index or by name**, and `list_camera_images`
 returns both. The name is the `.sfmr` relative path and is what appears in every
@@ -1789,7 +1790,7 @@ where a test hands no host over.
 - **Stale and out-of-range refs** produce errors naming what is loaded, for
   every ref-taking tool; `get_scene` survives a selection that has gone stale
   rather than panicking on it.
-- **Label addressing survives a reload**: a node replaced in place with a fresh
+- **Label addressing survives a node being replaced**: a node replaced with a fresh
   `ReconId` still answers to the same label.
 - **Solo**: it moves rather than accumulating, leaves the selection alone, and
   keeps `visible` and `drawn` distinguishable.

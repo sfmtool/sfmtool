@@ -8,7 +8,7 @@
 //! They are a second `impl AppState` rather than a second type, because every
 //! one of them ends by editing the scene and the selection that `state.rs`'s
 //! accessors describe — a resection that lands a derived node also selects it
-//! and the image that moved, and a reload has to re-point the solo. Splitting
+//! and the image that moved, and closing one has to re-point the solo. Splitting
 //! them into their own struct would mean handing that struct a
 //! `&mut AppState` and gaining nothing but a hop.
 //!
@@ -29,9 +29,10 @@ use super::AppState;
 impl AppState {
     /// Load a reconstruction from an .sfmr file, **appending** it as a node.
     ///
-    /// Opening a path that is already loaded reloads that node in place instead
-    /// — the predictable interpretation of "open this again", and it doubles as
-    /// a refresh.
+    /// **Always** appends, including for a path that is already loaded: that
+    /// opens the file a second time, as a second node with its own history.
+    /// A node's value changes only through its own history, so there is nothing
+    /// that reloads one in place — see `specs/gui/document-model.md`.
     ///
     /// A failure is **returned, not logged**: the File menu records it as
     /// `Failed to load …`, the MCP drain as `open_reconstruction failed: …`,
@@ -39,14 +40,6 @@ impl AppState {
     /// vocabularies. Success is logged here, because there the text is the same
     /// whoever asked.
     pub fn load_file(&mut self, path: &std::path::Path) -> Result<ReconId, String> {
-        if let Some(id) = self
-            .scene
-            .iter()
-            .find(|n| n.path.as_deref() == Some(path))
-            .map(|n| n.id)
-        {
-            return self.reload_node(id);
-        }
         match SfmrReconstruction::load(path) {
             Ok(recon) => {
                 log::info!(
@@ -78,60 +71,6 @@ impl AppState {
         self.append_node(SceneNode::demo(SfmrReconstruction::demo(num_points)));
         self.action_log.record(Kind::File, "Loaded demo data");
     }
-    /// Re-read a node's file from disk, keeping its place in tree order, its
-    /// label and its display settings.
-    ///
-    /// The refreshed node gets a **new** [`ReconId`]. A reload can change every
-    /// entity count, so every index-keyed cache entry for the old id is wrong;
-    /// a new id makes all of them unreachable rather than merely stale, which
-    /// is the same guarantee that makes closing a node safe. Returns the new id,
-    /// or the message for a demo node (no file to re-read) or a failed read.
-    ///
-    /// Like [`AppState::load_file`], a failure is returned rather than logged:
-    /// the caller is the one that knows whether it was asked for as a reload or
-    /// as an `open_reconstruction` of a path that happened to be loaded.
-    pub fn reload_node(&mut self, id: ReconId) -> Result<ReconId, String> {
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == id)
-            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
-        let path = self.scene[index].path.clone().ok_or_else(|| {
-            format!(
-                "{} was generated, not loaded from a file, so there is nothing to re-read.",
-                self.scene[index].label
-            )
-        })?;
-        let recon = match SfmrReconstruction::load(&path) {
-            Ok(recon) => recon,
-            Err(e) => {
-                let msg = format!("Failed to reload {}: {}", path.display(), e);
-                log::error!("{}", msg);
-                return Err(msg);
-            }
-        };
-        let mut node = SceneNode::from_path(&path, recon);
-        node.label = self.scene[index].label.clone();
-        node.copy_display_from(&self.scene[index]);
-        let new_id = node.id;
-        let was_selected = self.selected_recon == Some(id);
-        // A reload mints a fresh id, so the solo — which names an id rather
-        // than a position — has to be re-pointed or refreshing the soloed node
-        // would silently hide it along with everything else.
-        let was_solo = self.solo == Some(id);
-        self.scene[index] = node;
-        self.forget_recon(id);
-        if was_selected || self.selected_recon.is_none() {
-            self.selected_recon = Some(new_id);
-        }
-        if was_solo {
-            self.solo = Some(new_id);
-        }
-        let label = self.label_of(new_id);
-        self.action_log
-            .record(Kind::File, format!("Reloaded {label}"));
-        Ok(new_id)
-    }
     /// Fit `source`'s transform so it lands on top of `target`, and report the
     /// outcome in the status message.
     ///
@@ -157,14 +96,13 @@ impl AppState {
         let (source_label, target_label) =
             (self.scene[si].label.clone(), self.scene[ti].label.clone());
         let fit =
-            align::align_reconstructions(&self.scene[si].recon, &self.scene[ti].recon, options);
+            align::align_reconstructions(self.scene[si].recon(), self.scene[ti].recon(), options);
         match fit {
             Ok(fit) => {
                 // `compose` applies the receiver first: the fit takes the source
                 // into the target's own coordinates, then the target's transform
                 // takes those into world space.
                 self.scene[si].transform = fit.transform.compose(&self.scene[ti].transform);
-                self.transform_epoch += 1;
                 let message = align::success_message(&source_label, &target_label, &fit);
                 self.action_log.record(Kind::Scene, message);
             }
@@ -217,7 +155,7 @@ impl AppState {
         let index = self.scene.iter().position(|n| n.id == source)?;
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
-            .recon
+            .recon()
             .image_table
             .images
             .get(image)
@@ -243,7 +181,7 @@ impl AppState {
             // The panel's action is one image, which is the set primitive on a
             // one-element set.
             resect::resect_images(
-                &self.scene[index].recon,
+                self.scene[index].recon(),
                 &[image],
                 kind,
                 &resect::ResectImageOptions::default(),

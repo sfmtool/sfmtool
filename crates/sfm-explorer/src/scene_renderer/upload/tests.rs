@@ -1533,3 +1533,91 @@ fn clear_bg_image_resets_every_background_field() {
 
     drop(dir);
 }
+
+// ── Base identity and the deleted mask ──────────────────────────────────
+//
+// What the frame's upload phase does, in the same order `app.rs` does it: ask
+// whether the node's base changed, upload the three per-node resources only if
+// it did, then bring the deleted mask in line with the version's overlay.
+
+/// One frame of the upload phase for `id`. Returns whether a base upload ran.
+fn sync(
+    renderer: &mut SceneRenderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    id: ReconId,
+    edited: &sfmtool_core::EditedReconstruction,
+) -> bool {
+    let base = Arc::clone(&edited.base);
+    let uploaded = renderer.base_changed(id, &base);
+    if uploaded {
+        renderer.upload_points(device, id, &base);
+        renderer.upload_thumbnails(device, queue, id, &base);
+        renderer.upload_patches(device, queue, id, &base);
+        renderer.set_uploaded_base(id, base);
+    }
+    renderer.update_deleted_mask(queue, id, &edited.deleted_points);
+    uploaded
+}
+
+#[test]
+fn a_point_edit_uploads_no_base_buffer_and_moves_only_the_mask() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    let points = bundle(&renderer).point_count;
+    let patches = patch_count(&renderer);
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &loaded),
+        "an unchanged base uploaded again"
+    );
+
+    let mut edited = loaded.clone();
+    edited.delete_point(3).expect("a live point");
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &edited),
+        "a point edit re-uploaded the base"
+    );
+    assert_eq!(renderer.masked_deleted_count(RECON), 1);
+    // The base's buffers are untouched: the instance count is what the base
+    // holds, and the shader is what drops the deleted splat.
+    assert_eq!(bundle(&renderer).point_count, points);
+    assert_eq!(patch_count(&renderer), patches);
+
+    // Undoing back to the loaded value clears the mask and still uploads
+    // nothing, because the base on the GPU is the version's base.
+    assert!(!sync(&mut renderer, &device, &queue, RECON, &loaded));
+    assert_eq!(renderer.masked_deleted_count(RECON), 0);
+}
+
+#[test]
+fn a_bulk_edit_hands_the_renderer_a_new_base_and_re_uploads() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let recon = demo(40);
+    let images = recon.image_count();
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    let before = bundle(&renderer).point_count;
+
+    let keep: Vec<u32> = (1..images as u32).collect();
+    let subset = loaded
+        .base
+        .subset_by_image_indices(&keep, true)
+        .expect("an image subset");
+    let bulk = sfmtool_core::EditedReconstruction::new(Arc::new(subset));
+
+    assert!(
+        sync(&mut renderer, &device, &queue, RECON, &bulk),
+        "a new base did not re-upload"
+    );
+    assert!(bundle(&renderer).point_count <= before);
+    assert_eq!(renderer.masked_deleted_count(RECON), 0);
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &bulk),
+        "the new base uploaded twice"
+    );
+}

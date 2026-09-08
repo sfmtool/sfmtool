@@ -15,8 +15,11 @@
 //! See `specs/gui/scene-graph.md` ("Rendering: Per-Reconstruction GPU
 //! Resources").
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use nalgebra::Point3;
-use sfmtool_core::Se3Transform;
+use sfmtool_core::{Se3Transform, SfmrReconstruction};
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
 use crate::scene::NodeTint;
@@ -26,6 +29,15 @@ use crate::scene::NodeTint;
 /// `Option`s.
 pub(super) struct PatchResources {
     pub instance_buffer: wgpu::Buffer,
+    /// Per-patch liveness, `1` alive and `0` deleted, as a second instance
+    /// buffer stepping with `instance_buffer`. Rewritten entry by entry when
+    /// the overlay's deleted set changes; never rebuilt for a point edit.
+    pub alive_buffer: wgpu::Buffer,
+    /// Which instance slot each point that carries a patch was packed into.
+    /// The atlas and the instance buffer are compacted, so a patch's slot is
+    /// not its point index, and this is what turns a deleted point index into
+    /// the entry of `alive_buffer` to clear.
+    pub slot_of_point: HashMap<u32, u32>,
     /// The atlas itself. Nothing reads it after the bind group is built — it is
     /// held so the node *owns* its atlas: dropping the bundle is what returns
     /// that GPU memory, which is the whole point of per-node resources.
@@ -105,8 +117,25 @@ pub(super) struct ReconResources {
     /// pickable flag, tint. Written every frame by `update_uniforms`.
     pub uniform_buffer: wgpu::Buffer,
 
+    /// The base this bundle's buffers were built from, or `None` before the
+    /// first upload.
+    ///
+    /// The whole of the renderer's change detection: an upload runs when the
+    /// node's base is a different `Arc` from this one, and a run of point edits
+    /// -- which never writes through the base -- leaves it alone and re-uploads
+    /// nothing. See `specs/gui/document-model.md`.
+    pub uploaded_base: Option<Arc<SfmrReconstruction>>,
+
+    /// Which base indexes the deleted mask below currently marks as gone. What
+    /// a mask update diffs against, so the write is the size of the change.
+    pub masked_deleted: HashSet<u32>,
+
     // ── points ──
     pub point_instance_buffer: Option<wgpu::Buffer>,
+    /// Per-point liveness, `1` alive and `0` deleted, as a second instance
+    /// buffer stepping with `point_instance_buffer`. The overlay's deleted set
+    /// reaches the point shader through this and nothing else.
+    pub point_alive_buffer: Option<wgpu::Buffer>,
     pub point_count: u32,
     /// Global point uniforms + this node's `ReconUniforms`.
     pub point_bind_group: wgpu::BindGroup,
@@ -188,7 +217,10 @@ impl ReconResources {
             display: NodeDisplay::default(),
             transform: Se3Transform::identity(),
             uniform_buffer,
+            uploaded_base: None,
+            masked_deleted: HashSet::new(),
             point_instance_buffer: None,
+            point_alive_buffer: None,
             point_count: 0,
             point_bind_group,
             frustum_edge_buffer: None,

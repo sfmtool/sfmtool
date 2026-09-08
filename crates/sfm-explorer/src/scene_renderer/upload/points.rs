@@ -51,6 +51,16 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        // The deleted mask starts all-alive: a fresh base is what it is, and
+        // the overlay's set is applied on top by `update_deleted_mask`. At
+        // least one entry so a point-free node still has a bindable buffer.
+        let alive = vec![1u32; instances.len().max(1)];
+        let alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("point liveness"),
+            contents: bytemuck::cast_slice(&alive),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
         self.ensure_recon(device, id);
         let bundle = self.recons.get_mut(&id).expect("just ensured");
 
@@ -60,6 +70,8 @@ impl SceneRenderer {
         bundle.camera_nn_scale = compute_camera_nn_scale(&recon.image_table.images);
         bundle.bounds = Some(compute_scene_bounds(&recon.point_set.points));
         bundle.point_instance_buffer = Some(buffer);
+        bundle.point_alive_buffer = Some(alive_buffer);
+        bundle.masked_deleted.clear();
         bundle.point_count = instances.len() as u32;
 
         let (count, size) = (bundle.point_count, bundle.auto_point_size);

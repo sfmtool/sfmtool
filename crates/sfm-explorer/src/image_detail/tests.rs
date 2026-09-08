@@ -43,7 +43,7 @@ fn frame(
     crate::test_support::run_frame_headless(ctx, input, |ui| {
         detail.show(
             ui,
-            &node.recon,
+            node.recon(),
             node.id,
             Some(image_index),
             None,

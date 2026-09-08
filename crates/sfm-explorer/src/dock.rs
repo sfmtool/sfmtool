@@ -193,7 +193,7 @@ impl TabContext<'_> {
     fn show_image_browser(&mut self, ui: &mut egui::Ui) {
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            let recon = &node.recon;
+            let recon = node.recon();
             let id = node.id;
             // The strip shows exactly one reconstruction's sequence.
             // Name it whenever there is more than one to confuse it
@@ -290,7 +290,7 @@ impl TabContext<'_> {
     fn show_image_detail(&mut self, ui: &mut egui::Ui) {
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            let recon = &node.recon;
+            let recon = node.recon();
             let id = node.id;
             // Read out before the cache borrows below: they hold `&mut`
             // into `state`, which rules out an `&self.state` method call
@@ -413,7 +413,7 @@ impl TabContext<'_> {
     fn show_point_track_detail(&mut self, ui: &mut egui::Ui) {
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
-            let recon = &node.recon;
+            let recon = node.recon();
             let id = node.id;
             let selected_point = self.state.selected_point_in(id);
             // Ensure SIFT positions are cached for all images in the
@@ -621,20 +621,16 @@ impl TabContext<'_> {
         if let Some((image, from)) = response.resect_image {
             self.resect_image(image, from);
         }
+        if let Some(image) = response.delete_image {
+            if let Err(message) = self.state.delete_image(image) {
+                self.state.action_log.fail(Kind::Edit, message);
+            }
+            // A bulk edit renumbers the image table, so the panels' textures
+            // are keyed by indexes that now name other images.
+            self.forget_recon(image.recon);
+        }
         if let Some(id) = response.reset_transform {
             self.state.reset_node_transform(id);
-        }
-        if let Some(id) = response.reload_node {
-            // The reload's own outcome is the caller's to report: `reload_node`
-            // returns its failure rather than logging it, so that an
-            // `open_reconstruction` of an already-open path can word the same
-            // failure the way an agent asked for it.
-            if let Err(message) = self.state.reload_node(id) {
-                self.state.action_log.fail(Kind::File, message);
-            }
-            // The old id is gone for good, so its panel-local textures are
-            // unreachable rather than merely stale — drop them anyway.
-            self.forget_recon(id);
         }
         if let Some(id) = response.close_node {
             self.state.close_node(id);
@@ -691,7 +687,7 @@ impl TabContext<'_> {
 
     /// Drop every panel-local cache entry belonging to `id`.
     ///
-    /// `AppState::close_node` / `reload_node` handle the shared caches and the
+    /// `AppState::close_node` and the edits handle the shared caches and the
     /// selection; the renderer releases the GPU bundle from `retain_nodes` on
     /// the next frame. This is the third piece: the texture caches the panels
     /// own privately.
@@ -833,10 +829,12 @@ pub(crate) fn compute_track_images(state: &AppState, node: &SceneNode) -> Vec<us
     let Some(point_idx) = state.selected_point_in(node.id) else {
         return Vec::new();
     };
-    if point_idx >= node.recon.point_set.points.len() {
+    // A point this version has deleted lights no frustums: it is not in the
+    // reconstruction, whatever its index still resolves to in the base.
+    if point_idx >= node.recon().point_set.points.len() || node.is_point_deleted(point_idx as u32) {
         return Vec::new();
     }
-    node.recon.track_image_indices(point_idx)
+    node.recon().track_image_indices(point_idx)
 }
 
 /// Return the image indices in the hovered point's track, or empty if none.
@@ -851,8 +849,10 @@ pub(crate) fn compute_hover_track_images(state: &AppState, node: &SceneNode) -> 
     let Some(point_idx) = point.index_in(node.id) else {
         return Vec::new();
     };
-    if point_idx >= node.recon.point_set.points.len() {
+    // A point this version has deleted lights no frustums: it is not in the
+    // reconstruction, whatever its index still resolves to in the base.
+    if point_idx >= node.recon().point_set.points.len() || node.is_point_deleted(point_idx as u32) {
         return Vec::new();
     }
-    node.recon.track_image_indices(point_idx)
+    node.recon().track_image_indices(point_idx)
 }

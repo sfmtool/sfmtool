@@ -84,6 +84,18 @@ pub(in crate::scene_renderer) fn create(device: &wgpu::Device) -> PointPipelineR
                         },
                     ],
                 }),
+                // Slot 2: per-point liveness (per-instance). Its own buffer so
+                // the overlay's deleted set can be written into it without
+                // rewriting the instance buffer beside it.
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<u32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Uint32,
+                        offset: 0,
+                        shader_location: 3,
+                    }],
+                }),
             ],
             compilation_options: Default::default(),
         },

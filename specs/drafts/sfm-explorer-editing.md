@@ -18,14 +18,15 @@ into. A step that ships is deleted from here and written in the present tense
 where it belongs, so this file is always exactly the unbuilt remainder, and it
 is retired with the last step.
 
-Decided: the document is a value (below), history stores values rather than
-commands, a version is a base plus its point edits, change detection is by
-identity, node identity survives edits, the Action Log stays text and the history is the
-replayable thing, and the history is per node. Not decided: the history
-memory bound's value, and what the row-level edit draft leaves open.
+The document model itself is built and standing:
+[`../gui/document-model.md`](../gui/document-model.md) describes the node's
+versions, the two kinds of edit and the identity-based upload, and
+[`../gui/edit-history.md`](../gui/edit-history.md) the cursor and the maps. What
+is left here is what is built on top of it: saving, the History panel, the edit
+families and the wire surface. Not decided: what the row-level edit draft leaves
+open.
 
-Related standing specs, which will each carry a present-tense sentence pointing
-here once the first step lands: [`../gui/scene-graph.md`](../gui/scene-graph.md)
+Related standing specs: [`../gui/scene-graph.md`](../gui/scene-graph.md)
 (the node, and the invariant that a node transform never touches the
 reconstruction, which one edit here deliberately breaks),
 [`../gui/action-log.md`](../gui/action-log.md) (whose non-goals list "an undo
@@ -147,48 +148,23 @@ What the numbers decide:
 
 ### Change detection by identity
 
-The 3D viewport draws from GPU buffers the app fills from the node's
-reconstruction: the point instance buffer, the frustum and image-quad
-geometry, the thumbnail atlas, and the patch instances with their bitmap
-atlas. A node today carries one `needs_upload` boolean and, when it is set,
-the app's per-frame upload phase rebuilds all of those from the reconstruction
-at once; a transform change is noticed through a separate epoch counter. With
-a version being a base plus its edits, the upload phase keeps, per node, the
-identity of the base it last uploaded from and compares it each frame. A
-point edit leaves the base's buffers alone: the deleted set reaches the point
-shader as a small mask, and the additions are a second instance buffer drawn
-after the base's. A bulk edit changes the base, and re-uploads what changed
-in it, the shared bitmap and thumbnail columns telling the atlas uploads by
-identity that they have nothing to do. Undoing to a version whose base is the one on the GPU uploads the mask and
-the additions and nothing else. The boolean and the epoch both go, replaced
-by one mechanism, and the GPU-side cost of an undo is proportional to what
-the undo changed.
-
-Files into: `specs/gui/document-model.md` (new), amending the upload sections
-of [`../gui/scene-graph.md`](../gui/scene-graph.md).
+Built and standing: [`../gui/document-model.md`](../gui/document-model.md),
+"Change detection by identity". A node's GPU bundle remembers the base its
+buffers were built from, the upload phase compares pointers, and the deleted
+set reaches the point and patch shaders as a per-instance mask. What is still
+to come is the **additions** buffer -- a second instance buffer drawn after the
+base's with the same per-node uniforms -- and the patch atlas's slot
+assignment, which is a compaction over the points that carry a bitmap and so is
+not index-stable under an overlay that adds one. Neither is exercised until a
+point edit adds a point, which is the track edits in Part 5.
 
 ### Node identity survives edits
 
-The `ReconId` names the node across every version. Solo, tint, eyes, the
-transform, the selected reconstruction, and the MCP addressing all keep
-working through an edit without re-pointing.
-
-There is no reload within a node. `Open` always adds a node, so opening a
-path that is already loaded opens it a second time, as a second node with
-its own history, and the Scene Graph's `Reload from Disk` entry goes, along
-with today's rule that opening a loaded path reloads it in place. A node's
-value changes only through its own history.
-
-The selection is the exception that needs a rule. A selected point or image is
-an index into the current value, and an edit that deletes rows shifts the
-indexes after it. Options: clear the selection on any structural edit; remap
-it through the edit's row map; or key the selection by something stable. The
-history already knows what each structural edit removed, so remapping is
-cheap, and clearing is what a user would notice as a bug. The edited
-reconstruction
-([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md))
-keeps indexes stable across every edit but a materialisation, so remapping is
-needed only there, where the materialisation's row map supplies it.
+Built and standing: [`../gui/document-model.md`](../gui/document-model.md) for
+what the node holds, what a bulk edit owes the caches, and the rule that a
+node's value changes only through its own history, and
+[`../gui/edit-history.md`](../gui/edit-history.md) for the selection following
+a step's map.
 
 ---
 
@@ -196,37 +172,21 @@ needed only there, where the materialisation's row map supplies it.
 
 ### Values with a cursor
 
-A node's history is a vector of reconstruction values and a cursor. Undo moves
-the cursor back, redo moves it forward, a new edit at a cursor that is not at
-the end truncates the versions after it (the Photoshop rule; a branching
-history is a non-goal). Each version carries a label (the sentence the Action
-Log recorded for the edit), a timestamp, and the unshared bytes it holds
-relative to its neighbours, which is what the memory bound is measured in.
+Built and standing: [`../gui/edit-history.md`](../gui/edit-history.md) for the
+cursor, the truncation and the maps, and
+[`../gui/document-model.md`](../gui/document-model.md) for the budget, which is
+a constant of 4 GiB of unshared bytes per node rather than a setting.
 
-The history is bounded by a memory budget, not by a version count: a hundred
-point edits on one base cost the size of the edits, a bulk edit costs a copy
-of the light columns, and only an edit that touches the bitmaps costs the
-bitmaps. When the budget is exceeded the oldest versions are dropped from
-the front. The budget is a setting whose default is 4 GB of unshared bytes
-per node (§ "Step 1's numbers").
-
-Coalescing: an interactive edit that produces intermediate values (a drag) is
-one version, committed when the gesture ends. This is the same rule the Action
-Log applies to sliders, applied to the history instead of to text.
-
-The history is **per node**: each loaded reconstruction carries its own
-versions and cursor. Edits do not cross nodes, and a scene-wide cursor would
-make undoing an edit in one node silently undo the last edit in another. The
-Edit menu, the shortcuts and the History panel act on the selected
-reconstruction, and the panel's header names it. An edit that spans nodes is
-a non-goal.
+Not built: **coalescing**. An interactive edit that produces intermediate
+values (a drag) is one version, committed when the gesture ends -- the rule the
+Action Log applies to sliders, applied to the history instead of to text. No
+edit produces intermediate values yet, so there is nothing to coalesce; the
+first one that does, a pose drag in Part 5, is where it lands.
 
 ### The log and the history
 
-The Action Log stays text, per session, and complete: `Undo: Deleted 12 points
-in global` is an entry. The history is the replayable record and is per node.
-The two are not the same thing and neither is derived from the other; the log
-non-goal "an undo stack" stays true of the log.
+Built and standing: [`../gui/edit-history.md`](../gui/edit-history.md), "The
+Action Log", and the log spec's own non-goal.
 
 ### The History panel
 
@@ -247,13 +207,12 @@ Files into: `specs/gui/edit-history.md` (new).
 ## Part 3: saving
 
 Save writes the current value over the node's path; Save As writes it to a
-chosen path and re-points the node; Revert jumps the cursor to the disk state.
-A node that came from no file (demo data, a derived resection) has only Save
-As. The title and the tree row carry a dirty marker when the cursor is not at
-the disk state. Save recomputes the content hash and appends provenance to the
-metadata the way every writer does, and it preserves whatever the format spec
-says a rewriting consumer must preserve. Closing a dirty node, or the viewer
-with one open, asks.
+chosen path and re-points the node. A node that came from no file (demo data, a
+derived resection) has only Save As. The title and the tree row carry a dirty
+marker when the cursor is not at the disk state. Save recomputes the content
+hash and appends provenance to the metadata the way every writer does, and it
+preserves whatever the format spec says a rewriting consumer must preserve.
+Closing a dirty node, or the viewer with one open, asks.
 
 Files into: `specs/gui/saving.md` (new).
 
@@ -364,16 +323,9 @@ steps after it.
    the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-4. **Document model, undo and redo, one edit of each kind.** History as
-   versions on the node, the version graph and its point maps, base-identity
-   upload with the deleted mask and the additions buffer replacing
-   `needs_upload` and the transform epoch, Edit menu, shortcuts, Action Log
-   entries. Delete-selected-point is the point edit and delete-image the bulk
-   edit that together prove the loop. Files `gui/document-model.md` and
-   `gui/edit-history.md`, amends `gui/scene-graph.md` and `gui/action-log.md`.
 5. **History panel.** Files into `gui/edit-history.md`, amends
    `gui/panel-layout.md`.
-6. **Saving and point ids.** Save, Save As, Revert, the dirty marker, the
+6. **Saving and point ids.** Save, Save As, the dirty marker, the
    lineage metadata; the session id form, the earliest rule, Go to Point over
    the version graph. Files `gui/saving.md`, amends `gui/goto-point.md` and
    the format spec.
@@ -382,8 +334,7 @@ steps after it.
    since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
-Step 4 is the remaining groundwork; 5 and 6 are independent of each other; 7
-follows 4 and interleaves with 5 and 6.
+5 and 6 are independent of each other; 7 interleaves with both.
 
 ## Non-goals
 

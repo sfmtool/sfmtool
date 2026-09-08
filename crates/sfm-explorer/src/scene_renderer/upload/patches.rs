@@ -181,6 +181,21 @@ impl SceneRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        // The compaction above is what makes this map necessary: a patch's slot
+        // is not its point index, so clearing a deleted point's surfel needs
+        // the slot it was packed into.
+        let slot_of_point: std::collections::HashMap<u32, u32> = instances
+            .iter()
+            .enumerate()
+            .map(|(slot, instance)| (instance.point_index, slot as u32))
+            .collect();
+        let alive = vec![1u32; instances.len().max(1)];
+        let alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("patch liveness"),
+            contents: bytemuck::cast_slice(&alive),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
@@ -225,6 +240,8 @@ impl SceneRenderer {
 
         bundle.patch = Some(PatchResources {
             instance_buffer,
+            alive_buffer,
+            slot_of_point,
             atlas_texture: texture,
             uniform_buffer,
             bind_group,

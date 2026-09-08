@@ -6,7 +6,7 @@
 //!
 //! Two menus, one per row kind. The reconstruction row's
 //! ([`node_context_menu`]) carries the whole-node actions — visibility, tint,
-//! align, reload, reset, close — and the image row's ([`image_context_menu`])
+//! align, tint, reset, close — and the image row's ([`image_context_menu`])
 //! carries the two `Resect Image` entries. They are together because a menu is
 //! the one place in the panel where an item is *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
@@ -52,15 +52,6 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_tint_menu(ui, node, out);
     ui.separator();
-    // Demo data came from no file, so there is nothing to re-read.
-    if ui
-        .add_enabled(node.path.is_some(), egui::Button::new("Reload from Disk"))
-        .on_disabled_hover_text("This reconstruction was generated, not loaded from a file")
-        .clicked()
-    {
-        out.response.reload_node = Some(node.id);
-        ui.close();
-    }
     if ui.button("Close").clicked() {
         out.response.close_node = Some(node.id);
         ui.close();
@@ -123,7 +114,7 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
         return;
     }
 
-    let source_indexed = node.recon.feature_indexes().is_some();
+    let source_indexed = node.recon().feature_indexes().is_some();
     let any_target_indexed = others.iter().any(|t| t.feature_indexed);
     let points_available = source_indexed && any_target_indexed;
     let id = node.id;
@@ -221,6 +212,22 @@ pub(super) fn image_context_menu(
         .clicked()
     {
         out.response.resect_image = Some((image, ResectFrom::Matches));
+        ui.close();
+    }
+
+    ui.separator();
+    // No confirmation: this is an edit with a history behind it, and Undo is
+    // the answer to a mis-click. The resections above show their answer as a
+    // second node precisely because they *cannot* be undone.
+    let delete = ui.add(egui::Button::new("Delete Image")).on_hover_text(
+        "Remove this image from the reconstruction, with its observations and any \
+         track left with none. Undo (Ctrl+Z) puts it back.",
+    );
+    if out
+        .hit(row_id(node, &format!("delete_image_{index}")), delete)
+        .clicked()
+    {
+        out.response.delete_image = Some(image);
         ui.close();
     }
 }

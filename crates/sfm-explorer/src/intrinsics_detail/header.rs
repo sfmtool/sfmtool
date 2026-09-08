@@ -28,7 +28,7 @@ pub(super) fn show_header(
     pose: Option<&Pose>,
 ) {
     let uses = node
-        .recon
+        .recon()
         .image_table
         .images
         .iter()

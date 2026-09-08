@@ -121,7 +121,7 @@ pub fn resolve_point_query(
         PointQuery::Index(index) => index,
         PointQuery::Qualified { index, .. } => index,
     };
-    let count = node.recon.point_set.points.len();
+    let count = node.recon().point_set.points.len();
     if index >= count {
         return Err(format!(
             "{} has {count} points — index {index} is out of range.",
@@ -159,22 +159,22 @@ fn find_by_hash<'a>(
 /// fallback covers a reconstruction with no hash at all, which displays (and so
 /// must resolve) as `00000000`.
 fn hash_matches(node: &SceneNode, hash: &str) -> bool {
-    let full = &node.recon.content_hash.content_xxh128;
+    let full = &node.recon().content_hash.content_xxh128;
     full.len() >= hash.len() && full[..hash.len()].eq_ignore_ascii_case(hash)
-        || hash_prefix(&node.recon).eq_ignore_ascii_case(hash)
+        || hash_prefix(node.recon()).eq_ignore_ascii_case(hash)
 }
 
 /// The Point ID of the current selection, in the `pt3d_<hash>_<index>` form the
 /// Point Track header displays — what the dialog opens prefilled with.
 ///
 /// `None` when nothing is selected, or when the selection has gone stale
-/// against a reloaded reconstruction; prefilling an ID that no longer resolves
+/// against a different reconstruction; prefilling an ID that no longer resolves
 /// would hand the user a query that fails the moment they press Enter.
 pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) -> Option<String> {
     let point = selected_point?;
     let node = node_by_id(scene, point.recon)?;
-    (point.index() < node.recon.point_set.points.len())
-        .then(|| point_id(&node.recon, point.index()))
+    (point.index() < node.recon().point_set.points.len())
+        .then(|| point_id(node.recon(), point.index()))
 }
 
 /// The modal that collects the text.

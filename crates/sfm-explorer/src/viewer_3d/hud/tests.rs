@@ -49,7 +49,7 @@ fn recon_id(state: &AppState) -> ReconId {
 /// renders them, only `has_patch_data` looks.
 fn patch_state() -> AppState {
     let mut state = demo_state();
-    let recon = &mut state.scene[0].recon;
+    let recon = state.scene[0].recon_mut();
     let n = recon.point_set.points.len();
     recon.point_set.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
     recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));

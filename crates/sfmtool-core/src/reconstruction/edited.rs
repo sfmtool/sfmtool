@@ -1151,6 +1151,29 @@ pub struct RowMap {
 }
 
 impl RowMap {
+    /// The map a pass that dropped `removed` from a `point_count`-row point set
+    /// performed: the survivors keep their order and close up behind the holes.
+    ///
+    /// `removed` must be ascending and free of duplicates, and every entry must
+    /// be below `point_count`. It is the same shape a materialisation's map
+    /// takes when nothing was modified or added, so the whole-value edits that
+    /// drop rows can hand back a map of the type the overlay already speaks
+    /// rather than a second one.
+    pub fn compaction(point_count: u32, removed: Vec<u32>) -> Self {
+        debug_assert!(
+            removed.windows(2).all(|w| w[0] < w[1])
+                && removed.last().is_none_or(|&h| h < point_count),
+            "a compaction's holes are ascending, distinct and in range",
+        );
+        Self {
+            base_count: point_count,
+            holes: removed,
+            replaced: Vec::new(),
+            by_edited: Vec::new(),
+            by_new: Vec::new(),
+        }
+    }
+
     /// Where `edited` landed, or `None` when that index named no live point.
     pub fn forward(&self, edited: u32) -> Option<u32> {
         if edited >= self.base_count {

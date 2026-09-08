@@ -54,22 +54,21 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
 /// One scene entry: what a reconstruction is, how much of it there is, and how
 /// it is being drawn.
 ///
-/// `path` is `null` for the two node kinds that came from no file — demo data
-/// and a derived node such as a resection — which is also exactly when the
-/// viewer greys out `Reload from Disk`.
+/// `path` is `null` for the two node kinds that came from no file: demo data
+/// and a derived node such as a resection.
 pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
-    let recon = &node.recon;
+    let recon = node.recon();
     json!({
         "label": node.label,
         "path": node.path.as_ref().map(|p| p.display().to_string()),
         "content_hash": scene::hash_prefix(recon),
         "counts": {
-            "points": recon.point_set.points.len(),
+            "points": node.point_count(),
             // Read the way `scene::visible_stats` reads it, so this number and
             // the one in the viewport's stats overlay are the same number — an
             // agent comparing a reply against a screenshot should not find two.
-            "points_at_infinity": recon.metadata.infinity_point_count as usize,
-            "camera_images": recon.image_table.images.len(),
+            "points_at_infinity": node.infinity_point_count(),
+            "camera_images": node.image_count(),
             "camera_intrinsics": recon.image_table.cameras.len(),
             "observations": recon.point_set.tracks.len(),
         },
@@ -121,7 +120,7 @@ pub(super) fn selection(state: &AppState) -> Value {
             "index": image.index(),
             "name": state
                 .node(image.recon)
-                .and_then(|node| node.recon.image_table.images.get(image.index()))
+                .and_then(|node| node.recon().image_table.images.get(image.index()))
                 .map(|im| im.name.clone()),
         })),
         "camera_intrinsics": state.selected_camera.map(|camera| json!({
@@ -133,7 +132,7 @@ pub(super) fn selection(state: &AppState) -> Value {
             "index": point.index(),
             "id": state
                 .node(point.recon)
-                .map(|node| scene::point_id(&node.recon, point.index())),
+                .map(|node| scene::point_id(node.recon(), point.index())),
         })),
     })
 }
@@ -184,7 +183,7 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
             "camera_image_index": camera_view.image.index(),
             "name": state
                 .node(camera_view.image.recon)
-                .and_then(|node| node.recon.image_table.images.get(camera_view.image.index()))
+                .and_then(|node| node.recon().image_table.images.get(camera_view.image.index()))
                 .map(|im| im.name.clone()),
         })),
     })

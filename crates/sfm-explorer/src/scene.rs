@@ -30,7 +30,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use sfmtool_core::{Se3Transform, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, Se3Transform, SfmrReconstruction};
+
+use crate::document::History;
 
 /// Source of [`ReconId`] values. Monotonic and never reset, so ids are unique
 /// for the life of the process rather than merely within one `AppState`.
@@ -262,10 +264,14 @@ pub struct SceneNode {
     pub label: String,
     /// Source path; `None` for demo data.
     pub path: Option<PathBuf>,
-    pub recon: SfmrReconstruction,
-    /// This node's data needs (re-)upload to the GPU. Replaces the former
-    /// global `AppState::points_need_upload`.
-    pub needs_upload: bool,
+    /// This node's reconstruction as a sequence of values with a cursor: the
+    /// versions it has been through, and which one it is showing. See
+    /// [`crate::document`] and `specs/gui/document-model.md`.
+    ///
+    /// The value is reached through [`SceneNode::edited`] and its base through
+    /// [`SceneNode::recon`]; nothing outside the edit paths replaces it, so a
+    /// node's identity survives every edit.
+    pub history: History,
 
     // ── Per-node display state (Scene Graph panel) ──
     /// Master eye for the whole node. Off = nothing of it is drawn.
@@ -311,12 +317,12 @@ pub struct SceneNode {
 impl SceneNode {
     /// A node for `recon`, labeled `label` and sourced from `path`.
     fn new(label: String, path: Option<PathBuf>, recon: SfmrReconstruction) -> Self {
+        let history = History::new(recon, format!("Opened {label}"));
         Self {
             id: ReconId::next(),
             label,
             path,
-            recon,
-            needs_upload: true,
+            history,
             visible: true,
             interactive: true,
             show_points: true,
@@ -329,8 +335,7 @@ impl SceneNode {
     }
 
     /// A node derived in-session from another node (a resection, for one),
-    /// carrying `recon` under `label`. It came from no file — `Reload from
-    /// Disk` is greyed on it, exactly as it is on demo data — and everything
+    /// carrying `recon` under `label`. It came from no file, and everything
     /// there is to know about where it came from is in its label and its
     /// reconstruction's metadata.
     pub fn derived(label: String, recon: SfmrReconstruction) -> Self {
@@ -357,10 +362,79 @@ impl SceneNode {
         )
     }
 
+    /// The value this node is showing: its current base plus that version's
+    /// point edits.
+    pub fn edited(&self) -> &EditedReconstruction {
+        self.history.current()
+    }
+
+    /// The **base** of the value this node is showing.
+    ///
+    /// The read path for everything addressed by an index the overlay keeps
+    /// stable: an image, a camera, one point, one point's track, a column's
+    /// presence. A point edit never writes through it, so two versions in a run
+    /// of point edits hand back the same `&SfmrReconstruction`, which is what
+    /// [`crate::scene_renderer::SceneRenderer`] keys its uploads on.
+    ///
+    /// It does **not** answer how many points the node has, nor which of them
+    /// are still there: those are [`SceneNode::point_count`] and
+    /// [`SceneNode::is_point_deleted`], which read the overlay.
+    pub fn recon(&self) -> &SfmrReconstruction {
+        &self.history.current().base
+    }
+
+    /// The base of the value this node is showing, mutably.
+    ///
+    /// Test-only, for the fixtures that build a node and then adjust the
+    /// reconstruction under it. It reaches the base through
+    /// [`std::sync::Arc::get_mut`], which yields nothing once a second version
+    /// shares the base -- so it can only be used on a node that has not been
+    /// edited, and a write through a shared base panics here rather than being
+    /// seen by another version. `Arc::make_mut` is deliberately not used: it
+    /// would make the base copy-on-write, which is the one thing the value
+    /// model forbids.
+    #[cfg(test)]
+    pub fn recon_mut(&mut self) -> &mut SfmrReconstruction {
+        std::sync::Arc::get_mut(&mut self.history.current_mut().base)
+            .expect("a node whose base another version already shares is not a fixture")
+    }
+
+    /// How many points the node holds, through the overlay. O(1).
+    pub fn point_count(&self) -> usize {
+        self.history.current().point_count()
+    }
+
+    /// How many images the node holds. The overlay never edits the image table,
+    /// so this is the base's count.
+    pub fn image_count(&self) -> usize {
+        self.history.current().image_count()
+    }
+
+    /// Whether `index` names a point this version has deleted.
+    pub fn is_point_deleted(&self, index: u32) -> bool {
+        self.history.current().is_deleted(index)
+    }
+
+    /// How many of the node's points are at infinity, through the overlay.
+    ///
+    /// The base's metadata count less the deleted points that were at infinity,
+    /// which is O(deleted) rather than O(points).
+    pub fn infinity_point_count(&self) -> usize {
+        let edited = self.history.current();
+        let base = &edited.base;
+        let deleted_at_infinity = edited
+            .deleted_points
+            .iter()
+            .filter_map(|&i| base.point_set.points.get(i as usize))
+            .filter(|p| p.is_at_infinity())
+            .count();
+        (base.metadata.infinity_point_count as usize).saturating_sub(deleted_at_infinity)
+    }
+
     /// Whether this node carries everything the patch surfel pass needs: patch
     /// frames *and* the bitmaps to texture them with.
     pub fn has_patch_data(&self) -> bool {
-        let r = &self.recon;
+        let r = self.recon();
         r.point_set.patch_u_halfvec_xyz.is_some()
             && r.point_set.patch_v_halfvec_xyz.is_some()
             && r.point_set.patch_bitmaps_y_x_rgba.is_some()
@@ -383,10 +457,10 @@ impl SceneNode {
     /// Copy the per-node display state (eyes, interaction cursor, tint,
     /// transform) from `other`.
     ///
-    /// Used by `Reload from Disk`, which is a fresh read of the same file and
-    /// so should not also reset how the node is being displayed — an alignment
-    /// the user fitted before refreshing the file included, and the tint that
-    /// is how they were telling it apart from the file beside it.
+    /// Used by a resection that replaces an earlier derived node: the same
+    /// question asked again should come back displayed the way the reviewer had
+    /// it, the alignment they fitted included, and the tint that is how they
+    /// were telling it apart from the node beside it.
     pub fn copy_display_from(&mut self, other: &SceneNode) {
         self.visible = other.visible;
         self.interactive = other.interactive;
@@ -447,11 +521,11 @@ pub fn selected_node(scene: &[SceneNode], selected: Option<ReconId>) -> Option<&
 /// that work on point positions rather than on the GPU: `Z` zoom-to-fit, the
 /// Scene panel's per-node `Zoom to Fit`, and the viewport's first-show framing.
 pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
-    node.recon
-        .point_set
-        .points
-        .iter()
-        .map(|p| node.transform.apply_to_point(&p.position))
+    let edited = node.edited();
+    edited
+        .live_indexes()
+        .filter_map(|i| edited.point(i))
+        .map(|view| node.transform.apply_to_point(&view.point().position))
         .collect()
 }
 
@@ -462,7 +536,7 @@ pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
 /// image uses that camera, which `zoom_to_fit_points` treats as nothing to
 /// frame rather than as a degenerate one.
 pub fn camera_world_centres(node: &SceneNode, index: usize) -> Vec<nalgebra::Point3<f64>> {
-    node.recon
+    node.recon()
         .image_table
         .images
         .iter()
@@ -487,7 +561,7 @@ pub fn camera_sibling_images(node: &SceneNode, selected: Option<CameraRef>) -> V
         return Vec::new();
     };
     let siblings: Vec<usize> = node
-        .recon
+        .recon()
         .image_table
         .images
         .iter()
@@ -495,7 +569,7 @@ pub fn camera_sibling_images(node: &SceneNode, selected: Option<CameraRef>) -> V
         .filter(|(_, image)| image.camera_index as usize == index)
         .map(|(i, _)| i)
         .collect();
-    if siblings.len() == node.recon.image_table.images.len() {
+    if siblings.len() == node.image_count() {
         return Vec::new();
     }
     siblings
@@ -537,9 +611,9 @@ pub fn visible_stats(scene: &[SceneNode], solo: Option<ReconId>) -> SceneStats {
     let mut stats = SceneStats::default();
     for node in scene.iter().filter(|n| is_visible(n, solo)) {
         stats.recons += 1;
-        stats.points += node.recon.point_set.points.len();
-        stats.points_at_infinity += node.recon.metadata.infinity_point_count as usize;
-        stats.images += node.recon.image_table.images.len();
+        stats.points += node.point_count();
+        stats.points_at_infinity += node.infinity_point_count();
+        stats.images += node.image_count();
     }
     stats
 }

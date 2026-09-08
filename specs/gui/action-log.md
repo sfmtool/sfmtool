@@ -151,9 +151,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Session | — | Viewer | `SfM Explorer {version} started` |
 | Session | — | Viewer | `MCP endpoint listening on {url}` |
 | File | — | User / MCP | `Opened {label} from {path}` |
-| File | — | User / MCP | `Reloaded {label}` |
 | File | — | User / MCP | `Failed to load {path}: {error}` — **failed** |
-| File | — | User / MCP | `Failed to reload {path}: {error}` — **failed** |
 | File | — | User / MCP | `Closed {label}` |
 | File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
 | File | — | User | `Loaded demo data` |
@@ -167,6 +165,11 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Scene | — | User | `Align {src} → {tgt} failed: {reason}` — existing text, **failed** |
 | Scene | — | User | `Resected {image} in {label}: …` — existing text |
 | Scene | — | User | `Resect {image} in {label} refused: {reason}` — existing text, **failed** |
+| Edit | — | User | `Deleted point {index} in {label} ({from} → {to})` |
+| Edit | — | User | `Deleted image {name} from {label} ({from} → {to})` |
+| Edit | — | User | `Undo: {what the version was labelled} ({from} → {to})` |
+| Edit | — | User | `Redo: {what the version was labelled} ({from} → {to})` |
+| Edit | — | User | the reason an edit, undo or redo was refused — **failed** |
 | Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
 | Selection | `image` | User / MCP | `Selected image {name} in {label}` |
 | Selection | `camera intrinsics` | User / MCP | `Selected camera intrinsics #{k} in {label}` |
@@ -295,7 +298,7 @@ distinction gives every kind its answer:
   being scrubbed through; it is a picture the agent took and presumably
   looked at, and the human reading the log wants to know how many were taken
   and of what. Ten screenshots in a second are ten lines.
-- Everything else — Session, File, Scene, Animation, Layout, Window — is
+- Everything else — Session, File, Scene, Edit, Animation, Layout, Window — is
   discrete, as before.
 
 Coalescing is decided at record time and is not reversible; the entries it
@@ -360,6 +363,9 @@ pub(crate) enum Kind {
     Session,
     File,
     Scene,
+    /// An edit to a reconstruction, and the undo or redo of one. See
+    /// `specs/gui/document-model.md`.
+    Edit,
     Selection,
     View,
     Display,
@@ -522,7 +528,6 @@ owner that knows it happened:
 | Method | Why |
 |--------|-----|
 | `load_file(&Path) -> Result<ReconId, String>` | The failure is returned, not written, so the caller words it (§ "Threading and the MCP seam") |
-| `reload_node(ReconId) -> Result<ReconId, String>` | The same, in place of the old `Option` |
 | `set_solo(Option<ReconId>)` | The set form the MCP tool needs, with `toggle_solo` resolving a click into it — so one method owns the entry |
 | `clear_selection()` / `deselect_point()` | So that "drop everything" is one entry rather than the three deselects it is made of |
 
@@ -625,7 +630,7 @@ field it changed):
   `open_reconstruction failed: …` from the same `Err`. One failure, one entry,
   in the vocabulary of whoever asked. This also removes the MCP writer's
   scrape of the status field to recover a load error. The catalogue's
-  `Failed to load` and `Failed to reload` rows are the GUI caller's texts;
+  `Failed to load` row is the GUI caller's text;
   the `Align … failed` and `Resect … refused` rows are logged by the methods
   themselves because no MCP tool calls them.
 
@@ -648,7 +653,7 @@ same buffer the panel draws, on the same thread.
 ## Implementation notes
 
 - **Where the `record` calls go** is the whole of the implementation, and the
-  seams are these. `AppState` mutating methods: `load_file`, `reload_node`,
+  seams are these. `AppState` mutating methods: `load_file`,
   `close_node`, `close_all`, `select_recon`, `select_camera`, `select_image`,
   `select_point`, `clear_selection`, `deselect_point`, `set_solo`, `align_node`,
   `resect_image`, `reset_node_transform`, plus the demo loader. `Viewer3D`'s
@@ -826,7 +831,10 @@ Scene-graph and resection tests that read `state.status_message` moved to
   their layout under them.
 - **Recording which control was used.** `Selected image …` does not say
   whether it was the strip, the tree, the viewport or the keyboard.
-- **An undo stack.** The entries are text; they are not replayable.
+- **An undo stack.** The entries are text; they are not replayable. Undo walks a
+  node's own versions, which hold values -- see
+  [edit-history.md](edit-history.md). The log records that a step was taken; it
+  is not what takes it back.
 - **Logging the HTTP thread.** Schema refusals and timeouts stay with the
   client that caused them.
 

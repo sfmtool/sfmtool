@@ -55,6 +55,10 @@ struct VertexInput {
     @location(0) quad_pos: vec2<f32>,       // quad corner (-1..1)
     @location(1) world_pos: vec3<f32>,      // instance: point position
     @location(2) color_packed: u32,         // instance: packed RGBA8
+    // instance: 1 = this point is still in the reconstruction, 0 = the version
+    // in view has deleted it. Its own buffer, written where an edit moved and
+    // nowhere else, so a deletion never rewrites the instance buffer.
+    @location(3) alive: u32,
 }
 
 struct VertexOutput {
@@ -75,6 +79,17 @@ const INF_DEPTH: f32 = 1e-6;
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
+
+    // A deleted point emits a clipped vertex, so it draws nothing, occludes
+    // nothing and answers no pick — the same treatment a hidden point at
+    // infinity gets below.
+    if in.alive == 0u {
+        out.clip_pos = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+        out.view_depth = 0.0;
+        out.color = vec3<f32>(0.0);
+        out.point3d_index = recon.point_pick_base + in.instance_index;
+        return out;
+    }
 
     // Unpack color from u32 (R in low byte, then G, B), then tint. The
     // selection and hover overrides in the fragment shader are applied *after*

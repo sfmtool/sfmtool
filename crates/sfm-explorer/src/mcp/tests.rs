@@ -1476,19 +1476,20 @@ fn an_unknown_camera_image_name_says_what_a_name_looks_like() {
     assert!(error.0.contains("relative path"), "{error}");
 }
 
-/// A label survives `Reload from Disk`, which mints a fresh `ReconId` — the
-/// whole reason the label rather than the id is the wire handle.
+/// A label survives a node being replaced under a fresh `ReconId`, which a
+/// repeated resection does — the whole reason the label rather than the id is
+/// the wire handle.
 #[test]
-fn a_label_still_resolves_after_a_reload() {
+fn a_label_still_resolves_after_a_node_is_replaced() {
     let (mut state, mut viewer) = two_reconstructions();
     let before = state.scene[0].id;
-    // Standing in for a real reload, which needs a file on disk: replace the
-    // node in place, keeping its label, exactly as `reload_node` does.
-    let mut reloaded =
+    // The scene edit a repeated resection makes: replace the node in place,
+    // keeping its label.
+    let mut replacement =
         SceneNode::from_path(std::path::Path::new("/runs/alpha.sfmr"), recon(8, "A"));
-    reloaded.label = "alpha".to_string();
-    state.scene[0] = reloaded;
-    assert_ne!(state.scene[0].id, before, "a reload mints a fresh id");
+    replacement.label = "alpha".to_string();
+    state.scene[0] = replacement;
+    assert_ne!(state.scene[0].id, before, "a replacement mints a fresh id");
     state.selected_recon = Some(state.scene[0].id);
 
     let out = call(

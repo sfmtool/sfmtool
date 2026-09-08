@@ -108,7 +108,7 @@ pub(super) fn list_camera_images(
 ) -> JsonReply {
     let id = super::resolve_reconstruction(state, reconstruction_label)?;
     let node = state.node(id).expect("just resolved");
-    let recon = &node.recon;
+    let recon = node.recon();
     let total = recon.image_table.images.len();
     let limit = limit.min(MAX_LIMIT);
     let end = offset.saturating_add(limit).min(total);
@@ -135,7 +135,7 @@ pub(super) fn get_camera_image(
     let reproj_error = image_error_stats(state, image_ref);
 
     let node = state.node(id).expect("just resolved");
-    let recon = &node.recon;
+    let recon = node.recon();
     let image = &recon.image_table.images[index];
     let camera = &recon.image_table.cameras[image.camera_index as usize];
     let quaternion = image.quaternion_wxyz;
@@ -173,7 +173,7 @@ fn image_error_stats(state: &AppState, image: ImageRef) -> Value {
         return Value::Null;
     };
     match node
-        .recon
+        .recon()
         .compute_observation_reprojection_errors(image.index())
     {
         Ok(errors) => {
@@ -199,7 +199,7 @@ pub(super) fn get_camera_intrinsics(
     let id = super::resolve_reconstruction(state, reconstruction_label)?;
     resolve_camera_intrinsics(state, id, index)?;
     let node = state.node(id).expect("just resolved");
-    let recon = &node.recon;
+    let recon = node.recon();
     let camera = &recon.image_table.cameras[index];
     let users: Vec<usize> = recon
         .image_table
@@ -232,7 +232,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
     let node = state
         .node(recon_id)
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
-    let recon = &node.recon;
+    let recon = node.recon();
     let point = &recon.point_set.points[point_index];
     let observation_start = recon.point_set.observation_offsets[point_index];
     let feature_indexes = recon.feature_indexes();
@@ -289,18 +289,18 @@ fn warm_track_sift_cache(state: &mut AppState, point: crate::scene::PointRef) {
     let Some(node) = state.node(point.recon) else {
         return;
     };
-    if node.recon.feature_indexes().is_none() {
+    if node.recon().feature_indexes().is_none() {
         return;
     }
     let images: Vec<usize> = node
-        .recon
+        .recon()
         .track_image_indices(point.index())
         .into_iter()
         .collect();
     for image_index in images {
         let read_count = state
             .node(point.recon)
-            .map(|node| node.recon.point_set.max_track_feature_index[image_index] as usize + 1)
+            .map(|node| node.recon().point_set.max_track_feature_index[image_index] as usize + 1)
             .unwrap_or(0);
         // Split the borrow: the cache is `&mut` while the reconstruction it
         // reads from is `&`, which is exactly why `ensure_sift_cached` is a free
@@ -313,7 +313,7 @@ fn warm_track_sift_cache(state: &mut AppState, point: crate::scene::PointRef) {
         };
         ensure_sift_cached(
             sift_cache,
-            &node.recon,
+            node.recon(),
             ImageRef::new(point.recon, image_index),
             read_count,
         );

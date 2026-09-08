@@ -107,8 +107,8 @@ Two cases deliberately do not prefill:
 
 - **Nothing selected** — the previous query stays in the field (still selected),
   so a failed or repeated lookup is edited rather than retyped.
-- **A selection pointing past the end of its own reconstruction**, which a
-  reload can produce. Prefilling an ID that no longer resolves would hand the
+- **A selection pointing past the end of its own reconstruction**, which an
+  edit can produce. Prefilling an ID that no longer resolves would hand the
   user a query that fails the instant they press Enter.
 
 Re-opening an **already-open** dialog only re-focuses: it neither re-prefills

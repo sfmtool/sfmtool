@@ -29,16 +29,13 @@ pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) 
         .any(|node| node.path.as_deref() == Some(path));
     let before: Vec<crate::scene::ReconId> = state.scene.iter().map(|node| node.id).collect();
 
-    // `load_file` is used unchanged, including its already-loaded rule: opening
-    // a path that is open reloads that node in place, keeping its label,
-    // display state and transform. Its failure is *returned*, and becomes this
-    // tool's refusal — which the drain then records once, as
+    // `load_file` always appends, so opening a path that is already open adds
+    // a second node for it. Its failure is *returned*, and becomes this tool's
+    // refusal -- which the drain then records once, as
     // `open_reconstruction failed: …`.
     state.load_file(path).map_err(ToolError::new)?;
 
-    // Whichever node is not in `before` is the one that arrived. A reload
-    // replaces the node in place with a fresh `ReconId`, so this finds it in
-    // both cases and neither has to be special-cased.
+    // Whichever node is not in `before` is the one that arrived.
     let node = state
         .scene
         .iter()
@@ -53,7 +50,7 @@ pub(super) fn open_reconstruction(state: &mut AppState, path: &std::path::Path) 
     entry
         .as_object_mut()
         .expect("a reconstruction entry is an object")
-        .insert("reloaded".into(), json!(already_open));
+        .insert("already_open".into(), json!(already_open));
     Ok(entry)
 }
 

@@ -72,11 +72,11 @@ impl Viewer3D {
         let name = state
             .selected_image
             .filter(|i| i.recon == current)
-            .and_then(|i| state.scene[from].recon.image_table.images.get(i.index()))
+            .and_then(|i| state.scene[from].recon().image_table.images.get(i.index()))
             .map(|image| image.name.clone());
         let carried = name.and_then(|name| {
             state.scene[to]
-                .recon
+                .recon()
                 .image_table
                 .images
                 .iter()
@@ -490,7 +490,7 @@ impl Viewer3D {
     ) {
         use crate::action_log::Kind;
 
-        let reconstruction = &node.recon;
+        let reconstruction = node.recon();
         let recon_id = node.id;
         ui.input(|i| {
             let current_time = i.time;

@@ -250,10 +250,13 @@ impl SceneRenderer {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
                     for bundle in bundles(|b| b.display.show_points) {
-                        if let Some(instance_buf) = &bundle.point_instance_buffer {
+                        if let (Some(instance_buf), Some(alive_buf)) =
+                            (&bundle.point_instance_buffer, &bundle.point_alive_buffer)
+                        {
                             if bundle.point_count > 0 {
                                 pass.set_bind_group(0, &bundle.point_bind_group, &[]);
                                 pass.set_vertex_buffer(1, instance_buf.slice(..));
+                                pass.set_vertex_buffer(2, alive_buf.slice(..));
                                 pass.draw(0..4, 0..bundle.point_count);
                             }
                         }
@@ -341,6 +344,7 @@ impl SceneRenderer {
                             if patch.count > 0 {
                                 pass.set_bind_group(0, &patch.bind_group, &[]);
                                 pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));
+                                pass.set_vertex_buffer(2, patch.alive_buffer.slice(..));
                                 pass.draw(0..4, 0..patch.count);
                             }
                         }

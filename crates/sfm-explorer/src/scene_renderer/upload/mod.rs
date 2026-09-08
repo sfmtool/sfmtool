@@ -11,6 +11,7 @@
 
 mod bg_image;
 mod frustums;
+mod overlay;
 mod patches;
 mod points;
 mod thumbnails;

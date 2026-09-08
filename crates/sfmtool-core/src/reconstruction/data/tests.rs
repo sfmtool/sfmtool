@@ -242,6 +242,62 @@ fn test_subset_drops_orphaned_points_when_requested() {
 }
 
 #[test]
+fn test_subset_row_map_is_a_bijection_onto_the_surviving_points() {
+    let recon = SfmrReconstruction::demo(1000);
+    let (subset, map) = recon.subset_by_image_indices_with_map(&[0], true).unwrap();
+
+    // Forward: every point of the input either lands somewhere in the subset or
+    // was dropped, and the landings are exactly `0..subset.point_count()`, each
+    // hit once.
+    let mut landed = vec![false; subset.point_set.points.len()];
+    for old in 0..recon.point_set.points.len() as u32 {
+        let Some(new) = map.forward(old) else {
+            continue;
+        };
+        assert!(
+            !std::mem::replace(&mut landed[new as usize], true),
+            "two input points landed on subset row {new}"
+        );
+        // ...and the row it landed on is the same point.
+        assert_eq!(
+            subset.point_set.points[new as usize].position,
+            recon.point_set.points[old as usize].position,
+        );
+    }
+    assert!(
+        landed.iter().all(|&hit| hit),
+        "a subset row came from nowhere"
+    );
+
+    // Inverse: the other direction of the same bijection.
+    for new in 0..subset.point_set.points.len() as u32 {
+        let old = map.inverse(new).expect("every subset row has a source");
+        assert_eq!(map.forward(old), Some(new));
+    }
+
+    // What was dropped is exactly what the image kept nothing of.
+    for old in 0..recon.point_set.points.len() as u32 {
+        let seen_elsewhere = recon
+            .point_set
+            .tracks
+            .iter()
+            .any(|t| t.point_index == old && t.image_index == 0);
+        assert_eq!(map.forward(old).is_some(), seen_elsewhere, "point {old}");
+    }
+}
+
+#[test]
+fn test_subset_row_map_is_the_identity_when_no_point_is_dropped() {
+    let recon = SfmrReconstruction::demo(64);
+    let (subset, map) = recon.subset_by_image_indices_with_map(&[0], false).unwrap();
+    assert_eq!(subset.point_set.points.len(), recon.point_set.points.len());
+    for old in 0..recon.point_set.points.len() as u32 {
+        assert_eq!(map.forward(old), Some(old));
+        assert_eq!(map.inverse(old), Some(old));
+    }
+}
+
+#[test]
 fn test_subset_rejects_out_of_bounds_and_duplicates() {
     let recon = SfmrReconstruction::demo(1000);
     let n = recon.image_table.images.len() as u32;

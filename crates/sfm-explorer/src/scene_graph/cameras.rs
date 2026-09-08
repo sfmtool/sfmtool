@@ -52,7 +52,7 @@ pub(super) fn show_camera_intrinsics_group(
     ctx: &NodeContext,
     out: &mut TreeOutput,
 ) {
-    let count = node.recon.image_table.cameras.len();
+    let count = node.recon().image_table.cameras.len();
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         row_id(node.id, "intrinsics"),
@@ -77,7 +77,7 @@ pub(super) fn show_camera_intrinsics_group(
 /// the image list, so that pathological case cannot bury the node below it
 /// either.
 fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out: &mut TreeOutput) {
-    let cameras = &node.recon.image_table.cameras;
+    let cameras = &node.recon().image_table.cameras;
     if cameras.is_empty() {
         ui.weak("No cameras");
         return;
@@ -85,7 +85,7 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
     // One pass over the images rather than one per row: the rows want a count
     // each, and the image list is the long one.
     let mut uses = vec![0usize; cameras.len()];
-    for image in &node.recon.image_table.images {
+    for image in &node.recon().image_table.images {
         if let Some(count) = uses.get_mut(image.camera_index as usize) {
             *count += 1;
         }
@@ -234,7 +234,7 @@ pub(super) fn show_camera_images_group(
         });
         ui.label(format!(
             "Camera Images ({})",
-            node.recon.image_table.images.len()
+            node.recon().image_table.images.len()
         ));
     });
     header.body(|ui| show_camera_image_rows(ui, node, ctx, out));
@@ -256,7 +256,7 @@ pub(super) struct ResectAvailability {
 impl ResectAvailability {
     fn of(node: &SceneNode) -> Self {
         let posed: Vec<bool> = node
-            .recon
+            .recon()
             .image_table
             .images
             .iter()
@@ -268,7 +268,7 @@ impl ResectAvailability {
         Self {
             posed_count: posed.iter().filter(|&&p| p).count(),
             posed,
-            feature_indexed: node.recon.feature_indexes().is_some(),
+            feature_indexed: node.recon().feature_indexes().is_some(),
         }
     }
 
@@ -307,7 +307,7 @@ fn show_camera_image_rows(
     ctx: &NodeContext,
     out: &mut TreeOutput,
 ) {
-    let count = node.recon.image_table.images.len();
+    let count = node.recon().image_table.images.len();
     if count == 0 {
         ui.weak("No images");
         return;
@@ -336,7 +336,7 @@ fn show_camera_image_rows(
         for index in range {
             let image = ImageRef::new(node.id, index);
             let name = node
-                .recon
+                .recon()
                 .image_table
                 .images
                 .get(index)

@@ -20,18 +20,22 @@ and resolution rules, and the open questions.
 
 ## The GPU side
 
-The base's buffers keep their identity, so the umbrella's identity-based
-upload sees no change on the base and uploads nothing for it. The deleted set
-reaches the point shader as a per-point mask built from the set, a few bytes
-written into a buffer that is otherwise zero. The patch atlas is the one
-piece of GPU state the stable-index rule does not already cover: its slot
-assignment is a compaction over the points that carry a bitmap, so a point's
-atlas slot is not its index, and a point edit that changes a bitmap needs
-the additions' patches in a second atlas, or a slot map the base's atlas
-keeps across edits. The additions upload
-as a second instance buffer drawn after the base's, with the same per-node
-uniforms. A materialisation replaces both with one buffer, through the row
-map. No edit re-uploads a million points.
+Built and standing: [`../gui/document-model.md`](../gui/document-model.md),
+"Change detection by identity". The base's buffers keep their identity, so the
+upload sees no change on the base and uploads nothing for it, and the deleted
+set reaches the point and patch shaders as a per-instance mask written only
+where the set moved.
+
+What that leaves open is the half an addition needs. The additions upload as a
+second instance buffer drawn after the base's, with the same per-node uniforms.
+The patch atlas is the one piece of GPU state the stable-index rule does not
+already cover: its slot assignment is a compaction over the points that carry a
+bitmap, so a point's atlas slot is not its index, and a point edit that changes
+a bitmap needs the additions' patches in a second atlas, or a slot map the
+base's atlas keeps across edits. The bundle already keeps a point-index-to-slot
+map for the mask, which is the smaller half of that question. A materialisation
+replaces both buffers with one, through the row map. No edit re-uploads a
+million points.
 
 ## The file side
 
@@ -87,6 +91,12 @@ or a timestamp onto a base has to do so before the hash is taken, and where in
 the save path that stamping belongs is a decision for the saving step.
 
 ### The version graph
+
+The graph itself is built and standing:
+[`../gui/edit-history.md`](../gui/edit-history.md) describes the per-step maps,
+that they are kept for every version ever minted, and the forward and inverse
+walks over one step. What is open here is the id minting and resolution built on
+top of them.
 
 A node's history is a chain of versions, and each step between two versions
 carries a **point map**: a materialisation's row map from the old indexes to

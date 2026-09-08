@@ -18,6 +18,7 @@ use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
 
+mod edits;
 mod ops;
 
 /// The window title with no file loaded. `ui_basic`'s Windows attach path
@@ -534,15 +535,6 @@ pub struct AppState {
     /// per-observation patch tiles). Cleared when the scene changes.
     pub full_res_cache: HashMap<ImageRef, Option<ImageU8>>,
 
-    /// Bumped whenever any node's transform is set or reset.
-    ///
-    /// A node transform is a world-space change, so it invalidates the same
-    /// derived state a fresh upload does: the union scene bounds, the global
-    /// `length_scale`, and the frustum geometry sized from it. Comparing one
-    /// counter against the previous frame's is how `app.rs` notices, without
-    /// having to diff a `Vec<Se3Transform>`.
-    pub transform_epoch: u64,
-
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
 
@@ -671,7 +663,6 @@ impl AppState {
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
             full_res_cache: HashMap::new(),
-            transform_epoch: 0,
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),
@@ -687,8 +678,8 @@ impl AppState {
 
     /// Append `node` to the scene and select it.
     ///
-    /// The single node-arrival path: file loads, reloads, the CLI and demo data
-    /// all come through here, so none of them can forget that arriving is also
+    /// The single node-arrival path: file loads, resections, the CLI and demo
+    /// data all come through here, so none of them can forget that arriving is also
     /// a selection change. Selecting the new node clears the image and point
     /// selection per the finer-selection invariant — you opened this file to
     /// look at it, and no panel should be left showing another file's row.
@@ -771,7 +762,8 @@ impl AppState {
     /// Drop every cache entry and every selection/hover ref belonging to `id`.
     ///
     /// Does *not* touch `scene` or `selected_recon` — the callers differ on
-    /// what should happen to those (close falls back, reload re-points).
+    /// what should happen to those (close falls back, a resection that replaces
+    /// a derived node re-points).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
         self.full_res_cache.retain(|image, _| image.recon != id);
@@ -837,7 +829,7 @@ impl AppState {
     pub fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
         let node = self.node(image.recon)?;
         let camera = node
-            .recon
+            .recon()
             .image_table
             .images
             .get(image.index())?
@@ -883,7 +875,7 @@ impl AppState {
     /// resolves. Only ever used to build a log entry.
     fn image_name(&self, image: ImageRef) -> String {
         self.node(image.recon)
-            .and_then(|node| node.recon.image_table.images.get(image.index()))
+            .and_then(|node| node.recon().image_table.images.get(image.index()))
             .map(|i| i.name.clone())
             .unwrap_or_else(|| format!("#{}", image.index()))
     }
@@ -989,7 +981,7 @@ impl AppState {
         if moved {
             let id = self
                 .node(point.recon)
-                .map(|node| crate::scene::point_id(&node.recon, point.index()))
+                .map(|node| crate::scene::point_id(node.recon(), point.index()))
                 .unwrap_or_else(|| format!("#{}", point.index()));
             self.action_log
                 .record_run(Kind::Selection, "point", format!("Selected point {id}"));
@@ -1003,7 +995,6 @@ impl AppState {
         };
         node.transform = sfmtool_core::Se3Transform::identity();
         let label = node.label.clone();
-        self.transform_epoch += 1;
         self.action_log
             .record(Kind::Scene, format!("Reset transform of {label}"));
     }

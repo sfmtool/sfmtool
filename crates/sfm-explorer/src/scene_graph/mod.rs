@@ -116,8 +116,8 @@ const SELECTED_BAR_WIDTH: f32 = 3.0;
 /// hosts it.
 ///
 /// Keyed by the node's [`ReconId`], which is never reused — so a closed node
-/// cannot hand its expansion state to a later one, and a reload (which mints a
-/// fresh id) comes back collapsed.
+/// cannot hand its expansion state to a later one, and the same file opened
+/// twice is two nodes with expansion state of their own.
 pub(crate) fn row_id(recon: ReconId, key: &str) -> egui::Id {
     egui::Id::new(("scene_graph_row", recon, key))
 }
@@ -160,13 +160,14 @@ pub struct SceneGraphResponse {
     pub reset_transform: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
-    /// `Reload from Disk` chosen from a reconstruction's context menu.
-    pub reload_node: Option<ReconId>,
     /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
     /// the image to resect and which correspondence source was asked for. The
     /// `.matches` file itself is chosen a layer up, where the file dialog and
     /// the per-node memory of the last path live — see [`crate::resect`].
     pub resect_image: Option<(ImageRef, ResectFrom)>,
+    /// `Delete Image` chosen on an image row. A bulk edit on the node it
+    /// belongs to, carried out by `AppState::delete_image` after the frame.
+    pub delete_image: Option<ImageRef>,
 }
 
 /// Scene Graph panel state.
@@ -217,7 +218,7 @@ impl SceneGraphPanel {
             .map(|n| AlignTarget {
                 id: n.id,
                 label: n.label.clone(),
-                feature_indexed: n.recon.feature_indexes().is_some(),
+                feature_indexed: n.recon().feature_indexes().is_some(),
             })
             .collect();
         self.hits.clear();
@@ -586,7 +587,7 @@ fn show_points_group(
     ctx: &NodeContext,
     out: &mut TreeOutput,
 ) {
-    let at_infinity = node.recon.metadata.infinity_point_count as usize;
+    let at_infinity = node.infinity_point_count();
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
         row_id(node.id, "points"),
@@ -606,7 +607,7 @@ fn show_points_group(
         out.logged(row_id(id, "points_eye"), eye, || {
             visibility_text(&node.label, Layer::Points, shown)
         });
-        let count = with_thousands(node.recon.point_set.points.len());
+        let count = with_thousands(node.point_count());
         let label = if at_infinity > 0 {
             format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))
         } else {
@@ -639,7 +640,7 @@ fn show_points_group(
                 .push_id("point_selected", |ui| {
                     ui.add(egui::Button::selectable(
                         true,
-                        format!("selected: {}", point_id(&node.recon, point.index())),
+                        format!("selected: {}", point_id(node.recon(), point.index())),
                     ))
                 })
                 .inner;
@@ -658,7 +659,7 @@ fn show_points_group(
                         false,
                         egui::RichText::new(format!(
                             "hovered: {}",
-                            point_id(&node.recon, point.index())
+                            point_id(node.recon(), point.index())
                         ))
                         .weak(),
                     ))

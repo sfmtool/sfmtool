@@ -64,8 +64,8 @@ pub(crate) use server::serve;
 /// A reconstruction is named by its **label**, so these carry a `String` that
 /// [`apply_with_window`] resolves against `AppState::scene`. `Option<String>` means "the
 /// selected reconstruction if omitted". The `ReconId` never crosses the wire:
-/// a label is unique across the scene and survives `Reload from Disk`, which
-/// mints a fresh id (see "Addressing" in `specs/gui/mcp-server.md`).
+/// a label is unique across the scene and survives every edit of the node it
+/// names (see "Addressing" in `specs/gui/mcp-server.md`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Command {
     GetScene,
@@ -625,9 +625,12 @@ fn frame_description(state: &AppState, viewer: &Viewer3D) -> String {
         .camera_view
         .as_ref()
         .and_then(|camera_view| {
-            state
-                .node(camera_view.image.recon)
-                .and_then(|node| node.recon.image_table.images.get(camera_view.image.index()))
+            state.node(camera_view.image.recon).and_then(|node| {
+                node.recon()
+                    .image_table
+                    .images
+                    .get(camera_view.image.index())
+            })
         })
         .map(|image| format!(", looking through {}", image.name))
         .unwrap_or_default();
@@ -688,17 +691,17 @@ pub(super) fn resolve_camera_image(
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
     let index = match selector {
         CameraImageSel::Index(index) => {
-            if *index >= node.recon.image_table.images.len() {
+            if *index >= node.recon().image_table.images.len() {
                 return Err(ToolError::new(format!(
                     "{} has {} camera images — index {index} is out of range.",
                     node.label,
-                    node.recon.image_table.images.len()
+                    node.recon().image_table.images.len()
                 )));
             }
             *index
         }
         CameraImageSel::Name(name) => node
-            .recon
+            .recon()
             .image_table
             .images
             .iter()
@@ -724,11 +727,11 @@ pub(super) fn resolve_camera_intrinsics(
     let node = state
         .node(reconstruction)
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
-    if index >= node.recon.image_table.cameras.len() {
+    if index >= node.recon().image_table.cameras.len() {
         return Err(ToolError::new(format!(
             "{} has {} camera intrinsics records — index {index} is out of range.",
             node.label,
-            node.recon.image_table.cameras.len()
+            node.recon().image_table.cameras.len()
         )));
     }
     Ok(CameraRef::new(reconstruction, index))

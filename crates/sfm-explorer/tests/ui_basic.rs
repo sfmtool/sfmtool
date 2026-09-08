@@ -281,17 +281,21 @@ fn window_min_size() {
 
 // --- Menu bar tests (AccessKit) ---
 
-/// File is the only top-level menu. The display controls that made a View menu
-/// worth having moved into the viewport HUD, and the dock panels are permanent,
-/// so nothing app-global is left for a second menu — see
-/// `specs/gui/viewport-hud.md`.
+/// The menu bar's top-level menus, and the one that is deliberately absent.
+///
+/// The display controls that made a View menu worth having moved into the
+/// viewport HUD — see `specs/gui/viewport-hud.md` — so what is left is what is
+/// app-global: what is loaded, what has been done to it, where to go, and which
+/// panels are up.
 #[test]
-fn file_is_the_only_menu() {
+fn the_menu_bar_holds_file_edit_go_and_panels() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-    app.locator(r#"button[name="File"]"#)
-        .wait_attached(CONTENT_TIMEOUT)
-        .expect("'File' menu button not found");
+    for menu in ["File", "Edit", "Go", "Panels"] {
+        app.locator(&format!(r#"button[name="{menu}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("'{menu}' menu button not found"));
+    }
     assert!(
         app.locator(r#"button[name="View"]"#)
             .wait_attached(Duration::from_millis(500))
@@ -325,6 +329,34 @@ fn file_menu_items() {
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
     }
+}
+
+/// The Edit menu opens, and its items are in the tree even when every one of
+/// them is greyed.
+///
+/// With nothing loaded there is no node to undo in and nothing selected to
+/// delete, so all four items are disabled — which is the state this asserts they
+/// are nonetheless *present* in: an action that vanishes when it does not apply
+/// reads as unimplemented.
+///
+/// Only `Delete Image` is asserted by name. The other three carry their
+/// keyboard shortcut in the button's text, and the shortcut is spelled by the
+/// platform (`Ctrl+Z` against `⌘Z`), so matching them on an exact accessible
+/// name would be asserting egui's formatting rather than the menu. What they
+/// do, and when they are enabled, is covered headlessly in
+/// `state/edits/tests.rs`.
+#[test]
+fn edit_menu_items() {
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
+
+    app.locator(r#"button[name="Edit"]"#)
+        .press()
+        .expect("press Edit menu button");
+
+    app.locator(r#"button[name="Delete Image"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("Edit menu item 'Delete Image' did not appear");
 }
 
 /// File > Quit exits the process.
@@ -524,7 +556,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     // Neither are the two submenus, `Align to ▸` and `Tint ▸`: a menu button
     // does not surface under the `button` role here, and their contents only
     // exist once the submenu is opened — both are covered headlessly instead.
-    for item in ["Select", "Zoom to Fit", "Reload from Disk"] {
+    for item in ["Select", "Zoom to Fit"] {
         app.locator(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| {

@@ -125,7 +125,11 @@ pub struct SceneNode {
     pub label: String,
     /// Source path; None for demo data.
     pub path: Option<PathBuf>,
-    pub recon: SfmrReconstruction,
+    /// The reconstruction as a sequence of values with a cursor: the versions
+    /// this node has been through and which one it shows. Reached through
+    /// `edited()` (the value) and `recon()` (its base) -- see
+    /// [document-model.md](document-model.md).
+    pub history: History,
 
     // Per-node display state
     pub visible: bool,               // master eye for the whole node
@@ -144,9 +148,6 @@ pub struct SceneNode {
     /// load. Set by the "Align to…" operation; see "Node Transforms and
     /// Alignment" below.
     pub transform: Se3Transform,
-
-    /// This node's data needs (re-)upload to the GPU.
-    pub needs_upload: bool,
 }
 ```
 
@@ -154,9 +155,9 @@ The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
 five display flags plus `interactive` and `tint` onto the node's GPU bundle as a
 `NodeDisplay`, and the `transform` alongside them; the draw loop and per-recon
 uniform write consult only the bundle. `transform` and `tint` are also carried
-across a `Reload from Disk`, alongside the display flags — a refreshed file
-should come back where the user put it, in the color they were telling it apart
-by.
+onto a node that replaces another, alongside the display flags: a repeated
+resection should come back where the user put its answer, in the color they were
+telling it apart by.
 
 `AppState` replaces its single slot with:
 
@@ -166,9 +167,12 @@ pub selected_recon: Option<ReconId>, // see "The selected reconstruction" below
 pub solo: Option<ReconId>,           // see "Comparison Affordances" below
 ```
 
-The per-node `needs_upload` flag replaces the global `points_need_upload`
-bool; closing a node additionally enqueues a resource-release for its
-`ReconId` (see Rendering).
+A node's GPU buffers are refreshed when the **base** of the value it shows is a
+different one from the base they were built from, compared by pointer against
+what the node's bundle recorded -- see
+[document-model.md](document-model.md), "Change detection by identity". Closing
+a node additionally enqueues a resource-release for its `ReconId` (see
+Rendering).
 
 **Effective visibility** of a layer in node *n* is the AND of four switches:
 the global HUD Layers toggle (unchanged, now acting as a master switch across
@@ -281,8 +285,7 @@ fixed-height for virtualization.
   painted or not, so the name does not shift as the selection moves.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
-  `Tint ▸` (Original / palette of distinguishable colors), `Reload from Disk`,
-  `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
+  `Tint ▸` (Original / palette of distinguishable colors), `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
@@ -333,7 +336,9 @@ fixed-height for virtualization.
 - Context menu: `Resect Image` and `Resect Image from Matches…`, which
   re-estimate this one image's pose against the rest of its reconstruction and
   show the answer as a derived node beside the original — see
-  [resect-image.md](resect-image.md), which owns them.
+  [resect-image.md](resect-image.md), which owns them; and `Delete Image`,
+  which removes this image from the reconstruction as one version of it -- see
+  [edit-history.md](edit-history.md), which owns that one.
 - Selected row: highlight + auto-scroll into view when the selection changes
   from another panel (scroll-to happens only on selection *change*, so the
   user's manual scrolling isn't fought).
@@ -380,7 +385,7 @@ pub struct SceneGraphResponse {
     pub zoom_to_node: Option<ReconId>,
     pub toggle_solo: Option<ReconId>,
     pub close_node: Option<ReconId>,
-    pub reload_node: Option<ReconId>,
+    pub delete_image: Option<ImageRef>,
 }
 ```
 
@@ -781,9 +786,10 @@ is already in its own frame. Setting or resetting a transform recomputes the
 union scene bounds, re-derives `length_scale`, re-uploads frustum geometry at
 the new per-node scale, and rebuilds the track rays — which also dissolves the
 shared-frustum-size compromise noted under Rendering once the nodes' scales
-agree. `AppState` carries a `transform_epoch` counter that every transform
-change bumps; comparing it against the previous frame's is how the upload phase
-notices, without diffing a `Vec<Se3Transform>`.
+agree. The upload phase notices by comparing: mirroring a node's transform onto
+its GPU bundle reports whether it differs from the one the bundle held, so what
+was last drawn is what is compared against and no counter has to be kept in step
+with the field it describes.
 
 ---
 
@@ -873,8 +879,7 @@ one `Option<ReconId>` and never touches any `SceneNode::visible`, so:
   all-hidden bounds fallback keeping the camera where it was).
 - Closing the soloed node ends the solo rather than promoting the next one: a
   solo naming a node that is gone would hide the whole scene with nothing left
-  on screen to explain why. A **reload** re-points it at the node's new
-  `ReconId`, like the selection. **Opening a file** ends it — you opened that
+  on screen to explain why. **Opening a file** ends it — you opened that
   file to look at it.
 
 Solo is not selection: it neither selects the node nor is cleared by selecting
@@ -889,13 +894,11 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
 ## Loading, CLI, Window Title
 
 - **File > Open…** uses `rfd`'s `pick_files()` (multi-select) and **appends**
-  one node per chosen file. Opening a path that is already loaded reloads that
-  node in place (fresh read from disk), keeping its position in tree order, its
-  label and its display settings — the predictable interpretation, and it
-  doubles as a refresh. A reload mints a **new** `ReconId`: re-reading a file
-  can change every entity count, so every index-keyed cache entry for the old id
-  is wrong, and a new id makes all of them unreachable rather than merely stale.
-  The cost is that the reloaded node's image/point selection clears.
+  one node per chosen file. Opening a path that is already loaded appends a
+  second node for it, with a history of its own: a node's value changes only
+  through that history, so nothing re-reads a node in place. Two nodes over one
+  file are two independent documents, told apart in the tree by the `" (2)"`
+  their labels are disambiguated with.
 - Arriving is also a selection change: an appended node becomes the selected
   reconstruction, which by the invariant below clears the image and point
   selection. You opened the file to look at it, and no panel should be left
@@ -905,7 +908,7 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
 - **Demo data** becomes a node labeled `demo` (`path: None`) and appends like
   any other load. This also fixes the current demo-load path that skips the
   cache/selection resets `load_file` performs — node lifecycle is now one code
-  path. `Reload from Disk` is disabled for it: there is no file to re-read.
+  path.
 - **CLI**: `sfm explorer` accepts multiple paths
   (`@click.argument("sfmr_files", nargs=-1)`), and `lib.rs` loads every
   trailing argument instead of only `args[1]`.
@@ -959,8 +962,8 @@ reused, a missed purge can go stale but can never alias.
 The purge runs in three places, which is what the split of ownership costs:
 `AppState` drops its own caches and selection, `dock.rs` asks each panel to drop
 its private texture caches (`forget_recon`), and the renderer releases the GPU
-bundle from `retain_nodes` on the next frame. `Reload from Disk` runs the same
-three against the *old* id.
+bundle from `retain_nodes` on the next frame. A resection that replaces an
+earlier derived node runs the same three against the *old* id.
 
 ---
 
@@ -1017,12 +1020,14 @@ three against the *old* id.
 - **Transform plumbing**: the `model` matrix read back the way a vertex shader
   would (noop backend), splat size scaling with a scaled node, union bounds and
   the `length_scale` seed following a transform and returning on reset, track
-  rays built through it, and the transform carried across a reload.
+  rays built through it, and the transform carried onto a node that replaces
+  another.
 - **Tint**: the `Tint ▸` submenu offers `Original` plus every palette entry;
   picking one writes it to that node and no other, and the menu survives the
   pick so a second color is one click away; the swatch appears on the tinted row
   only and takes no room from the others; working the menu moves no selection;
-  the tint survives a reload; an untinted node writes the all-zero `a = 0`
+  the tint survives a node being replaced; an untinted node writes the
+  all-zero `a = 0`
   uniform and a tinted one writes its color at the strength constant; the
   palette entries are mutually distinguishable and none is near-black. On the
   renderer side the tint reaches that node's `ReconUniforms` and nobody else's,

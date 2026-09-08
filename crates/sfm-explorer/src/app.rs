@@ -299,20 +299,29 @@ impl App {
 
         let hidden_image = self.viewer_3d.camera_view.as_ref().map(|cv| cv.image);
 
-        // Per-node data upload, consuming each node's `needs_upload`.
+        // Per-node data upload, keyed on the identity of the node's base.
+        //
+        // A load or a bulk edit hands the node a base the renderer
+        // has not seen, and the three uploads below run. A point edit leaves
+        // the base the same `Arc`, so none of them does: what it changed is the
+        // version's deleted set, which reaches the shaders as the mask written
+        // at the end of each iteration. See `specs/gui/document-model.md`.
         let mut uploaded_any = false;
         for i in 0..self.state.scene.len() {
-            if !self.state.scene[i].needs_upload {
-                continue;
+            let node = &self.state.scene[i];
+            let id = node.id;
+            let base = std::sync::Arc::clone(&node.edited().base);
+            if self.scene_renderer.base_changed(id, &base) {
+                let recon = node.recon();
+                self.scene_renderer.upload_points(device, id, recon);
+                self.scene_renderer
+                    .upload_thumbnails(device, queue, id, recon);
+                self.scene_renderer.upload_patches(device, queue, id, recon);
+                self.scene_renderer.set_uploaded_base(id, base);
+                uploaded_any = true;
             }
-            let id = self.state.scene[i].id;
-            let recon = &self.state.scene[i].recon;
-            self.scene_renderer.upload_points(device, id, recon);
             self.scene_renderer
-                .upload_thumbnails(device, queue, id, recon);
-            self.scene_renderer.upload_patches(device, queue, id, recon);
-            self.state.scene[i].needs_upload = false;
-            uploaded_any = true;
+                .update_deleted_mask(queue, id, &node.edited().deleted_points);
         }
 
         // Mirror each node's Scene-panel display state onto its bundle. After
@@ -330,6 +339,7 @@ impl App {
         // The node transform rides along in the same sync: from the bundle it
         // becomes the per-recon `model` matrix, scales the node's splat size,
         // and moves its bounding sphere into the union.
+        let mut transform_changed = false;
         {
             let renderer = &mut self.scene_renderer;
             let solo = self.state.solo;
@@ -346,15 +356,13 @@ impl App {
                         tint: node.tint,
                     },
                 );
-                renderer.set_node_transform(node.id, node.transform.clone());
+                // Setting or resetting a transform is a world-space change, so
+                // it re-derives `length_scale` and re-sizes frustum geometry
+                // exactly as a fresh upload does. The mirror is where that is
+                // noticed: what the bundle held is what was last drawn.
+                transform_changed |= renderer.set_node_transform(node.id, node.transform.clone());
             }
         }
-
-        // Setting or resetting a transform is a world-space change, so it
-        // re-derives `length_scale` and re-sizes frustum geometry exactly as a
-        // fresh upload does.
-        let transform_changed = self.state.transform_epoch != self.prev_transform_epoch;
-        self.prev_transform_epoch = self.state.transform_epoch;
 
         // `length_scale` is global and re-derived from the union of the loaded
         // nodes, exactly as it is re-derived on load today. Frustum geometry
@@ -394,7 +402,7 @@ impl App {
                     self.scene_renderer.upload_frustums(
                         device,
                         id,
-                        &node.recon,
+                        node.recon(),
                         node_length_scale,
                         self.state.frustum_size_multiplier,
                     );
@@ -407,7 +415,7 @@ impl App {
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     id,
-                    node.recon.image_table.images.len(),
+                    node.recon().image_table.images.len(),
                     self.state.selected_image_in(id),
                     hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
@@ -433,8 +441,8 @@ impl App {
                 .selected_point
                 .and_then(|p| Some((p, crate::scene::node_by_id(&self.state.scene, p.recon)?)));
             match selected {
-                Some((point, node)) if point.index() < node.recon.point_set.points.len() => {
-                    let (id, recon, transform) = (node.id, &node.recon, node.transform.clone());
+                Some((point, node)) if point.index() < node.recon().point_set.points.len() => {
+                    let (id, recon, transform) = (node.id, node.recon(), node.transform.clone());
                     let point_idx = point.index();
                     // Pre-populate SIFT cache for all images in the track
                     // (sift_files only; embedded_patches has no `.sift`
@@ -473,7 +481,7 @@ impl App {
                 Some((image, node)) => {
                     let transform = node.transform.clone();
                     self.scene_renderer
-                        .upload_bg_image(device, queue, &node.recon, image);
+                        .upload_bg_image(device, queue, node.recon(), image);
                     Some(transform)
                 }
                 None => {
@@ -662,8 +670,9 @@ impl App {
                     ui.menu_button("File", |ui| {
                         if ui.button("Open...").clicked() {
                             // Multi-select, and every chosen file *appends* a
-                            // node. Re-opening a loaded path reloads it in
-                            // place instead (see `AppState::load_file`).
+                            // node, a path that is already open included: that
+                            // opens it a second time, as a second node with a
+                            // history of its own.
                             if let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("SfM Reconstruction", &["sfmr"])
                                 .pick_files()
@@ -716,6 +725,84 @@ impl App {
                             ui.close();
                         }
                     });
+                    ui.menu_button("Edit", |ui| {
+                        let target = app_state.selected_recon;
+                        let can_undo = target.is_some_and(|id| app_state.can_undo(id));
+                        let can_redo = target.is_some_and(|id| app_state.can_redo(id));
+                        let undo = ui
+                            .add_enabled(
+                                can_undo,
+                                egui::Button::new("Undo")
+                                    .shortcut_text(ui.ctx().format_shortcut(&UNDO_SHORTCUT)),
+                            )
+                            .on_disabled_hover_text(
+                                "The selected reconstruction has nothing to undo",
+                            );
+                        if undo.clicked() {
+                            let outcome = target.map(|id| app_state.undo(id));
+                            edit_outcome(app_state, outcome);
+                            forget_selected(
+                                target,
+                                image_browser,
+                                image_detail,
+                                point_track_detail,
+                                intrinsics_detail,
+                            );
+                            ui.close();
+                        }
+                        let redo = ui
+                            .add_enabled(
+                                can_redo,
+                                egui::Button::new("Redo")
+                                    .shortcut_text(ui.ctx().format_shortcut(&REDO_SHORTCUT)),
+                            )
+                            .on_disabled_hover_text(
+                                "The selected reconstruction has nothing to redo",
+                            );
+                        if redo.clicked() {
+                            let outcome = target.map(|id| app_state.redo(id));
+                            edit_outcome(app_state, outcome);
+                            forget_selected(
+                                target,
+                                image_browser,
+                                image_detail,
+                                point_track_detail,
+                                intrinsics_detail,
+                            );
+                            ui.close();
+                        }
+                        ui.separator();
+                        let point = app_state.selected_point;
+                        let delete_point = ui
+                            .add_enabled(
+                                point.is_some(),
+                                egui::Button::new("Delete Point").shortcut_text(
+                                    ui.ctx().format_shortcut(&DELETE_POINT_SHORTCUT),
+                                ),
+                            )
+                            .on_disabled_hover_text("Select a 3D point to delete it");
+                        if delete_point.clicked() {
+                            let outcome = app_state.delete_selected_point();
+                            edit_outcome(app_state, Some(outcome));
+                            ui.close();
+                        }
+                        let image = app_state.selected_image;
+                        let delete_image = ui
+                            .add_enabled(image.is_some(), egui::Button::new("Delete Image"))
+                            .on_disabled_hover_text("Select an image to delete it");
+                        if delete_image.clicked() {
+                            let outcome = image.map(|image| app_state.delete_image(image));
+                            edit_outcome(app_state, outcome);
+                            forget_selected(
+                                image.map(|i| i.recon),
+                                image_browser,
+                                image_detail,
+                                point_track_detail,
+                                intrinsics_detail,
+                            );
+                            ui.close();
+                        }
+                    });
                     ui.menu_button("Go", |ui| {
                         if ui
                             .add(
@@ -747,6 +834,42 @@ impl App {
                 && root_ui.input_mut(|i| i.consume_shortcut(&goto_point::SHORTCUT))
             {
                 app_state.open_goto_point();
+            }
+
+            // The Edit menu's shortcuts, under the same keyboard arbitration:
+            // Delete is a printable-looking key that a text field must keep,
+            // and undo belongs to whatever field is being typed into.
+            if !root_ui.ctx().egui_wants_keyboard_input() {
+                let (undo, redo, delete) = root_ui.input_mut(|i| {
+                    (
+                        i.consume_shortcut(&UNDO_SHORTCUT),
+                        i.consume_shortcut(&REDO_SHORTCUT)
+                            || i.consume_shortcut(&REDO_SHORTCUT_ALT),
+                        i.consume_shortcut(&DELETE_POINT_SHORTCUT),
+                    )
+                });
+                let target = app_state.selected_recon;
+                if undo || redo {
+                    let outcome = target.map(|id| {
+                        if undo {
+                            app_state.undo(id)
+                        } else {
+                            app_state.redo(id)
+                        }
+                    });
+                    edit_outcome(app_state, outcome);
+                    forget_selected(
+                        target,
+                        image_browser,
+                        image_detail,
+                        point_track_detail,
+                        intrinsics_detail,
+                    );
+                }
+                if delete && app_state.selected_point.is_some() {
+                    let outcome = app_state.delete_selected_point();
+                    edit_outcome(app_state, Some(outcome));
+                }
             }
 
             if app_state.show_demo_dialog {
@@ -957,4 +1080,65 @@ impl App {
             }
         }
     }
+}
+
+// ── The Edit menu's shortcuts and its two shared helpers ─────────────────
+
+/// Undo the selected reconstruction's newest version.
+pub(crate) const UNDO_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+
+/// Redo, in the spelling the menu shows.
+pub(crate) const REDO_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+
+/// Redo, in the spelling the rest of the desktop also accepts. Both are live;
+/// only [`REDO_SHORTCUT`] is written beside the menu item, because a menu that
+/// lists two spellings of one action reads as two actions.
+pub(crate) const REDO_SHORTCUT_ALT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
+    egui::Modifiers {
+        command: true,
+        shift: true,
+        ..egui::Modifiers::NONE
+    },
+    egui::Key::Z,
+);
+
+/// Delete the selected 3D point. Plain Delete, and so live only while no text
+/// field has the keyboard.
+pub(crate) const DELETE_POINT_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Delete);
+
+/// Report an edit's outcome, if one was attempted.
+///
+/// Every edit method writes its own success line, in the vocabulary of the
+/// document model, so this exists for the refusals: an edit that could not run
+/// says why, once, wherever it was asked for.
+fn edit_outcome(state: &mut crate::state::AppState, outcome: Option<Result<(), String>>) {
+    if let Some(Err(message)) = outcome {
+        state
+            .action_log
+            .fail(crate::action_log::Kind::Edit, message);
+    }
+}
+
+/// Drop the panel-local caches of `id` after an edit that renumbered its
+/// images.
+///
+/// The counterpart of `dock.rs`'s `forget_recon`, reachable from the menu bar,
+/// where the panels are in scope but the dock is not. A node keeps its
+/// [`crate::scene::ReconId`] across an edit, so nothing here becomes
+/// unreachable on its own the way a closed node's does -- it has to be dropped.
+fn forget_selected(
+    id: Option<crate::scene::ReconId>,
+    image_browser: &mut crate::image_browser::ImageBrowser,
+    image_detail: &mut crate::image_detail::ImageDetail,
+    point_track_detail: &mut crate::point_track_detail::PointTrackDetail,
+    intrinsics_detail: &mut crate::intrinsics_detail::IntrinsicsDetail,
+) {
+    let Some(id) = id else { return };
+    image_browser.forget_recon(id);
+    image_detail.forget_recon(id);
+    point_track_detail.forget_recon(id);
+    intrinsics_detail.forget_recon(id);
 }
