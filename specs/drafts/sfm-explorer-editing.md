@@ -21,9 +21,8 @@ is retired with the last step.
 Decided: the document is a value (below), history stores values rather than
 commands, sharing is per column, change detection is by identity, node
 identity survives edits, the Action Log stays text and the history is the
-replayable thing. Not decided: the history memory bound's value, whether the
-history is per node or per scene, and what the row-level edit draft leaves
-open.
+replayable thing, and the history is per node. Not decided: the history
+memory bound's value, and what the row-level edit draft leaves open.
 
 Related standing specs, which will each carry a present-tense sentence pointing
 here once the first step lands: [`../gui/scene-graph.md`](../gui/scene-graph.md)
@@ -147,10 +146,12 @@ Coalescing: an interactive edit that produces intermediate values (a drag) is
 one version, committed when the gesture ends. This is the same rule the Action
 Log applies to sliders, applied to the history instead of to text.
 
-Per node or per scene: proposed per node, because edits do not cross nodes and
-a scene-wide cursor would make undoing an edit in node A silently undo the
-last edit in node B. The Edit menu acts on the selected reconstruction. Open
-until an edit that spans nodes is proposed; none is.
+The history is **per node**: each loaded reconstruction carries its own
+versions and cursor. Edits do not cross nodes, and a scene-wide cursor would
+make undoing an edit in one node silently undo the last edit in another. The
+Edit menu, the shortcuts and the History panel act on the selected
+reconstruction, and the panel's header names it. An edit that spans nodes is
+a non-goal.
 
 ### The log and the history
 
@@ -324,9 +325,8 @@ Steps 2 and 3 are the groundwork; 4 and 5 are independent of each other and of
 ## Open questions
 
 - The history memory budget's value (Part 2), after step 1's numbers.
-- Per node versus per scene history (Part 2).
-- The overlay draft's open questions (materialisation policy, whether a
-  modified point keeps its index, when the point-set split lands).
+- The overlay draft's open questions (materialisation policy, how the
+  version graph's maps are stored, when the point-set split lands).
 - Whether `Reload from Disk` becomes "open the file as a new version at the
   cursor" so the id survives, or stays a fresh node. The former is consistent
   with node identity surviving edits.
