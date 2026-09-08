@@ -9,7 +9,10 @@ first; deleting a point, adding an observation to a track, or adjusting a point'
 position rewrites the second. This spec describes how that division is expressed
 in the type every pipeline in this repository passes around, so that an operation
 can name the half it works on, and so that two reconstructions that agree on the
-expensive parts can share them instead of copying.
+expensive parts can share them instead of copying. It then describes the
+**edited** form of that value, a shared immutable base plus the handful of point
+edits made on top of it, which is what makes an edit that changes one track cost
+the size of that track rather than the size of the reconstruction.
 
 The type is `SfmrReconstruction`, the in-memory form of a `.sfmr` file. It holds
 three things about the file itself (where the workspace is, the metadata, the
@@ -155,6 +158,274 @@ edited.point_set.tracks.retain(|t| t.point_index < 100);
 edited.rebuild_derived_fields();
 ```
 
+## The overlay: a base plus its edits
+
+A reconstruction the viewer targets is up to a million points and ten million
+track observations, stored as sorted columns with a prefix-sum index. The tracks
+are sorted by point then image, so adding one observation to one track is an
+insertion in the middle of a ten-million-row column, and a value that is a plain
+clone pays the whole column for it. An `EditedReconstruction` is that value in
+two parts instead: an immutable base, and the small set of edits made on it.
+
+- **The base** is a shared `SfmrReconstruction` behind an `Arc`. It is what was
+  loaded, or the last materialisation. Every version in a run of edits shares
+  it, and nothing is ever written through it.
+- **The deleted set** is which indexes are gone, as a hash set. A set rather
+  than a mask over the base: the overlay exists for individual point edits, so
+  it holds a handful of indexes against a million-point base and its size is the
+  size of the edit.
+- **The additions** are the points this version holds and the base does not, as
+  a `PointSet` of their own with exactly the base's columns, whose observations
+  index the base's image table.
+
+The images and the cameras are the base's. An edit to the image table is not an
+overlay edit.
+
+### Two kinds of edit
+
+A **point edit** lives in the overlay and is always delete-and-re-add. A point
+that changes in any way, its position, its constraint, its normal or frame, its
+track, is deleted from the base and re-added to the additions with its whole
+record and whole track. Adding an observation to a track, removing one,
+splitting a track, merging two, refitting a point, setting a constraint: each is
+tens of rows. Deleting a point is one index in the set. There is one code path
+for "a point that changed" whatever changed about it, and no partial state in
+which a track and a per-observation column disagree.
+
+A **bulk edit** is a function from a plain reconstruction to a plain
+reconstruction: it materialises the current version, runs, and its output is the
+next version's base with an empty overlay. Deleting an image, moving a pose,
+bundle adjustment and baking a transform are bulk, because each touches an
+image's worth of structure or more. The three whole-value edits above
+(`apply_se3_transform`, `subset_by_image_indices`, `filter_points_by_mask`) are
+bulk edits in this sense. The two compose: a run of point edits on a base, then
+a bulk edit that materialises them into the next base, then more point edits on
+that.
+
+### Indexes are stable
+
+A base point keeps its index while the base lives; a deleted index is a hole
+that resolves to nothing and is never reused; an added point takes the next
+index at or after the base's point count. So a point edit shifts no index, and
+a selection, a panel, a `pt3d_<hash>_<index>` id and a GPU instance buffer all
+survive an edit unchanged. Materialisation is the one operation that renumbers,
+and it produces the map that says how.
+
+A point re-added after a modification takes a new index, and the edit records
+the base index it replaces against it, which is what puts it back in its place
+at materialisation.
+
+### Rust API
+
+The type lives in
+[edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs),
+re-exported as
+`sfmtool_core::{EditedReconstruction, PointRecord, RecordObservation, PointView,
+RowMap, EditError}`, and reaches Python as
+`sfmtool._sfmtool.reconstruction.EditedReconstruction`.
+
+```rust
+pub struct EditedReconstruction {
+    pub base: Arc<SfmrReconstruction>,
+    pub deleted_points: HashSet<u32>,
+    pub added: PointSet,
+    /// Per added point: the base index it replaces, or `None` if it is new.
+    pub replaces: Vec<Option<u32>>,
+}
+
+impl EditedReconstruction {
+    pub fn new(base: Arc<SfmrReconstruction>) -> Self;
+
+    // Counts, all O(1).
+    pub fn point_count(&self) -> usize;
+    pub fn image_count(&self) -> usize;
+    pub fn base_point_count(&self) -> usize;
+    pub fn index_bound(&self) -> u32;
+    pub fn is_deleted(&self, index: u32) -> bool;
+    pub fn live_indexes(&self) -> impl Iterator<Item = u32> + '_;
+
+    // Column presence, answered from the base.
+    pub fn feature_source(&self) -> &str;
+    pub fn has_feature_indexes(&self) -> bool;
+    pub fn has_keypoints(&self) -> bool;
+    pub fn has_observation_confidence(&self) -> bool;
+    pub fn has_patch_frames(&self) -> bool;
+    pub fn has_patch_bitmaps(&self) -> bool;
+    pub fn has_normal_confidence(&self) -> bool;
+    pub fn has_point_constraints(&self) -> bool;
+
+    // Reading one point without materialising.
+    pub fn point(&self, index: u32) -> Option<PointView<'_>>;
+
+    // The point edits.
+    pub fn delete_point(&mut self, index: u32) -> Result<(), EditError>;
+    pub fn replace_point(&mut self, index: u32, record: PointRecord)
+        -> Result<u32, EditError>;
+    pub fn add_point(&mut self, record: PointRecord) -> Result<u32, EditError>;
+
+    // Hashes and the commit.
+    pub fn base_content_hash(&self) -> Result<&ContentHash, SfmrError>;
+    pub fn point_edit_hash(&self, records: &[PointRecord]) -> Result<String, SfmrError>;
+    pub fn materialize(&self) -> (SfmrReconstruction, RowMap);
+}
+
+pub struct PointRecord {
+    pub point: Point3D,
+    pub observations: Vec<RecordObservation>,
+    pub patch_u_halfvec: Option<[f32; 3]>,
+    pub patch_v_halfvec: Option<[f32; 3]>,
+    pub patch_bitmap: Option<Array3<u8>>,
+    pub normal_confidence: Option<u8>,
+    pub constraint: Option<(u8, f64, u32)>,
+}
+
+pub struct RecordObservation {
+    pub image_index: u32,
+    pub feature_index: Option<u32>,
+    pub keypoint_xy: Option<[f32; 2]>,
+    pub confidence: Option<u8>,
+}
+
+impl RowMap {
+    pub fn forward(&self, edited: u32) -> Option<u32>;
+    pub fn inverse(&self, new: u32) -> Option<u32>;
+    pub fn forward_dense(&self, index_bound: u32) -> Vec<Option<u32>>;
+    pub fn inverse_dense(&self, point_count: u32) -> Vec<u32>;
+}
+```
+
+**Why it is shaped this way.** The base's point side and the additions are the
+same `PointSet` type, which is what the split above buys: a per-point algorithm
+takes a point set and an image count, so the addition set needs no schema of its
+own to drift from the base's. `PointRecord` is the unit an edit trades in
+because delete-and-re-add wants a whole point, not a diff, and it names no point
+index: an observation's point is the record it belongs to, and the index that
+identifies that point differs between the overlay and the materialisation, so
+carrying one would be a second answer to a question the record already answers.
+A record must carry **exactly** the base's optional columns, no more and no
+fewer, which is what lets column presence be answered from the base alone and
+never from a walk; `add_point` refuses otherwise, with an `EditError` naming the
+column. Every edit validates before it pushes, so a refused record leaves the
+addition set exactly as it was.
+
+There is no copy-on-write and no interior mutability. `&mut self` on an edit is
+a write to the *overlay*, which the version owns; the base behind the `Arc` is
+never written, and a caller can assert that with `Arc::ptr_eq` across any run of
+point edits.
+
+### Example
+
+```rust
+use std::sync::Arc;
+use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
+
+let base = Arc::new(SfmrReconstruction::load(path)?);
+let mut edited = EditedReconstruction::new(Arc::clone(&base));
+
+// Add an observation to point 42's track: read the whole record, extend it,
+// and re-add. The base is untouched, and 42 stops resolving.
+let mut record = edited.point(42).unwrap().to_record();
+record.observations.push(sfmtool_core::RecordObservation {
+    image_index: 7,
+    feature_index: None,
+    keypoint_xy: Some([120.5, 88.25]),
+    confidence: Some(200),
+});
+let moved = edited.replace_point(42, record)?;
+
+edited.delete_point(9)?;
+
+// The plain value every algorithm consumes, plus where each index went.
+let (plain, row_map) = edited.materialize();
+assert_eq!(row_map.forward(moved), Some(42)); // back in its place
+assert_eq!(row_map.forward(9), None);         // gone
+```
+
+## Materialisation
+
+Materialising produces a plain `SfmrReconstruction` in which **every point keeps
+its place**: a modified point goes back to the base index it replaced, carrying
+its new record and track; a deleted point's slot closes up, shifting the points
+after it down by one; and only a point that is new to this base is appended,
+after the last base point, in the order the additions were made. The derived
+indexes are rebuilt at the end. The image table is the base's, thumbnails shared
+rather than copied.
+
+Keeping places is what makes the materialised file readable beside the one it
+came from: a point that was edited is at the same row in both, a point that was
+not is at the same row unless something before it was deleted, and a diff of the
+two files is the edit. It is also what makes the **row map** cheap. For base
+points the map is the identity less a prefix count of the slots that emptied, so
+it is stored as the sorted list of those holes and inverted by the same count;
+only the additions, a handful, need an entry each. `RowMap::forward` and
+`RowMap::inverse` are each a binary search, and `forward_dense` /
+`inverse_dense` are there for a caller crossing a language boundary.
+
+The tracks come out of one merge pass over the base's already-sorted runs, with
+the deleted runs skipped and the modified ones swapped in at their place, then
+the new runs appended: never a re-sort of eight million rows. The patch bitmaps,
+which are the heaviest column, are shared with the base outright when the
+materialisation neither moves a row nor changes a patch, and are the base's with
+those rows replaced when only patches changed.
+
+Materialisation is deterministic (the same value materialises to the same value,
+with the same row map) and idempotent (materialising the result, whose overlay
+is empty, changes nothing and gives the identity map). It fixes the metadata
+counts a save would write, and it does not stamp an operation, a tool or a
+timestamp, which is what keeps it deterministic and keeps the base hash below
+stable.
+
+The result becomes the base of the next version, with empty edits. Older
+versions keep their own base and their own edits, so the history's budget counts
+one copy of the light columns per materialisation rather than per edit.
+
+## Reading through the overlay
+
+`EditedReconstruction::point` resolves one index without materialising: below
+the base's point count it is a base index, at or above it an addition, and the
+caller does not learn which. It hands back a `PointView`, a borrow into whichever
+point set holds the point, with accessors for the geometry, the whole track and
+every column, plus `to_record` for the owned form. The panel, the track rays,
+the point picker and Go to Point read that one accessor.
+
+The counts are O(1) from `base.point_count() - deleted.len() + added.len()`, and
+column presence is answered from the base, since an addition set never
+introduces or removes a column. A reader that wants the whole reconstruction
+takes the materialisation: that is everything in `sfmtool-core` taking
+`&SfmrReconstruction`, which is most of it.
+
+## Hashes
+
+`SfmrReconstruction::content_xxh128` gives the content hashes a save of a value
+would write, computed from the value without touching the filesystem. It runs
+the `.sfmr` writer over an in-memory archive and discards the bytes, so there is
+no second hashing rule that could drift from the writer's: the returned
+`content_xxh128` is byte-for-byte the one a save of that value stores, including
+the normalisations the write performs on its way (tracks sorted, format version
+and infinity count refreshed, depth statistics and missing normals recomputed).
+The one condition is that nothing stamps new metadata onto the value between the
+hash and the save, because the metadata section is part of the hash. A base that
+was never written therefore has the hash a write of it would produce, which is
+what lets a point id name a point in a value that has no file yet.
+
+`EditedReconstruction::base_content_hash` computes that once, on first request,
+and keeps it. The cost is one serialisation and compression of the whole value,
+which the patch bitmaps dominate, so it is affordable on an event and not on a
+frame.
+
+`EditedReconstruction::point_edit_hash` hashes a point edit that creates points.
+It covers the base's `content_xxh128`, then each record's observations as the
+content hash of the image that sees the point and the pixel it is seen at, then
+the point that pixel set triangulates to. So two different additions on one base
+hash differently, and the same addition made twice, in two sessions or after an
+undo, hashes the same, which is right, since it is the same point. The image's
+content hash is the base's own per-image hash (`image_file_hashes` for
+`embedded_patches`, `sift_content_hashes` for `sift_files`, and the image's name
+when the reconstruction carries neither); the pixel is the inline keypoint when
+the base carries one and the `.sift` feature index otherwise, which is what
+identifies a sighting in each mode. An edit that only modifies or deletes
+creates no point and needs no hash of its own.
+
 ## Implementation notes
 
 **The sharing rule.** A shared column is read through its pointer and never
@@ -204,6 +475,30 @@ takes `.copy()`. Without that flag a Python write would land in every
 reconstruction sharing the buffer at once, which is the one thing the rule
 forbids.
 
+**The row map's inversion has a run, not a point.** For base points the forward
+map is `slot - holes_below(slot)`, and inverting it means solving
+`slot - holes_below(slot) == new`. That equation has more than one solution: a
+hole and the live slot after it both satisfy it, because a hole contributes
+nothing to the count below itself. Writing `slot = new + m`, the difference
+`holes_below(new + m) - m` falls by nought or one per step of `m`, so it is
+non-increasing and a binary search finds where it crosses zero; the answer is
+the **last** `m` of the crossing run, which is the only one that is not a hole.
+Taking the first instead returns a deleted slot, and every read through the map
+then reads a neighbour's point.
+
+**A materialisation's addition entries need two orders.** The pairs come out in
+emission order, which is base-slot order for the modified points and addition
+order for the appended ones, so the list is sorted by neither index on its own.
+`forward` and `inverse` each binary-search, so the map keeps the pairs twice,
+once sorted by the edited index and once by the new one. They are the size of
+the edit, so the second copy is free.
+
+**A record's `NaN` is not a difference.** A free point's constraint distance is
+`NaN` by definition, and `NaN != NaN`, so a structural comparison reports two
+identical reconstructions as different for no reason other than that neither
+constrains anything. `EditedReconstruction`'s `PartialEq` reads two `NaN`
+distances as agreeing, since both say the point is at no distance from anything.
+
 **Validation is split the same way.** `validate_observation_columns` checks the
 per-observation columns against the track count and the per-image hashes against
 the image count; `validate_point_columns` checks the constraint triple against
@@ -226,12 +521,38 @@ the crate. The Python side is exercised across `tests/rust_bindings/`, where the
 binding surface is the contract: no Python-visible name, dtype or shape depends
 on which half a column lives in.
 
+The overlay is covered by
+`crates/sfmtool-core/src/reconstruction/edited/tests.rs` and, from Python, by
+`tests/rust_bindings/test_edited_reconstruction_rust_bindings.py`. Both build on
+a reconstruction carrying every optional column, so a record that omits or
+invents one is a visible failure. What they pin:
+
+- Every read through the overlay equals the same read on the materialised value
+  under the row map, over pseudo-random sequences of delete, replace and add.
+- A run of point edits leaves the base the same `Arc` (`Arc::ptr_eq`).
+- Indexes are stable: an index that resolved before an edit and was neither
+  deleted nor replaced resolves to the same record after it, and a deleted or
+  replaced index resolves to nothing.
+- Materialisation is deterministic and idempotent, its row map is a bijection
+  from the surviving indexes onto the materialised rows, a modified point lands
+  back at the base index it replaced, and a version that changed no patch shares
+  the base's bitmap array by pointer.
+- A record is refused, with the addition set untouched, when it carries the
+  wrong columns, an image the base does not hold, a bitmap of the wrong
+  resolution, or no observations at all.
+- The hash a materialised value reports equals the `content_xxh128` a save of it
+  writes, read back off the file.
+
 ## Non-goals
 
-- An **edited reconstruction**, a shared immutable base plus the point edits made
-  on top of it, is not built here. This spec describes the plain value the base
-  would be; the base-plus-edits representation, the delete-and-re-add rule for
-  point edits, and materialisation are proposed in
+- Row-level surgery on the base's columns. The base is never written, and
+  `Arc::make_mut` appears nowhere.
+- Branching, or an edit applied to a version other than the one in hand. The
+  overlay is one version's worth of edits on one base.
+- Persisting the overlay. A file is always a materialisation.
+- The policy that decides *when* to materialise, the GPU-side consequences of
+  the deleted set and the additions buffer, and the point-id version graph that
+  tracks a point's identity across versions. Those are proposed in
   [`../../drafts/sfm-explorer-editing-overlay.md`](../../drafts/sfm-explorer-editing-overlay.md).
 - Sharing between reconstructions beyond the two heavy columns. The track
   columns are most of the remaining bytes and are untouched by every bulk edit

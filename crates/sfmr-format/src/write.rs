@@ -4,6 +4,7 @@
 //! `.sfmr` file writing.
 
 use std::borrow::Cow;
+use std::io::{Cursor, Seek, Write};
 use std::path::Path;
 
 use xxhash_rust::xxh3::Xxh3;
@@ -99,6 +100,53 @@ pub fn write_sfmr_with_options(
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<(), SfmrError> {
+    write_sfmr_into(data, options, || {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| SfmrError::IoPath {
+                operation: "Failed to create parent directory",
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+        std::fs::File::create(path).map_err(|e| SfmrError::IoPath {
+            operation: "Failed to create file",
+            path: path.to_path_buf(),
+            source: e,
+        })
+    })?;
+    Ok(())
+}
+
+/// The [`ContentHash`] a [`write_sfmr_with_options`] of `data` would write,
+/// computed without touching the filesystem.
+///
+/// The archive is built into memory and discarded, through the *same* code path
+/// a file write takes, so the returned hash is the one a subsequent write of
+/// `data` stores -- there is no second hashing rule that could drift from the
+/// writer's. `data` is normalised exactly as a write normalises it (tracks
+/// sorted, format version and `infinity_point_count` refreshed, depth
+/// statistics recomputed unless the options skip them), which is why it is
+/// taken by `&mut`.
+///
+/// The cost is a full serialisation and compression of the value, dominated by
+/// the patch bitmaps; a caller that asks repeatedly caches the answer.
+pub fn content_hash_of(
+    data: &mut SfmrData,
+    options: &WriteOptions,
+) -> Result<ContentHash, SfmrError> {
+    write_sfmr_into(data, options, || Ok(Cursor::new(Vec::new())))
+}
+
+/// Serialise `data` into a fresh archive on the sink `open_sink` returns, and
+/// give back the [`ContentHash`] written into it.
+///
+/// The sink is opened only once every validation has passed, so a rejected
+/// write leaves no file behind.
+fn write_sfmr_into<W: Write + Seek>(
+    data: &mut SfmrData,
+    options: &WriteOptions,
+    open_sink: impl FnOnce() -> Result<W, SfmrError>,
+) -> Result<ContentHash, SfmrError> {
     // Validate the feature_source and that the mode-appropriate columns are
     // present (and the others absent) before mutating or writing anything.
     validate_feature_source(data)?;
@@ -171,19 +219,7 @@ pub fn write_sfmr_with_options(
         num_buckets,
     )?;
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| SfmrError::IoPath {
-            operation: "Failed to create parent directory",
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let file = std::fs::File::create(path).map_err(|e| SfmrError::IoPath {
-        operation: "Failed to create file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut zip = ZipWriter::new(file);
+    let mut zip = ZipWriter::new(open_sink()?);
     let has_rigs = data.rig_frame_data.is_some();
     let mut section_digests: Vec<u128> = Vec::with_capacity(if has_rigs { 7 } else { 5 });
 
@@ -707,7 +743,7 @@ pub fn write_sfmr_with_options(
     )?;
 
     zip.finish()?;
-    Ok(())
+    Ok(content_hash)
 }
 
 /// The three constraint columns as borrowed slices: the constraint per point,

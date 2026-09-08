@@ -113,6 +113,29 @@ impl SfmrReconstruction {
         sfmr_format::write_sfmr(path, &mut data)
     }
 
+    /// The content hashes a [`save`](Self::save) of this value would write,
+    /// computed from the value alone without touching the filesystem.
+    ///
+    /// The hash is a function of the bytes the writer emits, and this runs the
+    /// writer over an in-memory archive that is then discarded, so the returned
+    /// [`sfmr_format::ContentHash`] is byte-for-byte the one a save of this
+    /// value stores -- including the normalisations a write performs on its way
+    /// (tracks sorted, format version and infinity count refreshed, depth
+    /// statistics and missing normals recomputed). Those normalisations happen
+    /// on the temporary [`SfmrData`] copy, so `self` is unchanged.
+    ///
+    /// The equality holds against a save that writes this value as it stands. A
+    /// caller that stamps new metadata (an operation name, a timestamp) between
+    /// hashing and saving changes the metadata section and so changes the hash;
+    /// stamp first, then hash.
+    ///
+    /// The cost is one serialisation and compression of the whole value, which
+    /// the patch bitmaps dominate.
+    pub fn content_xxh128(&self) -> Result<sfmr_format::ContentHash, SfmrError> {
+        let mut data = self.to_sfmr_data();
+        sfmr_format::content_hash_of(&mut data, &sfmr_format::WriteOptions::default())
+    }
+
     /// Convert from the raw columnar I/O representation.
     pub fn from_sfmr_data(data: SfmrData) -> Result<Self, SfmrError> {
         // Both observation sources load; the mode picks which columns the

@@ -4996,8 +4996,10 @@ dependencies = [
  "rayon",
  "serde_json",
  "sfmr-format",
+ "sfmtool-archive-io",
  "sift-format",
  "wgpu",
+ "xxhash-rust",
  "zip",
  "zstd",
 ]

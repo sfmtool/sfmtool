@@ -82,7 +82,7 @@ impl std::error::Error for ReconstructionError {}
 /// Here the representation is normalised — a finite point (`w != 0`) stores its
 /// Euclidean position in `position` with `w == 1.0`; a point at infinity
 /// (`w == 0`) stores a unit-length direction in `position` with `w == 0.0`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Point3D {
     /// Euclidean position (finite point) or unit direction (point at infinity),
     /// in world coordinates. Disambiguated by `w`.
@@ -262,7 +262,7 @@ impl SfmrImage {
 /// inline keypoint (`embedded_patches`) — lives in
 /// [`PointSet::observations`], a column parallel to the track array,
 /// rather than in this struct (so neither mode pays for the other's field).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackObservation {
     /// Index into the images array.
     pub image_index: u32,

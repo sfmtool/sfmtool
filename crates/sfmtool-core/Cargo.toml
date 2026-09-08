@@ -23,6 +23,8 @@ rand = "0.10"
 rand_distr = "0.6"
 serde_json = "1"
 sfmr-format = { path = "../sfmr-format" }
+sfmtool-archive-io = { path = "../sfmtool-archive-io" }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
 sift-format = { path = "../sift-format" }
 camrig-format = { path = "../camrig-format" }
 matches-format = { path = "../matches-format" }

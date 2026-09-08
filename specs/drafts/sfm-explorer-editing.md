@@ -59,7 +59,7 @@ out.
 ### A base plus its edits
 
 A version is an **edited reconstruction**
-([`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md)): a
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)): a
 shared, immutable base `SfmrReconstruction` in
 [`data.rs`](../../crates/sfmtool-core/src/reconstruction/data.rs), held by
 `Arc`, plus the small set of point edits made on top of it, a set of deleted
@@ -90,8 +90,10 @@ ever written through those `Arc`s, so it is sharing, not copy-on-write. The
 history budget (Part 2) bounds how many bases a node holds; § "Step 1's
 numbers" below has the measurements behind both decisions.
 
-Files into: `specs/core/reconstruction/edited-reconstruction.md`, which
-already describes the plain value the base is.
+Filed:
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+describes the value, the point edits, the overlay accessor, materialisation
+and the hashes.
 
 ### Step 1's numbers
 
@@ -182,10 +184,11 @@ an index into the current value, and an edit that deletes rows shifts the
 indexes after it. Options: clear the selection on any structural edit; remap
 it through the edit's row map; or key the selection by something stable. The
 history already knows what each structural edit removed, so remapping is
-cheap, and clearing is what a user would notice as a bug. The overlay draft
-([`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md))
-makes indexes stable across every edit but a materialisation, so remapping
-is needed only there, where the materialisation's row map supplies it.
+cheap, and clearing is what a user would notice as a bug. The edited
+reconstruction
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md))
+keeps indexes stable across every edit but a materialisation, so remapping is
+needed only there, where the materialisation's row map supplies it.
 
 ---
 
@@ -288,14 +291,17 @@ milliseconds and eighty megabytes per keystroke, and a hundred such edits in a
 history hold eight gigabytes of tracks that differ by a hundred rows in total.
 A plain value per version fails exactly on the edit that matters.
 
-The answer is proposed in
-[`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md): an
-edited reconstruction is an immutable base plus a deleted set and an addition
-set, every edit reduces to deleting points from the base and re-adding them
-to the additions, indexes stay stable while the base lives, and the plain CSR
-form is materialised only when an algorithm, a save, or a size threshold asks
-for it. What that draft leaves open is the materialisation policy and which
-read paths look through the overlay. The first track edits are built on
+The answer is
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md):
+an edited reconstruction is an immutable base plus a deleted set and an
+addition set, every point edit reduces to deleting points from the base and
+re-adding them to the additions, indexes stay stable while the base lives, and
+the plain CSR form is materialised, every point in its place and with a row
+map, only when an algorithm, a save, or a size threshold asks for it. What is
+still open, in
+[`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md), is the
+materialisation policy, the GPU side, and the point-id version graph. The first
+track edits are built on
 `embedded_patches` reconstructions, where an observation is a pixel and a
 patch and nothing else; an added observation on a `sift_files` reconstruction
 has no feature index behind it, and whether the format grows to carry one is
@@ -358,12 +364,6 @@ steps after it.
    the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-3. **The edited reconstruction, in core.** The base-plus-edits value, the
-   point edits as delete-and-re-add, the per-point accessor that looks through
-   the overlay, materialisation with every point in its place and its row map,
-   the base and edit hashes, bound so an offline caller can build and
-   materialise one. Files the rest of
-   `core/reconstruction/edited-reconstruction.md`.
 4. **Document model, undo and redo, one edit of each kind.** History as
    versions on the node, the version graph and its point maps, base-identity
    upload with the deleted mask and the additions buffer replacing
@@ -382,7 +382,7 @@ steps after it.
    since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
-Steps 3 and 4 are the groundwork; 5 and 6 are independent of each other; 7
+Step 4 is the remaining groundwork; 5 and 6 are independent of each other; 7
 follows 4 and interleaves with 5 and 6.
 
 ## Non-goals

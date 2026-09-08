@@ -25,7 +25,7 @@ pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
 pub use read::{read_sfmr, read_sfmr_content_hash, read_sfmr_metadata, resolve_workspace_dir};
 pub use types::*;
 pub use verify::verify_sfmr;
-pub use write::{write_sfmr, write_sfmr_with_options, WriteOptions};
+pub use write::{content_hash_of, write_sfmr, write_sfmr_with_options, WriteOptions};
 
 #[cfg(test)]
 mod tests;

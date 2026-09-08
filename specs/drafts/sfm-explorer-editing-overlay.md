@@ -1,219 +1,24 @@
-# Edited reconstructions: a base plus its edits
+# Editing an in-memory reconstruction: what the overlay leaves open
 
 **Status:** Draft
 
 Answers Part 4 of [`sfm-explorer-editing.md`](sfm-explorer-editing.md), the
-umbrella draft for editing a loaded reconstruction in place, which poses the
-row-level edit problem without solving it. That draft's Part 4 links here and
-shrinks to a pointer; when this ships, its content files into
-[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md),
-alongside the plain value that spec already describes, and the umbrella's
-step 3 is deleted.
+umbrella draft for editing a loaded reconstruction in place, and holds what is
+left of that answer after the core landed.
 
-A reconstruction in memory is a million points and ten million track
-observations, stored as sorted columns with a prefix-sum index (CSR), and the
-value-semantics model of the umbrella draft keeps one such value per history
-version. Copying a column to insert one row into it costs the whole column, so
-any edit that changes the track structure, which is nearly every interesting
-edit, is unaffordable under a plain column-sharing model. This draft proposes
-that an edited reconstruction is an **immutable base plus a small set of
-edits**, that every edit reduces to deleting points from the base and adding
-points to a side set, and that the plain CSR form is produced only when
-something needs it.
-
-Decided: the two-part representation, the delete-and-re-add rule, stable
-indexes across the base's lifetime, and materialisation as the commit. Not
-decided: the materialisation policy's thresholds, and how many read paths look
-through the overlay rather than materialising.
+The representation itself is built and standing:
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+describes the base plus its edits, the delete-and-re-add rule for point edits,
+the stable indexes, the accessor that reads one point without materialising,
+the materialisation that keeps every point in its place with its row map, and
+the base and point-edit hashes. This draft keeps only what that spec does not
+decide: how the GPU side consumes an overlay, what a save of an addition means
+on a `sift_files` reconstruction, the point-id version graph with its minting
+and resolution rules, and the open questions.
 
 ---
 
-## The representation
-
-An edited reconstruction has three parts:
-
-- **The base**: a shared, immutable `SfmrReconstruction`. It is what was
-  loaded, or the last materialisation. Every version in a run of edits shares
-  it.
-- **The deleted set**: which of the base's points are gone, as a hash set of
-  the base's point indexes. A set, not a mask over the base: the overlay
-  exists for individual point edits, so the set holds a handful of indexes
-  against a million-point base, and its size is the size of the edit rather
-  than the size of the base.
-- **The additions**: the points that exist in this version and not in the base,
-  as a point set of their own with the same columns the base's point side has:
-  points, CSR tracks, the per-observation columns, the patch frames and
-  bitmaps, the constraints. Their observations refer to the base's image table.
-
-The images and cameras are the base's, unchanged. An edit to the image table
-is not an overlay edit (below).
-
-```rust
-/// A reconstruction value that is a shared base plus what this version
-/// changed. Equal bases and equal edits are equal values.
-pub struct EditedReconstruction {
-    pub base: Arc<SfmrReconstruction>,
-    pub deleted_points: HashSet<u32>,
-    pub added: PointSet,
-    /// For each added point, the base index it replaces (a modified point),
-    /// or `None` for a point that is new. What puts a modified point back in
-    /// its place at materialisation, and what the version graph's point map
-    /// is read from.
-    pub replaces: Vec<Option<u32>>,
-}
-```
-
-`SfmrReconstruction` is an image table plus a `PointSet`
-([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)),
-so the base's point side and the additions are the same type and a per-point
-algorithm takes a `PointSet` and an image count rather than the whole. That is
-what this draft builds on; the alternative, an additions type that mirrors the
-point columns by hand, would be a second copy of the schema that drifts.
-
-### Two kinds of edit
-
-An edit is either a **point edit**, which lives in the overlay, or a **bulk
-edit**, which produces a new immutable base. The line between them is the
-footprint: a point edit touches a handful of points, and a bulk edit touches
-an image's worth of structure or more.
-
-A **point edit** is delete-and-re-add. A point that changes in any way, its
-position, its constraint, its normal or frame, its track, is deleted from the
-base and re-added to the additions with its whole record and whole track. The
-cost of the edit is the size of the records it touches, never the size of the
-base:
-
-- **Add an observation to a track**: delete the point, re-add it with its
-  observations plus one. Tens of rows.
-- **Remove an observation, split a track, merge two tracks, refit a point,
-  set a constraint**: the same.
-- **Delete a point**: one index in the set.
-
-A point edit never writes a row into the base's columns, so the base's
-identity, and everything keyed on it, holds for as long as the base does.
-
-A **bulk edit** is a function from a plain reconstruction to a plain
-reconstruction, a plain value in and a plain value out:
-it materialises the current version if it has to, runs, and its output is the
-next version's base with an empty overlay.
-
-- **Delete an image**: the image row goes, its observations go, every point it
-  observed is re-triangulated without it, and a point left under two
-  observations goes with them. Image indexes after it shift, which is the
-  renumbering the overlay is built to avoid and a bulk edit is allowed.
-- **Move a pose**: the image column changes and every point the image observes
-  is re-triangulated at the new pose. Thousands of points for a well-observed
-  image, so it is bulk, though it renumbers nothing.
-- **Bundle adjust**: every point moves.
-- **Bake the node transform**: every point and every pose moves.
-
-There is no third category, and the two compose: a run of point edits on a
-base, then a bulk edit that materialises them into the next base, then more
-point edits on that.
-
-### Indexes are stable
-
-A base point keeps its index while the base lives; a deleted index is a hole
-that resolves to nothing. An added point takes an index at or after the base's
-point count, assigned once and never reused within the base's lifetime. So an
-edit shifts no index: the selection, the Point Track Detail panel, a
-`pt3d_<hash>_<index>` id, the MCP addressing, and the GPU instance buffers all
-survive an edit unchanged, and the umbrella's open question about selection
-remapping is closed by construction rather than by a rule. Materialisation is
-the one operation that renumbers, and then only the points after a deletion
-and the points that are new; it is where a remap is produced.
-
-A point re-added after a modification gets a new index, and the edit records
-the old one against it: the point's identity continues across the
-modification (§ "The version graph" under Point ids), so the selection and
-the panel follow it, and its id does not change.
-
----
-
-## Materialisation
-
-Materialising an edited reconstruction produces a plain `SfmrReconstruction`
-in which **every point keeps its place**: a modified point goes back to the
-base index it replaced, carrying its new record and track; a deleted point's
-slot closes up, shifting the points after it down by one; and only a point
-that is new to this base is appended, after the last base point, in the
-order the additions were made. The tracks are re-sorted into CSR around
-that order and the derived indexes rebuilt. The image table is the base's,
-untouched.
-
-Keeping places is what makes the materialised file readable beside the one
-it came from: a point that was edited is at the same row in both, a point
-that was not is at the same row unless something before it was deleted, and
-a diff of the two files is the edit. It is also what makes the **row map**
-cheap: for base points it is the identity minus a prefix count of
-deletions, monotone, so it is stored as the sorted deleted set and inverted
-by the same count; for additions it is one index each. The selection and
-the GPU buffers consume it. A merge of two tracks keeps the lower index and
-deletes the higher; a split keeps the first half in place and appends the
-second.
-
-It is one copy of the light columns: the base's tracks are already sorted
-and the additions are a handful, so the track column is a merge pass over
-the base with the deleted tracks skipped and the modified ones swapped in at
-their place, then the new tracks appended, never a re-sort. The bitmap and
-thumbnail columns are shared with the base unless an addition changed a
-patch, in which case the new bitmap column is the base's with those rows
-replaced. On the largest real reconstruction (530 674 points, 8.1 million
-observations) the light columns are 165 MB and clone in 32 ms; the umbrella
-draft's "Step 1's numbers" has the measurements.
-
-It happens when:
-
-- a bulk edit or an algorithm that takes a plain reconstruction runs: bundle
-  adjustment, deleting an image, the census, alignment, a save;
-- the edits have grown past a fraction of the base, so that looking through
-  the overlay no longer pays;
-- explicitly, as a "flatten" the user or an agent asks for.
-
-The result becomes the **base of the next version**, with empty edits. Older
-versions keep their old base and their own edits, so a walk backwards through
-the history still shares, and the history budget counts one full copy per
-materialisation rather than per edit. Bundle adjustment is the common case: it
-reads a materialised value and its output is the next base.
-
-The fraction and the explicit trigger are the open policy. A
-materialisation costs tens of milliseconds on the largest real
-reconstruction, so it is affordable on any event and never on a frame.
-
----
-
-## Reading through the overlay
-
-A reader of an edited reconstruction sees the base's points minus the deleted
-ones, then the additions. Two kinds of reader exist:
-
-- **Per-point readers** resolve one index: base index below the base's count
-  and not deleted, addition index otherwise. The Point Track Detail panel, the
-  track rays, the point picker, a single-point photometric refit, Go to Point.
-  These learn the overlay, through one accessor that hides which side an index
-  came from, and never materialise.
-- **Whole-reconstruction readers** take a plain value and get the
-  materialisation. Everything in `sfmtool-core` that takes
-  `&SfmrReconstruction` today, which is most of it.
-
-The census
-([`reports/2026-09-07-editing-read-path-census.md`](../../reports/2026-09-07-editing-read-path-census.md))
-found no per-frame reader of the second kind: the eight per-frame "whole"
-reads are counts and the content hash, which an overlay answers in O(1)
-from `base.point_count() - deleted.len() + added.len()` and the cached base
-hash. Every real whole walk is event-driven. Three of them need a design
-rather than a materialisation: the derived aggregates the point upload
-computes (auto point size, camera scale, scene bounds), which a point edit
-must either leave stale until the next materialisation or update
-incrementally, and whose staleness shows in the clip planes; the Image
-Detail panel's embedded-features overlay, which walks every observation on
-exactly the `embedded_patches` files the first track edits target and must
-iterate base-minus-deleted plus additions instead; and column presence
-(`feature_indexes`, `keypoints_xy`, the patch frames), probed every frame
-in six places, which an overlay answers from the base alone, since an
-addition set never introduces or removes a column.
-
-### The GPU side
+## The GPU side
 
 The base's buffers keep their identity, so the umbrella's identity-based
 upload sees no change on the base and uploads nothing for it. The deleted set
@@ -228,7 +33,7 @@ as a second instance buffer drawn after the base's, with the same per-node
 uniforms. A materialisation replaces both with one buffer, through the row
 map. No edit re-uploads a million points.
 
-### The file side
+## The file side
 
 A save materialises, then writes as any writer does. An observation added from
 a clicked pixel has a keypoint and a patch but no feature index, so the first
@@ -236,31 +41,6 @@ track edits are built on `embedded_patches` reconstructions, where that is
 what an observation is. On a `sift_files` reconstruction such an edit refuses
 until the format carries an observation without a feature; that format
 decision is not made here.
-
----
-
-## Testing
-
-- An edited reconstruction and its materialisation agree: every per-point
-  read through the overlay equals the same read on the materialised value
-  under the row map, for random edit sequences.
-- Delete-and-re-add is total for point edits: every point-edit family
-  produces a value whose base is the same `Arc` as before the edit, and
-  every bulk-edit family produces a value with an empty overlay.
-- Stable indexes: after any edit that is not a materialisation, every index
-  that resolved before and was not deleted or modified resolves to the same
-  record.
-- Materialisation is deterministic and idempotent, and its row map is a
-  bijection from the surviving edited indexes onto the new ones.
-- A pose edit's and an image deletion's re-triangulation matches the batch
-  triangulation of the same points at the same poses, and an image deletion's
-  output equals the offline image-drop transform on the same input.
-
-## Non-goals
-
-- Row-level surgery on the base's CSR columns. The base is never written.
-- Branching, or edits applied to a version other than the cursor's.
-- Persisting the overlay. A file is always a materialisation.
 
 ---
 
@@ -293,29 +73,18 @@ The session form stays in the `[a-zA-Z0-9_]` class, so it double-click
 selects like the file form, and the file form is its prefix, so a session id
 truncates to a file id by dropping the last field.
 
-**Every base has a hash.** The section hashes are defined over the
-uncompressed bytes of the section entries, and `content_xxh128` over those,
-so the hash is a function of the value and not of a file: a base that was
-never saved has the same hash a save of it would write. A materialisation
-fixes the metadata a save would write (operation, provenance, timestamp) at
-the moment it produces the base, and computes the hash from the serialised
-sections without compressing or writing them, lazily on the first request
-for an id or for the hash itself. A later save writes exactly that metadata
-and those bytes, so the file's hash equals the base's, and an id minted
-before the save names the same point in the file after it. The cost is one
-serialisation and one XXH128 pass over the value, which is a fraction of the
-materialisation that produced it; the bitmaps dominate both. Demo data is
-hashed the same way, so `00000000` is no longer a state a node can be in.
-
-**Every point edit has a hash.** A point edit that creates points (a new
-track, a split's second half) is hashed over its content: the hash of the
-base it applies to, and the records it adds, which are the observations with
-their image content hashes and pixels, and the point they triangulate to.
-That is a function of what was added and where, and of nothing else: two
-different additions on the same base hash differently, and the same
-addition made twice, in two sessions or after an undo, hashes the same,
-which is right, since it is the same point. An edit that only modifies or
-deletes creates no points and needs no hash of its own.
+**Every base has a hash, and so does every point edit that creates one.** Both
+are built and specified in
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+under "Hashes": a base's `content_xxh128` is computed from the value without
+writing a file and equals what a save of it writes, and a point edit that
+creates points is hashed over the base's hash plus the records it adds. So an
+id minted against either names the same point after a save as before it, and
+demo data is hashed the same way, which means `00000000` is not a state a node
+can be in. What is left open here is the condition that equality rests on: the
+hash covers the metadata section, so anything that stamps an operation, a tool
+or a timestamp onto a base has to do so before the hash is taken, and where in
+the save path that stamping belongs is a decision for the saving step.
 
 ### The version graph
 
