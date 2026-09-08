@@ -215,6 +215,76 @@ decision is not made here.
 - Branching, or edits applied to a version other than the cursor's.
 - Persisting the overlay. A file is always a materialisation.
 
+---
+
+## Point ids
+
+A point id today is a coordinate in a file: `pt3d_{hash}_{index}`, the first
+eight hex digits of the file's `content_xxh128` and the point's row in it
+([the format spec's Point ID
+section](../formats/sfmr-file-format.md#point-id-portable-3d-point-references)).
+An edited reconstruction is not a file, so the id grows a **session form**
+that says which node and which version of it the index belongs to, and the
+file form stays exactly what it is.
+
+```
+pt3d_{hash}_{index}                       file form
+pt3d_{hash}_{index}_n{node}_v{version}    session form
+```
+
+| Part | Content | Example |
+|------|---------|---------|
+| `{hash}` | The **base's** hash: the file it was loaded from, or `00000000` for a base that is not a file (demo data, a materialisation not yet saved). | `a1b2c3d4` |
+| `{index}` | The point's index in the edited value: a base index, or an index at or past the base's count for an added point. | `12345` |
+| `{node}` | The node's session id (its `ReconId`), decimal. | `3` |
+| `{version}` | The version's serial within the node's history, decimal. Serials are minted once per node and never reused, so a version truncated by a new edit after an undo does not share a serial with the version that replaced it. | `17` |
+
+The session form stays in the `[a-zA-Z0-9_]` class, so it double-click
+selects like the file form, and the file form is a prefix of it, so a session
+id truncates to a file id by dropping the last two fields.
+
+**What the file form of a session id means.** The hash names the base, and
+the overlay never changes the base, so for a base point that was not deleted
+or modified the file form is exactly the point's id in the file, and every id
+written down against that file (the ground-truth table, a constraints file)
+keeps resolving through any number of point edits. For an added or modified
+point the index is at or past the base's count, so the file form is out of
+range in the file: a tool reading it detects that the id names a point the
+file does not contain, rather than silently reading another point. A deleted
+base point's file form still names the row in the file, which the file still
+has.
+
+**What the suffix adds.** Node and version make the id resolvable to one
+value in the session: the version's serial selects the base and the overlay
+together, so an id copied before a materialisation still names the point it
+named, through the materialisation's row map, when pasted after it. A
+`00000000` base is no longer ambiguous between nodes, since the node id
+separates them. Go to Point accepts both forms; on the session form it
+resolves the node by id (a closed node is a miss, named as such), the version
+by serial (mapping forward through every materialisation between that
+version and the cursor's, and refusing when a mapped index was deleted), and
+the index against that value.
+
+**What the panels copy.** *Copy Point ID* copies the session form, since that
+is what resolves in the session the user is in. It is disabled, with a hover
+explanation, for nothing: the file form is always recoverable from it. A
+constraints file wants file ids, and a tool consuming one accepts a session id
+by taking its file-form prefix and applying the out-of-range rule above.
+
+**What a save does.** A save materialises, writes a file with a new hash, and
+that file becomes the base of the next version with a row map from the old
+indexes. Ids minted against the old base resolve forward through the map as
+above, within the session. Across sessions the chain is gone unless the file
+carries it, so the saved file's metadata records its lineage: the ancestor
+base's hash and the row map from it, which is what lets an id from last
+week's file land in this week's. That metadata entry is the one addition this
+draft asks of the format spec, alongside a sentence in its Point ID section
+that a reader may meet the session form and takes its prefix.
+
+Files into: `gui/goto-point.md` (both forms and the resolution), the Point
+Track Detail's copy action, and the format spec's Point ID section (the one
+sentence) and metadata (the lineage entry).
+
 ## Open questions
 
 - The materialisation fraction, and whether it is measured in points, in
