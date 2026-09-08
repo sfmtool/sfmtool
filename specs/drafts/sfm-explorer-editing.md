@@ -401,4 +401,10 @@ follows 4 and interleaves with 5 and 6.
 ## Open questions
 
 - The overlay draft's open questions (materialisation policy, how the
-  version graph's maps are stored, when the point-set split lands).
+  version graph's maps are stored).
+- Finer sharing between bases than the two heavy columns. The track
+  structure (keypoints, image and point indexes, observation confidence) is
+  most of the light bytes and is untouched by every bulk edit but
+  delete-image, so a bulk edit could point at its input's track columns too.
+  Deliberately not decided until large reconstructions are being edited live
+  and the history's memory can be measured on them.
