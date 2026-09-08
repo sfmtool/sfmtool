@@ -79,13 +79,14 @@ algorithms take a point set rather than the whole. That split lives in
 `sfmtool-core`, because the struct is core's and is what the PyO3 bindings
 and every pipeline hold; the bindings' behaviour does not change.
 
-A bulk edit copies the base, and the base's heaviest parts are the patch
-bitmaps and the thumbnails, an order of magnitude over everything else, so
-those two columns are held by `Arc` and a bulk edit that does not touch them
-(every bulk edit but a refit of the patches) shares them with its
-predecessor. That is the whole of the column sharing this design needs: the
-light columns are copied whole by a bulk edit, which is already a full copy
-of the tracks, and the point edits never copy a column at all.
+There is no copy-on-write anywhere in this. The base is one immutable value
+behind one `Arc`, shared whole by every version in a run of point edits, and
+the thing a point edit updates is the edit part of the version, which is its
+own. A bulk edit produces a new base, which is a full copy including the
+patch bitmaps and thumbnails that dominate memory; the history budget
+(Part 2) is what bounds how many such bases a node holds. Whether two bases
+should share those two columns when a bulk edit did not touch them is an
+optimisation to decide from step 1's numbers, not part of the model.
 
 Files into: `specs/core/reconstruction/edited-reconstruction.md` (new).
 
@@ -102,9 +103,7 @@ identity of the base it last uploaded from and compares it each frame. A
 point edit leaves the base's buffers alone: the deleted set reaches the point
 shader as a small mask, and the additions are a second instance buffer drawn
 after the base's. A bulk edit changes the base, and re-uploads what changed
-in it, which the shared bitmap and thumbnail columns identify by identity as
-well: a pose edit re-uploads points and frustums and leaves the atlases.
-Undoing to a version whose base is the one on the GPU uploads the mask and
+in it. Undoing to a version whose base is the one on the GPU uploads the mask and
 the additions and nothing else. The boolean and the epoch both go, replaced
 by one mechanism, and the GPU-side cost of an undo is proportional to what
 the undo changed.
@@ -302,15 +301,14 @@ steps after it.
 
 1. **Census and measurement.** List every read path in the viewer that walks
    a reconstruction, and whether it reads one point or the whole; time a full
-   clone of the largest real reconstruction with and without its bitmaps and
-   thumbnails; time a materialisation of a base with a handful of edits. The
-   numbers go into the two drafts (the memory budget, the materialisation
-   threshold) before step 2 starts.
-2. **The point-set split and the shared heavy columns, in core.**
-   `SfmrReconstruction` becomes an image table plus a point set; the bitmap
-   and thumbnail columns become `Arc`-held. Bindings unchanged; byte parity on
-   the full Python and Rust suites is the acceptance test. Files the first
-   half of `core/reconstruction/edited-reconstruction.md`.
+   clone of the largest real reconstruction, and how much of it is bitmaps
+   and thumbnails; time a materialisation of a base with a handful of edits.
+   The numbers go into the two drafts (the memory budget, the materialisation
+   threshold, whether bases share their heavy columns) before step 2 starts.
+2. **The point-set split, in core.** `SfmrReconstruction` becomes an image
+   table plus a point set. Bindings unchanged; byte parity on the full Python
+   and Rust suites is the acceptance test. Files the first half of
+   `core/reconstruction/edited-reconstruction.md`.
 3. **The edited reconstruction, in core.** The base-plus-edits value, the
    point edits as delete-and-re-add, the per-point accessor that looks through
    the overlay, materialisation with every point in its place and its row map,
@@ -349,6 +347,8 @@ follows 4 and interleaves with 5 and 6.
 
 ## Open questions
 
-- The history memory budget's value (Part 2), after step 1's numbers.
+- The history memory budget's value (Part 2), after step 1's numbers, and
+  whether a bulk edit's base shares the bitmap and thumbnail columns with its
+  predecessor when it did not touch them, which the same numbers decide.
 - The overlay draft's open questions (materialisation policy, how the
   version graph's maps are stored, when the point-set split lands).
