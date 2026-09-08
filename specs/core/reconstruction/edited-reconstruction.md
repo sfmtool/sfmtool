@@ -195,6 +195,15 @@ the index rule above. The consequence is visible in
 `PointSet::validate_observation_columns`, which takes the image count as an
 argument in order to check the hash vectors' lengths.
 
+**The Python side sees the sharing rule as read-only views.** Every column
+getter on the `SfmrReconstruction` binding hands Python its own copy, so a
+write to the returned array never reaches the value. The one zero-copy getter,
+`thumbnails_y_x_rgb`, is a view of the shared buffer, and it is returned with
+numpy's writeable flag cleared: a write raises, and a caller that wants to edit
+takes `.copy()`. Without that flag a Python write would land in every
+reconstruction sharing the buffer at once, which is the one thing the rule
+forbids.
+
 **Validation is split the same way.** `validate_observation_columns` checks the
 per-observation columns against the track count and the per-image hashes against
 the image count; `validate_point_columns` checks the constraint triple against

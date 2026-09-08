@@ -623,7 +623,22 @@ impl PySfmrReconstruction {
             // at the pointer that owns it.
             &*borrow.inner.image_table.thumbnails_y_x_rgb as *const ndarray::Array4<u8>
         };
-        unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) }
+        let view = unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) };
+        // The buffer is shared: every clone of this reconstruction that did not
+        // replace its thumbnails points at the same allocation, and nothing on
+        // the Rust side ever writes through that pointer. A writeable numpy
+        // view would let Python do exactly that, into every sharer at once, so
+        // the view is handed out read-only. A caller that wants to edit takes
+        // `.copy()`.
+        let py = self_.py();
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("write", false)
+            .expect("setting a bool item on a fresh dict cannot fail");
+        view.call_method("setflags", (), Some(&kwargs)).expect(
+            "numpy refuses write=False only on a view of a writeable base, which this is not",
+        );
+        view
     }
 
     // ── Depth data getters ───────────────────────────────────────────

@@ -377,3 +377,25 @@ class TestPointConstraints:
         data["constraint_reference_images"] = reference
         with pytest.raises(OSError, match="its legend gives"):
             write_sfmr(tmp_path / "bad.sfmr", data, skip_recompute_depth_stats=True)
+
+
+class TestSharedColumnsAreReadOnly:
+    """The thumbnail array is a zero-copy view of a buffer that every clone of
+    the reconstruction shares, so the view is read-only: a write from Python
+    would land in every sharer at once."""
+
+    def test_thumbnails_view_is_read_only(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        view = recon.thumbnails_y_x_rgb
+        assert not view.flags.writeable
+        with pytest.raises(ValueError, match="read-only"):
+            view[0, 0, 0, 0] = 1
+
+    def test_a_write_to_a_copy_reaches_no_clone(self, seoul_bull_sfmr_only):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        clone = recon.clone_with_changes()
+        before = np.asarray(recon.thumbnails_y_x_rgb).copy()
+        edited = recon.thumbnails_y_x_rgb.copy()
+        edited[0, 0, 0, 0] = (int(edited[0, 0, 0, 0]) + 1) % 256
+        assert np.array_equal(np.asarray(recon.thumbnails_y_x_rgb), before)
+        assert np.array_equal(np.asarray(clone.thumbnails_y_x_rgb), before)
