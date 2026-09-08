@@ -234,7 +234,7 @@ pt3d_{hash}_{index}_n{node}_v{version}    session form
 
 | Part | Content | Example |
 |------|---------|---------|
-| `{hash}` | The **base's** hash: the file it was loaded from, or `00000000` for a base that is not a file (demo data, a materialisation not yet saved). | `a1b2c3d4` |
+| `{hash}` | The **base's** `content_xxh128`, whether or not the base has been written to a file (below). | `a1b2c3d4` |
 | `{index}` | The point's index in the edited value: a base index, or an index at or past the base's count for an added point. | `12345` |
 | `{node}` | The node's session id (its `ReconId`), decimal. | `3` |
 | `{version}` | The version's serial within the node's history, decimal. Serials are minted once per node and never reused, so a version truncated by a new edit after an undo does not share a serial with the version that replaced it. | `17` |
@@ -242,6 +242,20 @@ pt3d_{hash}_{index}_n{node}_v{version}    session form
 The session form stays in the `[a-zA-Z0-9_]` class, so it double-click
 selects like the file form, and the file form is a prefix of it, so a session
 id truncates to a file id by dropping the last two fields.
+
+**Every base has a hash.** The section hashes are defined over the
+uncompressed bytes of the section entries, and `content_xxh128` over those,
+so the hash is a function of the value and not of a file: a base that was
+never saved has the same hash a save of it would write. A materialisation
+fixes the metadata a save would write (operation, provenance, timestamp) at
+the moment it produces the base, and computes the hash from the serialised
+sections without compressing or writing them, lazily on the first request
+for an id or for the hash itself. A later save writes exactly that metadata
+and those bytes, so the file's hash equals the base's, and an id minted
+before the save names the same point in the file after it. The cost is one
+serialisation and one XXH128 pass over the value, which is a fraction of the
+materialisation that produced it; the bitmaps dominate both. Demo data is
+hashed the same way, so `00000000` is no longer a state a node can be in.
 
 **What the file form of a session id means.** The hash names the base, and
 the overlay never changes the base, so for a base point that was not deleted
@@ -257,8 +271,8 @@ has.
 **What the suffix adds.** Node and version make the id resolvable to one
 value in the session: the version's serial selects the base and the overlay
 together, so an id copied before a materialisation still names the point it
-named, through the materialisation's row map, when pasted after it. A
-`00000000` base is no longer ambiguous between nodes, since the node id
+named, through the materialisation's row map, when pasted after it. The
+same file opened as two nodes is no longer ambiguous, since the node id
 separates them. Go to Point accepts both forms; on the session form it
 resolves the node by id (a closed node is a miss, named as such), the version
 by serial (mapping forward through every materialisation between that
@@ -271,13 +285,15 @@ explanation, for nothing: the file form is always recoverable from it. A
 constraints file wants file ids, and a tool consuming one accepts a session id
 by taking its file-form prefix and applying the out-of-range rule above.
 
-**What a save does.** A save materialises, writes a file with a new hash, and
-that file becomes the base of the next version with a row map from the old
-indexes. Ids minted against the old base resolve forward through the map as
-above, within the session. Across sessions the chain is gone unless the file
-carries it, so the saved file's metadata records its lineage: the ancestor
-base's hash and the row map from it, which is what lets an id from last
-week's file land in this week's. That metadata entry is the one addition this
+**What a save does.** A save materialises if the overlay is not empty, which
+is a new base with a new hash and a row map from the old indexes, and writes
+the current base. Saving a base that is already materialised writes the
+bytes its hash was computed from and mints nothing. Ids minted against an
+older base resolve forward through the row maps as above, within the
+session. Across sessions the chain is gone unless the file carries it, so
+the saved file's metadata records its lineage: the ancestor base's hash and
+the row map from it, which is what lets an id from last week's file land in
+this week's. That metadata entry is the one addition this
 draft asks of the format spec, alongside a sentence in its Point ID section
 that a reader may meet the session form and takes its prefix.
 
