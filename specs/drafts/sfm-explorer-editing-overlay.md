@@ -223,11 +223,13 @@ A point id today is a coordinate in a file: `pt3d_{hash}_{index}`, the first
 eight hex digits of the file's `content_xxh128` and the point's row in it
 ([the format spec's Point ID
 section](../formats/sfmr-file-format.md#point-id-portable-3d-point-references)).
-An edited reconstruction is a chain of bases, so an id has to say which base
-its index belongs to and has to keep naming the same point as the chain
-grows. Two rules do that: every base has a hash, and an id is minted against
-the **earliest** base the point exists in. The file form stays exactly what
-it is; a **session form** adds the node.
+An edited reconstruction is a chain of bases with point edits between them,
+so an id has to say which of those its index belongs to and has to keep
+naming the same point as the chain grows. Two rules do that: the hash in an
+id is always derived from the content of the thing that created the point,
+a base or a point edit, never from a counter or a session; and an id is
+minted against the **earliest** such thing the point's identity reaches. The
+file form stays exactly what it is; a **session form** adds the node.
 
 ```
 pt3d_{hash}_{index}            file form
@@ -236,8 +238,8 @@ pt3d_{hash}_{index}_n{node}    session form
 
 | Part | Content | Example |
 |------|---------|---------|
-| `{hash}` | The `content_xxh128` of the base the id is minted against, whether or not that base has been written to a file (below). | `a1b2c3d4` |
-| `{index}` | The point's index in that base: a base index, or an index at or past the base's count for a point added on top of it. | `12345` |
+| `{hash}` | First 8 hex digits of the `content_xxh128` of the base the id is minted against, whether or not that base has been written to a file (below); or, for a point a point edit created, of that edit's content hash. | `a1b2c3d4` |
+| `{index}` | The point's index in that base; or, for a point a point edit created, its index among the points that edit created. | `12345` |
 | `{node}` | The node's session id (its `ReconId`), decimal. | `3` |
 
 The session form stays in the `[a-zA-Z0-9_]` class, so it double-click
@@ -258,6 +260,16 @@ serialisation and one XXH128 pass over the value, which is a fraction of the
 materialisation that produced it; the bitmaps dominate both. Demo data is
 hashed the same way, so `00000000` is no longer a state a node can be in.
 
+**Every point edit has a hash.** A point edit that creates points (a new
+track, a split's second half) is hashed over its content: the hash of the
+base it applies to, and the records it adds, which are the observations with
+their image content hashes and pixels, and the point they triangulate to.
+That is a function of what was added and where, and of nothing else: two
+different additions on the same base hash differently, and the same
+addition made twice, in two sessions or after an undo, hashes the same,
+which is right, since it is the same point. An edit that only modifies or
+deletes creates no points and needs no hash of its own.
+
 ### The version graph
 
 A node's history is a chain of versions, and each step between two versions
@@ -275,8 +287,8 @@ a materialisation's survivors as one array), so the node holds the whole
 graph of its session even when it has dropped the values. Every version's
 serial is minted once and never reused.
 
-**Resolving an id** finds the base the hash names among the node's versions,
-then walks the graph to the cursor's version. When the minting version is an
+**Resolving an id** finds the base or the point edit the hash names among
+the node's versions, then walks the graph to the cursor's version. When the minting version is an
 ancestor of the cursor's, the walk is forward through the maps in order. When
 it is on a discarded branch, the walk is backward from it to the last common
 ancestor, inverting each map (every map is a bijection on the points that
@@ -291,37 +303,36 @@ still there.
 point is not its coordinate in the cursor's base but its coordinate in the
 **earliest** base it existed in: the walk goes backward from the cursor
 through the maps as far as the point's identity reaches, and mints against
-the base it stops at. For most points that is the file the node was loaded
+the base, or the point edit, it stops at. For most points that is the file the node was loaded
 from, so the id shown is the one that file's readers already use, and it
 survives every edit of the session, every undo, and every save. The
 earliest id is the one with the largest set of versions it resolves in, so
 it is the one with the best chance of surviving whatever the user does next,
 which is the point of copying an id.
 
-**A point that is in no base yet.** A track added in the session (a new point
-with new observations, or a split's second half) exists only in an overlay,
-so the earliest base its identity reaches is the one it was added on top of,
-and it mints against that base at the index the overlay assigned it: at or
-past the base's point count, `pt3d_{base hash}_{base count + k}_n{node}`.
-That coordinate is a row of no file, which is what the out-of-range rule is
-for, but it is a stable name within the node: the overlay's addition indexes
-are assigned from a counter that is never reset while the base lives, across
-every branch of the version graph, so an addition undone and replaced by a
-different addition does not inherit its index, and the graph resolves the
-old id to a miss rather than to the wrong point. When the overlay is
-materialised the point gets a row in the new base and the row map records
-the addition index against it, so the id keeps resolving, and the earliest
-rule keeps minting the same id for it afterwards, through a save and, via
-the lineage metadata, in a later session. An id that names an addition in a
-file that was never saved is the one kind that dies with the session, which
-is what the base having no file means.
+**A point that is in no base yet.** A track added in the session exists only
+in an overlay, so the earliest thing its identity reaches is the point edit
+that created it, and it mints against that edit: `pt3d_{edit hash}_{k}`,
+where `k` is its index among the points the edit created (zero for a single
+new track; a split's second half is index one of its edit). Nothing about
+that name comes from the session. Add a track, undo, and add a different
+track, and the two ids differ, because the edits' contents differ, so the
+first id resolves through the version graph to a miss on the discarded
+branch rather than to the second track. Close without saving, reopen the
+file tomorrow, and add a track: it collides with yesterday's id only if it
+is the same observations at the same pixels, in which case it is the same
+point. Two sessions adding different tracks on the same file mint different
+ids.
 
-Two sessions that each add a point on top of the same file mint the same
-coordinate for different points. Each session's saved file carries its own
-lineage, so the id resolves correctly through either file's lineage on its
-own; only with both files loaded and the file form pasted is it ambiguous,
-and then the selected node wins, as it does today for the same file opened
-twice. The session form is not ambiguous, since the node id picks one.
+The edit hash names a row of no file, which is what the out-of-range rule is
+for, and a reader that meets it in a constraints file finds it among no
+file's `content_xxh128`. It is found in **lineage**: when the overlay is
+materialised the point gets a row in the new base and the row map records
+the edit hash and index against that row, so the id keeps resolving, the
+earliest rule keeps minting it afterwards, and the saved file's lineage
+metadata carries the pair for any later session. An id that names an
+addition never carried into a saved file is the one kind that dies with the
+session, which is what never saving means.
 
 The two walks are inverses, so an id minted this way and pasted back
 resolves in one forward walk, and the same point always shows the same id
@@ -357,7 +368,8 @@ the current base. Saving a base that is already materialised writes the
 bytes its hash was computed from and mints nothing. Within the session the
 version graph resolves any older id as above. Across sessions the graph is
 gone unless the file carries it, so the saved file's metadata records its
-lineage: the ancestor base's hash and the point map from it, chained back
+lineage: the ancestor base's hash and the point map from it, the hashes of
+the point edits whose points the materialisation carried in, chained back
 through every base the session materialised, which is what lets an id from
 last week's file land in this week's, and what lets the earliest rule keep
 minting last week's ids after a save. That metadata entry is the one
