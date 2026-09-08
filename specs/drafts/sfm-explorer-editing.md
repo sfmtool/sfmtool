@@ -110,14 +110,13 @@ of [`../gui/scene-graph.md`](../gui/scene-graph.md).
 
 The `ReconId` names the node across every version. Solo, tint, eyes, the
 transform, the selected reconstruction, and the MCP addressing all keep
-working through an edit without re-pointing, which is not what re-opening a
-loaded file does today (it mints a fresh id and re-points the solo).
+working through an edit without re-pointing.
 
-Re-reading a file is the same thing. `Open` on a path that is already loaded
-re-reads it into the node it already has, as a new version at the cursor
-whose base is the file's content, so the id survives and an undo returns to
-the edited state. That makes the Scene Graph's `Reload from Disk` entry the
-same action as `Open` on the node's path, and it goes.
+There is no reload within a node. `Open` always adds a node, so opening a
+path that is already loaded opens it a second time, as a second node with
+its own history, and the Scene Graph's `Reload from Disk` entry goes, along
+with today's rule that opening a loaded path reloads it in place. A node's
+value changes only through its own history.
 
 The selection is the exception that needs a rule. A selected point or image is
 an index into the current value, and an edit that deletes rows shifts the
@@ -185,9 +184,7 @@ Files into: `specs/gui/edit-history.md` (new).
 ## Part 3: saving
 
 Save writes the current value over the node's path; Save As writes it to a
-chosen path and re-points the node; Revert jumps the cursor to the disk state,
-which differs from `Open` on the same path only when the file changed on disk
-since it was read.
+chosen path and re-points the node; Revert jumps the cursor to the disk state.
 A node that came from no file (demo data, a derived resection) has only Save
 As. The title and the tree row carry a dirty marker when the cursor is not at
 the disk state. Save recomputes the content hash and appends provenance to the
