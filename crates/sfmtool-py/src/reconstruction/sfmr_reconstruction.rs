@@ -86,7 +86,10 @@ impl PySfmrReconstruction {
     ///
     /// Optionally updates the metadata with operation details before writing.
     /// If ``operation`` is provided, the metadata fields ``operation``, ``tool``,
-    /// ``tool_version``, ``timestamp``, and counts are updated automatically.
+    /// ``tool_version``, and counts are updated automatically. The write
+    /// timestamp is stamped by the writer, which records it outside the content
+    /// hash and hands it back, so ``metadata()['timestamp']`` after a save is the
+    /// value stored in the file.
     ///
     /// Args:
     ///     path: Output file path.
@@ -120,7 +123,6 @@ impl PySfmrReconstruction {
             meta.point_count = self.inner.point_set.points.len() as u32;
             meta.observation_count = self.inner.point_set.tracks.len() as u32;
             meta.camera_count = self.inner.image_table.cameras.len() as u32;
-            meta.timestamp = chrono::Local::now().to_rfc3339();
 
             // Update workspace paths relative to output file
             let output_path = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
@@ -141,9 +143,13 @@ impl PySfmrReconstruction {
             }
         }
 
-        self.inner
+        let record = self
+            .inner
             .save(&path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        // The value is untouched by the save; the in-memory metadata echoes the
+        // write record so a caller reading it back sees what the file carries.
+        self.inner.metadata.timestamp = record.timestamp;
         Ok(())
     }
 

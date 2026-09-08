@@ -108,9 +108,17 @@ impl SfmrReconstruction {
     /// has one, recomputing only the missing (zero) normals from geometry — so
     /// normals a consumer has set (e.g. `sfm xform --refine-normals`) survive the
     /// round trip. Depth statistics and histograms are still recomputed.
-    pub fn save(&self, path: &Path) -> Result<(), SfmrError> {
+    ///
+    /// The writer stamps the write timestamp and it is returned as the write
+    /// record, so there is no second place that spells the clock. The value
+    /// itself is untouched: the timestamp is about the act of writing, not the
+    /// content, so a shared base can be saved without cloning it.
+    pub fn save(&self, path: &Path) -> Result<sfmr_format::WriteRecord, SfmrError> {
         let mut data = self.to_sfmr_data();
-        sfmr_format::write_sfmr(path, &mut data)
+        sfmr_format::write_sfmr(path, &mut data)?;
+        Ok(sfmr_format::WriteRecord {
+            timestamp: data.metadata.timestamp,
+        })
     }
 
     /// The content hashes a [`save`](Self::save) of this value would write,
@@ -125,9 +133,10 @@ impl SfmrReconstruction {
     /// on the temporary [`SfmrData`] copy, so `self` is unchanged.
     ///
     /// The equality holds against a save that writes this value as it stands. A
-    /// caller that stamps new metadata (an operation name, a timestamp) between
-    /// hashing and saving changes the metadata section and so changes the hash;
-    /// stamp first, then hash.
+    /// caller that stamps new metadata (an operation name, say) between hashing
+    /// and saving changes the metadata section and so changes the hash; stamp
+    /// first, then hash. The write timestamp is not such a value: the writer
+    /// stamps it, and it lives outside every section digest.
     ///
     /// The cost is one serialisation and compression of the whole value, which
     /// the patch bitmaps dominate.

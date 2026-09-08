@@ -3,9 +3,12 @@
 
 """Tests for the homogeneous-point accessors on the SfmrReconstruction binding."""
 
+import time
+
 import numpy as np
 import pytest
 
+from sfmtool._sfmtool.io import read_sfmr_content_hash, read_sfmr_metadata
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import PatchCloud
 
@@ -698,3 +701,29 @@ class TestSiftFilesInlineKeypoints:
         point_indexes = np.asarray(recon.track_point_indexes)
         expected = keypoints[mask[point_indexes]]
         np.testing.assert_array_equal(kept, expected)
+
+
+class TestSaveTimestamp:
+    """``save`` takes its timestamp from the writer, and it is not hashed."""
+
+    def test_metadata_timestamp_is_the_one_written(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        first = tmp_path / "first.sfmr"
+        recon.save(first, operation="xform")
+
+        stored = read_sfmr_metadata(first)
+        assert recon.metadata()["timestamp"] == stored["timestamp"]
+        assert stored["timestamp"] != ""
+
+        # A second save of the same value stamps a new time and stores the same
+        # content hash: the timestamp lives outside every section digest.
+        time.sleep(0.02)
+        second = tmp_path / "second.sfmr"
+        recon.save(second, operation="xform")
+        restored = read_sfmr_metadata(second)
+
+        assert recon.metadata()["timestamp"] == restored["timestamp"]
+        assert restored["timestamp"] != stored["timestamp"]
+        assert read_sfmr_content_hash(first) == read_sfmr_content_hash(second)
