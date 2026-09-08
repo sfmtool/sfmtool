@@ -150,10 +150,21 @@ fn a_removal_map_keeps_every_surviving_index_where_it_was() {
     assert_eq!(map.inverse(5), None);
 }
 
+/// A point-mask filter over `recon`, and the map the history stores for it:
+/// the one `RowMap::by_scan` reads off the filter's input and output, which is
+/// how a bulk edit's map is made.
+fn dropping(recon: &SfmrReconstruction, keep: &[bool]) -> (SfmrReconstruction, PointMap) {
+    let after = recon.filter_points_by_mask(keep);
+    let map = RowMap::by_scan(recon, &after, None).expect("a filter keeps point order");
+    (after, PointMap::Rows(map))
+}
+
 #[test]
 fn a_row_map_closes_up_behind_what_it_removed_and_inverts() {
-    let removed = vec![0u32, 2, 3];
-    let map = PointMap::Rows(RowMap::compaction(6, removed.clone()));
+    let removed = [0u32, 2, 3];
+    let before = SfmrReconstruction::demo(6);
+    let keep: Vec<bool> = (0..6).map(|i| !removed.contains(&i)).collect();
+    let (_, map) = dropping(&before, &keep);
     // Survivors 1, 4, 5 become 0, 1, 2.
     assert_eq!(map.forward(1), Some(0));
     assert_eq!(map.forward(4), Some(1));
@@ -170,10 +181,10 @@ fn a_row_map_closes_up_behind_what_it_removed_and_inverts() {
 #[test]
 fn a_chain_applies_its_steps_in_order_and_inverts_in_reverse() {
     // Remove 1 of 5, then remove what was 3 (2 after the first step).
-    let chain = PointMap::Chain(vec![
-        PointMap::Rows(RowMap::compaction(5, vec![1])),
-        PointMap::Rows(RowMap::compaction(4, vec![2])),
-    ]);
+    let before = SfmrReconstruction::demo(5);
+    let (middle, first) = dropping(&before, &[true, false, true, true, true]);
+    let (_, second) = dropping(&middle, &[true, true, false, true]);
+    let chain = PointMap::Chain(vec![first, second]);
     assert_eq!(chain.forward(0), Some(0));
     assert_eq!(chain.forward(1), None);
     assert_eq!(chain.forward(2), Some(1));

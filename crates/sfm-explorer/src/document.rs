@@ -81,8 +81,8 @@ pub enum PointMap {
     /// A point edit. Indexes are stable across it, so the map is only the
     /// indexes that stopped resolving, ascending.
     Removed(Vec<u32>),
-    /// A whole-value edit's row map: a materialisation's, or the one an image
-    /// subset hands back for the points it dropped.
+    /// A whole-value edit's row map: a materialisation's, or the one
+    /// `RowMap::by_scan` reads off a bulk edit's input and output.
     Rows(RowMap),
     /// The steps one edit took, applied in order.
     Chain(Vec<PointMap>),

@@ -18,13 +18,13 @@
 //!   the base is the same `Arc` and nothing but the deleted set changed.
 //! - [`AppState::delete_image`] is the **bulk edit**. It materialises the
 //!   current value when the overlay is not empty, runs
-//!   `SfmrReconstruction::subset_by_image_indices_with_map` over it, and the
-//!   output is the next version's base with an empty overlay, under the row
-//!   map that call hands back.
+//!   `SfmrReconstruction::subset_by_image_indices` over it, and the output is
+//!   the next version's base with an empty overlay, under the row map
+//!   `RowMap::by_scan` reads off that call's input and output.
 
 use std::sync::Arc;
 
-use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
 use crate::document::PointMap;
@@ -117,8 +117,20 @@ impl AppState {
         let keep: Vec<u32> = (0..source.image_count() as u32)
             .filter(|&i| i != removed)
             .collect();
-        let (subset, subset_map) = source
-            .subset_by_image_indices_with_map(&keep, true)
+        let subset = source
+            .subset_by_image_indices(&keep, true)
+            .map_err(|e| format!("Cannot delete that image: {e}"))?;
+
+        // Where each image of `source` went, which is the keep list read the
+        // other way round: the deleted one goes nowhere, and everything past it
+        // moves down by one.
+        let mut image_map: Vec<Option<u32>> = vec![None; source.image_count()];
+        for (new, &old) in keep.iter().enumerate() {
+            image_map[old as usize] = Some(new as u32);
+        }
+        // The subset says nothing about which points it dropped, so the map is
+        // read off its input and its output.
+        let subset_map = RowMap::by_scan(source, &subset, Some(&image_map))
             .map_err(|e| format!("Cannot delete that image: {e}"))?;
 
         let mut steps = Vec::new();

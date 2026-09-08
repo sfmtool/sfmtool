@@ -48,8 +48,8 @@ them carries a `PointMap`
 pub enum PointMap {
     /// Indexes are stable across this step; these ones stopped resolving.
     Removed(Vec<u32>),
-    /// A whole-value edit's row map: a materialisation's, or the one an image
-    /// subset hands back for the points it dropped.
+    /// A whole-value edit's row map: a materialisation's, or the one
+    /// `RowMap::by_scan` reads off a bulk edit's input and output.
     Rows(RowMap),
     /// The steps one edit took, applied in order.
     Chain(Vec<PointMap>),
@@ -67,8 +67,8 @@ Each case is stored as what it is rather than as a pair of dense arrays, so a ma
 costs the size of the edit that made it: a list of the indexes one point edit
 removed, a row map that is a sorted list of holes plus one entry per addition, or
 the two or three steps a bulk edit took. A point deletion's map is one `u32`; an
-image deletion's is a materialisation's row map chained with the one the image
-subset returned for the points it orphaned
+image deletion's is a materialisation's row map chained with the one scanned off
+the image subset's input and output
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)).
 
 **The maps are kept for every version ever minted**, including versions a new
@@ -168,8 +168,9 @@ of a stale index.
 undo and redo move the cursor without moving the versions, that an edit after an
 undo truncates the tail and keeps its maps, that serials are not reused, that the
 budget releases values and never maps, and that each map case is its own inverse
-on the indexes that survive it. The row map the image subset returns is covered
-in core, in `crates/sfmtool-core/src/reconstruction/data/tests.rs`.
+on the indexes that survive it, over maps built the way the edits build them.
+The scan those maps come from is covered in core, in
+`crates/sfmtool-core/src/reconstruction/edited/tests.rs`.
 
 `crates/sfm-explorer/src/state/edits/tests.rs` covers what follows: a surviving
 selection keeping its index across a point edit, a deleted selection clearing,

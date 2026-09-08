@@ -235,14 +235,16 @@ hints, both move by less than a point's worth on a deletion, and both are
 re-derived at the next bulk edit. An incremental update is not worth an
 approximation that has to be kept honest.
 
-**The bulk edit is handed the renumbering it performed.**
-`subset_by_image_indices_with_map` returns the subset and the `RowMap` from the
-input's point indexes to the subset's, read off the same keep mask that built
-the subset's own renumbering
-([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)).
-So the version's map is that row map, chained after the materialisation's when
-there was one, and nothing in the viewer restates the rule for which points a
-dropped image orphans.
+**The bulk edit's map is derived by scanning, not restated.**
+`subset_by_image_indices` returns the subset and nothing about which points it
+dropped, so `delete_image` calls `RowMap::by_scan` on that call's input and
+output, with the image map its keep list already describes
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md),
+"The scanned row map"). The scan walks both point lists in order and reads off
+what happened between them, so the viewer restates neither the rule for which
+points a dropped image orphans nor any other edit's, and the next bulk edit gets
+its map for free. The version's map is that row map, chained after the
+materialisation's when there was one.
 
 **A deleted point still resolves through the base.** Indexes are stable, so a
 panel that bounds-checks against the base's point count can still reach a
