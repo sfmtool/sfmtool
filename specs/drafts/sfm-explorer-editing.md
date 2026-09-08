@@ -110,8 +110,14 @@ of [`../gui/scene-graph.md`](../gui/scene-graph.md).
 
 The `ReconId` names the node across every version. Solo, tint, eyes, the
 transform, the selected reconstruction, and the MCP addressing all keep
-working through an edit without re-pointing, which is not what `Reload from
-Disk` does today (it mints a fresh id and re-points the solo).
+working through an edit without re-pointing, which is not what re-opening a
+loaded file does today (it mints a fresh id and re-points the solo).
+
+Re-reading a file is the same thing. `Open` on a path that is already loaded
+re-reads it into the node it already has, as a new version at the cursor
+whose base is the file's content, so the id survives and an undo returns to
+the edited state. That makes the Scene Graph's `Reload from Disk` entry the
+same action as `Open` on the node's path, and it goes.
 
 The selection is the exception that needs a rule. A selected point or image is
 an index into the current value, and an edit that deletes rows shifts the
@@ -179,7 +185,9 @@ Files into: `specs/gui/edit-history.md` (new).
 ## Part 3: saving
 
 Save writes the current value over the node's path; Save As writes it to a
-chosen path and re-points the node; Revert jumps the cursor to the disk state.
+chosen path and re-points the node; Revert jumps the cursor to the disk state,
+which differs from `Open` on the same path only when the file changed on disk
+since it was read.
 A node that came from no file (demo data, a derived resection) has only Save
 As. The title and the tree row carry a dirty marker when the cursor is not at
 the disk state. Save recomputes the content hash and appends provenance to the
@@ -327,6 +335,3 @@ Steps 2 and 3 are the groundwork; 4 and 5 are independent of each other and of
 - The history memory budget's value (Part 2), after step 1's numbers.
 - The overlay draft's open questions (materialisation policy, how the
   version graph's maps are stored, when the point-set split lands).
-- Whether `Reload from Disk` becomes "open the file as a new version at the
-  cursor" so the id survives, or stays a fresh node. The former is consistent
-  with node identity surviving edits.
