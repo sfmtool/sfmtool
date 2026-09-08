@@ -293,11 +293,35 @@ point is not its coordinate in the cursor's base but its coordinate in the
 through the maps as far as the point's identity reaches, and mints against
 the base it stops at. For most points that is the file the node was loaded
 from, so the id shown is the one that file's readers already use, and it
-survives every edit of the session, every undo, and every save. A point
-added in the session mints against the base it was added on top of, which is
-the earliest it can. The earliest id is the one with the largest set of
-versions it resolves in, so it is the one with the best chance of surviving
-whatever the user does next, which is the point of copying an id.
+survives every edit of the session, every undo, and every save. The
+earliest id is the one with the largest set of versions it resolves in, so
+it is the one with the best chance of surviving whatever the user does next,
+which is the point of copying an id.
+
+**A point that is in no base yet.** A track added in the session (a new point
+with new observations, or a split's second half) exists only in an overlay,
+so the earliest base its identity reaches is the one it was added on top of,
+and it mints against that base at the index the overlay assigned it: at or
+past the base's point count, `pt3d_{base hash}_{base count + k}_n{node}`.
+That coordinate is a row of no file, which is what the out-of-range rule is
+for, but it is a stable name within the node: the overlay's addition indexes
+are assigned from a counter that is never reset while the base lives, across
+every branch of the version graph, so an addition undone and replaced by a
+different addition does not inherit its index, and the graph resolves the
+old id to a miss rather than to the wrong point. When the overlay is
+materialised the point gets a row in the new base and the row map records
+the addition index against it, so the id keeps resolving, and the earliest
+rule keeps minting the same id for it afterwards, through a save and, via
+the lineage metadata, in a later session. An id that names an addition in a
+file that was never saved is the one kind that dies with the session, which
+is what the base having no file means.
+
+Two sessions that each add a point on top of the same file mint the same
+coordinate for different points. Each session's saved file carries its own
+lineage, so the id resolves correctly through either file's lineage on its
+own; only with both files loaded and the file form pasted is it ambiguous,
+and then the selected node wins, as it does today for the same file opened
+twice. The session form is not ambiguous, since the node id picks one.
 
 The two walks are inverses, so an id minted this way and pasted back
 resolves in one forward walk, and the same point always shows the same id
