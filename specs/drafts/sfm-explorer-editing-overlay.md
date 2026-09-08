@@ -151,7 +151,15 @@ the GPU buffers consume it. A merge of two tracks keeps the lower index and
 deletes the higher; a split keeps the first half in place and appends the
 second.
 
-It is one full copy.
+It is one copy of the light columns: the base's tracks are already sorted
+and the additions are a handful, so the track column is a merge pass over
+the base with the deleted tracks skipped and the modified ones swapped in at
+their place, then the new tracks appended, never a re-sort. The bitmap and
+thumbnail columns are shared with the base unless an addition changed a
+patch, in which case the new bitmap column is the base's with those rows
+replaced. On the largest real reconstruction (530 674 points, 8.1 million
+observations) the light columns are 165 MB and clone in 32 ms; the umbrella
+draft's "Step 1's numbers" has the measurements.
 
 It happens when:
 
@@ -167,9 +175,9 @@ the history still shares, and the history budget counts one full copy per
 materialisation rather than per edit. Bundle adjustment is the common case: it
 reads a materialised value and its output is the next base.
 
-The fraction and the explicit trigger are the open policy. The measurement in
-the umbrella's step 1 (a full clone of the largest real reconstruction) sets
-what a materialisation costs, which bounds how often one is acceptable.
+The fraction and the explicit trigger are the open policy. A
+materialisation costs tens of milliseconds on the largest real
+reconstruction, so it is affordable on any event and never on a frame.
 
 ---
 
@@ -187,17 +195,34 @@ ones, then the additions. Two kinds of reader exist:
   materialisation. Everything in `sfmtool-core` that takes
   `&SfmrReconstruction` today, which is most of it.
 
-How many readers in the viewer are of the first kind, and whether any hot
-per-frame path in it is of the second, is the census question the umbrella's
-step 1 already asks. The design holds if the per-frame readers are all
-per-point or per-column, which is what the rendering path is today.
+The census
+([`reports/2026-09-07-editing-read-path-census.md`](../../reports/2026-09-07-editing-read-path-census.md))
+found no per-frame reader of the second kind: the eight per-frame "whole"
+reads are counts and the content hash, which an overlay answers in O(1)
+from `base.point_count() - deleted.len() + added.len()` and the cached base
+hash. Every real whole walk is event-driven. Three of them need a design
+rather than a materialisation: the derived aggregates the point upload
+computes (auto point size, camera scale, scene bounds), which a point edit
+must either leave stale until the next materialisation or update
+incrementally, and whose staleness shows in the clip planes; the Image
+Detail panel's embedded-features overlay, which walks every observation on
+exactly the `embedded_patches` files the first track edits target and must
+iterate base-minus-deleted plus additions instead; and column presence
+(`feature_indexes`, `keypoints_xy`, the patch frames), probed every frame
+in six places, which an overlay answers from the base alone, since an
+addition set never introduces or removes a column.
 
 ### The GPU side
 
 The base's buffers keep their identity, so the umbrella's identity-based
 upload sees no change on the base and uploads nothing for it. The deleted set
 reaches the point shader as a per-point mask built from the set, a few bytes
-written into a buffer that is otherwise zero. The additions upload
+written into a buffer that is otherwise zero. The patch atlas is the one
+piece of GPU state the stable-index rule does not already cover: its slot
+assignment is a compaction over the points that carry a bitmap, so a point's
+atlas slot is not its index, and a point edit that changes a bitmap needs
+the additions' patches in a second atlas, or a slot map the base's atlas
+keeps across edits. The additions upload
 as a second instance buffer drawn after the base's, with the same per-node
 uniforms. A materialisation replaces both with one buffer, through the row
 map. No edit re-uploads a million points.

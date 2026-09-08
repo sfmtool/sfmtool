@@ -82,13 +82,65 @@ and every pipeline hold; the bindings' behaviour does not change.
 There is no copy-on-write anywhere in this. The base is one immutable value
 behind one `Arc`, shared whole by every version in a run of point edits, and
 the thing a point edit updates is the edit part of the version, which is its
-own. A bulk edit produces a new base, which is a full copy including the
-patch bitmaps and thumbnails that dominate memory; the history budget
-(Part 2) is what bounds how many such bases a node holds. Whether two bases
-should share those two columns when a bulk edit did not touch them is an
-optimisation to decide from step 1's numbers, not part of the model.
+own. A bulk edit produces a new base, a copy of the light columns; the patch
+bitmaps and thumbnails, which are 88 % of the bytes, sit behind their own
+`Arc` inside the point set and a bulk edit that did not touch them (every
+one but a patch refit) points at its input's. Nothing is ever written
+through those `Arc`s, so it is sharing, not copy-on-write. The history
+budget (Part 2) bounds how many bases a node holds; § "Step 1's numbers"
+below has the measurements behind both decisions.
 
 Files into: `specs/core/reconstruction/edited-reconstruction.md` (new).
+
+### Step 1's numbers
+
+Measured on the largest real reconstruction to hand (530 674 points,
+8 147 206 observations, 500 images, `embedded_patches` with 24 px bitmaps)
+with [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
+medians of three:
+
+| Quantity | Value |
+|----------|-------|
+| In-memory size | 1 354 MB |
+| Of which patch bitmaps and thumbnails | 1 189 MB (88 %) |
+| Full clone | 355 ms |
+| Clone without the two heavy columns | 32 ms |
+| Materialisation with 8 modified, 4 deleted, 2 new points (numpy, full re-sort of the tracks) | 1 800 ms, of which the re-sort 745 ms |
+| XXH128 over every column | 131 ms |
+
+The read-path census is
+[`reports/2026-09-07-editing-read-path-census.md`](../../reports/2026-09-07-editing-read-path-census.md):
+116 read sites, of which 53 run every frame, and **no per-frame read walks
+the point set**. The eight per-frame "whole" reads are counts and the
+content hash, answerable over an overlay in O(1). The ten real whole walks
+are all event-driven: the point and patch uploads (gated on
+`needs_upload`), the derived aggregates computed with them (auto point size,
+camera scale, scene bounds), the embedded-features overlay of the Image
+Detail panel, the MCP per-image observation counts, zoom-to-fit, and the two
+core calls (align, resect).
+
+What the numbers decide:
+
+- **Bases share their heavy columns.** A bulk edit that copies the whole
+  base costs 1.35 GB and 355 ms per version, so a 4 GB budget holds three;
+  one that shares the bitmaps and thumbnails costs 165 MB and 32 ms, and the
+  same budget holds twenty-four. Every bulk edit in Part 5 but a patch refit
+  leaves those two columns untouched. So the point set holds them behind
+  their own `Arc`, and a bulk edit's output points at its input's. This is
+  not copy-on-write: nothing is ever written through those `Arc`s, and a
+  refit produces new ones. The base itself stays one immutable value.
+- **The materialisation is a merge, not a sort.** The base's tracks are
+  already sorted, and the additions are a handful of tracks, so the
+  materialised track column is one merge pass over the base (a copy with
+  the deleted tracks skipped and the modified ones swapped in at their
+  place) plus the appended new tracks, never a re-sort of eight million
+  rows. Its cost is then the light-column copy, some tens of milliseconds,
+  plus the bitmap copy unless the bitmaps are shared, which they are.
+- **The hash is lazy and affordable**: 131 ms once per base, on first
+  request.
+- **The history budget** starts at 4 GB of unshared bytes per node, which
+  the numbers above put at twenty-odd bulk edits or any number of point
+  edits on the largest file; it is a setting, not a constant.
 
 ### Change detection by identity
 
@@ -103,7 +155,8 @@ identity of the base it last uploaded from and compares it each frame. A
 point edit leaves the base's buffers alone: the deleted set reaches the point
 shader as a small mask, and the additions are a second instance buffer drawn
 after the base's. A bulk edit changes the base, and re-uploads what changed
-in it. Undoing to a version whose base is the one on the GPU uploads the mask and
+in it, the shared bitmap and thumbnail columns telling the atlas uploads by
+identity that they have nothing to do. Undoing to a version whose base is the one on the GPU uploads the mask and
 the additions and nothing else. The boolean and the epoch both go, replaced
 by one mechanism, and the GPU-side cost of an undo is proportional to what
 the undo changed.
@@ -149,9 +202,9 @@ relative to its neighbours, which is what the memory bound is measured in.
 The history is bounded by a memory budget, not by a version count: a hundred
 point edits on one base cost the size of the edits, a bulk edit costs a copy
 of the light columns, and only an edit that touches the bitmaps costs the
-bitmaps. When the budget is exceeded
-the oldest versions are dropped from the front. The budget's value is open;
-the measurement in step 1 informs it.
+bitmaps. When the budget is exceeded the oldest versions are dropped from
+the front. The budget is a setting whose default is 4 GB of unshared bytes
+per node (§ "Step 1's numbers").
 
 Coalescing: an interactive edit that produces intermediate values (a drag) is
 one version, committed when the gesture ends. This is the same rule the Action
@@ -299,14 +352,14 @@ Files into: [`../gui/mcp-server.md`](../gui/mcp-server.md).
 Each step is one PR, has its own spec change, and is verifiable without the
 steps after it.
 
-1. **Census and measurement.** List every read path in the viewer that walks
-   a reconstruction, and whether it reads one point or the whole; time a full
-   clone of the largest real reconstruction, and how much of it is bitmaps
-   and thumbnails; time a materialisation of a base with a handful of edits.
-   The numbers go into the two drafts (the memory budget, the materialisation
-   threshold, whether bases share their heavy columns) before step 2 starts.
+1. **Census and measurement.** Done: the census is
+   [`reports/2026-09-07-editing-read-path-census.md`](../../reports/2026-09-07-editing-read-path-census.md),
+   the script is
+   [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
+   and the numbers and what they decided are in Part 1.
 2. **The point-set split, in core.** `SfmrReconstruction` becomes an image
-   table plus a point set. Bindings unchanged; byte parity on the full Python
+   table plus a point set, with the bitmap and thumbnail columns behind their
+   own `Arc` inside it. Bindings unchanged; byte parity on the full Python
    and Rust suites is the acceptance test. Files the first half of
    `core/reconstruction/edited-reconstruction.md`.
 3. **The edited reconstruction, in core.** The base-plus-edits value, the
@@ -347,8 +400,5 @@ follows 4 and interleaves with 5 and 6.
 
 ## Open questions
 
-- The history memory budget's value (Part 2), after step 1's numbers, and
-  whether a bulk edit's base shares the bitmap and thumbnail columns with its
-  predecessor when it did not touch them, which the same numbers decide.
 - The overlay draft's open questions (materialisation policy, how the
   version graph's maps are stored, when the point-set split lands).
