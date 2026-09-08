@@ -9,6 +9,7 @@
 //! `SfmrReconstruction`, so callers are unaffected by the move.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nalgebra::Point3;
 use ndarray::Array4;
@@ -29,11 +30,16 @@ fn select_patch_rows_f32(
 }
 
 /// Like [`select_patch_rows_f32`] for the `(P, R, R, 4)` patch-bitmap array.
+///
+/// The bitmaps are shared behind an [`Arc`], and a row selection is a different
+/// array from the one it selects out of, so this reads through the input's
+/// pointer and wraps a fresh one -- never writing through the shared value.
 fn select_patch_rows_u8(
-    arr: &Option<ndarray::Array4<u8>>,
+    arr: &Option<Arc<ndarray::Array4<u8>>>,
     idx: &[usize],
-) -> Option<ndarray::Array4<u8>> {
-    arr.as_ref().map(|a| a.select(ndarray::Axis(0), idx))
+) -> Option<Arc<ndarray::Array4<u8>>> {
+    arr.as_ref()
+        .map(|a| Arc::new(a.select(ndarray::Axis(0), idx)))
 }
 
 /// Select rows `idx` of the optional per-OBSERVATION confidence column,
@@ -65,10 +71,12 @@ impl SfmrReconstruction {
         // point at infinity is a direction, so only the rotation acts on it
         // (translation and scale do not move a point at infinity) and the
         // result is renormalised to keep the stored direction unit-length.
-        let point_positions: Vec<Point3<f64>> = self.points.iter().map(|pt| pt.position).collect();
+        let point_positions: Vec<Point3<f64>> =
+            self.point_set.points.iter().map(|pt| pt.position).collect();
         let new_positions = transform.apply_to_points(&point_positions);
 
         let new_points: Vec<Point3D> = self
+            .point_set
             .points
             .iter()
             .zip(new_positions.iter())
@@ -98,6 +106,7 @@ impl SfmrReconstruction {
 
         // Transform camera poses
         let new_images: Vec<SfmrImage> = self
+            .image_table
             .images
             .iter()
             .map(|im| {
@@ -113,7 +122,7 @@ impl SfmrReconstruction {
             .collect();
 
         // Scale rig sensor translations if needed
-        let new_rig_frame_data = if let Some(ref rf) = self.rig_frame_data {
+        let new_rig_frame_data = if let Some(ref rf) = self.image_table.rig_frame_data {
             let scale = transform.scale;
             if (scale - 1.0).abs() > f64::EPSILON {
                 let mut rf = rf.clone();
@@ -137,7 +146,7 @@ impl SfmrReconstruction {
             |arr: &Option<ndarray::Array2<f32>>| -> Option<ndarray::Array2<f32>> {
                 arr.as_ref().map(|a| {
                     let mut out = a.clone();
-                    for (i, pt) in self.points.iter().enumerate() {
+                    for (i, pt) in self.point_set.points.iter().enumerate() {
                         let v = nalgebra::Vector3::new(
                             a[[i, 0]] as f64,
                             a[[i, 1]] as f64,
@@ -156,56 +165,64 @@ impl SfmrReconstruction {
                     out
                 })
             };
-        let new_patch_u = transform_halfvec(&self.patch_u_halfvec_xyz);
-        let new_patch_v = transform_halfvec(&self.patch_v_halfvec_xyz);
+        let new_patch_u = transform_halfvec(&self.point_set.patch_u_halfvec_xyz);
+        let new_patch_v = transform_halfvec(&self.point_set.patch_v_halfvec_xyz);
 
         let infinity_point_count = count_points_at_infinity(&new_points);
         SfmrReconstruction {
-            infinity_point_count,
-            images: new_images,
-            points: new_points,
-            rig_frame_data: new_rig_frame_data,
-            patch_u_halfvec_xyz: new_patch_u,
-            patch_v_halfvec_xyz: new_patch_v,
-            // Bitmaps live in the patch's own (s, t) frame, so a similarity of
-            // the whole scene leaves their appearance unchanged.
-            patch_bitmaps_y_x_rgba: self.patch_bitmaps_y_x_rgba.clone(),
-            has_normals: self.has_normals,
-            // Rotating a normal does not change how well-supported it is.
-            normal_confidence: self.normal_confidence.clone(),
-            // A similarity moves the cameras and the points together, so a
-            // distance from a camera centre survives it up to the scale factor
-            // and a reference index survives it outright. The kernel resolves a
-            // reference from the poses it is handed, so scaling the stored
-            // distance is what keeps the constraint saying the same thing about
-            // the scene.
-            point_constraints: self.point_constraints.as_ref().map(|c| {
-                let mut c = c.clone();
-                for r in c.constraint_distances.iter_mut() {
-                    if r.is_finite() {
-                        *r *= transform.scale;
-                    }
-                }
-                c
-            }),
-            observation_confidence: self.observation_confidence.clone(),
-            // A 3D similarity leaves the 2D image keypoints, feature indices, and
-            // image identity untouched, so the observation source passes through
-            // for both modes.
-            observations: self.observations.clone(),
             // All other fields are unchanged
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            cameras: self.cameras.clone(),
-            tracks: self.tracks.clone(),
-            observation_counts: self.observation_counts.clone(),
-            observation_offsets: self.observation_offsets.clone(),
-            thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
-            depth_statistics: self.depth_statistics.clone(),
-            depth_histogram_counts: self.depth_histogram_counts.clone(),
-            image_feature_to_point: self.image_feature_to_point.clone(),
-            max_track_feature_index: self.max_track_feature_index.clone(),
+            image_table: ImageTable {
+                images: new_images,
+                rig_frame_data: new_rig_frame_data,
+                cameras: self.image_table.cameras.clone(),
+                // The thumbnails are pixels of the source images, which a
+                // similarity of the scene does not touch, so the new value
+                // shares the old one's array rather than copying it.
+                thumbnails_y_x_rgb: Arc::clone(&self.image_table.thumbnails_y_x_rgb),
+                depth_statistics: self.image_table.depth_statistics.clone(),
+                depth_histogram_counts: self.image_table.depth_histogram_counts.clone(),
+            },
+            point_set: PointSet {
+                infinity_point_count,
+                points: new_points,
+                patch_u_halfvec_xyz: new_patch_u,
+                patch_v_halfvec_xyz: new_patch_v,
+                // Bitmaps live in the patch's own (s, t) frame, so a similarity
+                // of the whole scene leaves their appearance unchanged, and the
+                // new value shares the old one's array.
+                patch_bitmaps_y_x_rgba: self.point_set.patch_bitmaps_y_x_rgba.clone(),
+                has_normals: self.point_set.has_normals,
+                // Rotating a normal does not change how well-supported it is.
+                normal_confidence: self.point_set.normal_confidence.clone(),
+                // A similarity moves the cameras and the points together, so a
+                // distance from a camera centre survives it up to the scale
+                // factor and a reference index survives it outright. The kernel
+                // resolves a reference from the poses it is handed, so scaling
+                // the stored distance is what keeps the constraint saying the
+                // same thing about the scene.
+                point_constraints: self.point_set.point_constraints.as_ref().map(|c| {
+                    let mut c = c.clone();
+                    for r in c.constraint_distances.iter_mut() {
+                        if r.is_finite() {
+                            *r *= transform.scale;
+                        }
+                    }
+                    c
+                }),
+                observation_confidence: self.point_set.observation_confidence.clone(),
+                // A 3D similarity leaves the 2D image keypoints, feature
+                // indices, and image identity untouched, so the observation
+                // source passes through for both modes.
+                observations: self.point_set.observations.clone(),
+                tracks: self.point_set.tracks.clone(),
+                observation_counts: self.point_set.observation_counts.clone(),
+                observation_offsets: self.point_set.observation_offsets.clone(),
+                image_feature_to_point: self.point_set.image_feature_to_point.clone(),
+                max_track_feature_index: self.point_set.max_track_feature_index.clone(),
+            },
         }
     }
 
@@ -231,7 +248,7 @@ impl SfmrReconstruction {
         // column (SiftFiles `feature_indexes` / EmbeddedPatches `keypoints_xy`
         // rows) is filtered in lockstep with the tracks below, and the per-image
         // hashes follow the image subset.
-        let old_image_count = self.images.len();
+        let old_image_count = self.image_table.images.len();
         let new_image_count = image_indices.len();
 
         // Validate: in bounds, no duplicates. old_to_new is None for removed
@@ -255,15 +272,18 @@ impl SfmrReconstruction {
         // Build new image-indexed data in the order given.
         let new_images: Vec<SfmrImage> = image_indices
             .iter()
-            .map(|&i| self.images[i as usize].clone())
+            .map(|&i| self.image_table.images[i as usize].clone())
             .collect();
 
         let new_thumbnails = {
             let mut out = Array4::<u8>::zeros((new_image_count, 128, 128, 3));
             for (new_idx, &old_idx) in image_indices.iter().enumerate() {
-                let src = self
-                    .thumbnails_y_x_rgb
-                    .slice(ndarray::s![old_idx as usize, .., .., ..]);
+                let src = self.image_table.thumbnails_y_x_rgb.slice(ndarray::s![
+                    old_idx as usize,
+                    ..,
+                    ..,
+                    ..
+                ]);
                 out.slice_mut(ndarray::s![new_idx, .., .., ..]).assign(&src);
             }
             out
@@ -271,25 +291,25 @@ impl SfmrReconstruction {
 
         let new_depth_stats_images: Vec<ImageDepthStats> = image_indices
             .iter()
-            .map(|&i| self.depth_statistics.images[i as usize].clone())
+            .map(|&i| self.image_table.depth_statistics.images[i as usize].clone())
             .collect();
         let new_depth_statistics = DepthStatistics {
-            num_histogram_buckets: self.depth_statistics.num_histogram_buckets,
+            num_histogram_buckets: self.image_table.depth_statistics.num_histogram_buckets,
             images: new_depth_stats_images,
         };
 
         let new_depth_histogram_counts: Vec<Vec<u32>> = image_indices
             .iter()
-            .map(|&i| self.depth_histogram_counts[i as usize].clone())
+            .map(|&i| self.image_table.depth_histogram_counts[i as usize].clone())
             .collect();
 
         // Filter and remap tracks. Input tracks are grouped by point_index, so
         // a simple single-pass filter preserves that grouping. The parallel
         // feature_indexes column is filtered in lockstep (point-id remapping
         // below preserves order, so it stays parallel to the final tracks).
-        let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.tracks.len());
-        let mut kept_obs: Vec<usize> = Vec::with_capacity(self.tracks.len());
-        for (i, obs) in self.tracks.iter().enumerate() {
+        let mut new_tracks: Vec<TrackObservation> = Vec::with_capacity(self.point_set.tracks.len());
+        let mut kept_obs: Vec<usize> = Vec::with_capacity(self.point_set.tracks.len());
+        for (i, obs) in self.point_set.tracks.iter().enumerate() {
             if let Some(new_img_idx) = old_to_new[obs.image_index as usize] {
                 new_tracks.push(TrackObservation {
                     image_index: new_img_idx,
@@ -303,7 +323,7 @@ impl SfmrReconstruction {
         // observation-source column below does — it is an observation row, not a
         // point row, and the two selections are different.
         let new_observation_confidence =
-            select_observation_confidence(&self.observation_confidence, &kept_obs);
+            select_observation_confidence(&self.point_set.observation_confidence, &kept_obs);
 
         // Points + observation counts. A patch frame is per-point, so it rides
         // along: subset keeps the rows for surviving points (geometry is
@@ -320,14 +340,14 @@ impl SfmrReconstruction {
             kept_point_constraints,
         ) = if drop_orphaned_points {
             // Count surviving observations per point and build a keep mask.
-            let mut per_point_count = vec![0u32; self.points.len()];
+            let mut per_point_count = vec![0u32; self.point_set.points.len()];
             for obs in &new_tracks {
                 per_point_count[obs.point_index as usize] += 1;
             }
             let keep_mask: Vec<bool> = per_point_count.iter().map(|&c| c > 0).collect();
 
             // Remap point ids to be contiguous over kept points.
-            let mut point_remap = vec![u32::MAX; self.points.len()];
+            let mut point_remap = vec![u32::MAX; self.point_set.points.len()];
             let mut next_id = 0u32;
             for (old_id, &keep) in keep_mask.iter().enumerate() {
                 if keep {
@@ -344,6 +364,7 @@ impl SfmrReconstruction {
                 .collect();
 
             let kept_points: Vec<Point3D> = self
+                .point_set
                 .points
                 .iter()
                 .zip(keep_mask.iter())
@@ -367,27 +388,30 @@ impl SfmrReconstruction {
                 kept_points,
                 kept_counts,
                 remapped_tracks,
-                select_patch_rows_f32(&self.patch_u_halfvec_xyz, &keep_idx),
-                select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx),
-                select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx),
-                select_normal_confidence(&self.normal_confidence, &keep_idx),
-                self.point_constraints.as_ref().map(|c| c.select(&keep_idx)),
+                select_patch_rows_f32(&self.point_set.patch_u_halfvec_xyz, &keep_idx),
+                select_patch_rows_f32(&self.point_set.patch_v_halfvec_xyz, &keep_idx),
+                select_patch_rows_u8(&self.point_set.patch_bitmaps_y_x_rgba, &keep_idx),
+                select_normal_confidence(&self.point_set.normal_confidence, &keep_idx),
+                self.point_set
+                    .point_constraints
+                    .as_ref()
+                    .map(|c| c.select(&keep_idx)),
             )
         } else {
             // Keep all points; recompute per-point counts from the filtered tracks.
-            let mut per_point_count = vec![0u32; self.points.len()];
+            let mut per_point_count = vec![0u32; self.point_set.points.len()];
             for obs in &new_tracks {
                 per_point_count[obs.point_index as usize] += 1;
             }
             (
-                self.points.clone(),
+                self.point_set.points.clone(),
                 per_point_count,
                 new_tracks,
-                self.patch_u_halfvec_xyz.clone(),
-                self.patch_v_halfvec_xyz.clone(),
-                self.patch_bitmaps_y_x_rgba.clone(),
-                self.normal_confidence.clone(),
-                self.point_constraints.clone(),
+                self.point_set.patch_u_halfvec_xyz.clone(),
+                self.point_set.patch_v_halfvec_xyz.clone(),
+                self.point_set.patch_bitmaps_y_x_rgba.clone(),
+                self.point_set.normal_confidence.clone(),
+                self.point_set.point_constraints.clone(),
             )
         };
 
@@ -404,7 +428,7 @@ impl SfmrReconstruction {
         // Rebuild the observation source: the per-observation parallel column is
         // subset by the kept-observation indices, the per-image hashes by the
         // image subset. Matches the input variant.
-        let new_observations = match &self.observations {
+        let new_observations = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
                 keypoints_xy,
@@ -462,36 +486,41 @@ impl SfmrReconstruction {
 
         // Filter rig/frame data.
         let new_rig_frame_data = self
+            .image_table
             .rig_frame_data
             .as_ref()
             .map(|rf| subset_rig_frame_data(rf, image_indices));
 
         let infinity_point_count = count_points_at_infinity(&new_points);
         Ok(SfmrReconstruction {
-            infinity_point_count,
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            cameras: self.cameras.clone(),
-            images: new_images,
-            points: new_points,
-            tracks: new_tracks,
-            observation_counts: new_observation_counts,
-            observation_offsets: new_observation_offsets,
-            thumbnails_y_x_rgb: new_thumbnails,
-            depth_statistics: new_depth_statistics,
-            depth_histogram_counts: new_depth_histogram_counts,
-            rig_frame_data: new_rig_frame_data,
-            patch_u_halfvec_xyz: new_patch_u,
-            patch_v_halfvec_xyz: new_patch_v,
-            patch_bitmaps_y_x_rgba: new_patch_bitmaps,
-            has_normals: self.has_normals,
-            normal_confidence: new_normal_confidence,
-            point_constraints: new_point_constraints,
-            observation_confidence: new_observation_confidence,
-            observations: new_observations,
-            image_feature_to_point: new_image_feature_to_point,
-            max_track_feature_index: new_max_track_feature_index,
+            image_table: ImageTable {
+                cameras: self.image_table.cameras.clone(),
+                images: new_images,
+                thumbnails_y_x_rgb: Arc::new(new_thumbnails),
+                depth_statistics: new_depth_statistics,
+                depth_histogram_counts: new_depth_histogram_counts,
+                rig_frame_data: new_rig_frame_data,
+            },
+            point_set: PointSet {
+                infinity_point_count,
+                points: new_points,
+                tracks: new_tracks,
+                observation_counts: new_observation_counts,
+                observation_offsets: new_observation_offsets,
+                patch_u_halfvec_xyz: new_patch_u,
+                patch_v_halfvec_xyz: new_patch_v,
+                patch_bitmaps_y_x_rgba: new_patch_bitmaps,
+                has_normals: self.point_set.has_normals,
+                normal_confidence: new_normal_confidence,
+                point_constraints: new_point_constraints,
+                observation_confidence: new_observation_confidence,
+                observations: new_observations,
+                image_feature_to_point: new_image_feature_to_point,
+                max_track_feature_index: new_max_track_feature_index,
+            },
         })
     }
 
@@ -506,14 +535,15 @@ impl SfmrReconstruction {
     pub fn filter_points_by_mask(&self, mask: &[bool]) -> Self {
         assert_eq!(
             mask.len(),
-            self.points.len(),
+            self.point_set.points.len(),
             "mask length ({}) must match point count ({})",
             mask.len(),
-            self.points.len()
+            self.point_set.points.len()
         );
 
         // Filter points and observation counts
         let new_points: Vec<Point3D> = self
+            .point_set
             .points
             .iter()
             .zip(mask.iter())
@@ -529,15 +559,22 @@ impl SfmrReconstruction {
             .filter(|(_, &k)| k)
             .map(|(i, _)| i)
             .collect();
-        let new_patch_u = select_patch_rows_f32(&self.patch_u_halfvec_xyz, &keep_idx);
-        let new_patch_v = select_patch_rows_f32(&self.patch_v_halfvec_xyz, &keep_idx);
-        let new_patch_bitmaps = select_patch_rows_u8(&self.patch_bitmaps_y_x_rgba, &keep_idx);
-        let new_normal_confidence = select_normal_confidence(&self.normal_confidence, &keep_idx);
+        let new_patch_u = select_patch_rows_f32(&self.point_set.patch_u_halfvec_xyz, &keep_idx);
+        let new_patch_v = select_patch_rows_f32(&self.point_set.patch_v_halfvec_xyz, &keep_idx);
+        let new_patch_bitmaps =
+            select_patch_rows_u8(&self.point_set.patch_bitmaps_y_x_rgba, &keep_idx);
+        let new_normal_confidence =
+            select_normal_confidence(&self.point_set.normal_confidence, &keep_idx);
         // A constraint describes its own point and the images are untouched, so
         // the surviving rows travel verbatim.
-        let new_point_constraints = self.point_constraints.as_ref().map(|c| c.select(&keep_idx));
+        let new_point_constraints = self
+            .point_set
+            .point_constraints
+            .as_ref()
+            .map(|c| c.select(&keep_idx));
 
         let new_observation_counts: Vec<u32> = self
+            .point_set
             .observation_counts
             .iter()
             .zip(mask.iter())
@@ -548,7 +585,7 @@ impl SfmrReconstruction {
         // Remap surviving point ids to be contiguous, then filter observations
         // (preserving order) and the parallel observation-source column. Works
         // for both modes — keypoints are filtered in lockstep with the tracks.
-        let mut point_remap = vec![u32::MAX; self.points.len()];
+        let mut point_remap = vec![u32::MAX; self.point_set.points.len()];
         let mut next_id = 0u32;
         for (old, &keep) in mask.iter().enumerate() {
             if keep {
@@ -556,24 +593,24 @@ impl SfmrReconstruction {
                 next_id += 1;
             }
         }
-        let kept: Vec<usize> = (0..self.tracks.len())
-            .filter(|&i| mask[self.tracks[i].point_index as usize])
+        let kept: Vec<usize> = (0..self.point_set.tracks.len())
+            .filter(|&i| mask[self.point_set.tracks[i].point_index as usize])
             .collect();
         // The per-OBSERVATION confidence follows the observation rows `kept`,
         // never the point rows `keep_idx`.
         let new_observation_confidence =
-            select_observation_confidence(&self.observation_confidence, &kept);
+            select_observation_confidence(&self.point_set.observation_confidence, &kept);
         let new_tracks: Vec<TrackObservation> = kept
             .iter()
             .map(|&i| TrackObservation {
-                image_index: self.tracks[i].image_index,
-                point_index: point_remap[self.tracks[i].point_index as usize],
+                image_index: self.point_set.tracks[i].image_index,
+                point_index: point_remap[self.point_set.tracks[i].point_index as usize],
             })
             .collect();
 
         // Images are unchanged, so per-image hashes pass through; the
         // per-observation column is filtered by `kept`.
-        let new_observations = match &self.observations {
+        let new_observations = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
                 keypoints_xy,
@@ -599,7 +636,7 @@ impl SfmrReconstruction {
         let new_observation_offsets = compute_observation_offsets(&new_observation_counts);
 
         // Rebuild per-image feature→point mapping (sift_files only).
-        let image_count = self.images.len();
+        let image_count = self.image_table.images.len();
         let mut new_image_feature_to_point = vec![HashMap::new(); image_count];
         let mut new_max_track_feature_index = vec![0u32; image_count];
         if let ObservationSource::SiftFiles {
@@ -615,30 +652,29 @@ impl SfmrReconstruction {
 
         let infinity_point_count = count_points_at_infinity(&new_points);
         SfmrReconstruction {
-            infinity_point_count,
             workspace_dir: self.workspace_dir.clone(),
             metadata: self.metadata.clone(),
             content_hash: self.content_hash.clone(),
-            cameras: self.cameras.clone(),
-            images: self.images.clone(),
-            points: new_points,
-            tracks: new_tracks,
-            observation_counts: new_observation_counts,
-            observation_offsets: new_observation_offsets,
-            thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
-            depth_statistics: self.depth_statistics.clone(),
-            depth_histogram_counts: self.depth_histogram_counts.clone(),
-            rig_frame_data: self.rig_frame_data.clone(),
-            patch_u_halfvec_xyz: new_patch_u,
-            patch_v_halfvec_xyz: new_patch_v,
-            patch_bitmaps_y_x_rgba: new_patch_bitmaps,
-            has_normals: self.has_normals,
-            normal_confidence: new_normal_confidence,
-            point_constraints: new_point_constraints,
-            observation_confidence: new_observation_confidence,
-            observations: new_observations,
-            image_feature_to_point: new_image_feature_to_point,
-            max_track_feature_index: new_max_track_feature_index,
+            // A point mask touches no image, so the whole table is the input's,
+            // thumbnails shared rather than copied.
+            image_table: self.image_table.clone(),
+            point_set: PointSet {
+                infinity_point_count,
+                points: new_points,
+                tracks: new_tracks,
+                observation_counts: new_observation_counts,
+                observation_offsets: new_observation_offsets,
+                patch_u_halfvec_xyz: new_patch_u,
+                patch_v_halfvec_xyz: new_patch_v,
+                patch_bitmaps_y_x_rgba: new_patch_bitmaps,
+                has_normals: self.point_set.has_normals,
+                normal_confidence: new_normal_confidence,
+                point_constraints: new_point_constraints,
+                observation_confidence: new_observation_confidence,
+                observations: new_observations,
+                image_feature_to_point: new_image_feature_to_point,
+                max_track_feature_index: new_max_track_feature_index,
+            },
         }
     }
 }

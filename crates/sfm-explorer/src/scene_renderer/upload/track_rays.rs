@@ -16,7 +16,11 @@ const INFINITY_RAY_SCENE_MULTIPLE: f64 = 2.0;
 /// Bounding-box diagonal of the reconstruction's camera centers — a
 /// characteristic scene scale, used to size rays toward points at infinity.
 fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
-    let mut iter = recon.images.iter().map(|im| im.camera_center().coords);
+    let mut iter = recon
+        .image_table
+        .images
+        .iter()
+        .map(|im| im.camera_center().coords);
     let Some(first) = iter.next() else {
         return 0.0;
     };
@@ -55,7 +59,7 @@ pub(super) fn track_ray_edges(
     transform: &Se3Transform,
 ) -> Vec<EdgeInstance> {
     let point_idx = point_ref.index();
-    let point = &recon.points[point_idx];
+    let point = &recon.point_set.points[point_idx];
     let point_pos = point.position;
     let at_infinity = point.is_at_infinity();
 
@@ -79,14 +83,14 @@ pub(super) fn track_ray_edges(
     // unprojected from whichever the reconstruction carries.
     let feature_indexes = recon.feature_indexes();
     let keypoints_xy = recon.keypoints_xy();
-    let obs_start = recon.observation_offsets[point_idx];
+    let obs_start = recon.point_set.observation_offsets[point_idx];
     let observations = recon.observations_for_point(point_idx);
     let edges: Vec<EdgeInstance> = observations
         .iter()
         .enumerate()
         .filter_map(|(k, obs)| {
-            let image = &recon.images[obs.image_index as usize];
-            let camera = &recon.cameras[image.camera_index as usize];
+            let image = &recon.image_table.images[obs.image_index as usize];
+            let camera = &recon.image_table.cameras[image.camera_index as usize];
             let center = image.camera_center();
             let endpoint_a = [center.x as f32, center.y as f32, center.z as f32];
 

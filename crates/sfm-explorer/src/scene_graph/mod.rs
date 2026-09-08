@@ -606,7 +606,7 @@ fn show_points_group(
         out.logged(row_id(id, "points_eye"), eye, || {
             visibility_text(&node.label, Layer::Points, shown)
         });
-        let count = with_thousands(node.recon.points.len());
+        let count = with_thousands(node.recon.point_set.points.len());
         let label = if at_infinity > 0 {
             format!("Points ({count} · {} at ∞)", with_thousands(at_infinity))
         } else {

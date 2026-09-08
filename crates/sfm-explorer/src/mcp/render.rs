@@ -64,14 +64,14 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
         "path": node.path.as_ref().map(|p| p.display().to_string()),
         "content_hash": scene::hash_prefix(recon),
         "counts": {
-            "points": recon.points.len(),
+            "points": recon.point_set.points.len(),
             // Read the way `scene::visible_stats` reads it, so this number and
             // the one in the viewport's stats overlay are the same number — an
             // agent comparing a reply against a screenshot should not find two.
             "points_at_infinity": recon.metadata.infinity_point_count as usize,
-            "camera_images": recon.images.len(),
-            "camera_intrinsics": recon.cameras.len(),
-            "observations": recon.tracks.len(),
+            "camera_images": recon.image_table.images.len(),
+            "camera_intrinsics": recon.image_table.cameras.len(),
+            "observations": recon.point_set.tracks.len(),
         },
         "display": {
             "visible": node.visible,
@@ -121,7 +121,7 @@ pub(super) fn selection(state: &AppState) -> Value {
             "index": image.index(),
             "name": state
                 .node(image.recon)
-                .and_then(|node| node.recon.images.get(image.index()))
+                .and_then(|node| node.recon.image_table.images.get(image.index()))
                 .map(|im| im.name.clone()),
         })),
         "camera_intrinsics": state.selected_camera.map(|camera| json!({
@@ -184,7 +184,7 @@ pub(super) fn view(state: &AppState, viewer: &Viewer3D) -> Value {
             "camera_image_index": camera_view.image.index(),
             "name": state
                 .node(camera_view.image.recon)
-                .and_then(|node| node.recon.images.get(camera_view.image.index()))
+                .and_then(|node| node.recon.image_table.images.get(camera_view.image.index()))
                 .map(|im| im.name.clone()),
         })),
     })
@@ -196,7 +196,7 @@ pub(super) fn camera_image_row(
     index: usize,
     observations: usize,
 ) -> Value {
-    let image = &recon.images[index];
+    let image = &recon.image_table.images[index];
     json!({
         "index": index,
         "name": image.name,
@@ -235,8 +235,8 @@ pub(super) fn camera_intrinsics(camera: &sfmtool_core::CameraIntrinsics) -> Valu
 /// reports the count for every image it returns, and a per-image scan would
 /// make listing a reconstruction quadratic in its observation count.
 pub(super) fn observations_per_image(recon: &SfmrReconstruction) -> Vec<usize> {
-    let mut counts = vec![0usize; recon.images.len()];
-    for observation in &recon.tracks {
+    let mut counts = vec![0usize; recon.image_table.images.len()];
+    for observation in &recon.point_set.tracks {
         if let Some(slot) = counts.get_mut(observation.image_index as usize) {
             *slot += 1;
         }

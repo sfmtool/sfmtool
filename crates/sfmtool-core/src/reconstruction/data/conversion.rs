@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
@@ -22,8 +23,8 @@ use sfmr_format::{
 use crate::camera::CameraIntrinsics;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ObservationSource, Point3D,
-    PointConstraintColumns, SfmrImage, SfmrReconstruction, TrackObservation,
+    compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
+    PointConstraintColumns, PointSet, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 
 /// Unit quaternion from raw WXYZ components, keeping the caller's bits when
@@ -268,47 +269,51 @@ impl SfmrReconstruction {
             workspace_dir: data.workspace_dir.unwrap_or_default(),
             metadata: data.metadata,
             content_hash: data.content_hash,
-            cameras,
-            images,
-            points,
-            tracks,
-            observation_counts,
-            observation_offsets,
-            thumbnails_y_x_rgb: data.thumbnails_y_x_rgb,
-            depth_statistics: data.depth_statistics,
-            depth_histogram_counts,
-            rig_frame_data: data.rig_frame_data,
-            patch_u_halfvec_xyz: data.patch_u_halfvec_xyz,
-            patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
-            patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba,
-            has_normals,
-            // Rides along as stored; the convention upgrade above leaves it
-            // alone because a confidence is frame-independent.
-            normal_confidence: data.normal_confidence.map(|c| c.to_vec()),
-            // The triple travels as a set; the format reader has already
-            // checked that the three columns agree with each other and with the
-            // stored `w`. The convention upgrade above leaves it alone: a
-            // distance is a scalar and a reference is an index, so neither
-            // depends on which handedness the file was written in.
-            point_constraints: match (
-                data.point_constraints,
-                data.constraint_distances,
-                data.constraint_reference_images,
-            ) {
-                (Some(constraints), Some(distances), Some(reference_images)) => {
-                    Some(PointConstraintColumns {
-                        point_constraints: constraints.to_vec(),
-                        constraint_distances: distances.to_vec(),
-                        constraint_reference_images: reference_images.to_vec(),
-                    })
-                }
-                _ => None,
+            image_table: ImageTable {
+                cameras,
+                images,
+                thumbnails_y_x_rgb: Arc::new(data.thumbnails_y_x_rgb),
+                depth_statistics: data.depth_statistics,
+                depth_histogram_counts,
+                rig_frame_data: data.rig_frame_data,
             },
-            observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
-            observations,
-            image_feature_to_point,
-            max_track_feature_index,
-            infinity_point_count,
+            point_set: PointSet {
+                points,
+                tracks,
+                observation_counts,
+                observation_offsets,
+                patch_u_halfvec_xyz: data.patch_u_halfvec_xyz,
+                patch_v_halfvec_xyz: data.patch_v_halfvec_xyz,
+                patch_bitmaps_y_x_rgba: data.patch_bitmaps_y_x_rgba.map(Arc::new),
+                has_normals,
+                // Rides along as stored; the convention upgrade above leaves it
+                // alone because a confidence is frame-independent.
+                normal_confidence: data.normal_confidence.map(|c| c.to_vec()),
+                // The triple travels as a set; the format reader has already
+                // checked that the three columns agree with each other and with
+                // the stored `w`. The convention upgrade above leaves it alone:
+                // a distance is a scalar and a reference is an index, so neither
+                // depends on which handedness the file was written in.
+                point_constraints: match (
+                    data.point_constraints,
+                    data.constraint_distances,
+                    data.constraint_reference_images,
+                ) {
+                    (Some(constraints), Some(distances), Some(reference_images)) => {
+                        Some(PointConstraintColumns {
+                            point_constraints: constraints.to_vec(),
+                            constraint_distances: distances.to_vec(),
+                            constraint_reference_images: reference_images.to_vec(),
+                        })
+                    }
+                    _ => None,
+                },
+                observation_confidence: data.observation_confidence.map(|c| c.to_vec()),
+                observations,
+                image_feature_to_point,
+                max_track_feature_index,
+                infinity_point_count,
+            },
         };
 
         // The `load()` path is already protected by the format reader's
@@ -328,10 +333,10 @@ impl SfmrReconstruction {
     pub fn to_sfmr_data(&self) -> SfmrData {
         use ndarray::{Array1, Array2};
 
-        let image_count = self.images.len();
-        let point_count = self.points.len();
-        let observation_count = self.tracks.len();
-        let num_buckets = self.depth_statistics.num_histogram_buckets as usize;
+        let image_count = self.image_table.images.len();
+        let point_count = self.point_set.points.len();
+        let observation_count = self.point_set.tracks.len();
+        let num_buckets = self.image_table.depth_statistics.num_histogram_buckets as usize;
         // Keep the emitted metadata's discriminator in sync with the variant,
         // and its derived counts in sync with the actual arrays (in-memory
         // editors such as clone_with_changes can change the array sizes without
@@ -341,15 +346,20 @@ impl SfmrReconstruction {
         metadata.image_count = image_count as u32;
         metadata.point_count = point_count as u32;
         metadata.observation_count = observation_count as u32;
-        metadata.infinity_point_count = self.infinity_point_count as u32;
+        metadata.infinity_point_count = self.point_set.infinity_point_count as u32;
 
         // Images
-        let image_names: Vec<String> = self.images.iter().map(|im| im.name.clone()).collect();
+        let image_names: Vec<String> = self
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.name.clone())
+            .collect();
         let mut camera_indexes = Array1::<u32>::zeros(image_count);
         let mut quaternions_wxyz = Array2::<f64>::zeros((image_count, 4));
         let mut translations_xyz = Array2::<f64>::zeros((image_count, 3));
 
-        for (i, im) in self.images.iter().enumerate() {
+        for (i, im) in self.image_table.images.iter().enumerate() {
             camera_indexes[i] = im.camera_index;
             let q = im.quaternion_wxyz.quaternion();
             quaternions_wxyz[[i, 0]] = q.w;
@@ -369,10 +379,11 @@ impl SfmrReconstruction {
         let mut reprojection_errors = Array1::<f32>::zeros(point_count);
         // Normals are optional: `None` when this reconstruction carries none.
         let mut normals_xyz = self
+            .point_set
             .has_normals
             .then(|| Array2::<f32>::zeros((point_count, 3)));
 
-        for (i, pt) in self.points.iter().enumerate() {
+        for (i, pt) in self.point_set.points.iter().enumerate() {
             positions_xyzw[[i, 0]] = pt.position.x;
             positions_xyzw[[i, 1]] = pt.position.y;
             positions_xyzw[[i, 2]] = pt.position.z;
@@ -392,7 +403,7 @@ impl SfmrReconstruction {
         let mut image_indexes = Array1::<u32>::zeros(observation_count);
         let mut point_indexes = Array1::<u32>::zeros(observation_count);
 
-        for (i, obs) in self.tracks.iter().enumerate() {
+        for (i, obs) in self.point_set.tracks.iter().enumerate() {
             image_indexes[i] = obs.image_index;
             point_indexes[i] = obs.point_index;
         }
@@ -404,7 +415,7 @@ impl SfmrReconstruction {
             sift_content_hashes,
             keypoints_xy,
             image_file_hashes,
-        ) = match &self.observations {
+        ) = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
                 keypoints_xy,
@@ -429,28 +440,33 @@ impl SfmrReconstruction {
             ),
         };
 
-        let observation_counts = Array1::from_vec(self.observation_counts.clone());
+        let observation_counts = Array1::from_vec(self.point_set.observation_counts.clone());
 
         // Depth histogram counts
         let mut observed_depth_histogram_counts = Array2::<u32>::zeros((image_count, num_buckets));
-        for (i, row) in self.depth_histogram_counts.iter().enumerate() {
+        for (i, row) in self.image_table.depth_histogram_counts.iter().enumerate() {
             for (j, &val) in row.iter().enumerate() {
                 observed_depth_histogram_counts[[i, j]] = val;
             }
         }
 
         // Convert CameraIntrinsics → SfmrCamera for serialization
-        let cameras: Vec<SfmrCamera> = self.cameras.iter().map(SfmrCamera::from).collect();
+        let cameras: Vec<SfmrCamera> = self
+            .image_table
+            .cameras
+            .iter()
+            .map(SfmrCamera::from)
+            .collect();
 
         SfmrData {
             workspace_dir: Some(self.workspace_dir.clone()),
             metadata,
             content_hash: self.content_hash.clone(),
             cameras,
-            rig_frame_data: self.rig_frame_data.clone(),
-            patch_u_halfvec_xyz: self.patch_u_halfvec_xyz.clone(),
-            patch_v_halfvec_xyz: self.patch_v_halfvec_xyz.clone(),
-            patch_bitmaps_y_x_rgba: self.patch_bitmaps_y_x_rgba.clone(),
+            rig_frame_data: self.image_table.rig_frame_data.clone(),
+            patch_u_halfvec_xyz: self.point_set.patch_u_halfvec_xyz.clone(),
+            patch_v_halfvec_xyz: self.point_set.patch_v_halfvec_xyz.clone(),
+            patch_bitmaps_y_x_rgba: self.point_set.patch_bitmaps_y_x_rgba.as_deref().cloned(),
             image_names,
             camera_indexes,
             quaternions_wxyz,
@@ -460,28 +476,33 @@ impl SfmrReconstruction {
             feature_tool_hashes,
             sift_content_hashes,
             image_file_hashes,
-            thumbnails_y_x_rgb: self.thumbnails_y_x_rgb.clone(),
+            thumbnails_y_x_rgb: (*self.image_table.thumbnails_y_x_rgb).clone(),
             positions_xyzw,
             colors_rgb,
             reprojection_errors,
             normals_xyz,
             observation_confidence: self
+                .point_set
                 .observation_confidence
                 .as_ref()
                 .map(|c| Array1::from_vec(c.clone())),
             normal_confidence: self
+                .point_set
                 .normal_confidence
                 .as_ref()
                 .map(|c| Array1::from_vec(c.clone())),
             point_constraints: self
+                .point_set
                 .point_constraints
                 .as_ref()
                 .map(|c| Array1::from_vec(c.point_constraints.clone())),
             constraint_distances: self
+                .point_set
                 .point_constraints
                 .as_ref()
                 .map(|c| Array1::from_vec(c.constraint_distances.clone())),
             constraint_reference_images: self
+                .point_set
                 .point_constraints
                 .as_ref()
                 .map(|c| Array1::from_vec(c.constraint_reference_images.clone())),
@@ -490,7 +511,7 @@ impl SfmrReconstruction {
             keypoints_xy,
             point_indexes,
             observation_counts,
-            depth_statistics: self.depth_statistics.clone(),
+            depth_statistics: self.image_table.depth_statistics.clone(),
             observed_depth_histogram_counts,
         }
     }

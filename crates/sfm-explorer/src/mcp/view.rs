@@ -62,7 +62,7 @@ pub(super) fn set_view(
             let id = resolve_reconstruction(state, reconstruction_label.as_deref())?;
             let image = resolve_camera_image(state, id, &camera_image)?;
             let node = state.node(id).expect("just resolved");
-            let name = node.recon.images[image.index()].name.clone();
+            let name = node.recon.image_table.images[image.index()].name.clone();
             viewer.jump_to_camera_view(image, node);
             (None, format!("Looking through {name}"))
         }

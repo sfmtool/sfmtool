@@ -117,13 +117,13 @@ impl IntrinsicsDetail {
 
         // A stale index left over from a node that has since shrunk is the
         // same nothing as no selection at all.
-        let index = selected_camera.filter(|&i| i < node.recon.cameras.len());
+        let index = selected_camera.filter(|&i| i < node.recon.image_table.cameras.len());
         let Some(index) = index else {
             show_empty_state(ui);
             return response;
         };
         let reference = CameraRef::new(node.id, index);
-        let camera = &node.recon.cameras[index];
+        let camera = &node.recon.image_table.cameras[index];
         let derived = self
             .derived
             .entry(reference)
@@ -134,8 +134,8 @@ impl IntrinsicsDetail {
         // it, and a panel that would otherwise print one lens's `K` beside
         // another lens's pose should not depend on that guarantee holding.
         let image = selected_image
-            .filter(|&i| i < node.recon.images.len())
-            .filter(|&i| node.recon.images[i].camera_index as usize == index);
+            .filter(|&i| i < node.recon.image_table.images.len())
+            .filter(|&i| node.recon.image_table.images[i].camera_index as usize == index);
         let pose = image.map(|i| extrinsics::Pose::resolve(node, i, camera, self.pose_frame));
 
         egui::ScrollArea::vertical()

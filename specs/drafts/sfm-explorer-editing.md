@@ -73,24 +73,25 @@ CSR form that every algorithm consumes is **materialised** from base plus
 edits only when a bulk edit, a save or a size threshold asks for it, and the
 materialisation keeps every point in its place.
 
-Under it, `SfmrReconstruction` splits into an image table and a point set,
+Under it, `SfmrReconstruction` is already an image table plus a point set
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)),
 so the base's point side and the addition set are one type and per-point
-algorithms take a point set rather than the whole. That split lives in
-`sfmtool-core`, because the struct is core's and is what the PyO3 bindings
-and every pipeline hold; the bindings' behaviour does not change.
+algorithms take a point set rather than the whole, and the two heavy columns
+are behind their own `Arc` inside those halves.
 
 There is no copy-on-write anywhere in this. The base is one immutable value
 behind one `Arc`, shared whole by every version in a run of point edits, and
 the thing a point edit updates is the edit part of the version, which is its
 own. A bulk edit produces a new base, a copy of the light columns; the patch
 bitmaps and thumbnails, which are 88 % of the bytes, sit behind their own
-`Arc` inside the point set and a bulk edit that did not touch them (every
-one but a patch refit) points at its input's. Nothing is ever written
-through those `Arc`s, so it is sharing, not copy-on-write. The history
-budget (Part 2) bounds how many bases a node holds; § "Step 1's numbers"
-below has the measurements behind both decisions.
+`Arc` inside the point set and the image table, and a bulk edit that did not
+touch them (every one but a patch refit) points at its input's. Nothing is
+ever written through those `Arc`s, so it is sharing, not copy-on-write. The
+history budget (Part 2) bounds how many bases a node holds; § "Step 1's
+numbers" below has the measurements behind both decisions.
 
-Files into: `specs/core/reconstruction/edited-reconstruction.md` (new).
+Files into: `specs/core/reconstruction/edited-reconstruction.md`, which
+already describes the plain value the base is.
 
 ### Step 1's numbers
 
@@ -357,11 +358,6 @@ steps after it.
    the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-2. **The point-set split, in core.** `SfmrReconstruction` becomes an image
-   table plus a point set, with the bitmap and thumbnail columns behind their
-   own `Arc` inside it. Bindings unchanged; byte parity on the full Python
-   and Rust suites is the acceptance test. Files the first half of
-   `core/reconstruction/edited-reconstruction.md`.
 3. **The edited reconstruction, in core.** The base-plus-edits value, the
    point edits as delete-and-re-add, the per-point accessor that looks through
    the overlay, materialisation with every point in its place and its row map,
@@ -386,7 +382,7 @@ steps after it.
    since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
-Steps 2 to 4 are the groundwork; 5 and 6 are independent of each other; 7
+Steps 3 and 4 are the groundwork; 5 and 6 are independent of each other; 7
 follows 4 and interleaves with 5 and 6.
 
 ## Non-goals

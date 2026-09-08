@@ -8,13 +8,16 @@ use super::*;
 fn test_observations_for_point() {
     let recon = SfmrReconstruction::demo(1000);
     // Demo creates 1000 points, each observed by 2 cameras
-    assert_eq!(recon.observation_offsets.len(), recon.points.len() + 1);
     assert_eq!(
-        *recon.observation_offsets.last().unwrap(),
-        recon.tracks.len()
+        recon.point_set.observation_offsets.len(),
+        recon.point_set.points.len() + 1
+    );
+    assert_eq!(
+        *recon.point_set.observation_offsets.last().unwrap(),
+        recon.point_set.tracks.len()
     );
 
-    for i in 0..recon.points.len() {
+    for i in 0..recon.point_set.points.len() {
         let obs = recon.observations_for_point(i);
         assert_eq!(obs.len(), 2, "point {i} should have 2 observations");
         for o in obs {
@@ -39,7 +42,7 @@ fn test_observation_affine_shape_frontoparallel() {
     let mut recon = SfmrReconstruction::demo(16);
 
     // Pinhole with principal point at the origin, for easy arithmetic.
-    recon.cameras[0] = crate::CameraIntrinsics {
+    recon.image_table.cameras[0] = crate::CameraIntrinsics {
         model: crate::camera::CameraModel::Pinhole {
             focal_length_x: 100.0,
             focal_length_y: 100.0,
@@ -51,21 +54,21 @@ fn test_observation_affine_shape_frontoparallel() {
     };
     // Image 0 at the origin looking down −Z (identity world->camera, the
     // canonical convention).
-    recon.images[0].camera_index = 0;
-    recon.images[0].quaternion_wxyz = UnitQuaternion::identity();
-    recon.images[0].translation_xyz = Vector3::zeros();
+    recon.image_table.images[0].camera_index = 0;
+    recon.image_table.images[0].quaternion_wxyz = UnitQuaternion::identity();
+    recon.image_table.images[0].translation_xyz = Vector3::zeros();
     // Point 0 at (0, 0, −2) — in front — with a fronto-parallel patch:
     // half-extent 0.05 along world X (u) and Y (v), normal u × v = +Z
     // (toward the camera).
-    recon.points[0].position = Point3::new(0.0, 0.0, -2.0);
-    recon.points[0].w = 1.0;
-    let n = recon.points.len();
+    recon.point_set.points[0].position = Point3::new(0.0, 0.0, -2.0);
+    recon.point_set.points[0].w = 1.0;
+    let n = recon.point_set.points.len();
     let mut u = Array2::<f32>::zeros((n, 3));
     let mut v = Array2::<f32>::zeros((n, 3));
     u[[0, 0]] = 0.05;
     v[[0, 1]] = 0.05;
-    recon.patch_u_halfvec_xyz = Some(u);
-    recon.patch_v_halfvec_xyz = Some(v);
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
 
     // Keypoint = projection of the point centre = (0, 0). Expected shape is
     // axis-aligned with scale f * half_extent / depth = 100 * 0.05 / 2 = 2.5.
@@ -82,7 +85,7 @@ fn test_observation_affine_shape_frontoparallel() {
     // A point at infinity still has a shape: its patch is tangent to the
     // direction sphere, and here the tangent frame projects to the same
     // axis-aligned (roughly circular) footprint.
-    recon.points[0].w = 0.0;
+    recon.point_set.points[0].w = 0.0;
     let inf_shape = recon
         .observation_affine_shape(0, 0, [0.0, 0.0])
         .expect("an infinity patch projects to a shape");
@@ -98,8 +101,8 @@ fn test_observation_affine_shape_frontoparallel() {
     );
 
     // No patch arrays at all -> None.
-    recon.points[0].w = 1.0;
-    recon.patch_u_halfvec_xyz = None;
+    recon.point_set.points[0].w = 1.0;
+    recon.point_set.patch_u_halfvec_xyz = None;
     assert!(recon.observation_affine_shape(0, 0, [0.0, 0.0]).is_none());
 }
 
@@ -109,7 +112,7 @@ fn test_observation_affine_shape_rotated_camera() {
     use ndarray::Array2;
 
     let mut recon = SfmrReconstruction::demo(16);
-    recon.cameras[0] = crate::CameraIntrinsics {
+    recon.image_table.cameras[0] = crate::CameraIntrinsics {
         model: crate::camera::CameraModel::Pinhole {
             focal_length_x: 100.0,
             focal_length_y: 100.0,
@@ -122,18 +125,18 @@ fn test_observation_affine_shape_rotated_camera() {
     // World->camera rotation = +90° about Z; camera at the origin. The
     // rotated canonical camera still sees a point at world −Z in front.
     let rot = Rotation3::from_axis_angle(&Vector3::z_axis(), std::f64::consts::FRAC_PI_2);
-    recon.images[0].camera_index = 0;
-    recon.images[0].quaternion_wxyz = UnitQuaternion::from_rotation_matrix(&rot);
-    recon.images[0].translation_xyz = Vector3::zeros();
-    recon.points[0].position = Point3::new(0.0, 0.0, -2.0);
-    recon.points[0].w = 1.0;
-    let n = recon.points.len();
+    recon.image_table.images[0].camera_index = 0;
+    recon.image_table.images[0].quaternion_wxyz = UnitQuaternion::from_rotation_matrix(&rot);
+    recon.image_table.images[0].translation_xyz = Vector3::zeros();
+    recon.point_set.points[0].position = Point3::new(0.0, 0.0, -2.0);
+    recon.point_set.points[0].w = 1.0;
+    let n = recon.point_set.points.len();
     let mut u = Array2::<f32>::zeros((n, 3));
     let mut v = Array2::<f32>::zeros((n, 3));
     u[[0, 0]] = 0.05; // world +X
     v[[0, 1]] = 0.05; // world +Y
-    recon.patch_u_halfvec_xyz = Some(u);
-    recon.patch_v_halfvec_xyz = Some(v);
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
 
     // The point still projects to (0, 0). The world->camera rotation R sends
     // world +X -> camera +Y (image up, pixel v *decreasing*) and world +Y ->
@@ -155,12 +158,18 @@ fn test_observation_affine_shape_rotated_camera() {
 #[test]
 fn test_subset_keep_all_images_is_identity() {
     let recon = SfmrReconstruction::demo(1000);
-    let indices: Vec<u32> = (0..recon.images.len() as u32).collect();
+    let indices: Vec<u32> = (0..recon.image_table.images.len() as u32).collect();
     let subset = recon.subset_by_image_indices(&indices, false).unwrap();
-    assert_eq!(subset.images.len(), recon.images.len());
-    assert_eq!(subset.points.len(), recon.points.len());
-    assert_eq!(subset.tracks.len(), recon.tracks.len());
-    assert_eq!(subset.observation_counts, recon.observation_counts);
+    assert_eq!(
+        subset.image_table.images.len(),
+        recon.image_table.images.len()
+    );
+    assert_eq!(subset.point_set.points.len(), recon.point_set.points.len());
+    assert_eq!(subset.point_set.tracks.len(), recon.point_set.tracks.len());
+    assert_eq!(
+        subset.point_set.observation_counts,
+        recon.point_set.observation_counts
+    );
 }
 
 #[test]
@@ -170,25 +179,33 @@ fn test_subset_keeps_all_points_by_default() {
     // (i % 8) and ((i + 1) % 8), so ~2 points out of every 8 touch image 0.
     let subset = recon.subset_by_image_indices(&[0], false).unwrap();
 
-    assert_eq!(subset.images.len(), 1);
+    assert_eq!(subset.image_table.images.len(), 1);
     // Default: all points kept even if their track dropped to zero.
-    assert_eq!(subset.points.len(), recon.points.len());
-    assert_eq!(subset.observation_counts.len(), recon.points.len());
+    assert_eq!(subset.point_set.points.len(), recon.point_set.points.len());
+    assert_eq!(
+        subset.point_set.observation_counts.len(),
+        recon.point_set.points.len()
+    );
 
     // Observations that survived are the ones referencing image 0.
-    let expected_surviving: usize = recon.tracks.iter().filter(|t| t.image_index == 0).count();
-    assert_eq!(subset.tracks.len(), expected_surviving);
+    let expected_surviving: usize = recon
+        .point_set
+        .tracks
+        .iter()
+        .filter(|t| t.image_index == 0)
+        .count();
+    assert_eq!(subset.point_set.tracks.len(), expected_surviving);
     // Every surviving track now references the new image index 0.
-    for obs in &subset.tracks {
+    for obs in &subset.point_set.tracks {
         assert_eq!(obs.image_index, 0);
     }
     // Per-point observation_counts sum to the surviving track count.
     assert_eq!(
-        subset.observation_counts.iter().sum::<u32>() as usize,
+        subset.point_set.observation_counts.iter().sum::<u32>() as usize,
         expected_surviving
     );
     // And some points have zero observations.
-    assert!(subset.observation_counts.contains(&0));
+    assert!(subset.point_set.observation_counts.contains(&0));
 }
 
 #[test]
@@ -196,32 +213,38 @@ fn test_subset_drops_orphaned_points_when_requested() {
     let recon = SfmrReconstruction::demo(1000);
     let subset = recon.subset_by_image_indices(&[0], true).unwrap();
 
-    assert_eq!(subset.images.len(), 1);
+    assert_eq!(subset.image_table.images.len(), 1);
     // All surviving points have at least one observation.
-    assert!(subset.observation_counts.iter().all(|&c| c > 0));
+    assert!(subset.point_set.observation_counts.iter().all(|&c| c > 0));
     assert_eq!(
-        subset.points.len(),
-        subset.observation_counts.iter().filter(|&&c| c > 0).count()
+        subset.point_set.points.len(),
+        subset
+            .point_set
+            .observation_counts
+            .iter()
+            .filter(|&&c| c > 0)
+            .count()
     );
     // Point IDs in tracks are contiguous.
     let max_pt = subset
+        .point_set
         .tracks
         .iter()
         .map(|t| t.point_index)
         .max()
         .unwrap_or(0);
-    assert!((max_pt as usize) < subset.points.len());
+    assert!((max_pt as usize) < subset.point_set.points.len());
     // Observation offsets round-trip.
     assert_eq!(
-        *subset.observation_offsets.last().unwrap(),
-        subset.tracks.len()
+        *subset.point_set.observation_offsets.last().unwrap(),
+        subset.point_set.tracks.len()
     );
 }
 
 #[test]
 fn test_subset_rejects_out_of_bounds_and_duplicates() {
     let recon = SfmrReconstruction::demo(1000);
-    let n = recon.images.len() as u32;
+    let n = recon.image_table.images.len() as u32;
     assert!(recon.subset_by_image_indices(&[n], false).is_err());
     assert!(recon.subset_by_image_indices(&[0, 0], false).is_err());
 }
@@ -234,7 +257,7 @@ fn test_subset_filters_rig_frame_data() {
     // Start from the demo (8 images) and attach a trivial rig/frame
     // structure: one single-sensor rig, one frame per image.
     let mut recon = SfmrReconstruction::demo(1000);
-    let n_images = recon.images.len();
+    let n_images = recon.image_table.images.len();
     let rig_def = RigDefinition {
         name: "rig0".to_string(),
         sensor_count: 1,
@@ -242,7 +265,7 @@ fn test_subset_filters_rig_frame_data() {
         ref_sensor_name: "sensor0".to_string(),
         sensor_names: vec!["sensor0".to_string()],
     };
-    recon.rig_frame_data = Some(RigFrameData {
+    recon.image_table.rig_frame_data = Some(RigFrameData {
         rigs_metadata: RigsMetadata {
             rig_count: 1,
             sensor_count: 1,
@@ -261,7 +284,7 @@ fn test_subset_filters_rig_frame_data() {
 
     // Keep images 0, 3, 5 — three frames survive and must be remapped to 0,1,2.
     let subset = recon.subset_by_image_indices(&[0, 3, 5], false).unwrap();
-    let rf = subset.rig_frame_data.as_ref().unwrap();
+    let rf = subset.image_table.rig_frame_data.as_ref().unwrap();
     assert_eq!(rf.frames_metadata.frame_count, 3);
     assert_eq!(rf.rig_indexes.len(), 3);
     assert_eq!(rf.image_frame_indexes.to_vec(), vec![0, 1, 2]);
@@ -294,14 +317,18 @@ fn test_embedded_patches_round_trips_through_reconstruction() {
     // Build an embedded_patches SfmrData by hand (drop the .sift-link arrays, add
     // inline keypoints + image hash), load it, and round-trip it back.
     let recon = demo_embedded(10);
-    let n = recon.images.len();
+    let n = recon.image_table.images.len();
     let kp_expected = recon.keypoints_xy().unwrap().clone();
 
     assert_eq!(recon.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
     assert_eq!(recon.keypoints_xy().unwrap(), &kp_expected);
     assert_eq!(recon.image_file_hashes().unwrap().len(), n);
     // Feature-index machinery is empty for embedded (placeholders only).
-    assert!(recon.image_feature_to_point.iter().all(|m| m.is_empty()));
+    assert!(recon
+        .point_set
+        .image_feature_to_point
+        .iter()
+        .all(|m| m.is_empty()));
 
     // Round-trips back to embedded columns, .sift-link arrays absent.
     let out = recon.to_sfmr_data();
@@ -323,7 +350,7 @@ fn test_recompute_point_errors_embedded_uses_inline_keypoints() {
     recon
         .recompute_point_errors()
         .expect("embedded recompute must not read .sift");
-    assert!(recon.points.iter().all(|p| p.error.is_finite()));
+    assert!(recon.point_set.points.iter().all(|p| p.error.is_finite()));
 }
 
 #[test]
@@ -331,12 +358,12 @@ fn test_recompute_infinity_point_errors_embedded() {
     // Flag one point as at-infinity; the infinity-only recompute must run
     // against the inline keypoints (no `.sift`) and leave a finite error.
     let mut recon = demo_embedded(10);
-    recon.points[0].position = nalgebra::Point3::new(0.0, 0.0, -1.0);
-    recon.points[0].w = 0.0;
+    recon.point_set.points[0].position = nalgebra::Point3::new(0.0, 0.0, -1.0);
+    recon.point_set.points[0].w = 0.0;
     recon
         .recompute_infinity_point_errors()
         .expect("embedded infinity recompute must not read .sift");
-    assert!(recon.points[0].error.is_finite());
+    assert!(recon.point_set.points[0].error.is_finite());
 }
 
 #[test]
@@ -363,7 +390,7 @@ fn test_filter_points_keeps_embedded_keypoints_parallel() {
     // Surviving observations are the rows for points 0 and 2 — source rows
     // [0, 1, 4, 5] — kept in order and still parallel to the new tracks.
     let kp = out.keypoints_xy().unwrap();
-    assert_eq!(kp.nrows(), out.tracks.len());
+    assert_eq!(kp.nrows(), out.point_set.tracks.len());
     assert_eq!(kp.nrows(), 4);
     assert_eq!([kp[[0, 0]], kp[[0, 1]]], [0.0, 1.0]); // source row 0
     assert_eq!([kp[[1, 0]], kp[[1, 1]]], [2.0, 3.0]); // source row 1
@@ -408,26 +435,30 @@ fn test_se3_transform_preserves_embedded_columns() {
 #[test]
 fn test_subset_by_image_indices_keeps_embedded() {
     let recon = demo_embedded(4);
-    let n_obs_before = recon.tracks.len();
+    let n_obs_before = recon.point_set.tracks.len();
     // Keep a subset of images; embedded_patches is now supported.
     let sub = recon
         .subset_by_image_indices(&[0, 2], true)
         .expect("subset must support embedded_patches");
-    assert_eq!(sub.images.len(), 2);
+    assert_eq!(sub.image_table.images.len(), 2);
     assert_eq!(sub.feature_source(), FEATURE_SOURCE_EMBEDDED_PATCHES);
     // The inline keypoints stay parallel to the filtered tracks, and every
     // observation references a kept (remapped) image.
     let kp = sub
         .keypoints_xy()
         .expect("embedded_patches keeps keypoints");
-    assert_eq!(kp.shape()[0], sub.tracks.len());
-    for obs in &sub.tracks {
-        assert!((obs.image_index as usize) < sub.images.len());
+    assert_eq!(kp.shape()[0], sub.point_set.tracks.len());
+    for obs in &sub.point_set.tracks {
+        assert!((obs.image_index as usize) < sub.image_table.images.len());
     }
     // Observations on the two removed images are gone.
-    assert!(sub.tracks.len() < n_obs_before);
+    assert!(sub.point_set.tracks.len() < n_obs_before);
     // The SIFT-only feature→point maps stay empty for embedded_patches.
-    assert!(sub.image_feature_to_point.iter().all(|m| m.is_empty()));
+    assert!(sub
+        .point_set
+        .image_feature_to_point
+        .iter()
+        .all(|m| m.is_empty()));
 }
 
 #[test]
@@ -453,7 +484,9 @@ fn test_validate_observation_columns_detects_desync() {
 
     // Truncating keypoints below the observation count is caught.
     let mut recon = demo_embedded(4);
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations {
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut recon.point_set.observations
+    {
         *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &[0, 1]);
     }
     let err = recon
@@ -482,8 +515,11 @@ fn test_sift_files_inline_keypoints_round_trip_through_reconstruction() {
     // The mode is unchanged: the .sift link is still there, the inline column
     // rides alongside it.
     assert_eq!(recon.feature_source(), FEATURE_SOURCE_SIFT_FILES);
-    assert_eq!(recon.feature_indexes().unwrap().len(), recon.tracks.len());
-    assert_eq!(kp_expected.nrows(), recon.tracks.len());
+    assert_eq!(
+        recon.feature_indexes().unwrap().len(),
+        recon.point_set.tracks.len()
+    );
+    assert_eq!(kp_expected.nrows(), recon.point_set.tracks.len());
     recon.validate_observation_columns().unwrap();
 
     // And it survives the trip back out to SfmrData, alongside the .sift-link
@@ -515,7 +551,7 @@ fn test_filter_points_keeps_sift_files_inline_keypoints_parallel() {
     // [0, 1, 4, 5] -- and the inline column selects exactly the same rows the
     // feature indexes do.
     let kp = out.keypoints_xy().expect("inline column survives");
-    assert_eq!(kp.nrows(), out.tracks.len());
+    assert_eq!(kp.nrows(), out.point_set.tracks.len());
     assert_eq!(kp.nrows(), 4);
     assert_eq!([kp[[0, 0]], kp[[0, 1]]], [0.0, 1.0]); // source row 0
     assert_eq!([kp[[1, 0]], kp[[1, 1]]], [2.0, 3.0]); // source row 1
@@ -533,7 +569,7 @@ fn test_subset_by_image_indices_keeps_sift_files_inline_in_lockstep() {
 
     assert_eq!(sub.feature_source(), FEATURE_SOURCE_SIFT_FILES);
     let kp = sub.keypoints_xy().expect("inline column survives");
-    assert_eq!(kp.nrows(), sub.tracks.len());
+    assert_eq!(kp.nrows(), sub.point_set.tracks.len());
     sub.validate_observation_columns().unwrap();
 
     // The two modes carry the same coordinates, so subsetting the same images
@@ -554,7 +590,7 @@ fn test_validate_observation_columns_detects_a_sift_files_inline_desync() {
     if let ObservationSource::SiftFiles {
         keypoints_xy: Some(keypoints_xy),
         ..
-    } = &mut recon.observations
+    } = &mut recon.point_set.observations
     {
         *keypoints_xy = keypoints_xy.select(ndarray::Axis(0), &[0, 1]);
     }
@@ -582,7 +618,13 @@ fn test_recompute_point_errors_sift_files_prefers_inline_keypoints() {
     let mut embedded = demo_embedded(10);
     embedded.recompute_point_errors().unwrap();
 
-    for (i, (a, b)) in inline.points.iter().zip(&embedded.points).enumerate() {
+    for (i, (a, b)) in inline
+        .point_set
+        .points
+        .iter()
+        .zip(&embedded.point_set.points)
+        .enumerate()
+    {
         assert!(a.error.is_finite(), "point {i} error must be finite");
         assert_eq!(a.error, b.error, "point {i} error differs from embedded");
     }
@@ -599,20 +641,23 @@ fn test_compute_observation_reprojection_errors_sift_files_prefers_inline() {
     let results = recon
         .compute_observation_reprojection_errors(0)
         .expect("the inline column answers without any .sift");
-    assert_eq!(results.len(), recon.image_feature_to_point[0].len());
+    assert_eq!(
+        results.len(),
+        recon.point_set.image_feature_to_point[0].len()
+    );
     assert!(!results.is_empty());
 
     // Each pair measures the reprojection against that observation's own inline
     // row, found by crossing the feature-keyed map with the observation rows.
     let keypoints_xy = recon.keypoints_xy().unwrap();
-    let image = &recon.images[0];
-    let camera = &recon.cameras[image.camera_index as usize];
+    let image = &recon.image_table.images[0];
+    let camera = &recon.image_table.cameras[image.camera_index as usize];
     for (feature_index, error) in &results {
-        let point_index = recon.image_feature_to_point[0][feature_index];
+        let point_index = recon.point_set.image_feature_to_point[0][feature_index];
         let row = recon
             .observation_row(0, point_index, *feature_index)
             .expect("every tracked feature has an observation row");
-        let point = &recon.points[point_index as usize];
+        let point = &recon.point_set.points[point_index as usize];
         let expected = super::recompute::observation_reprojection_error(
             &image.quaternion_wxyz,
             &image.translation_xyz,
@@ -747,12 +792,12 @@ fn test_sfmr_data_colmap_to_canonical_converts_every_section() {
 
     let mut recon = SfmrReconstruction::demo(6);
     // Exercise the w = 0 branch: point 0 becomes an infinity direction.
-    recon.points[0].position = Point3::new(0.6, 0.0, 0.8);
-    recon.points[0].w = 0.0;
-    recon.infinity_point_count = 1;
+    recon.point_set.points[0].position = Point3::new(0.6, 0.0, 0.8);
+    recon.point_set.points[0].w = 0.0;
+    recon.point_set.infinity_point_count = 1;
 
     let mut data = recon.to_sfmr_data();
-    let p = recon.points.len();
+    let p = recon.point_set.points.len();
 
     // Attach a patch frame so the u/v half-vector rotation is exercised.
     let mut u = Array2::<f32>::zeros((p, 3));
@@ -793,8 +838,8 @@ fn test_sfmr_data_colmap_to_canonical_converts_every_section() {
         sensor_translations_xyz: sensor_t.clone(),
         frames_metadata: FramesMetadata { frame_count: 0 },
         rig_indexes: Array1::from_vec(vec![]),
-        image_sensor_indexes: Array1::from_vec(vec![0; recon.images.len()]),
-        image_frame_indexes: Array1::from_vec(vec![0; recon.images.len()]),
+        image_sensor_indexes: Array1::from_vec(vec![0; recon.image_table.images.len()]),
+        image_frame_indexes: Array1::from_vec(vec![0; recon.image_table.images.len()]),
     });
 
     let orig_quats = data.quaternions_wxyz.clone();
@@ -922,8 +967,16 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     // canonical ground truth and reports the current version.
     let loaded = SfmrReconstruction::load(&v4_path).unwrap();
     assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
-    assert_eq!(loaded.images.len(), recon.images.len());
-    for (li, ri) in loaded.images.iter().zip(&recon.images) {
+    assert_eq!(
+        loaded.image_table.images.len(),
+        recon.image_table.images.len()
+    );
+    for (li, ri) in loaded
+        .image_table
+        .images
+        .iter()
+        .zip(&recon.image_table.images)
+    {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         for k in 0..3 {
             assert!(
@@ -933,7 +986,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
             );
         }
     }
-    for (lp, rp) in loaded.points.iter().zip(&recon.points) {
+    for (lp, rp) in loaded.point_set.points.iter().zip(&recon.point_set.points) {
         for k in 0..3 {
             assert!((lp.position[k] - rp.position[k]).abs() < 1e-9);
             assert!((lp.normal[k] - rp.normal[k]).abs() < 1e-6);
@@ -949,13 +1002,23 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
         sfmr_format::SFMR_FORMAT_VERSION
     );
     let reloaded = SfmrReconstruction::load(&saved).unwrap();
-    for (li, ri) in reloaded.images.iter().zip(&loaded.images) {
+    for (li, ri) in reloaded
+        .image_table
+        .images
+        .iter()
+        .zip(&loaded.image_table.images)
+    {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         for k in 0..3 {
             assert!((li.translation_xyz[k] - ri.translation_xyz[k]).abs() < 1e-12);
         }
     }
-    for (lp, rp) in reloaded.points.iter().zip(&loaded.points) {
+    for (lp, rp) in reloaded
+        .point_set
+        .points
+        .iter()
+        .zip(&loaded.point_set.points)
+    {
         for k in 0..3 {
             assert!((lp.position[k] - rp.position[k]).abs() < 1e-12);
         }
@@ -976,10 +1039,10 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
 fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
     let mut recon = demo_embedded(num_points);
     let mut keypoints = recon.keypoints_xy().unwrap().clone();
-    for (obs_index, obs) in recon.tracks.iter().enumerate() {
-        let image = &recon.images[obs.image_index as usize];
-        let camera = &recon.cameras[image.camera_index as usize];
-        let point = &recon.points[obs.point_index as usize];
+    for (obs_index, obs) in recon.point_set.tracks.iter().enumerate() {
+        let image = &recon.image_table.images[obs.image_index as usize];
+        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let point = &recon.point_set.points[obs.point_index as usize];
         let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         assert!(
             p_cam.z < 0.0,
@@ -989,16 +1052,18 @@ fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
         keypoints[[obs_index, 0]] = u as f32;
         keypoints[[obs_index, 1]] = v as f32;
     }
-    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations {
+    if let ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+        &mut recon.point_set.observations
+    {
         *keypoints_xy = keypoints;
     }
     // The writer requires the patch frame in this mode, and the frame is
     // world-space, so it also witnesses a world rotation applied by mistake.
-    let p = recon.points.len();
-    recon.patch_u_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
+    let p = recon.point_set.points.len();
+    recon.point_set.patch_u_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
         [0.0625f32, 0.0, 0.0][c]
     }));
-    recon.patch_v_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
+    recon.point_set.patch_v_halfvec_xyz = Some(Array2::from_shape_fn((p, 3), |(_, c)| {
         [0.0, 0.03125f32, 0.0][c]
     }));
     recon.recompute_point_errors().unwrap();
@@ -1009,10 +1074,10 @@ fn demo_embedded_projected(num_points: usize) -> SfmrReconstruction {
 /// `tol` pixels and in front of its camera.
 fn assert_projects_onto_keypoints(recon: &SfmrReconstruction, tol: f64, ctx: &str) {
     let keypoints = recon.keypoints_xy().expect("embedded_patches fixture");
-    for (obs_index, obs) in recon.tracks.iter().enumerate() {
-        let image = &recon.images[obs.image_index as usize];
-        let camera = &recon.cameras[image.camera_index as usize];
-        let point = &recon.points[obs.point_index as usize];
+    for (obs_index, obs) in recon.point_set.tracks.iter().enumerate() {
+        let image = &recon.image_table.images[obs.image_index as usize];
+        let camera = &recon.image_table.cameras[image.camera_index as usize];
+        let point = &recon.point_set.points[obs.point_index as usize];
         let p_cam = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
         assert!(
             p_cam.z < 0.0,
@@ -1080,7 +1145,12 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
 
         // Poses and points come back exactly as stored — no conversion touched
         // them.
-        for (li, ri) in loaded.images.iter().zip(&recon.images) {
+        for (li, ri) in loaded
+            .image_table
+            .images
+            .iter()
+            .zip(&recon.image_table.images)
+        {
             let (lq, rq) = (
                 li.quaternion_wxyz.quaternion(),
                 ri.quaternion_wxyz.quaternion(),
@@ -1097,17 +1167,23 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
                 li.name
             );
         }
-        for (i, (lp, rp)) in loaded.points.iter().zip(&recon.points).enumerate() {
+        for (i, (lp, rp)) in loaded
+            .point_set
+            .points
+            .iter()
+            .zip(&recon.point_set.points)
+            .enumerate()
+        {
             assert_eq!(lp.position, rp.position, "{ctx}: point {i} moved on load");
             assert_eq!(lp.w, rp.w, "{ctx}: point {i} changed its w on load");
             assert_eq!(lp.normal, rp.normal, "{ctx}: point {i} normal rotated");
         }
         assert_eq!(
-            loaded.patch_u_halfvec_xyz, recon.patch_u_halfvec_xyz,
+            loaded.point_set.patch_u_halfvec_xyz, recon.point_set.patch_u_halfvec_xyz,
             "{ctx}: patch u half-vectors rotated on load"
         );
         assert_eq!(
-            loaded.patch_v_halfvec_xyz, recon.patch_v_halfvec_xyz,
+            loaded.point_set.patch_v_halfvec_xyz, recon.point_set.patch_v_halfvec_xyz,
             "{ctx}: patch v half-vectors rotated on load"
         );
 
@@ -1117,13 +1193,13 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
 
         // ...so recomputing the errors reproduces the stored ones rather than
         // collapsing to the "no observation in front of the camera" zero.
-        let stored: Vec<f32> = loaded.points.iter().map(|p| p.error).collect();
+        let stored: Vec<f32> = loaded.point_set.points.iter().map(|p| p.error).collect();
         assert!(
             stored.iter().all(|e| e.is_finite()),
             "{ctx}: stored errors must be finite"
         );
         loaded.recompute_point_errors().unwrap();
-        let recomputed: Vec<f32> = loaded.points.iter().map(|p| p.error).collect();
+        let recomputed: Vec<f32> = loaded.point_set.points.iter().map(|p| p.error).collect();
         assert_eq!(stored, recomputed, "{ctx}: recomputed errors differ");
     }
 
@@ -1165,18 +1241,28 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
     );
 
     let mut reloaded = SfmrReconstruction::load(&resaved).unwrap();
-    for (li, ri) in reloaded.images.iter().zip(&recon.images) {
+    for (li, ri) in reloaded
+        .image_table
+        .images
+        .iter()
+        .zip(&recon.image_table.images)
+    {
         assert_rotations_close(&li.quaternion_wxyz, &ri.quaternion_wxyz, &li.name);
         assert_eq!(li.translation_xyz, ri.translation_xyz);
     }
-    for (lp, rp) in reloaded.points.iter().zip(&recon.points) {
+    for (lp, rp) in reloaded
+        .point_set
+        .points
+        .iter()
+        .zip(&recon.point_set.points)
+    {
         assert_eq!(lp.position, rp.position);
         assert_eq!(lp.w, rp.w);
     }
     assert_projects_onto_keypoints(&reloaded, 1e-3, "resaved");
-    let stored: Vec<f32> = reloaded.points.iter().map(|p| p.error).collect();
+    let stored: Vec<f32> = reloaded.point_set.points.iter().map(|p| p.error).collect();
     reloaded.recompute_point_errors().unwrap();
-    let recomputed: Vec<f32> = reloaded.points.iter().map(|p| p.error).collect();
+    let recomputed: Vec<f32> = reloaded.point_set.points.iter().map(|p| p.error).collect();
     assert_eq!(stored, recomputed, "resaved: recomputed errors differ");
 
     std::fs::remove_dir_all(&dir).ok();
@@ -1235,8 +1321,8 @@ fn test_unit_quaternion_preserving_normalizes_non_unit() {
 /// wrong length. (Plus one because `0` is the reserved "no support" code.)
 fn demo_with_observation_confidence(num_points: usize) -> SfmrReconstruction {
     let mut recon = demo_embedded(num_points);
-    let m = recon.tracks.len();
-    recon.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
+    let m = recon.point_set.tracks.len();
+    recon.point_set.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
     recon.validate_observation_columns().unwrap();
     recon
 }
@@ -1244,7 +1330,7 @@ fn demo_with_observation_confidence(num_points: usize) -> SfmrReconstruction {
 #[test]
 fn test_observation_confidence_round_trips_through_sfmr_data() {
     let recon = demo_with_observation_confidence(4);
-    let expected = recon.observation_confidence.clone().unwrap();
+    let expected = recon.point_set.observation_confidence.clone().unwrap();
     let data = recon.to_sfmr_data();
     let arr = data
         .observation_confidence
@@ -1253,7 +1339,7 @@ fn test_observation_confidence_round_trips_through_sfmr_data() {
     assert_eq!(arr.len(), data.metadata.observation_count as usize);
     assert_eq!(arr.to_vec(), expected);
     let back = SfmrReconstruction::from_sfmr_data(data).unwrap();
-    assert_eq!(back.observation_confidence.unwrap(), expected);
+    assert_eq!(back.point_set.observation_confidence.unwrap(), expected);
 }
 
 #[test]
@@ -1263,10 +1349,11 @@ fn test_filter_points_selects_observation_confidence_by_observation_row() {
     let recon = demo_with_observation_confidence(4);
     let out = recon.filter_points_by_mask(&[true, false, true, false]);
     let confidence = out
+        .point_set
         .observation_confidence
         .clone()
         .expect("column must survive");
-    assert_eq!(confidence.len(), out.tracks.len());
+    assert_eq!(confidence.len(), out.point_set.tracks.len());
     // Source observation rows [0, 1, 4, 5] -> values [1, 2, 5, 6].
     assert_eq!(confidence, vec![1, 2, 5, 6]);
     out.validate_observation_columns().unwrap();
@@ -1277,8 +1364,9 @@ fn test_subset_by_image_indices_selects_observation_confidence_in_lockstep() {
     // Dropping an image drops the observations made in it, and the confidence
     // must lose exactly those rows — the same selection `keypoints_xy` takes.
     let recon = demo_with_observation_confidence(4);
-    let keep_image = recon.tracks[0].image_index;
+    let keep_image = recon.point_set.tracks[0].image_index;
     let kept_rows: Vec<u8> = recon
+        .point_set
         .tracks
         .iter()
         .enumerate()
@@ -1289,10 +1377,11 @@ fn test_subset_by_image_indices_selects_observation_confidence_in_lockstep() {
         .subset_by_image_indices(&[keep_image], true)
         .expect("subset should succeed");
     let confidence = out
+        .point_set
         .observation_confidence
         .clone()
         .expect("column must survive");
-    assert_eq!(confidence.len(), out.tracks.len());
+    assert_eq!(confidence.len(), out.point_set.tracks.len());
     assert_eq!(confidence, kept_rows);
     let kp = out.keypoints_xy().unwrap();
     assert_eq!(
@@ -1312,7 +1401,7 @@ fn test_se3_transform_carries_observation_confidence_verbatim() {
     use nalgebra::{UnitQuaternion, Vector3};
 
     let recon = demo_with_observation_confidence(4);
-    let expected = recon.observation_confidence.clone().unwrap();
+    let expected = recon.point_set.observation_confidence.clone().unwrap();
     let t = Se3Transform::new(
         RotQuaternion::from_nalgebra(UnitQuaternion::from_axis_angle(
             &Vector3::z_axis(),
@@ -1322,13 +1411,13 @@ fn test_se3_transform_carries_observation_confidence_verbatim() {
         1.5,
     );
     let out = recon.apply_se3_transform(&t);
-    assert_eq!(out.observation_confidence.unwrap(), expected);
+    assert_eq!(out.point_set.observation_confidence.unwrap(), expected);
 }
 
 #[test]
 fn test_validate_observation_columns_detects_a_confidence_desync() {
     let mut recon = demo_with_observation_confidence(4);
-    recon.observation_confidence = Some(vec![255; recon.tracks.len() - 1]);
+    recon.point_set.observation_confidence = Some(vec![255; recon.point_set.tracks.len() - 1]);
     let err = recon.validate_observation_columns().unwrap_err();
     assert!(
         err.contains("observation_confidence"),
@@ -1336,7 +1425,7 @@ fn test_validate_observation_columns_detects_a_confidence_desync() {
     );
 
     // Absent is always valid: it means "no information", not a desync.
-    recon.observation_confidence = None;
+    recon.point_set.observation_confidence = None;
     recon.validate_observation_columns().unwrap();
 }
 
@@ -1345,11 +1434,11 @@ fn test_observation_confidence_is_valid_in_sift_files_mode_too() {
     // It rates an observation, so it does not care which column backs one.
     let mut recon = SfmrReconstruction::demo(3);
     assert_eq!(recon.feature_source(), FEATURE_SOURCE_SIFT_FILES);
-    let m = recon.tracks.len();
-    recon.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
+    let m = recon.point_set.tracks.len();
+    recon.point_set.observation_confidence = Some((0..m).map(|i| (i + 1) as u8).collect());
     recon.validate_observation_columns().unwrap();
     let back = SfmrReconstruction::from_sfmr_data(recon.to_sfmr_data()).unwrap();
-    assert_eq!(back.observation_confidence.unwrap().len(), m);
+    assert_eq!(back.point_set.observation_confidence.unwrap().len(), m);
 }
 
 #[test]
@@ -1375,8 +1464,8 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
         width: 480,
         height: 480,
     };
-    recon.cameras = vec![cam.clone()];
-    for im in recon.images.iter_mut() {
+    recon.image_table.cameras = vec![cam.clone()];
+    for im in recon.image_table.images.iter_mut() {
         im.camera_index = 0;
         im.quaternion_wxyz = UnitQuaternion::identity();
         im.translation_xyz = Vector3::zeros();
@@ -1386,33 +1475,35 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
     // the diagonal, and squarely inside the model's domain.
     let theta: f64 = 100f64.to_radians();
     let dir = Vector3::new(theta.sin(), 0.0, -theta.cos());
-    for (p_idx, pt) in recon.points.iter_mut().enumerate() {
+    for (p_idx, pt) in recon.point_set.points.iter_mut().enumerate() {
         pt.position = Point3::from(dir * (3.0 + p_idx as f64));
         pt.w = 1.0;
     }
     assert!(
-        (recon.images[0].quaternion_wxyz * recon.points[0].position.coords).z > 0.0,
+        (recon.image_table.images[0].quaternion_wxyz * recon.point_set.points[0].position.coords).z
+            > 0.0,
         "fixture must be past 90 deg (canonical z > 0)"
     );
 
     // Plant each observation's keypoint 2 px along +u from the exact
     // projection, so the recomputed mean error must be exactly 2 px.
-    let projected: Vec<[f32; 2]> = (0..recon.tracks.len())
+    let projected: Vec<[f32; 2]> = (0..recon.point_set.tracks.len())
         .map(|k| {
-            let obs = &recon.tracks[k];
+            let obs = &recon.point_set.tracks[k];
             let p_idx = recon
+                .point_set
                 .observation_offsets
                 .windows(2)
                 .position(|w| (w[0]..w[1]).contains(&k))
                 .expect("observation belongs to a point");
-            let image = &recon.images[obs.image_index as usize];
-            let p_cam =
-                image.quaternion_wxyz * recon.points[p_idx].position.coords + image.translation_xyz;
+            let image = &recon.image_table.images[obs.image_index as usize];
+            let p_cam = image.quaternion_wxyz * recon.point_set.points[p_idx].position.coords
+                + image.translation_xyz;
             let (u, v) = cam.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]).unwrap();
             [(u + 2.0) as f32, v as f32]
         })
         .collect();
-    match &mut recon.observations {
+    match &mut recon.point_set.observations {
         ObservationSource::EmbeddedPatches { keypoints_xy, .. } => {
             for (k, uv) in projected.iter().enumerate() {
                 keypoints_xy[[k, 0]] = uv[0];
@@ -1423,7 +1514,7 @@ fn test_recompute_point_errors_fisheye_keeps_past_ninety_observations() {
     }
 
     recon.recompute_point_errors().unwrap();
-    for (i, p) in recon.points.iter().enumerate() {
+    for (i, p) in recon.point_set.points.iter().enumerate() {
         assert!(
             (p.error - 2.0).abs() < 1e-2,
             "point {i} error {} — a past-90-degree observation was dropped",

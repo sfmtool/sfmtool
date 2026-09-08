@@ -50,17 +50,17 @@ use crate::window::{WindowHost, WindowState};
 fn recon(images: usize, prefix: &str) -> SfmrReconstruction {
     assert!(images >= DEMO_IMAGES, "the demo tracks observe every image");
     let mut recon = SfmrReconstruction::demo(64);
-    let template = recon.images[0].clone();
-    while recon.images.len() < images {
-        recon.images.push(template.clone());
+    let template = recon.image_table.images[0].clone();
+    while recon.image_table.images.len() < images {
+        recon.image_table.images.push(template.clone());
     }
-    let second_camera = recon.cameras[0].clone();
-    recon.cameras.push(second_camera);
-    for (i, image) in recon.images.iter_mut().enumerate() {
+    let second_camera = recon.image_table.cameras[0].clone();
+    recon.image_table.cameras.push(second_camera);
+    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
         image.name = format!("images/{prefix}_{i:03}.jpg");
         image.camera_index = if i < images / 2 { 0 } else { 1 };
     }
-    recon.metadata.camera_count = recon.cameras.len() as u32;
+    recon.metadata.camera_count = recon.image_table.cameras.len() as u32;
     // Resize the per-image derived tables to match the grown image list.
     recon.rebuild_derived_fields();
     recon

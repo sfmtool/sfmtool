@@ -118,7 +118,7 @@ impl SceneRenderer {
     ) {
         let far_z = (length_scale * frustum_size_multiplier) as f64;
 
-        let mut edges: Vec<FrustumEdge> = Vec::with_capacity(recon.images.len() * 8);
+        let mut edges: Vec<FrustumEdge> = Vec::with_capacity(recon.image_table.images.len() * 8);
 
         // Pinhole (instanced) image quads
         let mut pinhole_quads: Vec<ImageQuadInstance> = Vec::new();
@@ -129,8 +129,8 @@ impl SceneRenderer {
         self.ensure_recon(device, id);
         let has_thumbnails = self.recons[&id].thumbnail_texture.is_some();
 
-        for (image_idx, image) in recon.images.iter().enumerate() {
-            let camera = &recon.cameras[image.camera_index as usize];
+        for (image_idx, image) in recon.image_table.images.iter().enumerate() {
+            let camera = &recon.image_table.cameras[image.camera_index as usize];
             let center = image.camera_center();
             let r = image.camera_to_world_rotation_flat();
             let center_arr = [center.x, center.y, center.z];
@@ -306,7 +306,7 @@ impl SceneRenderer {
         });
 
         // Create per-image color storage buffer (initialized to default white/alpha)
-        let colors: Vec<u32> = vec![FRUSTUM_COLOR_DEFAULT; recon.images.len()];
+        let colors: Vec<u32> = vec![FRUSTUM_COLOR_DEFAULT; recon.image_table.images.len()];
         let color_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("frustum colors"),
             contents: bytemuck::cast_slice(&colors),
@@ -316,7 +316,7 @@ impl SceneRenderer {
         let bundle = self.recons.get_mut(&id).expect("just ensured");
         bundle.frustum_edge_buffer = Some(buffer);
         bundle.frustum_edge_count = edges.len() as u32;
-        bundle.frustum_image_count = recon.images.len() as u32;
+        bundle.frustum_image_count = recon.image_table.images.len() as u32;
         bundle.frustum_color_buffer = Some(color_buffer);
 
         // Upload pinhole image quads (instanced)

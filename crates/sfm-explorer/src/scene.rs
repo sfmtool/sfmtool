@@ -361,9 +361,9 @@ impl SceneNode {
     /// frames *and* the bitmaps to texture them with.
     pub fn has_patch_data(&self) -> bool {
         let r = &self.recon;
-        r.patch_u_halfvec_xyz.is_some()
-            && r.patch_v_halfvec_xyz.is_some()
-            && r.patch_bitmaps_y_x_rgba.is_some()
+        r.point_set.patch_u_halfvec_xyz.is_some()
+            && r.point_set.patch_v_halfvec_xyz.is_some()
+            && r.point_set.patch_bitmaps_y_x_rgba.is_some()
     }
 
     /// Whether this node has been moved out of its own frame — i.e. its
@@ -448,6 +448,7 @@ pub fn selected_node(scene: &[SceneNode], selected: Option<ReconId>) -> Option<&
 /// Scene panel's per-node `Zoom to Fit`, and the viewport's first-show framing.
 pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
     node.recon
+        .point_set
         .points
         .iter()
         .map(|p| node.transform.apply_to_point(&p.position))
@@ -462,6 +463,7 @@ pub fn world_points(node: &SceneNode) -> Vec<nalgebra::Point3<f64>> {
 /// frame rather than as a degenerate one.
 pub fn camera_world_centres(node: &SceneNode, index: usize) -> Vec<nalgebra::Point3<f64>> {
     node.recon
+        .image_table
         .images
         .iter()
         .filter(|image| image.camera_index as usize == index)
@@ -486,13 +488,14 @@ pub fn camera_sibling_images(node: &SceneNode, selected: Option<CameraRef>) -> V
     };
     let siblings: Vec<usize> = node
         .recon
+        .image_table
         .images
         .iter()
         .enumerate()
         .filter(|(_, image)| image.camera_index as usize == index)
         .map(|(i, _)| i)
         .collect();
-    if siblings.len() == node.recon.images.len() {
+    if siblings.len() == node.recon.image_table.images.len() {
         return Vec::new();
     }
     siblings
@@ -534,9 +537,9 @@ pub fn visible_stats(scene: &[SceneNode], solo: Option<ReconId>) -> SceneStats {
     let mut stats = SceneStats::default();
     for node in scene.iter().filter(|n| is_visible(n, solo)) {
         stats.recons += 1;
-        stats.points += node.recon.points.len();
+        stats.points += node.recon.point_set.points.len();
         stats.points_at_infinity += node.recon.metadata.infinity_point_count as usize;
-        stats.images += node.recon.images.len();
+        stats.images += node.recon.image_table.images.len();
     }
     stats
 }

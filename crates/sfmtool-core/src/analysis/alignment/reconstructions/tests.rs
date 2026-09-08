@@ -31,10 +31,10 @@ fn known_similarity() -> Se3Transform {
 /// reconstruction seen from a different frame.
 fn transformed(recon: &SfmrReconstruction, t: &Se3Transform) -> SfmrReconstruction {
     let mut out = recon.clone();
-    for p in &mut out.points {
+    for p in &mut out.point_set.points {
         p.position = t.apply_to_point(&p.position);
     }
-    for image in &mut out.images {
+    for image in &mut out.image_table.images {
         let (rotation, translation) = t.apply_to_camera_pose(
             &RotQuaternion::from_nalgebra(image.quaternion_wxyz),
             &image.translation_xyz,
@@ -48,7 +48,7 @@ fn transformed(recon: &SfmrReconstruction, t: &Se3Transform) -> SfmrReconstructi
 /// Rename every image so the two reconstructions share nothing.
 fn renamed(recon: &SfmrReconstruction, prefix: &str) -> SfmrReconstruction {
     let mut out = recon.clone();
-    for (i, image) in out.images.iter_mut().enumerate() {
+    for (i, image) in out.image_table.images.iter_mut().enumerate() {
         image.name = format!("{prefix}_{i:03}.jpg");
     }
     out
@@ -58,9 +58,9 @@ fn renamed(recon: &SfmrReconstruction, prefix: &str) -> SfmrReconstruction {
 /// point mode cannot match on.
 fn embedded(recon: &SfmrReconstruction) -> SfmrReconstruction {
     let mut out = recon.clone();
-    out.observations = ObservationSource::EmbeddedPatches {
-        keypoints_xy: ndarray::Array2::<f32>::from_elem((out.tracks.len(), 2), 100.0),
-        image_file_hashes: vec![[0u8; 16]; out.images.len()],
+    out.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: ndarray::Array2::<f32>::from_elem((out.point_set.tracks.len(), 2), 100.0),
+        image_file_hashes: vec![[0u8; 16]; out.image_table.images.len()],
     };
     out
 }
@@ -80,9 +80,10 @@ fn worst_point_error(
     transform: &Se3Transform,
 ) -> f64 {
     source
+        .point_set
         .points
         .iter()
-        .zip(target.points.iter())
+        .zip(target.point_set.points.iter())
         .map(|(s, t)| (transform.apply_to_point(&s.position) - t.position).norm())
         .fold(0.0, f64::max)
 }
@@ -109,7 +110,7 @@ fn aligning_by_cameras_recovers_a_known_similarity() {
         "scale {} should invert the fixture's 2.0",
         fit.transform.scale,
     );
-    assert_eq!(fit.correspondences, a.images.len());
+    assert_eq!(fit.correspondences, a.image_table.images.len());
     assert!(fit.rms < 1e-9, "RMS {} over an exact fixture", fit.rms);
 }
 
@@ -124,7 +125,7 @@ fn aligning_by_cameras_lands_the_cameras_facing_the_same_way() {
     let fit = align_reconstructions(&b, &a, options(AlignSource::Cameras, true)).expect("a fit");
 
     let rotation = fit.transform.rotation.to_rotation_matrix();
-    for (source, target) in b.images.iter().zip(a.images.iter()) {
+    for (source, target) in b.image_table.images.iter().zip(a.image_table.images.iter()) {
         // Viewing direction: the camera-to-world rotation's third axis, put
         // through the fit's rotation (a direction ignores translation, and the
         // positive scale leaves it pointing where it did).
@@ -204,8 +205,8 @@ fn a_rigid_fit_of_a_scaled_pair_does_not_absorb_the_scale() {
 fn the_infinity_points_are_left_out_of_a_point_fit() {
     let mut a = SfmrReconstruction::demo(64);
     // A bearing, not a location: kept in the cloud, dropped from the fit.
-    a.points[0].w = 0.0;
-    a.points[0].position = Point3::new(0.0, 0.0, 1.0);
+    a.point_set.points[0].w = 0.0;
+    a.point_set.points[0].position = Point3::new(0.0, 0.0, 1.0);
     let b = transformed(&a, &known_similarity());
 
     let fit = align_reconstructions(&b, &a, options(AlignSource::Points, true)).expect("a fit");
@@ -238,7 +239,7 @@ fn too_few_shared_cameras_is_reported_rather_than_fitted() {
     let mut a = SfmrReconstruction::demo(64);
     let b = transformed(&a, &known_similarity());
     // Leave two images sharing a name — one short of what pins a rotation down.
-    for (i, image) in a.images.iter_mut().enumerate().skip(2) {
+    for (i, image) in a.image_table.images.iter_mut().enumerate().skip(2) {
         image.name = format!("only_in_a_{i:03}.jpg");
     }
 
@@ -268,7 +269,7 @@ fn a_pair_sharing_images_but_no_3d_points_is_reported() {
     // other side never used, so nothing joins.
     if let ObservationSource::SiftFiles {
         feature_indexes, ..
-    } = &mut b.observations
+    } = &mut b.point_set.observations
     {
         for f in feature_indexes.iter_mut() {
             *f += 10_000;
@@ -286,12 +287,12 @@ fn a_pair_sharing_images_but_no_3d_points_is_reported() {
 fn a_repeated_image_name_pairs_once_on_either_side() {
     let a = SfmrReconstruction::demo(64);
     let mut b = a.clone();
-    b.images[1].name = b.images[0].name.clone();
+    b.image_table.images[1].name = b.image_table.images[0].name.clone();
 
     // First occurrence wins on both sides, so the duplicate contributes one
     // pair, not two — and never a pair with the *second* index.
     let pairs = shared_images(&b, &a);
     assert_eq!(pairs.iter().filter(|&&(s, _)| s == 0).count(), 1);
     assert!(!pairs.iter().any(|&(s, _)| s == 1));
-    assert_eq!(pairs.len(), a.images.len() - 1);
+    assert_eq!(pairs.len(), a.image_table.images.len() - 1);
 }

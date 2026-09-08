@@ -78,9 +78,15 @@ pub(super) fn glyph_toggle(
 /// Measured against the width actually left after the label rather than
 /// against a character budget, so widening the panel brings the counts back.
 pub(super) fn counts_text(ui: &egui::Ui, node: &SceneNode) -> String {
-    let points = format!("{} pts", compact_count(node.recon.points.len()));
-    let images = format!("{} imgs", compact_count(node.recon.images.len()));
-    let cameras = format!("{} cams", compact_count(node.recon.cameras.len()));
+    let points = format!("{} pts", compact_count(node.recon.point_set.points.len()));
+    let images = format!(
+        "{} imgs",
+        compact_count(node.recon.image_table.images.len())
+    );
+    let cameras = format!(
+        "{} cams",
+        compact_count(node.recon.image_table.cameras.len())
+    );
     let available = ui.available_width();
     let font = egui::TextStyle::Small.resolve(ui.style());
     let fits = |text: &str| {

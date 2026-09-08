@@ -836,7 +836,12 @@ impl AppState {
     /// The camera an image uses, when the image ref still resolves.
     pub fn camera_of(&self, image: ImageRef) -> Option<CameraRef> {
         let node = self.node(image.recon)?;
-        let camera = node.recon.images.get(image.index())?.camera_index as usize;
+        let camera = node
+            .recon
+            .image_table
+            .images
+            .get(image.index())?
+            .camera_index as usize;
         Some(CameraRef::new(image.recon, camera))
     }
 
@@ -878,7 +883,7 @@ impl AppState {
     /// resolves. Only ever used to build a log entry.
     fn image_name(&self, image: ImageRef) -> String {
         self.node(image.recon)
-            .and_then(|node| node.recon.images.get(image.index()))
+            .and_then(|node| node.recon.image_table.images.get(image.index()))
             .map(|i| i.name.clone())
             .unwrap_or_else(|| format!("#{}", image.index()))
     }
@@ -1166,7 +1171,7 @@ pub fn ensure_full_res_cached<'a>(
     cache
         .entry(image)
         .or_insert_with(|| {
-            recon.images.get(image.index()).and_then(|im| {
+            recon.image_table.images.get(image.index()).and_then(|im| {
                 let path = recon.workspace_dir.join(&im.name);
                 match image::open(&path) {
                     Ok(dyn_image) => {

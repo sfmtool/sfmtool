@@ -177,7 +177,7 @@ pub fn merge_points_and_tracks(
         let feature_indexes = recon
             .feature_indexes()
             .expect("embedded_patches rejected above");
-        let start = recon.observation_offsets[point_id as usize];
+        let start = recon.point_set.observation_offsets[point_id as usize];
         let mut obs = HashSet::new();
         for (k, track) in recon
             .observations_for_point(point_id as usize)
@@ -200,7 +200,7 @@ pub fn merge_points_and_tracks(
         let mut observations = HashSet::new();
 
         for &(recon_idx, point_id) in group {
-            let point = &reconstructions[recon_idx].points[point_id as usize];
+            let point = &reconstructions[recon_idx].point_set.points[point_id as usize];
             sum_pos[0] += point.position.x;
             sum_pos[1] += point.position.y;
             sum_pos[2] += point.position.z;
@@ -229,11 +229,11 @@ pub fn merge_points_and_tracks(
 
     // Step 2: Add unique points (not in any correspondence group).
     for (recon_idx, recon) in reconstructions.iter().enumerate() {
-        for point_id in 0..recon.points.len() {
+        for point_id in 0..recon.point_set.points.len() {
             if in_group.contains(&(recon_idx, point_id as u32)) {
                 continue;
             }
-            let point = &recon.points[point_id];
+            let point = &recon.point_set.points[point_id];
             let observations = collect_observations(recon_idx, point_id as u32);
 
             let tp_id = temp_points.len();

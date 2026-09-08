@@ -13,6 +13,7 @@
 //! cannot give.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array4, Axis};
@@ -53,7 +54,7 @@ enum PatchFix {
 /// it used to be. Freeing an already-free point is a no-op, so this touches only
 /// what a caller constrained.
 fn release_touched_constraints(recon: &mut SfmrReconstruction, fixes: &[(usize, PatchFix)]) {
-    if let Some(constraints) = recon.point_constraints.as_mut() {
+    if let Some(constraints) = recon.point_set.point_constraints.as_mut() {
         for (pidx, _) in fixes {
             constraints.free(*pidx);
         }
@@ -317,10 +318,11 @@ pub(crate) fn classify_rays_at_infinity(
 impl SfmrReconstruction {
     /// Largest focal length (pixels) for each image's camera.
     fn per_image_focal_max(&self) -> Vec<f64> {
-        self.images
+        self.image_table
+            .images
             .iter()
             .map(|im| {
-                let (fx, fy) = self.cameras[im.camera_index as usize].focal_lengths();
+                let (fx, fy) = self.image_table.cameras[im.camera_index as usize].focal_lengths();
                 fx.max(fy)
             })
             .collect()
@@ -346,7 +348,7 @@ impl SfmrReconstruction {
     ) -> Option<Vector3<f64>> {
         let feature_indexes = self.feature_indexes()?;
         let inline = self.keypoints_xy();
-        let start = self.observation_offsets[point_idx];
+        let start = self.point_set.observation_offsets[point_idx];
         let mut sum = Vector3::zeros();
         for (k, o) in self.observations_for_point(point_idx).iter().enumerate() {
             let img = o.image_index as usize;
@@ -357,7 +359,7 @@ impl SfmrReconstruction {
                 ],
                 None => {
                     let positions = sift_positions.entry(img).or_insert_with(|| {
-                        let count = self.max_track_feature_index[img] as usize + 1;
+                        let count = self.point_set.max_track_feature_index[img] as usize + 1;
                         sift_format::read_sift_partial(&self.sift_path_for_image(img), count)
                             .ok()
                             .map(|d| d.positions_xy)
@@ -372,12 +374,12 @@ impl SfmrReconstruction {
                     [positions[[feat, 0]] as f64, positions[[feat, 1]] as f64]
                 }
             };
-            let cam = &self.cameras[self.images[img].camera_index as usize];
+            let cam = &self.image_table.cameras[self.image_table.images[img].camera_index as usize];
             let ray = cam.pixel_to_ray(uv[0], uv[1]);
             // `pixel_to_ray` is a camera-frame ray; rotate to world (camera-to-
             // world is the inverse of the stored world-to-camera rotation).
-            let world =
-                self.images[img].quaternion_wxyz.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
+            let world = self.image_table.images[img].quaternion_wxyz.inverse()
+                * Vector3::new(ray[0], ray[1], ray[2]);
             let n = world.norm();
             if n > 0.0 {
                 sum += world / n;
@@ -413,7 +415,12 @@ impl SfmrReconstruction {
     /// point the solve produced, never removed. Points already at infinity, and
     /// points with fewer than two observations, are left unchanged.
     pub fn classify_points_at_infinity(&self, noise_floor_px: f64) -> Self {
-        let centers: Vec<Point3<f64>> = self.images.iter().map(|im| im.camera_center()).collect();
+        let centers: Vec<Point3<f64>> = self
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_center())
+            .collect();
         let focal_max = self.per_image_focal_max();
         let finite_horizon = camera_extents(&centers);
         let origin = camera_cloud_centroid(&centers);
@@ -427,7 +434,7 @@ impl SfmrReconstruction {
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
 
         let mut recon = self.clone();
-        for (pidx, pt) in recon.points.iter_mut().enumerate() {
+        for (pidx, pt) in recon.point_set.points.iter_mut().enumerate() {
             if pt.is_at_infinity() {
                 continue;
             }
@@ -518,7 +525,7 @@ impl SfmrReconstruction {
 
         // A demoted point's normal was just zeroed, so its confidence drops to
         // zero too — the format keeps the two coherent for `w = 0` rows.
-        if let Some(confidence) = recon.normal_confidence.as_mut() {
+        if let Some(confidence) = recon.point_set.normal_confidence.as_mut() {
             for (pidx, _) in &patch_fixes {
                 confidence[*pidx] = 0;
             }
@@ -531,17 +538,25 @@ impl SfmrReconstruction {
         // has moved out from under is not one to keep.
         release_touched_constraints(&mut recon, &patch_fixes);
 
+        // The bitmaps are shared behind an `Arc`, so this pass takes an owned
+        // array out, edits that, and wraps a new one back in -- one array copy
+        // for the whole pass at worst, and none when the pointer was unique,
+        // rather than a write through a value another reconstruction may hold.
+        let mut patch_u = recon.point_set.patch_u_halfvec_xyz.take();
+        let mut patch_v = recon.point_set.patch_v_halfvec_xyz.take();
+        let mut patch_bitmaps = recon
+            .point_set
+            .patch_bitmaps_y_x_rgba
+            .take()
+            .map(Arc::unwrap_or_clone);
         for (pidx, fix) in patch_fixes {
-            apply_patch_fix(
-                &mut recon.patch_u_halfvec_xyz,
-                &mut recon.patch_v_halfvec_xyz,
-                &mut recon.patch_bitmaps_y_x_rgba,
-                pidx,
-                fix,
-            );
+            apply_patch_fix(&mut patch_u, &mut patch_v, &mut patch_bitmaps, pidx, fix);
         }
+        recon.point_set.patch_u_halfvec_xyz = patch_u;
+        recon.point_set.patch_v_halfvec_xyz = patch_v;
+        recon.point_set.patch_bitmaps_y_x_rgba = patch_bitmaps.map(Arc::new);
 
-        recon.infinity_point_count = count_points_at_infinity(&recon.points);
+        recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);
         recon
     }
 
@@ -561,10 +576,15 @@ impl SfmrReconstruction {
     /// export, a finite-only solver). It is not the inverse of
     /// [`Self::classify_points_at_infinity`].
     pub fn materialize_points_at_infinity(&self) -> Self {
-        if self.images.is_empty() {
+        if self.image_table.images.is_empty() {
             return self.clone();
         }
-        let centers: Vec<Point3<f64>> = self.images.iter().map(|im| im.camera_center()).collect();
+        let centers: Vec<Point3<f64>> = self
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_center())
+            .collect();
         let focal_max = self.per_image_focal_max();
 
         // Reference origin: the camera-cloud centroid.
@@ -580,7 +600,7 @@ impl SfmrReconstruction {
 
         let mut recon = self.clone();
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
-        for (pidx, pt) in recon.points.iter_mut().enumerate() {
+        for (pidx, pt) in recon.point_set.points.iter_mut().enumerate() {
             if !pt.is_at_infinity() {
                 continue;
             }
@@ -618,17 +638,25 @@ impl SfmrReconstruction {
         // released for the reason the demotion above releases one.
         release_touched_constraints(&mut recon, &patch_fixes);
 
+        // The bitmaps are shared behind an `Arc`, so this pass takes an owned
+        // array out, edits that, and wraps a new one back in -- one array copy
+        // for the whole pass at worst, and none when the pointer was unique,
+        // rather than a write through a value another reconstruction may hold.
+        let mut patch_u = recon.point_set.patch_u_halfvec_xyz.take();
+        let mut patch_v = recon.point_set.patch_v_halfvec_xyz.take();
+        let mut patch_bitmaps = recon
+            .point_set
+            .patch_bitmaps_y_x_rgba
+            .take()
+            .map(Arc::unwrap_or_clone);
         for (pidx, fix) in patch_fixes {
-            apply_patch_fix(
-                &mut recon.patch_u_halfvec_xyz,
-                &mut recon.patch_v_halfvec_xyz,
-                &mut recon.patch_bitmaps_y_x_rgba,
-                pidx,
-                fix,
-            );
+            apply_patch_fix(&mut patch_u, &mut patch_v, &mut patch_bitmaps, pidx, fix);
         }
+        recon.point_set.patch_u_halfvec_xyz = patch_u;
+        recon.point_set.patch_v_halfvec_xyz = patch_v;
+        recon.point_set.patch_bitmaps_y_x_rgba = patch_bitmaps.map(Arc::new);
 
-        recon.infinity_point_count = count_points_at_infinity(&recon.points);
+        recon.point_set.infinity_point_count = count_points_at_infinity(&recon.point_set.points);
         recon
     }
 }

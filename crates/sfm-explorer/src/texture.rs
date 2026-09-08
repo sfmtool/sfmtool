@@ -5,7 +5,7 @@
 //!
 //! egui wants `ColorImage` (RGBA); every image source the viewer holds is
 //! 3-channel RGB — the embedded thumbnails in
-//! [`SfmrReconstruction::thumbnails_y_x_rgb`] and the decoded full-resolution
+//! [`ImageTable::thumbnails_y_x_rgb`] and the decoded full-resolution
 //! images in [`crate::state::AppState`]'s full-res cache. Three panels used to expand it
 //! themselves, and the copies disagreed: two derived the output extent from the
 //! data while the third hard-coded 128, which is the thumbnail edge the `.sfmr`
@@ -18,7 +18,7 @@
 //! its neighbour rendered fine. Both extents now come from the same place the
 //! bytes do.
 //!
-//! [`SfmrReconstruction::thumbnails_y_x_rgb`]: sfmtool_core::SfmrReconstruction::thumbnails_y_x_rgb
+//! [`ImageTable::thumbnails_y_x_rgb`]: sfmtool_core::ImageTable::thumbnails_y_x_rgb
 
 use ndarray::ArrayView3;
 

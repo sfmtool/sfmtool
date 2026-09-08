@@ -16,6 +16,8 @@
 //! must enrich it first (`with_nested_image_paths`, `with_content_hash`,
 //! `with_embedded_patches`) or they assert nothing.
 
+use std::sync::Arc;
+
 use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
@@ -78,7 +80,7 @@ fn sift_cache_with_shape(
 /// directory to keep. `demo` alone produces bare `image_000.jpg`, which makes
 /// the truncation a no-op.
 fn with_nested_image_paths(mut recon: SfmrReconstruction) -> SfmrReconstruction {
-    for (i, image) in recon.images.iter_mut().enumerate() {
+    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
         image.name = format!("images/fisheye_left/image_{i:03}.jpg");
     }
     recon
@@ -95,7 +97,7 @@ fn with_content_hash(mut recon: SfmrReconstruction, hash: &str) -> SfmrReconstru
 /// "Patch" column turns on while `keypoints_xy` stays absent — the `sift_files`
 /// shape the tile anchoring falls back for.
 fn with_patch_frames(mut recon: SfmrReconstruction) -> SfmrReconstruction {
-    let n = recon.points.len();
+    let n = recon.point_set.points.len();
     // A patch spanning X and Z: the demo cameras ring the XY plane, so this is
     // never exactly edge-on to all of them.
     let mut u = Array2::<f32>::zeros((n, 3));
@@ -104,9 +106,10 @@ fn with_patch_frames(mut recon: SfmrReconstruction) -> SfmrReconstruction {
         u[[i, 0]] = 0.1;
         v[[i, 2]] = 0.1;
     }
-    recon.patch_u_halfvec_xyz = Some(u);
-    recon.patch_v_halfvec_xyz = Some(v);
-    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        Some(Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
     recon
 }
 
@@ -121,15 +124,15 @@ fn with_patch_frames(mut recon: SfmrReconstruction) -> SfmrReconstruction {
 /// degenerates to the `unwrap_or(0.0)` fallback.
 fn with_embedded_patches(recon: SfmrReconstruction) -> SfmrReconstruction {
     let mut recon = with_patch_frames(recon);
-    let obs_count = recon.tracks.len();
+    let obs_count = recon.point_set.tracks.len();
 
     let mut keypoints = Array2::<f32>::zeros((obs_count, 2));
-    for point_idx in 0..recon.points.len() {
-        let start = recon.observation_offsets[point_idx];
-        let position = recon.points[point_idx].position;
+    for point_idx in 0..recon.point_set.points.len() {
+        let start = recon.point_set.observation_offsets[point_idx];
+        let position = recon.point_set.points[point_idx].position;
         for (k, obs) in recon.observations_for_point(point_idx).iter().enumerate() {
-            let image = &recon.images[obs.image_index as usize];
-            let camera = &recon.cameras[image.camera_index as usize];
+            let image = &recon.image_table.images[obs.image_index as usize];
+            let camera = &recon.image_table.cameras[image.camera_index as usize];
             let p_cam = image.quaternion_wxyz.to_rotation_matrix() * position.coords
                 + image.translation_xyz;
             if let Some((x, y)) = camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z]) {
@@ -139,9 +142,9 @@ fn with_embedded_patches(recon: SfmrReconstruction) -> SfmrReconstruction {
         }
     }
 
-    recon.observations = ObservationSource::EmbeddedPatches {
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: keypoints,
-        image_file_hashes: vec![[0u8; 16]; recon.images.len()],
+        image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
     };
     recon
 }
@@ -150,7 +153,8 @@ fn with_embedded_patches(recon: SfmrReconstruction) -> SfmrReconstruction {
 /// with the points' geometric projections — the case the patch tiles have to
 /// follow the keypoint through.
 fn with_displaced_keypoints(mut recon: SfmrReconstruction, delta: [f32; 2]) -> SfmrReconstruction {
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations else {
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
         panic!("the fixture must carry embedded keypoints");
     };
     for i in 0..keypoints_xy.nrows() {
@@ -163,7 +167,7 @@ fn with_displaced_keypoints(mut recon: SfmrReconstruction, delta: [f32; 2]) -> S
 /// One image's camera model and `cam_from_world` pose, as the patch tile
 /// rendering reads them.
 fn view_of(recon: &SfmrReconstruction, img_idx: usize) -> (&CameraIntrinsics, RigidTransform) {
-    let image = &recon.images[img_idx];
+    let image = &recon.image_table.images[img_idx];
     let q = image.quaternion_wxyz.quaternion();
     let pose = RigidTransform::from_wxyz_translation(
         [q.w, q.i, q.j, q.k],
@@ -173,7 +177,10 @@ fn view_of(recon: &SfmrReconstruction, img_idx: usize) -> (&CameraIntrinsics, Ri
             image.translation_xyz.z,
         ],
     );
-    (&recon.cameras[image.camera_index as usize], pose)
+    (
+        &recon.image_table.cameras[image.camera_index as usize],
+        pose,
+    )
 }
 
 /// Where a frame's centre lands in a view — the pixel the tile is centred on.
@@ -197,7 +204,7 @@ fn full_res_images(
     recon: &SfmrReconstruction,
     indices: &[usize],
 ) -> HashMap<ImageRef, Option<ImageU8>> {
-    let camera = &recon.cameras[0];
+    let camera = &recon.image_table.cameras[0];
     let (w, h) = (camera.width, camera.height);
     indices
         .iter()
@@ -461,11 +468,13 @@ fn the_max_pairwise_angle_spans_the_observing_cameras() {
 
     // Recomputed from the reconstruction rather than restated from the panel:
     // the angle subtended at the point by its two observing camera centres.
-    let point = recon.points[5].position;
+    let point = recon.point_set.points[5].position;
     let rays: Vec<_> = recon
         .observations_for_point(5)
         .iter()
-        .map(|o| (point - recon.images[o.image_index as usize].camera_center()).normalize())
+        .map(|o| {
+            (point - recon.image_table.images[o.image_index as usize].camera_center()).normalize()
+        })
         .collect();
     let expected = rays[0].dot(&rays[1]).clamp(-1.0, 1.0).acos().to_degrees() as f32;
 
@@ -698,7 +707,7 @@ fn embedded_patches_enable_the_patch_column_and_header_tile() {
     // the SIFT cache — check the panel read the right row for each row.
     assert_eq!(panel.observations.len(), 2);
     let keypoints = recon.keypoints_xy().expect("embedded keypoints");
-    let start = recon.observation_offsets[0];
+    let start = recon.point_set.observation_offsets[0];
     for (k, obs) in panel.observations.iter().enumerate() {
         assert_eq!(
             obs.feature_xy,
@@ -870,8 +879,8 @@ fn a_keypoint_whose_ray_cannot_meet_the_patch_falls_back_to_the_geometric_frame(
 #[test]
 fn an_all_zero_patch_bitmap_leaves_the_header_tile_empty() {
     let mut recon = with_embedded_patches(SfmrReconstruction::demo(12));
-    let n = recon.points.len();
-    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((n, 8, 8, 4)));
+    let n = recon.point_set.points.len();
+    recon.point_set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::<u8>::zeros((n, 8, 8, 4))));
     let mut panel = PointTrackDetail::new();
     let ctx = egui::Context::default();
 

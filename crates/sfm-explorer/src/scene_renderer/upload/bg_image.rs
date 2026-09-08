@@ -30,7 +30,7 @@ impl SceneRenderer {
         }
 
         let image_index = image.index();
-        let Some(img) = recon.images.get(image_index) else {
+        let Some(img) = recon.image_table.images.get(image_index) else {
             return;
         };
         let image_path = recon.workspace_dir.join(&img.name);
@@ -116,7 +116,7 @@ impl SceneRenderer {
         // Generate tessellated mesh with world-space ray directions.
         // Uses the same camera-to-world rotation as frustum wireframes, so the
         // BG shader can use the standard view_proj = projection * view pipeline.
-        let camera = &recon.cameras[img.camera_index as usize];
+        let camera = &recon.image_table.cameras[img.camera_index as usize];
         let r = img.camera_to_world_rotation_flat();
         let subdivisions = if camera.model.is_fisheye() {
             BG_FISHEYE_SUBDIVISIONS

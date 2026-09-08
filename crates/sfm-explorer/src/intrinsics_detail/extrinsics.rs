@@ -63,7 +63,7 @@ impl Pose {
         camera: &CameraIntrinsics,
         frame: PoseFrame,
     ) -> Self {
-        let image = &node.recon.images[index];
+        let image = &node.recon.image_table.images[index];
         let transformed = frame == PoseFrame::NodeTransform && node.has_transform();
         let (quaternion, translation) = if transformed {
             node.transform.apply_to_camera_pose(
@@ -216,7 +216,7 @@ pub(super) fn show_extrinsics(
 /// "extrinsics" a rig dataset actually needs, and that nothing else in the
 /// viewer surfaces.
 fn show_rig_block(ui: &mut egui::Ui, recon: &SfmrReconstruction, index: usize) {
-    let Some(rig) = &recon.rig_frame_data else {
+    let Some(rig) = &recon.image_table.rig_frame_data else {
         return;
     };
     let (Some(&sensor), Some(&frame)) = (

@@ -13,6 +13,6 @@ pub mod point_estimation;
 pub mod triangulation;
 
 pub use data::{
-    unit_quaternion_preserving, ObservationSource, Point3D, PointConstraintColumns,
-    ReconstructionError, SfmrImage, SfmrReconstruction, TrackObservation,
+    unit_quaternion_preserving, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
+    PointSet, ReconstructionError, SfmrImage, SfmrReconstruction, TrackObservation,
 };

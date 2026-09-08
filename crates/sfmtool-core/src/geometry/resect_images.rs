@@ -330,11 +330,11 @@ pub fn resect_images(
     source: ResectSource<'_>,
     options: &ResectImageOptions,
 ) -> Result<ResectedImages, ResectImageError> {
-    let count = recon.images.len();
+    let count = recon.image_table.images.len();
     if image_indexes.is_empty() {
         return Err(ResectImageError::NoTargets);
     }
-    let posed: Vec<bool> = recon.images.iter().map(is_posed).collect();
+    let posed: Vec<bool> = recon.image_table.images.iter().map(is_posed).collect();
     let mut is_target = vec![false; count];
     for &t in image_indexes {
         if t >= count {
@@ -361,7 +361,7 @@ pub fn resect_images(
     // ordering wants.
     let mut target_rows: HashMap<usize, Vec<usize>> =
         image_indexes.iter().map(|&t| (t, Vec::new())).collect();
-    for (row, obs) in recon.tracks.iter().enumerate() {
+    for (row, obs) in recon.point_set.tracks.iter().enumerate() {
         let image = obs.image_index as usize;
         if is_target[image] {
             target_rows.get_mut(&image).expect("target row").push(row);
@@ -373,7 +373,7 @@ pub fn resect_images(
             (
                 t,
                 rows.iter()
-                    .map(|&row| recon.tracks[row].point_index as usize)
+                    .map(|&row| recon.point_set.tracks[row].point_index as usize)
                     .collect(),
             )
         })
@@ -389,7 +389,9 @@ pub fn resect_images(
     // want the pixels exactly once.
     let mut gathered: Vec<usize> = Vec::new();
     for &p in &all_observed {
-        gathered.extend(recon.observation_offsets[p]..recon.observation_offsets[p + 1]);
+        gathered.extend(
+            recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1],
+        );
     }
     gathered.sort_unstable();
     gathered.dedup();
@@ -400,7 +402,7 @@ pub fn resect_images(
     let finite_observed: Vec<usize> = all_observed
         .iter()
         .copied()
-        .filter(|&p| !recon.points[p].is_at_infinity())
+        .filter(|&p| !recon.point_set.points[p].is_at_infinity())
         .collect();
     let no_replacement: Vec<Option<Pose>> = vec![None; count];
     let held_out_list = triangulate_points(
@@ -463,7 +465,8 @@ pub fn resect_images(
     let bearings_of: HashMap<usize, Vec<BearingPair>> = image_indexes
         .iter()
         .map(|&t| {
-            let camera = &recon.cameras[recon.images[t].camera_index as usize];
+            let camera =
+                &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
             (
                 t,
                 gather_bearings(
@@ -498,7 +501,7 @@ pub fn resect_images(
             continue;
         }
         let bearings = &bearings_of[&t];
-        let camera = &recon.cameras[recon.images[t].camera_index as usize];
+        let camera = &recon.image_table.cameras[recon.image_table.images[t].camera_index as usize];
         let estimate = if bearings.len() >= MIN_BEARINGS {
             rotation_estimate(recon, t, bearings, camera, options)
         } else {
@@ -522,7 +525,7 @@ pub fn resect_images(
     let mut refit_points: Vec<usize> = accepted_targets
         .iter()
         .flat_map(|t| observed[t].iter().copied())
-        .filter(|&p| !recon.points[p].is_at_infinity())
+        .filter(|&p| !recon.point_set.points[p].is_at_infinity())
         .collect();
     refit_points.sort_unstable();
     refit_points.dedup();
@@ -539,20 +542,22 @@ pub fn resect_images(
     for &t in image_indexes {
         let estimate = &estimates[&t];
         if estimate.accepted {
-            out.images[t].quaternion_wxyz = estimate.rotation;
-            out.images[t].translation_xyz = estimate.translation;
+            out.image_table.images[t].quaternion_wxyz = estimate.rotation;
+            out.image_table.images[t].translation_xyz = estimate.translation;
         }
     }
     let mut retriangulated: HashSet<usize> = HashSet::new();
-    let mut drop_mask = vec![false; recon.points.len()];
+    let mut drop_mask = vec![false; recon.point_set.points.len()];
     for &p in &finite_observed {
         match (refit.get(&p), held_out.get(&p)) {
             (Some(&position), _) => {
-                out.points[p].position = Point3::new(position[0], position[1], position[2]);
+                out.point_set.points[p].position =
+                    Point3::new(position[0], position[1], position[2]);
                 retriangulated.insert(p);
             }
             (None, Some(&position)) => {
-                out.points[p].position = Point3::new(position[0], position[1], position[2]);
+                out.point_set.points[p].position =
+                    Point3::new(position[0], position[1], position[2]);
             }
             (None, None) => drop_mask[p] = true,
         }
@@ -573,7 +578,7 @@ pub fn resect_images(
         .iter()
         .map(|&t| {
             let estimate = &estimates[&t];
-            let stored = &recon.images[t];
+            let stored = &recon.image_table.images[t];
             let (rotation, translation) = if estimate.accepted {
                 (estimate.rotation, estimate.translation)
             } else {
@@ -674,7 +679,7 @@ fn observation_pixels(
             .map(|&row| [keypoints_xy[[row, 0]] as f64, keypoints_xy[[row, 1]] as f64])
             .collect());
     }
-    match &recon.observations {
+    match &recon.point_set.observations {
         ObservationSource::EmbeddedPatches { .. } => {
             unreachable!("embedded_patches always carries keypoints_xy, handled above")
         }
@@ -683,7 +688,7 @@ fn observation_pixels(
         } => {
             let mut images: Vec<usize> = rows
                 .iter()
-                .map(|&row| recon.tracks[row].image_index as usize)
+                .map(|&row| recon.point_set.tracks[row].image_index as usize)
                 .collect();
             images.sort_unstable();
             images.dedup();
@@ -693,7 +698,7 @@ fn observation_pixels(
             }
             rows.iter()
                 .map(|&row| {
-                    let image = recon.tracks[row].image_index as usize;
+                    let image = recon.point_set.tracks[row].image_index as usize;
                     let feature = feature_indexes[row] as usize;
                     positions[&image]
                         .get(feature)
@@ -717,7 +722,7 @@ fn read_sift_positions(
     image: usize,
 ) -> Result<Vec<[f32; 2]>, ReconstructionError> {
     let path = recon.sift_path_for_image(image);
-    let count = recon.max_track_feature_index[image] as usize + 1;
+    let count = recon.point_set.max_track_feature_index[image] as usize + 1;
     sift_format::read_sift_positions(&path, count).map_err(|e| ReconstructionError::SiftRead {
         path,
         source: e.to_string(),
@@ -745,8 +750,10 @@ fn triangulate_points(
     let mut centers: Vec<Point3<f64>> = Vec::new();
     let mut offsets: Vec<usize> = vec![0];
     for &p in points {
-        for row in recon.observation_offsets[p]..recon.observation_offsets[p + 1] {
-            let image = recon.tracks[row].image_index as usize;
+        for row in
+            recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1]
+        {
+            let image = recon.point_set.tracks[row].image_index as usize;
             if !contributes[image] {
                 continue;
             }
@@ -756,11 +763,12 @@ fn triangulate_points(
             let (rotation, translation) = match replace[image] {
                 Some(pose) => pose,
                 None => (
-                    recon.images[image].quaternion_wxyz,
-                    recon.images[image].translation_xyz,
+                    recon.image_table.images[image].quaternion_wxyz,
+                    recon.image_table.images[image].translation_xyz,
                 ),
             };
-            let camera = &recon.cameras[recon.images[image].camera_index as usize];
+            let camera =
+                &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
             let world = rotation.inverse() * Vector3::new(ray[0], ray[1], ray[2]);
             let norm = world.norm();
@@ -800,21 +808,24 @@ fn held_out_bearings(
 ) -> HashMap<usize, Vector3<f64>> {
     let mut out = HashMap::new();
     for &p in all_observed {
-        if !recon.points[p].is_at_infinity() {
+        if !recon.point_set.points[p].is_at_infinity() {
             continue;
         }
         let mut mean = Vector3::zeros();
-        for row in recon.observation_offsets[p]..recon.observation_offsets[p + 1] {
-            let image = recon.tracks[row].image_index as usize;
+        for row in
+            recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1]
+        {
+            let image = recon.point_set.tracks[row].image_index as usize;
             if !posed_others[image] {
                 continue;
             }
             let Some(uv) = pixel_of.get(&row) else {
                 continue;
             };
-            let camera = &recon.cameras[recon.images[image].camera_index as usize];
+            let camera =
+                &recon.image_table.cameras[recon.image_table.images[image].camera_index as usize];
             let ray = camera.pixel_to_ray(uv[0], uv[1]);
-            let world = recon.images[image].quaternion_wxyz.inverse()
+            let world = recon.image_table.images[image].quaternion_wxyz.inverse()
                 * Vector3::new(ray[0], ray[1], ray[2]);
             let norm = world.norm();
             if norm > 0.0 && !norm.is_nan() {
@@ -881,8 +892,8 @@ impl Estimate {
         bearings: usize,
     ) -> Self {
         Estimate {
-            rotation: recon.images[image_index].quaternion_wxyz,
-            translation: recon.images[image_index].translation_xyz,
+            rotation: recon.image_table.images[image_index].quaternion_wxyz,
+            translation: recon.image_table.images[image_index].translation_xyz,
             rotation_only: false,
             correspondences: finite,
             inliers: 0,
@@ -923,27 +934,29 @@ fn finite_estimates(
 
     // Held-out positions of every point any target is scored against — shared
     // by all the groups below, so a point means the same thing to each.
-    let mut points = vec![[f64::NAN; 3]; recon.points.len()];
+    let mut points = vec![[f64::NAN; 3]; recon.point_set.points.len()];
     for t in targets {
         for &(p, _, world) in &pairs_of[t] {
             points[p] = world;
         }
     }
 
-    let posed_indexes: Vec<u32> = (0..recon.images.len() as u32)
+    let posed_indexes: Vec<u32> = (0..recon.image_table.images.len() as u32)
         .filter(|&i| posed_others[i as usize])
         .collect();
     let posed_quaternions: Vec<[f64; 4]> = posed_indexes
         .iter()
         .map(|&i| {
-            let q = recon.images[i as usize].quaternion_wxyz.into_inner();
+            let q = recon.image_table.images[i as usize]
+                .quaternion_wxyz
+                .into_inner();
             [q.w, q.i, q.j, q.k]
         })
         .collect();
     let posed_translations: Vec<[f64; 3]> = posed_indexes
         .iter()
         .map(|&i| {
-            let t = recon.images[i as usize].translation_xyz;
+            let t = recon.image_table.images[i as usize].translation_xyz;
             [t.x, t.y, t.z]
         })
         .collect();
@@ -952,7 +965,7 @@ fn finite_estimates(
     // group.
     let mut cameras: Vec<u32> = targets
         .iter()
-        .map(|&t| recon.images[t].camera_index)
+        .map(|&t| recon.image_table.images[t].camera_index)
         .collect();
     cameras.sort_unstable();
     cameras.dedup();
@@ -961,9 +974,9 @@ fn finite_estimates(
         let group: Vec<usize> = targets
             .iter()
             .copied()
-            .filter(|&t| recon.images[t].camera_index == camera_index)
+            .filter(|&t| recon.image_table.images[t].camera_index == camera_index)
             .collect();
-        let camera = &recon.cameras[camera_index as usize];
+        let camera = &recon.image_table.cameras[camera_index as usize];
 
         // (cluster, image, pixel) rows, sorted by cluster: the group's
         // correspondences, and every non-target posed image's observation of a
@@ -977,8 +990,8 @@ fn finite_estimates(
             );
         }
         for &row in gathered {
-            let image = recon.tracks[row].image_index as usize;
-            let p = recon.tracks[row].point_index as usize;
+            let image = recon.point_set.tracks[row].image_index as usize;
+            let p = recon.point_set.tracks[row].point_index as usize;
             if !posed_others[image] || !points[p][0].is_finite() {
                 continue;
             }
@@ -1061,7 +1074,7 @@ fn rotation_estimate(
     camera: &CameraIntrinsics,
     options: &ResectImageOptions,
 ) -> Estimate {
-    let stored = &recon.images[image_index];
+    let stored = &recon.image_table.images[image_index];
     let degenerate = |n: usize| Estimate {
         rotation: stored.quaternion_wxyz,
         translation: stored.translation_xyz,
@@ -1159,13 +1172,13 @@ fn bearing_span(bearings: &[Vector3<f64>]) -> f64 {
 /// `None` for a reconstruction with no finite structure to measure against — a
 /// rotation-only one, where every displacement is unitless.
 fn scene_scale(recon: &SfmrReconstruction) -> Option<f64> {
-    let mut per_image: Vec<Vec<f64>> = vec![Vec::new(); recon.images.len()];
-    for obs in recon.tracks.iter() {
-        let point = &recon.points[obs.point_index as usize];
+    let mut per_image: Vec<Vec<f64>> = vec![Vec::new(); recon.image_table.images.len()];
+    for obs in recon.point_set.tracks.iter() {
+        let point = &recon.point_set.points[obs.point_index as usize];
         if point.is_at_infinity() {
             continue;
         }
-        let image = &recon.images[obs.image_index as usize];
+        let image = &recon.image_table.images[obs.image_index as usize];
         let d = (point.position - image.camera_center()).norm();
         if d.is_finite() && d > 0.0 {
             per_image[obs.image_index as usize].push(d);
@@ -1210,7 +1223,7 @@ fn write_provenance(
             "inlier_fraction": totals.inlier_fraction,
         }),
     );
-    recon.metadata.point_count = recon.points.len() as u32;
-    recon.metadata.infinity_point_count = recon.infinity_point_count as u32;
-    recon.metadata.observation_count = recon.tracks.len() as u32;
+    recon.metadata.point_count = recon.point_set.points.len() as u32;
+    recon.metadata.infinity_point_count = recon.point_set.infinity_point_count as u32;
+    recon.metadata.observation_count = recon.point_set.tracks.len() as u32;
 }

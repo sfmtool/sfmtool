@@ -545,7 +545,8 @@ pub fn member_keypoints_from_reconstruction(
         .iter()
         .map(|&p| {
             let p = p as usize;
-            let range = recon.observation_offsets[p]..recon.observation_offsets[p + 1];
+            let range =
+                recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1];
             match kxy {
                 Some(k) => range
                     .map(|r| Some([k[[r, 0]] as f64, k[[r, 1]] as f64]))

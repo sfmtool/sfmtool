@@ -496,12 +496,23 @@ fn scene_arrays(
     Vec<Vector3<f64>>,
     Vec<CameraIntrinsics>,
 ) {
-    let quats = recon.images.iter().map(|im| im.quaternion_wxyz).collect();
-    let trans = recon.images.iter().map(|im| im.translation_xyz).collect();
-    let cams = recon
+    let quats = recon
+        .image_table
         .images
         .iter()
-        .map(|im| recon.cameras[im.camera_index as usize].clone())
+        .map(|im| im.quaternion_wxyz)
+        .collect();
+    let trans = recon
+        .image_table
+        .images
+        .iter()
+        .map(|im| im.translation_xyz)
+        .collect();
+    let cams = recon
+        .image_table
+        .images
+        .iter()
+        .map(|im| recon.image_table.cameras[im.camera_index as usize].clone())
         .collect();
     (quats, trans, cams)
 }
@@ -544,8 +555,8 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
     recon.workspace_dir = dir.clone();
     recon.metadata.workspace.contents.feature_prefix_dir = "features".into();
 
-    for img in 0..recon.images.len() {
-        let count = recon.max_track_feature_index[img] as usize + 1;
+    for img in 0..recon.image_table.images.len() {
+        let count = recon.point_set.max_track_feature_index[img] as usize + 1;
         let mut affine = Array3::<f32>::zeros((count, 2, 2));
         for f in 0..count {
             let s = sigma(img, f) as f32;
@@ -560,11 +571,11 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
             },
             metadata: sift_format::SiftMetadata {
                 version: sift_format::SIFT_FORMAT_VERSION,
-                image_name: recon.images[img].name.clone(),
+                image_name: recon.image_table.images[img].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
-                image_width: recon.cameras[0].width,
-                image_height: recon.cameras[0].height,
+                image_width: recon.image_table.cameras[0].width,
+                image_height: recon.image_table.cameras[0].height,
                 feature_count: count as u32,
             },
             content_hash: sift_format::SiftContentHash::default(),
@@ -582,6 +593,7 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
     // match exactly what `read_image_scales` recovers (`a00 as f64`).
     let feats = recon.feature_indexes().unwrap().to_vec();
     recon
+        .point_set
         .tracks
         .iter()
         .enumerate()
@@ -604,15 +616,20 @@ fn from_tracks_reproduces_from_reconstruction_feature_size() {
     let from_recon =
         PatchCloud::from_reconstruction(&recon, PatchNormal::MeanViewing, extent, false).unwrap();
 
-    let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
-    let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
-    let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
+    let positions: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
+    let weights: Vec<f64> = recon.point_set.points.iter().map(|p| p.w).collect();
+    let obs_images: Vec<u32> = recon
+        .point_set
+        .tracks
+        .iter()
+        .map(|o| o.image_index)
+        .collect();
     let (quats, trans, cams) = scene_arrays(&recon);
     let from_arrays = PatchCloud::from_tracks(
         &positions,
         &weights,
         None,
-        &recon.observation_offsets,
+        &recon.point_set.observation_offsets,
         &obs_images,
         Some(&obs_scales),
         &quats,
@@ -643,20 +660,26 @@ fn from_tracks_matches_reconstruction_pixel_radius_and_stored_normal() {
     let from_recon =
         PatchCloud::from_reconstruction(&recon, PatchNormal::Stored, extent, false).unwrap();
 
-    let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
-    let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
+    let positions: Vec<Point3<f64>> = recon.point_set.points.iter().map(|p| p.position).collect();
+    let weights: Vec<f64> = recon.point_set.points.iter().map(|p| p.w).collect();
     let stored: Vec<Vector3<f64>> = recon
+        .point_set
         .points
         .iter()
         .map(|p| Vector3::new(p.normal.x as f64, p.normal.y as f64, p.normal.z as f64))
         .collect();
-    let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
+    let obs_images: Vec<u32> = recon
+        .point_set
+        .tracks
+        .iter()
+        .map(|o| o.image_index)
+        .collect();
     let (quats, trans, cams) = scene_arrays(&recon);
     let from_arrays = PatchCloud::from_tracks(
         &positions,
         &weights,
         Some(&stored),
-        &recon.observation_offsets,
+        &recon.point_set.observation_offsets,
         &obs_images,
         None,
         &quats,

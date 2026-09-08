@@ -42,7 +42,7 @@ pub struct ImageBrowserResponse {
 /// the sequence has none selected.
 fn image_name(recon: &SfmrReconstruction, index: Option<usize>) -> String {
     index
-        .and_then(|index| recon.images.get(index))
+        .and_then(|index| recon.image_table.images.get(index))
         .map(|image| image.name.clone())
         .unwrap_or_else(|| "no image".to_string())
 }
@@ -205,7 +205,7 @@ impl ImageBrowser {
             has_pointer: false,
         };
 
-        let num_images = recon.images.len();
+        let num_images = recon.image_table.images.len();
 
         // Cache invalidation: if the reconstruction changed, clear everything.
         if self.cached_recon != Some(recon_id) || num_images != self.cached_image_count {
@@ -251,7 +251,7 @@ impl ImageBrowser {
         let mut thumb_positions: Vec<(f32, f32)> = Vec::with_capacity(num_images);
         let mut x = 0.0_f32;
         for i in 0..num_images {
-            let cam = &recon.cameras[recon.images[i].camera_index as usize];
+            let cam = &recon.image_table.cameras[recon.image_table.images[i].camera_index as usize];
             let aspect = cam.width as f32 / cam.height as f32;
             let w = img_height * aspect;
             thumb_positions.push((x, w));
@@ -798,10 +798,10 @@ impl ImageBrowser {
         // 128×128 the `.sfmr` format pins today: `thumb_h` divides into bands
         // and `thumb_w` bounds the row scan. They were one constant before,
         // which silently used the height as the width.
-        let shape = recon.thumbnails_y_x_rgb.shape();
+        let shape = recon.image_table.thumbnails_y_x_rgb.shape();
         let (thumb_h, thumb_w) = (shape[1], shape[2]);
 
-        let num_images = recon.images.len();
+        let num_images = recon.image_table.images.len();
         // Texture layout: width = num_images, height = BANDS, row-major (top to bottom).
         let mut pixels = Vec::with_capacity(num_images * BANDS * 4);
         // egui textures are stored row-major, so we iterate band (row) first.
@@ -811,7 +811,7 @@ impl ImageBrowser {
             let y_start = band * thumb_h / BANDS;
             let y_end = ((band + 1) * thumb_h / BANDS).max(y_start + 1).min(thumb_h);
             for i in 0..num_images {
-                let rgb_slice = recon.thumbnails_y_x_rgb.index_axis(Axis(0), i);
+                let rgb_slice = recon.image_table.thumbnails_y_x_rgb.index_axis(Axis(0), i);
                 // Average the horizontal band [y_start..y_end].
                 let (mut r_sum, mut g_sum, mut b_sum) = (0u64, 0u64, 0u64);
                 let mut count = 0u64;
@@ -839,7 +839,12 @@ impl ImageBrowser {
 
     /// Load a single thumbnail into the texture cache.
     fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, idx: usize) {
-        let image = thumbnail_color_image(recon.thumbnails_y_x_rgb.index_axis(Axis(0), idx));
+        let image = thumbnail_color_image(
+            recon
+                .image_table
+                .thumbnails_y_x_rgb
+                .index_axis(Axis(0), idx),
+        );
         let texture = ctx.load_texture(format!("thumb_{idx}"), image, egui::TextureOptions::LINEAR);
         self.thumbnail_cache.insert(idx, texture);
     }

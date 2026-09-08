@@ -340,10 +340,11 @@ impl UnionFind {
 /// Largest focal length (pixels) for each image's camera.
 fn per_image_focal_max(recon: &SfmrReconstruction) -> Vec<f64> {
     recon
+        .image_table
         .images
         .iter()
         .map(|im| {
-            let (fx, fy) = recon.cameras[im.camera_index as usize].focal_lengths();
+            let (fx, fy) = recon.image_table.cameras[im.camera_index as usize].focal_lengths();
             fx.max(fy)
         })
         .collect()
@@ -392,8 +393,8 @@ impl SfmrReconstruction {
         // can be measured inline against the features it was built from.
         let mut obs_xy: HashMap<(u32, u32), [f64; 2]> = HashMap::new();
 
-        for (img_idx, image) in self.images.iter().enumerate() {
-            let camera = &self.cameras[image.camera_index as usize];
+        for (img_idx, image) in self.image_table.images.iter().enumerate() {
+            let camera = &self.image_table.cameras[image.camera_index as usize];
             let sift_path = self.sift_path_for_image(img_idx);
             let sift = sift_format::read_sift_partial(&sift_path, read_count).map_err(|e| {
                 ReconstructionError::SiftRead {
@@ -407,7 +408,7 @@ impl SfmrReconstruction {
             // quaternion. quaternion_wxyz.inverse() is the camera->world
             // rotation.
             let cam_to_world = image.quaternion_wxyz.inverse();
-            let tracked = &self.image_feature_to_point[img_idx];
+            let tracked = &self.point_set.image_feature_to_point[img_idx];
             for f in 0..n {
                 // Discovery only considers keypoints the solve left untracked. A
                 // 2D feature already assigned to a 3D point cannot also belong to
@@ -436,8 +437,12 @@ impl SfmrReconstruction {
             }
         }
 
-        let camera_centers: Vec<Point3<f64>> =
-            self.images.iter().map(|im| im.camera_center()).collect();
+        let camera_centers: Vec<Point3<f64>> = self
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_center())
+            .collect();
         let focal_max = per_image_focal_max(self);
 
         // `finite_horizon` defaults to the camera extents — the scale of the
@@ -476,8 +481,8 @@ impl SfmrReconstruction {
                     let Some(&observed) = obs_xy.get(&(img, feat)) else {
                         continue;
                     };
-                    let image = &self.images[img as usize];
-                    let camera = &self.cameras[image.camera_index as usize];
+                    let image = &self.image_table.images[img as usize];
+                    let camera = &self.image_table.cameras[image.camera_index as usize];
                     if let Some(e) = observation_reprojection_error(
                         &image.quaternion_wxyz,
                         &image.translation_xyz,
@@ -502,7 +507,7 @@ impl SfmrReconstruction {
         // member is a previously untracked feature, so no appended observation
         // collides with an existing point's observation.
         let mut recon = self.clone();
-        let old_point_count = recon.points.len();
+        let old_point_count = recon.point_set.points.len();
         // A `sift_files` reconstruction may carry an inline copy of its
         // observation coordinates; the appended observations extend it in
         // lockstep with `feature_indexes`. Their pixels are the ones unprojected
@@ -543,8 +548,8 @@ impl SfmrReconstruction {
                 }
             };
             let error = reprojection_error(&position, w == 0.0, &track.members);
-            let new_point_id = recon.points.len() as u32;
-            recon.points.push(Point3D {
+            let new_point_id = recon.point_set.points.len() as u32;
+            recon.point_set.points.push(Point3D {
                 position,
                 w,
                 color: [200, 200, 200],
@@ -552,7 +557,7 @@ impl SfmrReconstruction {
                 normal: Vector3::zeros(),
             });
             for (img, _feat) in &track.members {
-                recon.tracks.push(TrackObservation {
+                recon.point_set.tracks.push(TrackObservation {
                     image_index: *img,
                     point_index: new_point_id,
                 });
@@ -561,7 +566,7 @@ impl SfmrReconstruction {
             // new observations' feature indices to the parallel column.
             if let ObservationSource::SiftFiles {
                 feature_indexes, ..
-            } = &mut recon.observations
+            } = &mut recon.point_set.observations
             {
                 for (_img, feat) in &track.members {
                     feature_indexes.push(*feat);
@@ -577,20 +582,23 @@ impl SfmrReconstruction {
             }
             // A newly discovered observation was never measured, so it gets the
             // "no data-derived support" code rather than inheriting anything.
-            if let Some(confidence) = recon.observation_confidence.as_mut() {
+            if let Some(confidence) = recon.point_set.observation_confidence.as_mut() {
                 confidence.extend(std::iter::repeat_n(0u8, track.members.len()));
             }
             // Nothing outside the solve owns a track this pass discovered, so
             // its constraint row is free -- the row the reconstruction would
             // hold for it if it carried no constraint columns at all.
-            if let Some(constraints) = recon.point_constraints.as_mut() {
+            if let Some(constraints) = recon.point_set.point_constraints.as_mut() {
                 constraints.point_constraints.push(POINT_CONSTRAINT_FREE);
                 constraints.constraint_distances.push(f64::NAN);
                 constraints
                     .constraint_reference_images
                     .push(NO_REFERENCE_IMAGE);
             }
-            recon.observation_counts.push(track.members.len() as u32);
+            recon
+                .point_set
+                .observation_counts
+                .push(track.members.len() as u32);
         }
         eprintln!(
             "[find-infinity] discovered {n_finite} new finite + {n_infinity} new \
@@ -604,7 +612,7 @@ impl SfmrReconstruction {
                 keypoints_xy: Some(keypoints_xy),
                 ..
             },
-        ) = (appended_keypoints, &mut recon.observations)
+        ) = (appended_keypoints, &mut recon.point_set.observations)
         {
             for xy in rows {
                 keypoints_xy
@@ -613,7 +621,7 @@ impl SfmrReconstruction {
             }
         }
 
-        debug_assert!(recon.points.len() >= old_point_count);
+        debug_assert!(recon.point_set.points.len() >= old_point_count);
         recon.rebuild_derived_fields();
         Ok(recon)
     }

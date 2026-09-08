@@ -61,8 +61,8 @@ impl PointTrackDetail {
         let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_ref()) else {
             return;
         };
-        let image = &recon.images[img_idx];
-        let camera = &recon.cameras[image.camera_index as usize];
+        let image = &recon.image_table.images[img_idx];
+        let camera = &recon.image_table.cameras[image.camera_index as usize];
         let q = image.quaternion_wxyz.quaternion();
         let cam_from_world = RigidTransform::from_wxyz_translation(
             [q.w, q.i, q.j, q.k],
@@ -139,8 +139,8 @@ pub(super) fn build_patch_frame(
     recon: &SfmrReconstruction,
     point_idx: usize,
 ) -> Option<OrientedPatch> {
-    let u_arr = recon.patch_u_halfvec_xyz.as_ref()?;
-    let v_arr = recon.patch_v_halfvec_xyz.as_ref()?;
+    let u_arr = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
+    let v_arr = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
     if point_idx >= u_arr.nrows() || point_idx >= v_arr.nrows() {
         return None;
     }
@@ -161,7 +161,7 @@ pub(super) fn build_patch_frame(
     let hv = v.norm();
     let u_axis = u / hu;
     let v_axis = if hv > 1e-12 { v / hv } else { v };
-    let point = &recon.points[point_idx];
+    let point = &recon.point_set.points[point_idx];
     let mut patch = OrientedPatch::new(point.position, u_axis, v_axis, [hu, hv]);
     if point.w == 0.0 {
         patch.w = 0.0;
@@ -178,7 +178,7 @@ pub(super) fn build_stored_patch_texture(
     recon: &SfmrReconstruction,
     point_idx: usize,
 ) -> Option<egui::TextureHandle> {
-    let bitmaps = recon.patch_bitmaps_y_x_rgba.as_ref()?;
+    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_ref()?;
     if point_idx >= bitmaps.shape()[0] {
         return None;
     }

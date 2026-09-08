@@ -16,6 +16,8 @@
 //! `[` / `]` stepping, label disambiguation — is `AppState` behaviour and needs
 //! no frame at all.
 
+use std::sync::Arc;
+
 use eframe::egui;
 use nalgebra::Vector3;
 use sfmtool_core::reconstruction::ObservationSource;
@@ -40,12 +42,12 @@ const VIEWPORT: egui::Vec2 = egui::vec2(320.0, 900.0);
 /// tables, and `SfmrReconstruction::demo` fixes the camera ring at 8.
 fn recon_named(points: usize, images: usize, prefix: &str) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(points);
-    let template = recon.images[0].clone();
-    while recon.images.len() < images {
-        recon.images.push(template.clone());
+    let template = recon.image_table.images[0].clone();
+    while recon.image_table.images.len() < images {
+        recon.image_table.images.push(template.clone());
     }
-    recon.images.truncate(images);
-    for (i, image) in recon.images.iter_mut().enumerate() {
+    recon.image_table.images.truncate(images);
+    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
         image.name = format!("{prefix}_{i:03}.jpg");
     }
     recon
@@ -77,12 +79,12 @@ fn shared_shoot(n: usize) -> AppState {
 /// one-camera node cannot tell the two selection fields apart.
 fn two_camera_node(path: &str) -> SceneNode {
     let mut recon = recon_named(32, 8, "IMG");
-    let second = recon.cameras[0].clone();
-    recon.cameras.push(second);
-    for image in recon.images.iter_mut().skip(4) {
+    let second = recon.image_table.cameras[0].clone();
+    recon.image_table.cameras.push(second);
+    for image in recon.image_table.images.iter_mut().skip(4) {
         image.camera_index = 1;
     }
-    recon.metadata.camera_count = recon.cameras.len() as u32;
+    recon.metadata.camera_count = recon.image_table.cameras.len() as u32;
     SceneNode::from_path(std::path::Path::new(path), recon)
 }
 
@@ -90,7 +92,7 @@ fn two_camera_node(path: &str) -> SceneNode {
 /// a `.sfmr` allows and the tree has to show honestly rather than hide.
 fn unused_camera_node(path: &str) -> SceneNode {
     let mut node = two_camera_node(path);
-    for image in node.recon.images.iter_mut() {
+    for image in node.recon.image_table.images.iter_mut() {
         image.camera_index = 0;
     }
     node
@@ -100,11 +102,11 @@ fn unused_camera_node(path: &str) -> SceneNode {
 /// expand-by-default threshold, where only the count matters.
 fn camera_count_node(path: &str, cameras: usize) -> SceneNode {
     let mut node = two_camera_node(path);
-    let template = node.recon.cameras[0].clone();
-    while node.recon.cameras.len() < cameras {
-        node.recon.cameras.push(template.clone());
+    let template = node.recon.image_table.cameras[0].clone();
+    while node.recon.image_table.cameras.len() < cameras {
+        node.recon.image_table.cameras.push(template.clone());
     }
-    node.recon.metadata.camera_count = node.recon.cameras.len() as u32;
+    node.recon.metadata.camera_count = node.recon.image_table.cameras.len() as u32;
     node
 }
 
@@ -128,10 +130,10 @@ fn known_similarity() -> Se3Transform {
 /// `recon` with every point and camera pose put through `t`.
 fn transformed(recon: &SfmrReconstruction, t: &Se3Transform) -> SfmrReconstruction {
     let mut out = recon.clone();
-    for p in &mut out.points {
+    for p in &mut out.point_set.points {
         p.position = t.apply_to_point(&p.position);
     }
-    for image in &mut out.images {
+    for image in &mut out.image_table.images {
         let (rotation, translation) = t.apply_to_camera_pose(
             &RotQuaternion::from_nalgebra(image.quaternion_wxyz),
             &image.translation_xyz,
@@ -158,9 +160,10 @@ fn misaligned_pair() -> AppState {
 /// Worst distance between the node's points *as displayed* and `target`'s.
 fn worst_display_error(node: &SceneNode, target: &SceneNode, target_frame: &Se3Transform) -> f64 {
     node.recon
+        .point_set
         .points
         .iter()
-        .zip(target.recon.points.iter())
+        .zip(target.recon.point_set.points.iter())
         .map(|(s, t)| {
             (node.transform.apply_to_point(&s.position) - target_frame.apply_to_point(&t.position))
                 .norm()
@@ -442,10 +445,11 @@ fn the_patches_row_appears_only_for_a_node_that_carries_patch_data() {
     let patched = state.scene[1].id;
     {
         let recon = &mut state.scene[1].recon;
-        let n = recon.points.len();
-        recon.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-        recon.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-        recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
+        let n = recon.point_set.points.len();
+        recon.point_set.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+        recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+        recon.point_set.patch_bitmaps_y_x_rgba =
+            Some(Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
     }
     let (panel, _ctx) = settled(&mut state);
 
@@ -1019,9 +1023,9 @@ fn the_point_mode_is_disabled_without_feature_indexes_in_both_nodes() {
     let b = state.scene[1].id;
     // Node A carries embedded keypoints, so there is no feature index for a
     // point correspondence to be keyed on.
-    let tracks = state.scene[0].recon.tracks.len();
-    let images = state.scene[0].recon.images.len();
-    state.scene[0].recon.observations = ObservationSource::EmbeddedPatches {
+    let tracks = state.scene[0].recon.point_set.tracks.len();
+    let images = state.scene[0].recon.image_table.images.len();
+    state.scene[0].recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: ndarray::Array2::<f32>::from_elem((tracks, 2), 100.0),
         image_file_hashes: vec![[0u8; 16]; images],
     };
@@ -1481,10 +1485,10 @@ fn an_aligned_nodes_cameras_are_looked_through_where_they_are_drawn() {
     // two solves, one viewpoint — or "look through this camera" would show the
     // transformed scene from an untransformed viewpoint.
     let (rotation, centre) = crate::viewer_3d::transformed_pose(
-        &state.scene[1].recon.images[3],
+        &state.scene[1].recon.image_table.images[3],
         &state.scene[1].transform,
     );
-    let expected = &state.scene[0].recon.images[3];
+    let expected = &state.scene[0].recon.image_table.images[3];
     assert!(
         (centre - expected.camera_center()).norm() < 1e-9,
         "camera centre {centre:?} is not the target's {:?}",
@@ -1515,7 +1519,13 @@ fn the_status_message_reports_the_fit() {
 fn a_failed_align_leaves_the_transform_alone_and_says_why() {
     let mut state = misaligned_pair();
     let (a, b) = (state.scene[0].id, state.scene[1].id);
-    for (i, image) in state.scene[1].recon.images.iter_mut().enumerate() {
+    for (i, image) in state.scene[1]
+        .recon
+        .image_table
+        .images
+        .iter_mut()
+        .enumerate()
+    {
         image.name = format!("unrelated_{i:03}.jpg");
     }
 
@@ -1760,10 +1770,11 @@ fn stepping_carries_the_selection_to_the_same_named_image() {
     let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
     // Shift the second node's images by one, so the same name sits at a
     // different index — an index-based carry-over would land on the wrong photo.
-    state.scene[1].recon.images.rotate_left(1);
-    let name = state.scene[0].recon.images[3].name.clone();
+    state.scene[1].recon.image_table.images.rotate_left(1);
+    let name = state.scene[0].recon.image_table.images[3].name.clone();
     let expected = state.scene[1]
         .recon
+        .image_table
         .images
         .iter()
         .position(|i| i.name == name)
@@ -1813,7 +1824,9 @@ fn stepping_carries_the_camera_view_to_the_same_named_image() {
     let image = ImageRef::new(ids[0], 3);
     viewer.camera_view = Some(crate::viewer_3d::CameraViewMode {
         image,
-        r_world_from_cam: state.scene[0].recon.images[3].quaternion_wxyz.inverse(),
+        r_world_from_cam: state.scene[0].recon.image_table.images[3]
+            .quaternion_wxyz
+            .inverse(),
     });
     state.select_image(Some(image));
 
@@ -1821,8 +1834,8 @@ fn stepping_carries_the_camera_view_to_the_same_named_image() {
     let now = viewer.camera_view.as_ref().expect("still in camera view");
     assert_eq!(now.image.recon, ids[1], "the camera view stayed behind");
     assert_eq!(
-        state.scene[1].recon.images[now.image.index()].name,
-        state.scene[0].recon.images[3].name,
+        state.scene[1].recon.image_table.images[now.image.index()].name,
+        state.scene[0].recon.image_table.images[3].name,
     );
 }
 
@@ -1838,7 +1851,9 @@ fn stepping_drops_a_camera_view_whose_image_has_no_counterpart() {
     let mut viewer = Viewer3D::new();
     viewer.camera_view = Some(crate::viewer_3d::CameraViewMode {
         image,
-        r_world_from_cam: state.scene[0].recon.images[1].quaternion_wxyz.inverse(),
+        r_world_from_cam: state.scene[0].recon.image_table.images[1]
+            .quaternion_wxyz
+            .inverse(),
     });
 
     let ctx = egui::Context::default();
@@ -1897,8 +1912,8 @@ fn the_stats_overlay_sums_visible_nodes_and_leads_with_the_count() {
 
     let mut state = shared_shoot(2);
     state.scene[0].recon.metadata.infinity_point_count = 3;
-    let one_node_points = state.scene[0].recon.points.len();
-    let one_node_images = state.scene[0].recon.images.len();
+    let one_node_points = state.scene[0].recon.point_set.points.len();
+    let one_node_images = state.scene[0].recon.image_table.images.len();
 
     let text = scene_stats_text(&state.scene, None, false, 60.0);
     assert_eq!(
@@ -1928,8 +1943,8 @@ fn the_stats_overlay_counts_only_the_soloed_node() {
 
     let mut state = shared_shoot(3);
     let second = state.scene[1].id;
-    let points = state.scene[1].recon.points.len();
-    let images = state.scene[1].recon.images.len();
+    let points = state.scene[1].recon.point_set.points.len();
+    let images = state.scene[1].recon.image_table.images.len();
 
     state.toggle_solo(second);
     assert_eq!(
@@ -1953,7 +1968,7 @@ fn the_hover_overlay_names_the_reconstruction_only_when_several_are_loaded() {
 
     let mut state = shared_shoot(1);
     let first = state.scene[0].id;
-    let name = state.scene[0].recon.images[1].name.clone();
+    let name = state.scene[0].recon.image_table.images[1].name.clone();
 
     let image_pick = Some(PickTarget::Image(ImageRef::new(first, 1)));
     let point_pick = Some(PickTarget::Point(PointRef::new(first, 88)));
@@ -2247,7 +2262,7 @@ fn the_camera_zoom_frames_only_its_own_images_through_the_node_transform() {
         4,
         "framed the whole node rather than one lens"
     );
-    let expected = transform.apply_to_point(&node.recon.images[4].camera_center());
+    let expected = transform.apply_to_point(&node.recon.image_table.images[4].camera_center());
     assert!((centres[0] - expected).norm() < 1e-9);
 
     // A camera nothing uses frames nothing, rather than a degenerate point.
@@ -2411,13 +2426,13 @@ fn resectable_node(path: &str) -> SceneNode {
     use sfmtool_core::reconstruction::{ObservationSource, TrackObservation};
 
     let mut recon = SfmrReconstruction::demo(120);
-    let camera = recon.cameras[0].clone();
+    let camera = recon.image_table.cameras[0].clone();
     let mut tracks = Vec::new();
     let mut counts = Vec::new();
     let mut keypoints: Vec<[f32; 2]> = Vec::new();
-    for (p, point) in recon.points.iter().enumerate() {
+    for (p, point) in recon.point_set.points.iter().enumerate() {
         let mut count = 0u32;
-        for (i, image) in recon.images.iter().enumerate() {
+        for (i, image) in recon.image_table.images.iter().enumerate() {
             let local = image.quaternion_wxyz * point.position.coords + image.translation_xyz;
             let Some((u, v)) = camera.ray_to_pixel([local.x, local.y, local.z]) else {
                 continue;
@@ -2434,19 +2449,19 @@ fn resectable_node(path: &str) -> SceneNode {
         }
         counts.push(count);
     }
-    let images = recon.images.len();
+    let images = recon.image_table.images.len();
     let mut keypoints_xy = ndarray::Array2::<f32>::zeros((keypoints.len(), 2));
     for (row, uv) in keypoints.iter().enumerate() {
         keypoints_xy[[row, 0]] = uv[0];
         keypoints_xy[[row, 1]] = uv[1];
     }
-    recon.observations = ObservationSource::EmbeddedPatches {
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy,
         image_file_hashes: vec![[0u8; 16]; images],
     };
     recon.metadata.feature_source = "embedded_patches".to_string();
-    recon.tracks = tracks;
-    recon.observation_counts = counts;
+    recon.point_set.tracks = tracks;
+    recon.point_set.observation_counts = counts;
     recon.rebuild_derived_fields();
     SceneNode::from_path(std::path::Path::new(path), recon)
 }
@@ -2535,7 +2550,7 @@ fn resect_is_greyed_on_a_reconstruction_with_too_few_posed_images() {
 #[test]
 fn resect_is_greyed_on_an_image_that_is_not_posed() {
     let mut state = shared_shoot(1);
-    state.scene[0].recon.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    state.scene[0].recon.image_table.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     let (mut panel, ctx, id) = with_image_list(&mut state);
 
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_1"));
@@ -2576,7 +2591,7 @@ fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
     let mut state = resectable_scene();
     let source = state.scene[0].id;
     state.scene[0].transform = known_similarity();
-    let image = state.scene[0].recon.images[3].name.clone();
+    let image = state.scene[0].recon.image_table.images[3].name.clone();
 
     state.resect_image(source, 3, ResectFrom::Observations);
 
@@ -2600,8 +2615,8 @@ fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
     // The source is untouched.
     assert_eq!(state.scene[0].id, source);
     assert_eq!(
-        state.scene[0].recon.images[3].quaternion_wxyz,
-        resectable_node("/runs/run_a.sfmr").recon.images[3].quaternion_wxyz
+        state.scene[0].recon.image_table.images[3].quaternion_wxyz,
+        resectable_node("/runs/run_a.sfmr").recon.image_table.images[3].quaternion_wxyz
     );
 }
 

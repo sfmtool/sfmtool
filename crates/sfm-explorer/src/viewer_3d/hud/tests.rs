@@ -15,6 +15,8 @@
 //! anchored position on its second frame. Every helper here therefore runs
 //! several frames and only trusts the state left behind by the last one.
 
+use std::sync::Arc;
+
 use eframe::egui;
 use ndarray::{Array2, Array4};
 use sfmtool_core::SfmrReconstruction;
@@ -48,10 +50,11 @@ fn recon_id(state: &AppState) -> ReconId {
 fn patch_state() -> AppState {
     let mut state = demo_state();
     let recon = &mut state.scene[0].recon;
-    let n = recon.points.len();
-    recon.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-    recon.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
-    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::from_elem((n, 8, 8, 4), 200));
+    let n = recon.point_set.points.len();
+    recon.point_set.patch_u_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+    recon.point_set.patch_v_halfvec_xyz = Some(Array2::<f32>::from_elem((n, 3), 0.1));
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        Some(Arc::new(Array4::<u8>::from_elem((n, 8, 8, 4), 200)));
     state
 }
 

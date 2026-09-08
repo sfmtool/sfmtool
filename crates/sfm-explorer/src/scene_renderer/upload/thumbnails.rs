@@ -23,7 +23,7 @@ impl SceneRenderer {
         id: ReconId,
         recon: &SfmrReconstruction,
     ) {
-        let image_count = recon.images.len() as u32;
+        let image_count = recon.image_table.images.len() as u32;
         if image_count == 0 {
             return;
         }
@@ -73,7 +73,10 @@ impl SceneRenderer {
 
         // Upload each embedded thumbnail to its grid cell (RGB → RGBA)
         for i in 0..image_count_clamped as usize {
-            let rgb_slice = recon.thumbnails_y_x_rgb.index_axis(ndarray::Axis(0), i);
+            let rgb_slice = recon
+                .image_table
+                .thumbnails_y_x_rgb
+                .index_axis(ndarray::Axis(0), i);
             let mut rgba_data = Vec::with_capacity((THUMBNAIL_SIZE * THUMBNAIL_SIZE * 4) as usize);
             for pixel in rgb_slice.as_slice().unwrap().as_chunks::<3>().0.iter() {
                 rgba_data.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);

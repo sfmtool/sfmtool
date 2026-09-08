@@ -121,7 +121,7 @@ pub fn resolve_point_query(
         PointQuery::Index(index) => index,
         PointQuery::Qualified { index, .. } => index,
     };
-    let count = node.recon.points.len();
+    let count = node.recon.point_set.points.len();
     if index >= count {
         return Err(format!(
             "{} has {count} points — index {index} is out of range.",
@@ -173,7 +173,8 @@ fn hash_matches(node: &SceneNode, hash: &str) -> bool {
 pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) -> Option<String> {
     let point = selected_point?;
     let node = node_by_id(scene, point.recon)?;
-    (point.index() < node.recon.points.len()).then(|| point_id(&node.recon, point.index()))
+    (point.index() < node.recon.point_set.points.len())
+        .then(|| point_id(&node.recon, point.index()))
 }
 
 /// The modal that collects the text.

@@ -42,8 +42,8 @@ impl SfmrReconstruction {
         &self,
         image_index: usize,
     ) -> Result<Vec<(u32, f32)>, ReconstructionError> {
-        let image = &self.images[image_index];
-        let camera = &self.cameras[image.camera_index as usize];
+        let image = &self.image_table.images[image_index];
+        let camera = &self.image_table.cameras[image.camera_index as usize];
 
         let inline = self.keypoints_xy();
         // Feature positions from the image's `.sift` file, read only when there
@@ -51,7 +51,7 @@ impl SfmrReconstruction {
         let positions = match inline {
             Some(_) => Vec::new(),
             None => {
-                let read_count = self.max_track_feature_index[image_index] as usize + 1;
+                let read_count = self.point_set.max_track_feature_index[image_index] as usize + 1;
                 let sift_path = self.sift_path_for_image(image_index);
                 sift_format::read_sift_positions(&sift_path, read_count).map_err(|e| {
                     ReconstructionError::SiftRead {
@@ -68,7 +68,7 @@ impl SfmrReconstruction {
         let t = &image.translation_xyz;
 
         // Iterate all track observations for this image
-        let feat_to_point = &self.image_feature_to_point[image_index];
+        let feat_to_point = &self.point_set.image_feature_to_point[image_index];
         let mut results = Vec::with_capacity(feat_to_point.len());
 
         for (&feat_idx, &point_idx) in feat_to_point {
@@ -91,7 +91,7 @@ impl SfmrReconstruction {
                 },
             };
 
-            let point = &self.points[point_idx as usize];
+            let point = &self.point_set.points[point_idx as usize];
             let error = match observation_reprojection_error(
                 r,
                 t,
@@ -124,17 +124,17 @@ impl SfmrReconstruction {
     /// [`Self::compute_observation_reprojection_errors`] instead.
     fn inline_point_reprojection_errors(&self) -> Option<Vec<f32>> {
         let keypoints_xy = self.keypoints_xy()?;
-        let num_points = self.points.len();
+        let num_points = self.point_set.points.len();
         let mut out = vec![0.0f32; num_points];
         for (point_idx, slot) in out.iter_mut().enumerate() {
-            let point = &self.points[point_idx];
+            let point = &self.point_set.points[point_idx];
             let at_infinity = point.is_at_infinity();
-            let start = self.observation_offsets[point_idx];
+            let start = self.point_set.observation_offsets[point_idx];
             let mut sum = 0.0f64;
             let mut count = 0u32;
             for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
-                let image = &self.images[obs.image_index as usize];
-                let camera = &self.cameras[image.camera_index as usize];
+                let image = &self.image_table.images[obs.image_index as usize];
+                let camera = &self.image_table.cameras[image.camera_index as usize];
                 let obs_global = start + k;
                 let observed = [
                     keypoints_xy[[obs_global, 0]] as f64,
@@ -176,19 +176,19 @@ impl SfmrReconstruction {
     /// uses those directly and reads no `.sift` file.
     pub fn recompute_point_errors(&mut self) -> Result<(), ReconstructionError> {
         if let Some(errors) = self.inline_point_reprojection_errors() {
-            for (pt, error) in self.points.iter_mut().zip(errors) {
+            for (pt, error) in self.point_set.points.iter_mut().zip(errors) {
                 pt.error = error;
             }
             return Ok(());
         }
 
-        let num_points = self.points.len();
+        let num_points = self.point_set.points.len();
         let mut error_sums = vec![0.0f64; num_points];
         let mut error_counts = vec![0u32; num_points];
 
-        for img_idx in 0..self.images.len() {
+        for img_idx in 0..self.image_table.images.len() {
             let results = self.compute_observation_reprojection_errors(img_idx)?;
-            let feat_to_point = &self.image_feature_to_point[img_idx];
+            let feat_to_point = &self.point_set.image_feature_to_point[img_idx];
             for (feat_idx, error) in results {
                 if error.is_nan() {
                     continue;
@@ -201,7 +201,7 @@ impl SfmrReconstruction {
         }
 
         for i in 0..num_points {
-            self.points[i].error = if error_counts[i] > 0 {
+            self.point_set.points[i].error = if error_counts[i] > 0 {
                 (error_sums[i] / error_counts[i] as f64) as f32
             } else {
                 0.0
@@ -220,8 +220,13 @@ impl SfmrReconstruction {
     /// so finite points keep the errors the solve produced and `.sift` files are
     /// read only for images that observe a point at infinity.
     pub fn recompute_infinity_point_errors(&mut self) -> Result<(), ReconstructionError> {
-        let num_points = self.points.len();
-        let is_infinity: Vec<bool> = self.points.iter().map(|p| p.is_at_infinity()).collect();
+        let num_points = self.point_set.points.len();
+        let is_infinity: Vec<bool> = self
+            .point_set
+            .points
+            .iter()
+            .map(|p| p.is_at_infinity())
+            .collect();
         if !is_infinity.iter().any(|&b| b) {
             return Ok(());
         }
@@ -232,7 +237,7 @@ impl SfmrReconstruction {
         if let Some(errors) = self.inline_point_reprojection_errors() {
             for (i, &inf) in is_infinity.iter().enumerate() {
                 if inf {
-                    self.points[i].error = errors[i];
+                    self.point_set.points[i].error = errors[i];
                 }
             }
             return Ok(());
@@ -241,15 +246,15 @@ impl SfmrReconstruction {
         let mut error_sums = vec![0.0f64; num_points];
         let mut error_counts = vec![0u32; num_points];
 
-        for img_idx in 0..self.images.len() {
-            let feat_to_point = &self.image_feature_to_point[img_idx];
+        for img_idx in 0..self.image_table.images.len() {
+            let feat_to_point = &self.point_set.image_feature_to_point[img_idx];
             // Skip images observing no point at infinity — avoids reading their
             // `.sift` file just to discard every observation.
             if !feat_to_point.values().any(|&p| is_infinity[p as usize]) {
                 continue;
             }
             let results = self.compute_observation_reprojection_errors(img_idx)?;
-            let feat_to_point = &self.image_feature_to_point[img_idx];
+            let feat_to_point = &self.point_set.image_feature_to_point[img_idx];
             for (feat_idx, error) in results {
                 if error.is_nan() {
                     continue;
@@ -265,7 +270,7 @@ impl SfmrReconstruction {
 
         for i in 0..num_points {
             if is_infinity[i] {
-                self.points[i].error = if error_counts[i] > 0 {
+                self.point_set.points[i].error = if error_counts[i] > 0 {
                     (error_sums[i] / error_counts[i] as f64) as f32
                 } else {
                     0.0
@@ -283,14 +288,14 @@ impl SfmrReconstruction {
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
         use ndarray::{Array1, Array2};
 
-        let image_count = self.images.len();
-        let points3d_count = self.points.len();
-        let observation_count = self.tracks.len();
+        let image_count = self.image_table.images.len();
+        let points3d_count = self.point_set.points.len();
+        let observation_count = self.point_set.tracks.len();
 
         // Build columnar arrays from the reconstruction data
         let mut quaternions_wxyz = Array2::<f64>::zeros((image_count, 4));
         let mut translations_xyz = Array2::<f64>::zeros((image_count, 3));
-        for (i, im) in self.images.iter().enumerate() {
+        for (i, im) in self.image_table.images.iter().enumerate() {
             let q = im.quaternion_wxyz.quaternion();
             quaternions_wxyz[[i, 0]] = q.w;
             quaternions_wxyz[[i, 1]] = q.i;
@@ -302,7 +307,7 @@ impl SfmrReconstruction {
         }
 
         let mut positions_xyzw = Array2::<f64>::zeros((points3d_count, 4));
-        for (i, pt) in self.points.iter().enumerate() {
+        for (i, pt) in self.point_set.points.iter().enumerate() {
             positions_xyzw[[i, 0]] = pt.position.x;
             positions_xyzw[[i, 1]] = pt.position.y;
             positions_xyzw[[i, 2]] = pt.position.z;
@@ -311,7 +316,7 @@ impl SfmrReconstruction {
 
         let mut image_indexes = Array1::<u32>::zeros(observation_count);
         let mut point_indexes = Array1::<u32>::zeros(observation_count);
-        for (i, obs) in self.tracks.iter().enumerate() {
+        for (i, obs) in self.point_set.tracks.iter().enumerate() {
             image_indexes[i] = obs.image_index;
             point_indexes[i] = obs.point_index;
         }
@@ -325,9 +330,9 @@ impl SfmrReconstruction {
         )?;
 
         // Store results back
-        self.depth_statistics = result.depth_statistics;
+        self.image_table.depth_statistics = result.depth_statistics;
         let num_buckets = result.observed_depth_histogram_counts.ncols();
-        self.depth_histogram_counts = (0..image_count)
+        self.image_table.depth_histogram_counts = (0..image_count)
             .map(|i| {
                 (0..num_buckets)
                     .map(|j| result.observed_depth_histogram_counts[[i, j]])
@@ -335,8 +340,8 @@ impl SfmrReconstruction {
             })
             .collect();
         // Only materialize normals when this reconstruction carries them.
-        if self.has_normals {
-            for (i, pt) in self.points.iter_mut().enumerate() {
+        if self.point_set.has_normals {
+            for (i, pt) in self.point_set.points.iter_mut().enumerate() {
                 pt.normal = Vector3::new(
                     result.mean_viewing_normals_xyz[[i, 0]],
                     result.mean_viewing_normals_xyz[[i, 1]],

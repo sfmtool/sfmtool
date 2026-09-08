@@ -24,6 +24,7 @@ impl SceneRenderer {
         recon: &SfmrReconstruction,
     ) {
         let instances: Vec<PointInstance> = recon
+            .point_set
             .points
             .iter()
             .map(|p| {
@@ -55,9 +56,9 @@ impl SceneRenderer {
 
         // Auto point size, inter-camera distance and bounding sphere are all
         // per-recon: they describe this node's data, not the scene.
-        bundle.auto_point_size = compute_auto_point_size(&recon.points);
-        bundle.camera_nn_scale = compute_camera_nn_scale(&recon.images);
-        bundle.bounds = Some(compute_scene_bounds(&recon.points));
+        bundle.auto_point_size = compute_auto_point_size(&recon.point_set.points);
+        bundle.camera_nn_scale = compute_camera_nn_scale(&recon.image_table.images);
+        bundle.bounds = Some(compute_scene_bounds(&recon.point_set.points));
         bundle.point_instance_buffer = Some(buffer);
         bundle.point_count = instances.len() as u32;
 

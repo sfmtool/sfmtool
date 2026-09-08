@@ -203,7 +203,7 @@ impl TabContext<'_> {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(&node.label).strong());
                     ui.label(
-                        egui::RichText::new(format!("({} images)", recon.images.len()))
+                        egui::RichText::new(format!("({} images)", recon.image_table.images.len()))
                             .weak()
                             .small(),
                     );
@@ -301,10 +301,10 @@ impl TabContext<'_> {
             // The camera the selected image resolves to — the subject of
             // the intrinsics layer, and `None` with no image selected.
             let camera = selected_image.and_then(|idx| {
-                let camera_index = recon.images.get(idx)?.camera_index as usize;
+                let camera_index = recon.image_table.images.get(idx)?.camera_index as usize;
                 Some((
                     CameraRef::new(id, camera_index),
-                    recon.cameras.get(camera_index)?,
+                    recon.image_table.cameras.get(camera_index)?,
                 ))
             });
             // What the panel's controls were before this frame ran.
@@ -331,10 +331,10 @@ impl TabContext<'_> {
             let read_count_for_image = |idx: usize| -> usize {
                 if self.state.feature_display.overlay_mode == crate::state::OverlayMode::None {
                     // Only need tracked features
-                    recon.max_track_feature_index[idx] as usize + 1
+                    recon.point_set.max_track_feature_index[idx] as usize + 1
                 } else {
                     // Need up to max_features (or all tracked features, whichever is more)
-                    let tracked = recon.max_track_feature_index[idx] as usize + 1;
+                    let tracked = recon.point_set.max_track_feature_index[idx] as usize + 1;
                     let display = self
                         .state
                         .feature_display
@@ -421,9 +421,10 @@ impl TabContext<'_> {
             // inline, so the `.sift` probe would fail every time).
             if recon.feature_indexes().is_some() {
                 if let Some(pt_idx) = selected_point {
-                    if pt_idx < recon.points.len() {
+                    if pt_idx < recon.point_set.points.len() {
                         for img_idx in recon.track_image_indices(pt_idx) {
-                            let need = recon.max_track_feature_index[img_idx] as usize + 1;
+                            let need =
+                                recon.point_set.max_track_feature_index[img_idx] as usize + 1;
                             crate::state::ensure_sift_cached(
                                 &mut self.state.sift_cache,
                                 recon,
@@ -439,9 +440,9 @@ impl TabContext<'_> {
             // patch tiles from an immutable cache reference. Only
             // needed when the recon carries patch frames (the tiles
             // are gated on them).
-            if recon.patch_u_halfvec_xyz.is_some() {
+            if recon.point_set.patch_u_halfvec_xyz.is_some() {
                 if let Some(pt_idx) = selected_point {
-                    if pt_idx < recon.points.len() {
+                    if pt_idx < recon.point_set.points.len() {
                         for img_idx in recon.track_image_indices(pt_idx) {
                             crate::state::ensure_full_res_cached(
                                 &mut self.state.full_res_cache,
@@ -832,7 +833,7 @@ pub(crate) fn compute_track_images(state: &AppState, node: &SceneNode) -> Vec<us
     let Some(point_idx) = state.selected_point_in(node.id) else {
         return Vec::new();
     };
-    if point_idx >= node.recon.points.len() {
+    if point_idx >= node.recon.point_set.points.len() {
         return Vec::new();
     }
     node.recon.track_image_indices(point_idx)
@@ -850,7 +851,7 @@ pub(crate) fn compute_hover_track_images(state: &AppState, node: &SceneNode) -> 
     let Some(point_idx) = point.index_in(node.id) else {
         return Vec::new();
     };
-    if point_idx >= node.recon.points.len() {
+    if point_idx >= node.recon.point_set.points.len() {
         return Vec::new();
     }
     node.recon.track_image_indices(point_idx)

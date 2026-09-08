@@ -24,7 +24,7 @@ impl PointTrackDetail {
             "{:.3}, {:.3}, {:.3}",
             point.position.x, point.position.y, point.position.z
         );
-        let obs_count = recon.observation_counts[point_idx];
+        let obs_count = recon.point_set.observation_counts[point_idx];
 
         let mut goto_clicked = false;
         ui.horizontal_wrapped(|ui| {

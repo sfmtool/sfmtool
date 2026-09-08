@@ -173,7 +173,7 @@ impl PointTrackDetail {
         // No point selected — or a stale index left over from a reconstruction
         // that has since shrunk. Either way there is nothing to inspect, so
         // offer the one way in that needs no click on a splat.
-        let selected_point = selected_point.filter(|&idx| idx < recon.points.len());
+        let selected_point = selected_point.filter(|&idx| idx < recon.point_set.points.len());
         let Some(point_idx) = selected_point else {
             response.request_goto_point = show_empty_state(ui);
             self.prepared_point = None;
@@ -198,7 +198,7 @@ impl PointTrackDetail {
             };
         }
 
-        let point = &recon.points[point_idx];
+        let point = &recon.point_set.points[point_idx];
 
         // --- Header: Point Summary ---
         response.request_goto_point = self.show_header(ui, recon, point_idx, point);

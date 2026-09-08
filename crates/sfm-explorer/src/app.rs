@@ -407,7 +407,7 @@ impl App {
                 self.scene_renderer.update_frustum_colors(
                     queue,
                     id,
-                    node.recon.images.len(),
+                    node.recon.image_table.images.len(),
                     self.state.selected_image_in(id),
                     hidden_image.and_then(|h| h.index_in(id)),
                     &track_images,
@@ -433,7 +433,7 @@ impl App {
                 .selected_point
                 .and_then(|p| Some((p, crate::scene::node_by_id(&self.state.scene, p.recon)?)));
             match selected {
-                Some((point, node)) if point.index() < node.recon.points.len() => {
+                Some((point, node)) if point.index() < node.recon.point_set.points.len() => {
                     let (id, recon, transform) = (node.id, &node.recon, node.transform.clone());
                     let point_idx = point.index();
                     // Pre-populate SIFT cache for all images in the track
@@ -442,7 +442,8 @@ impl App {
                     if recon.feature_indexes().is_some() {
                         for obs in recon.observations_for_point(point_idx) {
                             let img_idx = obs.image_index as usize;
-                            let read_count = recon.max_track_feature_index[img_idx] as usize + 1;
+                            let read_count =
+                                recon.point_set.max_track_feature_index[img_idx] as usize + 1;
                             crate::state::ensure_sift_cached(
                                 &mut self.state.sift_cache,
                                 recon,

@@ -218,6 +218,7 @@ impl AppState {
         let label = self.scene[index].label.clone();
         let name = self.scene[index]
             .recon
+            .image_table
             .images
             .get(image)
             .map(|i| i.name.clone())?;

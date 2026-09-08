@@ -200,8 +200,8 @@ impl Correspondences {
 /// `image name → index`, first occurrence winning — the same rule
 /// `sfm align`'s by-cameras mode uses when a name repeats.
 fn images_by_name(recon: &SfmrReconstruction) -> HashMap<&str, usize> {
-    let mut map = HashMap::with_capacity(recon.images.len());
-    for (i, image) in recon.images.iter().enumerate() {
+    let mut map = HashMap::with_capacity(recon.image_table.images.len());
+    for (i, image) in recon.image_table.images.iter().enumerate() {
         map.entry(image.name.as_str()).or_insert(i);
     }
     map
@@ -214,7 +214,7 @@ pub fn shared_images(source: &SfmrReconstruction, target: &SfmrReconstruction) -
     let target_by_name = images_by_name(target);
     let mut seen: HashMap<&str, ()> = HashMap::new();
     let mut pairs = Vec::new();
-    for (i, image) in source.images.iter().enumerate() {
+    for (i, image) in source.image_table.images.iter().enumerate() {
         let name = image.name.as_str();
         if seen.insert(name, ()).is_some() {
             continue; // a repeated source name pairs once, like the target side
@@ -237,8 +237,8 @@ fn camera_correspondences(
     };
     for (i, j) in shared_images(source, target) {
         out.push(
-            &source.images[i as usize].camera_center(),
-            &target.images[j as usize].camera_center(),
+            &source.image_table.images[i as usize].camera_center(),
+            &target.image_table.images[j as usize].camera_center(),
         );
     }
     out
@@ -247,8 +247,18 @@ fn camera_correspondences(
 /// The three parallel track columns [`find_point_correspondences`] joins on.
 fn track_columns(recon: &SfmrReconstruction) -> Option<(Vec<u32>, &[u32], Vec<u32>)> {
     let feature_indexes = recon.feature_indexes()?;
-    let images = recon.tracks.iter().map(|t| t.image_index).collect();
-    let points = recon.tracks.iter().map(|t| t.point_index).collect();
+    let images = recon
+        .point_set
+        .tracks
+        .iter()
+        .map(|t| t.image_index)
+        .collect();
+    let points = recon
+        .point_set
+        .tracks
+        .iter()
+        .map(|t| t.point_index)
+        .collect();
     Some((images, feature_indexes, points))
 }
 
@@ -288,8 +298,10 @@ fn point_correspondences(
         target: Vec::new(),
     };
     for (&s, &t) in matched.source_ids.iter().zip(matched.target_ids.iter()) {
-        let (Some(sp), Some(tp)) = (source.points.get(s as usize), target.points.get(t as usize))
-        else {
+        let (Some(sp), Some(tp)) = (
+            source.point_set.points.get(s as usize),
+            target.point_set.points.get(t as usize),
+        ) else {
             continue;
         };
         if sp.is_at_infinity() || tp.is_at_infinity() {

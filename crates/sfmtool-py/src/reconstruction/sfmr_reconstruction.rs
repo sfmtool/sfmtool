@@ -116,10 +116,10 @@ impl PySfmrReconstruction {
             let meta = &mut self.inner.metadata;
             meta.operation = op.to_string();
             meta.tool = tool_name.unwrap_or("sfmtool").to_string();
-            meta.image_count = self.inner.images.len() as u32;
-            meta.point_count = self.inner.points.len() as u32;
-            meta.observation_count = self.inner.tracks.len() as u32;
-            meta.camera_count = self.inner.cameras.len() as u32;
+            meta.image_count = self.inner.image_table.images.len() as u32;
+            meta.point_count = self.inner.point_set.points.len() as u32;
+            meta.observation_count = self.inner.point_set.tracks.len() as u32;
+            meta.camera_count = self.inner.image_table.cameras.len() as u32;
             meta.timestamp = chrono::Local::now().to_rfc3339();
 
             // Update workspace paths relative to output file
@@ -162,7 +162,7 @@ impl PySfmrReconstruction {
     /// Number of 3D points at infinity (`w == 0`).
     #[getter]
     fn infinity_point_count(&self) -> usize {
-        self.inner.infinity_point_count
+        self.inner.point_set.infinity_point_count
     }
 
     /// Number of track observations.
@@ -198,6 +198,7 @@ impl PySfmrReconstruction {
     #[getter]
     fn cameras(&self) -> Vec<PyCameraIntrinsics> {
         self.inner
+            .image_table
             .cameras
             .iter()
             .map(|c| PyCameraIntrinsics { inner: c.clone() })
@@ -207,7 +208,12 @@ impl PySfmrReconstruction {
     /// List of image names (paths relative to the workspace).
     #[getter]
     fn image_names(&self) -> Vec<String> {
-        self.inner.images.iter().map(|im| im.name.clone()).collect()
+        self.inner
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.name.clone())
+            .collect()
     }
 
     // ── Image data array getters ─────────────────────────────────────
@@ -215,7 +221,13 @@ impl PySfmrReconstruction {
     /// Camera index for each image, shape `(N,)`.
     #[getter]
     fn camera_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self.inner.images.iter().map(|im| im.camera_index).collect();
+        let vec: Vec<u32> = self
+            .inner
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_index)
+            .collect();
         PyArray1::from_vec(py, vec)
     }
 
@@ -224,6 +236,7 @@ impl PySfmrReconstruction {
     fn quaternions_wxyz<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
+            .image_table
             .images
             .iter()
             .map(|im| {
@@ -239,6 +252,7 @@ impl PySfmrReconstruction {
     fn translations<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
+            .image_table
             .images
             .iter()
             .map(|im| {
@@ -308,7 +322,7 @@ impl PySfmrReconstruction {
     /// selects its rows in lockstep.
     #[getter]
     fn observation_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let confidence = self.inner.observation_confidence.as_ref()?;
+        let confidence = self.inner.point_set.observation_confidence.as_ref()?;
         Some(PyArray1::from_slice(py, confidence))
     }
 
@@ -350,6 +364,7 @@ impl PySfmrReconstruction {
     fn positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
+            .point_set
             .points
             .iter()
             .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z])
@@ -368,6 +383,7 @@ impl PySfmrReconstruction {
     fn positions_xyzw<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         let vec2: Vec<Vec<f64>> = self
             .inner
+            .point_set
             .points
             .iter()
             .map(|pt| vec![pt.position.x, pt.position.y, pt.position.z, pt.w])
@@ -384,6 +400,7 @@ impl PySfmrReconstruction {
     fn point_is_at_infinity<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<bool>> {
         let vec: Vec<bool> = self
             .inner
+            .point_set
             .points
             .iter()
             .map(|pt| pt.is_at_infinity())
@@ -396,6 +413,7 @@ impl PySfmrReconstruction {
     fn colors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u8>> {
         let vec2: Vec<Vec<u8>> = self
             .inner
+            .point_set
             .points
             .iter()
             .map(|pt| vec![pt.color[0], pt.color[1], pt.color[2]])
@@ -406,7 +424,13 @@ impl PySfmrReconstruction {
     /// Reprojection errors for 3D points, shape `(M,)`.
     #[getter]
     fn errors<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f32>> {
-        let vec: Vec<f32> = self.inner.points.iter().map(|pt| pt.error).collect();
+        let vec: Vec<f32> = self
+            .inner
+            .point_set
+            .points
+            .iter()
+            .map(|pt| pt.error)
+            .collect();
         PyArray1::from_vec(py, vec)
     }
 
@@ -418,6 +442,7 @@ impl PySfmrReconstruction {
     fn normals<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f32>> {
         let vec2: Vec<Vec<f32>> = self
             .inner
+            .point_set
             .points
             .iter()
             .map(|pt| vec![pt.normal.x, pt.normal.y, pt.normal.z])
@@ -429,7 +454,7 @@ impl PySfmrReconstruction {
     /// :attr:`normals` is all-zero and no `normals_xyz` array is written.
     #[getter]
     fn has_normals(&self) -> bool {
-        self.inner.has_normals
+        self.inner.point_set.has_normals
     }
 
     /// Per-point confidence in :attr:`normals`, shape ``(M,)`` ``uint8``, or
@@ -444,7 +469,7 @@ impl PySfmrReconstruction {
     /// untouched.
     #[getter]
     fn normal_confidence<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let confidence = self.inner.normal_confidence.as_ref()?;
+        let confidence = self.inner.point_set.normal_confidence.as_ref()?;
         Some(PyArray1::from_slice(py, confidence))
     }
 
@@ -462,7 +487,7 @@ impl PySfmrReconstruction {
     /// constraint_reference_images=...)``, and they are stored and written untouched.
     #[getter]
     fn point_constraints<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<u8>>> {
-        let constraints = self.inner.point_constraints.as_ref()?;
+        let constraints = self.inner.point_set.point_constraints.as_ref()?;
         Some(PyArray1::from_slice(py, &constraints.point_constraints))
     }
 
@@ -474,7 +499,7 @@ impl PySfmrReconstruction {
     /// a direction; ``NaN`` on every free and held row. See :attr:`point_constraints`.
     #[getter]
     fn constraint_distances<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        let constraints = self.inner.point_constraints.as_ref()?;
+        let constraints = self.inner.point_set.point_constraints.as_ref()?;
         Some(PyArray1::from_slice(py, &constraints.constraint_distances))
     }
 
@@ -490,7 +515,7 @@ impl PySfmrReconstruction {
         &self,
         py: Python<'py>,
     ) -> Option<Bound<'py, PyArray1<u32>>> {
-        let constraints = self.inner.point_constraints.as_ref()?;
+        let constraints = self.inner.point_set.point_constraints.as_ref()?;
         Some(PyArray1::from_slice(
             py,
             &constraints.constraint_reference_images,
@@ -502,17 +527,23 @@ impl PySfmrReconstruction {
     /// bitmaps, if stored, are not loaded into the cloud).
     #[getter]
     fn patches(&self) -> Option<crate::PyPatchCloud> {
-        let u = self.inner.patch_u_halfvec_xyz.as_ref()?;
-        let v = self.inner.patch_v_halfvec_xyz.as_ref()?;
+        let u = self.inner.point_set.patch_u_halfvec_xyz.as_ref()?;
+        let v = self.inner.point_set.patch_v_halfvec_xyz.as_ref()?;
         // The patch center for each point is the point's own position (a
         // direction for a point at infinity).
-        let centers: Vec<Point3<f64>> = self.inner.points.iter().map(|p| p.position).collect();
+        let centers: Vec<Point3<f64>> = self
+            .inner
+            .point_set
+            .points
+            .iter()
+            .map(|p| p.position)
+            .collect();
         let mut cloud = sfmtool_core::patch::PatchCloud::from_halfvec_arrays(u, v, &centers);
         // from_halfvec_arrays builds every patch finite; mark the rows whose
         // source point is at infinity so rendering treats their corners as
         // directions.
         for (patch, &pid) in cloud.patches.iter_mut().zip(cloud.point_indexes.iter()) {
-            if self.inner.points[pid as usize].is_at_infinity() {
+            if self.inner.point_set.points[pid as usize].is_at_infinity() {
                 patch.w = 0.0;
             }
         }
@@ -525,7 +556,7 @@ impl PySfmrReconstruction {
     /// ``clone_with_changes(patch_bitmaps=…)`` (the patch frame must be present).
     #[getter]
     fn patch_bitmaps<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray4<u8>>> {
-        let b = self.inner.patch_bitmaps_y_x_rgba.as_ref()?;
+        let b = self.inner.point_set.patch_bitmaps_y_x_rgba.as_deref()?;
         Some(b.clone().into_pyarray(py))
     }
 
@@ -534,7 +565,13 @@ impl PySfmrReconstruction {
     /// Image indexes for track observations, shape `(K,)`.
     #[getter]
     fn track_image_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self.inner.tracks.iter().map(|t| t.image_index).collect();
+        let vec: Vec<u32> = self
+            .inner
+            .point_set
+            .tracks
+            .iter()
+            .map(|t| t.image_index)
+            .collect();
         PyArray1::from_vec(py, vec)
     }
 
@@ -551,14 +588,20 @@ impl PySfmrReconstruction {
     /// 3D point indexes for track observations, shape `(K,)`.
     #[getter]
     fn track_point_indexes<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        let vec: Vec<u32> = self.inner.tracks.iter().map(|t| t.point_index).collect();
+        let vec: Vec<u32> = self
+            .inner
+            .point_set
+            .tracks
+            .iter()
+            .map(|t| t.point_index)
+            .collect();
         PyArray1::from_vec(py, vec)
     }
 
     /// Observation counts per 3D point, shape `(M,)`.
     #[getter]
     fn observation_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u32>> {
-        PyArray1::from_vec(py, self.inner.observation_counts.clone())
+        PyArray1::from_vec(py, self.inner.point_set.observation_counts.clone())
     }
 
     /// RGB thumbnails for each image, shape
@@ -569,11 +612,16 @@ impl PySfmrReconstruction {
     fn thumbnails_y_x_rgb<'py>(self_: &Bound<'py, Self>) -> Bound<'py, PyArray4<u8>> {
         // Get a raw pointer to the thumbnail array. This is safe because:
         // 1. #[pyclass] objects are heap-allocated and pinned — the data won't move.
+        //    The array is behind an `Arc`, so its buffer sits in an allocation of
+        //    its own that this object owns a share of, which is at least as
+        //    stable as holding the array inline.
         // 2. The returned numpy array holds a reference to `self_` (via the base/container
         //    object), preventing garbage collection while the view is alive.
         let ptr = {
             let borrow = self_.borrow();
-            &borrow.inner.thumbnails_y_x_rgb as *const ndarray::Array4<u8>
+            // Through the `Arc`: the view must point at the array itself, not
+            // at the pointer that owns it.
+            &*borrow.inner.image_table.thumbnails_y_x_rgb as *const ndarray::Array4<u8>
         };
         unsafe { PyArray4::borrow_from_array(&*ptr, self_.clone().into_any()) }
     }
@@ -583,13 +631,13 @@ impl PySfmrReconstruction {
     /// Depth statistics as a Python dict (serialized via JSON).
     #[getter]
     fn depth_statistics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        serde_to_py(py, &self.inner.depth_statistics)
+        serde_to_py(py, &self.inner.image_table.depth_statistics)
     }
 
     /// Depth histogram counts, shape `(N, num_buckets)`.
     #[getter]
     fn depth_histogram_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u32>> {
-        PyArray2::from_vec2(py, &self.inner.depth_histogram_counts).unwrap()
+        PyArray2::from_vec2(py, &self.inner.image_table.depth_histogram_counts).unwrap()
     }
 
     /// Return a new reconstruction containing only the images at
@@ -627,11 +675,11 @@ impl PySfmrReconstruction {
         let mask_slice = mask.as_slice().map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("mask must be a contiguous array: {e}"))
         })?;
-        if mask_slice.len() != self.inner.points.len() {
+        if mask_slice.len() != self.inner.point_set.points.len() {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "mask length ({}) must match point count ({})",
                 mask_slice.len(),
-                self.inner.points.len()
+                self.inner.point_set.points.len()
             )));
         }
         let filtered = self.inner.filter_points_by_mask(mask_slice);
@@ -833,17 +881,23 @@ impl PySfmrReconstruction {
     #[pyo3(signature = (noise_px=1.0))]
     fn triangulation_diagnostics(&self, py: Python<'_>, noise_px: f64) -> PyResult<Py<PyAny>> {
         let recon = &self.inner;
-        let centers: Vec<Point3<f64>> = recon.images.iter().map(|im| im.camera_center()).collect();
+        let centers: Vec<Point3<f64>> = recon
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.camera_center())
+            .collect();
         let focal_max: Vec<f64> = recon
+            .image_table
             .images
             .iter()
             .map(|im| {
-                let (fx, fy) = recon.cameras[im.camera_index as usize].focal_lengths();
+                let (fx, fy) = recon.image_table.cameras[im.camera_index as usize].focal_lengths();
                 fx.max(fy)
             })
             .collect();
 
-        let m = recon.points.len();
+        let m = recon.point_set.points.len();
         let mut condition_number = vec![f64::NAN; m];
         let mut depth_sigma = vec![f64::NAN; m];
         let mut inverse_depth_z = vec![f64::NAN; m];
@@ -854,7 +908,7 @@ impl PySfmrReconstruction {
         let mut sigma_rad = Vec::new();
         let mut offsets = vec![0usize];
         let mut point_of_track = Vec::new();
-        for (pidx, pt) in recon.points.iter().enumerate() {
+        for (pidx, pt) in recon.point_set.points.iter().enumerate() {
             if pt.is_at_infinity() {
                 continue;
             }
@@ -918,10 +972,10 @@ impl PySfmrReconstruction {
         point_index: usize,
         noise_px: f64,
     ) -> PyResult<Py<PyAny>> {
-        if point_index >= self.inner.points.len() {
+        if point_index >= self.inner.point_set.points.len() {
             return Err(pyo3::exceptions::PyIndexError::new_err(format!(
                 "point index {point_index} out of range (0..{})",
-                self.inner.points.len()
+                self.inner.point_set.points.len()
             )));
         }
         let rep = self
@@ -1042,7 +1096,7 @@ impl PySfmrReconstruction {
     #[getter]
     fn rig_frame_data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         use crate::helpers::rig_frame_data_to_py;
-        match &self.inner.rig_frame_data {
+        match &self.inner.image_table.rig_frame_data {
             Some(rf) => rig_frame_data_to_py(py, rf),
             None => Ok(py.None()),
         }

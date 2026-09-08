@@ -29,6 +29,7 @@ pub(super) fn show_header(
 ) {
     let uses = node
         .recon
+        .image_table
         .images
         .iter()
         .filter(|image| image.camera_index as usize == index)

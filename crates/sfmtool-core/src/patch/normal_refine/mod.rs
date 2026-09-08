@@ -465,7 +465,8 @@ pub fn view_indices_from_reconstruction(
         .iter()
         .map(|&p| {
             let p = p as usize;
-            recon.tracks[recon.observation_offsets[p]..recon.observation_offsets[p + 1]]
+            recon.point_set.tracks
+                [recon.point_set.observation_offsets[p]..recon.point_set.observation_offsets[p + 1]]
                 .iter()
                 .map(|o| o.image_index)
                 .collect()

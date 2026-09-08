@@ -34,12 +34,13 @@ impl SceneRenderer {
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
 
-        let (Some(u_halfvecs), Some(v_halfvecs)) =
-            (&recon.patch_u_halfvec_xyz, &recon.patch_v_halfvec_xyz)
-        else {
+        let (Some(u_halfvecs), Some(v_halfvecs)) = (
+            &recon.point_set.patch_u_halfvec_xyz,
+            &recon.point_set.patch_v_halfvec_xyz,
+        ) else {
             return;
         };
-        let Some(bitmaps) = &recon.patch_bitmaps_y_x_rgba else {
+        let Some(bitmaps) = &recon.point_set.patch_bitmaps_y_x_rgba else {
             return;
         };
         // Tiles must be square and fit the GPU's 2D texture limit; on-disk files
@@ -70,6 +71,7 @@ impl SceneRenderer {
         // buffers are compacted, so an instance's atlas slot is not its point
         // index.
         let n_rows = recon
+            .point_set
             .points
             .len()
             .min(bitmaps.shape()[0])
@@ -157,7 +159,7 @@ impl SceneRenderer {
                 },
             );
 
-            let p = &recon.points[i];
+            let p = &recon.point_set.points[i];
             instances.push(PatchInstance {
                 center: [
                     p.position.x as f32,

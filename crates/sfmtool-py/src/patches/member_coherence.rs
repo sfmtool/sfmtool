@@ -200,7 +200,7 @@ impl PyPatchCloud {
                 .inner
                 .point_indexes
                 .iter()
-                .any(|&p| p as usize >= recon.points.len())
+                .any(|&p| p as usize >= recon.point_set.points.len())
             {
                 return Err(PyValueError::new_err(
                     "patch cloud point_indexes are out of range for this reconstruction \

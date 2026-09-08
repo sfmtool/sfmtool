@@ -52,7 +52,7 @@ impl SfmrReconstruction {
         normal: PatchNormal,
         extent: PatchExtent,
     ) -> Result<Self, ReconstructionError> {
-        if let ObservationSource::EmbeddedPatches { .. } = &self.observations {
+        if let ObservationSource::EmbeddedPatches { .. } = &self.point_set.observations {
             return Err(ReconstructionError::Unsupported(
                 "to_embedded_patches: reconstruction is already embedded_patches; \
                  there is no .sift to copy keypoints from"
@@ -60,7 +60,7 @@ impl SfmrReconstruction {
             ));
         }
 
-        let (feature_indexes, inline_keypoints) = match &self.observations {
+        let (feature_indexes, inline_keypoints) = match &self.point_set.observations {
             ObservationSource::SiftFiles {
                 feature_indexes,
                 keypoints_xy,
@@ -79,10 +79,10 @@ impl SfmrReconstruction {
                 "to_embedded_patches: building patch frames failed: {e}"
             ))
         })?;
-        let (patch_u, patch_v) = cloud.to_halfvec_arrays(self.points.len());
+        let (patch_u, patch_v) = cloud.to_halfvec_arrays(self.point_set.points.len());
 
         // Per-image: a minimal keypoint read plus the source-image identity hash.
-        let n_images = self.images.len();
+        let n_images = self.image_table.images.len();
         let mut positions_per_image: Vec<Vec<[f32; 2]>> = Vec::with_capacity(n_images);
         let mut image_file_hashes: Vec<[u8; 16]> = Vec::with_capacity(n_images);
         for i in 0..n_images {
@@ -92,7 +92,7 @@ impl SfmrReconstruction {
             let positions = match inline_keypoints {
                 Some(_) => Vec::new(),
                 None => {
-                    let count = self.max_track_feature_index[i] as usize + 1;
+                    let count = self.point_set.max_track_feature_index[i] as usize + 1;
                     read_sift_positions(&path, count).map_err(|e| {
                         ReconstructionError::SiftRead {
                             path: path.clone(),
@@ -121,12 +121,12 @@ impl SfmrReconstruction {
 
         // Per-observation keypoints, parallel to `tracks` (and thus to the
         // feature_indexes column), so the existing track ordering is preserved.
-        let m = self.tracks.len();
+        let m = self.point_set.tracks.len();
         let keypoints_xy = match inline_keypoints {
             Some(inline) => inline.clone(),
             None => {
                 let mut keypoints_xy = Array2::<f32>::zeros((m, 2));
-                for (j, obs) in self.tracks.iter().enumerate() {
+                for (j, obs) in self.point_set.tracks.iter().enumerate() {
                     let img = obs.image_index as usize;
                     let fidx = feature_indexes[j] as usize;
                     let pos = positions_per_image[img].get(fidx).ok_or_else(|| {
@@ -147,13 +147,13 @@ impl SfmrReconstruction {
         };
 
         let mut out = self.clone();
-        out.observations = ObservationSource::EmbeddedPatches {
+        out.point_set.observations = ObservationSource::EmbeddedPatches {
             keypoints_xy,
             image_file_hashes,
         };
-        out.metadata.feature_source = out.observations.name().to_string();
-        out.patch_u_halfvec_xyz = Some(patch_u);
-        out.patch_v_halfvec_xyz = Some(patch_v);
+        out.metadata.feature_source = out.point_set.observations.name().to_string();
+        out.point_set.patch_u_halfvec_xyz = Some(patch_u);
+        out.point_set.patch_v_halfvec_xyz = Some(patch_v);
         out.rebuild_derived_fields();
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;

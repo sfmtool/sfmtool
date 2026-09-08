@@ -126,6 +126,7 @@ impl ImageDetail {
                     |feature| {
                         Some(
                             recon
+                                .point_set
                                 .points
                                 .get(feature.point_index as usize)
                                 .map(|p| if p.error.is_finite() { p.error } else { vmax })
@@ -148,6 +149,7 @@ impl ImageDetail {
                     |feature| {
                         Some(
                             recon
+                                .point_set
                                 .observation_counts
                                 .get(feature.point_index as usize)
                                 .copied()
@@ -258,8 +260,9 @@ impl ImageDetail {
                     // Report hover for cross-panel feedback.
                     response.hovered_point = Some(point_idx);
 
-                    if let Some(pt) = recon.points.get(point_idx) {
+                    if let Some(pt) = recon.point_set.points.get(point_idx) {
                         let obs_count = recon
+                            .point_set
                             .observation_counts
                             .get(point_idx)
                             .copied()
@@ -532,7 +535,7 @@ fn compute_error_range(features: &[DisplayFeature], recon: &SfmrReconstruction) 
         if !feature.is_tracked() {
             continue;
         }
-        if let Some(pt) = recon.points.get(feature.point_index as usize) {
+        if let Some(pt) = recon.point_set.points.get(feature.point_index as usize) {
             if pt.error.is_finite() {
                 vmin = vmin.min(pt.error);
                 vmax = vmax.max(pt.error);
@@ -598,6 +601,7 @@ fn compute_track_length_range(
             continue;
         }
         let count = recon
+            .point_set
             .observation_counts
             .get(feature.point_index as usize)
             .copied()

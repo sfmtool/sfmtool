@@ -171,7 +171,7 @@ impl PyPatchCloud {
                 .inner
                 .point_indexes
                 .iter()
-                .any(|&p| p as usize >= recon.points.len())
+                .any(|&p| p as usize >= recon.point_set.points.len())
             {
                 return Err(PyValueError::new_err(
                     "patch cloud point_indexes are out of range for this reconstruction \
@@ -305,8 +305,8 @@ impl PyPatchCloud {
                     // observations all key to the same map entry, so any duplicate
                     // view resolves to the same keypoint (last write wins, harmless).
                     let mut kp_map: std::collections::HashMap<(u32, u32), [f64; 2]> =
-                        std::collections::HashMap::with_capacity(recon.tracks.len());
-                    for (j, obs) in recon.tracks.iter().enumerate() {
+                        std::collections::HashMap::with_capacity(recon.point_set.tracks.len());
+                    for (j, obs) in recon.point_set.tracks.iter().enumerate() {
                         kp_map.insert(
                             (obs.point_index, obs.image_index),
                             [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],
@@ -377,7 +377,7 @@ impl PyPatchCloud {
             // Scatter per source 3D point. In views mode there is no reconstruction
             // point count, so size to the highest referenced point id.
             let npoints = recon_opt
-                .map(|recon| recon.points.len())
+                .map(|recon| recon.point_set.points.len())
                 .unwrap_or_else(|| {
                     self.inner
                         .point_indexes

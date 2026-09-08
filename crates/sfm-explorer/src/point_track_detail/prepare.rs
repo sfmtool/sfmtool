@@ -43,7 +43,7 @@ impl PointTrackDetail {
         self.stored_patch_texture = build_stored_patch_texture(ctx, recon, point_idx);
         self.rendered_patch_textures.clear();
 
-        let point3d = &recon.points[point_idx];
+        let point3d = &recon.point_set.points[point_idx];
         // Keypoints come from one of two sources: SIFT feature positions read
         // into the cache (`sift_files`, via `feature_indexes`) or keypoints
         // stored inline on the reconstruction (`embedded_patches`, via
@@ -52,7 +52,7 @@ impl PointTrackDetail {
         // patch frame into the view (`observation_affine_shape`).
         let feature_indexes = recon.feature_indexes();
         let keypoints_xy = recon.keypoints_xy();
-        let obs_start = recon.observation_offsets[point_idx];
+        let obs_start = recon.point_set.observation_offsets[point_idx];
         let observations = recon.observations_for_point(point_idx);
 
         // Collect world-space rays from each camera center to the point
@@ -62,8 +62,8 @@ impl PointTrackDetail {
         for (k, obs) in observations.iter().enumerate() {
             let img_idx = obs.image_index as usize;
             let obs_global = obs_start + k;
-            let image = &recon.images[img_idx];
-            let camera = &recon.cameras[image.camera_index as usize];
+            let image = &recon.image_table.images[img_idx];
+            let camera = &recon.image_table.cameras[image.camera_index as usize];
 
             // Feature index (SIFT), position, and extents for this observation.
             let (feature_index, feature_xy, feature_extents) = if let Some(fis) = feature_indexes {

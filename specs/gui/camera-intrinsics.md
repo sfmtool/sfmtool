@@ -1052,7 +1052,7 @@ the time, in a way nobody would notice.
 
 `sfmr_format::{RigFrameData, RigsMetadata, RigDefinition, FramesMetadata}` are
 re-exported from `sfmtool-core`, beside `THUMBNAIL_SIZE` and for the same reason:
-`SfmrReconstruction::rig_frame_data` is a public field whose type nothing
+`ImageTable::rig_frame_data` is a public field whose type nothing
 downstream could otherwise name, so reading — or building — a rig meant depending
 on `sfmr-format` directly.
 

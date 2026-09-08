@@ -18,7 +18,7 @@ fn demo_node() -> SceneNode {
 fn available_after_toolbar(cell_width: f32, overlay_mode: OverlayMode) -> egui::Rect {
     let node = demo_node();
     let camera_ref = CameraRef::new(node.id, 0);
-    let camera = &node.recon.cameras[0];
+    let camera = &node.recon.image_table.cameras[0];
     let mut settings = FeatureDisplaySettings {
         overlay_mode,
         ..Default::default()

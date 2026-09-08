@@ -368,8 +368,8 @@ impl PointTrackDetail {
             );
 
             // Draw feature dot overlay: map feature pixel coords to screen coords.
-            let camera_idx = recon.images[img_idx].camera_index as usize;
-            let intrinsics = &recon.cameras[camera_idx];
+            let camera_idx = recon.image_table.images[img_idx].camera_index as usize;
+            let intrinsics = &recon.image_table.cameras[camera_idx];
             let img_w = intrinsics.width as f32;
             let img_h = intrinsics.height as f32;
 
@@ -392,7 +392,12 @@ impl PointTrackDetail {
     /// Load a single thumbnail texture into the cache.
     fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
         let idx = image.index();
-        let color_image = thumbnail_color_image(recon.thumbnails_y_x_rgb.index_axis(Axis(0), idx));
+        let color_image = thumbnail_color_image(
+            recon
+                .image_table
+                .thumbnails_y_x_rgb
+                .index_axis(Axis(0), idx),
+        );
         let texture = ctx.load_texture(
             format!("track_thumb_{idx}"),
             color_image,

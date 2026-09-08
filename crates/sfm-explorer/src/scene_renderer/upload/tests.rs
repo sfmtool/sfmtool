@@ -14,6 +14,8 @@
 //! with its extent, is a validation error, so these tests fail on bad
 //! arithmetic rather than silently accepting it.
 
+use std::sync::Arc;
+
 use std::collections::HashMap;
 
 use ndarray::{Array2, Array4};
@@ -108,7 +110,7 @@ fn demo(points: usize) -> SfmrReconstruction {
 
 /// Replace the single camera so every image resolves to `model`.
 fn with_camera_model(mut recon: SfmrReconstruction, model: CameraModel) -> SfmrReconstruction {
-    recon.cameras = vec![CameraIntrinsics {
+    recon.image_table.cameras = vec![CameraIntrinsics {
         model,
         width: 1920,
         height: 1080,
@@ -162,19 +164,20 @@ fn with_patches(
     }
     let rows = bitmap_rows.unwrap_or(n);
     let cols = bitmap_cols.unwrap_or(resolution);
-    recon.patch_u_halfvec_xyz = Some(u);
-    recon.patch_v_halfvec_xyz = Some(v);
-    recon.patch_bitmaps_y_x_rgba = Some(Array4::<u8>::zeros((rows, resolution, cols, 4)));
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
+    recon.point_set.patch_bitmaps_y_x_rgba =
+        Some(Arc::new(Array4::<u8>::zeros((rows, resolution, cols, 4))));
     recon
 }
 
 /// Swap the observation source to embedded keypoints, so track rays read
 /// inline keypoints instead of the SIFT cache.
 fn with_embedded_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction {
-    let obs_count = recon.tracks.len();
-    recon.observations = ObservationSource::EmbeddedPatches {
+    let obs_count = recon.point_set.tracks.len();
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: Array2::<f32>::from_elem((obs_count, 2), 100.0),
-        image_file_hashes: vec![[0u8; 16]; recon.images.len()],
+        image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
     };
     recon
 }
@@ -199,7 +202,12 @@ fn sift_cache(images: usize, features: usize) -> HashMap<ImageRef, CachedSiftFea
 /// of the implementation so the infinity-ray length assertion is a real check
 /// rather than a restatement of the code under test.
 fn camera_cloud_diagonal(recon: &SfmrReconstruction) -> f64 {
-    let centres: Vec<_> = recon.images.iter().map(|im| im.camera_center()).collect();
+    let centres: Vec<_> = recon
+        .image_table
+        .images
+        .iter()
+        .map(|im| im.camera_center())
+        .collect();
     let axis_span = |f: fn(&nalgebra::Point3<f64>) -> f64| {
         let lo = centres.iter().map(f).fold(f64::INFINITY, f64::min);
         let hi = centres.iter().map(f).fold(f64::NEG_INFINITY, f64::max);
@@ -274,7 +282,7 @@ fn upload_points_counts_instances_and_derives_scene_scale() {
 fn upload_points_handles_an_empty_cloud() {
     let (device, _queue) = device();
     let mut recon = demo(8);
-    recon.points.clear();
+    recon.point_set.points.clear();
     let mut r = SceneRenderer::new();
 
     r.upload_points(&device, RECON, &recon);
@@ -472,9 +480,9 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
     });
     let mut recon = demo(16);
     let images = 25;
-    let template = recon.images[0].clone();
-    recon.images = vec![template; images];
-    recon.thumbnails_y_x_rgb = Array4::zeros((images, 128, 128, 3));
+    let template = recon.image_table.images[0].clone();
+    recon.image_table.images = vec![template; images];
+    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((images, 128, 128, 3)));
     let mut r = SceneRenderer::new();
 
     r.upload_thumbnails(&device, &queue, RECON, &recon);
@@ -496,8 +504,8 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
 fn upload_thumbnails_skips_an_imageless_reconstruction() {
     let (device, queue) = device();
     let mut recon = demo(8);
-    recon.images.clear();
-    recon.thumbnails_y_x_rgb = Array4::zeros((0, 128, 128, 3));
+    recon.image_table.images.clear();
+    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((0, 128, 128, 3)));
     let mut r = SceneRenderer::new();
 
     r.upload_thumbnails(&device, &queue, RECON, &recon);
@@ -549,7 +557,7 @@ fn upload_patches_uploads_nothing_without_patch_arrays() {
 fn upload_patches_skips_frames_without_bitmaps() {
     let (device, queue) = device();
     let mut recon = with_patches(demo(4), 16, &[true; 4], None, None);
-    recon.patch_bitmaps_y_x_rgba = None; // frames present, bitmaps absent
+    recon.point_set.patch_bitmaps_y_x_rgba = None; // frames present, bitmaps absent
     let mut r = SceneRenderer::new();
 
     r.upload_patches(&device, &queue, RECON, &recon);
@@ -1125,8 +1133,8 @@ fn an_aligned_nodes_background_image_stays_in_front_of_the_camera() {
     use super::super::uniforms::bg_image_uniforms;
 
     let recon = SfmrReconstruction::demo(64);
-    let image = &recon.images[3];
-    let camera = &recon.cameras[image.camera_index as usize];
+    let image = &recon.image_table.images[3];
+    let camera = &recon.image_table.cameras[image.camera_index as usize];
 
     // A half-turn: the alignment between two solves that disagree about which
     // way the scene faces, and the one that makes a background image left in
@@ -1266,7 +1274,7 @@ fn resetting_a_node_transform_puts_its_bounds_back() {
 #[test]
 fn track_rays_are_built_through_the_owning_nodes_transform() {
     let recon = demo(4);
-    let cache = sift_cache(recon.images.len(), 8);
+    let cache = sift_cache(recon.image_table.images.len(), 8);
     let t = similarity(2.0);
 
     let native = track_ray_edges(&recon, point(0), &cache, &identity());
@@ -1298,7 +1306,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     // Point 3, not 0: demo sets feature_indexes[i] = i, so a non-zero point
     // makes the obs_start + k -> feature_indexes -> cache lookup chain
     // load-bearing rather than always resolving index 0.
-    let cache = sift_cache(recon.images.len(), 8);
+    let cache = sift_cache(recon.image_table.images.len(), 8);
     let mut r = SceneRenderer::new();
 
     r.upload_track_rays(&device, &recon, point(3), &cache, &identity());
@@ -1311,7 +1319,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
 #[test]
 fn track_rays_for_a_finite_point_stop_near_the_scene() {
     let recon = demo(4);
-    let cache = sift_cache(recon.images.len(), 8);
+    let cache = sift_cache(recon.image_table.images.len(), 8);
 
     let edges = track_ray_edges(&recon, point(0), &cache, &identity());
 
@@ -1348,7 +1356,7 @@ fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
     let (device, _queue) = device();
     let recon = demo(4);
     // Cache present but holding zero features, so every lookup misses.
-    let cache = sift_cache(recon.images.len(), 0);
+    let cache = sift_cache(recon.image_table.images.len(), 0);
     let mut r = SceneRenderer::new();
 
     r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
@@ -1372,9 +1380,9 @@ fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
 #[test]
 fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     let mut recon = demo(4);
-    recon.points[0].w = 0.0;
-    assert!(recon.points[0].is_at_infinity());
-    let cache = sift_cache(recon.images.len(), 8);
+    recon.point_set.points[0].w = 0.0;
+    assert!(recon.point_set.points[0].is_at_infinity());
+    let cache = sift_cache(recon.image_table.images.len(), 8);
 
     let edges = track_ray_edges(&recon, point(0), &cache, &identity());
 
@@ -1398,7 +1406,7 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
 fn clear_track_rays_drops_the_buffer() {
     let (device, _queue) = device();
     let recon = demo(4);
-    let cache = sift_cache(recon.images.len(), 8);
+    let cache = sift_cache(recon.image_table.images.len(), 8);
     let mut r = SceneRenderer::new();
     r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
     assert_eq!(r.track_ray_count, 2);
@@ -1425,7 +1433,7 @@ fn recon_with_real_bg_image(tag: &str) -> (SfmrReconstruction, TempDir) {
 
     let mut recon = demo(4);
     recon.workspace_dir = dir.path().to_path_buf();
-    recon.images[0].name = BG_NAME.to_string();
+    recon.image_table.images[0].name = BG_NAME.to_string();
     (recon, dir)
 }
 

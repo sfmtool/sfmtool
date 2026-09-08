@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use approx::assert_relative_eq;
 use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
@@ -27,7 +28,8 @@ use sfmr_format::{
 
 use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::reconstruction::{
-    ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
+    ImageTable, ObservationSource, Point3D, PointSet, SfmrImage, SfmrReconstruction,
+    TrackObservation,
 };
 
 use super::{
@@ -261,33 +263,37 @@ fn build(
             tracks_xxh128: String::new(),
             content_xxh128: String::new(),
         },
-        cameras: vec![camera],
-        images,
-        points,
-        tracks,
-        observation_counts,
-        thumbnails_y_x_rgb: Array4::zeros((n_images, 1, 1, 3)),
-        depth_statistics: DepthStatistics {
-            num_histogram_buckets: 0,
-            images: Vec::new(),
+        image_table: ImageTable {
+            cameras: vec![camera],
+            images,
+            thumbnails_y_x_rgb: Arc::new(Array4::zeros((n_images, 1, 1, 3))),
+            depth_statistics: DepthStatistics {
+                num_histogram_buckets: 0,
+                images: Vec::new(),
+            },
+            depth_histogram_counts: Vec::new(),
+            rig_frame_data: None,
         },
-        depth_histogram_counts: Vec::new(),
-        rig_frame_data: None,
-        patch_u_halfvec_xyz: None,
-        patch_v_halfvec_xyz: None,
-        patch_bitmaps_y_x_rgba: None,
-        has_normals: false,
-        normal_confidence: None,
-        point_constraints: None,
-        observation_confidence: None,
-        observations: ObservationSource::EmbeddedPatches {
-            keypoints_xy,
-            image_file_hashes: vec![[0u8; 16]; n_images],
+        point_set: PointSet {
+            points,
+            tracks,
+            observation_counts,
+            patch_u_halfvec_xyz: None,
+            patch_v_halfvec_xyz: None,
+            patch_bitmaps_y_x_rgba: None,
+            has_normals: false,
+            normal_confidence: None,
+            point_constraints: None,
+            observation_confidence: None,
+            observations: ObservationSource::EmbeddedPatches {
+                keypoints_xy,
+                image_file_hashes: vec![[0u8; 16]; n_images],
+            },
+            observation_offsets: Vec::new(),
+            image_feature_to_point: Vec::new(),
+            max_track_feature_index: Vec::new(),
+            infinity_point_count: 0,
         },
-        observation_offsets: Vec::new(),
-        image_feature_to_point: Vec::new(),
-        max_track_feature_index: Vec::new(),
-        infinity_point_count: 0,
     };
     recon.rebuild_derived_fields();
     recon
@@ -307,13 +313,15 @@ fn angle_deg(a: &UnitQuaternion<f64>, b: &UnitQuaternion<f64>) -> f64 {
 /// observations the hold-out is supposed to be blind to.
 fn corrupt_observations(recon: &mut SfmrReconstruction, image_index: usize) {
     let rows: Vec<usize> = recon
+        .point_set
         .tracks
         .iter()
         .enumerate()
         .filter(|(_, t)| t.image_index as usize == image_index)
         .map(|(row, _)| row)
         .collect();
-    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.observations else {
+    let ObservationSource::EmbeddedPatches { keypoints_xy, .. } = &mut recon.point_set.observations
+    else {
         unreachable!("the fixtures are embedded_patches");
     };
     for (n, row) in rows.into_iter().enumerate() {
@@ -328,14 +336,14 @@ fn corrupt_observations(recon: &mut SfmrReconstruction, image_index: usize) {
 fn a_perturbed_pose_is_recovered_from_held_out_structure() {
     let truth = orbit();
     let target = 0;
-    let true_pose = truth.images[target].clone();
+    let true_pose = truth.image_table.images[target].clone();
 
     let mut source = truth.clone();
     // A pose that is wrong by tens of degrees and a substantial fraction of the
     // scene: the disagreement this feature exists to show.
     let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.35);
-    source.images[target].quaternion_wxyz = spin * true_pose.quaternion_wxyz;
-    source.images[target].translation_xyz =
+    source.image_table.images[target].quaternion_wxyz = spin * true_pose.quaternion_wxyz;
+    source.image_table.images[target].translation_xyz =
         true_pose.translation_xyz + Vector3::new(0.6, -0.3, 0.2);
 
     let out = resect_image(
@@ -348,7 +356,7 @@ fn a_perturbed_pose_is_recovered_from_held_out_structure() {
     assert!(out.report.accepted, "refused: {:?}", out.report.refusal);
     assert!(out.report.correspondences >= 100);
 
-    let fitted = &out.reconstruction.images[target];
+    let fitted = &out.reconstruction.image_table.images[target];
     assert!(
         angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.1,
         "rotation off by {}",
@@ -370,7 +378,7 @@ fn a_perturbed_pose_is_recovered_from_held_out_structure() {
 
     // The source is untouched under every outcome.
     assert_eq!(
-        source.images[target].quaternion_wxyz,
+        source.image_table.images[target].quaternion_wxyz,
         spin * true_pose.quaternion_wxyz
     );
 }
@@ -384,7 +392,7 @@ fn the_hold_out_never_reads_the_targets_own_observations() {
     // so the estimate must be refused — and the held-out positions, which come
     // from the other seven cameras alone, must still be the truth.
     corrupt_observations(&mut source, target);
-    source.images[target].translation_xyz += Vector3::new(3.0, 3.0, 3.0);
+    source.image_table.images[target].translation_xyz += Vector3::new(3.0, 3.0, 3.0);
 
     let out = resect_image(
         &source,
@@ -400,9 +408,10 @@ fn the_hold_out_never_reads_the_targets_own_observations() {
 
     let worst = out
         .reconstruction
+        .point_set
         .points
         .iter()
-        .zip(&truth.points)
+        .zip(&truth.point_set.points)
         .map(|(a, b)| (a.position - b.position).norm())
         .fold(0.0, f64::max);
     // Not zero: the fixture stores its keypoints as `f32`, so a position
@@ -418,18 +427,19 @@ fn the_same_input_gives_a_bit_identical_answer() {
     let one = resect_image(&source, 2, ResectSource::StoredObservations, &options).unwrap();
     let two = resect_image(&source, 2, ResectSource::StoredObservations, &options).unwrap();
     assert_eq!(
-        one.reconstruction.images[2].quaternion_wxyz,
-        two.reconstruction.images[2].quaternion_wxyz
+        one.reconstruction.image_table.images[2].quaternion_wxyz,
+        two.reconstruction.image_table.images[2].quaternion_wxyz
     );
     assert_eq!(
-        one.reconstruction.images[2].translation_xyz,
-        two.reconstruction.images[2].translation_xyz
+        one.reconstruction.image_table.images[2].translation_xyz,
+        two.reconstruction.image_table.images[2].translation_xyz
     );
     for (a, b) in one
         .reconstruction
+        .point_set
         .points
         .iter()
-        .zip(&two.reconstruction.points)
+        .zip(&two.reconstruction.point_set.points)
     {
         assert_eq!(a.position, b.position);
     }
@@ -441,8 +451,9 @@ fn the_same_input_gives_a_bit_identical_answer() {
 /// Perturb one image of `recon` by a rotation about `axis` and a fixed shift.
 fn perturbed(mut recon: SfmrReconstruction, target: usize, angle: f64) -> SfmrReconstruction {
     let spin = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle);
-    recon.images[target].quaternion_wxyz = spin * recon.images[target].quaternion_wxyz;
-    recon.images[target].translation_xyz += Vector3::new(0.6, -0.3, 0.2);
+    recon.image_table.images[target].quaternion_wxyz =
+        spin * recon.image_table.images[target].quaternion_wxyz;
+    recon.image_table.images[target].translation_xyz += Vector3::new(0.6, -0.3, 0.2);
     recon
 }
 
@@ -450,7 +461,10 @@ fn perturbed(mut recon: SfmrReconstruction, target: usize, angle: f64) -> SfmrRe
 fn two_targets_held_out_together_both_recover() {
     let truth = orbit();
     let targets = [0usize, 1usize];
-    let true_poses: Vec<SfmrImage> = targets.iter().map(|&t| truth.images[t].clone()).collect();
+    let true_poses: Vec<SfmrImage> = targets
+        .iter()
+        .map(|&t| truth.image_table.images[t].clone())
+        .collect();
 
     let mut source = truth.clone();
     source = perturbed(source, targets[0], 0.35);
@@ -474,7 +488,7 @@ fn two_targets_held_out_together_both_recover() {
     );
     for (report, truth_pose) in out.reports.iter().zip(&true_poses) {
         assert_eq!(report.image_index, truth_pose_index(&truth, truth_pose));
-        let fitted = &out.reconstruction.images[report.image_index];
+        let fitted = &out.reconstruction.image_table.images[report.image_index];
         assert!(
             angle_deg(&fitted.quaternion_wxyz, &truth_pose.quaternion_wxyz) < 0.1,
             "{} rotation off by {}",
@@ -496,8 +510,8 @@ fn two_targets_held_out_together_both_recover() {
     // The source is untouched under every outcome.
     for &t in &targets {
         assert_ne!(
-            source.images[t].quaternion_wxyz,
-            truth.images[t].quaternion_wxyz
+            source.image_table.images[t].quaternion_wxyz,
+            truth.image_table.images[t].quaternion_wxyz
         );
     }
 }
@@ -513,7 +527,7 @@ fn the_hold_out_ignores_every_target_not_just_one() {
     let mut source = truth.clone();
     for &t in &targets {
         corrupt_observations(&mut source, t);
-        source.images[t].translation_xyz += Vector3::new(3.0, 3.0, 3.0);
+        source.image_table.images[t].translation_xyz += Vector3::new(3.0, 3.0, 3.0);
     }
 
     let out = resect_images(
@@ -540,9 +554,10 @@ fn the_hold_out_ignores_every_target_not_just_one() {
 
     let worst = out
         .reconstruction
+        .point_set
         .points
         .iter()
-        .zip(&truth.points)
+        .zip(&truth.point_set.points)
         .map(|(a, b)| (a.position - b.position).norm())
         .fold(0.0, f64::max);
     // Not zero: the fixture stores its keypoints as `f32`, so a position
@@ -597,6 +612,7 @@ fn a_set_that_leaves_too_few_posed_images_is_refused() {
 /// The index of the image `pose` came from, by name.
 fn truth_pose_index(recon: &SfmrReconstruction, pose: &SfmrImage) -> usize {
     recon
+        .image_table
         .images
         .iter()
         .position(|i| i.name == pose.name)
@@ -622,11 +638,11 @@ fn dome() -> SfmrReconstruction {
 fn a_rotation_only_reconstruction_recovers_a_perturbed_rotation() {
     let truth = dome();
     let target = 0;
-    let true_rotation = truth.images[target].quaternion_wxyz;
-    let stored_translation = truth.images[target].translation_xyz;
+    let true_rotation = truth.image_table.images[target].quaternion_wxyz;
+    let stored_translation = truth.image_table.images[target].translation_xyz;
 
     let mut source = truth.clone();
-    source.images[target].quaternion_wxyz =
+    source.image_table.images[target].quaternion_wxyz =
         UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.2) * true_rotation;
 
     let out = resect_image(
@@ -641,7 +657,7 @@ fn a_rotation_only_reconstruction_recovers_a_perturbed_rotation() {
     assert!(out.report.scene_scale.is_none());
     assert_eq!(out.report.held_out_points, 0);
 
-    let fitted = &out.reconstruction.images[target];
+    let fitted = &out.reconstruction.image_table.images[target];
     assert!(
         angle_deg(&fitted.quaternion_wxyz, &true_rotation) < 0.05,
         "rotation off by {}",
@@ -656,7 +672,7 @@ fn a_rotation_only_reconstruction_recovers_a_perturbed_rotation() {
 #[test]
 fn an_out_of_range_image_is_refused() {
     let source = orbit();
-    let count = source.images.len();
+    let count = source.image_table.images.len();
     let err = resect_image(
         &source,
         count,
@@ -694,16 +710,18 @@ fn too_few_held_out_points_and_no_bearings_is_refused() {
     // image: nothing is left to hold out against.
     let target = 0;
     let mine: std::collections::HashSet<u32> = source
+        .point_set
         .tracks
         .iter()
         .filter(|t| t.image_index as usize == target)
         .map(|t| t.point_index)
         .collect();
-    let keep: Vec<bool> = (0..source.points.len())
+    let keep: Vec<bool> = (0..source.point_set.points.len())
         .map(|p| mine.contains(&(p as u32)))
         .collect();
     source = source.filter_points_by_mask(&keep);
     let rows: Vec<usize> = source
+        .point_set
         .tracks
         .iter()
         .enumerate()
@@ -747,7 +765,7 @@ fn bearings_that_span_no_angle_are_refused() {
         .map(|i| Point3::from(one + Vector3::new(0.0, 1e-9 * i as f64, 0.0)))
         .collect();
     let source = build(images, positions, true, 250.0);
-    assert!(source.points.len() >= super::MIN_BEARINGS);
+    assert!(source.point_set.points.len() >= super::MIN_BEARINGS);
 
     let out = resect_image(
         &source,
@@ -764,7 +782,7 @@ fn bearings_that_span_no_angle_are_refused() {
 #[test]
 fn an_unposed_target_is_refused() {
     let mut source = orbit();
-    source.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
+    source.image_table.images[1].translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     let err = resect_image(
         &source,
         1,
@@ -796,27 +814,27 @@ fn a_matches_join_needs_feature_indexes() {
 /// derived indexes. Used to starve a target of held-out support.
 fn drop_all_but(mut recon: SfmrReconstruction, rows: &[usize]) -> SfmrReconstruction {
     let set: std::collections::HashSet<usize> = rows.iter().copied().collect();
-    let kept: Vec<usize> = (0..recon.tracks.len())
+    let kept: Vec<usize> = (0..recon.point_set.tracks.len())
         .filter(|r| set.contains(r))
         .collect();
-    let tracks: Vec<TrackObservation> = kept.iter().map(|&r| recon.tracks[r]).collect();
-    let mut counts = vec![0u32; recon.points.len()];
+    let tracks: Vec<TrackObservation> = kept.iter().map(|&r| recon.point_set.tracks[r]).collect();
+    let mut counts = vec![0u32; recon.point_set.points.len()];
     for track in &tracks {
         counts[track.point_index as usize] += 1;
     }
     let ObservationSource::EmbeddedPatches {
         keypoints_xy,
         image_file_hashes,
-    } = &recon.observations
+    } = &recon.point_set.observations
     else {
         unreachable!("the fixtures are embedded_patches");
     };
-    recon.observations = ObservationSource::EmbeddedPatches {
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
         keypoints_xy: keypoints_xy.select(ndarray::Axis(0), &kept),
         image_file_hashes: image_file_hashes.clone(),
     };
-    recon.tracks = tracks;
-    recon.observation_counts = counts;
+    recon.point_set.tracks = tracks;
+    recon.point_set.observation_counts = counts;
     recon.rebuild_derived_fields();
     recon
 }
@@ -884,6 +902,7 @@ const INFINITY_SOLVE: &str = r"C:\DataSets\workspace-prep\evo-survey-20260823\re
 fn report_of(path: &str, image: &str) -> super::ResectImageReport {
     let recon = SfmrReconstruction::load(std::path::Path::new(path)).expect("load");
     let index = recon
+        .image_table
         .images
         .iter()
         .position(|i| i.name == image)
@@ -934,23 +953,28 @@ fn resects_the_adjudicated_far_frame() {
 #[ignore = "reads a candidate solve from outside the repository"]
 fn resects_a_member_of_the_infinity_candidate() {
     let recon = SfmrReconstruction::load(std::path::Path::new(INFINITY_SOLVE)).expect("load");
-    let infinity = recon.points.iter().filter(|p| p.is_at_infinity()).count();
+    let infinity = recon
+        .point_set
+        .points
+        .iter()
+        .filter(|p| p.is_at_infinity())
+        .count();
     println!(
         "{} images, {} points ({infinity} at infinity), {} observations",
-        recon.images.len(),
-        recon.points.len(),
-        recon.tracks.len()
+        recon.image_table.images.len(),
+        recon.point_set.points.len(),
+        recon.point_set.tracks.len()
     );
     // Whichever image carries the most observations — the best-supported member.
     let mut counts: HashMap<usize, usize> = HashMap::new();
-    for track in &recon.tracks {
+    for track in &recon.point_set.tracks {
         *counts.entry(track.image_index as usize).or_default() += 1;
     }
     let mut ranked: Vec<(usize, usize)> = counts.into_iter().collect();
     ranked.sort_by_key(|&(image, n)| (std::cmp::Reverse(n), image));
     for &(image, n) in ranked.iter().take(3) {
         println!("  candidate image {image} ({n} observations)");
-        let name = recon.images[image].name.clone();
+        let name = recon.image_table.images[image].name.clone();
         let report = report_of(INFINITY_SOLVE, &name);
         // Every point of this candidate is a bearing, so there is no finite
         // support at all and the rotation-only path is the only one available.
@@ -959,7 +983,7 @@ fn resects_a_member_of_the_infinity_candidate() {
         assert!(report.scene_scale.is_none());
     }
     assert_eq!(recon.metadata.feature_source, FEATURE_SOURCE_SIFT_FILES);
-    assert_eq!(infinity, recon.points.len());
+    assert_eq!(infinity, recon.point_set.points.len());
 }
 
 /// [`super::scene_scale`] takes the crate's median, which **averages the two
@@ -994,7 +1018,7 @@ fn scene_scale_averages_the_two_middles_of_an_even_population() {
     let recon = build(images, positions, false, 800.0);
     // Every point has to have survived, or the population is not the one the
     // table above describes.
-    assert_eq!(recon.points.len(), 4);
+    assert_eq!(recon.point_set.points.len(), 4);
 
     let scale = super::scene_scale(&recon).expect("finite structure has a scale");
     assert_relative_eq!(scale, 3.0, epsilon = 1e-12);

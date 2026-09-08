@@ -10,6 +10,7 @@
 //! a data *generator*, not part of the data model.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::Array4;
@@ -22,8 +23,8 @@ use sfmr_format::{
 use crate::camera::CameraIntrinsics;
 
 use super::{
-    compute_observation_offsets, count_points_at_infinity, ObservationSource, Point3D, SfmrImage,
-    SfmrReconstruction, TrackObservation,
+    compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
+    PointSet, SfmrImage, SfmrReconstruction, TrackObservation,
 };
 
 impl SfmrReconstruction {
@@ -202,23 +203,8 @@ impl SfmrReconstruction {
 
         let infinity_point_count = count_points_at_infinity(&points);
         SfmrReconstruction {
-            infinity_point_count,
             workspace_dir: PathBuf::new(),
             metadata,
-            rig_frame_data: None,
-            patch_u_halfvec_xyz: None,
-            patch_v_halfvec_xyz: None,
-            patch_bitmaps_y_x_rgba: None,
-            has_normals: true,
-            normal_confidence: None,
-            point_constraints: None,
-            observation_confidence: None,
-            observations: ObservationSource::SiftFiles {
-                feature_indexes,
-                keypoints_xy: None,
-                feature_tool_hashes: vec![[0u8; 16]; num_images],
-                sift_content_hashes: vec![[0u8; 16]; num_images],
-            },
             content_hash: ContentHash {
                 metadata_xxh128: String::new(),
                 cameras_xxh128: String::new(),
@@ -229,17 +215,36 @@ impl SfmrReconstruction {
                 tracks_xxh128: String::new(),
                 content_xxh128: String::new(),
             },
-            cameras,
-            images,
-            points,
-            tracks,
-            observation_counts,
-            observation_offsets,
-            thumbnails_y_x_rgb: Array4::zeros((num_images, 128, 128, 3)),
-            depth_statistics,
-            depth_histogram_counts,
-            image_feature_to_point,
-            max_track_feature_index,
+            image_table: ImageTable {
+                cameras,
+                images,
+                thumbnails_y_x_rgb: Arc::new(Array4::zeros((num_images, 128, 128, 3))),
+                depth_statistics,
+                depth_histogram_counts,
+                rig_frame_data: None,
+            },
+            point_set: PointSet {
+                infinity_point_count,
+                patch_u_halfvec_xyz: None,
+                patch_v_halfvec_xyz: None,
+                patch_bitmaps_y_x_rgba: None,
+                has_normals: true,
+                normal_confidence: None,
+                point_constraints: None,
+                observation_confidence: None,
+                observations: ObservationSource::SiftFiles {
+                    feature_indexes,
+                    keypoints_xy: None,
+                    feature_tool_hashes: vec![[0u8; 16]; num_images],
+                    sift_content_hashes: vec![[0u8; 16]; num_images],
+                },
+                points,
+                tracks,
+                observation_counts,
+                observation_offsets,
+                image_feature_to_point,
+                max_track_feature_index,
+            },
         }
     }
 }

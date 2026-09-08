@@ -627,7 +627,7 @@ fn frame_description(state: &AppState, viewer: &Viewer3D) -> String {
         .and_then(|camera_view| {
             state
                 .node(camera_view.image.recon)
-                .and_then(|node| node.recon.images.get(camera_view.image.index()))
+                .and_then(|node| node.recon.image_table.images.get(camera_view.image.index()))
         })
         .map(|image| format!(", looking through {}", image.name))
         .unwrap_or_default();
@@ -688,17 +688,18 @@ pub(super) fn resolve_camera_image(
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
     let index = match selector {
         CameraImageSel::Index(index) => {
-            if *index >= node.recon.images.len() {
+            if *index >= node.recon.image_table.images.len() {
                 return Err(ToolError::new(format!(
                     "{} has {} camera images — index {index} is out of range.",
                     node.label,
-                    node.recon.images.len()
+                    node.recon.image_table.images.len()
                 )));
             }
             *index
         }
         CameraImageSel::Name(name) => node
             .recon
+            .image_table
             .images
             .iter()
             .position(|image| image.name == *name)
@@ -723,11 +724,11 @@ pub(super) fn resolve_camera_intrinsics(
     let node = state
         .node(reconstruction)
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
-    if index >= node.recon.cameras.len() {
+    if index >= node.recon.image_table.cameras.len() {
         return Err(ToolError::new(format!(
             "{} has {} camera intrinsics records — index {index} is out of range.",
             node.label,
-            node.recon.cameras.len()
+            node.recon.image_table.cameras.len()
         )));
     }
     Ok(CameraRef::new(reconstruction, index))

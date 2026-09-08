@@ -623,7 +623,7 @@ fn demo_panel_fixture() -> (
         std::path::Path::new("/runs/demo.sfmr"),
         sfmtool_core::SfmrReconstruction::demo(64),
     );
-    let camera = &node.recon.cameras[0];
+    let camera = &node.recon.image_table.cameras[0];
     let (w, h) = (
         f32::from(camera.width as u16),
         f32::from(camera.height as u16),
@@ -631,7 +631,7 @@ fn demo_panel_fixture() -> (
     // A tiny stand-in for the photograph: the panel only uploads it.
     let image = ImageU8::new(8, 8, 3, vec![90u8; 8 * 8 * 3]);
     // Features spread over the frame, one per tracked keypoint index.
-    let count = node.recon.image_feature_to_point[0].len().max(1);
+    let count = node.recon.point_set.image_feature_to_point[0].len().max(1);
     let sift = crate::state::CachedSiftFeatures {
         positions_xy: (0..count)
             .map(|i| {

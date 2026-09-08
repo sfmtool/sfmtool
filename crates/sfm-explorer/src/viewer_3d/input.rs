@@ -72,11 +72,12 @@ impl Viewer3D {
         let name = state
             .selected_image
             .filter(|i| i.recon == current)
-            .and_then(|i| state.scene[from].recon.images.get(i.index()))
+            .and_then(|i| state.scene[from].recon.image_table.images.get(i.index()))
             .map(|image| image.name.clone());
         let carried = name.and_then(|name| {
             state.scene[to]
                 .recon
+                .image_table
                 .images
                 .iter()
                 .position(|image| image.name == name)
@@ -516,8 +517,8 @@ impl Viewer3D {
             // Stepping stays inside `recon_id`: an image or camera view
             // belonging to another node is not a position in this sequence, so
             // it reads as "nothing selected" and stepping starts from the top.
-            if !reconstruction.images.is_empty() {
-                let n = reconstruction.images.len();
+            if !reconstruction.image_table.images.is_empty() {
+                let n = reconstruction.image_table.images.len();
                 let in_camera_view = self.camera_view.is_some();
                 let cur = self
                     .camera_view

@@ -90,7 +90,7 @@ pub(crate) fn compute_point_diagnostics(
 ) -> (f32, f32) {
     use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 
-    let Some(pt) = recon.points.get(point_idx) else {
+    let Some(pt) = recon.point_set.points.get(point_idx) else {
         return (f32::NAN, f32::NAN);
     };
     if pt.is_at_infinity() {
@@ -103,7 +103,7 @@ pub(crate) fn compute_point_diagnostics(
     let mut sigma = Vec::with_capacity(observations.len());
     for obs in observations {
         let img_idx = obs.image_index as usize;
-        let Some(image) = recon.images.get(img_idx) else {
+        let Some(image) = recon.image_table.images.get(img_idx) else {
             continue;
         };
         let center = image.camera_center();
@@ -112,7 +112,7 @@ pub(crate) fn compute_point_diagnostics(
         if len > 1e-12 {
             dirs.push(dir / len);
             centers.push(center);
-            let (fx, fy) = recon.cameras[image.camera_index as usize].focal_lengths();
+            let (fx, fy) = recon.image_table.cameras[image.camera_index as usize].focal_lengths();
             sigma.push(noise / fx.max(fy));
         }
     }

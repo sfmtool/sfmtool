@@ -406,9 +406,11 @@ impl PatchCloud {
         exclude_points_at_infinity: bool,
     ) -> Result<Self, PatchCloudError> {
         // Per-point geometry.
-        let positions: Vec<Point3<f64>> = recon.points.iter().map(|p| p.position).collect();
-        let weights: Vec<f64> = recon.points.iter().map(|p| p.w).collect();
+        let positions: Vec<Point3<f64>> =
+            recon.point_set.points.iter().map(|p| p.position).collect();
+        let weights: Vec<f64> = recon.point_set.points.iter().map(|p| p.w).collect();
         let stored_normals: Vec<Vector3<f64>> = recon
+            .point_set
             .points
             .iter()
             .map(|p| Vector3::new(p.normal.x as f64, p.normal.y as f64, p.normal.z as f64))
@@ -416,18 +418,32 @@ impl PatchCloud {
 
         // Per-observation image index (flat, grouped by point — `recon.tracks` is
         // sorted by point then image, so `observation_offsets` groups it).
-        let obs_images: Vec<u32> = recon.tracks.iter().map(|o| o.image_index).collect();
+        let obs_images: Vec<u32> = recon
+            .point_set
+            .tracks
+            .iter()
+            .map(|o| o.image_index)
+            .collect();
 
         // Per-image pose + camera model (the image's camera, cloned per image so
         // the shared routine indexes everything by image).
-        let cam_quats: Vec<UnitQuaternion<f64>> =
-            recon.images.iter().map(|im| im.quaternion_wxyz).collect();
-        let cam_translations: Vec<Vector3<f64>> =
-            recon.images.iter().map(|im| im.translation_xyz).collect();
-        let cam_intrinsics: Vec<CameraIntrinsics> = recon
+        let cam_quats: Vec<UnitQuaternion<f64>> = recon
+            .image_table
             .images
             .iter()
-            .map(|im| recon.cameras[im.camera_index as usize].clone())
+            .map(|im| im.quaternion_wxyz)
+            .collect();
+        let cam_translations: Vec<Vector3<f64>> = recon
+            .image_table
+            .images
+            .iter()
+            .map(|im| im.translation_xyz)
+            .collect();
+        let cam_intrinsics: Vec<CameraIntrinsics> = recon
+            .image_table
+            .images
+            .iter()
+            .map(|im| recon.image_table.cameras[im.camera_index as usize].clone())
             .collect();
 
         // FeatureSize is the one policy that reads the workspace `.sift` files:
@@ -448,12 +464,12 @@ impl PatchCloud {
         // `sec θ` magnification of its image plane that a bare range reading drops.
         let obs_scales: Vec<Option<f64>> = if matches!(extent, PatchExtent::FeatureSize { .. }) {
             let feature_indexes = recon.feature_indexes();
-            let img_scales: Vec<Option<Vec<f64>>> = (0..recon.images.len())
+            let img_scales: Vec<Option<Vec<f64>>> = (0..recon.image_table.images.len())
                 .map(|i| read_image_scales(recon, i))
                 .collect();
-            (0..recon.tracks.len())
+            (0..recon.point_set.tracks.len())
                 .map(|j| {
-                    let img = recon.tracks[j].image_index as usize;
+                    let img = recon.point_set.tracks[j].image_index as usize;
                     feature_indexes.map(|f| f[j]).and_then(|feature_index| {
                         img_scales
                             .get(img)
@@ -470,7 +486,7 @@ impl PatchCloud {
             positions: &positions,
             weights: &weights,
             stored_normals: &stored_normals,
-            obs_offsets: &recon.observation_offsets,
+            obs_offsets: &recon.point_set.observation_offsets,
             obs_images: &obs_images,
             obs_scales: &obs_scales,
             cam_quats: &cam_quats,
@@ -1063,7 +1079,7 @@ impl Default for PatchExtent {
 /// Per-feature keypoint scales (column-0 norm of the affine shape) read from an
 /// image's `.sift` file, or `None` if it cannot be read.
 fn read_image_scales(recon: &SfmrReconstruction, image_index: usize) -> Option<Vec<f64>> {
-    let read_count = *recon.max_track_feature_index.get(image_index)? as usize + 1;
+    let read_count = *recon.point_set.max_track_feature_index.get(image_index)? as usize + 1;
     let path = recon.sift_path_for_image(image_index);
     let data = sift_format::read_sift_partial(&path, read_count).ok()?;
     let aff = &data.affine_shapes;

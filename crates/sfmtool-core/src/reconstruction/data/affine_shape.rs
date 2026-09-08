@@ -38,9 +38,9 @@ impl SfmrReconstruction {
         image_index: usize,
         keypoint_xy: [f32; 2],
     ) -> Option<[[f32; 2]; 2]> {
-        let u_arr = self.patch_u_halfvec_xyz.as_ref()?;
-        let v_arr = self.patch_v_halfvec_xyz.as_ref()?;
-        let point = self.points.get(point_idx)?;
+        let u_arr = self.point_set.patch_u_halfvec_xyz.as_ref()?;
+        let v_arr = self.point_set.patch_v_halfvec_xyz.as_ref()?;
+        let point = self.point_set.points.get(point_idx)?;
         let u = Vector3::new(
             u_arr[[point_idx, 0]] as f64,
             u_arr[[point_idx, 1]] as f64,
@@ -55,8 +55,8 @@ impl SfmrReconstruction {
             return None; // no patch for this point
         }
 
-        let image = self.images.get(image_index)?;
-        let camera = self.cameras.get(image.camera_index as usize)?;
+        let image = self.image_table.images.get(image_index)?;
+        let camera = self.image_table.cameras.get(image.camera_index as usize)?;
         let r = image.quaternion_wxyz.to_rotation_matrix();
 
         // Where to evaluate the frame. For a point at infinity the patch is
@@ -119,7 +119,7 @@ impl SfmrReconstruction {
         let keypoints_xy = self.keypoints_xy()?;
         let mut out = vec![0.0f32; self.point_count()];
         for (point_idx, slot) in out.iter_mut().enumerate() {
-            let start = self.observation_offsets[point_idx];
+            let start = self.point_set.observation_offsets[point_idx];
             let mut max_size = 0.0f32;
             for (k, obs) in self.observations_for_point(point_idx).iter().enumerate() {
                 let obs_global = start + k;

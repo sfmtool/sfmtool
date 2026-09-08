@@ -379,11 +379,12 @@ impl ImageDetail {
             intrinsics_display.enabled = !intrinsics_display.enabled;
         }
         let camera_ref = recon
+            .image_table
             .images
             .get(img_idx)
             .map(|image| CameraRef::new(recon_id, image.camera_index as usize));
         let camera = camera_ref
-            .and_then(|camera_ref| recon.cameras.get(camera_ref.index()))
+            .and_then(|camera_ref| recon.image_table.cameras.get(camera_ref.index()))
             .cloned();
         let view = View {
             origin: image_rect.min,
@@ -482,7 +483,7 @@ impl ImageDetail {
             return;
         }
 
-        let feature_to_point = &recon.image_feature_to_point[img_idx];
+        let feature_to_point = &recon.point_set.image_feature_to_point[img_idx];
         if feature_to_point.is_empty() || cached_sift.is_none() {
             self.feature_overlay = Some(FeatureOverlayState {
                 image,
@@ -599,7 +600,7 @@ impl ImageDetail {
             return;
         };
 
-        let feature_to_point = &recon.image_feature_to_point[img_idx];
+        let feature_to_point = &recon.point_set.image_feature_to_point[img_idx];
         let num_features = cached.positions_xy.len();
 
         // Apply max_features limit
@@ -720,8 +721,8 @@ fn embedded_image_features(recon: &SfmrReconstruction, img_idx: usize) -> Vec<Di
         return Vec::new();
     };
     let mut features = Vec::new();
-    for point_idx in 0..recon.points.len() {
-        let obs_start = recon.observation_offsets[point_idx];
+    for point_idx in 0..recon.point_set.points.len() {
+        let obs_start = recon.point_set.observation_offsets[point_idx];
         for (k, obs) in recon.observations_for_point(point_idx).iter().enumerate() {
             if obs.image_index as usize == img_idx {
                 let row = obs_start + k;
@@ -779,7 +780,7 @@ fn populate_feature_diagnostics(
 /// Compute the max pairwise angle (degrees) between world-space rays from
 /// observing cameras to a 3D point. Single-observation points return 0.0.
 fn compute_max_track_angle_deg(recon: &SfmrReconstruction, point_idx: usize) -> f32 {
-    let Some(pt) = recon.points.get(point_idx) else {
+    let Some(pt) = recon.point_set.points.get(point_idx) else {
         return f32::NAN;
     };
     let point_pos = pt.position;
@@ -787,7 +788,7 @@ fn compute_max_track_angle_deg(recon: &SfmrReconstruction, point_idx: usize) -> 
     let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
     for obs in observations {
         let img_idx = obs.image_index as usize;
-        let Some(image) = recon.images.get(img_idx) else {
+        let Some(image) = recon.image_table.images.get(img_idx) else {
             continue;
         };
         let cam_center = image.camera_center();

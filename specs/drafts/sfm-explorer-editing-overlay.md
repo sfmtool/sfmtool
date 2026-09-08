@@ -6,8 +6,9 @@ Answers Part 4 of [`sfm-explorer-editing.md`](sfm-explorer-editing.md), the
 umbrella draft for editing a loaded reconstruction in place, which poses the
 row-level edit problem without solving it. That draft's Part 4 links here and
 shrinks to a pointer; when this ships, its content files into
-`core/reconstruction/edited-reconstruction.md`, and the umbrella's steps 2
-and 3 are deleted.
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md),
+alongside the plain value that spec already describes, and the umbrella's
+step 3 is deleted.
 
 A reconstruction in memory is a million points and ten million track
 observations, stored as sorted columns with a prefix-sum index (CSR), and the
@@ -62,12 +63,12 @@ pub struct EditedReconstruction {
 }
 ```
 
-Under it, `SfmrReconstruction` splits into an image table and a `PointSet`,
-so the base's point side and the additions are one type and every per-point
-algorithm takes a `PointSet` and an image table rather than the whole. That
-split is the structural change this draft asks for; the alternative, an
-additions type that mirrors the point columns by hand, would be a second copy
-of the schema that drifts.
+`SfmrReconstruction` is an image table plus a `PointSet`
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)),
+so the base's point side and the additions are the same type and a per-point
+algorithm takes a `PointSet` and an image count rather than the whole. That is
+what this draft builds on; the alternative, an additions type that mirrors the
+point columns by hand, would be a second copy of the schema that drifts.
 
 ### Two kinds of edit
 

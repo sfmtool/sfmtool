@@ -65,11 +65,11 @@ pub(super) fn correspondences(
         .map(|(i, name)| (normalize(name), i))
         .collect();
     let target = *by_name
-        .get(&normalize(&recon.images[image_index].name))
+        .get(&normalize(&recon.image_table.images[image_index].name))
         .ok_or_else(|| {
             ResectImageError::Matches(format!(
                 "{} is not one of the {} images of this .matches file",
-                recon.images[image_index].name,
+                recon.image_table.images[image_index].name,
                 matches.image_names.len()
             ))
         })?;
@@ -77,7 +77,7 @@ pub(super) fn correspondences(
     // matches file. Images the matches file does not name simply contribute
     // nothing.
     let mut to_recon: HashMap<usize, usize> = HashMap::new();
-    for (i, image) in recon.images.iter().enumerate() {
+    for (i, image) in recon.image_table.images.iter().enumerate() {
         if i == image_index || !posed[i] {
             continue;
         }
@@ -176,7 +176,7 @@ pub(super) fn correspondences(
     if rows.is_empty() {
         return Err(ResectImageError::Matches(format!(
             "the .matches file connects {} to no posed image of this reconstruction",
-            recon.images[image_index].name
+            recon.image_table.images[image_index].name
         )));
     }
 
@@ -195,11 +195,11 @@ pub(super) fn correspondences(
     let mut seen: std::collections::HashSet<(u32, usize)> = std::collections::HashSet::new();
     let mut out = Vec::new();
     for (feature, image, other_feature) in rows {
-        let Some(&point) = recon.image_feature_to_point[image].get(&other_feature) else {
+        let Some(&point) = recon.point_set.image_feature_to_point[image].get(&other_feature) else {
             continue;
         };
         let point = point as usize;
-        if recon.points[point].is_at_infinity() {
+        if recon.point_set.points[point].is_at_infinity() {
             continue;
         }
         if !seen.insert((feature, point)) {
@@ -212,7 +212,7 @@ pub(super) fn correspondences(
                 None => continue,
             },
         };
-        let position = recon.points[point].position;
+        let position = recon.point_set.points[point].position;
         out.push((point, uv, [position.x, position.y, position.z]));
     }
     // Sorted by point so the estimate's input order is a function of the data

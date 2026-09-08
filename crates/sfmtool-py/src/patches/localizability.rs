@@ -80,7 +80,7 @@ impl PyPatchCloud {
             .inner
             .point_indexes
             .iter()
-            .any(|&p| p as usize >= recon.points.len())
+            .any(|&p| p as usize >= recon.point_set.points.len())
         {
             return Err(PyValueError::new_err(
                 "patch cloud point_indexes are out of range for this reconstruction \
@@ -94,11 +94,11 @@ impl PyPatchCloud {
                 "patch_bitmaps must be square R×R per point, got {r}×{r2}"
             )));
         }
-        if n != recon.points.len() {
+        if n != recon.point_set.points.len() {
             return Err(PyValueError::new_err(format!(
                 "patch_bitmaps has {n} rows but the reconstruction has {} points; \
                  pass a stack scattered per source 3D point",
-                recon.points.len()
+                recon.point_set.points.len()
             )));
         }
         let window = parse_patch_window(window, window_sigma)?;
@@ -116,6 +116,7 @@ impl PyPatchCloud {
         }
         // One pose + mean focal per image.
         let poses: Vec<RigidTransform> = recon
+            .image_table
             .images
             .iter()
             .map(|im| {
@@ -131,18 +132,20 @@ impl PyPatchCloud {
             })
             .collect();
         let focal: Vec<f64> = recon
+            .image_table
             .images
             .iter()
             .map(|im| {
-                let (fx, fy) = recon.cameras[im.camera_index as usize].focal_lengths();
+                let (fx, fy) = recon.image_table.cameras[im.camera_index as usize].focal_lengths();
                 0.5 * (fx + fy)
             })
             .collect();
         let ray_path: Vec<bool> = recon
+            .image_table
             .images
             .iter()
             .map(|im| {
-                recon.cameras[im.camera_index as usize]
+                recon.image_table.cameras[im.camera_index as usize]
                     .model
                     .needs_ray_path()
             })
@@ -168,10 +171,10 @@ impl PyPatchCloud {
             if !h.is_finite() {
                 continue;
             }
-            let point = &recon.points[p_idx];
+            let point = &recon.point_set.points[p_idx];
             let mut vals: Vec<f64> = Vec::new();
-            for obs in &recon.tracks
-                [recon.observation_offsets[p_idx]..recon.observation_offsets[p_idx + 1]]
+            for obs in &recon.point_set.tracks[recon.point_set.observation_offsets[p_idx]
+                ..recon.point_set.observation_offsets[p_idx + 1]]
             {
                 let im = obs.image_index as usize;
                 // Homogeneous transform so a point at infinity (`w == 0`, whose

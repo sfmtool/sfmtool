@@ -170,7 +170,7 @@ impl PyPatchCloud {
                 .inner
                 .point_indexes
                 .iter()
-                .any(|&p| p as usize >= recon.points.len())
+                .any(|&p| p as usize >= recon.point_set.points.len())
             {
                 return Err(PyValueError::new_err(
                     "patch cloud point_indexes are out of range for this reconstruction \
@@ -326,8 +326,9 @@ impl PyPatchCloud {
         let stored_kp_map: Option<std::collections::HashMap<(u32, u32), [f64; 2]>> = recon_opt
             .and_then(|recon| {
                 recon.keypoints_xy().map(|keypoints_xy| {
-                    let mut m = std::collections::HashMap::with_capacity(recon.tracks.len());
-                    for (j, obs) in recon.tracks.iter().enumerate() {
+                    let mut m =
+                        std::collections::HashMap::with_capacity(recon.point_set.tracks.len());
+                    for (j, obs) in recon.point_set.tracks.iter().enumerate() {
                         m.insert(
                             (obs.point_index, obs.image_index),
                             [keypoints_xy[[j, 0]] as f64, keypoints_xy[[j, 1]] as f64],

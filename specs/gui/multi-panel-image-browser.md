@@ -89,10 +89,10 @@ All four panels share `AppState::selected_image` as the central image selection 
 
 All four panels also share `AppState::selected_point: Option<usize>` for 3D point selection.
 A selected 3D point implies its track — the set of `(image_index, feature_index)` observations
-from `SfmrReconstruction::tracks`.
+from `PointSet::tracks`.
 
 **Data model**: Tracks are stored sorted by `(point_index, image_index)` in
-`SfmrReconstruction::tracks`, with `observation_counts[i]` giving the number of observations
+`PointSet::tracks`, with `observation_counts[i]` giving the number of observations
 for point `i`. To find observations for a point, compute the offset from the prefix sum of
 `observation_counts` and read `observation_counts[point_idx]` entries.
 
@@ -508,15 +508,15 @@ When an overlay mode is active and `selected_image` changes, load:
      keyed by `(image_index, read_count)`. Invalidate if `max_features` increases
      beyond the cached read count.
 
-2. **Track mapping** for the image from `SfmrReconstruction::tracks`:
+2. **Track mapping** for the image from `PointSet::tracks`:
    - Build `image_idx → Vec<(feature_idx, point_idx)>` mapping (same approach as the
      heatmap command, lines 161-174 of `_commands/heatmap.py`)
    - Only features that participate in a track have associated 3D points and metrics
    - Features not in any track are untracked (drawn differently or omitted depending on mode)
 
 3. **Per-point metrics** looked up by `point_idx`:
-   - Reprojection error: `SfmrReconstruction::points[point_idx].error`
-   - Track length: `SfmrReconstruction::observation_counts[point_idx]`
+   - Reprojection error: `PointSet::points[point_idx].error`
+   - Track length: `PointSet::observation_counts[point_idx]`
    - Max track angle (triangulation angle): max pairwise angle (degrees) between
      world-space rays from observing cameras to the 3D point. Computed on
      demand when the Max Track Angle overlay is active, cached per-feature in
