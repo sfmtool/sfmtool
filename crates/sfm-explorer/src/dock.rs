@@ -392,7 +392,7 @@ impl TabContext<'_> {
             });
             let detail_response = self.image_detail.show(
                 ui,
-                recon,
+                node.edited(),
                 id,
                 selected_image,
                 selected_point,
@@ -415,6 +415,22 @@ impl TabContext<'_> {
                 // coupling rules are a no-op here — but the setter is
                 // also what records the selection.
                 self.state.select_point(PointRef::new(id, point_idx));
+            }
+            // The pixel the context menu was opened at, held until the entry
+            // that consumes it is clicked (the menu is drawn on later frames).
+            if let Some(pixel) = detail_response.context_menu_pixel {
+                self.state.pending_observation_pixel = Some(pixel);
+            }
+            if detail_response.add_observation {
+                if let (Some(point), Some(image)) =
+                    (self.state.selected_point, self.state.selected_image)
+                {
+                    if let Err(why) = self.state.add_observation(point, image) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Edit, why);
+                    }
+                }
             }
             if detail_response.has_pointer {
                 // Detail owns hover state when it has the pointer.
@@ -444,17 +460,14 @@ impl TabContext<'_> {
             // inline, so the `.sift` probe would fail every time).
             if recon.feature_indexes().is_some() {
                 if let Some(pt_idx) = selected_point {
-                    if pt_idx < recon.point_set.points.len() {
-                        for img_idx in recon.track_image_indices(pt_idx) {
-                            let need =
-                                recon.point_set.max_track_feature_index[img_idx] as usize + 1;
-                            crate::state::ensure_sift_cached(
-                                &mut self.state.sift_cache,
-                                recon,
-                                ImageRef::new(id, img_idx),
-                                need,
-                            );
-                        }
+                    for img_idx in node.edited().track_image_indices(pt_idx as u32) {
+                        let need = recon.point_set.max_track_feature_index[img_idx] as usize + 1;
+                        crate::state::ensure_sift_cached(
+                            &mut self.state.sift_cache,
+                            recon,
+                            ImageRef::new(id, img_idx),
+                            need,
+                        );
                     }
                 }
             }
@@ -465,14 +478,12 @@ impl TabContext<'_> {
             // are gated on them).
             if recon.point_set.patch_u_halfvec_xyz.is_some() {
                 if let Some(pt_idx) = selected_point {
-                    if pt_idx < recon.point_set.points.len() {
-                        for img_idx in recon.track_image_indices(pt_idx) {
-                            crate::state::ensure_full_res_cached(
-                                &mut self.state.full_res_cache,
-                                recon,
-                                ImageRef::new(id, img_idx),
-                            );
-                        }
+                    for img_idx in node.edited().track_image_indices(pt_idx as u32) {
+                        crate::state::ensure_full_res_cached(
+                            &mut self.state.full_res_cache,
+                            recon,
+                            ImageRef::new(id, img_idx),
+                        );
                     }
                 }
             }
@@ -481,7 +492,7 @@ impl TabContext<'_> {
                 .unwrap_or_default();
             let track_response = self.point_track_detail.show(
                 ui,
-                recon,
+                node.edited(),
                 id,
                 &point_id,
                 selected_point,
@@ -865,12 +876,9 @@ pub(crate) fn compute_track_images(state: &AppState, node: &SceneNode) -> Vec<us
     let Some(point_idx) = state.selected_point_in(node.id) else {
         return Vec::new();
     };
-    // A point this version has deleted lights no frustums: it is not in the
-    // reconstruction, whatever its index still resolves to in the base.
-    if point_idx >= node.recon().point_set.points.len() || node.is_point_deleted(point_idx as u32) {
-        return Vec::new();
-    }
-    node.recon().track_image_indices(point_idx)
+    // Through the overlay: a point this version deleted lights no frustums,
+    // and one it added or modified lights the track it holds now.
+    node.edited().track_image_indices(point_idx as u32)
 }
 
 /// Return the image indices in the hovered point's track, or empty if none.
@@ -885,10 +893,7 @@ pub(crate) fn compute_hover_track_images(state: &AppState, node: &SceneNode) -> 
     let Some(point_idx) = point.index_in(node.id) else {
         return Vec::new();
     };
-    // A point this version has deleted lights no frustums: it is not in the
-    // reconstruction, whatever its index still resolves to in the base.
-    if point_idx >= node.recon().point_set.points.len() || node.is_point_deleted(point_idx as u32) {
-        return Vec::new();
-    }
-    node.recon().track_image_indices(point_idx)
+    // Through the overlay: a point this version deleted lights no frustums,
+    // and one it added or modified lights the track it holds now.
+    node.edited().track_image_indices(point_idx as u32)
 }

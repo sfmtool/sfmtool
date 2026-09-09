@@ -652,6 +652,28 @@ image, similar to how the 3D viewer navigates the point cloud but in 2D.
 - **Pan limits**: Clamped so the image overlaps the panel by at least 50px.
 - **View persistence**: The view outlives the image it was set on — see below.
 
+### Image Detail: the context menu
+
+A right **click** inside the image, press and release within egui's drag
+threshold, opens a context menu at the pointer. A right **drag** is the zoom
+above, and the threshold is what tells the two apart, so a zoom gesture never
+puts a menu up. The menu is opened on egui's own `clicked_by(Secondary)` rather
+than on the raw platform button state the pan/zoom handler reads, which is what
+makes that distinction available at all.
+
+Its one entry is `Add observation to track here`, which adds an observation of
+the selected 3D point to this image at the clicked pixel
+([`edits/add-observation.md`](edits/add-observation.md)). It is greyed with a
+hover explanation when no point is selected or when this image already observes
+the selected point, and it is replaced by a line saying why on a `sift_files`
+reconstruction, where an observation is a `.sift` feature and a clicked pixel is
+not one.
+
+The pixel is recorded on the frame the menu opens, in source-image coordinates
+through the same `panel_to_image` transform the feature hit-testing uses: the
+menu's entries are laid out on later frames, by which time the pointer has moved
+off the place the user named.
+
 **Rendering** (`image_detail/`):
 - `base_scale = min(panel_w / tex_w, panel_h / tex_h)` fits the image to panel
 - `effective_scale = base_scale * zoom`, `image_center = panel_center + pan`

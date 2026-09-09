@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::EditedReconstruction;
 
 use super::patch::{build_patch_frame, build_stored_patch_texture};
 use super::{PointTrackDetail, TrackObservationData};
@@ -28,32 +28,38 @@ impl PointTrackDetail {
     pub(super) fn prepare_observations(
         &mut self,
         ctx: &egui::Context,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         point: PointRef,
         sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
     ) {
         let point_idx = point.index();
         self.observations.clear();
         self.thumbnail_textures.clear();
+        // The images and cameras are the base's; the point is the overlay's.
+        let recon = &*edited.base;
+        let Some(view) = edited.point(point_idx as u32) else {
+            self.patch_frame = None;
+            self.stored_patch_texture = None;
+            self.rendered_patch_textures.clear();
+            return;
+        };
 
         // Per-point patch state (embedded-patches reconstructions): the
         // oriented patch frame gates the per-observation "Patch" column, the
         // stored bitmap feeds the header tile. Rendered tiles rebuild lazily.
-        self.patch_frame = build_patch_frame(recon, point_idx);
-        self.stored_patch_texture = build_stored_patch_texture(ctx, recon, point_idx);
+        self.patch_frame = build_patch_frame(&view);
+        self.stored_patch_texture = build_stored_patch_texture(ctx, &view, point_idx);
         self.rendered_patch_textures.clear();
 
-        let point3d = &recon.point_set.points[point_idx];
+        let point3d = view.point();
         // Keypoints come from one of two sources: SIFT feature positions read
         // into the cache (`sift_files`, via `feature_indexes`) or keypoints
         // stored inline on the reconstruction (`embedded_patches`, via
         // `keypoints_xy`, indexed per observation). For embedded keypoints the
         // affine shape (and hence size) is derived by projecting the point's
         // patch frame into the view (`observation_affine_shape`).
-        let feature_indexes = recon.feature_indexes();
-        let keypoints_xy = recon.keypoints_xy();
-        let obs_start = recon.point_set.observation_offsets[point_idx];
-        let observations = recon.observations_for_point(point_idx);
+        let feature_indexes = view.feature_indexes();
+        let observations = view.observations();
 
         // Collect world-space rays from each camera center to the point
         // for max-angle computation.
@@ -61,13 +67,12 @@ impl PointTrackDetail {
 
         for (k, obs) in observations.iter().enumerate() {
             let img_idx = obs.image_index as usize;
-            let obs_global = obs_start + k;
             let image = &recon.image_table.images[img_idx];
             let camera = &recon.image_table.cameras[image.camera_index as usize];
 
             // Feature index (SIFT), position, and extents for this observation.
             let (feature_index, feature_xy, feature_extents) = if let Some(fis) = feature_indexes {
-                let feat_idx = fis[obs_global] as usize;
+                let feat_idx = fis[k] as usize;
                 let cached_sift = sift_cache.get(&ImageRef::new(point.recon, img_idx));
                 let xy = cached_sift
                     .and_then(|sift| sift.positions_xy.get(feat_idx))
@@ -78,16 +83,17 @@ impl PointTrackDetail {
                     .map(affine_full_extents)
                     .unwrap_or([0.0, 0.0]);
                 (feat_idx, xy, extents)
-            } else if let Some(kxy) = keypoints_xy {
+            } else if let Some(xy) = view.keypoint_xy(k) {
                 // Embedded keypoint: no SIFT feature index, so report the
-                // observation index. The affine shape (and hence the extents) is
-                // derived by projecting the point's patch frame into this image.
-                let xy = [kxy[[obs_global, 0]], kxy[[obs_global, 1]]];
-                let extents = recon
-                    .observation_affine_shape(point_idx, img_idx, xy)
+                // observation's place in the track. The affine shape (and hence
+                // the extents) is derived by projecting the point's patch frame
+                // into this image, through the overlay so that an edited frame
+                // or position is the one projected.
+                let extents = edited
+                    .observation_affine_shape(point_idx as u32, img_idx, xy)
                     .map(|a| affine_full_extents(&a))
                     .unwrap_or([0.0, 0.0]);
-                (obs_global, xy, extents)
+                (k, xy, extents)
             } else {
                 (0, [0.0, 0.0], [0.0, 0.0])
             };
@@ -132,7 +138,8 @@ impl PointTrackDetail {
         self.max_angle_deg = compute_max_pairwise_angle(&world_rays);
 
         // Triangulation observability diagnostics for this point.
-        let (condition_number, inverse_depth_z) = compute_point_diagnostics(recon, point_idx);
+        let (condition_number, inverse_depth_z) =
+            compute_point_diagnostics(&recon.image_table, &view);
         self.condition_number = condition_number;
         self.inverse_depth_z = inverse_depth_z;
     }

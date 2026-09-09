@@ -457,6 +457,45 @@ impl EditedReconstruction {
         }
     }
 
+    /// The images that observe the point at `index`, in stored order, or an
+    /// empty list when the index names no live point.
+    ///
+    /// The overlay's answer to `SfmrReconstruction::track_image_indices`, which
+    /// reads the base and so cannot see an addition's track.
+    pub fn track_image_indices(&self, index: u32) -> Vec<usize> {
+        self.point(index).map_or_else(Vec::new, |view| {
+            view.observations()
+                .iter()
+                .map(|o| o.image_index as usize)
+                .collect()
+        })
+    }
+
+    /// The affine shape of one observation's keypoint, read through the
+    /// overlay.
+    ///
+    /// The overlay's answer to `SfmrReconstruction::observation_affine_shape`:
+    /// the same projection algebra, over the frame and position this version
+    /// holds for the point rather than the base's.
+    pub fn observation_affine_shape(
+        &self,
+        index: u32,
+        image_index: usize,
+        keypoint_xy: [f32; 2],
+    ) -> Option<[[f32; 2]; 2]> {
+        let view = self.point(index)?;
+        let u = view.patch_u_halfvec()?;
+        let v = view.patch_v_halfvec()?;
+        super::data::patch_affine_shape(
+            view.point(),
+            nalgebra::Vector3::new(u[0] as f64, u[1] as f64, u[2] as f64),
+            nalgebra::Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64),
+            &self.base.image_table,
+            image_index,
+            keypoint_xy,
+        )
+    }
+
     /// Every live index, ascending. Base points first, then additions in the
     /// order they were made -- which is materialisation's order for the
     /// appended points and not for the modified ones.

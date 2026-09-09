@@ -203,6 +203,26 @@ frame arrays **and** the bitmaps being `Some`):
 
 Called from `App::prepare_uploads` (`app.rs:224-388`) beside `upload_thumbnails`.
 
+Each instance also has an entry in a liveness buffer, `1` alive and `0` deleted,
+which is how an edit's deleted set reaches this pass. Because the instances are
+compacted, a point's slot is not its point index, so the bundle keeps the
+point-index-to-slot map the mask write needs.
+
+### The overlay's additions get a second atlas
+
+A node draws its base's atlas and then, when its current version added a
+patch-bearing point, a **second, small atlas** of its own, packed by the same
+code over a shorter list. Two draws in one pass; nothing in the shader tells them
+apart, because each `PatchResources` already carries its own grid dimensions in
+its own uniform block.
+
+A second atlas rather than slots appended to the base's: the base's atlas is
+exactly what a run of point edits shares, so appending to it would mean building
+a new texture per edit and re-uploading every tile. An addition's instance
+carries its **edited** index as `point_index`, so one deleted-mask write finds
+either atlas's slot with the same lookup. A materialisation replaces both with
+one. See [document-model.md](document-model.md), "Change detection by identity".
+
 ### Memory
 
 The atlas is `P × R × R × 4` bytes. At `R = 32`, 100k patches ≈ 400 MB — real,

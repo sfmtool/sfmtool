@@ -9,6 +9,7 @@
 //! sibling [`super::pipelines`] and [`super::render`] modules: the uploads
 //! share no state with each other, only the renderer they write into.
 
+mod additions;
 mod bg_image;
 mod frustums;
 mod overlay;

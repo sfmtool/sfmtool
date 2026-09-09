@@ -53,6 +53,36 @@ pub(super) struct PatchResources {
     pub patches_per_page: u32,
 }
 
+/// The overlay's **additions** as GPU state: a second set of instance buffers
+/// drawn after the base's, in the same passes and with the same global
+/// uniforms.
+///
+/// The base's buffers are what a run of point edits shares, so they must not be
+/// rebuilt when the overlay gains a point. The additions get their own buffers
+/// instead, sized to the addition set alone. It carries its own copy of the
+/// node's `ReconUniforms` for one field: the additions' pick base is the node's
+/// plus its base point count, which is what makes an addition's global pick id
+/// still `point_pick_base + edited index`.
+///
+/// Patches likewise get a **second, small atlas** rather than an appended
+/// slot range in the base's. The base's atlas texture and bind group then keep
+/// their identity across every point edit, and the packing arithmetic is the
+/// same code over a shorter list. The two atlases are drawn as two draws in one
+/// pass; nothing about the shader distinguishes them.
+pub(super) struct AdditionResources {
+    /// This node's `ReconUniforms` with the additions' pick base.
+    pub uniform_buffer: wgpu::Buffer,
+    /// The point bind group over `uniform_buffer`.
+    pub bind_group: wgpu::BindGroup,
+    pub point_instance_buffer: wgpu::Buffer,
+    /// Per-addition liveness, as for the base's.
+    pub point_alive_buffer: wgpu::Buffer,
+    pub point_count: u32,
+    /// The additions' surfels and their own atlas, when any addition carries a
+    /// patch bitmap.
+    pub patch: Option<PatchResources>,
+}
+
 /// One node's display state as the renderer needs it: which layers to draw,
 /// and whether the node captures picks.
 ///
@@ -167,6 +197,19 @@ pub(super) struct ReconResources {
     // ── patches (optional) ──
     pub patch: Option<PatchResources>,
 
+    // ── the overlay's additions (optional) ──
+    /// The additions' instance buffers and their own patch atlas, when this
+    /// version holds any.
+    pub additions: Option<AdditionResources>,
+    /// The addition set those buffers were built from, as `(points, tracks)`.
+    ///
+    /// A complete change signal, and O(1): additions are append-only along a
+    /// node's history, and the history is linear because a new edit discards
+    /// the redo tail. So two versions of one base whose addition sets have the
+    /// same point and observation counts hold the same additions, and a count
+    /// that moved is the only way the set can differ.
+    pub uploaded_additions: (usize, usize),
+
     // ── per-recon derived scalars (formerly singletons on SceneRenderer) ──
     /// Auto-computed splat size (world space, before the global user scaling).
     pub auto_point_size: f32,
@@ -241,12 +284,19 @@ impl ReconResources {
             atlas_rows: 0,
             images_per_page: 0,
             patch: None,
+            additions: None,
+            uploaded_additions: (0, 0),
             auto_point_size: FALLBACK_POINT_SIZE,
             camera_nn_scale: None,
             bounds: None,
             point_pick_base: 0,
             image_pick_base: 0,
         }
+    }
+
+    /// How many addition instances this bundle draws.
+    pub(super) fn addition_count(&self) -> u32 {
+        self.additions.as_ref().map_or(0, |a| a.point_count)
     }
 
     /// The seed this node contributes to the global `length_scale`: the point

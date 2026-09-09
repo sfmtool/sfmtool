@@ -108,6 +108,12 @@ fn demo(points: usize) -> SfmrReconstruction {
     SfmrReconstruction::demo(points)
 }
 
+/// A reconstruction wrapped as a version with no edits, for the reads that go
+/// through the overlay accessor.
+fn edited_of(recon: &SfmrReconstruction) -> sfmtool_core::EditedReconstruction {
+    sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon.clone()))
+}
+
 /// Replace the single camera so every image resolves to `model`.
 fn with_camera_model(mut recon: SfmrReconstruction, model: CameraModel) -> SfmrReconstruction {
     recon.image_table.cameras = vec![CameraIntrinsics {
@@ -1277,8 +1283,8 @@ fn track_rays_are_built_through_the_owning_nodes_transform() {
     let cache = sift_cache(recon.image_table.images.len(), 8);
     let t = similarity(2.0);
 
-    let native = track_ray_edges(&recon, point(0), &cache, &identity());
-    let moved = track_ray_edges(&recon, point(0), &cache, &t);
+    let native = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
+    let moved = track_ray_edges(&edited_of(&recon), point(0), &cache, &t);
 
     // Track rays are drawn from a shared singleton buffer with no per-recon
     // `model` matrix, so the transform has to be applied on the CPU or the rays
@@ -1309,7 +1315,7 @@ fn upload_track_rays_emits_one_ray_per_cached_observation() {
     let cache = sift_cache(recon.image_table.images.len(), 8);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(3), &cache, &identity());
+    r.upload_track_rays(&device, &edited_of(&recon), point(3), &cache, &identity());
 
     // Demo gives every point two observations.
     assert_eq!(r.track_ray_count, 2);
@@ -1321,7 +1327,7 @@ fn track_rays_for_a_finite_point_stop_near_the_scene() {
     let recon = demo(4);
     let cache = sift_cache(recon.image_table.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, point(0), &cache, &identity());
+    let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
 
     // A finite point terminates each ray at the closest approach to it, which
     // lies inside the camera cloud — decisively shorter than the fixed
@@ -1345,7 +1351,13 @@ fn upload_track_rays_skips_observations_with_no_cached_features() {
 
     // Empty cache — a missing `.sift` companion must draw no ray at all
     // rather than a misleading one.
-    r.upload_track_rays(&device, &recon, point(0), &HashMap::new(), &identity());
+    r.upload_track_rays(
+        &device,
+        &edited_of(&recon),
+        point(0),
+        &HashMap::new(),
+        &identity(),
+    );
 
     assert_eq!(r.track_ray_count, 0);
     assert!(r.track_ray_edge_buffer.is_none());
@@ -1359,7 +1371,7 @@ fn upload_track_rays_skips_feature_indexes_past_a_truncated_cache() {
     let cache = sift_cache(recon.image_table.images.len(), 0);
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
+    r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
 
     assert_eq!(r.track_ray_count, 0);
 }
@@ -1370,7 +1382,13 @@ fn upload_track_rays_reads_inline_keypoints_without_a_sift_cache() {
     let recon = with_embedded_keypoints(demo(4));
     let mut r = SceneRenderer::new();
 
-    r.upload_track_rays(&device, &recon, point(0), &HashMap::new(), &identity());
+    r.upload_track_rays(
+        &device,
+        &edited_of(&recon),
+        point(0),
+        &HashMap::new(),
+        &identity(),
+    );
 
     // Embedded-patch reconstructions carry keypoints inline, so no cache is
     // consulted and the rays still build.
@@ -1384,7 +1402,7 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     assert!(recon.point_set.points[0].is_at_infinity());
     let cache = sift_cache(recon.image_table.images.len(), 8);
 
-    let edges = track_ray_edges(&recon, point(0), &cache, &identity());
+    let edges = track_ray_edges(&edited_of(&recon), point(0), &cache, &identity());
 
     // An infinity point's stored position is a unit direction at the origin,
     // which would project behind every camera and collapse each ray to zero
@@ -1408,7 +1426,7 @@ fn clear_track_rays_drops_the_buffer() {
     let recon = demo(4);
     let cache = sift_cache(recon.image_table.images.len(), 8);
     let mut r = SceneRenderer::new();
-    r.upload_track_rays(&device, &recon, point(0), &cache, &identity());
+    r.upload_track_rays(&device, &edited_of(&recon), point(0), &cache, &identity());
     assert_eq!(r.track_ray_count, 2);
 
     r.clear_track_rays();
@@ -1556,6 +1574,9 @@ fn sync(
         renderer.upload_patches(device, queue, id, &base);
         renderer.set_uploaded_base(id, base);
     }
+    if renderer.additions_changed(id, edited) {
+        renderer.upload_additions(device, queue, id, edited);
+    }
     renderer.update_deleted_mask(queue, id, &edited.deleted_points);
     uploaded
 }
@@ -1620,4 +1641,164 @@ fn a_bulk_edit_hands_the_renderer_a_new_base_and_re_uploads() {
         !sync(&mut renderer, &device, &queue, RECON, &bulk),
         "the new base uploaded twice"
     );
+}
+
+// ── The overlay's additions ─────────────────────────────────────────────
+//
+// The other half of change detection by identity: a point the overlay adds has
+// no instance in the base's buffers, so it gets its own, and its patch gets its
+// own small atlas. See `specs/gui/document-model.md`.
+
+/// The record of base point `index`, with its position nudged so the addition
+/// is distinguishable from what it replaces.
+fn moved_record(
+    edited: &sfmtool_core::EditedReconstruction,
+    index: u32,
+) -> sfmtool_core::PointRecord {
+    let mut record = edited.point(index).expect("a live point").to_record();
+    record.point.position.x += 1.0;
+    record
+}
+
+/// The additions half of a node's bundle.
+fn additions(renderer: &SceneRenderer) -> Option<&super::super::recon::AdditionResources> {
+    bundle(renderer).additions.as_ref()
+}
+
+#[test]
+fn an_addition_uploads_its_own_buffers_and_not_the_base() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    let points = bundle(&renderer).point_count;
+    let patches = patch_count(&renderer);
+    assert!(additions(&renderer).is_none(), "a fresh overlay has none");
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    let moved = edited.replace_point(3, record).expect("a live point");
+    assert_eq!(moved, 40, "the addition takes the next index");
+
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &edited),
+        "an addition re-uploaded the base"
+    );
+    // The base's buffers keep their identity and their instance count; the
+    // addition is a second, one-instance buffer beside them.
+    assert_eq!(bundle(&renderer).point_count, points);
+    assert_eq!(patch_count(&renderer), patches);
+    let additions = additions(&renderer).expect("the addition uploaded");
+    assert_eq!(additions.point_count, 1);
+    // The replaced base instance is masked, so the point is drawn once.
+    assert_eq!(renderer.masked_deleted_count(RECON), 1);
+}
+
+#[test]
+fn an_addition_that_carries_a_bitmap_gets_a_slot_in_its_own_atlas() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    let moved = edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    let patch = additions(&renderer)
+        .expect("the addition uploaded")
+        .patch
+        .as_ref()
+        .expect("the addition carries a bitmap");
+    assert_eq!(patch.count, 1);
+    // Keyed on the *edited* index, like the base's map, which is what lets one
+    // mask write find either.
+    assert_eq!(patch.slot_of_point.get(&moved), Some(&0));
+    assert!(
+        !patch.slot_of_point.contains_key(&3),
+        "the additions' atlas is its own, not an extension of the base's"
+    );
+}
+
+#[test]
+fn the_pick_range_covers_the_additions() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(demo(40));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    let moved = edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    // The base's instances and the additions occupy one contiguous range, so an
+    // addition's global id is `point_pick_base + edited index` exactly as a
+    // base point's is, and the readback resolves it back to the same ref.
+    let global = renderer
+        .global_point_index_for_test(point(moved as usize))
+        .expect("an addition is pickable");
+    assert_eq!(global, bundle(&renderer).point_pick_base + moved);
+    assert_eq!(
+        renderer.resolve_pick_for_test(global),
+        Some(point(moved as usize)),
+    );
+}
+
+#[test]
+fn undoing_an_addition_drops_its_buffers_without_touching_the_base() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(demo(40));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    assert!(additions(&renderer).is_some());
+
+    // Back to the loaded value: the base is the same allocation, so nothing of
+    // it is re-uploaded, and the additions simply go.
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &loaded),
+        "an undo re-uploaded the base"
+    );
+    assert!(additions(&renderer).is_none());
+    assert_eq!(renderer.masked_deleted_count(RECON), 0);
+}
+
+#[test]
+fn a_new_base_clears_the_additions() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let recon = demo(40);
+    let images = recon.image_count();
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::new(recon));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    assert!(additions(&renderer).is_some());
+
+    // A bulk edit's output is a new base with an empty overlay; the additions'
+    // indexes were relative to the old base's point count, so they cannot
+    // survive it.
+    let keep: Vec<u32> = (1..images as u32).collect();
+    let subset = edited
+        .materialize()
+        .0
+        .subset_by_image_indices(&keep, true)
+        .expect("an image subset");
+    let bulk = sfmtool_core::EditedReconstruction::new(Arc::new(subset));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &bulk));
+    assert!(additions(&renderer).is_none());
 }

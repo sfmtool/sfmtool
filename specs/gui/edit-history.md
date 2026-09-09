@@ -49,6 +49,9 @@ them carries a `PointMap`
 pub enum PointMap {
     /// Indexes are stable across this step; these ones stopped resolving.
     Removed(Vec<u32>),
+    /// A point edit that modified points: the index each held before the step
+    /// and the one it took after it. Every index not named is unchanged.
+    Replaced(Vec<(u32, u32)>),
     /// A whole-value edit's row map: a materialisation's, or the one
     /// `RowMap::by_scan` reads off a bulk edit's input and output.
     Rows(RowMap),
@@ -66,8 +69,11 @@ impl PointMap {
 
 Each case is stored as what it is rather than as a pair of dense arrays, so a map
 costs the size of the edit that made it: a list of the indexes one point edit
-removed, a row map that is a sorted list of holes plus one entry per addition, or
-the two or three steps a bulk edit took. A point deletion's map is one `u32`; an
+removed, a pair per point it modified, a row map that is a sorted list of holes
+plus one entry per addition, or the two or three steps a bulk edit took. A point
+deletion's map is one `u32`, and an added observation's is one pair, because
+delete-and-re-add gives a modified point a new index while it stays the same
+point and the selection has to follow it there. An
 image deletion's is a materialisation's row map chained with the one scanned off
 the image subset's input and output
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)).

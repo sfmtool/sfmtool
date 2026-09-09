@@ -204,6 +204,16 @@ impl SceneRenderer {
                 bytemuck::bytes_of(&recon_uniforms(bundle, size_multiplier, show_infinity)),
             );
 
+            // The overlay's additions carry the same block with the pick base
+            // shifted past the base's instances, so an addition's global pick
+            // id is `point_pick_base + edited index` as a base point's is.
+            if let Some(additions) = &bundle.additions {
+                let mut uniforms = recon_uniforms(bundle, size_multiplier, show_infinity);
+                uniforms.point_pick_base =
+                    bundle.point_pick_base.saturating_add(bundle.point_count);
+                queue.write_buffer(&additions.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+            }
+
             // Image quad uniforms (this node's thumbnail atlas)
             if let Some(buf) = &bundle.image_quad_uniform_buffer {
                 queue.write_buffer(

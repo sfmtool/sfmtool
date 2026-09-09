@@ -15,12 +15,11 @@
 use std::collections::HashMap;
 
 use nalgebra::Vector3;
-use ndarray::Axis;
 use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::{PointView, SfmrReconstruction};
 
 use super::PointTrackDetail;
 use crate::scene::ImageRef;
@@ -135,33 +134,19 @@ pub(super) fn render_frame(
 /// axis and half-extent like `PatchCloud::from_halfvec_arrays`. For a point
 /// at infinity the stored u/v are already the tangent frame — the same frame
 /// applies, just re-marked with `w = 0`.
-pub(super) fn build_patch_frame(
-    recon: &SfmrReconstruction,
-    point_idx: usize,
-) -> Option<OrientedPatch> {
-    let u_arr = recon.point_set.patch_u_halfvec_xyz.as_ref()?;
-    let v_arr = recon.point_set.patch_v_halfvec_xyz.as_ref()?;
-    if point_idx >= u_arr.nrows() || point_idx >= v_arr.nrows() {
-        return None;
-    }
-    let u = Vector3::new(
-        u_arr[[point_idx, 0]] as f64,
-        u_arr[[point_idx, 1]] as f64,
-        u_arr[[point_idx, 2]] as f64,
-    );
+pub(super) fn build_patch_frame(view: &PointView<'_>) -> Option<OrientedPatch> {
+    let u = view.patch_u_halfvec()?;
+    let v = view.patch_v_halfvec()?;
+    let u = Vector3::new(u[0] as f64, u[1] as f64, u[2] as f64);
     let hu = u.norm();
     if hu <= 1e-12 {
         return None;
     }
-    let v = Vector3::new(
-        v_arr[[point_idx, 0]] as f64,
-        v_arr[[point_idx, 1]] as f64,
-        v_arr[[point_idx, 2]] as f64,
-    );
+    let v = Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64);
     let hv = v.norm();
     let u_axis = u / hu;
     let v_axis = if hv > 1e-12 { v / hv } else { v };
-    let point = &recon.point_set.points[point_idx];
+    let point = view.point();
     let mut patch = OrientedPatch::new(point.position, u_axis, v_axis, [hu, hv]);
     if point.w == 0.0 {
         patch.w = 0.0;
@@ -175,14 +160,10 @@ pub(super) fn build_patch_frame(
 /// alpha channel (per-texel cross-view confidence) is forced opaque.
 pub(super) fn build_stored_patch_texture(
     ctx: &egui::Context,
-    recon: &SfmrReconstruction,
+    view: &PointView<'_>,
     point_idx: usize,
 ) -> Option<egui::TextureHandle> {
-    let bitmaps = recon.point_set.patch_bitmaps_y_x_rgba.as_ref()?;
-    if point_idx >= bitmaps.shape()[0] {
-        return None;
-    }
-    let bitmap = bitmaps.index_axis(Axis(0), point_idx);
+    let bitmap = view.patch_bitmap()?;
     let h = bitmap.shape()[0];
     let w = bitmap.shape()[1];
     let mut rgba: Vec<u8> = if let Some(slice) = bitmap.as_slice() {

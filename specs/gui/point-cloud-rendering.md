@@ -54,6 +54,22 @@ struct PointInstance {
 16 bytes per point. 10M points = 160 MB of GPU buffer. The alpha byte carries
 the points-at-infinity flag (see [Points at Infinity](#points-at-infinity)).
 
+A second instance buffer steps alongside it, one `u32` per point: `1` alive, `0`
+deleted. The shader emits a clipped vertex for a masked point, so it draws
+nothing, occludes nothing and answers no pick. That is how an edit's deleted set
+reaches the pass without rewriting the instance buffer.
+
+### The overlay's additions
+
+A node draws **two** point instance buffers: its base's, and the points its
+current version added on top of it. The second is drawn immediately after the
+first in the same pass, with the same global uniforms and its own liveness
+buffer, and it is rebuilt only when the addition set moves; the base's is what a
+run of point edits shares and is never rebuilt for one. The two occupy one
+contiguous pick range, so a point's global pick id is
+`point_pick_base + edited index` whichever buffer holds it. See
+[document-model.md](document-model.md), "Change detection by identity".
+
 ### Point Sizing
 
 Point size is determined by two factors:

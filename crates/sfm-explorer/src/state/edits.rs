@@ -25,6 +25,10 @@
 
 use std::sync::Arc;
 
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -33,8 +37,39 @@ use crate::scene::{ImageRef, PointRef, ReconId};
 
 use super::AppState;
 
+/// How many pyramid levels the photometric fit's sampler needs. The kernels'
+/// own callers build the same number.
+const PYRAMID_LEVELS: usize = 6;
+
+/// Decoded images for one edit, owning what a [`ProjectedImage`] borrows.
+///
+/// One entry per image of the node, because the patch kernels index their view
+/// slice by image index; the entries the call does not read are one-pixel
+/// placeholders.
+pub(super) struct DecodedViews {
+    cameras: Vec<CameraIntrinsics>,
+    poses: Vec<RigidTransform>,
+    pyramids: Vec<ImageU8Pyramid>,
+}
+
+impl DecodedViews {
+    /// The borrowed form a patch kernel takes.
+    pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
+        self.cameras
+            .iter()
+            .zip(&self.poses)
+            .zip(&self.pyramids)
+            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+                camera,
+                cam_from_world,
+                pyramid,
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 impl AppState {
     /// Delete the selected point from the node it belongs to.
@@ -69,6 +104,112 @@ impl AppState {
         self.follow_selection_forward(point.recon);
         self.action_log
             .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+        Ok(())
+    }
+
+    /// Add an observation of the selected point in `image`, at `pixel`.
+    ///
+    /// A point edit, and the first one that *creates* structure: the point is
+    /// deleted from the base and re-added with the new sighting in its track, so
+    /// its index moves and the version's map records the move. The base is the
+    /// same `Arc`.
+    ///
+    /// The photometric fit needs the photographs, which a reconstruction value
+    /// does not carry, so the track's images and the clicked one are decoded on
+    /// demand through the node's full-resolution cache and turned into pyramids
+    /// for this call. A handful of images per edit; nothing pre-decodes the
+    /// table.
+    pub fn add_observation(&mut self, point: PointRef, image: ImageRef) -> Result<(), String> {
+        let pixel = self
+            .pending_observation_pixel
+            .ok_or_else(|| "No pixel was named for the observation.".to_string())?;
+        self.add_observation_at(point, image, pixel)
+    }
+
+    /// [`AppState::add_observation`] at an explicit pixel.
+    pub fn add_observation_at(
+        &mut self,
+        point: PointRef,
+        image: ImageRef,
+        pixel: [f32; 2],
+    ) -> Result<(), String> {
+        if point.recon != image.recon {
+            return Err("The point and the image belong to different reconstructions.".to_string());
+        }
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == point.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+
+        // Which images the fit needs: the track's, plus the one being added to.
+        // The gate is the menu's own, so the entry and the edit cannot disagree
+        // about when this can run, and it is checked before anything is decoded.
+        let (label, image_name, needed) = {
+            let node = &self.scene[index];
+            let edited = node.history.current();
+            match crate::image_detail::add_observation_entry(
+                edited,
+                image.index(),
+                Some(point.index()),
+            ) {
+                None => {
+                    return Err(
+                        "Adding an observation needs an embedded_patches reconstruction."
+                            .to_string(),
+                    )
+                }
+                Some(Err(why)) => return Err(why.to_string()),
+                Some(Ok(())) => {}
+            }
+            let mut needed = edited.track_image_indices(point.point);
+            needed.push(image.index());
+            let name = node
+                .recon()
+                .image_table
+                .images
+                .get(image.index())
+                .map(|im| im.name.clone())
+                .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
+            (node.label.clone(), name, needed)
+        };
+        let decoded = self.decode_views_for(point.recon, &needed)?;
+
+        let node = &mut self.scene[index];
+        let edited = node.history.current();
+        let views = decoded.views();
+        let (next, report) = sfmtool_core::add_observation(
+            edited,
+            point.point,
+            image.image,
+            pixel,
+            &views,
+            &sfmtool_core::AddObservationOptions::default(),
+        )
+        .map_err(|e| format!("Cannot add that observation: {e}"))?;
+
+        let moved = report.point;
+        let text = format!(
+            "Added observation of point {} in {image_name} ({label})",
+            point.point
+        );
+        let serial = node.history.push(
+            next,
+            PointMap::Replaced(vec![(point.point, moved)]),
+            text.clone(),
+        );
+        let parent = version_before(node, serial);
+        // The selection stays on the point, which has taken a new index; the
+        // map is what moves it there.
+        self.follow_selection_forward(point.recon);
+        self.pending_observation_pixel = None;
+        self.action_log.record(
+            Kind::Edit,
+            format!(
+                "{text}: ZNCC {:.3}, {:.2} px from the click ({parent} → {serial})",
+                report.zncc, report.shift_px
+            ),
+        );
         Ok(())
     }
 
@@ -288,6 +429,67 @@ impl AppState {
             None => Some(point.point),
         };
         self.selected_point = moved.map(|index| PointRef::new(id, index as usize));
+    }
+
+    /// Decode the images `needed` names and hand back a view per image of the
+    /// node, ready for a patch kernel.
+    ///
+    /// Every entry has to exist because the kernels index `views` by image
+    /// index, but only the ones a call reads have to be real: an image outside
+    /// `needed` gets a one-pixel placeholder, which nothing samples. Decoding
+    /// goes through the node's full-resolution cache, so an image the panels
+    /// have already shown is not read twice.
+    fn decode_views_for(&mut self, id: ReconId, needed: &[usize]) -> Result<DecodedViews, String> {
+        let Some(index) = self.scene.iter().position(|n| n.id == id) else {
+            return Err("That reconstruction is no longer loaded.".to_string());
+        };
+        for &img_idx in needed {
+            let AppState {
+                scene,
+                full_res_cache,
+                ..
+            } = self;
+            let recon = scene[index].recon();
+            if crate::state::ensure_full_res_cached(
+                full_res_cache,
+                recon,
+                ImageRef::new(id, img_idx),
+            )
+            .is_none()
+            {
+                let name = recon.image_table.images[img_idx].name.clone();
+                return Err(format!("Cannot read {name}."));
+            }
+        }
+        let recon = self.scene[index].recon();
+        let placeholder = ImageU8::new(1, 1, 3, vec![0u8; 3]);
+        let mut cameras = Vec::with_capacity(recon.image_count());
+        let mut poses = Vec::with_capacity(recon.image_count());
+        let mut pyramids = Vec::with_capacity(recon.image_count());
+        for (i, im) in recon.image_table.images.iter().enumerate() {
+            cameras.push(recon.image_table.cameras[im.camera_index as usize].clone());
+            let q = im.quaternion_wxyz;
+            poses.push(RigidTransform::from_wxyz_translation(
+                [q.w, q.i, q.j, q.k],
+                [
+                    im.translation_xyz.x,
+                    im.translation_xyz.y,
+                    im.translation_xyz.z,
+                ],
+            ));
+            let source = needed
+                .contains(&i)
+                .then(|| self.full_res_cache.get(&ImageRef::new(id, i)))
+                .flatten()
+                .and_then(|slot| slot.as_ref())
+                .unwrap_or(&placeholder);
+            pyramids.push(ImageU8Pyramid::build(source, PYRAMID_LEVELS));
+        }
+        Ok(DecodedViews {
+            cameras,
+            poses,
+            pyramids,
+        })
     }
 
     /// Drop everything this state holds that is keyed by an image of `id`, and

@@ -6,7 +6,7 @@
 use super::super::gpu_types::EdgeInstance;
 use super::super::SceneRenderer;
 use crate::scene::{ImageRef, PointRef};
-use sfmtool_core::{Se3Transform, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, Se3Transform};
 use wgpu::util::DeviceExt;
 
 /// Length of a point-at-infinity track ray, as a multiple of the camera-cloud
@@ -15,7 +15,7 @@ const INFINITY_RAY_SCENE_MULTIPLE: f64 = 2.0;
 
 /// Bounding-box diagonal of the reconstruction's camera centers — a
 /// characteristic scene scale, used to size rays toward points at infinity.
-fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
+fn camera_cloud_extent(recon: &sfmtool_core::SfmrReconstruction) -> f64 {
     let mut iter = recon
         .image_table
         .images
@@ -53,13 +53,19 @@ fn camera_cloud_extent(recon: &SfmrReconstruction) -> f64 {
 /// per-recon `model` matrix of its own. Because a similarity is affine, mapping
 /// the two endpoints is the same as mapping the whole segment.
 pub(super) fn track_ray_edges(
-    recon: &SfmrReconstruction,
+    edited: &EditedReconstruction,
     point_ref: PointRef,
     sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
     transform: &Se3Transform,
 ) -> Vec<EdgeInstance> {
+    // The point and its track are the overlay's, so a modified or added point
+    // draws the rays it holds now; the images and cameras are the base's.
+    let recon = &*edited.base;
     let point_idx = point_ref.index();
-    let point = &recon.point_set.points[point_idx];
+    let Some(view) = edited.point(point_idx as u32) else {
+        return Vec::new();
+    };
+    let point = view.point();
     let point_pos = point.position;
     let at_infinity = point.is_at_infinity();
 
@@ -81,10 +87,8 @@ pub(super) fn track_ray_edges(
     // the reconstruction (`embedded_patches`). Both are photometrically
     // placed and need not point exactly at the 3D point, so the ray is
     // unprojected from whichever the reconstruction carries.
-    let feature_indexes = recon.feature_indexes();
-    let keypoints_xy = recon.keypoints_xy();
-    let obs_start = recon.point_set.observation_offsets[point_idx];
-    let observations = recon.observations_for_point(point_idx);
+    let feature_indexes = view.feature_indexes();
+    let observations = view.observations();
     let edges: Vec<EdgeInstance> = observations
         .iter()
         .enumerate()
@@ -99,15 +103,14 @@ pub(super) fn track_ray_edges(
             // observation when neither source yields one (e.g. a missing or
             // truncated `.sift` file) rather than drawing a misleading ray.
             let obs_pixel: [f64; 2] = if let Some(fis) = feature_indexes {
-                let fi = fis[obs_start + k] as usize;
+                let fi = fis[k] as usize;
                 let cached =
                     sift_cache.get(&ImageRef::new(point_ref.recon, obs.image_index as usize))?;
                 let xy = cached.positions_xy.get(fi)?;
                 [xy[0] as f64, xy[1] as f64]
             } else {
-                let kxy = keypoints_xy?;
-                let row = obs_start + k;
-                [kxy[[row, 0]] as f64, kxy[[row, 1]] as f64]
+                let xy = view.keypoint_xy(k)?;
+                [xy[0] as f64, xy[1] as f64]
             };
 
             // Unproject the keypoint to a camera-local unit ray, then rotate
@@ -171,12 +174,12 @@ impl SceneRenderer {
     pub fn upload_track_rays(
         &mut self,
         device: &wgpu::Device,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         point: PointRef,
         sift_cache: &std::collections::HashMap<ImageRef, crate::state::CachedSiftFeatures>,
         transform: &Se3Transform,
     ) {
-        let edges = track_ray_edges(recon, point, sift_cache, transform);
+        let edges = track_ray_edges(edited, point, sift_cache, transform);
 
         if edges.is_empty() {
             self.track_ray_edge_buffer = None;

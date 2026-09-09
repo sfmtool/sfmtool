@@ -219,6 +219,11 @@ fn full_res_images(
 
 const VIEWPORT: egui::Vec2 = egui::vec2(1200.0, 800.0);
 
+/// A reconstruction wrapped as a version with no edits.
+fn edited_of(recon: &SfmrReconstruction) -> sfmtool_core::EditedReconstruction {
+    sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon.clone()))
+}
+
 /// Drive one frame of the panel over a fixed-size viewport with `events`
 /// delivered to egui, returning the response it hands back to the dock. The
 /// panel is left in its post-frame state so tests can inspect what it prepared.
@@ -242,11 +247,14 @@ fn run_frame(
         events,
         ..Default::default()
     };
+    // The panel reads its point through the overlay, so the fixture is wrapped
+    // as a version with no edits; the tests that make an edit build their own.
+    let edited = edited_of(recon);
     let mut response = None;
     crate::test_support::run_frame_headless(ctx, input, |ui| {
         response = Some(panel.show(
             ui,
-            recon,
+            &edited,
             RECON,
             TEST_POINT_ID,
             selected_point,
@@ -1014,4 +1022,97 @@ fn error_color_ramps_from_green_through_yellow_to_red() {
             "error {error} px"
         );
     }
+}
+
+// ── Reading through the overlay ─────────────────────────────────────────
+
+#[test]
+fn the_panel_shows_a_modified_points_track_and_not_the_bases() {
+    // The panel reads the point through the overlay, so an added observation is
+    // a row it draws even though the base's row for that index is untouched.
+    let base = std::sync::Arc::new(crate::state::edits::tests::embedded_demo(12));
+    let mut edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::clone(&base));
+    let before = edited.point(3).expect("a live point").observations().len();
+
+    let mut record = edited.point(3).expect("a live point").to_record();
+    let unseen = (0..edited.image_count() as u32)
+        .find(|i| !record.observations.iter().any(|o| o.image_index == *i))
+        .expect("the demo track does not span every image");
+    record.observations.push(sfmtool_core::RecordObservation {
+        image_index: unseen,
+        feature_index: None,
+        keypoint_xy: Some([10.0, 20.0]),
+        confidence: None,
+    });
+    record.observations.sort_by_key(|o| o.image_index);
+    let moved = edited.replace_point(3, record).expect("a live point");
+
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+    let cache = sift_cache(8, 16);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(&ctx, input, |ui| {
+        panel.show(
+            ui,
+            &edited,
+            RECON,
+            TEST_POINT_ID,
+            Some(moved as usize),
+            None,
+            &cache,
+            &HashMap::new(),
+            &[],
+            &ScrollInput::default(),
+        );
+    });
+
+    assert_eq!(
+        panel.observations.len(),
+        before + 1,
+        "the panel prepared the base's track rather than the version's"
+    );
+    assert!(
+        panel
+            .observations
+            .iter()
+            .any(|o| o.image_index == unseen as usize),
+        "the added observation is not among the prepared rows"
+    );
+}
+
+#[test]
+fn a_deleted_point_shows_the_empty_state() {
+    let base = std::sync::Arc::new(SfmrReconstruction::demo(12));
+    let mut edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::clone(&base));
+    edited.delete_point(3).expect("a live point");
+
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+    let cache = sift_cache(8, 16);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(&ctx, input, |ui| {
+        panel.show(
+            ui,
+            &edited,
+            RECON,
+            TEST_POINT_ID,
+            Some(3),
+            None,
+            &cache,
+            &HashMap::new(),
+            &[],
+            &ScrollInput::default(),
+        );
+    });
+
+    // An index the base still holds but the version does not: the panel takes
+    // the empty state rather than showing a point that is not there.
+    assert!(panel.observations.is_empty());
+    assert_eq!(panel.prepared_point, None);
 }

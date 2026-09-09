@@ -320,6 +320,16 @@ impl App {
                 self.scene_renderer.set_uploaded_base(id, base);
                 uploaded_any = true;
             }
+            // The overlay's additions are the other half of the same question,
+            // and are keyed on the addition set rather than on the base: a base
+            // change empties them, and a point edit that adds a point rebuilds
+            // only them. The mask below covers both.
+            let edited = node.edited();
+            if self.scene_renderer.additions_changed(id, edited) {
+                self.scene_renderer
+                    .upload_additions(device, queue, id, edited);
+                uploaded_any = true;
+            }
             self.scene_renderer
                 .update_deleted_mask(queue, id, &node.edited().deleted_points);
         }
@@ -441,15 +451,16 @@ impl App {
                 .selected_point
                 .and_then(|p| Some((p, crate::scene::node_by_id(&self.state.scene, p.recon)?)));
             match selected {
-                Some((point, node)) if point.index() < node.recon().point_set.points.len() => {
+                // Liveness rather than a bound on the base's rows: a deleted
+                // point draws no rays, and an added one is past that bound.
+                Some((point, node)) if node.edited().point(point.point).is_some() => {
                     let (id, recon, transform) = (node.id, node.recon(), node.transform.clone());
-                    let point_idx = point.index();
+                    let edited = node.edited();
                     // Pre-populate SIFT cache for all images in the track
                     // (sift_files only; embedded_patches has no `.sift`
                     // files and reads its keypoints inline).
                     if recon.feature_indexes().is_some() {
-                        for obs in recon.observations_for_point(point_idx) {
-                            let img_idx = obs.image_index as usize;
+                        for img_idx in edited.track_image_indices(point.point) {
                             let read_count =
                                 recon.point_set.max_track_feature_index[img_idx] as usize + 1;
                             crate::state::ensure_sift_cached(
@@ -462,7 +473,7 @@ impl App {
                     }
                     self.scene_renderer.upload_track_rays(
                         device,
-                        recon,
+                        edited,
                         point,
                         &self.state.sift_cache,
                         &transform,
@@ -1108,7 +1119,10 @@ impl App {
                     self.state.hovered_point = None;
                 }
                 Some(PickTarget::Point(point)) => {
-                    self.state.hovered_point = Some(point);
+                    // The shader clips a masked point, so the buffer should
+                    // never name one; the check is what keeps that a property
+                    // of the document rather than of one shader.
+                    self.state.hovered_point = point_is_live(&self.state, point).then_some(point);
                     self.state.hovered_image = None;
                 }
                 None => {
@@ -1159,7 +1173,7 @@ impl App {
                         }
                     }
                 }
-                Some(PickTarget::Point(point)) => {
+                Some(PickTarget::Point(point)) if point_is_live(&self.state, point) => {
                     self.state.select_point(point);
                 }
                 None if !self.viewer_3d.pending_click_is_alt => {
@@ -1188,7 +1202,9 @@ impl App {
                             .record(crate::action_log::Kind::Selection, text);
                     }
                 }
-                None => {}
+                // A pick that named a point this version deleted, or a
+                // background click while Alt is held: nothing to do either way.
+                _ => {}
             }
         }
     }
@@ -1341,4 +1357,16 @@ fn forget_selected(
     image_detail.forget_recon(id);
     point_track_detail.forget_recon(id);
     intrinsics_detail.forget_recon(id);
+}
+
+/// Whether `point` names a point the version on screen still holds.
+///
+/// The pick buffer's indexes are the base's instance rows, which stay stable
+/// across a point edit, so a row whose point this version deleted is still an
+/// index the readback can carry. The shader clips it and it should never arrive,
+/// and this is what makes that a property of the document rather than of one
+/// shader.
+fn point_is_live(state: &crate::state::AppState, point: crate::scene::PointRef) -> bool {
+    crate::scene::node_by_id(&state.scene, point.recon)
+        .is_some_and(|node| !node.is_point_deleted(point.point))
 }

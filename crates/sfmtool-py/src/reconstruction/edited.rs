@@ -18,10 +18,13 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
 
+use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointRecord, RecordObservation, RowMap,
 };
-use sfmtool_core::Point3D;
+use sfmtool_core::{add_observation, AddObservationOptions, Point3D};
+
+use crate::patches::views::{resolve_pyramids, PosedViews};
 
 use super::sfmr_reconstruction::PySfmrReconstruction;
 
@@ -341,6 +344,70 @@ impl PyEditedReconstruction {
     fn add_point(&mut self, record: &Bound<'_, PyDict>) -> PyResult<u32> {
         let record = record_from_dict(record)?;
         self.inner.add_point(record).map_err(edit_err)
+    }
+
+    /// Add an observation of `point` in `image`, at `pixel`, to this version.
+    ///
+    /// The clicked pixel is a seed: the point's stored patch is registered into
+    /// `image` by the same two kernels, at the same parameters, that
+    /// ``sfm embed-patches`` places every observation with, and the track is
+    /// then re-triangulated with the new sighting in it. Returns
+    /// ``(EditedReconstruction, report)``; this object is not changed, and the
+    /// returned value shares its base.
+    ///
+    /// `images` is what every patch kernel takes -- a list of ``HxW[xC]``
+    /// ``uint8`` arrays, one per image of the base, or a prebuilt
+    /// :class:`ImagePyramidSet` -- because the photometric fit needs pixels and
+    /// a reconstruction carries poses and lenses rather than photographs.
+    ///
+    /// `min_zncc` overrides the acceptance bar; the default is the localizer's
+    /// own absolute floor, which is the bar the embed pass keeps an observation
+    /// on. Raises ``ValueError`` with the reason when the edit is refused.
+    #[pyo3(signature = (point, image, pixel, images, min_zncc = None))]
+    fn add_observation(
+        &self,
+        py: Python<'_>,
+        point: u32,
+        image: u32,
+        pixel: [f32; 2],
+        images: &Bound<'_, PyAny>,
+        min_zncc: Option<f64>,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let posed = PosedViews::from_reconstruction(&self.inner.base);
+        let pyramids = resolve_pyramids(&posed, images)?;
+        let views: Vec<ProjectedImage<'_>> = posed
+            .cameras
+            .iter()
+            .zip(&posed.poses)
+            .zip(pyramids.as_slice())
+            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+                camera,
+                cam_from_world,
+                pyramid,
+            })
+            .collect();
+        let mut options = AddObservationOptions::default();
+        if let Some(bar) = min_zncc {
+            options.min_zncc = bar;
+        }
+        let (next, report) = add_observation(&self.inner, point, image, pixel, &views, &options)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let d = PyDict::new(py);
+        d.set_item("point", report.point)?;
+        d.set_item("replaced", report.replaced)?;
+        d.set_item("image", report.image)?;
+        d.set_item(
+            "clicked_pixel",
+            PyArray1::from_vec(py, report.clicked_pixel.to_vec()),
+        )?;
+        d.set_item("keypoint", PyArray1::from_vec(py, report.keypoint.to_vec()))?;
+        d.set_item("shift_px", report.shift_px)?;
+        d.set_item("zncc", report.zncc)?;
+        d.set_item("observation_count", report.observation_count)?;
+        d.set_item("position_shift", report.position_shift)?;
+        d.set_item("condition_number", report.condition_number)?;
+        Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 
     /// The plain reconstruction this version is, with every point in its place,

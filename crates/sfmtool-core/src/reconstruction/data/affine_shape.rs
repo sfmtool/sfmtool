@@ -12,7 +12,77 @@
 
 use nalgebra::Vector3;
 
-use super::SfmrReconstruction;
+use super::{ImageTable, Point3D, SfmrReconstruction};
+
+/// The projected affine shape of one patch frame in one image.
+///
+/// The whole of [`SfmrReconstruction::observation_affine_shape`] below the
+/// column lookups, taken as arguments rather than read off a reconstruction so
+/// that a caller holding the point through an overlay
+/// ([`crate::EditedReconstruction`]) reaches the same algebra. `u` and `v` are
+/// the patch's in-plane half-*vectors*, not unit axes.
+///
+/// Returns `None` when the frame is degenerate, the image index names no image,
+/// or the projection falls behind the camera.
+pub fn patch_affine_shape(
+    point: &Point3D,
+    u: Vector3<f64>,
+    v: Vector3<f64>,
+    image_table: &ImageTable,
+    image_index: usize,
+    keypoint_xy: [f32; 2],
+) -> Option<[[f32; 2]; 2]> {
+    if u.norm_squared() == 0.0 || v.norm_squared() == 0.0 {
+        return None; // no patch for this point
+    }
+    let image = image_table.images.get(image_index)?;
+    let camera = image_table.cameras.get(image.camera_index as usize)?;
+    let r = image.quaternion_wxyz.to_rotation_matrix();
+
+    // Where to evaluate the frame. For a point at infinity the patch is
+    // tangent to the direction sphere: the anchor is the stored direction
+    // and corners are directions (projected with `w = 0`). For a finite
+    // point the anchor is where the keypoint's back-projected ray meets the
+    // patch plane (fall back to the point centre for a grazing view).
+    let anchor = if point.is_at_infinity() {
+        point.position.coords
+    } else {
+        let normal = u.cross(&v);
+        let n_norm = normal.norm();
+        if n_norm == 0.0 {
+            return None;
+        }
+        let normal = normal / n_norm;
+        let center = image.camera_center();
+        let ray_cam = camera.pixel_to_ray(keypoint_xy[0] as f64, keypoint_xy[1] as f64);
+        let ray_world = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
+        let denom = ray_world.dot(&normal);
+        if denom.abs() < 1e-9 {
+            point.position.coords
+        } else {
+            let lambda = (point.position.coords - center.coords).dot(&normal) / denom;
+            center.coords + lambda * ray_world
+        }
+    };
+
+    // Project the anchor and the two half-axis tips. `w` folds out the
+    // translation for a point at infinity, so its corners project as
+    // directions.
+    let w = point.w;
+    let project = |world: Vector3<f64>| -> Option<(f64, f64)> {
+        let p_cam = r * world + w * image.translation_xyz;
+        camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])
+    };
+    let k = project(anchor)?;
+    let pu = project(anchor + u)?;
+    let pv = project(anchor + v)?;
+
+    // Columns are the projected half-axes: u -> column 0, v -> column 1.
+    Some([
+        [(pu.0 - k.0) as f32, (pv.0 - k.0) as f32],
+        [(pu.1 - k.1) as f32, (pv.1 - k.1) as f32],
+    ])
+}
 
 impl SfmrReconstruction {
     /// Derive the local **affine shape** of an observation's keypoint — the
@@ -51,57 +121,7 @@ impl SfmrReconstruction {
             v_arr[[point_idx, 1]] as f64,
             v_arr[[point_idx, 2]] as f64,
         );
-        if u.norm_squared() == 0.0 || v.norm_squared() == 0.0 {
-            return None; // no patch for this point
-        }
-
-        let image = self.image_table.images.get(image_index)?;
-        let camera = self.image_table.cameras.get(image.camera_index as usize)?;
-        let r = image.quaternion_wxyz.to_rotation_matrix();
-
-        // Where to evaluate the frame. For a point at infinity the patch is
-        // tangent to the direction sphere: the anchor is the stored direction
-        // and corners are directions (projected with `w = 0`). For a finite
-        // point the anchor is where the keypoint's back-projected ray meets the
-        // patch plane (fall back to the point centre for a grazing view).
-        let anchor = if point.is_at_infinity() {
-            point.position.coords
-        } else {
-            let normal = u.cross(&v);
-            let n_norm = normal.norm();
-            if n_norm == 0.0 {
-                return None;
-            }
-            let normal = normal / n_norm;
-            let center = image.camera_center();
-            let ray_cam = camera.pixel_to_ray(keypoint_xy[0] as f64, keypoint_xy[1] as f64);
-            let ray_world = r.transpose() * Vector3::new(ray_cam[0], ray_cam[1], ray_cam[2]);
-            let denom = ray_world.dot(&normal);
-            if denom.abs() < 1e-9 {
-                point.position.coords
-            } else {
-                let lambda = (point.position.coords - center.coords).dot(&normal) / denom;
-                center.coords + lambda * ray_world
-            }
-        };
-
-        // Project the anchor and the two half-axis tips. `w` folds out the
-        // translation for a point at infinity, so its corners project as
-        // directions.
-        let w = point.w;
-        let project = |world: Vector3<f64>| -> Option<(f64, f64)> {
-            let p_cam = r * world + w * image.translation_xyz;
-            camera.ray_to_pixel([p_cam.x, p_cam.y, p_cam.z])
-        };
-        let k = project(anchor)?;
-        let pu = project(anchor + u)?;
-        let pv = project(anchor + v)?;
-
-        // Columns are the projected half-axes: u -> column 0, v -> column 1.
-        Some([
-            [(pu.0 - k.0) as f32, (pv.0 - k.0) as f32],
-            [(pu.1 - k.1) as f32, (pv.1 - k.1) as f32],
-        ])
+        patch_affine_shape(point, u, v, &self.image_table, image_index, keypoint_xy)
     }
 
     /// Per-point maximum keypoint feature size (px) for an `embedded_patches`

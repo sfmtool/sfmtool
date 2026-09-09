@@ -18,6 +18,7 @@ mod overlay;
 mod tests;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
+pub(crate) use overlay::{add_observation_entry, ADD_OBSERVATION_LABEL};
 
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{CameraRef, ImageRef, ReconId};
@@ -27,7 +28,7 @@ use crate::state::{
 use crate::texture::rgb_to_color_image;
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::camera::CameraIntrinsics;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::EditedReconstruction;
 use std::collections::HashMap;
 
 use intrinsics::View;
@@ -114,6 +115,13 @@ pub struct ImageDetailResponse {
     pub hovered_point: Option<usize>,
     /// Whether the pointer is currently inside the detail panel.
     pub has_pointer: bool,
+    /// The pixel a right-click just opened the context menu at, in
+    /// source-image coordinates. Set on the frame the menu opens and read by
+    /// the dock into `AppState::pending_observation_pixel`, because the menu's
+    /// entries are drawn a frame later, by which time the pointer has moved.
+    pub context_menu_pixel: Option<[f32; 2]>,
+    /// Set when the context menu's `Add observation to track here` was clicked.
+    pub add_observation: bool,
 }
 
 impl ImageDetail {
@@ -234,7 +242,7 @@ impl ImageDetail {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         recon_id: ReconId,
         selected_image: Option<usize>,
         selected_point: Option<usize>,
@@ -250,6 +258,8 @@ impl ImageDetail {
             select_point: None,
             hovered_point: None,
             has_pointer: false,
+            context_menu_pixel: None,
+            add_observation: false,
         };
 
         // If no image selected, show placeholder
@@ -287,7 +297,7 @@ impl ImageDetail {
                 && c.max_feature_size == feature_display.max_feature_size
         });
         if show_features && !cache_valid {
-            self.load_display_features(recon, image_ref, sift_features, feature_display);
+            self.load_display_features(edited, image_ref, sift_features, feature_display);
         } else if !show_features {
             // In None mode, still load tracked features for selected point display
             let tracked_overlay_valid = self
@@ -295,7 +305,7 @@ impl ImageDetail {
                 .as_ref()
                 .is_some_and(|c| c.image == image_ref && c.tracked_only);
             if !tracked_overlay_valid {
-                self.load_tracked_features(recon, image_ref, sift_features);
+                self.load_tracked_features(edited, image_ref, sift_features);
             }
         }
 
@@ -378,13 +388,15 @@ impl ImageDetail {
         if response.has_pointer && ui.input(|i| i.key_pressed(egui::Key::I)) {
             intrinsics_display.enabled = !intrinsics_display.enabled;
         }
-        let camera_ref = recon
-            .image_table
+        // The image table and its cameras are the base's: no point edit moves an
+        // image, and a bulk edit that does hands the node a new base.
+        let image_table = &edited.base.image_table;
+        let camera_ref = image_table
             .images
             .get(img_idx)
             .map(|image| CameraRef::new(recon_id, image.camera_index as usize));
         let camera = camera_ref
-            .and_then(|camera_ref| recon.image_table.cameras.get(camera_ref.index()))
+            .and_then(|camera_ref| image_table.cameras.get(camera_ref.index()))
             .cloned();
         let view = View {
             origin: image_rect.min,
@@ -409,7 +421,7 @@ impl ImageDetail {
             ui,
             &painter,
             &interact_response,
-            recon,
+            edited,
             feature_display,
             selected_point,
             hovered_point,
@@ -453,17 +465,18 @@ impl ImageDetail {
     /// Build tracked-only feature list from the shared SIFT cache (for None overlay mode).
     fn load_tracked_features(
         &mut self,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         image: ImageRef,
         cached_sift: Option<&CachedSiftFeatures>,
     ) {
+        let recon = &*edited.base;
         let img_idx = image.index();
         // Embedded-patches reconstructions keep keypoints inline (no `.sift`
         // cache, empty `image_feature_to_point`); build the tracked-feature list
         // from the per-observation keypoints. Every embedded observation belongs
         // to a point, so all are tracked.
         if recon.feature_indexes().is_none() {
-            let features = embedded_image_features(recon, img_idx);
+            let features = embedded_image_features(edited, img_idx);
             let tree = build_feature_tree(&features);
             log::info!(
                 "Loaded {} embedded tracked features for image {}",
@@ -537,11 +550,12 @@ impl ImageDetail {
     /// Build display feature list for overlay modes (Features/ReprojError/TrackLength).
     fn load_display_features(
         &mut self,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         image: ImageRef,
         cached_sift: Option<&CachedSiftFeatures>,
         settings: &FeatureDisplaySettings,
     ) {
+        let recon = &*edited.base;
         let img_idx = image.index();
         // Embedded-patches: build features from the inline per-observation
         // keypoints, with affine shapes derived by projecting each point's patch
@@ -549,7 +563,7 @@ impl ImageDetail {
         // so `tracked_only` is a no-op; size filters and the max-features cap
         // apply just like the SIFT path.
         if recon.feature_indexes().is_none() {
-            let mut features = embedded_image_features(recon, img_idx);
+            let mut features = embedded_image_features(edited, img_idx);
             features.retain(|f| {
                 let size = feature_size(&f.affine_shape);
                 settings.min_feature_size.is_none_or(|mn| size >= mn)
@@ -565,7 +579,7 @@ impl ImageDetail {
                     features.truncate(max);
                 }
             }
-            populate_feature_diagnostics(&mut features, recon, settings.overlay_mode);
+            populate_feature_diagnostics(&mut features, edited, settings.overlay_mode);
             let tree = build_feature_tree(&features);
             log::info!(
                 "Loaded {} embedded features for image {} (mode: {:?})",
@@ -657,7 +671,7 @@ impl ImageDetail {
 
         // Populate per-point diagnostics only when the active overlay consumes
         // them. Each iterates a point's observations, so we pay only on demand.
-        populate_feature_diagnostics(&mut features, recon, settings.overlay_mode);
+        populate_feature_diagnostics(&mut features, edited, settings.overlay_mode);
 
         let tree = build_feature_tree(&features);
 
@@ -716,24 +730,32 @@ fn build_feature_tree(features: &[DisplayFeature]) -> kiddo::KdTree<f32, 2> {
 /// skips the ellipse and only the centre dot draws. O(total observations):
 /// embedded recons have no per-image keypoint index (`image_feature_to_point`
 /// is empty).
-fn embedded_image_features(recon: &SfmrReconstruction, img_idx: usize) -> Vec<DisplayFeature> {
-    let Some(kxy) = recon.keypoints_xy() else {
+///
+/// The walk is over the version's **live** indexes rather than the base's rows:
+/// base points less the deleted set, then the additions. A point this version
+/// deleted contributes no feature, and one it added or modified contributes the
+/// track it holds now.
+fn embedded_image_features(edited: &EditedReconstruction, img_idx: usize) -> Vec<DisplayFeature> {
+    if !edited.has_keypoints() {
         return Vec::new();
-    };
+    }
     let mut features = Vec::new();
-    for point_idx in 0..recon.point_set.points.len() {
-        let obs_start = recon.point_set.observation_offsets[point_idx];
-        for (k, obs) in recon.observations_for_point(point_idx).iter().enumerate() {
+    for point_idx in edited.live_indexes() {
+        let Some(view) = edited.point(point_idx) else {
+            continue;
+        };
+        for (k, obs) in view.observations().iter().enumerate() {
             if obs.image_index as usize == img_idx {
-                let row = obs_start + k;
-                let position = [kxy[[row, 0]], kxy[[row, 1]]];
-                let affine_shape = recon
+                let Some(position) = view.keypoint_xy(k) else {
+                    continue;
+                };
+                let affine_shape = edited
                     .observation_affine_shape(point_idx, img_idx, position)
                     .unwrap_or([[0.0; 2]; 2]);
                 features.push(DisplayFeature {
                     position,
                     affine_shape,
-                    point_index: point_idx as u32,
+                    point_index: point_idx,
                     max_track_angle_deg: f32::NAN,
                     inverse_depth_z: f32::NAN,
                     condition_number: f32::NAN,
@@ -749,7 +771,7 @@ fn embedded_image_features(recon: &SfmrReconstruction, img_idx: usize) -> Vec<Di
 /// on demand).
 fn populate_feature_diagnostics(
     features: &mut [DisplayFeature],
-    recon: &SfmrReconstruction,
+    edited: &EditedReconstruction,
     mode: OverlayMode,
 ) {
     match mode {
@@ -757,17 +779,18 @@ fn populate_feature_diagnostics(
             for feature in features.iter_mut() {
                 if feature.is_tracked() {
                     feature.max_track_angle_deg =
-                        compute_max_track_angle_deg(recon, feature.point_index as usize);
+                        compute_max_track_angle_deg(edited, feature.point_index);
                 }
             }
         }
         OverlayMode::DepthReliability | OverlayMode::ConditionNumber => {
             for feature in features.iter_mut() {
                 if feature.is_tracked() {
-                    let (cond, z) = crate::metrics::compute_point_diagnostics(
-                        recon,
-                        feature.point_index as usize,
-                    );
+                    let Some(view) = edited.point(feature.point_index) else {
+                        continue;
+                    };
+                    let (cond, z) =
+                        crate::metrics::compute_point_diagnostics(&edited.base.image_table, &view);
                     feature.condition_number = cond;
                     feature.inverse_depth_z = z;
                 }
@@ -779,16 +802,16 @@ fn populate_feature_diagnostics(
 
 /// Compute the max pairwise angle (degrees) between world-space rays from
 /// observing cameras to a 3D point. Single-observation points return 0.0.
-fn compute_max_track_angle_deg(recon: &SfmrReconstruction, point_idx: usize) -> f32 {
-    let Some(pt) = recon.point_set.points.get(point_idx) else {
+fn compute_max_track_angle_deg(edited: &EditedReconstruction, point_idx: u32) -> f32 {
+    let Some(view) = edited.point(point_idx) else {
         return f32::NAN;
     };
-    let point_pos = pt.position;
-    let observations = recon.observations_for_point(point_idx);
+    let point_pos = view.point().position;
+    let observations = view.observations();
     let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
     for obs in observations {
         let img_idx = obs.image_index as usize;
-        let Some(image) = recon.image_table.images.get(img_idx) else {
+        let Some(image) = edited.base.image_table.images.get(img_idx) else {
             continue;
         };
         let cam_center = image.camera_center();

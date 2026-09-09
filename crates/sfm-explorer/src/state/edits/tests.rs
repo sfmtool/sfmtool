@@ -436,3 +436,102 @@ fn a_jump_to_where_the_cursor_already_is_or_to_no_version_is_refused() {
     let other = state.scene[1].history.current_version().serial;
     assert!(state.jump_to_version(id, other).is_err());
 }
+
+// ── Add observation: the point edit that creates structure ──────────────
+
+/// A demo node whose value is `embedded_patches`, which is the only mode this
+/// edit is defined on. No images behind it, so the fit itself is exercised in
+/// `sfmtool-core` and through the Python binding rather than here.
+fn embedded_state() -> AppState {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(embedded_demo(64)));
+    state
+}
+
+/// The demo reconstruction with its observations rewritten as inline keypoints
+/// and a patch frame per point.
+///
+/// Built here rather than through `to_embedded_patches`, which reads the `.sift`
+/// companions the demo value has no files for.
+pub(crate) fn embedded_demo(points: usize) -> SfmrReconstruction {
+    use ndarray::Array2;
+    use sfmtool_core::ObservationSource;
+
+    let mut recon = SfmrReconstruction::demo(points);
+    let images = recon.image_count();
+    let observations = recon.point_set.tracks.len();
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: Array2::<f32>::from_shape_fn((observations, 2), |(i, c)| {
+            (i % 64) as f32 + c as f32
+        }),
+        image_file_hashes: vec![[0u8; 16]; images],
+    };
+    let p = recon.point_count();
+    let mut u = Array2::<f32>::zeros((p, 3));
+    let mut v = Array2::<f32>::zeros((p, 3));
+    for i in 0..p {
+        u[[i, 0]] = 0.02;
+        v[[i, 1]] = 0.02;
+    }
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
+    recon.metadata.feature_source = "embedded_patches".to_string();
+    recon.rebuild_derived_fields();
+    recon
+}
+
+#[test]
+fn a_sift_files_node_refuses_the_edit() {
+    let mut state = state();
+    let id = node(&state);
+    let why = state
+        .add_observation_at(PointRef::new(id, 3), ImageRef::new(id, 5), [10.0, 10.0])
+        .expect_err("a sift_files node has no room for a featureless observation");
+    assert!(why.contains("embedded_patches"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+#[test]
+fn an_image_already_in_the_track_refuses_the_edit() {
+    let mut state = embedded_state();
+    let id = node(&state);
+    let seen = state.scene[0].edited().track_image_indices(3)[0];
+    let why = state
+        .add_observation_at(PointRef::new(id, 3), ImageRef::new(id, seen), [1.0, 1.0])
+        .expect_err("that image already observes the point");
+    assert!(why.contains("already observes"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+#[test]
+fn the_edit_refuses_without_a_selected_point() {
+    let state = embedded_state();
+    let edited = state.scene[0].edited();
+    let entry = crate::image_detail::add_observation_entry(edited, 0, None)
+        .expect("an embedded_patches node offers the entry");
+    assert!(entry.is_err(), "the entry should be greyed with no point");
+}
+
+#[test]
+fn the_entry_is_absent_on_a_sift_files_node() {
+    let state = state();
+    let edited = state.scene[0].edited();
+    assert!(
+        crate::image_detail::add_observation_entry(edited, 0, Some(3)).is_none(),
+        "the entry has no meaning on a sift_files node"
+    );
+}
+
+#[test]
+fn the_entry_is_offered_for_an_image_outside_the_track() {
+    let state = embedded_state();
+    let edited = state.scene[0].edited();
+    let seen: Vec<usize> = edited.track_image_indices(3);
+    let unseen = (0..edited.image_count())
+        .find(|i| !seen.contains(i))
+        .expect("the demo track does not span every image");
+    assert_eq!(
+        crate::image_detail::add_observation_entry(edited, unseen, Some(3)),
+        Some(Ok(())),
+    );
+}

@@ -260,6 +260,20 @@ impl SceneRenderer {
                                 pass.draw(0..4, 0..bundle.point_count);
                             }
                         }
+                        // The overlay's additions, after the base's and with
+                        // the same global uniforms; their own bind group
+                        // carries only the shifted pick base.
+                        if let Some(additions) = &bundle.additions {
+                            if additions.point_count > 0 {
+                                pass.set_bind_group(0, &additions.bind_group, &[]);
+                                pass.set_vertex_buffer(
+                                    1,
+                                    additions.point_instance_buffer.slice(..),
+                                );
+                                pass.set_vertex_buffer(2, additions.point_alive_buffer.slice(..));
+                                pass.draw(0..4, 0..additions.point_count);
+                            }
+                        }
                     }
                 }
             }
@@ -340,7 +354,11 @@ impl SceneRenderer {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, quad_vb.slice(..));
                     for bundle in bundles(|b| b.display.show_patches) {
-                        if let Some(patch) = &bundle.patch {
+                        // The base's atlas, then the additions' own: two draws
+                        // in one pass, and nothing in the shader tells them
+                        // apart.
+                        let additions = bundle.additions.as_ref().and_then(|a| a.patch.as_ref());
+                        for patch in bundle.patch.iter().chain(additions) {
                             if patch.count > 0 {
                                 pass.set_bind_group(0, &patch.bind_group, &[]);
                                 pass.set_vertex_buffer(1, patch.instance_buffer.slice(..));

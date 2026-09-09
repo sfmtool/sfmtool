@@ -351,7 +351,27 @@ impl SceneRenderer {
     fn global_point_index(&self, point: PointRef) -> Option<u32> {
         let bundle = self.recons.get(&point.recon)?;
         let local = point.point;
-        (local < bundle.point_count).then(|| bundle.point_pick_base + local)
+        // An edited index below the base's instance count names a base
+        // instance and one at or above it names an addition; the two ranges are
+        // contiguous, so the arithmetic is the same for both.
+        let span = bundle.point_count.saturating_add(bundle.addition_count());
+        (local < span).then(|| bundle.point_pick_base + local)
+    }
+
+    /// [`Self::global_point_index`], for the upload tests, which assert on the
+    /// pick space a node's instances occupy rather than on a rendered frame.
+    #[cfg(test)]
+    pub(crate) fn global_point_index_for_test(&self, point: PointRef) -> Option<u32> {
+        self.global_point_index(point)
+    }
+
+    /// What the pick readback would resolve `pick_id` to, for the same tests.
+    #[cfg(test)]
+    pub(crate) fn resolve_pick_for_test(&self, pick_id: u32) -> Option<PointRef> {
+        match self.pick_tables.resolve(pick_id | picking::PICK_TAG_POINT) {
+            Some(PickTarget::Point(point)) => Some(point),
+            _ => None,
+        }
     }
 
     /// The global image index a ref maps to, for the shader's `u32` compare.
@@ -414,14 +434,19 @@ impl SceneRenderer {
             let bundle = self.recons.get_mut(id).expect("id came from the map");
             bundle.point_pick_base = point_base;
             bundle.image_pick_base = image_base;
+            // The range covers the base's instances *and* the overlay's
+            // additions, laid out in that order, which is what makes an
+            // addition's global id `point_pick_base + edited index` exactly as a
+            // base point's is.
+            let point_span = bundle.point_count.saturating_add(bundle.addition_count());
             self.pick_tables.push(
                 *id,
                 point_base,
-                bundle.point_count,
+                point_span,
                 image_base,
                 bundle.frustum_image_count,
             );
-            point_base = point_base.saturating_add(bundle.point_count);
+            point_base = point_base.saturating_add(point_span);
             image_base = image_base.saturating_add(bundle.frustum_image_count);
         }
 

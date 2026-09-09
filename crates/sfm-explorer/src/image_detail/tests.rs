@@ -43,7 +43,7 @@ fn frame(
     crate::test_support::run_frame_headless(ctx, input, |ui| {
         detail.show(
             ui,
-            node.recon(),
+            node.edited(),
             node.id,
             Some(image_index),
             None,
@@ -196,4 +196,46 @@ fn a_view_reset_forgets_the_extent_it_was_measured_against() {
     frame(&mut detail, &ctx, &node, 0, &image, PANEL);
     assert_eq!(detail.zoom, 1.0);
     assert_eq!(detail.pan, egui::Vec2::ZERO);
+}
+
+// ── Reading through the overlay ─────────────────────────────────────────
+
+/// The embedded-features walk over a version that has deleted and added a
+/// point: it is over the version's live indexes, not the base's rows.
+#[test]
+fn the_embedded_overlay_skips_a_deleted_point_and_shows_an_addition() {
+    use crate::state::edits::tests::embedded_demo;
+
+    let base = std::sync::Arc::new(embedded_demo(40));
+    let loaded = sfmtool_core::EditedReconstruction::new(std::sync::Arc::clone(&base));
+
+    // The image every feature below is counted in: the first one the point
+    // whose fate we change is seen in.
+    let image = loaded.track_image_indices(3)[0];
+    let features_in = |edited: &sfmtool_core::EditedReconstruction| -> Vec<u32> {
+        super::embedded_image_features(edited, image)
+            .iter()
+            .map(|f| f.point_index)
+            .collect()
+    };
+
+    let before = features_in(&loaded);
+    assert!(before.contains(&3));
+
+    // Deleted: its observation leaves the overlay.
+    let mut deleted = loaded.clone();
+    deleted.delete_point(3).expect("a live point");
+    let after = features_in(&deleted);
+    assert!(!after.contains(&3), "a deleted point still drew a feature");
+    assert_eq!(after.len(), before.len() - 1);
+
+    // Modified: the old index is gone and the new one is there, still in the
+    // same image, because the record carried its track over.
+    let mut modified = loaded.clone();
+    let record = modified.point(3).expect("a live point").to_record();
+    let moved = modified.replace_point(3, record).expect("a live point");
+    let after = features_in(&modified);
+    assert!(!after.contains(&3), "the replaced index still drew");
+    assert!(after.contains(&moved), "the addition drew no feature");
+    assert_eq!(after.len(), before.len());
 }

@@ -73,6 +73,12 @@ impl SceneRenderer {
         bundle.point_alive_buffer = Some(alive_buffer);
         bundle.masked_deleted.clear();
         bundle.point_count = instances.len() as u32;
+        // An addition's index is relative to the base's point count and its
+        // instances hold edited indexes, so a new base invalidates both. The
+        // version that arrives with that base has an empty overlay; a later one
+        // that does not re-uploads through `upload_additions`.
+        bundle.additions = None;
+        bundle.uploaded_additions = (0, 0);
 
         let (count, size) = (bundle.point_count, bundle.auto_point_size);
         // The point count moved, so the global pick index space has to be

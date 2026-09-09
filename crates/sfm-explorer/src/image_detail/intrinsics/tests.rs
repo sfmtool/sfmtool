@@ -547,7 +547,7 @@ fn panel_frame_with_input(
     let mut warm = ctx.run_ui(warm_up, |ui| {
         detail.show(
             ui,
-            node.recon(),
+            node.edited(),
             node.id,
             Some(0),
             None,
@@ -565,7 +565,7 @@ fn panel_frame_with_input(
     let mut output = ctx.run_ui(input, |ui| {
         detail.show(
             ui,
-            node.recon(),
+            node.edited(),
             node.id,
             Some(0),
             None,

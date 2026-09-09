@@ -30,30 +30,46 @@ impl SceneRenderer {
         // The bind group below needs the patch pipeline's layout and the
         // node's bundle, neither of which may exist yet.
         self.ensure_recon(device, id);
-
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
+        let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0);
+        self.recons.get_mut(&id).expect("just ensured").patch = patch;
+    }
 
+    /// The surfel instances and bitmap atlas for one point set, with each
+    /// instance's `point_index` offset by `index_offset`.
+    ///
+    /// Shared by the base's upload and the overlay's additions, which differ
+    /// only in which point set they read and where its indexes start. The
+    /// additions get their own `PatchResources`, and so their own atlas: the
+    /// base's atlas is what a run of point edits shares, and appending to it
+    /// would mean rebuilding it.
+    pub(super) fn build_patch_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: ReconId,
+        point_set: &sfmtool_core::PointSet,
+        index_offset: u32,
+    ) -> Option<PatchResources> {
         let (Some(u_halfvecs), Some(v_halfvecs)) = (
-            &recon.point_set.patch_u_halfvec_xyz,
-            &recon.point_set.patch_v_halfvec_xyz,
+            &point_set.patch_u_halfvec_xyz,
+            &point_set.patch_v_halfvec_xyz,
         ) else {
-            return;
+            return None;
         };
-        let Some(bitmaps) = &recon.point_set.patch_bitmaps_y_x_rgba else {
-            return;
-        };
+        let bitmaps = point_set.patch_bitmaps_y_x_rgba.as_ref()?;
         // Tiles must be square and fit the GPU's 2D texture limit; on-disk files
         // are shape-verified, but an in-memory recon (e.g. built in Python) may
         // not be, so guard rather than trip a wgpu validation error.
         let resolution = bitmaps.shape()[1] as u32;
         let tile_cols = bitmaps.shape()[2] as u32;
         if resolution == 0 {
-            return;
+            return None;
         }
         if tile_cols != resolution {
             log::warn!("patch bitmaps are non-square ({resolution}×{tile_cols}); skipping patches");
-            return;
+            return None;
         }
         let max_texture_dim = device.limits().max_texture_dimension_2d;
         let max_array_layers = device.limits().max_texture_array_layers;
@@ -62,7 +78,7 @@ impl SceneRenderer {
                 "patch bitmap resolution {resolution} exceeds the GPU texture limit \
                  {max_texture_dim}; skipping patches",
             );
-            return;
+            return None;
         }
 
         // Collect the points that carry a patch: a point with no patch is an
@@ -70,8 +86,7 @@ impl SceneRenderer {
         // short frame/bitmap array can't index out of range. The instance/atlas
         // buffers are compacted, so an instance's atlas slot is not its point
         // index.
-        let n_rows = recon
-            .point_set
+        let n_rows = point_set
             .points
             .len()
             .min(bitmaps.shape()[0])
@@ -82,7 +97,7 @@ impl SceneRenderer {
             .collect();
         let patch_count = point_indices.len() as u32;
         if patch_count == 0 {
-            return;
+            return None;
         }
 
         // Atlas grid dimensions: each layer ("page") holds a cols×rows grid of
@@ -159,7 +174,7 @@ impl SceneRenderer {
                 },
             );
 
-            let p = &recon.point_set.points[i];
+            let p = &point_set.points[i];
             instances.push(PatchInstance {
                 center: [
                     p.position.x as f32,
@@ -171,7 +186,7 @@ impl SceneRenderer {
                 _pad0: 0.0,
                 v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
                 atlas_layer: slot as u32,
-                point_index: i as u32,
+                point_index: index_offset + i as u32,
             });
         }
 
@@ -211,9 +226,12 @@ impl SceneRenderer {
 
         let layout = self.patch_bind_group_layout.as_ref();
         let sampler = self.patch_sampler.as_ref();
-        let bundle = self.recons.get_mut(&id).expect("just ensured");
+        let bundle = self
+            .recons
+            .get_mut(&id)
+            .expect("the caller ensured the bundle");
         let (Some(layout), Some(sampler)) = (layout, sampler) else {
-            return;
+            return None;
         };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("patch bind group"),
@@ -238,7 +256,7 @@ impl SceneRenderer {
             ],
         });
 
-        bundle.patch = Some(PatchResources {
+        let resources = PatchResources {
             instance_buffer,
             alive_buffer,
             slot_of_point,
@@ -249,7 +267,7 @@ impl SceneRenderer {
             atlas_cols: cols,
             atlas_rows: actual_rows_per_page,
             patches_per_page,
-        });
+        };
 
         let atlas_bytes = atlas_width as u64 * atlas_height as u64 * 4 * num_pages as u64;
         log::info!(
@@ -262,5 +280,6 @@ impl SceneRenderer {
             num_pages,
             atlas_bytes as f64 / (1024.0 * 1024.0),
         );
+        Some(resources)
     }
 }

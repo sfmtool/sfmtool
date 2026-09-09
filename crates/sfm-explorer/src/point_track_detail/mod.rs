@@ -24,7 +24,7 @@ use std::collections::HashMap;
 
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::patch::cloud::OrientedPatch;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::EditedReconstruction;
 
 use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, PointRef, ReconId};
@@ -149,7 +149,7 @@ impl PointTrackDetail {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         recon_id: ReconId,
         // The selected point's Point ID, minted by the caller.
         point_id: &str,
@@ -176,10 +176,16 @@ impl PointTrackDetail {
             }
         }
 
-        // No point selected — or a stale index left over from a reconstruction
-        // that has since shrunk. Either way there is nothing to inspect, so
-        // offer the one way in that needs no click on a splat.
-        let selected_point = selected_point.filter(|&idx| idx < recon.point_set.points.len());
+        // The image table, the cameras and the thumbnails are the base's, which
+        // no point edit changes. The point itself is read through the overlay
+        // just below, so a modified or added point is what this panel shows.
+        let recon = &*edited.base;
+
+        // No point selected, or an index that names no live point: it was
+        // deleted, or it is stale from a reconstruction that has since shrunk.
+        // Either way there is nothing to inspect, so offer the one way in that
+        // needs no click on a splat.
+        let selected_point = selected_point.filter(|&idx| edited.point(idx as u32).is_some());
         let Some(point_idx) = selected_point else {
             response.request_goto_point = show_empty_state(ui);
             self.prepared_point = None;
@@ -193,7 +199,7 @@ impl PointTrackDetail {
             // Set first: everything below derives the reconstruction its
             // caches belong to from `prepared_point`.
             self.prepared_point = Some(point_ref);
-            self.prepare_observations(ui.ctx(), recon, point_ref, sift_cache);
+            self.prepare_observations(ui.ctx(), edited, point_ref, sift_cache);
             self.scroll_offset_y = None;
         }
         // Not gated on the selection changing: an edit or an undo can change
@@ -201,13 +207,32 @@ impl PointTrackDetail {
         // selection, and the header must show the id that resolves *now*.
         self.point_id = point_id.to_string();
 
-        let point = &recon.point_set.points[point_idx];
+        let view = edited
+            .point(point_idx as u32)
+            .expect("the selection was just filtered to a live point");
+        let point = view.point();
+        let obs_count = view.observations().len() as u32;
 
         // --- Header: Point Summary ---
-        response.request_goto_point = self.show_header(ui, recon, point_idx, point);
+        response.request_goto_point = self.show_header(ui, obs_count, point);
 
         // --- Stored-patch header tile (embedded-patches reconstructions) ---
         self.show_stored_patch_tile(ui);
+
+        // The way to grow this track, said where the track is being read. The
+        // edit itself belongs to the image, so this is a hint and not a button:
+        // it names the gesture and the panel it happens in.
+        if !edited.has_feature_indexes() {
+            ui.label(
+                egui::RichText::new(format!(
+                    "To add an observation: select an image this point is not seen in, \
+                     then right-click it in Image Detail and choose \u{201c}{}\u{201d}.",
+                    crate::image_detail::ADD_OBSERVATION_LABEL
+                ))
+                .weak()
+                .small(),
+            );
+        }
 
         ui.separator();
 

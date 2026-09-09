@@ -233,13 +233,16 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         .node(recon_id)
         .ok_or_else(|| ToolError::new("The reconstruction is no longer loaded."))?;
     let recon = node.recon();
-    let point = &recon.point_set.points[point_index];
-    let observation_start = recon.point_set.observation_offsets[point_index];
-    let feature_indexes = recon.feature_indexes();
-    let keypoints_xy = recon.keypoints_xy();
+    // The point and its track come through the overlay, so an agent is told
+    // what the panels show; the images and cameras are the base's.
+    let view = node.edited().point(point_ref.point).ok_or_else(|| {
+        ToolError::new("That point is not in this version of the reconstruction.")
+    })?;
+    let point = view.point();
+    let feature_indexes = view.feature_indexes();
 
-    let track: Vec<Value> = recon
-        .observations_for_point(point_index)
+    let track: Vec<Value> = view
+        .observations()
         .iter()
         .enumerate()
         .map(|(k, observation)| {
@@ -250,9 +253,8 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
                 state,
                 recon_id,
                 image_index,
-                observation_start + k,
-                feature_indexes,
-                keypoints_xy,
+                feature_indexes.map(|f| f[k] as usize),
+                view.keypoint_xy(k),
             );
             let (reproj_error, _) =
                 crate::metrics::compute_observation_metrics(point, image, camera, xy);
@@ -292,11 +294,7 @@ fn warm_track_sift_cache(state: &mut AppState, point: crate::scene::PointRef) {
     if node.recon().feature_indexes().is_none() {
         return;
     }
-    let images: Vec<usize> = node
-        .recon()
-        .track_image_indices(point.index())
-        .into_iter()
-        .collect();
+    let images: Vec<usize> = node.edited().track_image_indices(point.point);
     for image_index in images {
         let read_count = state
             .node(point.recon)
@@ -330,12 +328,10 @@ fn observation_xy(
     state: &AppState,
     recon: crate::scene::ReconId,
     image_index: usize,
-    observation: usize,
-    feature_indexes: Option<&[u32]>,
-    keypoints_xy: Option<&ndarray::Array2<f32>>,
+    feature_index: Option<usize>,
+    keypoint_xy: Option<[f32; 2]>,
 ) -> [f32; 2] {
-    if let Some(feature_indexes) = feature_indexes {
-        let feature = feature_indexes[observation] as usize;
+    if let Some(feature) = feature_index {
         return state
             .sift_cache
             .get(&ImageRef::new(recon, image_index))
@@ -343,8 +339,5 @@ fn observation_xy(
             .copied()
             .unwrap_or([0.0, 0.0]);
     }
-    if let Some(keypoints) = keypoints_xy {
-        return [keypoints[[observation, 0]], keypoints[[observation, 1]]];
-    }
-    [0.0, 0.0]
+    keypoint_xy.unwrap_or([0.0, 0.0])
 }

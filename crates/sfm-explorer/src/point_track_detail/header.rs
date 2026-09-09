@@ -5,8 +5,6 @@
 //! length, triangulation diagnostics) and, for embedded-patches
 //! reconstructions, the stored-patch preview tile drawn beneath it.
 
-use sfmtool_core::SfmrReconstruction;
-
 use super::{PointTrackDetail, STORED_PATCH_SIZE};
 
 impl PointTrackDetail {
@@ -15,8 +13,9 @@ impl PointTrackDetail {
     pub(super) fn show_header(
         &self,
         ui: &mut egui::Ui,
-        recon: &SfmrReconstruction,
-        point_idx: usize,
+        // Read through the overlay by the caller, so a modified point's track
+        // length is this version's rather than the base's.
+        obs_count: u32,
         point: &sfmtool_core::Point3D,
     ) -> bool {
         let point_id = self.point_id.clone();
@@ -24,7 +23,6 @@ impl PointTrackDetail {
             "{:.3}, {:.3}, {:.3}",
             point.position.x, point.position.y, point.position.z
         );
-        let obs_count = recon.point_set.observation_counts[point_idx];
 
         let mut goto_clicked = false;
         ui.horizontal_wrapped(|ui| {

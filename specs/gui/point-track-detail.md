@@ -104,6 +104,28 @@ RGB channels are shown — the alpha channel (per-texel cross-view confidence)
 is forced opaque. The row is hidden entirely when the reconstruction has no
 bitmaps or the point's bitmap is all-zero.
 
+#### Growing the track
+
+On an **embedded-patches** reconstruction a line under the stored-patch tile
+names the way to add an image to this track: select an image the point is not
+seen in, then right-click it in the Image Detail panel and choose *Add
+observation to track here*
+([`edits/add-observation.md`](edits/add-observation.md)). The hint lives here
+because the track is what a reader is looking at when they notice the gap, and it
+is a hint rather than a button because the action names a pixel, which only the
+other panel can supply. It quotes the menu entry's own label from one constant,
+so the two cannot drift.
+
+#### What the panel reads
+
+Everything about the point -- its position, colour and error, its whole track,
+each observation's keypoint, its patch frame and stored bitmap, its
+triangulation diagnostics -- is read through the version's overlay accessor
+rather than off the base, so a point an edit modified shows the track it holds
+now. An index the version has deleted resolves to nothing and the panel takes its
+empty state, even though the base still has a row at that index
+([document-model.md](document-model.md)).
+
 #### Point ID
 
 The header displays a **Point ID** — a compact, copy-pastable identifier that

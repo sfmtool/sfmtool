@@ -39,6 +39,7 @@ mod image_table;
 mod point_set;
 mod recompute;
 
+pub use affine_shape::patch_affine_shape;
 pub use image_table::ImageTable;
 pub use point_set::{ObservationSource, PointSet};
 

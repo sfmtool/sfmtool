@@ -135,6 +135,8 @@ value.
 impl AppState {
     pub fn delete_selected_point(&mut self) -> Result<(), String>;
     pub fn delete_point(&mut self, point: PointRef) -> Result<(), String>;
+    pub fn add_observation(&mut self, point: PointRef, image: ImageRef)
+        -> Result<(), String>;
     pub fn delete_image(&mut self, image: ImageRef) -> Result<(), String>;
     pub fn undo(&mut self, id: ReconId) -> Result<(), String>;
     pub fn redo(&mut self, id: ReconId) -> Result<(), String>;
@@ -148,6 +150,12 @@ the overlay and shares the base pointer -- calls
 `EditedReconstruction::delete_point`, and pushes the result. The base is the same
 `Arc`, every other index still means what it meant, and the version's unshared
 cost is one `u32`.
+
+**Add observation is the point edit that creates.** It reads the point's whole
+record, extends its track with the sighting the photometric fit placed, and calls
+`EditedReconstruction::replace_point`, so the point takes a new index while
+remaining the same point and the version's map is the pair saying which index
+became which. Its own spec is [`edits/add-observation.md`](edits/add-observation.md).
 
 **Delete image is the bulk edit.** It materialises the current value when the
 overlay is not empty, runs `SfmrReconstruction::subset_by_image_indices` over the
@@ -209,8 +217,39 @@ entry per surfel; because the patch instances and the atlas are compacted over
 the points that carry a bitmap, the bundle keeps the point-index-to-slot map the
 mask write needs.
 
+**The overlay's additions are a second set of buffers.** A point the overlay adds
+has no instance in the base's buffers, and putting one there would mean
+rebuilding a million instances for one point. So the additions get their own
+point instance buffer and their own liveness buffer, drawn after the base's in
+the same pass with the same global uniforms, and their patches get their own
+small atlas drawn after the base's. The base's buffers, its atlas and its bind
+groups keep their identity across every point edit.
+
+A second, small atlas rather than slots appended to the base's: the base's atlas
+is exactly what a run of point edits shares, and appending to a texture means
+building a new one. The packing arithmetic is the same code over a shorter list,
+and each `PatchResources` already carries its own grid dimensions in its own
+uniform block, so two atlases are two draws in one pass and nothing in the shader
+tells them apart. An addition's surfel instance carries its **edited** index, so
+one mask write finds either atlas's slot.
+
+The additions carry their own copy of the node's per-recon uniform block for one
+field: their pick base is the node's plus its base instance count, and the node's
+pick range covers both. An addition's global pick id is then
+`point_pick_base + edited index`, exactly as a base point's is, so the readback
+resolves an addition with no special case.
+
+They are rebuilt when the addition set's `(point count, observation count)` moves,
+which is a complete signal and O(1): additions are append-only along a node's
+history, and that history is linear because a new edit discards the redo tail, so
+two versions of one base whose addition sets agree on both counts hold the same
+additions. A new base clears them, since their indexes are relative to the base's
+point count.
+
 Undoing to a version whose base is the one on the GPU therefore writes the mask
-and nothing else, and the GPU cost of an undo is the size of what it undid.
+and drops or rebuilds the additions, and nothing else; the GPU cost of an undo is
+the size of what it undid. A materialisation replaces both sets of buffers with
+one, through the row map.
 
 **Node transforms are detected the same way.** Mirroring a node's transform onto
 its bundle reports whether it differs from the one the bundle held, and that
@@ -258,13 +297,19 @@ points a dropped image orphans nor any other edit's, and the next bulk edit gets
 its map for free. The version's map is that row map, chained after the
 materialisation's when there was one.
 
-**A deleted point still resolves through the base.** Indexes are stable, so a
-panel that bounds-checks against the base's point count can still reach a
-deleted point's record. The selection cannot land on one (the edit clears it, and
-the map clears it after) and the pick buffer cannot return one (the shader clips
-it), and the track-highlight paths check the overlay. Routing every panel read
-through the overlay accessor is what the first track edit needs, and is proposed
-in [`../drafts/sfm-explorer-editing.md`](../drafts/sfm-explorer-editing.md).
+**Per-point reads go through the overlay.** Every read of one point's record --
+its geometry, its track, its keypoints, its patch frame and bitmap, its
+constraint -- resolves through `EditedReconstruction::point`, so a point the
+version modified or added is what the panels show and a point it deleted resolves
+to nothing. That covers the Point Track Detail panel, the track rays, the pick
+path, Go to Point, the Image Detail panel's embedded-features overlay and its
+per-point colourings, the track-highlight helpers, and the MCP `get_point` reply.
+The embedded-features overlay walks the version's **live indexes** rather than
+the base's rows, which is base-minus-deleted followed by the additions.
+
+What still reads the base is what the overlay does not change: the image table,
+the cameras, the thumbnails, and **column presence**, which an addition set never
+introduces or removes. Nothing on a frame path materialises.
 
 ## Testing
 

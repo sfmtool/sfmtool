@@ -46,9 +46,9 @@ impl SceneRenderer {
     ///
     /// Writes one `u32` per index that entered or left the set, in both the
     /// point buffer and -- for a point that carries a surfel -- the patch
-    /// buffer, so an edit costs its own size rather than the node's. An index
-    /// at or above the base's point count is an addition, which has no instance
-    /// in the base's buffers and so nothing to mask.
+    /// buffer, so an edit costs its own size rather than the node's. An index at
+    /// or above the base's point count is an addition, and is masked in the
+    /// additions' own buffers, which the overlay owns alongside the mask.
     pub fn update_deleted_mask(
         &mut self,
         queue: &wgpu::Queue,
@@ -80,6 +80,29 @@ impl SceneRenderer {
                         u64::from(slot) * 4,
                         bytemuck::bytes_of(&alive),
                     );
+                }
+            }
+            // An addition's own instance, whose row is its edited index less
+            // the base's point count. Its surfel is keyed on the edited index,
+            // like the base's, because the instances carry that.
+            if let Some(additions) = &bundle.additions {
+                if let Some(row) = index.checked_sub(bundle.point_count) {
+                    if row < additions.point_count {
+                        queue.write_buffer(
+                            &additions.point_alive_buffer,
+                            u64::from(row) * 4,
+                            bytemuck::bytes_of(&alive),
+                        );
+                    }
+                }
+                if let Some(patch) = &additions.patch {
+                    if let Some(&slot) = patch.slot_of_point.get(&index) {
+                        queue.write_buffer(
+                            &patch.alive_buffer,
+                            u64::from(slot) * 4,
+                            bytemuck::bytes_of(&alive),
+                        );
+                    }
                 }
             }
         }

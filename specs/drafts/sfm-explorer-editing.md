@@ -211,53 +211,21 @@ version 9), and the point ids it keeps resolving are
 
 ---
 
-## Part 4: the design challenge: row-level edits under value semantics
+## Part 4: row-level edits under value semantics
 
-A plain value per version, with the heavy columns shared, solves the bulk
-edits: a pose moves, an image goes, a bundle adjustment runs, and the version
-is a copy of the light columns. It does not, on its own, solve the edit that
-is the reason to build this at all.
-
-Consider the first track edit we want. Select a point in the Point Track Detail
-panel, then select an image that is not in its track. Right-click in that image
-and choose *add a keypoint here to the track*. The viewer places the
-observation, runs the photometric fit against the track's patch (the same
-kernel the embed pass uses), and the track now has one more observation.
-
-What that edit does to the value:
-
-- `tracks` gains one row, and the rows are sorted by point then image, so it is
-  an insertion in the middle of a ten-million-row column, not an append.
-- `observation_counts[p]` increments, and `observation_offsets` shifts by one
-  for every point after `p`.
-- The observation-source columns (`feature_indexes` or `keypoints_xy`,
-  `observation_confidence`) each gain a row at the same position.
-- `image_feature_to_point[i]` and `max_track_feature_index[i]` change for that
-  image.
-- The point's position, error, normal, and patch frame may all move after the
-  fit.
-
-A version that is a plain value clones ten million rows of `tracks` to
-insert one. That is tens of
-milliseconds and eighty megabytes per keystroke, and a hundred such edits in a
-history hold eight gigabytes of tracks that differ by a hundred rows in total.
-A plain value per version fails exactly on the edit that matters.
-
-The answer is
-[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md):
-an edited reconstruction is an immutable base plus a deleted set and an
-addition set, every point edit reduces to deleting points from the base and
-re-adding them to the additions, indexes stay stable while the base lives, and
-the plain CSR form is materialised, every point in its place and with a row
-map, only when an algorithm, a save, or a size threshold asks for it. What is
-still open, in
-[`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md), is the
-materialisation policy and the GPU side. The first
-track edits are built on
-`embedded_patches` reconstructions, where an observation is a pixel and a
-patch and nothing else; an added observation on a `sift_files` reconstruction
-has no feature index behind it, and whether the format grows to carry one is
-a format decision neither draft makes.
+Built and standing. The edit this part posed -- select a point, select an image
+that is not in its track, right-click there and add a keypoint to the track -- is
+[`../gui/edits/add-observation.md`](../gui/edits/add-observation.md), over the
+core function in
+[`../core/reconstruction/add-observation.md`](../core/reconstruction/add-observation.md).
+The representation that makes it cost the size of one track rather than the size
+of the reconstruction is
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md),
+and what the viewer does with it on the GPU is
+[`../gui/document-model.md`](../gui/document-model.md), "Change detection by
+identity". What is left of the question is
+[`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md): the
+materialisation policy.
 
 ---
 
@@ -284,13 +252,15 @@ Families, in the proposed order:
 - **Resect in place**: the existing resection applied to the node as a
   version rather than landing a derived node. The derived-node variant stays as
   the comparison affordance.
-- **Track edits**: add an observation to a track from a pixel (Part 4), remove
-  one, split a track, merge two. Gated on Part 4's answer.
+- **Track edits**: add an observation to a track from a pixel is built and
+  standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md).
+  Remove one, split a track, merge two remain.
 - **Bundle adjust**: run the adjustment on the node's value with the
   constraints it carries, as one version.
 
-Files into: `specs/gui/edits/<family>.md`, one each, plus an
-`edits/README.md` index; `resect-image.md` gains its in-place variant.
+Files into: `specs/gui/edits/<family>.md`, one each, in the
+[`../gui/edits/`](../gui/edits/README.md) directory the first family opened;
+`resect-image.md` gains its in-place variant.
 
 ---
 
@@ -317,8 +287,12 @@ steps after it.
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
 7. **Edit families**, one PR each in Part 5's order, `gui/edits/`. The
-   add-observation track edit, on `embedded_patches` files, is the first,
-   since it is what the overlay is for.
+   add-observation track edit, on `embedded_patches` files, is done: it was
+   first because it is what the overlay is for, and it is what routed every
+   per-point read through the overlay accessor and put the additions on the
+   GPU. Remaining: delete an observation and an image from the panels,
+   point constraints, bake transform, resect in place, the other track edits
+   (remove an observation, split, merge), and bundle adjust.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
 ## Non-goals

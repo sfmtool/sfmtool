@@ -218,3 +218,117 @@ class TestHashes:
         assert edited.point_edit_hash([one]) == edited.point_edit_hash([one])
         assert edited.point_edit_hash([one]) != edited.point_edit_hash([two])
         assert len(edited.point_edit_hash([one])) == 32
+
+
+class TestAddObservation:
+    """``add_observation``: a clicked pixel becomes an observation of a track.
+
+    Built on the cheap ``to_embedded_patches`` baseline, which is a real
+    ``embedded_patches`` value over the 17-image workspace, so the fit runs
+    against the workspace's own photographs. The click is placed at the point's
+    own projection into the target image, read off a single-view localization,
+    which is what a user pointing at the point would produce.
+    """
+
+    TARGET = 0
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        return EditedReconstruction(recon.to_embedded_patches())
+
+    @pytest.fixture
+    def images(self, embedded):
+        from sfmtool._workspace_image import read_workspace_image
+
+        base = embedded.materialize()[0]
+        return [
+            read_workspace_image(base.workspace_dir, name) for name in base.image_names
+        ]
+
+    @pytest.fixture
+    def gap(self, embedded, images):
+        """A point the target image does not observe, and where it projects.
+
+        A one-view localization runs no congealing round, so the keypoint it
+        reports is the point's projection itself.
+        """
+        base = embedded.materialize()[0]
+        # The embedded base already carries the frames, so the cloud is read
+        # back out of its own columns rather than re-derived from the `.sift`.
+        cloud = base.patches
+        localized = cloud.localize_keypoints(
+            base,
+            images,
+            view_sets={p: [self.TARGET] for p in range(base.point_count)},
+        )
+        for entry in localized:
+            index = int(entry["point_index"])
+            if len(entry["views"]) != 1:
+                continue
+            record = embedded.point(index)
+            seen = set(int(i) for i in record["image_indexes"])
+            if self.TARGET in seen or len(seen) < 2:
+                continue
+            x, y = (float(v) for v in entry["keypoints"][0])
+            return index, self.TARGET, [x, y]
+        pytest.skip("no point of this reconstruction projects into image 0 unseen")
+
+    def test_a_sift_files_base_is_refused(self, edited, images):
+        with pytest.raises(ValueError, match="embedded_patches"):
+            edited.add_observation(0, 0, [1.0, 1.0], images)
+
+    def test_an_image_already_in_the_track_is_refused(self, embedded, images, gap):
+        point, _, pixel = gap
+        seen = int(embedded.point(point)["image_indexes"][0])
+        with pytest.raises(ValueError, match="already observes"):
+            embedded.add_observation(point, seen, pixel, images)
+
+    def test_a_pixel_off_the_sensor_is_refused(self, embedded, images, gap):
+        point, image, _ = gap
+        with pytest.raises(ValueError, match="outside"):
+            embedded.add_observation(point, image, [-5.0, 10.0], images)
+
+    def test_an_unreachable_bar_is_refused(self, embedded, images, gap):
+        point, image, pixel = gap
+        with pytest.raises(ValueError, match="below the"):
+            embedded.add_observation(point, image, pixel, images, min_zncc=1.5)
+        assert len(embedded.point(point)["image_indexes"]) >= 2
+
+    def test_an_accepted_fit_adds_one_observation_and_keeps_the_base(
+        self, embedded, images, gap
+    ):
+        point, image, pixel = gap
+        before = len(embedded.point(point)["image_indexes"])
+        # The bar is off: this test is about the call's shape and the value it
+        # returns, not about whether this particular surface registers well.
+        next_value, report = embedded.add_observation(
+            point, image, pixel, images, min_zncc=-2.0
+        )
+
+        assert report["replaced"] == point
+        assert report["image"] == image
+        assert report["observation_count"] == before + 1
+        assert len(report["keypoint"]) == 2
+        assert report["shift_px"] >= 0.0
+
+        record = next_value.point(report["point"])
+        assert list(record["image_indexes"]).count(image) == 1
+        assert list(record["image_indexes"]) == sorted(record["image_indexes"])
+
+        # This object is untouched, and the two agree on the base.
+        assert len(embedded.point(point)["image_indexes"]) == before
+        assert next_value.base_content_hash() == embedded.base_content_hash()
+
+    def test_the_modification_materialises_back_into_its_place(
+        self, embedded, images, gap
+    ):
+        point, image, pixel = gap
+        points_before = embedded.point_count
+        next_value, report = embedded.add_observation(
+            point, image, pixel, images, min_zncc=-2.0
+        )
+        recon, forward, _ = next_value.materialize()
+        assert next_value.point_count == points_before
+        assert recon.point_count == points_before
+        assert forward[report["point"]] == point

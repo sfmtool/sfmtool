@@ -2,6 +2,17 @@
 
 _Snapshot: 2026-09-07, `crates/sfm-explorer/src` at `main` after #403._
 
+> _Status (2026-09-08): Partially superseded -- the **classification** below
+> (per-point / per-column / whole, per-frame / event-driven) still holds and is
+> what the design was decided against, but the **coordinates do not**. This
+> census predates the overlay: it describes a `SceneNode` holding a plain
+> `SfmrReconstruction` with `needs_upload` and `transform_epoch`, where a node
+> now holds a `History` of `EditedReconstruction` values, change detection is by
+> base identity, and every per-point read resolves through the overlay accessor.
+> Read [`specs/gui/document-model.md`](../specs/gui/document-model.md) for what
+> the read path **is**; read this for why it is shaped that way. Line numbers and
+> function signatures here are stale._
+
 This is step 1 of the plan in
 [`specs/drafts/sfm-explorer-editing.md`](../specs/drafts/sfm-explorer-editing.md),
 the "census" half: every place the viewer reads a `SfmrReconstruction`, with the

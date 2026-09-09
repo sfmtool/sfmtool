@@ -9,7 +9,44 @@ use super::{DisplayFeature, ImageDetail, ImageDetailResponse};
 use crate::colormap;
 use crate::state::{FeatureDisplaySettings, OverlayMode};
 use kiddo::SquaredEuclidean;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::EditedReconstruction;
+
+/// The context-menu entry's label, and what the Point Track Detail panel's hint
+/// quotes so the two cannot drift.
+pub(crate) const ADD_OBSERVATION_LABEL: &str = "Add observation to track here";
+
+/// Whether the Image Detail context menu offers the add-observation entry for
+/// this node, image and selection, and why not when it is greyed.
+///
+/// `None` for a node the edit is not defined on at all (a `sift_files`
+/// reconstruction, where an observation is a `.sift` feature and a clicked
+/// pixel is not one); `Some(Err(reason))` when it is defined but cannot run on
+/// what is selected.
+pub(crate) fn add_observation_entry(
+    edited: &EditedReconstruction,
+    image_index: usize,
+    selected_point: Option<usize>,
+) -> Option<Result<(), &'static str>> {
+    if edited.has_feature_indexes() {
+        return None;
+    }
+    let Some(point) = selected_point else {
+        return Some(Err(
+            "Select a point first: the observation is added to that point's track.",
+        ));
+    };
+    let Some(view) = edited.point(point as u32) else {
+        return Some(Err("The selected point is not in this version."));
+    };
+    if view
+        .observations()
+        .iter()
+        .any(|o| o.image_index as usize == image_index)
+    {
+        return Some(Err("This image already observes the selected point."));
+    }
+    Some(Ok(()))
+}
 
 impl ImageDetail {
     /// Draw feature overlays for the current image, run click hit-testing and
@@ -21,7 +58,7 @@ impl ImageDetail {
         ui: &egui::Ui,
         painter: &egui::Painter,
         interact_response: &egui::Response,
-        recon: &SfmrReconstruction,
+        edited: &EditedReconstruction,
         feature_display: &FeatureDisplaySettings,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
@@ -34,6 +71,8 @@ impl ImageDetail {
         let Some(ref overlay) = self.feature_overlay else {
             return;
         };
+        let context_menu_entry =
+            add_observation_entry(edited, overlay.image.index(), selected_point);
         let features = &overlay.features;
         let feature_tree = &overlay.tree;
         let image_to_panel = |px: f32, py: f32| -> egui::Pos2 {
@@ -113,7 +152,7 @@ impl ImageDetail {
                 }
             }
             OverlayMode::ReprojError => {
-                let (vmin, vmax) = compute_error_range(features, recon);
+                let (vmin, vmax) = compute_error_range(features, edited);
                 // The one arm with no `None`: a point missing from the cloud
                 // colours as zero and a non-finite error saturates the ramp,
                 // rather than either dropping out of the picture.
@@ -125,11 +164,16 @@ impl ImageDetail {
                     image_to_panel,
                     |feature| {
                         Some(
-                            recon
-                                .point_set
-                                .points
-                                .get(feature.point_index as usize)
-                                .map(|p| if p.error.is_finite() { p.error } else { vmax })
+                            edited
+                                .point(feature.point_index)
+                                .map(|v| {
+                                    let e = v.point().error;
+                                    if e.is_finite() {
+                                        e
+                                    } else {
+                                        vmax
+                                    }
+                                })
                                 .unwrap_or(0.0),
                         )
                     },
@@ -139,7 +183,7 @@ impl ImageDetail {
                 );
             }
             OverlayMode::TrackLength => {
-                let (vmin, vmax) = compute_track_length_range(features, recon);
+                let (vmin, vmax) = compute_track_length_range(features, edited);
                 draw_value_overlay(
                     painter,
                     panel_rect,
@@ -148,12 +192,10 @@ impl ImageDetail {
                     image_to_panel,
                     |feature| {
                         Some(
-                            recon
-                                .point_set
-                                .observation_counts
-                                .get(feature.point_index as usize)
-                                .copied()
-                                .unwrap_or(1) as f32,
+                            edited
+                                .point(feature.point_index)
+                                .map_or(1, |v| v.observations().len())
+                                as f32,
                         )
                     },
                     (vmin, vmax),
@@ -206,6 +248,54 @@ impl ImageDetail {
                 );
             }
         }
+
+        // ── The context menu ──
+        //
+        // Opened by a secondary *click* rather than by the raw button state the
+        // pan/zoom handler reads: a right **drag** is this panel's zoom
+        // (`input.rs`), and egui's own drag threshold is what tells the two
+        // apart, so a zoom gesture never puts a menu up.
+        //
+        // The pixel is recorded on the frame the menu opens, because the
+        // entries below are laid out on later frames, by which time the pointer
+        // has moved off the place the user named.
+        if interact_response.clicked_by(egui::PointerButton::Secondary) {
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                response.context_menu_pixel = Some(panel_to_image(pos));
+            }
+        }
+        egui::Popup::context_menu(interact_response).show(|ui| {
+            match context_menu_entry {
+                Some(entry) => {
+                    let button = egui::Button::new(ADD_OBSERVATION_LABEL);
+                    let clicked = match entry {
+                        // Enabled: the reason it can run is the point and the
+                        // image the user has already chosen.
+                        Ok(()) => ui.add(button).clicked(),
+                        // Greyed, with the sentence saying which of the two
+                        // conditions does not hold.
+                        Err(why) => {
+                            ui.add_enabled(false, button).on_disabled_hover_text(why);
+                            false
+                        }
+                    };
+                    if clicked {
+                        response.add_observation = true;
+                        ui.close();
+                    }
+                }
+                // Not an `embedded_patches` node: the entry is absent rather
+                // than greyed, because the edit is not defined here at all.
+                None => {
+                    ui.label(
+                        egui::RichText::new(
+                            "Adding an observation needs an embedded_patches reconstruction.",
+                        )
+                        .weak(),
+                    );
+                }
+            }
+        });
 
         // Hit testing for feature clicks (only tracked features)
         if interact_response.clicked() {
@@ -260,13 +350,9 @@ impl ImageDetail {
                     // Report hover for cross-panel feedback.
                     response.hovered_point = Some(point_idx);
 
-                    if let Some(pt) = recon.point_set.points.get(point_idx) {
-                        let obs_count = recon
-                            .point_set
-                            .observation_counts
-                            .get(point_idx)
-                            .copied()
-                            .unwrap_or(0);
+                    if let Some(view) = edited.point(point_idx as u32) {
+                        let pt = view.point();
+                        let obs_count = view.observations().len() as u32;
                         let feat = features
                             .iter()
                             .find(|f| f.point_index as usize == point_idx);
@@ -528,17 +614,18 @@ fn draw_value_overlay(
 }
 
 /// Compute the reprojection error range for tracked features in the display list.
-fn compute_error_range(features: &[DisplayFeature], recon: &SfmrReconstruction) -> (f32, f32) {
+fn compute_error_range(features: &[DisplayFeature], edited: &EditedReconstruction) -> (f32, f32) {
     let mut vmin = f32::MAX;
     let mut vmax = f32::MIN;
     for feature in features {
         if !feature.is_tracked() {
             continue;
         }
-        if let Some(pt) = recon.point_set.points.get(feature.point_index as usize) {
-            if pt.error.is_finite() {
-                vmin = vmin.min(pt.error);
-                vmax = vmax.max(pt.error);
+        if let Some(view) = edited.point(feature.point_index) {
+            let error = view.point().error;
+            if error.is_finite() {
+                vmin = vmin.min(error);
+                vmax = vmax.max(error);
             }
         }
     }
@@ -592,7 +679,7 @@ fn compute_finite_value_range(
 /// Compute the track length (observation count) range for tracked features.
 fn compute_track_length_range(
     features: &[DisplayFeature],
-    recon: &SfmrReconstruction,
+    edited: &EditedReconstruction,
 ) -> (f32, f32) {
     let mut vmin = f32::MAX;
     let mut vmax = f32::MIN;
@@ -600,12 +687,9 @@ fn compute_track_length_range(
         if !feature.is_tracked() {
             continue;
         }
-        let count = recon
-            .point_set
-            .observation_counts
-            .get(feature.point_index as usize)
-            .copied()
-            .unwrap_or(1) as f32;
+        let count = edited
+            .point(feature.point_index)
+            .map_or(1, |v| v.observations().len()) as f32;
         vmin = vmin.min(count);
         vmax = vmax.max(count);
     }

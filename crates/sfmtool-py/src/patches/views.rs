@@ -94,13 +94,13 @@ pub(super) fn build_pyramids_from_cameras(
 /// The per-image pyramids a kernel call reads: either owned (built from a numpy
 /// image list for this one call) or shared (an [`PyImagePyramidSet`] handle,
 /// built once and reused across calls).
-pub(super) enum PyramidSet {
+pub(crate) enum PyramidSet {
     Owned(Vec<ImageU8Pyramid>),
     Shared(Arc<Vec<ImageU8Pyramid>>),
 }
 
 impl PyramidSet {
-    pub(super) fn as_slice(&self) -> &[ImageU8Pyramid] {
+    pub(crate) fn as_slice(&self) -> &[ImageU8Pyramid] {
         match self {
             PyramidSet::Owned(v) => v,
             PyramidSet::Shared(a) => a,
@@ -116,9 +116,9 @@ impl PyramidSet {
 /// for a reconstruction and a bare set of views.
 pub(crate) struct PosedViews {
     /// Per-image camera intrinsics (resolved via each view's camera index).
-    pub(super) cameras: Vec<CameraIntrinsics>,
+    pub(crate) cameras: Vec<CameraIntrinsics>,
     /// Per-image `cam_from_world` pose.
-    pub(super) poses: Vec<RigidTransform>,
+    pub(crate) poses: Vec<RigidTransform>,
 }
 
 impl PosedViews {
@@ -126,7 +126,7 @@ impl PosedViews {
         self.cameras.len()
     }
 
-    pub(super) fn from_reconstruction(recon: &sfmtool_core::SfmrReconstruction) -> Self {
+    pub(crate) fn from_reconstruction(recon: &sfmtool_core::SfmrReconstruction) -> Self {
         let cameras = recon
             .image_table
             .images
@@ -178,7 +178,7 @@ pub(super) fn resolve_scene<'py>(
 /// of numpy images (pyramids built for this call). Shared by `refine_normals`,
 /// `select_views`, `localize_keypoints`, and `refine_keypoints` so they handle
 /// imagery identically for a reconstruction and a `CameraViews`.
-pub(super) fn resolve_pyramids(
+pub(crate) fn resolve_pyramids(
     posed: &PosedViews,
     images: &Bound<'_, PyAny>,
 ) -> PyResult<PyramidSet> {

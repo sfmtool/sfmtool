@@ -85,16 +85,19 @@ fn max_pairwise_angle_of_fewer_than_two_rays_is_zero() {
 
 #[test]
 fn point_diagnostics_are_undefined_for_a_missing_point() {
-    let recon = SfmrReconstruction::demo(4);
-    let (cond, z) = compute_point_diagnostics(&recon, 999);
-    assert!(cond.is_nan());
-    assert!(z.is_nan());
+    // A missing point has no view at all, which is the caller's `None` rather
+    // than a value this function returns.
+    let edited =
+        sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(SfmrReconstruction::demo(4)));
+    assert!(edited.point(999).is_none());
 }
 
 #[test]
 fn point_diagnostics_are_finite_for_a_triangulated_point() {
     let recon = SfmrReconstruction::demo(12);
-    let (cond, z) = compute_point_diagnostics(&recon, 5);
+    let edited = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
+    let view = edited.point(5).expect("a live point");
+    let (cond, z) = compute_point_diagnostics(&edited.base.image_table, &view);
     assert!(cond.is_finite() && cond >= 1.0, "condition number {cond}");
     assert!(z.is_finite(), "inverse-depth z {z}");
 }

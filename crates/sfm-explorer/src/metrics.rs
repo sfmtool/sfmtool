@@ -5,8 +5,10 @@
 //! and whole-track diagnostics for one 3D point.
 //!
 //! Nothing here touches egui state — every function is a pure computation over
-//! a [`SfmrReconstruction`], which is what lets the display code that quotes
-//! them stay thin. They live at the crate root rather than under a panel
+//! the point and image table handed to it, which is what lets the display code
+//! that quotes them stay thin. A point arrives as a [`PointView`], so the
+//! numbers describe the version on screen rather than the base under it.
+//! They live at the crate root rather than under a panel
 //! because three different surfaces read the same numbers: the Point Track
 //! Detail table tabulates them, the Image Detail overlay colours features by
 //! them, and the MCP `get_point` tool reports them to an agent. A figure an
@@ -15,7 +17,7 @@
 //! definition and no panel owns it.
 
 use nalgebra::Vector3;
-use sfmtool_core::{Point3D, SfmrReconstruction};
+use sfmtool_core::{ImageTable, Point3D, PointView};
 
 #[cfg(test)]
 mod tests;
@@ -85,25 +87,23 @@ pub(crate) fn compute_observation_metrics(
 /// infinity, missing points, or fewer than two usable rays. The per-ray angular
 /// noise is `max(reproj_error, 1px) / f`, matching the classifier's policy.
 pub(crate) fn compute_point_diagnostics(
-    recon: &SfmrReconstruction,
-    point_idx: usize,
+    image_table: &ImageTable,
+    view: &PointView<'_>,
 ) -> (f32, f32) {
     use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 
-    let Some(pt) = recon.point_set.points.get(point_idx) else {
-        return (f32::NAN, f32::NAN);
-    };
+    let pt = view.point();
     if pt.is_at_infinity() {
         return (f32::NAN, f32::NAN);
     }
-    let observations = recon.observations_for_point(point_idx);
+    let observations = view.observations();
     let noise = (pt.error as f64).max(1.0);
     let mut dirs = Vec::with_capacity(observations.len());
     let mut centers = Vec::with_capacity(observations.len());
     let mut sigma = Vec::with_capacity(observations.len());
     for obs in observations {
         let img_idx = obs.image_index as usize;
-        let Some(image) = recon.image_table.images.get(img_idx) else {
+        let Some(image) = image_table.images.get(img_idx) else {
             continue;
         };
         let center = image.camera_center();
@@ -112,7 +112,7 @@ pub(crate) fn compute_point_diagnostics(
         if len > 1e-12 {
             dirs.push(dir / len);
             centers.push(center);
-            let (fx, fy) = recon.image_table.cameras[image.camera_index as usize].focal_lengths();
+            let (fx, fy) = image_table.cameras[image.camera_index as usize].focal_lengths();
             sigma.push(noise / fx.max(fy));
         }
     }

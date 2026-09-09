@@ -194,3 +194,32 @@ fn a_chain_applies_its_steps_in_order_and_inverts_in_reverse() {
         assert_eq!(chain.inverse(new), Some(old));
     }
 }
+
+// ── The map a modification makes ────────────────────────────────────────
+
+#[test]
+fn a_replacement_map_moves_the_named_index_and_no_other() {
+    // Delete-and-re-add gives a modified point a new index while it stays the
+    // same point, so this is what carries a selection across such an edit.
+    let map = PointMap::Replaced(vec![(3, 40), (7, 41)]);
+    assert_eq!(map.forward(3), Some(40));
+    assert_eq!(map.forward(7), Some(41));
+    assert_eq!(map.inverse(40), Some(3));
+    assert_eq!(map.inverse(41), Some(7));
+    // Everything not named is unchanged, which is what makes the map the size
+    // of the edit rather than the size of the reconstruction.
+    for index in [0, 4, 39, 42] {
+        assert_eq!(map.forward(index), Some(index));
+        assert_eq!(map.inverse(index), Some(index));
+    }
+}
+
+#[test]
+fn a_replacement_map_round_trips_through_a_chain() {
+    let map = PointMap::Chain(vec![
+        PointMap::Replaced(vec![(3, 40)]),
+        PointMap::Replaced(vec![(40, 41)]),
+    ]);
+    assert_eq!(map.forward(3), Some(41));
+    assert_eq!(map.inverse(41), Some(3));
+}
