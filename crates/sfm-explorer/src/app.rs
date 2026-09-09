@@ -657,6 +657,11 @@ impl App {
         let intrinsics_detail = &mut self.intrinsics_detail;
 
         let mut quit_requested = false;
+        // Both close paths are collected here rather than acted on in the menu
+        // closure, because a dirty node turns either of them into a question
+        // first and the answer arrives on a later frame.
+        let mut close_all_requested = false;
+        let mut quit_from_menu = false;
 
         let full_output = self.egui_ctx.run_ui(raw_input, |root_ui| {
             // Accumulate scroll events once per frame, with DM-aware suppression.
@@ -691,6 +696,40 @@ impl App {
                             }
                             ui.close();
                         }
+                        ui.separator();
+                        // Both act on the selected node, which is what every
+                        // other node-scoped command in this menu bar does.
+                        let target = app_state.selected_recon;
+                        let has_path = target
+                            .and_then(|id| app_state.node(id))
+                            .is_some_and(|node| node.path.is_some());
+                        let save = ui
+                            .add_enabled(
+                                has_path,
+                                egui::Button::new("Save")
+                                    .shortcut_text(ui.ctx().format_shortcut(&SAVE_SHORTCUT)),
+                            )
+                            .on_disabled_hover_text(
+                                "The selected reconstruction came from no file — use Save As",
+                            );
+                        if save.clicked() {
+                            let outcome = target.map(|id| app_state.save_node(id));
+                            save_outcome(app_state, outcome);
+                            ui.close();
+                        }
+                        let save_as = ui
+                            .add_enabled(
+                                target.is_some(),
+                                egui::Button::new("Save As...")
+                                    .shortcut_text(ui.ctx().format_shortcut(&SAVE_AS_SHORTCUT)),
+                            )
+                            .on_disabled_hover_text("Select a reconstruction to save it");
+                        if save_as.clicked() {
+                            let outcome = target.map(|id| save_as_with_dialog(app_state, id));
+                            save_outcome(app_state, outcome);
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui
                             .add_enabled(
                                 !app_state.scene.is_empty(),
@@ -698,14 +737,7 @@ impl App {
                             )
                             .clicked()
                         {
-                            for node in &app_state.scene {
-                                let id = node.id;
-                                image_browser.forget_recon(id);
-                                image_detail.forget_recon(id);
-                                point_track_detail.forget_recon(id);
-                                intrinsics_detail.forget_recon(id);
-                            }
-                            app_state.close_all();
+                            close_all_requested = true;
                             ui.close();
                         }
                         ui.separator();
@@ -722,6 +754,7 @@ impl App {
                             // nothing. The flag is read straight after the
                             // egui pass, where the event loop can act on it.
                             quit_requested = true;
+                            quit_from_menu = true;
                             ui.close();
                         }
                     });
@@ -839,6 +872,28 @@ impl App {
             // The Edit menu's shortcuts, under the same keyboard arbitration:
             // Delete is a printable-looking key that a text field must keep,
             // and undo belongs to whatever field is being typed into.
+            // The File menu's save shortcuts, under the same arbitration: Ctrl+S
+            // belongs to whatever field is being typed into while it is.
+            if !root_ui.ctx().egui_wants_keyboard_input() {
+                let (save, save_as) = root_ui.input_mut(|i| {
+                    (
+                        i.consume_shortcut(&SAVE_SHORTCUT),
+                        i.consume_shortcut(&SAVE_AS_SHORTCUT),
+                    )
+                });
+                let target = app_state.selected_recon;
+                if save || save_as {
+                    let outcome = target.map(|id| {
+                        if save_as {
+                            save_as_with_dialog(app_state, id)
+                        } else {
+                            app_state.save_node(id)
+                        }
+                    });
+                    save_outcome(app_state, outcome);
+                }
+            }
+
             if !root_ui.ctx().egui_wants_keyboard_input() {
                 let (undo, redo, delete) = root_ui.input_mut(|i| {
                     (
@@ -870,6 +925,63 @@ impl App {
                     let outcome = app_state.delete_selected_point();
                     edit_outcome(app_state, Some(outcome));
                 }
+            }
+
+            // The close prompt, and the answer to whichever question it asked.
+            // Drawn before the panels so it sits over them, and answered here so
+            // the close it was standing in front of happens on the same frame.
+            // What the menu asked for goes through the prompt when something is
+            // dirty; what the prompt answered goes straight through, since the
+            // question has already been put.
+            let mut close_all_now = false;
+            let dirty = app_state.dirty_labels();
+            if let Some(answer) = app_state.close_prompt.show(root_ui.ctx(), &dirty) {
+                let (pending, save_first) = match answer {
+                    crate::close_prompt::CloseAnswer::Save(pending) => (pending, true),
+                    crate::close_prompt::CloseAnswer::Discard(pending) => (pending, false),
+                };
+                if !save_first || save_dirty_before_closing(app_state, pending) {
+                    match pending {
+                        crate::close_prompt::PendingClose::Node(id) => {
+                            forget_selected(
+                                Some(id),
+                                image_browser,
+                                image_detail,
+                                point_track_detail,
+                                intrinsics_detail,
+                            );
+                            app_state.close_node(id);
+                        }
+                        crate::close_prompt::PendingClose::All => close_all_now = true,
+                        crate::close_prompt::PendingClose::Quit => quit_requested = true,
+                    }
+                }
+            }
+
+            if std::mem::take(&mut close_all_requested) {
+                if app_state.any_dirty() {
+                    app_state
+                        .close_prompt
+                        .ask(crate::close_prompt::PendingClose::All);
+                } else {
+                    close_all_now = true;
+                }
+            }
+            if close_all_now {
+                for node in &app_state.scene {
+                    let id = node.id;
+                    image_browser.forget_recon(id);
+                    image_detail.forget_recon(id);
+                    point_track_detail.forget_recon(id);
+                    intrinsics_detail.forget_recon(id);
+                }
+                app_state.close_all();
+            }
+            if quit_from_menu && app_state.any_dirty() {
+                quit_requested = false;
+                app_state
+                    .close_prompt
+                    .ask(crate::close_prompt::PendingClose::Quit);
             }
 
             if app_state.show_demo_dialog {
@@ -1079,6 +1191,94 @@ impl App {
                 None => {}
             }
         }
+    }
+}
+
+// ── The File menu's save shortcuts and their helpers ─────────────────────
+
+/// Write the selected reconstruction over its own file.
+pub(crate) const SAVE_SHORTCUT: egui::KeyboardShortcut =
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+
+/// Write the selected reconstruction to a file chosen in the dialog.
+pub(crate) const SAVE_AS_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
+    egui::Modifiers {
+        command: true,
+        shift: true,
+        ..egui::Modifiers::NONE
+    },
+    egui::Key::S,
+);
+
+/// Ask for a path and write `id` to it, through the same native dialog
+/// `File ▸ Open` uses.
+///
+/// `Ok(())` with nothing written when the dialog was dismissed: choosing not to
+/// choose a file is not a failure, and a log line saying so would be noise.
+fn save_as_with_dialog(
+    state: &mut crate::state::AppState,
+    id: crate::scene::ReconId,
+) -> Result<(), String> {
+    let suggested = state
+        .node(id)
+        .map(|node| format!("{}.sfmr", node.label))
+        .unwrap_or_else(|| "reconstruction.sfmr".to_string());
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("SfM Reconstruction", &["sfmr"])
+        .set_file_name(suggested)
+        .save_file()
+    else {
+        return Ok(());
+    };
+    state.save_node_as(id, &path)
+}
+
+/// Write everything the close prompt was standing in front of, and say whether
+/// the close may go ahead.
+///
+/// A node with no file goes through the Save As dialog, so *Save* on demo data
+/// or a resection is a real offer rather than a refusal. A write that fails, or
+/// a dialog that is dismissed, stops the close: the point of the prompt is that
+/// nothing is lost without an answer, and neither of those is one.
+fn save_dirty_before_closing(
+    state: &mut crate::state::AppState,
+    pending: crate::close_prompt::PendingClose,
+) -> bool {
+    let ids = match pending {
+        crate::close_prompt::PendingClose::Node(id) => vec![id],
+        _ => state.dirty_ids(),
+    };
+    for id in ids {
+        let has_path = state.node(id).is_some_and(|node| node.path.is_some());
+        let outcome = if has_path {
+            state.save_node(id)
+        } else {
+            save_as_with_dialog(state, id)
+        };
+        if let Err(message) = outcome {
+            state
+                .action_log
+                .fail(crate::action_log::Kind::File, message);
+            return false;
+        }
+        if state.is_dirty(id) {
+            // Save As was dismissed, so nothing was written and the node is
+            // still where it was.
+            return false;
+        }
+    }
+    true
+}
+
+/// Report a save's outcome, if one was attempted.
+///
+/// The counterpart of [`edit_outcome`]: a save writes its own success line
+/// naming the path and the version, so this exists for the refusals.
+fn save_outcome(state: &mut crate::state::AppState, outcome: Option<Result<(), String>>) {
+    if let Some(Err(message)) = outcome {
+        state
+            .action_log
+            .fail(crate::action_log::Kind::File, message);
     }
 }
 

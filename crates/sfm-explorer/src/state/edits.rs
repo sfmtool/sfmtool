@@ -264,7 +264,7 @@ impl AppState {
     /// Follow the selected point through the step that produced the version now
     /// at `id`'s cursor: a surviving point keeps its place, a deleted one
     /// clears the selection.
-    fn follow_selection_forward(&mut self, id: ReconId) {
+    pub(super) fn follow_selection_forward(&mut self, id: ReconId) {
         let Some(point) = self.selected_point.filter(|p| p.recon == id) else {
             return;
         };

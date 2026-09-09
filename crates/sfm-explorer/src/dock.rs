@@ -476,10 +476,14 @@ impl TabContext<'_> {
                     }
                 }
             }
+            let point_id = selected_point
+                .map(|index| crate::scene::point_id(node, index))
+                .unwrap_or_default();
             let track_response = self.point_track_detail.show(
                 ui,
                 recon,
                 id,
+                &point_id,
                 selected_point,
                 self.state.hovered_image_in(id),
                 &self.state.sift_cache,
@@ -656,8 +660,17 @@ impl TabContext<'_> {
             self.state.reset_node_transform(id);
         }
         if let Some(id) = response.close_node {
-            self.state.close_node(id);
-            self.forget_recon(id);
+            // A node whose cursor is not at its file is a question, not a
+            // close: the prompt asks it, and `app.rs` carries out whichever
+            // answer comes back on a later frame.
+            if self.state.is_dirty(id) {
+                self.state
+                    .close_prompt
+                    .ask(crate::close_prompt::PendingClose::Node(id));
+            } else {
+                self.state.close_node(id);
+                self.forget_recon(id);
+            }
         }
     }
 

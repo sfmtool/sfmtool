@@ -249,6 +249,7 @@ fn build(
         frame_count: None,
         world_space_unit: None,
         feature_source: FEATURE_SOURCE_EMBEDDED_PATCHES.to_string(),
+        lineage: Vec::new(),
     };
     let mut recon = SfmrReconstruction {
         workspace_dir: PathBuf::new(),

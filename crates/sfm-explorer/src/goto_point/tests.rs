@@ -73,6 +73,7 @@ fn a_full_point_id_parses_into_its_hash_and_index() {
         Ok(PointQuery::Qualified {
             hash: "a1b2c3d4".to_string(),
             index: 12345,
+            node: None,
         })
     );
 }
@@ -84,6 +85,7 @@ fn a_point_id_is_case_insensitive_and_normalizes_to_lowercase() {
     let expected = PointQuery::Qualified {
         hash: "a1b2c3d4".to_string(),
         index: 7,
+        node: None,
     };
     assert_eq!(parse_point_query("PT3D_A1B2C3D4_7"), Ok(expected.clone()));
     assert_eq!(parse_point_query("pt3d_A1b2C3d4_7"), Ok(expected));
@@ -99,6 +101,7 @@ fn a_full_32_character_hash_parses_too() {
         Ok(PointQuery::Qualified {
             hash: hash.to_string(),
             index: 9,
+            node: None,
         })
     );
 }
@@ -201,13 +204,17 @@ fn a_full_id_past_the_end_is_bounds_checked_against_its_own_node() {
 }
 
 #[test]
-fn an_unhashed_reconstruction_resolves_by_the_zeros_it_displays() {
-    // Demo data and any pre-hash file display as `pt3d_00000000_<i>`; copying
-    // that ID out of the panel and pasting it back has to work.
+fn a_node_that_came_from_no_file_resolves_by_its_computed_hash() {
+    // Demo data carries no stored hash, but its value hashes like any other, so
+    // the id the panel shows for it is a real id and pasting it back works.
+    // `00000000` is not a state a node is in.
     let mut state = AppState::new();
     let id = state.append_node(SceneNode::demo(SfmrReconstruction::demo(20)));
+    let minted = crate::scene::point_id(&state.scene[0], 4);
 
-    assert_eq!(go_to(&state, "pt3d_00000000_4"), Ok(PointRef::new(id, 4)));
+    assert!(!minted.starts_with("pt3d_00000000_"), "got {minted}");
+    assert_eq!(go_to(&state, &minted), Ok(PointRef::new(id, 4)));
+    assert!(go_to(&state, "pt3d_00000000_4").is_err());
 }
 
 #[test]
@@ -245,12 +252,16 @@ fn a_hash_that_matches_no_node_is_not_answered_by_the_selected_one() {
 
 #[test]
 fn the_selected_points_id_is_what_the_dialog_prefills_with() {
+    // The session form, minted by the earliest rule against the value's own
+    // hash rather than against whatever hash the file stored.
     let (mut state, _a, b) = two_nodes();
     state.select_point(PointRef::new(b, 17));
+    let node = crate::scene::node_by_id(&state.scene, b).expect("the node");
+    let hash = crate::point_ids::base_hash_prefix(node.edited()).expect("a hashable value");
 
     assert_eq!(
         selected_point_id(&state.scene, state.selected_point),
-        Some("pt3d_cccc3333_17".to_string())
+        Some(format!("pt3d_{hash}_17_n{}", b.raw()))
     );
 }
 
@@ -280,7 +291,13 @@ fn opening_from_app_state_carries_the_selection_into_the_field() {
 
     state.open_goto_point();
 
-    assert_eq!(state.goto_point.input, "pt3d_aaaa1111_3");
+    assert_eq!(
+        state.goto_point.input,
+        crate::scene::point_id(&state.scene[0], 3)
+    );
+    // And what it prefilled with resolves, which is the point of prefilling it.
+    assert!(go_to(&state, &state.goto_point.input).is_ok());
+    let _ = a;
 }
 
 #[test]

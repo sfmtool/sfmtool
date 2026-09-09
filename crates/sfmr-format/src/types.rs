@@ -12,6 +12,8 @@ use thiserror::Error;
 
 use sfmtool_archive_io::ArchiveIoError;
 
+use crate::lineage::LineageEntry;
+
 /// Edge length, in pixels, of the square RGB thumbnails a `.sfmr` carries, one
 /// per image.
 ///
@@ -196,6 +198,23 @@ pub struct SfmrMetadata {
     /// Legacy version 1–3 files have no key and read as `sift_files`.
     #[serde(default = "default_feature_source")]
     pub feature_source: String,
+    /// Which earlier contents this file's point rows came from, one entry per
+    /// ancestor (format version 9+).
+    ///
+    /// A Point ID minted against an ancestor carries that ancestor's hash, and
+    /// the entry's map says where its rows are here, so the id keeps resolving
+    /// after the content was rewritten. See [`LineageEntry`]. It is a field of
+    /// `metadata.json` rather than a section of its own because it *is* content:
+    /// two files that disagree about where their rows came from are different
+    /// files, and this way that difference reaches `content_xxh128` with no
+    /// extra section digest.
+    ///
+    /// Empty is the ordinary state -- every file below version 9, and every
+    /// reconstruction that was not written from an edited ancestor -- and drops
+    /// out of the JSON entirely, so adding the field left version 8 files
+    /// hashing exactly as they did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lineage: Vec<LineageEntry>,
 }
 
 /// Validate per-observation keypoints: every `(u, v)` must be finite and lie
@@ -510,6 +529,14 @@ pub(crate) fn validate_point_constraints(
 /// Current `.sfmr` format version. [`crate::write_sfmr`] always writes this
 /// version; [`crate::read_sfmr`] accepts any version up to it.
 ///
+/// Version 9 added the optional `lineage` field of `metadata.json` (see
+/// [`LineageEntry`]), which records which earlier contents this file's point
+/// rows came from so a Point ID minted against one of them still resolves here.
+/// A file below version 9 carries no such field and reads as an empty list,
+/// which is also what a file with no ancestor writes -- the key is omitted
+/// entirely when the list is empty, so nothing about an unedited file's bytes or
+/// hashes changed with the bump.
+///
 /// Version 8 moved the write timestamp out of `metadata.json` into a top-level
 /// `written.json` (see [`WriteRecord`]), which -- like `content_hash.json` --
 /// is outside every section digest. The content hashes then describe the
@@ -542,7 +569,7 @@ pub(crate) fn validate_point_constraints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 8;
+pub const SFMR_FORMAT_VERSION: u32 = 9;
 
 /// The first `.sfmr` version that stores its write timestamp in `written.json`
 /// rather than in `metadata.json`.

@@ -90,8 +90,14 @@ pub struct PointTrackDetail {
     /// not visible in the view warp to all-black and are drawn as such (a future
     /// N/A flag may distinguish "not visible" from a genuinely dark surface).
     rendered_patch_textures: HashMap<ImageRef, egui::TextureHandle>,
-    /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
-    hash_prefix: String,
+    /// The selected point's Point ID in the session form, as *Copy Point ID*
+    /// copies it.
+    ///
+    /// Handed in by the caller rather than derived here: it is minted by the
+    /// earliest rule over the node's whole version graph
+    /// ([`crate::point_ids::mint`]), and this panel sees one reconstruction
+    /// value, not the node behind it.
+    point_id: String,
     /// Tracked vertical scroll offset for DM gesture scrolling.
     scroll_offset_y: Option<f32>,
 }
@@ -135,7 +141,7 @@ impl PointTrackDetail {
             patch_frame: None,
             stored_patch_texture: None,
             rendered_patch_textures: HashMap::new(),
-            hash_prefix: String::new(),
+            point_id: String::new(),
             scroll_offset_y: None,
         }
     }
@@ -147,6 +153,8 @@ impl PointTrackDetail {
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         recon_id: ReconId,
+        // The selected point's session-form Point ID, minted by the caller.
+        point_id: &str,
         selected_point: Option<usize>,
         hovered_image: Option<usize>,
         sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
@@ -189,14 +197,11 @@ impl PointTrackDetail {
             self.prepared_point = Some(point_ref);
             self.prepare_observations(ui.ctx(), recon, point_ref, sift_cache);
             self.scroll_offset_y = None;
-            // Update hash prefix from reconstruction
-            let hash = &recon.content_hash.content_xxh128;
-            self.hash_prefix = if hash.len() >= 8 {
-                hash[..8].to_string()
-            } else {
-                "00000000".to_string()
-            };
         }
+        // Not gated on the selection changing: an edit or an undo can change
+        // which content the earliest rule mints against without moving the
+        // selection, and the header must show the id that resolves *now*.
+        self.point_id = point_id.to_string();
 
         let point = &recon.point_set.points[point_idx];
 
@@ -244,7 +249,7 @@ impl PointTrackDetail {
         self.patch_frame = None;
         self.stored_patch_texture = None;
         self.rendered_patch_textures.clear();
-        self.hash_prefix.clear();
+        self.point_id.clear();
         self.scroll_offset_y = None;
     }
 }

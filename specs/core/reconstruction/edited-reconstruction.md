@@ -661,9 +661,10 @@ timestamp it stored and verifies against the hashes it stored.
 - Branching, or an edit applied to a version other than the one in hand. The
   overlay is one version's worth of edits on one base.
 - Persisting the overlay. A file is always a materialisation.
-- The policy that decides *when* to materialise, and the point-id minting and
-  resolution built on the version graph. Those are proposed in
+- The policy that decides *when* to materialise, proposed in
   [`../../drafts/sfm-explorer-editing-overlay.md`](../../drafts/sfm-explorer-editing-overlay.md).
+  The point-id minting and resolution these hashes feed are
+  [`../../gui/goto-point.md`](../../gui/goto-point.md).
   What the viewer does with the deleted set and the additions on the GPU, and
   the per-node history the versions live in, are in
   [`../../gui/document-model.md`](../../gui/document-model.md).

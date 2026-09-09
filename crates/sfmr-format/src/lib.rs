@@ -16,12 +16,14 @@ compile_error!(
 
 mod depth_stats;
 mod entries;
+mod lineage;
 mod read;
 mod types;
 mod verify;
 mod write;
 
 pub use depth_stats::{compute_depth_statistics, DepthStatsResult};
+pub use lineage::{LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT};
 pub use read::{read_sfmr, read_sfmr_content_hash, read_sfmr_metadata, resolve_workspace_dir};
 pub use types::*;
 pub use verify::verify_sfmr;

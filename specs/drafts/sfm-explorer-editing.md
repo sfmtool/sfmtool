@@ -200,15 +200,14 @@ at, which is what a save moves.
 
 ## Part 3: saving
 
-Save writes the current value over the node's path; Save As writes it to a
-chosen path and re-points the node. A node that came from no file (demo data, a
-derived resection) has only Save As. The title and the tree row carry a dirty
-marker when the cursor is not at the disk state. Save recomputes the content
-hash and appends provenance to the metadata the way every writer does, and it
-preserves whatever the format spec says a rewriting consumer must preserve.
-Closing a dirty node, or the viewer with one open, asks.
-
-Files into: `specs/gui/saving.md` (new).
+Built and standing: [`../gui/saving.md`](../gui/saving.md) for Save and Save As,
+the materialisation a save of an edited value performs and the provenance and
+lineage stamped onto it before it is hashed, the disk serial the Edit History
+panel marks, the dirty marker in the tree row and the window title, and the
+unsaved-changes prompt a close puts up. The lineage a save writes is the format
+spec's ([`../formats/sfmr-file-format.md`](../formats/sfmr-file-format.md),
+version 9), and the point ids it keeps resolving are
+[`../gui/goto-point.md`](../gui/goto-point.md).
 
 ---
 
@@ -253,7 +252,7 @@ the plain CSR form is materialised, every point in its place and with a row
 map, only when an algorithm, a save, or a size threshold asks for it. What is
 still open, in
 [`sfm-explorer-editing-overlay.md`](sfm-explorer-editing-overlay.md), is the
-materialisation policy, the GPU side, and the point-id version graph. The first
+materialisation policy and the GPU side. The first
 track edits are built on
 `embedded_patches` reconstructions, where an observation is a pixel and a
 patch and nothing else; an added observation on a `sift_files` reconstruction
@@ -317,16 +316,10 @@ steps after it.
    the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-6. **Saving and point ids.** Save, Save As, the dirty marker, the
-   lineage metadata; the session id form, the earliest rule, Go to Point over
-   the version graph. Files `gui/saving.md`, amends `gui/goto-point.md` and
-   the format spec.
 7. **Edit families**, one PR each in Part 5's order, `gui/edits/`. The
    add-observation track edit, on `embedded_patches` files, is the first,
    since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
-
-7 interleaves with 6.
 
 ## Non-goals
 
@@ -339,8 +332,7 @@ steps after it.
 
 ## Open questions
 
-- The overlay draft's open questions (materialisation policy, how the
-  version graph's maps are stored).
+- The overlay draft's open question: the materialisation policy.
 - Finer sharing between bases than the two heavy columns. The track
   structure (keypoints, image and point indexes, observation confidence) is
   most of the light bytes and is untouched by every bulk edit but

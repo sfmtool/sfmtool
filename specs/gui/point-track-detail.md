@@ -74,12 +74,12 @@ A compact horizontal bar at the top showing key properties of the selected 3D
 point:
 
 ```
-pt3d_a1b2c3d4_12345 | xyz: (1.234, -0.567, 2.891) | error: 0.42px | track: 7 obs | max∠: 12.3° | [RGB]
+pt3d_a1b2c3d4_12345_n3 | xyz: (1.234, -0.567, 2.891) | error: 0.42px | track: 7 obs | max∠: 12.3° | [RGB]
 ```
 
 | Field | Source | Description |
 |-------|--------|-------------|
-| Point ID | `selected_point` + `content_xxh128` | Copy-pastable ID (see Point ID section below) |
+| Point ID | `selected_point`, minted over the node's version graph | Copy-pastable session-form ID (see Point ID section below) |
 | Position | `recon.points[idx].position` | World-space XYZ coordinates |
 | Error | `recon.points[idx].error` | RMS reprojection error in pixels |
 | Track length | `recon.observation_counts[idx]` | Number of observing images |
@@ -115,6 +115,19 @@ The Point ID format is `pt3d_{hash}_{index}`, e.g., `pt3d_a1b2c3d4_12345`.
 The hash prefix is derived from the `.sfmr` file's `content_xxh128` hash, and
 the entire ID uses only `[a-zA-Z0-9_]` characters so it can be
 selected with a single double-click in any terminal or browser.
+
+The header shows, and *Copy Point ID* copies, the **session form** --
+`pt3d_{hash}_{index}_n{node}`, the file form with the node's session id after it
+-- minted by the **earliest rule**: the hash is the oldest content the point's
+identity reaches back to through the node's version graph, so the ID is the one
+with the best chance of still resolving after whatever the user does next
+([goto-point.md](goto-point.md) § "The ID forms and the version graph"). A tool
+that wants a file ID takes the prefix.
+
+The ID is **recomputed every frame** rather than on selection change. An edit or
+an undo can change which content the earliest rule mints against without the
+selection moving at all, so an ID cached against the selection would go on
+showing the content of a version the node has left.
 
 For the full format specification, design rationale, and `.sfmr` file resolution
 strategy, see the [Point ID section in the sfmr file format
@@ -298,8 +311,8 @@ The Point ID and XYZ coordinates are individually clickable. Clicking either
 copies the value to the clipboard for use in external tools or scripts. Visual
 feedback: the clicked text briefly flashes or a "Copied!" tooltip appears.
 
-- **Point ID click**: Copies the full Point ID string (e.g.,
-  `pt3d_a1b2c3d4_12345`).
+- **Point ID click**: Copies the full session-form Point ID string (e.g.,
+  `pt3d_a1b2c3d4_12345_n3`).
 - **Coordinates click**: Copies the XYZ coordinates (e.g.,
   `1.234, -0.567, 2.891`).
 

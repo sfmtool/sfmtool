@@ -399,3 +399,45 @@ class TestSharedColumnsAreReadOnly:
         edited[0, 0, 0, 0] = (int(edited[0, 0, 0, 0]) + 1) % 256
         assert np.array_equal(np.asarray(recon.thumbnails_y_x_rgb), before)
         assert np.array_equal(np.asarray(clone.thumbnails_y_x_rgb), before)
+
+
+class TestLineage:
+    """A file records which earlier contents its point rows came from, so a
+    Point ID minted against one of them still resolves against this file.
+
+    The entries reach Python the way every other metadata key does, through
+    ``metadata()`` and ``read_sfmr``'s ``metadata`` dict."""
+
+    def test_metadata_has_no_lineage_key_without_an_ancestor(
+        self, seoul_bull_sfmr_only
+    ):
+        # The ordinary state: nothing was edited into this file, so it records
+        # no ancestor and the key is absent rather than an empty list.
+        recon = SfmrReconstruction.load(seoul_bull_sfmr_only)
+        assert "lineage" not in recon.metadata()
+
+    def test_lineage_round_trips_and_shows_up_in_metadata(
+        self, seoul_bull_sfmr_only, tmp_path
+    ):
+        lineage = [
+            {
+                "hash": "0123456789abcdef0123456789abcdef",
+                "kind": "base",
+                "map": {"form": "monotone", "deleted": [3], "created": []},
+            },
+            {
+                "hash": "fedcba9876543210fedcba9876543210",
+                "kind": "point_edit",
+                "map": {"form": "dense", "rows": [0, None]},
+            },
+        ]
+        data = read_sfmr(seoul_bull_sfmr_only)
+        data["metadata"]["lineage"] = lineage
+
+        out = tmp_path / "with_lineage.sfmr"
+        write_sfmr(out, data)
+
+        ok, errors = verify_sfmr(out)
+        assert ok, errors
+        assert read_sfmr(out)["metadata"]["lineage"] == lineage
+        assert SfmrReconstruction.load(out).metadata()["lineage"] == lineage

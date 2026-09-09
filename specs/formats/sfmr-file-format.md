@@ -284,7 +284,7 @@ JSON structure describing the reconstruction:
 ```
 
 **Field descriptions:**
-- `version`: Format version number (`1` to `8`).
+- `version`: Format version number (`1` to `9`).
   See [Versioning and Migration](#versioning-and-migration) for the relationship
   to earlier versions.
 - `feature_source`: (version 4+) How each observation's 2D coordinate is carried
@@ -328,6 +328,9 @@ JSON structure describing the reconstruction:
 - `rig_count`: (Optional) Number of rig definitions. Present only when rig data exists.
 - `sensor_count`: (Optional) Total sensors across all rigs. Present only when rig data exists.
 - `frame_count`: (Optional) Number of frames (temporal instants). Present only when rig data exists.
+- `lineage`: (Optional, version 9+) The contents this reconstruction descends
+  from, each with the mapping from its points onto this file's rows. See
+  [Lineage](#lineage-version-9). Absent when there are none.
 
 **Important**: All paths in the `.sfmr` file (image paths in `images/names.json.zst`, etc.) are **relative to the workspace directory**, not relative to the `.sfmr` file itself. This ensures consistent path resolution regardless of where the `.sfmr` file is located.
 
@@ -373,6 +376,99 @@ the relative paths within the workspace will work. Similarly, if you move a `.sf
 the workspace, it will still work either falling back to the absolute path or the containing workspace directory.
 If you move `reconstruction.sfmr` to `/home/user/reconstruction.sfmr`, which is outside the workspace,
 it still finds the workspace because it first fails to resolve the relative path and then uses the absolute path.
+
+#### Lineage (version 9+)
+
+A Point ID names a point by a content hash and a row number in that content
+([Point ID](#point-id-portable-3d-point-references)). A reconstruction that was
+derived from an earlier one holds the same points at different rows, so an ID
+written against the earlier content stops naming anything in the later file
+unless the later file says how the two are related. **Lineage is that
+statement**: an optional array under the top-level metadata key `lineage`,
+listing the contents this file descends from and, for each, where each of its
+points landed here.
+
+```json
+{
+  "lineage": [
+    { "hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "kind": "base",
+      "map": { "form": "monotone", "deleted": [17, 902], "created": [] } },
+    { "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "kind": "point_edit",
+      "map": { "form": "dense", "rows": [2107, null] } }
+  ]
+}
+```
+
+**It is a field of the metadata, not a section of its own.** Lineage is content:
+it is part of `metadata.json`, therefore inside `metadata_xxh128` and therefore
+inside `content_xxh128`. Two files that assert different ancestry are different
+reconstructions and hash differently. It is **absent when the list is empty**, so
+a file with no ancestor hashes exactly as it would have under version 8, and a
+version 8 file reads as an empty list.
+
+**Each entry** has these keys:
+
+| Key | Required | Type | Meaning |
+|-----|----------|------|---------|
+| `hash` | Yes | string | 32 lowercase hex digits: the ancestor's content hash. This is the `{hash}` an ID minted against that ancestor carries, and an ID's 8-digit prefix matches its first 8 digits. |
+| `kind` | Yes | string | `"base"` or `"point_edit"`, below. |
+| `map` | Yes | object | Where each of the ancestor's points landed in this file, in one of the two encodings below. Its `form` key, `"monotone"` or `"dense"`, says which. |
+
+`kind` says what the hash names, which is what a consumer needs in order to know
+whether the hash could also name a file:
+
+- **`"base"`** -- the hash is a `content_xxh128`, the same value a file of that
+  content stores in `content_hash.json`. Such a file may exist and may be found
+  by matching the hash; it need not.
+- **`"point_edit"`** -- the hash names the set of points one edit created,
+  numbered from zero in the order they were created. It is the content hash of
+  no file, and searching for a file that carries it finds nothing. An ID whose
+  `{index}` is a position in that numbering resolves only through an entry of
+  this kind.
+
+**Every entry's map is already composed.** It goes from the ancestor's points
+straight into *this file's* rows, never to the next ancestor along. A file two
+derivations removed from an original therefore still carries one entry for that
+original, with a map onto its own rows, so resolving an ID is **one lookup and
+one map application** whatever the depth of the chain. A writer that carries
+lineage forward composes as it goes.
+
+##### Map encodings
+
+Both encodings are exact. Which one an entry uses is a matter of size alone, and
+a reader must accept either.
+
+**`"monotone"`** -- for a derivation that preserves the order of the points it
+kept:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `deleted` | array of integers, ascending | Point indexes of the **ancestor** that have no row in this file. |
+| `created` | array of integers, ascending | Row indexes of **this file** that come from no ancestor point. |
+
+To read it: walk this file's rows in order, skipping the rows named in
+`created`, and hand out the ancestor's point indexes in order, skipping those
+named in `deleted`. The two sequences are the same length, and the pairing is
+the map. Its size is the size of the difference between the two contents rather
+than the size of either, so an edit that touched a handful of points costs a
+handful of numbers.
+
+**`"dense"`** -- the general encoding:
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `rows` | array, one entry per ancestor point | For ancestor point `i`, the row of this file it landed in, or `null` if it has none. |
+
+`rows` has exactly the ancestor's point count of entries, and every non-`null`
+value is a distinct row index below this file's `point_count`. This form is what
+a derivation that **reordered** the points it kept must use: the monotone form
+can express deletions and insertions but not a change of order, so a writer that
+moved rows relative to one another encodes densely.
+
+**Rules for a conforming writer.** Its own hash is never an entry: a file is not
+its own ancestor. There is at most one entry per `hash`. An ancestor none of
+whose points survive into this file contributes no entry, since a map with no
+pairs answers nothing. Entries are ordered oldest ancestor first.
 
 ### 2. Content Hash (`content_hash.json.zst`)
 
@@ -1805,6 +1901,22 @@ pt3d_{hash}_{index}
 
 **Example**: `pt3d_a1b2c3d4_12345`
 
+**A longer form.** A reader may meet an ID with a further underscore-separated
+field after the index, `pt3d_a1b2c3d4_12345_n3`. That trailing field identifies
+the point within an editing session that has not been written out, and means
+nothing to a file. A reader takes the ID's **file-form prefix** -- everything up
+to and including the index -- and treats the rest of the string as absent. The
+prefix is a well-formed Point ID, so nothing else about resolution changes.
+
+**An index out of range names a point the file does not contain.** The index is
+a row number in the points arrays, so an index at or past the file's
+`point_count` is not a point of that file at all -- it is a reference to
+something that lived only in the producer's memory, or in a file the reference
+outlived. A reader **detects** that case and reports it, rather than reading
+another point: the number is in range for no row, and silently clamping it or
+wrapping it would answer a question about one point with the coordinates of
+another.
+
 ### Why `content_xxh128`
 
 The `content_xxh128` is the overall file integrity hash, computed from all
@@ -1918,8 +2030,21 @@ All extensions should:
 
 ## Versioning and Migration
 
-The format spans eight versions (`1` to `8`), all valid; each extends the previous,
-and how an older file maps to the current model is given below.
+The format spans nine versions (`1` to `9`), all valid; each extends the previous,
+and how an older file maps to the current model is given below. Version 9 is the
+current format version: a reader accepts any version up to it.
+
+### Version 8 → Version 9
+
+| Change | Detail |
+|---|---|
+| top-level `lineage` | New **optional** metadata array: the contents this reconstruction descends from and where each of their points landed here. See [Lineage](#lineage-version-9). It rides inside `metadata.json`, which is already hashed, so no hash slot changes. |
+
+Migration is mechanical and lossless in both directions. A version 8 file carries
+no such key and reads as an empty list; a version 9 file with no ancestor writes
+no key and is byte-identical in the metadata section to the version 8 file it
+came from apart from the version number. Nothing else moves, and no existing
+array changes meaning.
 
 ### Version 1 → Version 2 (history)
 
@@ -2030,6 +2155,11 @@ its camera.
 
 ## Version History
 
+- **Version 9**: Optional top-level `lineage`: the contents this
+  reconstruction descends from, each with a composed map from its points onto
+  this file's rows, so a Point ID written against an ancestor still resolves
+  here. Absent when there are none, so a file with no ancestor hashes as it did
+  at version 8, and a version 8 file reads as an empty list.
 - **Version 8**: The write timestamp moves out of `metadata.json` into the
   top-level `written.json`, which is outside every section hash and so
   outside `content_xxh128`. Two saves of one unchanged value then write the

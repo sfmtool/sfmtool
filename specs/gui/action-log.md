@@ -155,6 +155,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | File | — | User / MCP | `Closed {label}` |
 | File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
 | File | — | User | `Loaded demo data` |
+| File | — | User | `Saved {label} at {serial} to {path}` -- one entry per save, the serial being the version that reached the disk ([saving.md](saving.md)) |
+| File | — | User | the reason a save was refused -- **failed**: the node is not loaded, the node came from no file (Save), the version at the cursor was released to keep the node inside the history budget, or the write itself failed |
 | Scene | — | User / MCP | `Soloed {label}` / `Ended the solo` |
 | Scene | — | User / MCP | `{label} hidden` / `{label} shown` |
 | Scene | — | User / MCP | `{Points|Camera images|Patches|Points at infinity} of {label} hidden/shown` |
@@ -223,6 +225,9 @@ Rules that the table implies:
   tree and the `,` / `.` keys all log the same `Selected image …` text**,
   because all of them end in `AppState::select_image`. Which control was used
   is not recorded.
+- **A dismissed file dialog writes nothing and logs nothing.** Cancelling
+  `Save As...` is a change of mind, not a refused action, so it is neither a
+  `Saved …` entry nor a failed one.
 - **A failed entry is never coalesced away**, whatever its kind.
 
 Not logged, by design:

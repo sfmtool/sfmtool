@@ -188,6 +188,7 @@ impl SfmrReconstruction {
             frame_count: None,
             world_space_unit: None,
             feature_source: FEATURE_SOURCE_SIFT_FILES.to_string(),
+            lineage: Vec::new(),
         };
 
         let observation_offsets = compute_observation_offsets(&observation_counts);

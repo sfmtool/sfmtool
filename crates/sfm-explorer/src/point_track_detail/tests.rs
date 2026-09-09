@@ -222,6 +222,12 @@ const VIEWPORT: egui::Vec2 = egui::vec2(1200.0, 800.0);
 /// Drive one frame of the panel over a fixed-size viewport with `events`
 /// delivered to egui, returning the response it hands back to the dock. The
 /// panel is left in its post-frame state so tests can inspect what it prepared.
+/// The Point ID the caller hands the panel in these tests.
+///
+/// A constant, because minting one is the node's job and not this panel's: what
+/// is under test here is that the panel shows and copies the id it was given.
+const TEST_POINT_ID: &str = "pt3d_deadbeef_0_n0";
+
 fn run_frame(
     panel: &mut PointTrackDetail,
     ctx: &egui::Context,
@@ -242,6 +248,7 @@ fn run_frame(
             ui,
             recon,
             RECON,
+            TEST_POINT_ID,
             selected_point,
             None,
             sift_cache,
@@ -893,26 +900,17 @@ fn an_all_zero_patch_bitmap_leaves_the_header_tile_empty() {
 // ── Panel lifecycle ─────────────────────────────────────────────────────
 
 #[test]
-fn the_point_id_carries_the_content_hash_prefix() {
+fn the_header_shows_the_point_id_it_was_handed() {
+    // The id is minted over the node's version graph by the earliest rule, which
+    // is a question about the node rather than about this reconstruction value —
+    // so the panel takes the answer and shows it rather than deriving one.
     let recon = with_content_hash(SfmrReconstruction::demo(12), "deadbeefcafef00d");
     let mut panel = PointTrackDetail::new();
     let ctx = egui::Context::default();
 
     show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
 
-    assert_eq!(panel.hash_prefix, "deadbeef");
-}
-
-#[test]
-fn a_short_content_hash_falls_back_to_zeros() {
-    // `demo` leaves the hash empty, which is the case the fallback exists for.
-    let recon = SfmrReconstruction::demo(12);
-    let mut panel = PointTrackDetail::new();
-    let ctx = egui::Context::default();
-
-    show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
-
-    assert_eq!(panel.hash_prefix, "00000000");
+    assert_eq!(panel.point_id, TEST_POINT_ID);
 }
 
 #[test]
@@ -946,7 +944,7 @@ fn clear_resets_every_cache() {
     assert!(panel.patch_frame.is_none());
     assert!(panel.stored_patch_texture.is_none());
     assert!(panel.rendered_patch_textures.is_empty());
-    assert!(panel.hash_prefix.is_empty());
+    assert!(panel.point_id.is_empty());
     assert_eq!(panel.scroll_offset_y, None);
 }
 

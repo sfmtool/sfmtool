@@ -58,6 +58,14 @@ pub use sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
+/// The lineage a saved reconstruction records: which earlier contents its point
+/// rows came from, so a Point ID minted against one of them still resolves.
+///
+/// Re-exported for the same reason as the constraint codes above: a consumer
+/// composing or reading lineage works in terms of a reconstruction value, and
+/// needs these names without depending on `sfmr-format` itself.
+pub use sfmr_format::{LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT};
+
 // `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
 // the two formats' thumbnail extents must agree. Neither format crate depends
 // on the other — this crate is the first place both are visible, which makes it

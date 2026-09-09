@@ -50,6 +50,12 @@ impl ReconId {
         Self(NEXT_RECON_ID.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// This id as the decimal number the session form of a Point ID carries in
+    /// its `_n{node}` suffix.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
     /// A chosen id, for tests that need a fixture and an assertion to agree on
     /// one. Test-only on purpose: in the app, ids are handed out by
     /// [`ReconId::next`] and never picked.
@@ -362,6 +368,19 @@ impl SceneNode {
         )
     }
 
+    /// Whether the cursor is somewhere other than the version the disk holds --
+    /// what the window title's and the Scene row's `*` marker mean, and what
+    /// closing asks about.
+    ///
+    /// A node that came from no file is **not** dirty until something is done to
+    /// it: the disk serial starts on its first version like every other node's,
+    /// and demo data nobody has touched is not unsaved work. The first edit
+    /// moves the cursor off that version and the marker appears, and a save,
+    /// which for such a node is a Save As, moves the disk serial to meet it.
+    pub fn is_dirty(&self) -> bool {
+        self.history.current_version().serial != self.history.disk_serial()
+    }
+
     /// The value this node is showing: its current base plus that version's
     /// point edits.
     pub fn edited(&self) -> &EditedReconstruction {
@@ -618,24 +637,28 @@ pub fn visible_stats(scene: &[SceneNode], solo: Option<ReconId>) -> SceneStats {
     stats
 }
 
-/// The first 8 hex characters of a reconstruction's content hash — the part
-/// that goes into a displayed `pt3d_<hash>_<index>` id.
+/// The first 8 hex characters of the content hash of the base this node is
+/// showing — the part that goes into a displayed `pt3d_<hash>_<index>` id.
 ///
-/// Zero-filled when the reconstruction carries no hash, so an id is always the
-/// same shape and always parseable.
-pub fn hash_prefix(recon: &SfmrReconstruction) -> String {
-    let hash = &recon.content_hash.content_xxh128;
-    if hash.len() >= 8 {
-        hash[..8].to_string()
-    } else {
-        "00000000".to_string()
-    }
+/// Computed from the value, so a node that came from no file has one exactly
+/// like a node that did, and a node that has edited its way to a new base
+/// reports the hash of *that* base rather than of the file it was loaded from.
+/// Zero-filled only when the value cannot be hashed at all, so an id is always
+/// the same shape and always parseable.
+pub fn hash_prefix(node: &SceneNode) -> String {
+    crate::point_ids::base_hash_prefix(node.edited()).unwrap_or_else(|| "00000000".to_string())
 }
 
-/// The copyable point id the Point Track panel shows, `pt3d_<hash>_<index>`.
+/// The copyable point id the Point Track panel shows, in the session form
+/// `pt3d_<hash>_<index>_n<node>`.
 ///
-/// Because the hash is per-reconstruction content, these ids are already
-/// unambiguous across simultaneously loaded files.
-pub fn point_id(recon: &SfmrReconstruction, point_idx: usize) -> String {
-    format!("pt3d_{}_{}", hash_prefix(recon), point_idx)
+/// Minted by the earliest rule ([`crate::point_ids::mint`]), so it is the id of
+/// the earliest content the point reaches rather than a coordinate in whatever
+/// the node is showing now. Falls back to the plain coordinate for a point the
+/// walk cannot name, which keeps the panel showing an id of the right shape.
+pub fn point_id(node: &SceneNode, point_idx: usize) -> String {
+    u32::try_from(point_idx)
+        .ok()
+        .and_then(|index| crate::point_ids::mint(node, index))
+        .unwrap_or_else(|| format!("pt3d_{}_{point_idx}_n{}", hash_prefix(node), node.id.raw()))
 }

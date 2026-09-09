@@ -561,7 +561,14 @@ fn show_node_header(
         out.mark(row_id(node.id, "node_tint_swatch"), square);
     }
 
-    let mut label = egui::RichText::new(&node.label);
+    // A leading `*` while the node is not at the version its file holds -- the
+    // same marker the window title carries, on the row that names the node it
+    // is about, which is the one that matters when several are loaded.
+    let mut label = egui::RichText::new(if node.is_dirty() {
+        format!("*{}", node.label)
+    } else {
+        node.label.clone()
+    });
     if ctx.selected {
         label = label.strong();
     }
@@ -640,7 +647,7 @@ fn show_points_group(
                 .push_id("point_selected", |ui| {
                     ui.add(egui::Button::selectable(
                         true,
-                        format!("selected: {}", point_id(node.recon(), point.index())),
+                        format!("selected: {}", point_id(node, point.index())),
                     ))
                 })
                 .inner;
@@ -657,11 +664,8 @@ fn show_points_group(
                 .push_id("point_hovered", |ui| {
                     ui.add(egui::Button::selectable(
                         false,
-                        egui::RichText::new(format!(
-                            "hovered: {}",
-                            point_id(node.recon(), point.index())
-                        ))
-                        .weak(),
+                        egui::RichText::new(format!("hovered: {}", point_id(node, point.index())))
+                            .weak(),
                     ))
                 })
                 .inner;

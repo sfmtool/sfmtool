@@ -16,9 +16,7 @@
 //! testable without a frame; [`GotoPointDialog`] is the thin egui shell that
 //! collects the text and reports the [`PointRef`] it resolved to.
 
-use crate::scene::{
-    hash_prefix, node_by_id, point_id, selected_node, PointRef, ReconId, SceneNode,
-};
+use crate::scene::{node_by_id, selected_node, PointRef, ReconId, SceneNode};
 
 /// The keyboard shortcut that opens the dialog: Ctrl+G, or Cmd+G on macOS.
 ///
@@ -33,13 +31,19 @@ pub enum PointQuery {
     /// A bare index, which names a point but not a file — so it resolves
     /// against whichever reconstruction is currently selected.
     Index(usize),
-    /// A full `pt3d_<hash>_<index>` id: the hash names the reconstruction, so
-    /// this resolves on its own and may *change* the selected reconstruction.
+    /// A full `pt3d_<hash>_<index>` id, with or without the session form's
+    /// `_n<node>` suffix: the hash names the content, so this resolves on its
+    /// own and may *change* the selected reconstruction.
     Qualified {
         /// The hash as typed, lowercased. Usually the 8 characters a displayed
         /// Point ID carries, but any prefix of a `content_xxh128` is accepted.
         hash: String,
         index: usize,
+        /// The node the session form names, as the number in its `_n<node>`
+        /// suffix; `None` for the file form. It says which of several nodes
+        /// carrying one hash the id was minted in, and saves the search over the
+        /// others.
+        node: Option<u32>,
     },
 }
 
@@ -60,10 +64,10 @@ pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
             .map_err(|_| format!("Point index {bare} is too large."));
     }
 
-    // `splitn(3, '_')` rather than a full split: only the first two separators
-    // are structural, and a trailing part that is not a number is caught below
-    // as "not a number" rather than silently ignored.
-    let mut parts = text.splitn(3, '_');
+    // `splitn(4, '_')` rather than a full split: three separators are
+    // structural, and a trailing part that is neither a number nor a node
+    // suffix is caught below as such rather than silently ignored.
+    let mut parts = text.splitn(4, '_');
     if let (Some(prefix), Some(hash), Some(index)) = (parts.next(), parts.next(), parts.next()) {
         if prefix.eq_ignore_ascii_case("pt3d") {
             if hash.is_empty() || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -78,9 +82,25 @@ pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
                      pt3d_a1b2c3d4_12345."
                 ));
             };
+            // The session form adds one field. An id is the file form with that
+            // field dropped, so accepting both here is what lets an id copied
+            // out of a panel be pasted back in.
+            let node = match parts.next() {
+                None => None,
+                Some(suffix) => match crate::point_ids::parse_node_suffix(suffix) {
+                    Some(node) => Some(node),
+                    None => {
+                        return Err(format!(
+                            "{suffix:?} is not a node suffix — expected n3, as in \
+                             pt3d_a1b2c3d4_12345_n3."
+                        ))
+                    }
+                },
+            };
             return Ok(PointQuery::Qualified {
                 hash: hash.to_ascii_lowercase(),
                 index,
+                node,
             });
         }
     }
@@ -104,68 +124,69 @@ pub fn resolve_point_query(
     selected: Option<ReconId>,
     query: &PointQuery,
 ) -> Result<PointRef, String> {
-    let node = match query {
-        PointQuery::Index(_) => selected_node(scene, selected)
-            .ok_or_else(|| "No reconstruction is loaded — use File ▸ Open first.".to_string())?,
-        PointQuery::Qualified { hash, .. } => {
-            find_by_hash(scene, selected, hash).ok_or_else(|| {
-                format!(
-                    "No loaded reconstruction has content hash {hash} — open the .sfmr file \
-                     this ID came from."
-                )
-            })?
+    let (hash, index, wanted_node) = match query {
+        // A bare index is a coordinate in the value on screen, not an id, so it
+        // is used as it stands against the selected node.
+        PointQuery::Index(index) => {
+            let node = selected_node(scene, selected).ok_or_else(|| {
+                "No reconstruction is loaded — use File ▸ Open first.".to_string()
+            })?;
+            let count = node.point_count();
+            if *index >= count {
+                return Err(format!(
+                    "{} has {count} points — index {index} is out of range.",
+                    node.label
+                ));
+            }
+            return Ok(PointRef::new(node.id, *index));
         }
+        PointQuery::Qualified { hash, index, node } => (hash, *index, *node),
     };
 
-    let index = match *query {
-        PointQuery::Index(index) => index,
-        PointQuery::Qualified { index, .. } => index,
-    };
-    let count = node.recon().point_set.points.len();
-    if index >= count {
-        return Err(format!(
-            "{} has {count} points — index {index} is out of range.",
-            node.label
-        ));
-    }
-    Ok(PointRef::new(node.id, index))
+    let node =
+        find_by_hash(scene, selected, hash, wanted_node).ok_or_else(|| match wanted_node {
+            Some(n) => format!(
+            "No loaded reconstruction is node n{n} with content hash {hash} — the node it names \
+             may have been closed; open the .sfmr file this ID came from."
+        ),
+            None => format!(
+                "No loaded reconstruction has content hash {hash} — open the .sfmr file this ID \
+             came from."
+            ),
+        })?;
+
+    let index = u32::try_from(index).map_err(|_| format!("Point index {index} is too large."))?;
+    let index = crate::point_ids::resolve(node, hash, index)?;
+    Ok(PointRef::new(node.id, index as usize))
 }
 
-/// The loaded node whose content hash starts with `hash`, preferring the
-/// selected one.
+/// The loaded node the id belongs to, preferring the one its node suffix names
+/// and then the selected one.
 ///
-/// Several nodes can match: the same file opened from two paths shares a
-/// content hash, and so do any two reconstructions carrying *no* hash, which
-/// both display as `00000000`. Every match holds the same content, so the index
-/// means the same thing in each — preferring the selected node just keeps the
-/// answer where the user is already looking instead of jumping them elsewhere
-/// for no visible reason.
+/// Several nodes can match a bare hash: the same file opened from two paths has
+/// been the same content, and so has a node that materialised its way to it.
+/// Every match has held that content, so the index means the same thing in each
+/// — the suffix, and then the selection, only keep the answer where the user is
+/// already looking instead of jumping them elsewhere for no visible reason.
 fn find_by_hash<'a>(
     scene: &'a [SceneNode],
     selected: Option<ReconId>,
     hash: &str,
+    node: Option<u32>,
 ) -> Option<&'a SceneNode> {
-    selected
-        .and_then(|id| node_by_id(scene, id))
-        .filter(|node| hash_matches(node, hash))
-        .or_else(|| scene.iter().find(|node| hash_matches(node, hash)))
+    let matches = |node: &&SceneNode| crate::point_ids::holds_hash(node, hash);
+    node.and_then(|n| scene.iter().find(|node| node.id.raw() == n))
+        .filter(matches)
+        .or_else(|| {
+            selected
+                .and_then(|id| node_by_id(scene, id))
+                .filter(matches)
+        })
+        .or_else(|| scene.iter().find(matches))
 }
 
-/// Whether `hash` is a prefix of this node's `content_xxh128`.
-///
-/// The displayed 8-character prefix is the common case, but a full 32-character
-/// hash out of `content_hash.json.zst` matches too — the format spec offers it
-/// for exact disambiguation, so pasting one should work. The `hash_prefix`
-/// fallback covers a reconstruction with no hash at all, which displays (and so
-/// must resolve) as `00000000`.
-fn hash_matches(node: &SceneNode, hash: &str) -> bool {
-    let full = &node.recon().content_hash.content_xxh128;
-    full.len() >= hash.len() && full[..hash.len()].eq_ignore_ascii_case(hash)
-        || hash_prefix(node.recon()).eq_ignore_ascii_case(hash)
-}
-
-/// The Point ID of the current selection, in the `pt3d_<hash>_<index>` form the
-/// Point Track header displays — what the dialog opens prefilled with.
+/// The Point ID of the current selection, in the session form the Point Track
+/// header displays — what the dialog opens prefilled with.
 ///
 /// `None` when nothing is selected, or when the selection has gone stale
 /// against a different reconstruction; prefilling an ID that no longer resolves
@@ -173,8 +194,9 @@ fn hash_matches(node: &SceneNode, hash: &str) -> bool {
 pub fn selected_point_id(scene: &[SceneNode], selected_point: Option<PointRef>) -> Option<String> {
     let point = selected_point?;
     let node = node_by_id(scene, point.recon)?;
-    (point.index() < node.recon().point_set.points.len())
-        .then(|| point_id(node.recon(), point.index()))
+    let index = u32::try_from(point.index()).ok()?;
+    node.edited().point(index)?;
+    crate::point_ids::mint(node, index)
 }
 
 /// The modal that collects the text.

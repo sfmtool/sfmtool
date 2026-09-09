@@ -20,6 +20,7 @@ use std::collections::HashMap;
 
 mod edits;
 mod ops;
+mod save;
 
 /// The window title with no file loaded. `ui_basic`'s Windows attach path
 /// finds our window by this exact name, so it is also what the tests match on.
@@ -545,6 +546,10 @@ pub struct AppState {
     /// it is showing. See [`crate::goto_point`].
     pub goto_point: GotoPointDialog,
 
+    /// The prompt that stands between an unsaved edit and losing it, and what
+    /// is waiting on it. See [`crate::close_prompt`].
+    pub close_prompt: crate::close_prompt::ClosePrompt,
+
     /// The `.matches` file each node's matches-backed resection reads, chosen
     /// once per source node and remembered for the session. See
     /// [`crate::resect`].
@@ -666,6 +671,7 @@ impl AppState {
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),
+            close_prompt: crate::close_prompt::ClosePrompt::default(),
             resect_matches: HashMap::new(),
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]
@@ -981,7 +987,7 @@ impl AppState {
         if moved {
             let id = self
                 .node(point.recon)
-                .map(|node| crate::scene::point_id(node.recon(), point.index()))
+                .map(|node| crate::scene::point_id(node, point.index()))
                 .unwrap_or_else(|| format!("#{}", point.index()));
             self.action_log
                 .record_run(Kind::Selection, "point", format!("Selected point {id}"));
@@ -1052,12 +1058,23 @@ impl AppState {
     /// title however many nodes follow it: it came from no file, so naming one
     /// would be a lie, and the base title is load-bearing for `ui_basic`'s
     /// Windows attach path.
+    ///
+    /// The file name carries a leading `*` while the node showing it is not at
+    /// the version its file holds. The marker sits on the *name* rather than at
+    /// the front of the title for the same reason the MCP suffix does: the
+    /// leading base title is what an attaching process matches on.
     pub fn window_title(&self) -> String {
         let extra = self.scene.len().saturating_sub(1);
+        let marker = match self.scene.first() {
+            Some(node) if self.is_dirty(node.id) => "*",
+            _ => "",
+        };
         #[allow(unused_mut)]
         let mut title = match self.scene.first().and_then(|node| node.file_name()) {
-            Some(name) if extra > 0 => format!("{WINDOW_TITLE_BASE} - {name} (+{extra})"),
-            Some(name) => format!("{WINDOW_TITLE_BASE} - {name}"),
+            Some(name) if extra > 0 => {
+                format!("{WINDOW_TITLE_BASE} - {marker}{name} (+{extra})")
+            }
+            Some(name) => format!("{WINDOW_TITLE_BASE} - {marker}{name}"),
             None => WINDOW_TITLE_BASE.to_string(),
         };
         // A window something else can drive should never look like one nothing

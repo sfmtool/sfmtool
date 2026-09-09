@@ -19,7 +19,7 @@ impl PointTrackDetail {
         point_idx: usize,
         point: &sfmtool_core::Point3D,
     ) -> bool {
-        let point_id = format!("pt3d_{}_{}", self.hash_prefix, point_idx);
+        let point_id = self.point_id.clone();
         let coords = format!(
             "{:.3}, {:.3}, {:.3}",
             point.position.x, point.position.y, point.position.z

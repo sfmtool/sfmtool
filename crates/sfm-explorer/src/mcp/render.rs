@@ -61,7 +61,7 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
     json!({
         "label": node.label,
         "path": node.path.as_ref().map(|p| p.display().to_string()),
-        "content_hash": scene::hash_prefix(recon),
+        "content_hash": scene::hash_prefix(node),
         "counts": {
             "points": node.point_count(),
             // Read the way `scene::visible_stats` reads it, so this number and
@@ -132,7 +132,7 @@ pub(super) fn selection(state: &AppState) -> Value {
             "index": point.index(),
             "id": state
                 .node(point.recon)
-                .map(|node| scene::point_id(node.recon(), point.index())),
+                .map(|node| scene::point_id(node, point.index())),
         })),
     })
 }

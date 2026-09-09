@@ -370,6 +370,36 @@ fn edit_menu_items() {
         .expect("Edit menu item 'Delete Image' did not appear");
 }
 
+/// The File menu's two save items, and which of them applies to demo data.
+///
+/// Both are matched on a name *prefix*: each carries its keyboard shortcut in
+/// the button's text, and the shortcut is spelled by the platform (`Ctrl+S`
+/// against `⌘S`), so an exact name would be asserting egui's formatting rather
+/// than the menu -- the same reason `edit_menu_items` above names only the one
+/// item with no shortcut.
+///
+/// Demo data came from no file, so there is nothing for Save to write over and
+/// Save As is the only way out. Both items are nonetheless present: an action
+/// that vanishes when it does not apply reads as unimplemented. What each of
+/// them does is covered headlessly in `state/save/tests.rs`.
+#[test]
+fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
+    load_demo_data(&app);
+
+    app.locator(r#"button[name="File"]"#)
+        .press()
+        .expect("press File menu button");
+
+    app.locator(r#"button[name^="Save As..."][enabled="true"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("'Save As...' is enabled for a node that came from no file");
+    app.locator(r#"button[name^="Save"][enabled="false"]"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("'Save' is disabled for a node that came from no file");
+}
+
 /// File > Quit exits the process.
 ///
 /// It used to send `ViewportCommand::Close`, which this app's own winit loop

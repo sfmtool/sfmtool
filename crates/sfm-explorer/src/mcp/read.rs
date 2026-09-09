@@ -269,7 +269,7 @@ pub(super) fn get_point(state: &mut AppState, query: &crate::goto_point::PointQu
         .collect();
 
     Ok(json!({
-        "id": point_id(recon, point_index),
+        "id": point_id(node, point_index),
         "reconstruction_label": node.label,
         "index": point_index,
         "position": render::point(&point.position),

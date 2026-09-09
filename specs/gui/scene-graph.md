@@ -270,6 +270,11 @@ fixed-height for virtualization.
 - All three glyph toggles carry **explicit ids** rather than egui's auto ids: an
   auto id is a count of what was allocated before the widget, so anything added
   to the row ahead of it would move the hover/click state of everything after.
+- A **leading `*` on the label while the node is dirty** -- `*run_a` -- which is
+  true when its cursor is not at the version the disk holds
+  (`SceneNode::is_dirty`, [saving.md](saving.md)). It rides on
+  the label rather than taking a column, since it is a fact about the value the
+  label names.
 - Bold + accent bar when selected. Click: select this reconstruction.
   Double-click: zoom-to-fit this node.
 - Everything past the two toggles is **one click target spanning the row** —
@@ -918,6 +923,12 @@ reconstruction on screen at a time, the same photo, one keystroke apart.
   the `ui_basic` Windows attach path and keeps its current value — which is also
   why a *nameless* first node (demo data) leaves the title at the bare base
   however many files follow it, rather than inventing a name for the count.
+  A dirty node puts a `*` **on the file name**, not at the front of the title:
+  `SfM Explorer - *run_a.sfmr`, `SfM Explorer - *run_a.sfmr (+2)`. The leading
+  base title is what an attaching process matches on -- the same reason the MCP
+  mention is a suffix -- so a marker before it would break the match on exactly
+  the sessions where something had been edited. A window showing no file name
+  keeps the bare base title, marker or not. See [saving.md](saving.md).
 
 The scene-stats overlay (top-left) sums across the effectively visible nodes
 (the same eye-AND-solo rule the draw loop uses) and leads with the file count

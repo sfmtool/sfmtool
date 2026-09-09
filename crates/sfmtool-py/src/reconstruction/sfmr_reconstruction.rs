@@ -196,6 +196,10 @@ impl PySfmrReconstruction {
     }
 
     /// Reconstruction metadata as a Python dict (serialized via JSON).
+    ///
+    /// Every stored key, including `lineage` when the file records where its
+    /// point rows came from -- the key is absent when it records nothing, which
+    /// is every file with no edited ancestor.
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         serde_to_py(py, &self.inner.metadata)
     }

@@ -83,6 +83,56 @@ Every serial is minted once and never reused, so a map keyed on a pair of serial
 names one step for the life of the session, and a discarded version's map can
 never be mistaken for a later one's.
 
+## The version graph
+
+The maps are not a list beside the versions but a **graph over them**. The
+history keeps a step list with one entry per version ever minted, holding the
+version, the version it was made from, the point map between them, and the
+points that step created:
+
+```rust
+/// What a point-creating edit records about itself.
+pub struct CreatedPoints {
+    /// The edit's content hash (`EditedReconstruction::point_edit_hash`).
+    pub hash: String,
+    /// The indexes it created in that version, in creation order. Position `k`
+    /// in this list is the `k` a point id carries.
+    pub indexes: Vec<u32>,
+}
+
+impl History {
+    /// Push a version whose edit created points, recording them.
+    pub fn push_creating(&mut self, value: EditedReconstruction, map: PointMap,
+                         label: impl Into<String>, created: CreatedPoints)
+        -> VersionSerial;
+
+    /// Where index `index` of version `from` sits in version `to`. Walks back
+    /// to the last version the two share, inverting each step's map, then
+    /// forward. `Err` carries the version the walk stopped at.
+    pub fn follow(&self, from: VersionSerial, to: VersionSerial, index: u32)
+        -> Result<u32, VersionSerial>;
+
+    pub fn ancestry(&self, serial: VersionSerial) -> Vec<VersionSerial>;
+    pub fn parent_of(&self, serial: VersionSerial) -> Option<VersionSerial>;
+    pub fn created_by(&self, serial: VersionSerial) -> Option<&CreatedPoints>;
+    pub fn all_serials(&self) -> impl Iterator<Item = VersionSerial> + '_;
+}
+```
+
+**The step list is never pruned** -- not by the budget, which releases values
+and never steps, and not by the truncation a new edit after an undo performs. So
+a discarded redo tail is still walkable, and an index taken on it still has a
+graph to be followed through.
+
+**Every base has a hash, and so does every point-creating edit.** A base's
+content hash is computed from the value without writing a file and equals what a
+save of it writes, and a point edit that creates points is hashed over the base's
+hash plus the records it adds
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+§ "Hashes"). Demo data and a resection therefore hash exactly like a loaded file.
+Those hashes plus this graph are what a point id is minted against and resolved
+through ([goto-point.md](goto-point.md) § "The ID forms and the version graph").
+
 ## What follows a map
 
 **The selection.** A selected point is an index into the version it was chosen
@@ -162,7 +212,8 @@ was made and its unshared bytes, written for a person to read (`2.00 KiB`,
 **Two marks.** The row at the cursor is marked with `▶` and drawn as the
 selected row: it is what the node is showing. The row at the **disk state** --
 the version the node's file on disk holds, which is the version it was loaded at
-until a save moves it (`History::disk_serial`) -- is marked with `●`. A cursor
+until a save moves it (`History::disk_serial`, [saving.md](saving.md)) -- is
+marked with `●`. A cursor
 mark anywhere but the disk mark is the panel's way of saying the node is dirty,
 which is a fact about two rows rather than a badge of its own.
 
@@ -291,8 +342,3 @@ alone, listing the loaded node's one version.
 - Restoring a selection an edit removed.
 - Editing a version from the panel: a row is a place to stand, not a thing to
   rename, delete or export.
-- The version-graph walks that mint and resolve a point id across versions,
-  proposed in
-  [`../drafts/sfm-explorer-editing.md`](../drafts/sfm-explorer-editing.md) and
-  [`../drafts/sfm-explorer-editing-overlay.md`](../drafts/sfm-explorer-editing-overlay.md);
-  the maps they walk are the ones this spec describes.

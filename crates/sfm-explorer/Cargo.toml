@@ -137,6 +137,11 @@ winres = "0.1"
 # binary is unaffected.
 wgpu = { version = "30", features = ["noop"] }
 
+# The save tests read the file back off disk and check what the writer put in
+# it. The crate itself never reaches past `sfmtool-core`, which is why this is a
+# dev-dependency rather than a dependency.
+sfmr-format = { path = "../sfmr-format" }
+
 # UI tests drive the accessibility tree, which xa11y reads on all three desktop
 # platforms: Windows (UI Automation), macOS (AXUIElement), Linux (AT-SPI2 over
 # D-Bus). Linux is the one whose API has to be brought up rather than merely

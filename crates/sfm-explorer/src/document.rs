@@ -120,6 +120,23 @@ fn is_live(removed: &[u32], index: u32) -> bool {
     removed.binary_search(&index).is_err()
 }
 
+/// The points one version's edit brought into existence, and the hash they are
+/// named by.
+///
+/// A point that no ancestor holds cannot be named by a base's hash and a row in
+/// it, because there is no such row. It is named instead by the content hash of
+/// the edit that created it (`EditedReconstruction::point_edit_hash`) and its
+/// position among that edit's creations, which is what
+/// [`crate::point_ids::mint`] mints and [`crate::point_ids::resolve`] resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedPoints {
+    /// The point edit's content hash, 32 lowercase hex digits.
+    pub hash: String,
+    /// The indexes the created points hold **in this version**, in the order the
+    /// edit created them. Position `k` in this list is the `k` of the id.
+    pub indexes: Vec<u32>,
+}
+
 /// One version of a node's reconstruction.
 pub struct Version {
     /// Minted once, never reused.
@@ -146,6 +163,15 @@ impl Version {
     }
 }
 
+/// One edge of the version graph: a version, the version it was made from, what
+/// the step did to point indexes, and which points it created.
+struct Step {
+    serial: VersionSerial,
+    parent: VersionSerial,
+    map: PointMap,
+    created: Option<CreatedPoints>,
+}
+
 /// A node's versions, its cursor, and the maps between every version it has
 /// ever minted.
 pub struct History {
@@ -153,9 +179,11 @@ pub struct History {
     /// Which version the node currently shows. Always in range, and always a
     /// version whose value is present.
     cursor: usize,
-    /// One entry per version that was made from another: `(serial, parent,
-    /// map)`. Never pruned -- not by the budget, and not by a truncation.
-    maps: Vec<(VersionSerial, VersionSerial, PointMap)>,
+    /// One entry per version that was made from another. Never pruned -- not by
+    /// the budget, and not by a truncation -- so it is the whole graph of the
+    /// session, discarded redo tails included, and every walk over it can reach
+    /// a version the viewer can no longer show.
+    steps: Vec<Step>,
     /// The version the node's file on disk holds: the one it was loaded at,
     /// until a save says otherwise.
     disk_serial: VersionSerial,
@@ -176,7 +204,7 @@ impl History {
                 unshared_bytes,
             }],
             cursor: 0,
-            maps: Vec::new(),
+            steps: Vec::new(),
             disk_serial: serial,
         }
     }
@@ -231,7 +259,6 @@ impl History {
     }
 
     /// Say that `serial` is now the version on disk. Called by a save.
-    #[allow(dead_code, reason = "the writer of a node calls this; see the getter")]
     pub fn set_disk_serial(&mut self, serial: VersionSerial) {
         self.disk_serial = serial;
     }
@@ -257,16 +284,102 @@ impl History {
     /// The map from the version with serial `parent` to the version with serial
     /// `serial`, for any version ever minted on this node.
     pub fn map_between(&self, parent: VersionSerial, serial: VersionSerial) -> Option<&PointMap> {
-        self.maps
+        self.steps
             .iter()
-            .find(|(to, from, _)| *to == serial && *from == parent)
-            .map(|(_, _, map)| map)
+            .find(|s| s.serial == serial && s.parent == parent)
+            .map(|s| &s.map)
     }
 
     /// How many maps are held. The budget never touches these.
     #[allow(dead_code, reason = "read by the version-graph walks and by the tests")]
     pub fn map_count(&self) -> usize {
-        self.maps.len()
+        self.steps.len()
+    }
+
+    /// The version `serial` was made from, or `None` for the node's first
+    /// version.
+    pub fn parent_of(&self, serial: VersionSerial) -> Option<VersionSerial> {
+        self.steps
+            .iter()
+            .find(|s| s.serial == serial)
+            .map(|s| s.parent)
+    }
+
+    /// The chain of serials from `serial` back to the node's first version,
+    /// `serial` first.
+    ///
+    /// Defined for every version the node has ever minted, including one a
+    /// discarded redo tail took with it: the steps outlive the version rows.
+    pub fn ancestry(&self, serial: VersionSerial) -> Vec<VersionSerial> {
+        let mut chain = vec![serial];
+        while let Some(parent) = self.parent_of(*chain.last().expect("non-empty")) {
+            chain.push(parent);
+        }
+        chain
+    }
+
+    /// The points the step that produced `serial` created, when it created any.
+    pub fn created_by(&self, serial: VersionSerial) -> Option<&CreatedPoints> {
+        self.steps
+            .iter()
+            .find(|s| s.serial == serial)
+            .and_then(|s| s.created.as_ref())
+    }
+
+    /// Every version the node has ever minted, oldest first, the discarded ones
+    /// included.
+    pub fn all_serials(&self) -> Vec<VersionSerial> {
+        let mut serials: Vec<VersionSerial> = self
+            .versions
+            .first()
+            .map(|v| v.serial)
+            .into_iter()
+            .chain(self.steps.iter().map(|s| s.serial))
+            .collect();
+        serials.sort_unstable();
+        serials.dedup();
+        serials
+    }
+
+    /// Where the point that is index `index` in version `from` is in version
+    /// `to`.
+    ///
+    /// The two need not be on one line of descent. The walk goes back from
+    /// `from` to the last version both share, inverting each step's map, and
+    /// then forward to `to`; when `from` is already an ancestor of `to` the
+    /// first leg is empty and this is one forward walk. Every map is a bijection
+    /// on the points that survive it, so both legs are well defined.
+    ///
+    /// `Err` carries the version the walk stopped at: the step into or out of it
+    /// is where the point ceased to exist, which is the only thing worth saying
+    /// to someone whose id did not resolve.
+    pub fn follow(
+        &self,
+        from: VersionSerial,
+        to: VersionSerial,
+        index: u32,
+    ) -> Result<u32, VersionSerial> {
+        let up = self.ancestry(from);
+        let down = self.ancestry(to);
+        let meet = up.iter().copied().find(|s| down.contains(s)).ok_or(from)?;
+
+        let mut index = index;
+        // Back to the meeting point, inverting the step that made each version
+        // along the way.
+        for serial in up.iter().take_while(|s| **s != meet) {
+            let parent = self.parent_of(*serial).ok_or(*serial)?;
+            let map = self.map_between(parent, *serial).ok_or(*serial)?;
+            index = map.inverse(index).ok_or(*serial)?;
+        }
+        // Then forward, in order, to the destination.
+        let forward_leg: Vec<VersionSerial> =
+            down.iter().copied().take_while(|s| *s != meet).collect();
+        for serial in forward_leg.iter().rev() {
+            let parent = self.parent_of(*serial).ok_or(*serial)?;
+            let map = self.map_between(parent, *serial).ok_or(*serial)?;
+            index = map.forward(index).ok_or(*serial)?;
+        }
+        Ok(index)
     }
 
     /// Append `value` as the next version, discarding any redo tail.
@@ -279,6 +392,21 @@ impl History {
         value: EditedReconstruction,
         map: PointMap,
         label: impl Into<String>,
+    ) -> VersionSerial {
+        self.push_creating(value, map, label, None)
+    }
+
+    /// [`History::push`] for an edit that created points, which names them.
+    ///
+    /// `created` is kept on the version for good, so an id minted against the
+    /// edit's hash resolves for the rest of the session however far the cursor
+    /// travels afterwards.
+    pub fn push_creating(
+        &mut self,
+        value: EditedReconstruction,
+        map: PointMap,
+        label: impl Into<String>,
+        created: Option<CreatedPoints>,
     ) -> VersionSerial {
         // The redo tail's values go; its maps stay, which is what lets an index
         // taken on a discarded version still be followed.
@@ -294,7 +422,12 @@ impl History {
             unshared_bytes,
         });
         self.cursor = self.versions.len() - 1;
-        self.maps.push((serial, parent, map));
+        self.steps.push(Step {
+            serial,
+            parent,
+            map,
+            created,
+        });
         self.enforce_budget();
         serial
     }
