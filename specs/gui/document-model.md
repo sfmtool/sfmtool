@@ -34,7 +34,7 @@ edit; what changes is the value it shows. That value lives in a `History`, in
 [document.rs](../../crates/sfm-explorer/src/document.rs).
 
 ```rust
-pub struct History { /* versions, cursor, maps */ }
+pub struct History { /* versions, cursor, maps, the version on disk */ }
 
 pub struct Version {
     pub serial: VersionSerial,
@@ -56,6 +56,18 @@ impl History {
     pub fn can_redo(&self) -> bool;
     pub fn undo(&mut self) -> Option<(VersionSerial, VersionSerial)>;
     pub fn redo(&mut self) -> Option<(VersionSerial, VersionSerial)>;
+
+    pub fn cursor(&self) -> usize;
+    pub fn position_of(&self, serial: VersionSerial) -> Option<usize>;
+    /// One step towards the version at `target`, as an undo or a redo.
+    pub fn step_towards(&mut self, target: usize)
+        -> Option<(VersionSerial, VersionSerial)>;
+
+    /// The version the node's file on disk holds: the one it was loaded at,
+    /// until a write of the node moves it. The History panel marks it
+    /// ([edit-history.md](edit-history.md)).
+    pub fn disk_serial(&self) -> VersionSerial;
+    pub fn set_disk_serial(&mut self, serial: VersionSerial);
 }
 ```
 

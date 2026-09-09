@@ -13,7 +13,8 @@ holding an index across an edit follow it: a selected point stays selected
 through an edit that renumbered the cloud around it, and comes back to the same
 point when the edit is undone.
 
-This spec describes the cursor's behaviour, the maps, and what follows them. What
+This spec describes the cursor's behaviour, the maps, what follows them, and the
+History panel the list is read and walked in. What
 a version *is*, and how an edit is applied, is
 [document-model.md](document-model.md).
 
@@ -128,6 +129,88 @@ addressed. It asks for no confirmation: it is an edit with a history behind it,
 and undo is the answer to a mis-click. The resections beside it show their answer
 as a second node precisely because they are not edits and cannot be undone.
 
+## The History panel
+
+A dock tab, **History**, registered with the panel layout like every other panel
+([panel-layout.md](panel-layout.md)): it is in the Panels menu, in the stock
+grid behind the Image Browser and the Action Log, and a layout file spells it
+`history`. It shows the **selected** node's history, since that is the node the
+Edit menu and its shortcuts act on.
+
+The panel is [history_panel.rs](../../crates/sfm-explorer/src/history_panel.rs),
+one function over `&AppState` that reports what was clicked:
+
+```rust
+/// What the panel reports back to the dock.
+pub(crate) struct HistoryResponse {
+    /// The version a click asked for, and the node it belongs to.
+    pub jump: Option<(ReconId, VersionSerial)>,
+}
+
+pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> HistoryResponse;
+```
+
+It keeps no state of its own, so there is nothing of the panel's to lose when it
+is closed, and it decides nothing: the dock hands the click to
+`AppState::jump_to_version` ([state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs))
+and that is what moves the cursor.
+
+**A row per version, oldest first**, carrying the version's label, the time it
+was made and its unshared bytes, written for a person to read (`2.00 KiB`,
+`165 MiB`). A header above them names the node and counts its versions.
+
+**Two marks.** The row at the cursor is marked with `▶` and drawn as the
+selected row: it is what the node is showing. The row at the **disk state** --
+the version the node's file on disk holds, which is the version it was loaded at
+until a save moves it (`History::disk_serial`) -- is marked with `●`. A cursor
+mark anywhere but the disk mark is the panel's way of saying the node is dirty,
+which is a fact about two rows rather than a badge of its own.
+
+**A row whose value the budget released still lists**, says `(released)`, and
+refuses the jump with a hover text saying why: the maps are kept for every
+version ever minted, so the history still knows what happened there, and only
+the value it would return to is gone.
+
+**Clicking a row jumps the cursor to it**, in either direction and in one step
+(§ "Jumping to a version"). The cursor's own row is not a jump and is disabled;
+its hover says it is what the node shows.
+
+**With no node selected**, or with a node whose history is the one version it
+was loaded at, the panel says so rather than showing an empty list.
+
+**Keyboard.** The panel adds no shortcut and holds no text field, so
+`Ctrl/Cmd+Z` and `Ctrl/Cmd+Y` keep working with the focus in it: they are read
+outside the dock, under egui's keyboard arbitration, and nothing here asks for
+the keyboard. An undo or a redo moves the mark the panel draws, since the panel
+reads the cursor rather than remembering it.
+
+## Jumping to a version
+
+`AppState::jump_to_version(id, serial)` moves a node's cursor straight to one
+version:
+
+```rust
+pub fn jump_to_version(&mut self, id: ReconId, serial: VersionSerial) -> Result<(), String>;
+```
+
+**It is the run of undos or redos that separates the two versions.** The cursor
+is walked one version at a time and the selection is put through each step's map
+in turn, so a jump over three edits leaves the selection exactly where three
+undos would have, including the case where one of the steps removed the point
+and cleared it. Writing it as the composition rather than as a single map from
+serial to serial is what keeps one rule for where a selection goes.
+
+**It is refused as a whole** when the destination is not one of that node's
+versions, when it is where the cursor already is, or when any version the walk
+would pass through, the destination included, has had its value released: the
+check runs over the whole span before the cursor moves, so a refusal leaves the
+cursor where it was.
+
+What a bulk edit owes the rest of the viewer is owed here too: the walk may pass
+a version whose base renumbered the image table, so the image and camera
+selections and the caches keyed by them are dropped, exactly as an undo drops
+them.
+
 ## The Action Log
 
 Every edit, undo and redo writes one `Edit` entry naming the node, what was done
@@ -139,7 +222,13 @@ Deleted point 12345 in run_a (v3 → v4)
 Deleted image IMG_0007.jpg from run_a (v4 → v5)
 Undo: Deleted image IMG_0007.jpg from run_a (v5 → v4)
 Redo: Deleted image IMG_0007.jpg from run_a (v4 → v5)
+Go to: Opened run_a (v5 → v3)
 ```
+
+A jump is one entry however many versions it crossed, because it is one thing
+the user asked for; its text is the label of the version it arrived at, and its
+serials are where it started and where it stopped rather than every version in
+between.
 
 An undo's text is the label of the version it left, so the log says what was
 undone rather than what is now showing. A refused edit writes a failed entry
@@ -175,16 +264,35 @@ The scan those maps come from is covered in core, in
 `crates/sfm-explorer/src/state/edits/tests.rs` covers what follows: a surviving
 selection keeping its index across a point edit, a deleted selection clearing,
 a selection following the renumbering of an image deletion onto the same point
-and coming back through the undo, and the three log texts.
+and coming back through the undo, and the three log texts. The jump is there
+too: a jump back landing where a run of undos would have, a jump forward
+returning to the version it came from, the selection arriving at the same index
+a run of undos leaves it at across a point edit and a renumbering, one log entry
+naming the two serials, and the refusals -- a released version, a version behind
+a released one, the cursor's own version, and a serial belonging to another
+node -- each leaving the cursor and the log untouched.
+
+`crates/sfm-explorer/src/history_panel/tests.rs` runs the panel through
+`Context::run_ui` and reads the strings it painted: the rows in oldest-first
+order with the cursor and disk marks on the right ones, the mark following an
+undo, a released row listing and saying so, the two empty states, and a
+synthesized click on a row reporting that version -- which the test then jumps
+to, so what the panel offers and what the jump does are asserted together. The
+sizes are checked against the strings a row states them in.
+
+`crates/sfm-explorer/tests/ui_basic.rs` covers what no headless frame can: the
+panel drawn in a real window, brought to the front by a layout file naming it
+alone, listing the loaded node's one version.
 
 ## Non-goals
 
 - A branching history. A new edit after an undo discards the redo tail.
 - History across sessions. The versions live as long as the viewer.
 - Restoring a selection an edit removed.
-- The History panel, which lists a node's versions and jumps the cursor to any of
-  them in one step, and the version-graph walks that mint and resolve a point id
-  across versions. Both are proposed in
+- Editing a version from the panel: a row is a place to stand, not a thing to
+  rename, delete or export.
+- The version-graph walks that mint and resolve a point id across versions,
+  proposed in
   [`../drafts/sfm-explorer-editing.md`](../drafts/sfm-explorer-editing.md) and
   [`../drafts/sfm-explorer-editing-overlay.md`](../drafts/sfm-explorer-editing-overlay.md);
   the maps they walk are the ones this spec describes.

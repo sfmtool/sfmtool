@@ -203,10 +203,10 @@ handful of "pane". A panel has one handle, its name, so the argument spells
 both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
-The seven names are the layout file's, and there is no second spelling of them
+The eight names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `viewer_3d`, `image_browser`, `image_detail`, `point_track`,
-`camera_intrinsics`, `action_log` (`Tab::wire_name`). An unknown name is
-refused with a message listing all seven (`Tab::all_wire_names`). `Tab` stays
+`camera_intrinsics`, `action_log`, `history` (`Tab::wire_name`). An unknown name is
+refused with a message listing all eight (`Tab::all_wire_names`). `Tab` stays
 the Rust name — it is `egui_dock`'s word for the thing in a node, and the code
 is not the wire.
 
@@ -626,7 +626,7 @@ to set — the same rule as `set_reconstruction_display`.
 
 **The wire spellings are the code's.** `overlay_mode` takes the snake-cased
 `OverlayMode` variant (`OverlayMode::wire_name`, `from_wire_name`,
-`all_wire_names`, exactly as `Tab` spells the seven panels), because the GUI's
+`all_wire_names`, exactly as `Tab` spells the eight panels), because the GUI's
 labels — `Reproj Error`, `Max Track Angle` — are display text with spaces in
 it, and § "Where the GUI has no word, the code's word wins" applies to a word
 the GUI has only as a label. An unknown mode is refused with a message listing
@@ -1051,14 +1051,15 @@ Where the window is, and which panels are where. No arguments.
     "layout": { "main": { /* … */ }, "windows": [] }
   },
   "window": { /* the window block, live, with `monitors` — null with no window */ },
-  "panels": {                       // one entry per panel, always all seven
+  "panels": {                       // one entry per panel, always all eight
     "scene":             { "open": true,  "active": true },
     "viewer_3d":         { "open": true,  "active": true },
     "image_browser":     { "open": true,  "active": true },
     "image_detail":      { "open": true,  "active": true },
     "point_track":       { "open": true,  "active": false },
     "camera_intrinsics": { "open": true,  "active": false },
-    "action_log":        { "open": true,  "active": false }
+    "action_log":        { "open": true,  "active": false },
+    "history":           { "open": true,  "active": false }
   }
 }
 ```
@@ -1082,7 +1083,7 @@ the window is showing as and what it would come back to.
 should not cost the agent a tree walk. `open` is whether the panel appears
 anywhere in the document's `layout`; `active` is whether it is the front tab of
 its node — a panel alone in a node is active, and the default layout's two
-multi-tab nodes leave three of the seven behind a sibling. A closed panel is
+multi-tab nodes leave four of the eight behind a sibling. A closed panel is
 `active: false`.
 
 Where there is no window — a headless `AppState` — `window` is `null` and the
@@ -1098,7 +1099,7 @@ The argument **is the document**, version tag optional:
 { "window": { "state": "maximized" } }
 { "window": { "state": "normal", "inner_size": [1600, 900] } }
 { "layout": { "main": { /* … */ }, "windows": [] } }
-{ "layout": "default" }                                     // the stock seven-panel grid
+{ "layout": "default" }                                     // the stock eight-panel grid
 { "window": { "state": "maximized" }, "layout": "default" } // both, in that order
 { "sfm_explorer_layout": 2, "window": { /* … */ }, "layout": { /* … */ } }  // a file, or a whole reply, sent back
 ```
@@ -1819,7 +1820,7 @@ where a test hands no host over.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
-  all seven, with the default layout's three behind-a-sibling tabs inactive and
+  all eight, with the default layout's four behind-a-sibling tabs inactive and
   the rest active. A maximized fake makes the two disagree on purpose: the block
   reports the monitor-sized rectangle and the document the one it restores to.
   With no host, `window` is `null` and the document has no `window` section,
@@ -1845,7 +1846,7 @@ where a test hands no host over.
 - **`show_panel` / `hide_panel`**: hiding closes and reports `open: false`;
   hiding a closed panel succeeds and changes nothing; showing after hiding lands
   the panel in its default group-mate's node and in front; showing an open panel
-  raises it and moves nothing else; an unknown name lists the seven.
+  raises it and moves nothing else; an unknown name lists the eight.
 - **The panel writes record the menu's own entries** — `Closed …`, `Opened …`,
   `Raised …`, and `Reset layout` for `"default"` — each under `Kind::Layout` as
   actor `MCP`, and a document records `Set layout`. A call carrying both portions
@@ -1870,7 +1871,7 @@ where a test hands no host over.
   `Panel(tab)`, the panel's name and its last laid-out size in the caption and
   in the query text; `viewer_3d` keeping the frame description. A closed panel
   is refused naming `show_panel`, one behind another is refused naming the tab
-  in front, an unknown name lists the seven, and a `show_panel` followed by a
+  in front, an unknown name lists the eight, and a `show_panel` followed by a
   `screenshot` of that panel in one batch is accepted.
 - **`hud: false` with `viewer_3d`** defers with `ScreenshotSource::ViewportRender`
   and a query text ending `without HUD`; with another panel or with no panel it
@@ -2085,7 +2086,7 @@ Other candidates, in rough order of value:
   None of the three supported backends has, and a per-frame blit for a case that
   has not arisen is the wrong trade until it does.
 - **Should a panel screenshot include its tab bar?** The body is what the panel
-  shows; the tab bar is the same seven words every time. Excluded; include it if
+  shows; the tab bar is the same eight words every time. Excluded; include it if
   an agent needs to see which tab is in front, which `get_window_layout`'s
   `panels` already says.
 - **Whether `set_view` should expose the HUD's display controls** (point size,

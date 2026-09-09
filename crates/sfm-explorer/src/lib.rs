@@ -20,6 +20,7 @@ mod colormap;
 mod dock;
 mod document;
 mod goto_point;
+mod history_panel;
 mod image_browser;
 mod image_detail;
 mod intrinsics_detail;

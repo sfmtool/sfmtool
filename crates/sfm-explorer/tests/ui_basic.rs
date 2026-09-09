@@ -639,6 +639,44 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     );
 }
 
+/// The History panel reaches a real window: with a node loaded it lists that
+/// node's one version, the file as it was opened.
+///
+/// The panel starts behind the Image Browser in the stock grid, and it is put
+/// in front through the Panels menu -- closed, then opened, which is what
+/// `show_panel` makes the active tab of its node. That is the way in here:
+/// `egui_dock`'s tab bar is painted rather than built out of widgets, so there
+/// is no tab button in the accessibility tree to press. Everything the panel
+/// decides is exercised headlessly in `history_panel/tests.rs`.
+#[test]
+fn the_history_panel_lists_the_loaded_version() {
+    let _guard = Guard::new();
+    let app = attach(_guard.child());
+    load_demo_data(&app);
+
+    for _ in 0..2 {
+        app.locator(r#"button[name="Panels"]"#)
+            .press()
+            .expect("press the Panels menu button");
+        app.locator(r#"check_box[name="History"]"#)
+            .wait_attached(CONTENT_TIMEOUT)
+            .expect("the Panels menu has no History entry")
+            .press()
+            .expect("press the History entry");
+    }
+
+    // The demo node is labeled "demo" and has been through no edit, so both
+    // strings are fixed by the fixture.
+    for text in [
+        "1 version",
+        "demo has not been edited; its one version is the file as it was opened.",
+    ] {
+        app.locator(&format!(r#"static_text[name="{text}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("History panel text '{text}' did not appear"));
+    }
+}
+
 // --- The MCP screenshot, against a real frame ---
 //
 // Everything else the MCP surface does is under headless test in

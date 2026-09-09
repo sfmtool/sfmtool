@@ -21,10 +21,10 @@ is retired with the last step.
 The document model itself is built and standing:
 [`../gui/document-model.md`](../gui/document-model.md) describes the node's
 versions, the two kinds of edit and the identity-based upload, and
-[`../gui/edit-history.md`](../gui/edit-history.md) the cursor and the maps. What
-is left here is what is built on top of it: saving, the History panel, the edit
-families and the wire surface. Not decided: what the row-level edit draft leaves
-open.
+[`../gui/edit-history.md`](../gui/edit-history.md) the cursor, the maps and the
+History panel. What is left here is what is built on top of it: saving, the
+edit families and the wire surface. Not decided: what the row-level edit draft
+leaves open.
 
 Related standing specs: [`../gui/scene-graph.md`](../gui/scene-graph.md)
 (the node, and the invariant that a node transform never touches the
@@ -190,17 +190,11 @@ Action Log", and the log spec's own non-goal.
 
 ### The History panel
 
-A dock tab, registered with the panel layout like every other panel
-([`../gui/panel-layout.md`](../gui/panel-layout.md)), listing the selected
-node's versions oldest first with the cursor marked. Clicking a row jumps the
-cursor there, in either direction, in one step. Each row shows the label, the
-time, and the unshared size; the row at the disk state (the last saved
-version, or the loaded one) is marked, which is the dirty indicator in the
-panel's vocabulary. Keyboard: the platform's undo and redo shortcuts act on
-the selected node from any panel that does not consume them for its own text
-editing.
-
-Files into: `specs/gui/edit-history.md` (new).
+Built and standing: [`../gui/edit-history.md`](../gui/edit-history.md), "The
+History panel" for the tab and its rows and "Jumping to a version" for what a
+click does, and [`../gui/panel-layout.md`](../gui/panel-layout.md) for the tab
+itself. The row it marks as the disk state is the version the node was loaded
+at, which is what a save moves.
 
 ---
 
@@ -323,8 +317,6 @@ steps after it.
    the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-5. **History panel.** Files into `gui/edit-history.md`, amends
-   `gui/panel-layout.md`.
 6. **Saving and point ids.** Save, Save As, the dirty marker, the
    lineage metadata; the session id form, the earliest rule, Go to Point over
    the version graph. Files `gui/saving.md`, amends `gui/goto-point.md` and
@@ -334,7 +326,7 @@ steps after it.
    since it is what the overlay is for.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
-5 and 6 are independent of each other; 7 interleaves with both.
+7 interleaves with 6.
 
 ## Non-goals
 

@@ -287,3 +287,152 @@ fn an_edit_after_an_undo_discards_the_redo_tail() {
     assert!(!node.is_point_deleted(2), "the discarded version came back");
     assert!(node.is_point_deleted(3));
 }
+
+// ── Jumping to a version ────────────────────────────────────────────────
+
+/// The serial of the node's version at `position`.
+fn serial_at(state: &AppState, position: usize) -> crate::document::VersionSerial {
+    state.scene[0].history.versions()[position].serial
+}
+
+#[test]
+fn a_jump_back_lands_on_the_version_a_run_of_undos_would_have() {
+    let mut state = state();
+    let id = node(&state);
+    for point in [1u32, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point as usize))
+            .expect("a live point");
+    }
+    let first = serial_at(&state, 1);
+
+    state.jump_to_version(id, first).expect("a live version");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.current_version().serial, first);
+    assert!(node.is_point_deleted(1));
+    assert!(!node.is_point_deleted(2));
+    assert!(!node.is_point_deleted(3));
+    // The versions themselves did not move: a jump walks the cursor.
+    assert_eq!(node.history.versions().len(), 4);
+    assert_eq!(node.history.cursor(), 1);
+}
+
+#[test]
+fn a_jump_forward_returns_to_the_version_it_came_from() {
+    let mut state = state();
+    let id = node(&state);
+    for point in [1u32, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point as usize))
+            .expect("a live point");
+    }
+    let last = serial_at(&state, 3);
+    let first = serial_at(&state, 1);
+    state.jump_to_version(id, first).expect("a live version");
+
+    state.jump_to_version(id, last).expect("a live version");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.current_version().serial, last);
+    for point in [1u32, 2, 3] {
+        assert!(node.is_point_deleted(point));
+    }
+}
+
+#[test]
+fn a_jump_takes_the_selection_through_every_step_it_passes() {
+    let mut state = state();
+    let id = node(&state);
+    let survivor = surviving_point(&state, 0);
+    let position = state.scene[0].recon().point_set.points[survivor as usize].position;
+    state.selected_point = Some(PointRef::new(id, survivor as usize));
+    let loaded = serial_at(&state, 0);
+
+    // A point edit and then a bulk edit, so the jump back composes a
+    // stable-index step with a renumbering one.
+    state
+        .delete_point(PointRef::new(id, survivor as usize + 1))
+        .expect("a live point");
+    state.delete_image(ImageRef::new(id, 0)).expect("an image");
+    let moved = state.selected_point.expect("the point survived");
+    assert_eq!(
+        state.scene[0].recon().point_set.points[moved.index()].position,
+        position
+    );
+
+    state.jump_to_version(id, loaded).expect("a live version");
+
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, survivor as usize)),
+        "the jump did not compose the maps a run of undos would have"
+    );
+}
+
+#[test]
+fn a_jump_writes_one_log_entry_naming_the_two_serials() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 1))
+        .expect("a live point");
+    state
+        .delete_point(PointRef::new(id, 2))
+        .expect("a live point");
+    let from = serial_at(&state, 2);
+    let to = serial_at(&state, 0);
+    state.action_log.clear();
+
+    state.jump_to_version(id, to).expect("a live version");
+
+    let texts = texts(&state);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert_eq!(texts[0], format!("Go to: Opened demo ({from} → {to})"));
+    assert!(state
+        .action_log
+        .entries()
+        .all(|entry| entry.kind == crate::action_log::Kind::Edit));
+}
+
+#[test]
+fn a_jump_onto_a_released_version_is_refused_whole() {
+    let mut state = state();
+    let id = node(&state);
+    for point in [1u32, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point as usize))
+            .expect("a live point");
+    }
+    let released = serial_at(&state, 1);
+    let earliest = serial_at(&state, 0);
+    state.scene[0].history.versions_mut_for_test()[1].value = None;
+    state.action_log.clear();
+
+    // The released version itself, and any version the walk would pass
+    // through it to reach.
+    assert!(state.jump_to_version(id, released).is_err());
+    assert!(state.jump_to_version(id, earliest).is_err());
+    assert_eq!(
+        state.scene[0].history.cursor(),
+        3,
+        "the cursor moved anyway"
+    );
+    assert_eq!(texts(&state), Vec::<String>::new());
+}
+
+#[test]
+fn a_jump_to_where_the_cursor_already_is_or_to_no_version_is_refused() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 1))
+        .expect("a live point");
+    let here = serial_at(&state, 1);
+    assert!(state.jump_to_version(id, here).is_err());
+
+    // A serial of another node's history is not one of this node's versions.
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
+    let other = state.scene[1].history.current_version().serial;
+    assert!(state.jump_to_version(id, other).is_err());
+}

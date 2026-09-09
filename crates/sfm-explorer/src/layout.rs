@@ -178,12 +178,12 @@ const GROUPS: [&[Tab]; 2] = [
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
     ],
-    &[Tab::ImageBrowser, Tab::ActionLog],
+    &[Tab::ImageBrowser, Tab::ActionLog, Tab::History],
 ];
 
 impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
-    pub(crate) const ALL: [Tab; 7] = [
+    pub(crate) const ALL: [Tab; 8] = [
         Tab::SceneGraph,
         Tab::Viewer3D,
         Tab::ImageBrowser,
@@ -191,6 +191,7 @@ impl Tab {
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
         Tab::ActionLog,
+        Tab::History,
     ];
 
     /// The panel's name on the wire: its title, lower-cased and joined with
@@ -204,6 +205,7 @@ impl Tab {
             Tab::PointTrackDetail => "point_track",
             Tab::IntrinsicsDetail => "camera_intrinsics",
             Tab::ActionLog => "action_log",
+            Tab::History => "history",
         }
     }
 
@@ -230,7 +232,7 @@ impl Tab {
                 edge: Split::Left,
                 share: 0.18,
             },
-            Tab::ImageBrowser | Tab::ActionLog => Home::Edge {
+            Tab::ImageBrowser | Tab::ActionLog | Tab::History => Home::Edge {
                 edge: Split::Below,
                 share: 0.20,
             },
@@ -254,13 +256,13 @@ impl Tab {
 // ── The stock layout ─────────────────────────────────────────────────────
 
 impl Default for Layout {
-    /// The stock seven-panel grid:
+    /// The stock eight-panel grid:
     ///
     /// ```text
     /// ┌────────┬──────────────────┬───────────────┐
     /// │        │    3D Viewer     │ Image Detail  │
     /// │ Scene  ├──────────────────┴───────────────┤
-    /// │        │ Image Browser │ Action Log       │
+    /// │        │ Image Browser │ Action Log │ History │
     /// └────────┴──────────────────────────────────┘
     /// ```
     ///
@@ -268,7 +270,8 @@ impl Default for Layout {
     /// tree is a list of short labels and everything else in the window wants
     /// the width. Two nodes hold more than one tab, and in both the first is
     /// the active one: the bottom node opens on the Image Browser with the
-    /// Action Log behind it, and the right-hand node on Image Detail.
+    /// Action Log and the History behind it, and the right-hand node on Image
+    /// Detail.
     ///
     /// `Layout::default().to_dock()` is what the viewer starts with, and what
     /// Panels ▸ Reset Layout restores.
@@ -291,7 +294,11 @@ impl Default for Layout {
                             Tab::IntrinsicsDetail,
                         ])),
                     }),
-                    second: Box::new(LayoutNode::leaf(&[Tab::ImageBrowser, Tab::ActionLog])),
+                    second: Box::new(LayoutNode::leaf(&[
+                        Tab::ImageBrowser,
+                        Tab::ActionLog,
+                        Tab::History,
+                    ])),
                 }),
             }),
             windows: Vec::new(),

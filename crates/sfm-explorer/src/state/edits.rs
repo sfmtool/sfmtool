@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! [`AppState`]'s edits: the two operations that give a node a new version, and
-//! the two that move its cursor.
+//! the three that move its cursor -- undo, redo, and the History panel's jump,
+//! which is the two of them repeated.
 //!
 //! See `specs/gui/document-model.md` and `specs/gui/edit-history.md`. Each edit
 //! is a function from the value at the node's cursor to the next value, pushed
@@ -27,7 +28,7 @@ use std::sync::Arc;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
-use crate::document::PointMap;
+use crate::document::{PointMap, VersionSerial};
 use crate::scene::{ImageRef, PointRef, ReconId};
 
 use super::AppState;
@@ -193,6 +194,60 @@ impl AppState {
             Kind::Edit,
             format!("Redo: {redone_label} ({from} → {redone})"),
         );
+        Ok(())
+    }
+
+    /// Move `id`'s cursor straight to the version with serial `serial`.
+    ///
+    /// The move is one action to the user and one Action Log entry, and it is
+    /// the sequence of undos or redos that separates the two versions to
+    /// everything that follows a map: the cursor is walked one step at a time
+    /// and the selection is put through each step's map in turn, so a jump over
+    /// three edits lands the selection exactly where three undos would have.
+    /// Refused as a whole when any version it would pass through, the
+    /// destination included, has had its value released by the budget: there is
+    /// nothing there to show.
+    pub fn jump_to_version(&mut self, id: ReconId, serial: VersionSerial) -> Result<(), String> {
+        let Some(index) = self.scene.iter().position(|n| n.id == id) else {
+            return Err("That reconstruction is no longer loaded.".to_string());
+        };
+        let node = &self.scene[index];
+        let Some(target) = node.history.position_of(serial) else {
+            return Err(format!("{serial} is not a version of {}.", node.label));
+        };
+        let cursor = node.history.cursor();
+        if target == cursor {
+            return Err(format!("{serial} is already what {} shows.", node.label));
+        }
+        let from = node.history.current_version().serial;
+        let span = target.min(cursor)..=target.max(cursor);
+        if node.history.versions()[span]
+            .iter()
+            .any(|v| v.value.is_none())
+        {
+            return Err(format!(
+                "Cannot go to {serial}: its value, or one on the way to it, was released to keep {} inside the history budget.",
+                node.label
+            ));
+        }
+        while self.scene[index].history.cursor() != target {
+            let node = &mut self.scene[index];
+            let stepping_back = target < node.history.cursor();
+            let Some((left, _)) = node.history.step_towards(target) else {
+                break;
+            };
+            if stepping_back {
+                self.follow_selection_backward(id, left);
+            } else {
+                self.follow_selection_forward(id);
+            }
+        }
+        let node = &self.scene[index];
+        let label = node.history.current_version().label.clone();
+        let to = node.history.current_version().serial;
+        self.forget_images_of(id);
+        self.action_log
+            .record(Kind::Edit, format!("Go to: {label} ({from} → {to})"));
         Ok(())
     }
 

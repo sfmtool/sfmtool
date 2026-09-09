@@ -129,7 +129,6 @@ pub struct Version {
     pub label: String,
     /// When it was made. Wall clock, for the same reason the Action Log's is:
     /// a version is read next to something else that happened.
-    #[allow(dead_code, reason = "read by the History panel and by the tests")]
     pub at: Timestamp,
     /// The value, or `None` once the budget has released it. A released version
     /// keeps its place, its label and its map; it is simply no longer a version
@@ -157,6 +156,9 @@ pub struct History {
     /// One entry per version that was made from another: `(serial, parent,
     /// map)`. Never pruned -- not by the budget, and not by a truncation.
     maps: Vec<(VersionSerial, VersionSerial, PointMap)>,
+    /// The version the node's file on disk holds: the one it was loaded at,
+    /// until a save says otherwise.
+    disk_serial: VersionSerial,
 }
 
 impl History {
@@ -164,9 +166,10 @@ impl History {
     pub fn new(base: SfmrReconstruction, label: impl Into<String>) -> Self {
         let value = EditedReconstruction::new(Arc::new(base));
         let unshared_bytes = value_bytes(&value, None);
+        let serial = VersionSerial::next();
         Self {
             versions: vec![Version {
-                serial: VersionSerial::next(),
+                serial,
                 label: label.into(),
                 at: Timestamp::now(),
                 value: Some(value),
@@ -174,6 +177,7 @@ impl History {
             }],
             cursor: 0,
             maps: Vec::new(),
+            disk_serial: serial,
         }
     }
 
@@ -213,9 +217,41 @@ impl History {
     }
 
     /// Where the cursor is, as an index into [`History::versions`].
-    #[allow(dead_code, reason = "read by the History panel and by the tests")]
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    /// The version the node's file on disk holds.
+    ///
+    /// It is the version the node was loaded at until something writes the
+    /// node out; a save moves it with [`History::set_disk_serial`], and the
+    /// History panel marks whichever version it names.
+    pub fn disk_serial(&self) -> VersionSerial {
+        self.disk_serial
+    }
+
+    /// Say that `serial` is now the version on disk. Called by a save.
+    #[allow(dead_code, reason = "the writer of a node calls this; see the getter")]
+    pub fn set_disk_serial(&mut self, serial: VersionSerial) {
+        self.disk_serial = serial;
+    }
+
+    /// Where `serial` sits in [`History::versions`], for a caller holding a
+    /// serial rather than a position.
+    pub fn position_of(&self, serial: VersionSerial) -> Option<usize> {
+        self.versions.iter().position(|v| v.serial == serial)
+    }
+
+    /// Move the cursor one step towards `target`, as an undo or a redo would.
+    ///
+    /// `Some((from, to))` when it moved; `None` when it is already there or the
+    /// step would land on a released version.
+    pub fn step_towards(&mut self, target: usize) -> Option<(VersionSerial, VersionSerial)> {
+        match target.cmp(&self.cursor) {
+            std::cmp::Ordering::Less => self.undo(),
+            std::cmp::Ordering::Greater => self.redo(),
+            std::cmp::Ordering::Equal => None,
+        }
     }
 
     /// The map from the version with serial `parent` to the version with serial

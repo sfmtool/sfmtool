@@ -44,7 +44,7 @@ const DEFAULT_JSON: &str = r#"{
           }
         },
         "second": {
-          "tabs": ["image_browser", "action_log"],
+          "tabs": ["image_browser", "action_log", "history"],
           "active": "image_browser"
         }
       }
@@ -130,7 +130,10 @@ fn the_action_log_shares_the_bottom_node_with_the_image_browser() {
         .filter_map(|node| node.get_leaf())
         .find(|leaf| leaf.tabs.contains(&Tab::ActionLog))
         .expect("no leaf holds the Action Log");
-    assert_eq!(leaf.tabs, vec![Tab::ImageBrowser, Tab::ActionLog]);
+    assert_eq!(
+        leaf.tabs,
+        vec![Tab::ImageBrowser, Tab::ActionLog, Tab::History]
+    );
     assert_eq!(
         leaf.tabs[leaf.active.0],
         Tab::ImageBrowser,
@@ -245,6 +248,7 @@ fn tab_all_is_in_the_menus_order() {
             Tab::PointTrackDetail,
             Tab::IntrinsicsDetail,
             Tab::ActionLog,
+            Tab::History,
         ]
     );
 }
@@ -474,12 +478,12 @@ fn only_this_version_is_read() {
 }
 
 #[test]
-fn an_unknown_panel_name_lists_the_seven() {
+fn an_unknown_panel_name_lists_them_all() {
     let message = layout_refusal(r#"{"main": {"tabs": ["viewer3d"], "active": "viewer3d"}}"#);
     assert_eq!(
         message,
         "layout.main: unknown panel \"viewer3d\"; the panels are scene, viewer_3d, image_browser, \
-         image_detail, point_track, camera_intrinsics, action_log"
+         image_detail, point_track, camera_intrinsics, action_log, history"
     );
 }
 

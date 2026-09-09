@@ -169,7 +169,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User | `Deleted image {name} from {label} ({from} → {to})` |
 | Edit | — | User | `Undo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User | `Redo: {what the version was labelled} ({from} → {to})` |
-| Edit | — | User | the reason an edit, undo or redo was refused — **failed** |
+| Edit | — | User | `Go to: {what the version was labelled} ({from} → {to})` -- a History panel jump |
+| Edit | — | User | the reason an edit, undo, redo or jump was refused — **failed** |
 | Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
 | Selection | `image` | User / MCP | `Selected image {name} in {label}` |
 | Selection | `camera intrinsics` | User / MCP | `Selected camera intrinsics #{k} in {label}` |

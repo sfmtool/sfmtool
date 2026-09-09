@@ -3,8 +3,8 @@
 
 //! Dock tab identity and tab rendering.
 //!
-//! Names the seven panels (Scene, 3D Viewer, Image Browser, Image Detail,
-//! Point Track Detail, Camera Intrinsics, Action Log) and holds the `TabViewer`
+//! Names the eight panels (Scene, 3D Viewer, Image Browser, Image Detail,
+//! Point Track Detail, Camera Intrinsics, Action Log, History) and holds the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -34,6 +34,7 @@ pub(crate) enum Tab {
     PointTrackDetail,
     IntrinsicsDetail,
     ActionLog,
+    History,
 }
 
 impl Tab {
@@ -46,6 +47,7 @@ impl Tab {
             Tab::PointTrackDetail => "Point Track",
             Tab::IntrinsicsDetail => "Camera Intrinsics",
             Tab::ActionLog => "Action Log",
+            Tab::History => "History",
         }
     }
 }
@@ -96,6 +98,7 @@ impl TabViewer for TabContext<'_> {
             // The one tab with no empty state: an empty scene still has a
             // session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
+            Tab::History => self.show_history(ui),
         }
     }
 
@@ -185,6 +188,26 @@ impl TabContext<'_> {
                     ui.label("or File > Load Demo Data to see sample data.");
                 });
             });
+        }
+    }
+
+    /// The History tab: the selected node's versions, and the jump a click on
+    /// one of them asks for.
+    ///
+    /// The jump is applied here rather than in the panel for the reason every
+    /// other panel's response is: the panel holds `&AppState` while it draws,
+    /// and moving the cursor needs it mutably.
+    fn show_history(&mut self, ui: &mut egui::Ui) {
+        let response = crate::history_panel::show(ui, self.state);
+        if let Some((id, serial)) = response.jump {
+            if let Err(message) = self.state.jump_to_version(id, serial) {
+                self.state.action_log.fail(Kind::Edit, message);
+            } else {
+                // The cursor moved over any number of steps, one of which may
+                // have been a bulk edit, so the image-keyed textures the panels
+                // hold are statements about a table that has been renumbered.
+                self.forget_recon(id);
+            }
         }
     }
 

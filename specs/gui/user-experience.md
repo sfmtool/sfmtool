@@ -184,7 +184,7 @@ There is no **View** menu — with the display controls in the HUD, nothing
 app-global about the *viewport* is left for it to hold. **File**
 (Open / Load Demo Data / Quit) is unchanged.
 
-**Panels** lists the seven docked panels with a tick beside each open one, and
+**Panels** lists the eight docked panels with a tick beside each open one, and
 holds Reset Layout and Save / Load Layout. It is the way back from a closed
 panel, which is what makes every panel closeable in the first place. Save Layout
 writes the window's placement as well as the panel arrangement, and opens on
