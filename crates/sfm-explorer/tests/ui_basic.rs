@@ -380,8 +380,12 @@ fn edit_menu_items() {
 ///
 /// Demo data came from no file, so there is nothing for Save to write over and
 /// Save As is the only way out. Both items are nonetheless present: an action
-/// that vanishes when it does not apply reads as unimplemented. What each of
-/// them does is covered headlessly in `state/save/tests.rs`.
+/// that vanishes when it does not apply reads as unimplemented. Presence is
+/// all this asserts: which of the two is enabled is not read here, because the
+/// accessibility tree does not report egui's disabled state the same way on
+/// every platform (Linux never matched an `enabled="false"` selector), and the
+/// enabled logic, like what each item does, is covered headlessly in
+/// `state/save/tests.rs`.
 #[test]
 fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
     let _guard = Guard::new();
@@ -392,12 +396,12 @@ fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
         .press()
         .expect("press File menu button");
 
-    app.locator(r#"button[name^="Save As..."][enabled="true"]"#)
+    app.locator(r#"button[name^="Save As..."]"#)
         .wait_attached(CONTENT_TIMEOUT)
-        .expect("'Save As...' is enabled for a node that came from no file");
-    app.locator(r#"button[name^="Save"][enabled="false"]"#)
+        .expect("File menu item 'Save As...' did not appear");
+    app.locator(r#"button[name^="Save "]"#)
         .wait_attached(CONTENT_TIMEOUT)
-        .expect("'Save' is disabled for a node that came from no file");
+        .expect("File menu item 'Save' did not appear");
 }
 
 /// File > Quit exits the process.

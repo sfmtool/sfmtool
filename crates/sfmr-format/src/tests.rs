@@ -2919,16 +2919,45 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
 #[test]
 fn a_monotone_map_says_where_every_surviving_row_went() {
     // Ancestor rows 0..5 with row 2 gone, and a row of this file (row 1) that
-    // no ancestor row landed in. The two lists determine the whole map.
+    // no ancestor row landed in.
     let map = LineageMap::Monotone {
+        source_rows: 5,
         deleted: vec![2],
         created: vec![1],
     };
+    assert_eq!(map.source_rows(), 5);
     assert_eq!(map.forward(0), Some(0));
     assert_eq!(map.forward(1), Some(2));
     assert_eq!(map.forward(2), None);
     assert_eq!(map.forward(3), Some(3));
     assert_eq!(map.forward(4), Some(4));
+}
+
+#[test]
+fn a_monotone_map_refuses_a_row_at_or_past_its_source_count() {
+    // `deleted` and `created` name only the rows that changed, so they do not
+    // imply how many rows the ancestor had. `source_rows` is what says where the
+    // map's domain ends: without it row 5 below would answer `Some(5)`, naming a
+    // row of this file for an ancestor row that never existed.
+    let map = LineageMap::Monotone {
+        source_rows: 5,
+        deleted: vec![2],
+        created: vec![1],
+    };
+    assert_eq!(map.forward(4), Some(4));
+    assert_eq!(map.forward(5), None);
+    assert_eq!(map.forward(6), None);
+    assert_eq!(map.forward(u32::MAX), None);
+
+    // The degenerate case the same rule covers: a map over no rows at all
+    // describes no row, rather than describing row zero.
+    let empty = LineageMap::Monotone {
+        source_rows: 0,
+        deleted: vec![],
+        created: vec![],
+    };
+    assert_eq!(empty.source_rows(), 0);
+    assert_eq!(empty.forward(0), None);
 }
 
 #[test]
@@ -2940,6 +2969,7 @@ fn a_dense_map_says_it_row_by_row_and_may_reorder() {
     assert_eq!(map.forward(1), None);
     assert_eq!(map.forward(2), Some(0));
     // Past the end is not a row of the ancestor at all.
+    assert_eq!(map.source_rows(), 3);
     assert_eq!(map.forward(3), None);
 }
 
@@ -2954,6 +2984,7 @@ fn lineage_round_trips_through_a_write_and_reaches_the_content_hash() {
             hash: "0123456789abcdef0123456789abcdef".to_string(),
             kind: LINEAGE_KIND_BASE.to_string(),
             map: LineageMap::Monotone {
+                source_rows: 4,
                 deleted: vec![1],
                 created: vec![],
             },
@@ -3009,6 +3040,7 @@ fn metadata_with_no_lineage_key_reads_as_an_empty_list() {
         hash: "0123456789abcdef0123456789abcdef".to_string(),
         kind: LINEAGE_KIND_BASE.to_string(),
         map: LineageMap::Monotone {
+            source_rows: 1,
             deleted: vec![],
             created: vec![],
         },

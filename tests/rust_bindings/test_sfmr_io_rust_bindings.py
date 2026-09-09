@@ -423,7 +423,12 @@ class TestLineage:
             {
                 "hash": "0123456789abcdef0123456789abcdef",
                 "kind": "base",
-                "map": {"form": "monotone", "deleted": [3], "created": []},
+                "map": {
+                    "form": "monotone",
+                    "source_rows": 12,
+                    "deleted": [3],
+                    "created": [],
+                },
             },
             {
                 "hash": "fedcba9876543210fedcba9876543210",

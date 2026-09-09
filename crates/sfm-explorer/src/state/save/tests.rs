@@ -147,7 +147,12 @@ fn a_save_records_the_lineage_of_the_base_it_came_from() {
     // A deletion preserves order, so the map is the small encoding, and it says
     // exactly which row went.
     match &entry.map {
-        LineageMap::Monotone { deleted, created } => {
+        LineageMap::Monotone {
+            source_rows,
+            deleted,
+            created,
+        } => {
+            assert_eq!(*source_rows, 64);
             assert_eq!(deleted, &vec![3]);
             assert!(created.is_empty());
         }
@@ -157,6 +162,63 @@ fn a_save_records_the_lineage_of_the_base_it_came_from() {
     assert_eq!(entry.map.forward(2), Some(2));
     assert_eq!(entry.map.forward(3), None);
     assert_eq!(entry.map.forward(4), Some(3));
+}
+
+#[test]
+fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
+    // The node's base already records where an *earlier* content's rows went:
+    // a monotone map whose only mentioned row is row 0, over 65 source rows. The
+    // save has to compose all 65 of them into the file it writes, not just the
+    // ones the map happens to name -- the rows a monotone map says nothing about
+    // are exactly the ones that came through unchanged, and they are the bulk of
+    // any real map. `source_rows` is what says where the domain ends; a
+    // composition that guessed it from the highest mentioned row would enumerate
+    // row 0 alone, find it deleted, and drop the whole ancestor.
+    let dir = temp_dir("compose");
+    let (mut state, id, path) = state_from_file(&dir);
+    let grandparent = "aaaabbbbccccddddeeeeffff00001111";
+    state.scene[0].recon_mut().metadata.lineage = vec![sfmr_format::LineageEntry {
+        hash: grandparent.to_string(),
+        kind: sfmr_format::LINEAGE_KIND_BASE.to_string(),
+        map: LineageMap::Monotone {
+            source_rows: 65,
+            deleted: vec![0],
+            created: vec![],
+        },
+    }];
+
+    // An addition as well as a deletion, so the map the composition goes
+    // through both loses a row and gains one rather than being a pure shift.
+    let record = state.scene[0]
+        .edited()
+        .point(5)
+        .expect("a live point")
+        .to_record();
+    state.scene[0]
+        .history
+        .current_mut()
+        .add_point(record)
+        .expect("a well-formed record");
+    state
+        .delete_point(PointRef::new(id, 3))
+        .expect("a live point");
+    state.save_node(id).expect("a writable path");
+
+    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let entry = metadata
+        .lineage
+        .iter()
+        .find(|e| e.hash == grandparent)
+        .expect("the ancestor its own base recorded");
+    assert_eq!(entry.map.source_rows(), 65);
+
+    // The far survivor: the ancestor's last row was row 63 of the node's base
+    // (row 0 having gone), and the save's deletion of row 3 moved it down one
+    // more. It is past every row the ancestor's own map mentions, which is the
+    // point of the test.
+    assert_eq!(entry.map.forward(64), Some(62));
+    // And what the ancestor map already said was gone is still gone.
+    assert_eq!(entry.map.forward(0), None);
 }
 
 #[test]

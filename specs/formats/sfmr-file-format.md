@@ -392,7 +392,8 @@ points landed here.
 {
   "lineage": [
     { "hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90", "kind": "base",
-      "map": { "form": "monotone", "deleted": [17, 902], "created": [] } },
+      "map": { "form": "monotone", "source_rows": 4096,
+               "deleted": [17, 902], "created": [] } },
     { "hash": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "kind": "point_edit",
       "map": { "form": "dense", "rows": [2107, null] } }
   ]
@@ -443,6 +444,7 @@ kept:
 
 | Key | Type | Meaning |
 |-----|------|---------|
+| `source_rows` | integer | How many points the **ancestor** had, which is the map's domain: ancestor indexes run `0` up to but not including it. |
 | `deleted` | array of integers, ascending | Point indexes of the **ancestor** that have no row in this file. |
 | `created` | array of integers, ascending | Row indexes of **this file** that come from no ancestor point. |
 
@@ -452,6 +454,18 @@ named in `deleted`. The two sequences are the same length, and the pairing is
 the map. Its size is the size of the difference between the two contents rather
 than the size of either, so an edit that touched a handful of points costs a
 handful of numbers.
+
+`source_rows` is carried because the two lists do not imply it. They name only
+the points that changed, so the ancestor's unchanged points -- the bulk of any
+real map -- appear in neither, and nothing else in the entry says how many of
+them there are. Without it a consumer walking the whole map would have to guess
+its domain from the highest index the lists happen to mention, and every
+unchanged point past that would be invisible: a map that deleted only point 0
+would read as a map over one point. It also settles the degenerate case, where a
+map over no points at all is `source_rows` 0 with two empty lists rather than
+something indistinguishable from a map over one. An index at or past
+`source_rows` is not a point of the ancestor, exactly as an index past the end of
+the dense form's `rows` is not.
 
 **`"dense"`** -- the general encoding:
 

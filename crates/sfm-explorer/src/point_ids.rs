@@ -42,6 +42,12 @@ mod tests;
 /// How many hex digits of a hash a displayed id carries.
 pub const HASH_PREFIX_LEN: usize = 8;
 
+/// How many hex digits a whole content hash has.
+///
+/// An XXH128 digest written as lowercase hex, which is what `content_xxh128` is
+/// and the only length a hash this module will work from.
+pub const HASH_LEN: usize = 32;
+
 /// The first [`HASH_PREFIX_LEN`] hex digits of `edited`'s base content hash.
 ///
 /// Computed from the value and cached on it, so it is the hash a save of that
@@ -52,10 +58,16 @@ pub fn base_hash_prefix(edited: &EditedReconstruction) -> Option<String> {
     Some(full_base_hash(edited)?[..HASH_PREFIX_LEN].to_string())
 }
 
-/// The whole 32-digit base content hash of `edited`.
+/// The whole base content hash of `edited`.
+///
+/// The length is checked **exactly** rather than as a lower bound: a content
+/// hash is [`HASH_LEN`] hex digits and nothing else, so a string of any other
+/// length is not one, and answering with a prefix of it would put a hash into an
+/// id that no file and no other walk will ever match. The empty string a value
+/// carrying no stored hash holds is the case this rejects in practice.
 fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
     let hash = &edited.base_content_hash().ok()?.content_xxh128;
-    (hash.len() >= HASH_PREFIX_LEN).then_some(hash.as_str())
+    (hash.len() == HASH_LEN).then_some(hash.as_str())
 }
 
 /// The id `node` shows for the point at `index` in the value at its cursor, in

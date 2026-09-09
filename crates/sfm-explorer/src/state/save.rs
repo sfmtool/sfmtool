@@ -244,7 +244,7 @@ fn lineage_for(node: &SceneNode, row_map: &sfmtool_core::RowMap) -> Vec<LineageE
 
         // The ancestor's own recorded ancestors, composed straight through.
         for entry in &value.base.metadata.lineage {
-            let rows: Vec<Option<u32>> = (0..source_len(&entry.map))
+            let rows: Vec<Option<u32>> = (0..entry.map.source_rows())
                 .map(|i| {
                     entry
                         .map
@@ -265,23 +265,6 @@ fn lineage_for(node: &SceneNode, row_map: &sfmtool_core::RowMap) -> Vec<LineageE
         }
     }
     entries
-}
-
-/// How many source rows a stored map describes.
-///
-/// A dense map says so outright. A monotone one does not carry the count, so it
-/// is the largest source row it mentions plus one -- which is enough, because a
-/// row past that maps to itself shifted and would be recomputed identically by
-/// the composition below.
-fn source_len(map: &LineageMap) -> u32 {
-    match map {
-        LineageMap::Dense { rows } => rows.len() as u32,
-        LineageMap::Monotone { deleted, created } => {
-            let highest = deleted.last().copied().unwrap_or(0);
-            let rows = created.last().copied().unwrap_or(0);
-            highest.max(rows) + 1
-        }
-    }
 }
 
 /// Add one entry, in the smaller of the two encodings, unless its hash is
@@ -324,5 +307,9 @@ fn compress(rows: Vec<Option<u32>>) -> LineageMap {
         created.extend(next..row);
         next = row + 1;
     }
-    LineageMap::Monotone { deleted, created }
+    LineageMap::Monotone {
+        source_rows: rows.len() as u32,
+        deleted,
+        created,
+    }
 }

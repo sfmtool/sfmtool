@@ -74,7 +74,16 @@ pub enum LineageMap {
     /// with the deleted ones skipped. This is the shape a materialisation
     /// produces, and it costs the size of the edit rather than the size of the
     /// reconstruction.
+    ///
+    /// `source_rows` is how many rows the ancestor had. It is carried because
+    /// the two lists do not imply it: they name only the rows that changed, so
+    /// without it the map's domain would have to be guessed from the highest row
+    /// it happens to mention, and every unchanged row past that would be
+    /// invisible to anything enumerating the map.
     Monotone {
+        /// How many rows the ancestor had, which is the map's domain: valid
+        /// indexes are `0 .. source_rows`.
+        source_rows: u32,
         /// Ancestor rows with no row here, ascending.
         deleted: Vec<u32>,
         /// Rows here with no ancestor row, ascending.
@@ -92,11 +101,30 @@ pub enum LineageMap {
 }
 
 impl LineageMap {
+    /// How many rows the ancestor had, which is the map's domain: every index a
+    /// caller enumerating the map should ask about is below it.
+    ///
+    /// Both encodings state it outright, which is what lets a consumer walk a
+    /// whole map without knowing which encoding it is in.
+    pub fn source_rows(&self) -> u32 {
+        match self {
+            LineageMap::Monotone { source_rows, .. } => *source_rows,
+            LineageMap::Dense { rows } => rows.len() as u32,
+        }
+    }
+
     /// Where ancestor row `index` is in this file, or `None` when it is not.
     pub fn forward(&self, index: u32) -> Option<u32> {
         match self {
-            LineageMap::Monotone { deleted, created } => {
-                if deleted.binary_search(&index).is_ok() {
+            LineageMap::Monotone {
+                source_rows,
+                deleted,
+                created,
+            } => {
+                // Outside the domain is not a row of the ancestor at all, which
+                // is the same answer the dense form gives past the end of its
+                // list.
+                if index >= *source_rows || deleted.binary_search(&index).is_ok() {
                     return None;
                 }
                 // How many of the ancestor's rows before this one survive, then
