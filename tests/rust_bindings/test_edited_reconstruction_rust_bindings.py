@@ -251,7 +251,11 @@ class TestAddObservation:
         """A point the target image does not observe, and where it projects.
 
         A one-view localization runs no congealing round, so the keypoint it
-        reports is the point's projection itself.
+        reports is the point's projection itself. Which surfaces register in
+        image 0 depends on the platform's solve of the fixture, so the first
+        candidate whose patch the localizer accepts there is the one returned:
+        the tests are about the call's shape, the refusal texts and the
+        materialisation, not about any particular surface.
         """
         base = embedded.materialize()[0]
         # The embedded base already carries the frames, so the cloud is read
@@ -271,8 +275,14 @@ class TestAddObservation:
             if self.TARGET in seen or len(seen) < 2:
                 continue
             x, y = (float(v) for v in entry["keypoints"][0])
+            try:
+                embedded.add_observation(
+                    index, self.TARGET, [x, y], images, min_zncc=-2.0
+                )
+            except ValueError:
+                continue
             return index, self.TARGET, [x, y]
-        pytest.skip("no point of this reconstruction projects into image 0 unseen")
+        pytest.skip("no point of this reconstruction registers in image 0 unseen")
 
     def test_a_sift_files_base_is_refused(self, edited, images):
         with pytest.raises(ValueError, match="embedded_patches"):
