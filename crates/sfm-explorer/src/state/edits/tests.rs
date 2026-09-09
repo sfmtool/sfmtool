@@ -675,3 +675,199 @@ fn a_node_with_no_patch_frames_falls_back_to_the_named_radius() {
         super::FALLBACK_PATCH_RADIUS_PX
     );
 }
+
+// ── Remove observation: the point edit that shortens a track ────────────
+
+/// [`embedded_demo`] with every keypoint the exact projection of its point, and
+/// track lengths of one, two and three cycling by point index.
+///
+/// The projections are what make the re-triangulation well-conditioned, and the
+/// three lengths are the three outcomes: point 0 is deleted by the edit, point 1
+/// becomes a bearing, point 2 stays finite and is re-solved.
+fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
+    use ndarray::Array2;
+    use sfmtool_core::{ObservationSource, TrackObservation};
+
+    let mut recon = embedded_demo(points);
+    let tracks: Vec<TrackObservation> = (0..points)
+        .flat_map(|p| {
+            (0..=(p % 3)).map(move |image| TrackObservation {
+                image_index: image as u32,
+                point_index: p as u32,
+            })
+        })
+        .collect();
+    let mut keypoints = Array2::<f32>::zeros((tracks.len(), 2));
+    for (row, track) in tracks.iter().enumerate() {
+        let image = &recon.image_table.images[track.image_index as usize];
+        let point = recon.point_set.points[track.point_index as usize].position;
+        let cam = image.quaternion_wxyz.to_rotation_matrix() * point.coords + image.translation_xyz;
+        let (x, y) = recon.image_table.cameras[image.camera_index as usize]
+            .ray_to_pixel([cam.x, cam.y, cam.z])
+            .expect("every demo camera sees every demo point");
+        keypoints[[row, 0]] = x as f32;
+        keypoints[[row, 1]] = y as f32;
+    }
+    let images = recon.image_count();
+    recon.point_set.observation_counts = (0..points).map(|p| (p % 3) as u32 + 1).collect();
+    recon.point_set.tracks = tracks;
+    recon.point_set.observations = ObservationSource::EmbeddedPatches {
+        keypoints_xy: keypoints,
+        image_file_hashes: vec![[0u8; 16]; images],
+    };
+    recon.rebuild_derived_fields();
+    recon
+}
+
+/// A state holding one node of [`projected_embedded_demo`], selected.
+fn removable_state() -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(projected_embedded_demo(12)));
+    let id = state.selected_recon.expect("a selected reconstruction");
+    (state, id)
+}
+
+#[test]
+fn removing_from_a_longer_track_moves_the_selection_with_the_point() {
+    let (mut state, id) = removable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    state.selected_point = Some(PointRef::new(id, 2));
+    state.action_log.clear();
+
+    state
+        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, 1))
+        .expect("image 1 observes point 2");
+
+    let node = &state.scene[0];
+    assert!(
+        Arc::ptr_eq(&before, &node.edited().base),
+        "a point edit wrote through the base"
+    );
+    assert_eq!(node.history.versions().len(), 2);
+    let moved = state.selected_point.expect("the point is still selected");
+    assert_ne!(moved.point, 2, "a modification takes a new index");
+    let view = node.edited().point(moved.point).expect("the moved point");
+    assert_eq!(view.observations().len(), 2);
+    assert_eq!(view.point().w, 1.0, "two rays still state a depth");
+
+    let label = &node.history.current_version().label;
+    assert!(
+        label.starts_with("Removed observation of point 2 in image_001.jpg"),
+        "{label}"
+    );
+    let texts = texts(&state);
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    assert!(texts[0].contains("2 observations left"), "{}", texts[0]);
+}
+
+#[test]
+fn removing_down_to_one_view_leaves_a_bearing_under_the_selection() {
+    let (mut state, id) = removable_state();
+    state.selected_point = Some(PointRef::new(id, 1));
+    state.action_log.clear();
+
+    state
+        .remove_observation(PointRef::new(id, 1), ImageRef::new(id, 1))
+        .expect("image 1 observes point 1");
+
+    let moved = state.selected_point.expect("the point is still selected");
+    let view = state.scene[0]
+        .edited()
+        .point(moved.point)
+        .expect("the moved point");
+    assert_eq!(view.observations().len(), 1);
+    assert_eq!(view.point().w, 0.0, "one sighting fixes a bearing");
+    assert!(
+        texts(&state)[0].contains("bearing at infinity"),
+        "{:?}",
+        texts(&state)
+    );
+}
+
+#[test]
+fn removing_the_last_observation_deletes_the_point_and_clears_the_selection() {
+    let (mut state, id) = removable_state();
+    let count = state.scene[0].point_count();
+    state.selected_point = Some(PointRef::new(id, 0));
+    state.action_log.clear();
+
+    state
+        .remove_observation(PointRef::new(id, 0), ImageRef::new(id, 0))
+        .expect("image 0 is point 0's only observation");
+
+    assert_eq!(
+        state.selected_point, None,
+        "a deleted point stayed selected"
+    );
+    let node = &state.scene[0];
+    assert!(node.is_point_deleted(0));
+    assert_eq!(node.point_count(), count - 1);
+    assert!(
+        texts(&state)[0].contains("is deleted"),
+        "{:?}",
+        texts(&state)
+    );
+}
+
+#[test]
+fn an_undo_puts_the_observation_back() {
+    let (mut state, id) = removable_state();
+    let before = state.scene[0]
+        .edited()
+        .point(2)
+        .expect("a live point")
+        .point()
+        .position;
+
+    state
+        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, 1))
+        .expect("image 1 observes point 2");
+    state.undo(id).expect("one edit to undo");
+
+    let view = state.scene[0].edited().point(2).expect("the point is back");
+    assert_eq!(view.observations().len(), 3);
+    assert_eq!(view.point().position, before);
+    assert_eq!(state.scene[0].history.cursor(), 0);
+}
+
+#[test]
+fn a_sift_files_node_allows_the_edit() {
+    let mut state = state();
+    let id = node(&state);
+    let seen = state.scene[0].edited().track_image_indices(3)[0];
+    state.selected_point = Some(PointRef::new(id, 3));
+
+    state
+        .remove_observation(PointRef::new(id, 3), ImageRef::new(id, seen))
+        .expect("taking a row out invents no feature");
+    assert_eq!(state.scene[0].history.versions().len(), 2);
+}
+
+#[test]
+fn the_entry_is_greyed_without_a_point_and_for_an_image_outside_the_track() {
+    let (state, _) = removable_state();
+    let edited = state.scene[0].edited();
+    assert!(crate::image_detail::remove_observation_entry(edited, 0, None).is_err());
+    let outside = (0..edited.image_count())
+        .find(|i| !edited.track_image_indices(2).contains(i))
+        .expect("the track does not span every image");
+    assert!(crate::image_detail::remove_observation_entry(edited, outside, Some(2)).is_err());
+    assert_eq!(
+        crate::image_detail::remove_observation_entry(edited, 1, Some(2)),
+        Ok(()),
+        "image 1 observes point 2"
+    );
+}
+
+#[test]
+fn removing_an_observation_that_is_not_there_is_refused_and_leaves_the_history_alone() {
+    let (mut state, id) = removable_state();
+    let outside = (0..state.scene[0].edited().image_count())
+        .find(|i| !state.scene[0].edited().track_image_indices(2).contains(i))
+        .expect("the track does not span every image");
+    let why = state
+        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, outside))
+        .expect_err("that image does not observe the point");
+    assert!(why.contains("does not observe"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}

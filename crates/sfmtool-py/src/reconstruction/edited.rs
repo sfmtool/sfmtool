@@ -23,7 +23,8 @@ use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointRecord, RecordObservation, RowMap,
 };
 use sfmtool_core::{
-    add_observation, create_point, AddObservationOptions, CreatePointOptions, Point3D,
+    add_observation, create_point, remove_observation, AddObservationOptions, CreatePointOptions,
+    Point3D,
 };
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
@@ -409,6 +410,44 @@ impl PyEditedReconstruction {
         d.set_item("observation_count", report.observation_count)?;
         d.set_item("position_shift", report.position_shift)?;
         d.set_item("from_infinity", report.from_infinity)?;
+        d.set_item("condition_number", report.condition_number)?;
+        Ok((PyEditedReconstruction { inner: next }, d.unbind()))
+    }
+
+    /// Remove the observation of `point` in `image` from this version.
+    ///
+    /// The rows that remain keep their keypoints, feature indexes and
+    /// confidences, and so do the point's colour, patch frame, patch bitmap and
+    /// constraint. What the removal changes is the geometry: with two or more
+    /// sightings left a finite point is re-triangulated from them; with one left
+    /// it becomes a bearing at infinity along that sighting's ray, its frame
+    /// divided by the depth it stood at so the patch keeps its angular size;
+    /// with none left the point is deleted and the report's ``deleted`` says so.
+    ///
+    /// No images are needed: the rays come from the poses and lenses the
+    /// reconstruction already carries. Returns
+    /// ``(EditedReconstruction, report)``; this object is not changed, and the
+    /// returned value shares its base. Raises ``ValueError`` with the reason
+    /// when the edit is refused.
+    fn remove_observation(
+        &self,
+        py: Python<'_>,
+        point: u32,
+        image: u32,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let (next, report) = remove_observation(&self.inner, point, image)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let d = PyDict::new(py);
+        d.set_item("point", report.point)?;
+        d.set_item("replaced", report.replaced)?;
+        d.set_item("image", report.image)?;
+        d.set_item("observation_count", report.observation_count)?;
+        d.set_item("deleted", report.deleted)?;
+        d.set_item("to_infinity", report.to_infinity)?;
+        d.set_item("retriangulated", report.retriangulated)?;
+        d.set_item("position", PyArray1::from_vec(py, report.position.to_vec()))?;
+        d.set_item("position_shift", report.position_shift)?;
         d.set_item("condition_number", report.condition_number)?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }

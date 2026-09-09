@@ -20,7 +20,15 @@ pub(crate) const ADD_OBSERVATION_LABEL: &str = "Add observation to track here";
 /// patch's radius, rather than running the edit on the spot.
 pub(crate) const CREATE_POINT_LABEL: &str = "Create 3D Point here...";
 
-/// What a `sift_files` node's context menu says in place of either entry.
+/// The remove-an-observation entry's label. "From track" rather than "here":
+/// the entry names a row of the selected point's track, and the pixel the menu
+/// was opened at says nothing about which.
+pub(crate) const REMOVE_OBSERVATION_LABEL: &str = "Remove observation from track";
+
+/// What a `sift_files` node's context menu says in place of the two entries
+/// that need a patch. Removing an observation is offered there as well: taking
+/// a row out invents no feature, so it is defined whatever backs an
+/// observation.
 pub(crate) const NOT_EMBEDDED_PATCHES: &str =
     "Creating a point and adding an observation need an embedded_patches reconstruction.";
 
@@ -87,6 +95,34 @@ pub(crate) fn add_observation_entry(
         return Some(Err("This image already observes the selected point."));
     }
     Some(Ok(()))
+}
+
+/// Whether the Image Detail context menu's remove-observation entry can run for
+/// this node, image and selection, and why not when it is greyed.
+///
+/// There is no `None` arm: removing a row invents no feature, so the edit is
+/// defined on a `sift_files` node exactly as it is on an `embedded_patches`
+/// one. What it needs is a selected point this image is a member of the track
+/// of.
+pub(crate) fn remove_observation_entry(
+    edited: &EditedReconstruction,
+    image_index: usize,
+    selected_point: Option<usize>,
+) -> Result<(), &'static str> {
+    let Some(point) = selected_point else {
+        return Err("Select a point first: the observation is removed from that point's track.");
+    };
+    let Some(view) = edited.point(point as u32) else {
+        return Err("The selected point is not in this version.");
+    };
+    if !view
+        .observations()
+        .iter()
+        .any(|o| o.image_index as usize == image_index)
+    {
+        return Err("This image does not observe the selected point.");
+    }
+    Ok(())
 }
 
 impl ImageDetail {
@@ -332,11 +368,29 @@ impl ImageDetail {
                         ui.close();
                     }
                 }
-                // Not an `embedded_patches` node: the entry is absent rather
-                // than greyed, because the edit is not defined here at all.
+                // Not an `embedded_patches` node: the two entries above are
+                // absent rather than greyed, because neither edit is defined
+                // here at all.
                 None => {
                     ui.label(egui::RichText::new(NOT_EMBEDDED_PATCHES).weak());
                 }
+            }
+            // Offered whatever backs an observation, because taking a row out
+            // invents nothing: it needs a selected point and an image that is
+            // in its track, and says which of the two is missing when it is
+            // greyed.
+            let button = egui::Button::new(REMOVE_OBSERVATION_LABEL);
+            let clicked =
+                match remove_observation_entry(edited, overlay.image.index(), selected_point) {
+                    Ok(()) => ui.add(button).clicked(),
+                    Err(why) => {
+                        ui.add_enabled(false, button).on_disabled_hover_text(why);
+                        false
+                    }
+                };
+            if clicked {
+                response.remove_observation = true;
+                ui.close();
             }
         });
 

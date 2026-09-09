@@ -1116,3 +1116,81 @@ fn a_deleted_point_shows_the_empty_state() {
     assert!(panel.observations.is_empty());
     assert_eq!(panel.prepared_point, None);
 }
+
+// ── The row's own action ────────────────────────────────────────────────
+
+/// Open a row's context menu with a secondary click at `row`, then click the
+/// entry `offset` below it, and give back the last frame's response.
+///
+/// Four frames, because each interaction is resolved against the rects
+/// registered on the previous pass: park, secondary-click, move onto the open
+/// menu, click it.
+fn click_row_menu_entry(
+    recon: &SfmrReconstruction,
+    point_idx: usize,
+    row: egui::Pos2,
+    offset: egui::Vec2,
+) -> PointTrackDetailResponse {
+    let cache = sift_cache(8, 16);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+    let entry = row + offset;
+    let mut response = None;
+    for frame in 0..4 {
+        let at = if frame >= 2 { entry } else { row };
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        let button = match frame {
+            1 => Some(egui::PointerButton::Secondary),
+            3 => Some(egui::PointerButton::Primary),
+            _ => None,
+        };
+        if let Some(button) = button {
+            for pressed in [true, false] {
+                events.push(egui::Event::PointerButton {
+                    pos: at,
+                    button,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        response = Some(run_frame(
+            &mut panel,
+            &ctx,
+            recon,
+            Some(point_idx),
+            &cache,
+            &HashMap::new(),
+            events,
+        ));
+    }
+    response.expect("four frames ran")
+}
+
+#[test]
+fn a_rows_context_menu_asks_for_that_observation_to_be_removed() {
+    let recon = SfmrReconstruction::demo(12);
+    let (_, first_y) = hovered_images_down_the_panel(&recon, 0);
+    // The second row's band, whose image is 1: what the entry reports back has
+    // to be that row's image and not the panel's first.
+    let row = egui::pos2(300.0, first_y[1] + 24.0);
+
+    // The entry is the menu's first item, a few pixels below and right of the
+    // click; the exact inset is egui's own padding, so it is swept rather than
+    // pinned.
+    let asked = (0..12).find_map(|step| {
+        let response =
+            click_row_menu_entry(&recon, 0, row, egui::vec2(20.0, 4.0 + step as f32 * 4.0));
+        response.remove_observation
+    });
+    assert_eq!(asked, Some(1), "no offset below the row hit the entry");
+}
+
+#[test]
+fn an_ordinary_frame_asks_for_no_removal() {
+    let recon = SfmrReconstruction::demo(12);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+    let response = show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
+    assert_eq!(response.remove_observation, None);
+}

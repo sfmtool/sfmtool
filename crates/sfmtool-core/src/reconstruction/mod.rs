@@ -13,6 +13,7 @@ mod embed;
 pub mod filter;
 pub mod point_correspondence;
 pub mod point_estimation;
+pub mod remove_observation;
 pub mod triangulation;
 
 pub use add_observation::{
@@ -20,6 +21,8 @@ pub use add_observation::{
 };
 
 pub use create_point::{create_point, CreatePointError, CreatePointOptions, CreatePointReport};
+
+pub use remove_observation::{remove_observation, RemoveObservationError, RemoveObservationReport};
 
 pub use edited::{
     EditError, EditedReconstruction, PointRecord, PointView, RecordObservation, RowMap,

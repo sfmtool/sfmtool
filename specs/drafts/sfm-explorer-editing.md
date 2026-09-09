@@ -240,9 +240,13 @@ available offline; the viewer adds only the invocation and the history entry.
 
 Families, in the proposed order:
 
-- **Delete**: selected points, an observation from a track, an image (with its
-  observations and any track left under two views). The first structural edit,
-  and the one the selection-remapping rule is tested against.
+- **Delete**: selected points and an image (with its observations and any track
+  left under two views) are built and standing with the document model,
+  [`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit";
+  removing an observation from a track is standing as
+  [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md).
+  The first structural edits, and the ones the selection-remapping rule is
+  tested against.
 - **Point constraints**: set a selected point free, ranged, or held, with the
   reference image and distance, from the Point Track Detail panel. The
   ground-truth workflow does this today in scripts against a CSV.
@@ -256,8 +260,9 @@ Families, in the proposed order:
   standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
   and so is creating a point from a pixel,
   [`../gui/edits/create-point.md`](../gui/edits/create-point.md), which is the
-  edit an added observation then places. Remove an observation, split a track,
-  merge two remain.
+  edit an added observation then places, and so is removing an observation,
+  [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
+  which inverts the first. Split a track and merge two remain.
 - **Bundle adjust**: run the adjustment on the node's value with the
   constraints it carries, as one version.
 
@@ -296,9 +301,11 @@ steps after it.
    GPU. Create a point from a pixel is done beside it, and is what exercises the
    rest of that machinery: a point in no base, `push_creating`, the point-edit
    hash an id is minted against, and an addition the GPU draws that replaces
-   nothing. Remaining: delete an observation and an image from the panels,
-   point constraints, bake transform, resect in place, the other track edits
-   (remove an observation, split, merge), and bundle adjust.
+   nothing. Removing an observation is done as well,
+   [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
+   and is the edit that inverts add-observation, including the patch frame's
+   crossing to and from infinity. Remaining: point constraints, bake transform,
+   resect in place, the other track edits (split, merge), and bundle adjust.
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
 ## Non-goals

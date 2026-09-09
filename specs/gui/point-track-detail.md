@@ -123,6 +123,17 @@ until a second sighting is added to it -- a bearing at infinity -- because that
 is what this panel then shows: one observation, and a position the reconstruction
 does not yet claim. It quotes its menu entry's label from one constant too.
 
+#### Removing an observation
+
+A secondary click on an observation row opens a context menu with one entry,
+*Remove this observation*, which takes that row out of the track
+([`edits/remove-observation.md`](edits/remove-observation.md)). The menu is on
+the row because the row **is** the observation: no further selection is needed,
+and the panel reports the row's own image index back to the dock, which pairs it
+with the selected point. The entry is offered on every row whatever backs an
+observation, since removing one invents no feature; on a track's only row it
+carries a hover text saying that removing it deletes the point.
+
 #### What the panel reads
 
 Everything about the point -- its position, colour and error, its whole track,

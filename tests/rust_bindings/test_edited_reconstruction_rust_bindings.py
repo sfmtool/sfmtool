@@ -426,3 +426,134 @@ class TestCreatePoint:
         # The fit ran against the provisional patch, so the report carries a real
         # score rather than a placeholder.
         assert np.isfinite(add["zncc"])
+
+
+class TestRemoveObservation:
+    """``remove_observation``: one image drops out of a track.
+
+    The same ``to_embedded_patches`` baseline the two edits above use, because
+    the round trip runs an ``add_observation`` fit against the workspace's own
+    photographs: a row is taken out and put back at the keypoint it held, and
+    the point has to come home.
+    """
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        return EditedReconstruction(recon.to_embedded_patches())
+
+    @pytest.fixture
+    def images(self, embedded):
+        from sfmtool._workspace_image import read_workspace_image
+
+        base = embedded.materialize()[0]
+        return [
+            read_workspace_image(base.workspace_dir, name) for name in base.image_names
+        ]
+
+    @pytest.fixture
+    def long_track(self, embedded):
+        """A point with three or more observations, and its first image."""
+        for index in embedded.live_indexes():
+            record = embedded.point(int(index))
+            if len(record["image_indexes"]) >= 3:
+                return int(index), int(record["image_indexes"][0])
+        pytest.skip("no track of this reconstruction holds three observations")
+
+    def test_an_image_outside_the_track_is_refused(self, embedded, long_track):
+        point, _ = long_track
+        seen = set(int(i) for i in embedded.point(point)["image_indexes"])
+        unseen = next(
+            i for i in range(embedded.materialize()[0].image_count) if i not in seen
+        )
+        with pytest.raises(ValueError, match="does not observe"):
+            embedded.remove_observation(point, unseen)
+
+    def test_a_dead_point_is_refused(self, embedded, long_track):
+        point, image = long_track
+        embedded.delete_point(point)
+        with pytest.raises(ValueError, match="no live point"):
+            embedded.remove_observation(point, image)
+
+    def test_removing_a_row_shortens_the_track_and_keeps_the_base(
+        self, embedded, long_track
+    ):
+        point, image = long_track
+        before = list(int(i) for i in embedded.point(point)["image_indexes"])
+
+        next_value, report = embedded.remove_observation(point, image)
+
+        assert report["replaced"] == point
+        assert report["deleted"] is False
+        assert report["to_infinity"] is False
+        assert report["retriangulated"] is True
+        assert report["observation_count"] == len(before) - 1
+        assert len(report["position"]) == 3
+        record = next_value.point(report["point"])
+        assert list(int(i) for i in record["image_indexes"]) == [
+            i for i in before if i != image
+        ]
+        # This object is untouched, and the two agree on the base.
+        assert list(int(i) for i in embedded.point(point)["image_indexes"]) == before
+        assert next_value.base_content_hash() == embedded.base_content_hash()
+
+        # The modification goes back into the place it came from.
+        recon, forward, _ = next_value.materialize()
+        assert recon.point_count == embedded.point_count
+        assert forward[report["point"]] == point
+
+    def test_the_round_trip_brings_the_observation_back(self, embedded, images):
+        # Whether a given surface registers again in a given image is a
+        # property of this fixture's solve, so the first track that survives
+        # the round trip is the one the assertions run on: what is under test
+        # is the value the two edits land on, not the fit.
+        trip = None
+        for index in embedded.live_indexes():
+            index = int(index)
+            record = embedded.point(index)
+            if len(record["image_indexes"]) < 3:
+                continue
+            image = int(record["image_indexes"][0])
+            pixel = [float(v) for v in record["keypoints_xy"][0]]
+            shorter, removed = embedded.remove_observation(index, image)
+            try:
+                restored, added = shorter.add_observation(
+                    removed["point"], image, pixel, images, min_zncc=-2.0
+                )
+            except ValueError:
+                continue
+            trip = (record, restored, added)
+            break
+        if trip is None:
+            pytest.skip("no track of this reconstruction survives the round trip")
+        record, restored, added = trip
+        before = np.array(record["position"], dtype=float)
+
+        home = restored.point(added["point"])
+        assert list(int(i) for i in home["image_indexes"]) == list(
+            int(i) for i in record["image_indexes"]
+        )
+        assert home["w"] == 1.0
+        span = float(np.linalg.norm(before))
+        assert np.linalg.norm(
+            np.array(home["position"], dtype=float) - before
+        ) < 0.1 * (span + 1.0)
+
+    def test_removing_every_observation_ends_in_a_deleted_point(
+        self, embedded, long_track
+    ):
+        point, _ = long_track
+        value = embedded
+        index = point
+        report = None
+        while report is None or not report["deleted"]:
+            image = int(value.point(index)["image_indexes"][0])
+            value, report = value.remove_observation(index, image)
+            if not report["deleted"]:
+                index = report["point"]
+                assert report["to_infinity"] == (report["observation_count"] == 1)
+
+        assert report["point"] is None
+        assert report["observation_count"] == 0
+        assert value.point(index) is None
+        assert value.point_count == embedded.point_count - 1

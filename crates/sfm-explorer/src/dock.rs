@@ -463,6 +463,17 @@ impl TabContext<'_> {
                     }
                 }
             }
+            if detail_response.remove_observation {
+                if let (Some(point), Some(image)) =
+                    (self.state.selected_point, self.state.selected_image)
+                {
+                    if let Err(why) = self.state.remove_observation(point, image) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Edit, why);
+                    }
+                }
+            }
             if detail_response.has_pointer {
                 // Detail owns hover state when it has the pointer.
                 self.state.hovered_point =
@@ -567,6 +578,20 @@ impl TabContext<'_> {
             }
             if track_response.request_goto_point {
                 self.state.open_goto_point();
+            }
+            // The row named an image of the selected point's track, which is
+            // the pair the edit takes.
+            if let (Some(img_idx), Some(point)) =
+                (track_response.remove_observation, selected_point)
+            {
+                if let Err(why) = self
+                    .state
+                    .remove_observation(PointRef::new(id, point), ImageRef::new(id, img_idx))
+                {
+                    self.state
+                        .action_log
+                        .fail(crate::action_log::Kind::Edit, why);
+                }
             }
             if let Some(image) = new_selection {
                 self.state.select_image(Some(image));

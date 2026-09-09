@@ -19,7 +19,8 @@ mod tests;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
 pub(crate) use overlay::{
-    add_observation_entry, CreatePointPrompt, ADD_OBSERVATION_LABEL, CREATE_POINT_LABEL,
+    add_observation_entry, remove_observation_entry, CreatePointPrompt, ADD_OBSERVATION_LABEL,
+    CREATE_POINT_LABEL,
 };
 
 use crate::platform::{GestureEvent, ScrollInput};
@@ -124,6 +125,9 @@ pub struct ImageDetailResponse {
     pub context_menu_pixel: Option<[f32; 2]>,
     /// Set when the context menu's `Add observation to track here` was clicked.
     pub add_observation: bool,
+    /// Set when the context menu's `Remove observation from track` was clicked:
+    /// the row taken out is the selected point's observation in this image.
+    pub remove_observation: bool,
     /// Set when the context menu's `Create 3D Point here...` was clicked: the
     /// caller opens the prompt, because the radius it offers is data the panel
     /// does not hold.
@@ -271,6 +275,7 @@ impl ImageDetail {
             has_pointer: false,
             context_menu_pixel: None,
             add_observation: false,
+            remove_observation: false,
             open_create_point: false,
             create_point: None,
             cancel_create_point: false,

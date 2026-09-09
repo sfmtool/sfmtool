@@ -117,6 +117,9 @@ pub struct PointTrackDetailResponse {
     /// The user asked for the Go to Point dialog — from the header button, or
     /// from the empty state's button when no point is selected at all.
     pub request_goto_point: bool,
+    /// If Some, a row's context menu asked for that image's observation to be
+    /// taken out of the selected point's track.
+    pub remove_observation: Option<usize>,
 }
 
 /// Height of each thumbnail in the observation table.
@@ -166,6 +169,7 @@ impl PointTrackDetail {
             hovered_image: None,
             has_pointer: false,
             request_goto_point: false,
+            remove_observation: None,
         };
 
         // Check if pointer is in this panel

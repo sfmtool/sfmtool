@@ -20,6 +20,11 @@ use crate::platform::{self, GestureEvent};
 use crate::scene::{ImageRef, ReconId};
 use crate::texture::thumbnail_color_image;
 
+/// The row context menu's entry, which names the row it was opened on rather
+/// than the track: the Image Detail entry names an image, and this one names
+/// the observation the user is looking at.
+pub(crate) const REMOVE_OBSERVATION_ROW_LABEL: &str = "Remove this observation";
+
 /// Height of one observation row: the thumbnail plus vertical padding.
 const ROW_HEIGHT: f32 = THUMB_SIZE + 8.0;
 /// Size of the feature dot overlay on thumbnails.
@@ -199,6 +204,28 @@ impl PointTrackDetail {
         if is_pointer_on_row {
             response.hovered_image = Some(obs_image_index);
         }
+
+        // The row's own action, on the row's own secondary click. The edit acts
+        // on this observation, and this row is the only place in the viewer
+        // that names one, so the menu belongs here rather than in the panel's
+        // header. Enabled on every row: the last one taking the point with it
+        // is an outcome of the edit rather than a reason to refuse it, and the
+        // hover text says so before it happens.
+        let last_row = self.observations.len() == 1;
+        egui::Popup::context_menu(&row_response).show(|ui| {
+            let button = ui.add(egui::Button::new(REMOVE_OBSERVATION_ROW_LABEL));
+            let button = if last_row {
+                button.on_hover_text(
+                    "This is the point's only observation; removing it deletes the point.",
+                )
+            } else {
+                button
+            };
+            if button.clicked() {
+                response.remove_observation = Some(obs_image_index);
+                ui.close();
+            }
+        });
 
         // Handle click/double-click
         if row_response.double_clicked() {

@@ -213,6 +213,72 @@ impl AppState {
         Ok(())
     }
 
+    /// Remove the observation of `point` in `image` from its track.
+    ///
+    /// A point edit, and the one that takes structure out of a track without
+    /// taking the track's point with it: the point is deleted from the base and
+    /// re-added with the sighting gone, so its index moves and the version's map
+    /// records the move. The base is the same `Arc`, and no photographs are
+    /// read -- the rays the re-triangulation needs are the poses and lenses the
+    /// value already carries.
+    ///
+    /// The last observation is the exception: with nothing left to see the
+    /// point, the point goes, and the version's map is the one
+    /// [`AppState::delete_point`] pushes.
+    pub fn remove_observation(&mut self, point: PointRef, image: ImageRef) -> Result<(), String> {
+        if point.recon != image.recon {
+            return Err("The point and the image belong to different reconstructions.".to_string());
+        }
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == point.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let node = &mut self.scene[index];
+        let edited = node.history.current();
+        // The gate is the menu's own, so the entry and the edit cannot disagree
+        // about when this can run.
+        crate::image_detail::remove_observation_entry(edited, image.index(), Some(point.index()))
+            .map_err(|why| why.to_string())?;
+        let image_name = node
+            .recon()
+            .image_table
+            .images
+            .get(image.index())
+            .map(|im| im.name.clone())
+            .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
+        let (next, report) = sfmtool_core::remove_observation(edited, point.point, image.image)
+            .map_err(|e| format!("Cannot remove that observation: {e}"))?;
+
+        let label = node.label.clone();
+        let text = format!(
+            "Removed observation of point {} in {image_name} ({label})",
+            point.point
+        );
+        // The point survived and took a new index, or it was the track's last
+        // sighting and the point went with it. The map is what the selection
+        // follows in either case.
+        let map = match report.point {
+            Some(moved) => PointMap::Replaced(vec![(point.point, moved)]),
+            None => PointMap::Removed(vec![point.point]),
+        };
+        let serial = node.history.push(next, map, text.clone());
+        let parent = version_before(node, serial);
+        self.follow_selection_forward(point.recon);
+        let outcome = if report.deleted {
+            "the point had no other observation and is deleted".to_string()
+        } else if report.to_infinity {
+            "one observation left, so the point is a bearing at infinity".to_string()
+        } else {
+            format!("{} observations left", report.observation_count)
+        };
+        self.action_log.record(
+            Kind::Edit,
+            format!("{text}: {outcome} ({parent} → {serial})"),
+        );
+        Ok(())
+    }
+
     /// Create a 3D point at `pixel` in `image`, with a patch of `radius_px`.
     ///
     /// A point edit, and the first one that creates a point rather than moving

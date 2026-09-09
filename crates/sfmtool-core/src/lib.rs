@@ -38,11 +38,12 @@ pub mod spherical;
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use reconstruction::{
-    add_observation, create_point, AddObservationError, AddObservationOptions,
+    add_observation, create_point, remove_observation, AddObservationError, AddObservationOptions,
     AddObservationReport, CreatePointError, CreatePointOptions, CreatePointReport, EditError,
     EditedReconstruction, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
-    PointRecord, PointSet, PointView, ReconstructionError, RecordObservation, RowMap, SfmrImage,
-    SfmrReconstruction, TrackObservation,
+    PointRecord, PointSet, PointView, ReconstructionError, RecordObservation,
+    RemoveObservationError, RemoveObservationReport, RowMap, SfmrImage, SfmrReconstruction,
+    TrackObservation,
 };
 /// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on

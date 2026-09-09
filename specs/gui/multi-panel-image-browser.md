@@ -661,20 +661,24 @@ puts a menu up. The menu is opened on egui's own `clicked_by(Secondary)` rather
 than on the raw platform button state the pan/zoom handler reads, which is what
 makes that distinction available at all.
 
-Its two entries are `Create 3D Point here...`, which creates a point at the
-clicked pixel ([`edits/create-point.md`](edits/create-point.md)), and `Add
+Its entries are `Create 3D Point here...`, which creates a point at the
+clicked pixel ([`edits/create-point.md`](edits/create-point.md)), `Add
 observation to track here`, which adds an observation of the selected 3D point
 to this image at that pixel
-([`edits/add-observation.md`](edits/add-observation.md)).
+([`edits/add-observation.md`](edits/add-observation.md)), and `Remove observation
+from track`, which takes the selected point's observation in this image out of
+its track ([`edits/remove-observation.md`](edits/remove-observation.md)).
 
 Creating a point needs nothing but a pixel on the sensor, so its entry is never
 greyed; its trailing ellipsis is the promise it keeps, opening a small prompt at
 the click for the patch radius, with a preview circle of that radius drawn on
 the image while it is up. Adding an observation is greyed with a hover
 explanation when no point is selected or when this image already observes the
-selected point. Both are replaced by one line saying why on a `sift_files`
+selected point. Those two are replaced by one line saying why on a `sift_files`
 reconstruction, where an observation is a `.sift` feature and a clicked pixel is
-not one.
+not one. Removing an observation is offered there as well, under that line, and
+names no pixel: it is greyed when no point is selected or when this image does
+not observe it.
 
 The pixel is recorded on the frame the menu opens, in source-image coordinates
 through the same `panel_to_image` transform the feature hit-testing uses: the
