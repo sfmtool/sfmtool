@@ -459,3 +459,120 @@ fn corrupt_zst_payload_is_an_invalid_format_error() {
         "unexpected: {err}"
     );
 }
+
+// ── Atomic writes ───────────────────────────────────────────────────────
+
+/// A directory of this test's own under the system temp dir, emptied first so a
+/// rerun does not read a previous run's files.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("archive_io_atomic_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    dir
+}
+
+/// The names of the files in `dir`, sorted.
+fn entries(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("a readable dir")
+        .map(|e| {
+            e.expect("a readable entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_successful_write_leaves_the_target_and_no_temporary_file() {
+    let dir = temp_dir("success");
+    let path = dir.join("out.bin");
+
+    let bytes: usize = write_atomically(&path, |file| {
+        std::io::Write::write_all(file, b"hello")?;
+        Ok::<usize, std::io::Error>(5)
+    })
+    .expect("a writable path");
+
+    assert_eq!(bytes, 5, "the closure's value comes back");
+    assert_eq!(std::fs::read(&path).unwrap(), b"hello");
+    assert_eq!(entries(&dir), vec!["out.bin".to_string()]);
+}
+
+#[test]
+fn overwriting_an_existing_target_replaces_it() {
+    // The rename has to replace, not fail, on every platform this builds for.
+    let dir = temp_dir("overwrite");
+    let path = dir.join("out.bin");
+    std::fs::write(&path, b"old content, longer than the new").unwrap();
+
+    write_atomically(&path, |file| {
+        std::io::Write::write_all(file, b"new")?;
+        Ok::<(), std::io::Error>(())
+    })
+    .expect("a writable path");
+
+    assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    assert_eq!(entries(&dir), vec!["out.bin".to_string()]);
+}
+
+#[test]
+fn a_failed_write_leaves_the_previous_target_untouched() {
+    // The whole point: the target is either what it was or what was written,
+    // never a prefix of what was being written.
+    let dir = temp_dir("failure");
+    let path = dir.join("out.bin");
+    std::fs::write(&path, b"the only copy").unwrap();
+
+    let error = write_atomically(&path, |file| {
+        // Some of the new content reaches the temporary file before the failure,
+        // which is exactly the case a direct write would have destroyed.
+        std::io::Write::write_all(file, b"half of something else")?;
+        Err::<(), std::io::Error>(std::io::Error::other("ran out of things to say"))
+    })
+    .expect_err("the closure failed");
+
+    assert_eq!(error.to_string(), "ran out of things to say");
+    assert_eq!(std::fs::read(&path).unwrap(), b"the only copy");
+    assert_eq!(entries(&dir), vec!["out.bin".to_string()]);
+}
+
+#[test]
+fn a_panic_in_the_write_leaves_no_temporary_file() {
+    let dir = temp_dir("panic");
+    let path = dir.join("out.bin");
+    std::fs::write(&path, b"the only copy").unwrap();
+
+    let panicked = std::panic::catch_unwind(|| {
+        write_atomically(&path, |file| -> Result<(), std::io::Error> {
+            std::io::Write::write_all(file, b"half of").unwrap();
+            panic!("something went wrong mid-write");
+        })
+    });
+
+    assert!(panicked.is_err(), "the panic propagates");
+    assert_eq!(std::fs::read(&path).unwrap(), b"the only copy");
+    assert_eq!(entries(&dir), vec!["out.bin".to_string()]);
+}
+
+#[test]
+fn a_missing_parent_directory_is_an_error_and_creates_nothing() {
+    // The same answer a direct write gives. Whether a missing parent should be
+    // created is a decision about what a path means, and it belongs to the
+    // caller: some writers create it first and some deliberately do not.
+    let dir = temp_dir("parent");
+    let path = dir.join("nested").join("out.bin");
+
+    let error = write_atomically(&path, |file| {
+        std::io::Write::write_all(file, b"x")?;
+        Ok::<(), std::io::Error>(())
+    })
+    .expect_err("no such directory");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound, "{error}");
+    assert!(!dir.join("nested").exists());
+    assert!(entries(&dir).is_empty(), "{:?}", entries(&dir));
+}

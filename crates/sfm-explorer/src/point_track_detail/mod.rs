@@ -90,13 +90,11 @@ pub struct PointTrackDetail {
     /// not visible in the view warp to all-black and are drawn as such (a future
     /// N/A flag may distinguish "not visible" from a genuinely dark surface).
     rendered_patch_textures: HashMap<ImageRef, egui::TextureHandle>,
-    /// The selected point's Point ID in the session form, as *Copy Point ID*
-    /// copies it.
+    /// The selected point's Point ID, as *Copy Point ID* copies it.
     ///
-    /// Handed in by the caller rather than derived here: it is minted by the
-    /// earliest rule over the node's whole version graph
-    /// ([`crate::point_ids::mint`]), and this panel sees one reconstruction
-    /// value, not the node behind it.
+    /// Handed in by the caller rather than derived here: it is minted over the
+    /// node's whole version graph ([`crate::point_ids::mint`]), and this panel
+    /// sees one reconstruction value, not the node behind it.
     point_id: String,
     /// Tracked vertical scroll offset for DM gesture scrolling.
     scroll_offset_y: Option<f32>,
@@ -153,7 +151,7 @@ impl PointTrackDetail {
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         recon_id: ReconId,
-        // The selected point's session-form Point ID, minted by the caller.
+        // The selected point's Point ID, minted by the caller.
         point_id: &str,
         selected_point: Option<usize>,
         hovered_image: Option<usize>,

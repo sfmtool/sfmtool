@@ -1012,16 +1012,7 @@ fn camera_image_text(selector: &CameraImageSel) -> String {
 fn point_text(query: &crate::goto_point::PointQuery) -> String {
     match query {
         crate::goto_point::PointQuery::Index(index) => format!("#{index}"),
-        crate::goto_point::PointQuery::Qualified {
-            hash,
-            index,
-            node: None,
-        } => format!("pt3d_{hash}_{index}"),
-        crate::goto_point::PointQuery::Qualified {
-            hash,
-            index,
-            node: Some(node),
-        } => format!("pt3d_{hash}_{index}_n{node}"),
+        crate::goto_point::PointQuery::Qualified { hash, index } => format!("pt3d_{hash}_{index}"),
     }
 }
 

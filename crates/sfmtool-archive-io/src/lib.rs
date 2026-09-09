@@ -401,6 +401,97 @@ pub fn write_binary_entry_hashed<W: Write + Seek>(
     Ok(())
 }
 
+// ── Atomic writes ───────────────────────────────────────────────────────
+
+/// Distinguishes the temporary files of concurrent writers within one process.
+///
+/// The process id separates processes and this separates threads, so two writers
+/// aiming at one path never stream into the same temporary file. Neither is a
+/// claim of uniqueness against a hostile filesystem; both together are enough
+/// that an ordinary concurrent write does not corrupt another's.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write `path` through a temporary file, so the target is either the previous
+/// content or the new content and never a prefix of the new one.
+///
+/// `write` streams the whole file into the handle it is given. On success the
+/// handle is flushed and `sync_all`ed, and only then renamed over `path`. On any
+/// failure, including a panic unwinding out of `write`, the temporary file is
+/// removed and `path` is left exactly as it was.
+///
+/// This matters most where a writer's target is also its only copy of what it is
+/// replacing. A viewer saving an edited reconstruction over the file it loaded
+/// from would, with a plain `File::create`, truncate that file at the moment it
+/// opened it: a failure anywhere in the write then leaves a partial archive
+/// where the original was, and the original is gone.
+///
+/// The temporary file is `<file name>.tmp<hex>` **in the target's own
+/// directory**, which is what makes the last step a rename rather than a copy: a
+/// temp file elsewhere could be on another filesystem, where `rename` fails and
+/// any fallback is a copy that is not atomic.
+///
+/// A missing parent directory is an error, exactly as it is for a direct write.
+/// Whether to create one is a decision about what a path means, which belongs to
+/// the caller: some of these writers create the parent and some deliberately do
+/// not, and a helper that always created it would silently change what a bad
+/// path does.
+///
+/// `rename` replaces an existing target on both Unix and Windows.
+pub fn write_atomically<T, E, F>(path: &std::path::Path, write: F) -> Result<T, E>
+where
+    F: FnOnce(&mut std::fs::File) -> Result<T, E>,
+    E: From<std::io::Error>,
+{
+    let parent = path.parent().unwrap_or(std::path::Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        parent
+    };
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "out".to_string());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let counter = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temp = parent.join(format!(
+        "{name}.tmp{:08x}{:08x}{:08x}",
+        std::process::id(),
+        counter,
+        nanos
+    ));
+
+    // From here every exit removes the temporary file. The guard does it on an
+    // unwind as well, so a panic in `write` does not leave one behind either.
+    struct Remove<'a>(&'a std::path::Path, bool);
+    impl Drop for Remove<'_> {
+        fn drop(&mut self) {
+            if self.1 {
+                let _ = std::fs::remove_file(self.0);
+            }
+        }
+    }
+    let mut guard = Remove(&temp, true);
+
+    let value = {
+        let mut file = std::fs::File::create(&temp)?;
+        let value = write(&mut file)?;
+        // Flush this handle, then ask the filesystem to make the bytes durable,
+        // before anything makes the temporary file visible as the target.
+        file.flush()?;
+        file.sync_all()?;
+        value
+    };
+
+    std::fs::rename(&temp, path)?;
+    // The rename consumed it, so there is nothing left to remove.
+    guard.1 = false;
+    Ok(value)
+}
+
 // ── Hashing ─────────────────────────────────────────────────────────────
 
 /// Format an XXH128 digest as a 32-character lowercase hex string.

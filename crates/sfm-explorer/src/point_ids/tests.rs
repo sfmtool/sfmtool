@@ -1,8 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The two walks: which id a point is shown under after an edit, and which
-//! point an id lands on after an undo, an edit over it, or a materialisation.
+//! The two walks: which content a point's id names as the node is edited and
+//! saved, and which point an id lands on after an undo, an edit over it, or a
+//! materialisation.
+
+use std::path::PathBuf;
 
 use sfmtool_core::SfmrReconstruction;
 
@@ -18,9 +21,43 @@ fn state() -> AppState {
     state
 }
 
+/// A directory of this test's own under the system temp dir, emptied first so a
+/// rerun does not read a previous run's file.
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("sfm_explorer_ids_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    dir
+}
+
+/// A state holding one node that came from `dir/recon.sfmr`, selected, with its
+/// cursor at the version the disk serial names.
+fn state_from_file(dir: &std::path::Path) -> AppState {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        &dir.join("recon.sfmr"),
+        SfmrReconstruction::demo(64),
+    ));
+    state
+}
+
 /// The id of the one node.
 fn id(state: &AppState) -> ReconId {
     state.selected_recon.expect("a selected reconstruction")
+}
+
+/// The hash of the base the node's disk serial names, eight digits.
+fn disk_hash(state: &AppState) -> String {
+    let node = &state.scene[0];
+    let serial = node.history.disk_serial();
+    let value = node
+        .history
+        .versions()
+        .iter()
+        .find(|v| v.serial == serial)
+        .and_then(|v| v.value.as_ref())
+        .expect("a version the budget has not released");
+    base_hash_prefix(value).expect("a hashable reconstruction")
 }
 
 /// The hash the ids of `state`'s node are minted against at the moment of the
@@ -42,21 +79,19 @@ fn demo_data_has_a_hash_like_any_other_reconstruction() {
 }
 
 #[test]
-fn an_id_is_the_session_form_and_carries_the_node() {
+fn an_id_is_a_hash_and_a_row_and_nothing_else() {
+    // Nothing in an id names a node: a point's identity is its content hash and
+    // its row there, which is the same pair in every node holding that content.
     let state = state();
-    let node = &state.scene[0];
-    let minted = mint(node, 7).expect("a live point");
-    assert_eq!(
-        minted,
-        format!("pt3d_{}_7_n{}", current_hash(&state), node.id.raw())
-    );
+    let minted = mint(&state.scene[0], 7).expect("a live point");
+    assert_eq!(minted, format!("pt3d_{}_7", current_hash(&state)));
 }
 
 #[test]
-fn the_earliest_rule_keeps_an_id_across_a_point_edit() {
+fn the_disk_version_is_what_an_id_names_across_a_point_edit() {
     // A point edit leaves indexes alone, so the id is unchanged in both halves
-    // — but it is the *base* it is minted against that must not move, and that
-    // is what the assertion is about.
+    // — but it is the *content* it is minted against that must not move, and
+    // that is what the assertion is about.
     let mut state = state();
     let node_id = id(&state);
     let before = mint(&state.scene[0], 9).expect("a live point");
@@ -70,10 +105,11 @@ fn the_earliest_rule_keeps_an_id_across_a_point_edit() {
 }
 
 #[test]
-fn the_earliest_rule_survives_a_materialisation_that_renumbers() {
+fn an_unsaved_materialisation_that_renumbers_keeps_the_loaded_id() {
     // Delete an early point, then a bulk edit, which materialises and shifts
-    // every point after the deletion down by one. The id shown for the shifted
-    // point stays the one it had in the file's own numbering.
+    // every point after the deletion down by one. Nothing was saved, so the
+    // version on disk is still the loaded one, and the id shown for the shifted
+    // point stays the one it had in that file's own numbering.
     let mut state = state();
     let node_id = id(&state);
     let first_hash = current_hash(&state);
@@ -142,10 +178,116 @@ fn an_unknown_hash_says_so_rather_than_resolving_somewhere_else() {
     assert!(holds_hash(&state.scene[0], &current_hash(&state)));
 }
 
+// ── Which content an id names: the disk version, then the earliest ──────
+
 #[test]
-fn a_node_suffix_parses_and_a_bad_one_does_not() {
-    assert_eq!(parse_node_suffix("n3"), Some(3));
-    assert_eq!(parse_node_suffix("n0"), Some(0));
-    assert_eq!(parse_node_suffix("3"), None);
-    assert_eq!(parse_node_suffix("nx"), None);
+fn a_save_moves_the_id_onto_the_file_that_was_just_written() {
+    // Loaded, edited, saved. The point is a row of the file now on disk, so its
+    // id is that file's hash and that row: a reader of the saved file resolves
+    // it with nothing else to hand.
+    let dir = temp_dir("after_save");
+    let mut state = state_from_file(&dir);
+    let node_id = id(&state);
+    let loaded_hash = disk_hash(&state);
+    assert_eq!(
+        mint(&state.scene[0], 40).as_deref(),
+        Some(format!("pt3d_{loaded_hash}_40").as_str())
+    );
+
+    // Deleting an earlier point moves this one, so the save changes both halves
+    // of its id and neither can be right by accident.
+    state
+        .delete_point(PointRef::new(node_id, 3))
+        .expect("a live point");
+    state.save_node(node_id).expect("a writable path");
+
+    let saved_hash = disk_hash(&state);
+    assert_ne!(saved_hash, loaded_hash);
+    assert_eq!(
+        mint(&state.scene[0], 39).as_deref(),
+        Some(format!("pt3d_{saved_hash}_39").as_str())
+    );
+    // And the id taken before the save still resolves, through the lineage the
+    // save recorded.
+    assert_eq!(resolve(&state.scene[0], &loaded_hash, 40), Ok(39));
+}
+
+#[test]
+fn an_undo_past_a_save_puts_the_id_back_on_the_loaded_file() {
+    // The cursor is on a version the saved one is not an ancestor of, so the
+    // point's identity does not reach the disk version and the earliest rule
+    // takes over: the file the node was loaded from.
+    let dir = temp_dir("undo_past_save");
+    let mut state = state_from_file(&dir);
+    let node_id = id(&state);
+    let loaded_hash = disk_hash(&state);
+
+    state
+        .delete_point(PointRef::new(node_id, 3))
+        .expect("a live point");
+    state.save_node(node_id).expect("a writable path");
+    let saved_hash = disk_hash(&state);
+    assert_eq!(
+        mint(&state.scene[0], 39).as_deref(),
+        Some(format!("pt3d_{saved_hash}_39").as_str())
+    );
+
+    // Back to the value before the save materialised, where indexes are the
+    // loaded file's again.
+    state.undo(node_id).expect("the save's materialisation");
+
+    assert_eq!(
+        mint(&state.scene[0], 40).as_deref(),
+        Some(format!("pt3d_{loaded_hash}_40").as_str())
+    );
+}
+
+#[test]
+fn a_point_created_since_the_last_save_is_named_by_the_edit_that_made_it() {
+    // It is a row of no base, the one on disk included, so there is nothing for
+    // the disk rule to name it with and the creating edit's own hash is the
+    // earliest content its identity reaches.
+    let dir = temp_dir("created");
+    let mut state = state_from_file(&dir);
+    let record = state.scene[0]
+        .edited()
+        .point(5)
+        .expect("a live point")
+        .to_record();
+    let edit_hash = state.scene[0]
+        .edited()
+        .point_edit_hash(std::slice::from_ref(&record))
+        .expect("a hashable base");
+
+    // The shape a point-creating edit pushes: the same base, an overlay one
+    // point bigger, indexes stable across the step (so nothing stopped
+    // resolving), and the created index named on the version.
+    let node = &mut state.scene[0];
+    let mut next = node.history.current().clone();
+    let added = next.add_point(record).expect("a well-formed record");
+    node.history.push_creating(
+        next,
+        crate::document::PointMap::Removed(Vec::new()),
+        "Added a point",
+        Some(crate::document::CreatedPoints {
+            hash: edit_hash.clone(),
+            indexes: vec![added],
+        }),
+    );
+
+    // Position zero among that edit's creations, under the edit's hash.
+    assert_eq!(
+        mint(&state.scene[0], added).as_deref(),
+        Some(format!("pt3d_{}_0", &edit_hash[..HASH_PREFIX_LEN]).as_str())
+    );
+    // A point that *is* on disk is unaffected: the two rules coexist per point.
+    assert_eq!(
+        mint(&state.scene[0], 40).as_deref(),
+        Some(format!("pt3d_{}_40", disk_hash(&state)).as_str())
+    );
+    // And the edit hash resolves back to the point it named.
+    assert_eq!(
+        resolve(&state.scene[0], &edit_hash[..HASH_PREFIX_LEN], 0),
+        Ok(added)
+    );
 }

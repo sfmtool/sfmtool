@@ -73,7 +73,6 @@ fn a_full_point_id_parses_into_its_hash_and_index() {
         Ok(PointQuery::Qualified {
             hash: "a1b2c3d4".to_string(),
             index: 12345,
-            node: None,
         })
     );
 }
@@ -85,7 +84,6 @@ fn a_point_id_is_case_insensitive_and_normalizes_to_lowercase() {
     let expected = PointQuery::Qualified {
         hash: "a1b2c3d4".to_string(),
         index: 7,
-        node: None,
     };
     assert_eq!(parse_point_query("PT3D_A1B2C3D4_7"), Ok(expected.clone()));
     assert_eq!(parse_point_query("pt3d_A1b2C3d4_7"), Ok(expected));
@@ -101,7 +99,6 @@ fn a_full_32_character_hash_parses_too() {
         Ok(PointQuery::Qualified {
             hash: hash.to_string(),
             index: 9,
-            node: None,
         })
     );
 }
@@ -252,8 +249,9 @@ fn a_hash_that_matches_no_node_is_not_answered_by_the_selected_one() {
 
 #[test]
 fn the_selected_points_id_is_what_the_dialog_prefills_with() {
-    // The session form, minted by the earliest rule against the value's own
-    // hash rather than against whatever hash the file stored.
+    // Minted against the value's own hash rather than against whatever hash the
+    // file happened to store, and carrying nothing about which node it came
+    // from: the point is that content's row 17 wherever that content is loaded.
     let (mut state, _a, b) = two_nodes();
     state.select_point(PointRef::new(b, 17));
     let node = crate::scene::node_by_id(&state.scene, b).expect("the node");
@@ -261,7 +259,7 @@ fn the_selected_points_id_is_what_the_dialog_prefills_with() {
 
     assert_eq!(
         selected_point_id(&state.scene, state.selected_point),
-        Some(format!("pt3d_{hash}_17_n{}", b.raw()))
+        Some(format!("pt3d_{hash}_17"))
     );
 }
 

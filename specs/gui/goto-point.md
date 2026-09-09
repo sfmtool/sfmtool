@@ -2,9 +2,9 @@
 
 **Go to Point** is a dialog in the viewer for reaching a 3D point by naming it
 instead of finding it on screen. It takes a typed or pasted point index, or a
-whole portable point ID of the form `pt3d_<hash>_<index>` or
-`pt3d_<hash>_<index>_n<node>`, and selects that point -- switching the selected
-reconstruction when the ID names a different one.
+whole portable point ID of the form `pt3d_<hash>_<index>`, and selects that
+point -- switching the selected reconstruction when the ID names a different
+one.
 
 For the panel this most directly serves, see
 [point-track-detail.md](point-track-detail.md). For the ID format
@@ -87,9 +87,8 @@ and a selected field would delete the whole query on the next keystroke.
 
 #### Prefill and Selection on Open
 
-Opening the dialog puts the **currently selected point's ID** in the field, in
-the same session form the Point Track header displays, and selects the whole
-thing.
+Opening the dialog puts the **currently selected point's ID** in the field, as
+the Point Track header displays it, and selects the whole thing.
 
 Both halves matter, and the selection is the load-bearing one. A field that
 opens prefilled but unselected is actively worse than one that opens empty:
@@ -123,8 +122,7 @@ Two shapes, plus tolerance for how they get pasted:
 | Input | Meaning |
 |-------|---------|
 | `12345` | Point index in the **currently selected** reconstruction, as it stands: a coordinate in the value on screen, not a name to be resolved. |
-| `pt3d_a1b2c3d4_12345` | The **file form**: the point `a1b2c3d4` numbered `12345`, wherever a loaded node held that content. |
-| `pt3d_a1b2c3d4_12345_n3` | The **session form**: the same, in the node whose session id is `3`. |
+| `pt3d_a1b2c3d4_12345` | A **point ID**: the point numbered `12345` in the content `a1b2c3d4`, wherever a loaded node has held that content. |
 
 Tolerated without complaint:
 
@@ -151,14 +149,17 @@ a pasted ID move the whole session to a *different* loaded file -- the behaviour
 that makes an ID copied in one session useful in the next -- and what lets one
 copied before a run of edits still land after them.
 
-**Which node.** On the session form the node suffix picks the node outright,
-with no hash search. On the file form every loaded node's graph is searched for
-the hash, and the selected node is preferred among the matches: every match held
-the same content by definition, so the index means the same thing in each, and
-preferring the selected node keeps the answer where the user is already looking.
-The preference only breaks ties among real matches -- it never turns a miss into
-a hit. **A closed node is a miss**, and the message says so: the node the ID
-names may have been closed.
+**Which node.** Nothing in an ID names one. A point's identity is its content
+hash and its row in that content, which is the same pair in every node that
+holds that content, so which node to show is a question about the session rather
+than about the ID, and it is answered by the selection. The **selected node is
+tried first**, and then every other loaded node in scene order; the first that
+has held the content wins. Every match held the same content by definition, so
+the index means the same thing in each, and going to the selected node first
+just keeps the answer where the user is already looking. **A closed node is a
+miss**: the message names what was searched, so the answer says the ID's content
+is in none of these three loaded reconstructions rather than only that it was not
+found.
 
 **A bare index is still a coordinate**, not a name. It is used as it stands
 against the selected node's current value, with no hash to resolve and no walk
@@ -178,20 +179,22 @@ A point ID names a point by the **content that created it** and its place in
 that content, never by a counter or a session. Two forms carry that:
 
 ```
-pt3d_{hash}_{index}            file form
-pt3d_{hash}_{index}_n{node}    session form
+pt3d_{hash}_{index}
 ```
 
 | Part | Content | Example |
 |------|---------|---------|
 | `{hash}` | First 8 hex digits of the content hash of the base the ID is minted against, whether or not that base has been written to a file; or, for a point a point edit created, of that edit's content hash. | `a1b2c3d4` |
 | `{index}` | The point's index in that base; or, for a point a point edit created, its index among the points that edit created, numbered from zero in creation order. | `12345` |
-| `{node}` | The node's session id (its `ReconId`), decimal. | `3` |
 
-The session form stays inside the `[a-zA-Z0-9_]` class, so it double-click
-selects like the file form, and **the file form is the session form's prefix**:
-a session ID truncates to a file ID by dropping the last field. Both forms are
-minted and resolved in
+There is one form, and it carries nothing about the session it was copied in.
+A point's identity **is** its content hash and its row there, and that pair is
+the same in every node that holds that content, so a field naming a node would
+add nothing to the identity and would only say where one copy of the point
+happened to be looked at. Which node to show is a question about the session,
+and it is answered by the selection (§ "Resolution") rather than by the ID. The
+whole ID stays inside the `[a-zA-Z0-9_]` class, so it double-click selects. IDs
+are minted and resolved in
 [point_ids.rs](../../crates/sfm-explorer/src/point_ids.rs), over the version
 graph a node's `History` keeps
 ([document.rs](../../crates/sfm-explorer/src/document.rs)).
@@ -205,15 +208,31 @@ performs, so a discarded redo tail is still walkable and an ID minted on it
 still has somewhere to resolve.
 
 **Minting** walks back from the cursor, inverting each step's map as far as the
-point's identity reaches, and mints against the **earliest** content that
-identity reaches. A step that reports the point as not having existed before it
-is the step that created it, and the ID is that edit's content hash with the
-point's place among that edit's creations. Otherwise the walk runs out of graph,
-and the ID is the base content hash of the oldest version on the trail that
-still holds its value, with the index the point has in it; a version the budget
-released is skipped, since it has no columns to hash. The earliest ID is the one
-that resolves in the largest set of versions, which is what makes it the one
-worth copying.
+point's identity reaches, and then chooses which content on that walk to name.
+The rule is **the version on disk first, and the earliest content otherwise**.
+
+- **The version on disk** is the version the node was loaded at or last saved as
+  (`History::disk_serial`, [saving.md](saving.md)). If the point's identity
+  reaches it and the point is a row of its base, that base's hash and that row
+  are the ID. This is the ID a reader of the file on disk uses as it stands,
+  with no lineage to consult and no other file to find, and reaching the file on
+  disk is what someone copying an ID almost always wants it for.
+- **The earliest content** otherwise. A step that says it created the point ends
+  the walk, and the ID is that edit's content hash with the point's place among
+  that edit's creations. Otherwise the ID is the base content hash of the oldest
+  version on the trail that still holds its value, with the index the point has
+  in it; a version the budget released is skipped, since it has no columns to
+  hash.
+
+Three things fall to the second rule: a point created since the last save, which
+is a row of no base at all; a cursor on a branch the disk version is not an
+ancestor of, such as after an undo past a save; and a disk version the budget has
+released. None of those is a broken ID, only a weaker one, because the lineage a
+save records keeps an earlier content's IDs resolving in every file written
+afterwards ([the format spec's Lineage
+section](../formats/sfmr-file-format.md#lineage-version-9)). That is also why
+preferring the disk version costs nothing: the earlier ID a user already wrote
+down goes on working after the save that moved the displayed ID off it.
 
 **Resolving** finds the hash first and walks second. The hash is looked for
 among, in order: the point edits' hashes, the bases of the versions that still
@@ -270,9 +289,8 @@ pub enum PointQuery {
     /// A bare index — resolves against the selected reconstruction.
     Index(usize),
     /// A full `pt3d_<hash>_<index>` id -- the hash names the content the point
-    /// was minted against. `node` is `Some` for the session form, which names
-    /// the node outright instead of searching for the hash.
-    Qualified { hash: String, index: usize, node: Option<ReconId> },
+    /// was minted against, and the index its row there.
+    Qualified { hash: String, index: usize },
 }
 
 pub fn parse_point_query(input: &str) -> Result<PointQuery, String>;

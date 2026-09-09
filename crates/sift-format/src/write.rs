@@ -18,15 +18,25 @@ use crate::types::*;
 pub fn write_sift(path: &Path, data: &SiftData, zstd_level: i32) -> Result<(), SiftError> {
     let feature_count = data.metadata.feature_count as usize;
 
-    // Validate dimensions
+    // Validate dimensions before opening anything, so a rejected write leaves
+    // no file behind.
     validate_dimensions(data, feature_count)?;
 
-    let file = std::fs::File::create(path).map_err(|e| SiftError::IoPath {
-        operation: "Failed to create file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut zip = ZipWriter::new(file);
+    // Through a temporary file renamed over the target, so a failed write
+    // leaves the previous file intact rather than a truncated one. See
+    // `sfmtool_archive_io::write_atomically`.
+    sfmtool_archive_io::write_atomically(path, |file| write_sift_into(file, data, zstd_level))
+}
+
+/// Stream the archive into `writer`. The whole of the write but the choosing of
+/// where it lands.
+fn write_sift_into<W: std::io::Write + std::io::Seek>(
+    writer: W,
+    data: &SiftData,
+    zstd_level: i32,
+) -> Result<(), SiftError> {
+    let feature_count = data.metadata.feature_count as usize;
+    let mut zip = ZipWriter::new(writer);
 
     // Encode metadata to bytes and track for hashing
     let feature_tool_bytes = write_json_entry(

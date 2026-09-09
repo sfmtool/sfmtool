@@ -43,12 +43,21 @@ pub fn write_matches(path: &Path, data: &MatchesData, zstd_level: i32) -> Result
             source: e,
         })?;
     }
-    let file = std::fs::File::create(path).map_err(|e| MatchesError::IoPath {
-        operation: "Failed to create file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut zip = ZipWriter::new(file);
+    // Through a temporary file renamed over the target, so a failed write
+    // leaves the previous file intact rather than a truncated one. See
+    // `sfmtool_archive_io::write_atomically`.
+    sfmtool_archive_io::write_atomically(path, |file| write_matches_into(file, data, zstd_level))
+}
+
+/// Stream the archive into `writer`. The whole of the write but the choosing of
+/// where it lands.
+fn write_matches_into<W: std::io::Write + std::io::Seek>(
+    writer: W,
+    data: &MatchesData,
+    zstd_level: i32,
+) -> Result<(), MatchesError> {
+    let image_count = data.metadata.image_count as usize;
+    let mut zip = ZipWriter::new(writer);
     // Present-section digests, accumulated in the canonical order: metadata,
     // images, pairs, clusters, cluster_patches, two_view_geometries.
     let mut section_digests: Vec<u128> = Vec::with_capacity(6);

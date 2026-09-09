@@ -1915,13 +1915,6 @@ pt3d_{hash}_{index}
 
 **Example**: `pt3d_a1b2c3d4_12345`
 
-**A longer form.** A reader may meet an ID with a further underscore-separated
-field after the index, `pt3d_a1b2c3d4_12345_n3`. That trailing field identifies
-the point within an editing session that has not been written out, and means
-nothing to a file. A reader takes the ID's **file-form prefix** -- everything up
-to and including the index -- and treats the rest of the string as absent. The
-prefix is a well-formed Point ID, so nothing else about resolution changes.
-
 **An index out of range names a point the file does not contain.** The index is
 a row number in the points arrays, so an index at or past the file's
 `point_count` is not a point of that file at all -- it is a reference to
@@ -1930,6 +1923,16 @@ outlived. A reader **detects** that case and reports it, rather than reading
 another point: the number is in range for no row, and silently clamping it or
 wrapping it would answer a question about one point with the coordinates of
 another.
+
+Two ordinary sources of such an ID, both of which a reader meets rather than
+produces. An ID minted against a base with more points than the file it was
+eventually written as: the base is content that was never a file, and a row past
+this file's end is one the write dropped. And an ID whose `{hash}` names not a
+reconstruction but the set of points a single edit created, numbered from zero,
+in which case the index is a position in that numbering and no `content_xxh128`
+anywhere carries the hash. [Lineage](#lineage-version-9) is where both are
+resolved when the file records it, and the out-of-range report is the honest
+answer when it does not.
 
 ### Why `content_xxh128`
 

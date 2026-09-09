@@ -214,22 +214,25 @@ pub fn write_sfmr_with_options(
     data: &mut SfmrData,
     options: &WriteOptions,
 ) -> Result<(), SfmrError> {
-    write_sfmr_into(data, options, || {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| SfmrError::IoPath {
-                operation: "Failed to create parent directory",
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        let file = std::fs::File::create(path).map_err(|e| SfmrError::IoPath {
-            operation: "Failed to create file",
-            path: path.to_path_buf(),
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SfmrError::IoPath {
+            operation: "Failed to create parent directory",
+            path: parent.to_path_buf(),
             source: e,
         })?;
-        Ok(ArchiveSink {
-            zip: ZipWriter::new(file),
-            zstd_level: options.zstd_level,
+    }
+    // Through a temporary file in the target's directory, renamed over the
+    // target only once the whole archive is on disk. A save whose target is the
+    // file it is replacing would otherwise truncate that file at the moment it
+    // opened it, and a failure anywhere in the write would leave a partial
+    // archive where the only copy was. See `sfmtool_archive_io::write_atomically`
+    // and `specs/formats/archive-container.md`.
+    sfmtool_archive_io::write_atomically(path, |file| {
+        write_sfmr_into(data, options, || {
+            Ok(ArchiveSink {
+                zip: ZipWriter::new(file),
+                zstd_level: options.zstd_level,
+            })
         })
     })?;
     Ok(())

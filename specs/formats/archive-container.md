@@ -176,6 +176,8 @@ pub fn write_binary_entry<W: Write + Seek>(
 pub fn write_binary_entry_hashed<W: Write + Seek>(
     zip: &mut ZipWriter<W>, name: &str, data: &[u8], zstd_level: i32, hasher: &mut Xxh3)
     -> Result<(), ArchiveIoError>;
+pub fn write_atomically<T, E: From<std::io::Error>, F: FnOnce(&mut File) -> Result<T, E>>(
+    path: &Path, write: F) -> Result<T, E>;
 
 // Hashing
 pub fn format_hash(digest: u128) -> String;                   // 32-char lowercase hex
@@ -191,7 +193,28 @@ what the crate owns. Pushing the entry table up here would mean a schema
 description language, and every format crate would then be a client of it rather
 than of a few functions.
 
-Three consequences of that choice are visible in the signatures:
+**A write never leaves a partial file at its target.** `write_atomically` is the
+one piece of the writing surface that is not entry-at-a-time, and every format's
+`write_*` entry point goes through it. It creates `<file name>.tmp<hex>` in the
+**target's own directory**, hands the handle to the closure that streams the
+whole archive, flushes and syncs it, and only then renames it over the target;
+the temporary file is in that directory rather than a system temp one so the last
+step is a rename on one filesystem rather than a copy across two, and `rename`
+replaces an existing target on every platform this builds for. Any failure, a
+panic unwinding out of the closure included, removes the temporary file and
+leaves the target exactly as it was. A **missing parent directory is an error**,
+as it is for a direct write: whether a path inside one should bring it into
+existence is a decision about what that path means, and it stays with the format
+crate, some of which create the parent first and some of which deliberately do
+not. The reason it is here rather than in one
+format crate is that the situation is every format's: a writer's target is often
+the only copy of what it is replacing, and a plain `File::create` truncates that
+copy at the moment it opens it, so a failure part-way through leaves a partial
+archive where the original was. The in-memory hashing path, which serialises into
+a buffer to compute a content hash without writing anything, does not go through
+it and is unaffected.
+
+Three consequences of the entry-at-a-time choice are visible in the signatures:
 
 - **The caller owns the hasher.** `write_binary_entry_hashed` takes
   `&mut Xxh3` and updates it with the uncompressed bytes; it does not decide what

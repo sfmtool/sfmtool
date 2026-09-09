@@ -223,8 +223,10 @@ fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
 
 #[test]
 fn an_id_from_before_a_save_still_resolves_after_it() {
-    // The earliest rule and the lineage together: the id shown for a point does
-    // not move across the save, and pasting the one taken before it still lands.
+    // What the lineage is for. The id a point is *shown* under moves onto the
+    // file just written, since that is the file a reader now has; the id taken
+    // before the save keeps landing on the same point, because the save recorded
+    // where the earlier content's rows went.
     let dir = temp_dir("ids");
     let (mut state, id, _) = state_from_file(&dir);
     let before = crate::scene::point_id(&state.scene[0], 40);
@@ -235,12 +237,11 @@ fn an_id_from_before_a_save_still_resolves_after_it() {
     state.save_node(id).expect("a writable path");
 
     let node = &state.scene[0];
-    // Row 40 shifted down to 39 in the written file, and the id did not move.
-    assert_eq!(crate::scene::point_id(node, 39), before);
-    let hash = before
-        .split('_')
-        .nth(1)
-        .expect("pt3d_<hash>_<index>_n<node>");
+    // Row 40 shifted down to 39 in the written file, and the id follows it there.
+    let after = crate::scene::point_id(node, 39);
+    assert_ne!(after, before);
+    assert!(after.ends_with("_39"), "{after}");
+    let hash = before.split('_').nth(1).expect("pt3d_<hash>_<index>");
     assert_eq!(crate::point_ids::resolve(node, hash, 40), Ok(39));
 }
 

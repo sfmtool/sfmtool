@@ -3048,3 +3048,43 @@ fn metadata_with_no_lineage_key_reads_as_an_empty_list() {
     let json = serde_json::to_string(&data.metadata).unwrap();
     assert!(json.contains("\"form\":\"monotone\""), "{json}");
 }
+
+// ── Atomic writes ───────────────────────────────────────────────────────
+
+#[test]
+fn a_write_that_fails_leaves_an_existing_file_byte_identical() {
+    // The case that matters is a save over the file it is replacing: the target
+    // is the only copy, so a writer that truncated it on open would destroy it
+    // on any failure. What this asserts is that `write_sfmr` goes through the
+    // temporary file and cleans it up: the previous bytes are still there and
+    // nothing is left beside them. The failure *after* bytes have been streamed
+    // is asserted where it can be injected, in
+    // `sfmtool-archive-io`'s `a_failed_write_leaves_the_previous_target_untouched`.
+    let dir = std::env::temp_dir().join("sfmr_test_atomic_write");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("recon.sfmr");
+
+    let mut good = make_test_data();
+    write_sfmr(&path, &mut good).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    // A value the writer rejects: the metadata's point count disagrees with the
+    // arrays, which validation catches after the target would have been opened.
+    let mut bad = make_test_data();
+    bad.metadata.point_count += 7;
+    let error = write_sfmr(&path, &mut bad).expect_err("dimension validation");
+
+    assert!(
+        std::fs::read(&path).unwrap() == before,
+        "the previous file survived the failed write ({error})"
+    );
+    // And nothing was left lying beside it.
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, vec!["recon.sfmr".to_string()], "{names:?}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

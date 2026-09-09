@@ -50,12 +50,6 @@ impl ReconId {
         Self(NEXT_RECON_ID.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// This id as the decimal number the session form of a Point ID carries in
-    /// its `_n{node}` suffix.
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-
     /// A chosen id, for tests that need a fixture and an assertion to agree on
     /// one. Test-only on purpose: in the app, ids are handed out by
     /// [`ReconId::next`] and never picked.
@@ -649,16 +643,16 @@ pub fn hash_prefix(node: &SceneNode) -> String {
     crate::point_ids::base_hash_prefix(node.edited()).unwrap_or_else(|| "00000000".to_string())
 }
 
-/// The copyable point id the Point Track panel shows, in the session form
-/// `pt3d_<hash>_<index>_n<node>`.
+/// The copyable point id the Point Track panel shows, `pt3d_<hash>_<index>`.
 ///
-/// Minted by the earliest rule ([`crate::point_ids::mint`]), so it is the id of
-/// the earliest content the point reaches rather than a coordinate in whatever
-/// the node is showing now. Falls back to the plain coordinate for a point the
-/// walk cannot name, which keeps the panel showing an id of the right shape.
+/// Minted by [`crate::point_ids::mint`], so it names the content the point is on
+/// disk in when it is in one, and the earliest content it reaches otherwise --
+/// rather than a coordinate in whatever the node is showing now. Falls back to
+/// the plain coordinate for a point the walk cannot name, which keeps the panel
+/// showing an id of the right shape.
 pub fn point_id(node: &SceneNode, point_idx: usize) -> String {
     u32::try_from(point_idx)
         .ok()
         .and_then(|index| crate::point_ids::mint(node, index))
-        .unwrap_or_else(|| format!("pt3d_{}_{point_idx}_n{}", hash_prefix(node), node.id.raw()))
+        .unwrap_or_else(|| format!("pt3d_{}_{point_idx}", hash_prefix(node)))
 }

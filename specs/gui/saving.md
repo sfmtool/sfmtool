@@ -34,9 +34,9 @@ produced -- with the hover text `The selected reconstruction came from no file
 item away, so the item says which one rather than opening a dialog the user did
 not ask for.
 
-**Save As uses the same native file dialog `File > Open` uses**, so choosing
-where a reconstruction goes looks like choosing where one comes from. On a
-chosen path it writes, then sets the node's `path` to that path and the node's
+**Save As asks for the path through the platform's native save dialog**, the
+counterpart of the native open dialog `File > Open` uses, filtered to `.sfmr`.
+On a chosen path it writes, then sets the node's `path` to that path and the node's
 `label` to the new file's stem, so the tree row, the window title and every
 label-addressed operation name the file the node is now attached to. **A
 dismissed dialog writes nothing and logs nothing**: cancelling a file picker is
@@ -77,6 +77,14 @@ and all, and mints no version. It is already the content its hash names: a
 second stamping would change the content the hash was taken over, and a version
 identical to the one before it would say that something happened when nothing
 did.
+
+**A save never leaves a partial file at the node's path.** The write goes to a
+temporary file in the target's directory and is renamed over the target only once
+the whole archive is on disk, so the path holds either the previous
+reconstruction or the new one and never a prefix of the new one
+([archive-container.md](../formats/archive-container.md) § "Rust API"). Save over
+the node's own path is exactly the case that needs it: the file being written is
+the only copy of the one being replaced.
 
 After the write, `History::set_disk_serial` names the version that reached the
 disk, and the Edit History panel's disk mark follows it
@@ -142,11 +150,12 @@ the node inside the history budget, or the write itself failed.
 
 `crates/sfm-explorer/src/state/save/tests.rs` covers the save path headlessly:
 that a loaded node starts clean and an edit makes it dirty, and that a node from
-no file is dirty and offers only Save As; that a save with an overlay
+no file offers only Save As; that a save with an overlay
 materialises into a version the cursor sits on, stamps the provenance it hashed,
 and records the lineage of the base it came from; that a point id minted before
-a save still resolves after it, which is what the stamping order and the lineage
-are for; that a save with no overlay writes the value and mints nothing; that
+a save still resolves after it, which is what the lineage is for, while the id
+the panels *show* moves onto the file just written; that a save with no overlay
+writes the value and mints nothing; that
 Save As writes elsewhere and re-points the node; that a save writes one log entry
 naming the path and the version; that a failed write is refused with a reason and
 changes nothing; and that the window title marks the first node while it is

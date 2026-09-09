@@ -34,14 +34,21 @@ pub(crate) fn write_camrig_unchecked(
     data: &CamRigData,
     zstd_level: i32,
 ) -> Result<(), CamRigError> {
-    let s = data.sensor_count();
+    // Through a temporary file renamed over the target, so a failed write
+    // leaves the previous file intact rather than a truncated one. See
+    // `sfmtool_archive_io::write_atomically`.
+    sfmtool_archive_io::write_atomically(path, |file| write_camrig_into(file, data, zstd_level))
+}
 
-    let file = std::fs::File::create(path).map_err(|e| CamRigError::IoPath {
-        operation: "Failed to create file",
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    let mut zip = ZipWriter::new(file);
+/// Stream the archive into `writer`. The whole of the write but the choosing of
+/// where it lands.
+fn write_camrig_into<W: std::io::Write + std::io::Seek>(
+    writer: W,
+    data: &CamRigData,
+    zstd_level: i32,
+) -> Result<(), CamRigError> {
+    let s = data.sensor_count();
+    let mut zip = ZipWriter::new(writer);
 
     // metadata.json
     let metadata_bytes =

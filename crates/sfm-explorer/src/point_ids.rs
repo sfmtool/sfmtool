@@ -4,24 +4,23 @@
 //! Point ids over a node's version graph: which id a point is shown under, and
 //! which point an id names.
 //!
-//! See `specs/gui/goto-point.md` and the format spec's Point ID section. An id
-//! is a content hash and a row index in the content that hash identifies:
-//!
-//! ```text
-//! pt3d_{hash}_{index}            file form
-//! pt3d_{hash}_{index}_n{node}    session form
-//! ```
+//! See `specs/gui/goto-point.md` and the format spec's Point ID section. There
+//! is one form, `pt3d_{hash}_{index}`: a content hash and a row index in the
+//! content that hash identifies. A point's identity is exactly that pair, and it
+//! is the same pair in every node that holds that content, so nothing in an id
+//! names a node and which node to show is settled by the selection.
 //!
 //! A node edits its reconstruction, so the content an index is a row of changes
-//! under the id. Two rules keep an id meaning one point anyway, and this module
+//! under the id. Two walks keep an id meaning one point anyway, and this module
 //! is the two of them:
 //!
-//! - [`mint`] applies the **earliest rule**. The id shown for a point is its
-//!   coordinate not in the value at the cursor but in the earliest content its
-//!   identity reaches: the walk goes back through the version graph's maps as
-//!   far as the point goes, and names the base, or the point edit, it stops at.
-//!   For a point that came out of the file the node was loaded from, that is the
-//!   id that file's readers already use, and no edit, undo or save changes it.
+//! - [`mint`] chooses the content to name. **The version on disk first**: if the
+//!   point's identity reaches the version the node was loaded at or last saved
+//!   as, and that version is a base, the id is that base's hash and the point's
+//!   row in it, so the id resolves straight in the file on disk with nothing to
+//!   consult. **Otherwise the earliest rule**: the walk goes back through the
+//!   version graph's maps as far as the point's identity reaches and names the
+//!   base, or the point edit, it stops at.
 //! - [`resolve`] walks the other way. It finds the hash among the node's bases,
 //!   its point edits and its bases' recorded lineage, and follows the point from
 //!   there to the cursor -- backward out of a branch an undo discarded and then
@@ -70,67 +69,122 @@ fn full_base_hash(edited: &EditedReconstruction) -> Option<&str> {
     (hash.len() == HASH_LEN).then_some(hash.as_str())
 }
 
-/// The id `node` shows for the point at `index` in the value at its cursor, in
-/// the session form.
+/// The id `node` shows for the point at `index` in the value at its cursor.
 ///
-/// `None` when `index` names no live point of that value, or when the earliest
-/// content the point reaches can no longer be hashed because the budget released
-/// it and every version after it too.
+/// **The version on disk first.** If the point's identity reaches the version
+/// the node was loaded at or last saved as, and it is a row of that version's
+/// base, the id is that base's hash and that row. That is the id a reader of the
+/// file on disk uses as it stands, with no lineage to consult and no other file
+/// to find, which is what someone copying an id out of the viewer almost always
+/// wants it for.
+///
+/// **The earliest content otherwise**, which is the case for a point created
+/// since the last save (named by the edit that created it), for a cursor on a
+/// branch the disk version is not an ancestor of, such as after an undo past a
+/// save, and for a disk version the budget has released. The lineage a save
+/// records keeps an earlier id resolving in every file written afterwards, so
+/// this is a weaker id than the disk one rather than a broken one.
+///
+/// `None` when `index` names no live point of the value at the cursor, or when
+/// no content the point reaches can still be hashed.
 pub fn mint(node: &SceneNode, index: u32) -> Option<String> {
-    let (hash, index) = earliest(node, index)?;
-    Some(format!(
-        "pt3d_{}_{index}_n{}",
-        &hash[..HASH_PREFIX_LEN],
-        node.id.raw()
-    ))
+    let Reached { chain, created } = walk_back(node, index)?;
+
+    let disk = node.history.disk_serial();
+    let on_disk = chain
+        .iter()
+        .find(|(serial, _)| *serial == disk)
+        .and_then(|(serial, index)| base_named(node, *serial, *index));
+
+    let (hash, index) = on_disk.or_else(|| {
+        // The earliest content the identity reaches. A creating edit is
+        // before every base on the chain, so it wins when there is one.
+        created.or_else(|| {
+            chain
+                .iter()
+                .rev()
+                .find_map(|(serial, index)| base_named(node, *serial, *index))
+        })
+    })?;
+    Some(format!("pt3d_{}_{index}", &hash[..HASH_PREFIX_LEN]))
 }
 
-/// The earliest content the point at `index` reaches, as `(hash, index in it)`.
+/// A content hash and the index the point has in it. What an id is made of, and
+/// what both of [`mint`]'s rules produce.
+type Named = (String, u32);
+
+/// What walking back from the cursor found.
+struct Reached {
+    /// `(version, index in it)` newest first, holding every version in which the
+    /// point has an index.
+    chain: Vec<(VersionSerial, u32)>,
+    /// The edit that created the point, when the walk reached one.
+    created: Option<Named>,
+}
+
+/// The chain of versions the point at `index` reaches, walking back from the
+/// cursor, and the edit that created it when the walk found one.
 ///
-/// The walk inverts one step at a time. A step that reports the point as not
-/// having existed before it is the step that created it, and a created point is
-/// named by the edit's own hash and its place among that edit's creations. When
-/// the walk instead runs out of graph it has reached the node's first version,
-/// and the point is a row of some base along the way -- the oldest one that
-/// still holds its value, since a released version has no columns to hash.
-fn earliest(node: &SceneNode, index: u32) -> Option<(String, u32)> {
+/// The walk inverts one step at a time; a step that says it created the point
+/// ends the chain and names the creating edit. Both halves are returned because
+/// the two rules in [`mint`] want different parts of the same walk.
+fn walk_back(node: &SceneNode, index: u32) -> Option<Reached> {
     let history = &node.history;
-    // The trail from the cursor backwards, newest first.
-    let mut trail = vec![(history.current_version().serial, index)];
+    let mut chain = vec![(history.current_version().serial, index)];
     loop {
-        let (serial, index) = *trail.last().expect("seeded with the cursor");
+        let (serial, index) = *chain.last().expect("seeded with the cursor");
+        // What a step says it created is asked first, and is authoritative. A
+        // map may or may not report a created row as having no predecessor --
+        // one whose indexes are stable across the edit reports every index as
+        // surviving, since none of them stopped resolving -- so the created list
+        // is the only place that always knows.
+        if let Some(created) = history.created_by(serial) {
+            if let Some(k) = created.indexes.iter().position(|&i| i == index) {
+                return Some(Reached {
+                    chain,
+                    created: Some((created.hash.clone(), k as u32)),
+                });
+            }
+        }
         let Some(parent) = history.parent_of(serial) else {
-            break;
+            return Some(Reached {
+                chain,
+                created: None,
+            });
         };
         let Some(map) = history.map_between(parent, serial) else {
-            break;
+            return Some(Reached {
+                chain,
+                created: None,
+            });
         };
         match map.inverse(index) {
-            Some(before) => trail.push((parent, before)),
+            Some(before) => chain.push((parent, before)),
+            // The step created the point and said nothing about it, which the
+            // check above has already ruled out for a step that names its
+            // creations. There is no earlier content to walk to.
             None => {
-                // This step is where the point began. It is in no base, so it
-                // is named by the edit that made it.
-                let created = history.created_by(serial)?;
-                let k = created.indexes.iter().position(|&i| i == index)?;
-                return Some((created.hash.clone(), k as u32));
+                return Some(Reached {
+                    chain,
+                    created: None,
+                })
             }
         }
     }
-    // Oldest first, so the first base that can answer is the earliest one.
-    for (serial, index) in trail.iter().rev() {
-        let Some(value) = value_at(node, *serial) else {
-            continue;
-        };
-        if (*index as usize) >= value.base_point_count() {
-            // An addition of that version's overlay, which only a created-point
-            // edit produces and which the loop above has already named.
-            continue;
-        }
-        if let Some(hash) = full_base_hash(value) {
-            return Some((hash.to_string(), *index));
-        }
-    }
-    None
+}
+
+/// `(hash, row)` when version `serial` still holds a value and `index` is a row
+/// of its base.
+///
+/// `None` for a version the budget has released, which has no columns to hash,
+/// and for an index that is an addition of that version's overlay rather than a
+/// row of its base, which only a created-point edit produces and which [`mint`]
+/// names through the creating edit instead.
+fn base_named(node: &SceneNode, serial: VersionSerial, index: u32) -> Option<(String, u32)> {
+    let value = value_at(node, serial)?;
+    ((index as usize) < value.base_point_count())
+        .then(|| full_base_hash(value).map(|hash| (hash.to_string(), index)))
+        .flatten()
 }
 
 /// The value of the version `serial`, when the budget has not released it.
@@ -269,14 +323,4 @@ fn locate(
 /// Whether `hash` is a prefix of `full`, ignoring case.
 fn starts_with(full: &str, hash: &str) -> bool {
     full.len() >= hash.len() && full[..hash.len()].eq_ignore_ascii_case(hash)
-}
-
-/// The node number an id's `_n{node}` suffix names.
-///
-/// A number rather than a [`crate::scene::ReconId`]: an id from another session
-/// can carry a number no node here was ever handed, so a query is matched
-/// against the loaded nodes' [`crate::scene::ReconId::raw`] rather than turned
-/// into an id of its own.
-pub fn parse_node_suffix(text: &str) -> Option<u32> {
-    text.strip_prefix('n')?.parse::<u32>().ok()
 }
