@@ -4,6 +4,7 @@
 //! SfM reconstruction: the [`SfmrReconstruction`] data type plus per-point
 //! operations (triangulation, filtering, correspondence).
 
+pub mod add_observation;
 pub(crate) mod data;
 mod edit;
 pub mod edited;
@@ -12,6 +13,10 @@ pub mod filter;
 pub mod point_correspondence;
 pub mod point_estimation;
 pub mod triangulation;
+
+pub use add_observation::{
+    add_observation, AddObservationError, AddObservationOptions, AddObservationReport,
+};
 
 pub use edited::{
     EditError, EditedReconstruction, PointRecord, PointView, RecordObservation, RowMap,
