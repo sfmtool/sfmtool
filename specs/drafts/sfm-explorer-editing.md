@@ -22,7 +22,7 @@ The document model itself is built and standing:
 [`../gui/document-model.md`](../gui/document-model.md) describes the node's
 versions, the two kinds of edit and the identity-based upload, and
 [`../gui/edit-history.md`](../gui/edit-history.md) the cursor, the maps and the
-History panel. What is left here is what is built on top of it: saving, the
+Edit History panel. What is left here is what is built on top of it: saving, the
 edit families and the wire surface. Not decided: what the row-level edit draft
 leaves open.
 
@@ -188,10 +188,10 @@ first one that does, a pose drag in Part 5, is where it lands.
 Built and standing: [`../gui/edit-history.md`](../gui/edit-history.md), "The
 Action Log", and the log spec's own non-goal.
 
-### The History panel
+### The Edit History panel
 
 Built and standing: [`../gui/edit-history.md`](../gui/edit-history.md), "The
-History panel" for the tab and its rows and "Jumping to a version" for what a
+Edit History panel" for the tab and its rows and "Jumping to a version" for what a
 click does, and [`../gui/panel-layout.md`](../gui/panel-layout.md) for the tab
 itself. The row it marks as the disk state is the version the node was loaded
 at, which is what a save moves.

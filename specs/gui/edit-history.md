@@ -14,7 +14,7 @@ through an edit that renumbered the cloud around it, and comes back to the same
 point when the edit is undone.
 
 This spec describes the cursor's behaviour, the maps, what follows them, and the
-History panel the list is read and walked in. What
+Edit History panel the list is read and walked in. What
 a version *is*, and how an edit is applied, is
 [document-model.md](document-model.md).
 
@@ -129,25 +129,25 @@ addressed. It asks for no confirmation: it is an edit with a history behind it,
 and undo is the answer to a mis-click. The resections beside it show their answer
 as a second node precisely because they are not edits and cannot be undone.
 
-## The History panel
+## The Edit History panel
 
-A dock tab, **History**, registered with the panel layout like every other panel
-([panel-layout.md](panel-layout.md)): it is in the Panels menu, in the stock
-grid behind the Image Browser and the Action Log, and a layout file spells it
-`history`. It shows the **selected** node's history, since that is the node the
-Edit menu and its shortcuts act on.
+A dock tab, **Edit History**, registered with the panel layout like every other
+panel ([panel-layout.md](panel-layout.md)): it is in the Panels menu, in the
+stock grid behind the Image Browser and the Action Log, and a layout file spells
+it `edit_history`. It shows the **selected** node's history, since that is the
+node the Edit menu and its shortcuts act on.
 
-The panel is [history_panel.rs](../../crates/sfm-explorer/src/history_panel.rs),
+The panel is [edit_history_panel.rs](../../crates/sfm-explorer/src/edit_history_panel.rs),
 one function over `&AppState` that reports what was clicked:
 
 ```rust
 /// What the panel reports back to the dock.
-pub(crate) struct HistoryResponse {
+pub(crate) struct EditHistoryResponse {
     /// The version a click asked for, and the node it belongs to.
     pub jump: Option<(ReconId, VersionSerial)>,
 }
 
-pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> HistoryResponse;
+pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> EditHistoryResponse;
 ```
 
 It keeps no state of its own, so there is nothing of the panel's to lose when it
@@ -272,7 +272,7 @@ naming the two serials, and the refusals -- a released version, a version behind
 a released one, the cursor's own version, and a serial belonging to another
 node -- each leaving the cursor and the log untouched.
 
-`crates/sfm-explorer/src/history_panel/tests.rs` runs the panel through
+`crates/sfm-explorer/src/edit_history_panel/tests.rs` runs the panel through
 `Context::run_ui` and reads the strings it painted: the rows in oldest-first
 order with the cursor and disk marks on the right ones, the mark following an
 undo, a released row listing and saying so, the two empty states, and a

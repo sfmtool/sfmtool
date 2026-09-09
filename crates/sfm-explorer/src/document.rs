@@ -225,7 +225,7 @@ impl History {
     ///
     /// It is the version the node was loaded at until something writes the
     /// node out; a save moves it with [`History::set_disk_serial`], and the
-    /// History panel marks whichever version it names.
+    /// Edit History panel marks whichever version it names.
     pub fn disk_serial(&self) -> VersionSerial {
         self.disk_serial
     }

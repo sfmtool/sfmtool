@@ -657,25 +657,25 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     );
 }
 
-/// The History panel reaches a real window: with a node loaded it lists that
+/// The Edit History panel reaches a real window: with a node loaded it lists that
 /// node's one version, the file as it was opened.
 ///
 /// The panel is put in front by a default layout file naming it alone, as the
 /// startup-load test above puts the Action Log there: the stock grid keeps the
-/// History tab behind the Image Browser, and `egui_dock`'s tab bar is painted
+/// Edit History tab behind the Image Browser, and `egui_dock`'s tab bar is painted
 /// rather than built out of widgets, so there is no tab in the accessibility
 /// tree to press. A layout file is the deterministic way in, since the panel is
 /// in front from the viewer's first frame. Everything the panel decides is
-/// exercised headlessly in `history_panel/tests.rs`.
+/// exercised headlessly in `edit_history_panel/tests.rs`.
 #[test]
-fn the_history_panel_lists_the_loaded_version() {
+fn the_edit_history_panel_lists_the_loaded_version() {
     let (_file, lock) = DefaultLayoutFile::written(
         r#"{
   "sfm_explorer_layout": 2,
   "layout": {
     "main": {
-      "tabs": ["history"],
-      "active": "history"
+      "tabs": ["edit_history"],
+      "active": "edit_history"
     },
     "windows": []
   }
@@ -695,7 +695,7 @@ fn the_history_panel_lists_the_loaded_version() {
     ] {
         app.locator(&format!(r#"static_text[name="{text}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
-            .unwrap_or_else(|_| panic!("History panel text '{text}' did not appear"));
+            .unwrap_or_else(|_| panic!("Edit History panel text '{text}' did not appear"));
     }
 }
 

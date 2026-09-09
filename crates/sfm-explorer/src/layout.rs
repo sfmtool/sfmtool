@@ -178,7 +178,7 @@ const GROUPS: [&[Tab]; 2] = [
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
     ],
-    &[Tab::ImageBrowser, Tab::ActionLog, Tab::History],
+    &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
 impl Tab {
@@ -191,7 +191,7 @@ impl Tab {
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
         Tab::ActionLog,
-        Tab::History,
+        Tab::EditHistory,
     ];
 
     /// The panel's name on the wire: its title, lower-cased and joined with
@@ -205,7 +205,7 @@ impl Tab {
             Tab::PointTrackDetail => "point_track",
             Tab::IntrinsicsDetail => "camera_intrinsics",
             Tab::ActionLog => "action_log",
-            Tab::History => "history",
+            Tab::EditHistory => "edit_history",
         }
     }
 
@@ -232,7 +232,7 @@ impl Tab {
                 edge: Split::Left,
                 share: 0.18,
             },
-            Tab::ImageBrowser | Tab::ActionLog | Tab::History => Home::Edge {
+            Tab::ImageBrowser | Tab::ActionLog | Tab::EditHistory => Home::Edge {
                 edge: Split::Below,
                 share: 0.20,
             },
@@ -262,7 +262,7 @@ impl Default for Layout {
     /// ┌────────┬──────────────────┬───────────────┐
     /// │        │    3D Viewer     │ Image Detail  │
     /// │ Scene  ├──────────────────┴───────────────┤
-    /// │        │ Image Browser │ Action Log │ History │
+    /// │        │ Image Browser │ Action Log │ Edit History │
     /// └────────┴──────────────────────────────────┘
     /// ```
     ///
@@ -270,7 +270,7 @@ impl Default for Layout {
     /// tree is a list of short labels and everything else in the window wants
     /// the width. Two nodes hold more than one tab, and in both the first is
     /// the active one: the bottom node opens on the Image Browser with the
-    /// Action Log and the History behind it, and the right-hand node on Image
+    /// Action Log and the Edit History behind it, and the right-hand node on Image
     /// Detail.
     ///
     /// `Layout::default().to_dock()` is what the viewer starts with, and what
@@ -297,7 +297,7 @@ impl Default for Layout {
                     second: Box::new(LayoutNode::leaf(&[
                         Tab::ImageBrowser,
                         Tab::ActionLog,
-                        Tab::History,
+                        Tab::EditHistory,
                     ])),
                 }),
             }),

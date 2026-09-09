@@ -30,7 +30,7 @@ root, and everything below describes the arrangement to its right.
 │       │                          │              │
 │       │                          │              │
 │       ├──────────────────────────┴──────────────┤
-│       │ [Image Browser] [Action Log] [History]  │
+│       │[Image Browser][Action Log][Edit History]│
 │       │ ◀ [img01] [img02] [img03] [img04] ... ▶ │
 └───────┴─────────────────────────────────────────┘
 ```
@@ -42,8 +42,8 @@ root, and everything below describes the arrangement to its right.
   and Camera Intrinsics. Full-resolution image of the selected camera.
 - **Image Browser**: bottom strip, full width, ~20% of the height.
   Horizontally-scrollable strip of 128×128 thumbnails. It shares its tab group
-  with the **Action Log** ([action-log.md](action-log.md)) and the **History**
-  panel ([edit-history.md](edit-history.md)), and is the active
+  with the **Action Log** ([action-log.md](action-log.md)) and the **Edit
+  History** panel ([edit-history.md](edit-history.md)), and is the active
   member, so the viewer opens on the strip.
 
 Since we use `egui_dock`, the user can re-dock any panel anywhere (float, reorder tabs,

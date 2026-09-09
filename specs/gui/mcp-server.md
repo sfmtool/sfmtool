@@ -205,7 +205,7 @@ argument `reconstruction_label`.
 
 The eight names are the layout file's, and there is no second spelling of them
 anywhere: `scene`, `viewer_3d`, `image_browser`, `image_detail`, `point_track`,
-`camera_intrinsics`, `action_log`, `history` (`Tab::wire_name`). An unknown name is
+`camera_intrinsics`, `action_log`, `edit_history` (`Tab::wire_name`). An unknown name is
 refused with a message listing all eight (`Tab::all_wire_names`). `Tab` stays
 the Rust name — it is `egui_dock`'s word for the thing in a node, and the code
 is not the wire.
@@ -1059,7 +1059,7 @@ Where the window is, and which panels are where. No arguments.
     "point_track":       { "open": true,  "active": false },
     "camera_intrinsics": { "open": true,  "active": false },
     "action_log":        { "open": true,  "active": false },
-    "history":           { "open": true,  "active": false }
+    "edit_history":      { "open": true,  "active": false }
   }
 }
 ```

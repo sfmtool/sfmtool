@@ -47,8 +47,8 @@ image and zoom it had when it closed. This is the same mechanism that already
 covers a tab behind another tab in the same node.
 
 Two panels have no struct at all: the Action Log draws the log itself, and the
-History panel draws the selected node's history
-([edit-history.md](edit-history.md) § "The History panel"). Both are functions
+Edit History panel draws the selected node's history
+([edit-history.md](edit-history.md) § "The Edit History panel"). Both are functions
 over state that lives elsewhere, so there is nothing of theirs for a close to
 keep or lose.
 
@@ -65,7 +65,7 @@ Panels
     Point Track
     Camera Intrinsics
     Action Log
-    History
+    Edit History
   ─────────────
     Reset Layout
   ─────────────
@@ -114,8 +114,8 @@ as nearly as the current arrangement allows. Three rules, tried in order:
 2. **A default group-mate is open:** push it into that node, behind the
    current tabs, then make it active. The default layout has two multi-tab
    groups — Image Detail / Point Track / Camera Intrinsics, and Image Browser /
-   Action Log / History — and a panel from either goes home to whichever of its
-   group-mates is still there.
+   Action Log / Edit History — and a panel from either goes home to whichever
+   of its group-mates is still there.
 3. **Otherwise, split the main surface's root** along the panel's home edge,
    at its home fraction, and put the panel in the new node:
 
@@ -123,7 +123,7 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    |-------|-----------|------------------|
    | Scene | left | 0.18 |
    | 3D Viewer | *(takes the root)* | — |
-   | Image Browser, Action Log, History | below | 0.20 |
+   | Image Browser, Action Log, Edit History | below | 0.20 |
    | Image Detail, Point Track, Camera Intrinsics | right | 0.33 |
 
    "Takes the root" for the 3D Viewer means: if the dock is empty it becomes
@@ -204,7 +204,7 @@ observed a window (a headless `AppState`):
           }
         },
         "second": {
-          "tabs": ["image_browser", "action_log", "history"],
+          "tabs": ["image_browser", "action_log", "edit_history"],
           "active": "image_browser"
         }
       }
@@ -373,7 +373,7 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | `point_track` | `PointTrackDetail` | Point Track |
 | `camera_intrinsics` | `IntrinsicsDetail` | Camera Intrinsics |
 | `action_log` | `ActionLog` | Action Log |
-| `history` | `History` | History |
+| `edit_history` | `EditHistory` | Edit History |
 
 The word is **panel**, on the wire as in the specs, which use it several hundred
 times against a handful of "pane". `Tab` stays the Rust name: it is
@@ -436,7 +436,7 @@ each with its message:
   be an arrangement, null, or "default"`.
 - Inside `layout`: every panel name is one of the eight (`unknown panel
   "viewer3d"; the panels are scene, viewer_3d, image_browser, image_detail,
-  point_track, camera_intrinsics, action_log, history`); **every panel appears at most
+  point_track, camera_intrinsics, action_log, edit_history`); **every panel appears at most
   once** across `main` and every window (`panel "scene" appears more than once`),
   because a `Tab` is a singleton — one struct draws it — and two tabs with one
   identity would draw one panel twice and confuse egui's widget ids, while a
@@ -935,7 +935,7 @@ nothing to raise.
 |-----------|---------|---------|
 | `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. |
 | Scene home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
-| Image Browser / Action Log / History home | below, `0.20` | Same. |
+| Image Browser / Action Log / Edit History home | below, `0.20` | Same. |
 | Image Detail / Point Track / Camera Intrinsics home | right, `0.33` | Same. |
 | `layout::DEFAULT_LAYOUT_FILE_NAME` | `.sfm-explorer-default-layout.json` | The file the viewer reads at startup, and the name the save dialog offers. |
 | `--no-default-layout` | off | Skip the startup load (`cli::Args::no_default_layout`). |

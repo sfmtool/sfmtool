@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! [`AppState`]'s edits: the two operations that give a node a new version, and
-//! the three that move its cursor -- undo, redo, and the History panel's jump,
+//! the three that move its cursor -- undo, redo, and the Edit History panel's jump,
 //! which is the two of them repeated.
 //!
 //! See `specs/gui/document-model.md` and `specs/gui/edit-history.md`. Each edit

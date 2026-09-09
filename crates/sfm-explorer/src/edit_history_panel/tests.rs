@@ -1,7 +1,7 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Headless tests for the History panel.
+//! Headless tests for the Edit History panel.
 //!
 //! egui lays a frame out with no GPU behind it, so `show` really does walk the
 //! versions and paint every row; the assertions read the strings it painted
@@ -167,7 +167,7 @@ fn clicking_a_row_asks_for_that_version_and_the_jump_moves_the_cursor() {
         ],
         ..Default::default()
     };
-    let mut response = super::HistoryResponse::default();
+    let mut response = super::EditHistoryResponse::default();
     let mut output = ctx.run_ui(input, |ui| {
         response = show(ui, &state);
     });

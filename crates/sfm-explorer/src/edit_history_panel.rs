@@ -1,10 +1,10 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The History panel: the selected node's versions, oldest first, with the
+//! The Edit History panel: the selected node's versions, oldest first, with the
 //! cursor on one of them.
 //!
-//! See `specs/gui/edit-history.md` § "The History panel". The panel reads
+//! See `specs/gui/edit-history.md` § "The Edit History panel". The panel reads
 //! [`crate::document::History`] and decides nothing: a click reports the serial
 //! it wants, and [`crate::state::AppState::jump_to_version`] is what moves the
 //! cursor. A row whose value the budget released is listed and disabled, since
@@ -19,7 +19,7 @@ mod tests;
 
 /// What the panel reports back to the dock.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HistoryResponse {
+pub(crate) struct EditHistoryResponse {
     /// The version a click asked for, and the node it belongs to.
     pub jump: Option<(ReconId, VersionSerial)>,
 }
@@ -31,8 +31,8 @@ const CURSOR_MARK: &str = "\u{25b6}";
 const DISK_MARK: &str = "\u{25cf}";
 
 /// The panel body.
-pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> HistoryResponse {
-    let mut response = HistoryResponse::default();
+pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> EditHistoryResponse {
+    let mut response = EditHistoryResponse::default();
     let Some(node) = crate::scene::selected_node(&state.scene, state.selected_recon) else {
         ui.centered_and_justified(|ui| {
             ui.label("No reconstruction loaded");
@@ -69,7 +69,7 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> HistoryResponse {
     }
 
     egui::ScrollArea::vertical()
-        .id_salt("history_versions")
+        .id_salt("edit_history_versions")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, version) in history.versions().iter().enumerate() {

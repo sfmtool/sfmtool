@@ -64,7 +64,7 @@ impl History {
         -> Option<(VersionSerial, VersionSerial)>;
 
     /// The version the node's file on disk holds: the one it was loaded at,
-    /// until a write of the node moves it. The History panel marks it
+    /// until a write of the node moves it. The Edit History panel marks it
     /// ([edit-history.md](edit-history.md)).
     pub fn disk_serial(&self) -> VersionSerial;
     pub fn set_disk_serial(&mut self, serial: VersionSerial);
