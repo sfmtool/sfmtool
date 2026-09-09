@@ -17,6 +17,7 @@ invocation, the version's label and the history entry.
 | Document | Description |
 |----------|-------------|
 | [add-observation.md](add-observation.md) | Add one observation of the selected point to the image on screen, at a right-clicked pixel, placed by the embed pass's own photometric kernel and followed by a re-triangulation of the track. |
+| [create-point.md](create-point.md) | Create a 3D point at a right-clicked pixel, at infinity along that pixel's ray, with a one-observation track and a patch sized by a prompt. |
 
 The two edits that predate this directory are specced with the document model
 they were built to exercise: **delete point** (the point edit) and **delete

@@ -1802,3 +1802,42 @@ fn a_new_base_clears_the_additions() {
     assert!(sync(&mut renderer, &device, &queue, RECON, &bulk));
     assert!(additions(&renderer).is_none());
 }
+
+#[test]
+fn a_created_point_at_infinity_uploads_as_an_addition_of_its_own() {
+    // A created point is an addition the base has no row for at all -- not a
+    // modification of one -- so nothing of the base is masked, and it draws as
+    // the bearing it is.
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    let points = bundle(&renderer).point_count;
+
+    let mut edited = loaded.clone();
+    let mut record = edited.point(0).expect("a live point").to_record();
+    record.point.position = nalgebra::Point3::new(0.0, 0.0, 1.0);
+    record.point.w = 0.0;
+    record.observations.truncate(1);
+    if let Some(bitmap) = record.patch_bitmap.as_ref() {
+        record.patch_bitmap = Some(bitmap.clone());
+    }
+    let created = edited.add_point(record).expect("a valid record");
+    assert_eq!(created, 40, "an addition takes the next index");
+
+    assert!(
+        !sync(&mut renderer, &device, &queue, RECON, &edited),
+        "an addition re-uploaded the base"
+    );
+    assert_eq!(bundle(&renderer).point_count, points);
+    let additions = additions(&renderer).expect("the addition uploaded");
+    assert_eq!(additions.point_count, 1);
+    assert_eq!(
+        renderer.masked_deleted_count(RECON),
+        0,
+        "a created point replaces no base instance"
+    );
+    let patch = additions.patch.as_ref().expect("it carries a bitmap");
+    assert_eq!(patch.slot_of_point.get(&created), Some(&0));
+}

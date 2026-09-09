@@ -170,6 +170,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User | `Deleted point {index} in {label} ({from} → {to})` |
 | Edit | — | User | `Deleted image {name} from {label} ({from} → {to})` |
 | Edit | — | User | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
+| Edit | — | User | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |
 | Edit | — | User | `Undo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User | `Redo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |

@@ -116,6 +116,13 @@ is a hint rather than a button because the action names a pixel, which only the
 other panel can supply. It quotes the menu entry's own label from one constant,
 so the two cannot drift.
 
+A second line beside it names the way to make a point that is in no track yet:
+right-click where it is in Image Detail and choose *Create 3D Point here...*
+([`edits/create-point.md`](edits/create-point.md)). It says what such a point is
+until a second sighting is added to it -- a bearing at infinity -- because that
+is what this panel then shows: one observation, and a position the reconstruction
+does not yet claim. It quotes its menu entry's label from one constant too.
+
 #### What the panel reads
 
 Everything about the point -- its position, colour and error, its whole track,

@@ -38,7 +38,8 @@ pub mod spherical;
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use reconstruction::{
-    add_observation, AddObservationError, AddObservationOptions, AddObservationReport, EditError,
+    add_observation, create_point, AddObservationError, AddObservationOptions,
+    AddObservationReport, CreatePointError, CreatePointOptions, CreatePointReport, EditError,
     EditedReconstruction, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
     PointRecord, PointSet, PointView, ReconstructionError, RecordObservation, RowMap, SfmrImage,
     SfmrReconstruction, TrackObservation,

@@ -397,6 +397,7 @@ impl TabContext<'_> {
                 selected_image,
                 selected_point,
                 hovered_point,
+                &mut self.state.create_point_prompt,
                 self.gesture_events,
                 self.scroll_input,
                 sift,
@@ -420,6 +421,36 @@ impl TabContext<'_> {
             // that consumes it is clicked (the menu is drawn on later frames).
             if let Some(pixel) = detail_response.context_menu_pixel {
                 self.state.pending_observation_pixel = Some(pixel);
+            }
+            if detail_response.open_create_point {
+                // The prompt opens at the pixel the menu was opened at,
+                // offering the radius the last created point took or, failing
+                // that, the size the reconstruction's own patches project to
+                // in this image.
+                if let (Some(pixel), Some(image)) = (
+                    self.state.pending_observation_pixel,
+                    self.state.selected_image,
+                ) {
+                    let radius = self
+                        .state
+                        .create_point_radius
+                        .unwrap_or_else(|| self.state.create_point_default_radius(image));
+                    self.state.create_point_prompt =
+                        Some(crate::image_detail::CreatePointPrompt::new(pixel, radius));
+                }
+            }
+            if detail_response.cancel_create_point {
+                self.state.create_point_prompt = None;
+            }
+            if let Some((pixel, radius)) = detail_response.create_point {
+                if let Some(image) = self.state.selected_image {
+                    if let Err(why) = self.state.create_point(image, pixel, radius) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Edit, why);
+                    }
+                    self.state.create_point_prompt = None;
+                }
             }
             if detail_response.add_observation {
                 if let (Some(point), Some(image)) =

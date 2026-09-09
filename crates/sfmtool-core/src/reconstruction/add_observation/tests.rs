@@ -25,8 +25,8 @@ use crate::reconstruction::data::{
 
 use super::*;
 
-const IMG_W: u32 = 128;
-const IMG_H: u32 = 128;
+pub(crate) const IMG_W: u32 = 128;
+pub(crate) const IMG_H: u32 = 128;
 const FOCAL: f64 = 160.0;
 const PLANE_Z: f64 = 4.0;
 const HALF_EXTENT: f64 = 0.12;
@@ -77,14 +77,14 @@ fn pose(center: [f64; 3]) -> RigidTransform {
 
 /// The decoded views, held so the borrows in [`views`] have something to point
 /// at.
-struct Scene {
+pub(crate) struct Scene {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
     pyramids: Vec<ImageU8Pyramid>,
 }
 
 impl Scene {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cameras: CENTERS.iter().map(|_| pinhole()).collect(),
             poses: CENTERS.iter().map(|&c| pose(c)).collect(),
@@ -95,7 +95,7 @@ impl Scene {
         }
     }
 
-    fn views(&self) -> Vec<ProjectedImage<'_>> {
+    pub(crate) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras
             .iter()
             .zip(&self.poses)
@@ -109,7 +109,7 @@ impl Scene {
     }
 
     /// Where `world` lands in image `i`, in source-image px.
-    fn project(&self, i: usize, world: Point3<f64>) -> [f64; 2] {
+    pub(crate) fn project(&self, i: usize, world: Point3<f64>) -> [f64; 2] {
         let cam = self.poses[i].transform_point(&world);
         let (u, v) = self.cameras[i]
             .ray_to_pixel([cam.x, cam.y, cam.z])
@@ -131,7 +131,7 @@ fn plane_patch(center: Point3<f64>) -> OrientedPatch {
 /// An `embedded_patches` reconstruction over [`Scene`] holding one point on the
 /// plane, observed by images 0 and 1 at their exact projections. Image 2 does
 /// not observe it, and is where an observation is added.
-fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
+pub(crate) fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
     let mut recon = SfmrReconstruction::demo(1);
     let n = CENTERS.len();
 
@@ -144,7 +144,12 @@ fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
             translation_xyz: Vector3::new(-CENTERS[i][0], CENTERS[i][1], CENTERS[i][2]),
         })
         .collect();
-    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((n, 8, 8, 3)));
+    recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
+        n,
+        sfmr_format::THUMBNAIL_SIZE,
+        sfmr_format::THUMBNAIL_SIZE,
+        3,
+    )));
     recon.image_table.depth_statistics.images.truncate(n);
     recon.image_table.depth_histogram_counts.truncate(n);
 
@@ -191,12 +196,29 @@ fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
     recon
 }
 
+/// [`fixture`] carrying the optional per-observation and per-point columns a
+/// created point has to fill in: an `(P, r, r, 4)` bitmap column, an
+/// observation confidence and a normal confidence.
+pub(crate) fn fixture_with_columns(
+    scene: &Scene,
+    world: Point3<f64>,
+    r: usize,
+) -> SfmrReconstruction {
+    let mut recon = fixture(scene, world);
+    let set = &mut recon.point_set;
+    set.patch_bitmaps_y_x_rgba = Some(Arc::new(Array4::zeros((set.points.len(), r, r, 4))));
+    set.observation_confidence = Some(vec![200; set.tracks.len()]);
+    set.normal_confidence = Some(vec![180; set.points.len()]);
+    recon.rebuild_derived_fields();
+    recon
+}
+
 /// The fixture wrapped as a version with no edits.
-fn edited(scene: &Scene, world: Point3<f64>) -> EditedReconstruction {
+pub(crate) fn edited(scene: &Scene, world: Point3<f64>) -> EditedReconstruction {
     EditedReconstruction::new(Arc::new(fixture(scene, world)))
 }
 
-const WORLD: Point3<f64> = Point3::new(0.0, 0.0, PLANE_Z);
+pub(crate) const WORLD: Point3<f64> = Point3::new(0.0, 0.0, PLANE_Z);
 
 // ── The refusals ─────────────────────────────────────────────────────
 

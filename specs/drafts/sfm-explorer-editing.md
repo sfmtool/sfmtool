@@ -253,8 +253,11 @@ Families, in the proposed order:
   version rather than landing a derived node. The derived-node variant stays as
   the comparison affordance.
 - **Track edits**: add an observation to a track from a pixel is built and
-  standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md).
-  Remove one, split a track, merge two remain.
+  standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
+  and so is creating a point from a pixel,
+  [`../gui/edits/create-point.md`](../gui/edits/create-point.md), which is the
+  edit an added observation then places. Remove an observation, split a track,
+  merge two remain.
 - **Bundle adjust**: run the adjustment on the node's value with the
   constraints it carries, as one version.
 
@@ -290,7 +293,10 @@ steps after it.
    add-observation track edit, on `embedded_patches` files, is done: it was
    first because it is what the overlay is for, and it is what routed every
    per-point read through the overlay accessor and put the additions on the
-   GPU. Remaining: delete an observation and an image from the panels,
+   GPU. Create a point from a pixel is done beside it, and is what exercises the
+   rest of that machinery: a point in no base, `push_creating`, the point-edit
+   hash an id is minted against, and an addition the GPU draws that replaces
+   nothing. Remaining: delete an observation and an image from the panels,
    point constraints, bake transform, resect in place, the other track edits
    (remove an observation, split, merge), and bundle adjust.
 8. **Wire surface.** Amends `gui/mcp-server.md`.

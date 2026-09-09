@@ -337,3 +337,60 @@ fn the_window_title_marks_the_first_node_while_it_is_dirty() {
     state.save_node(id).expect("a writable path");
     assert_eq!(state.window_title(), "SfM Explorer - recon.sfmr");
 }
+
+#[test]
+fn a_created_point_survives_the_save_and_keeps_its_id() {
+    // The one edit whose points are in no base: the file has to carry both the
+    // point and, in its lineage, the hash the point's id is minted against.
+    let dir = temp_dir("created_point");
+    let path = dir.join("recon.sfmr");
+    let mut state = AppState::new();
+    let id = state.append_node(SceneNode::from_path(
+        &path,
+        crate::state::edits::tests::embedded_demo(16),
+    ));
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let (w, h) = (camera.width, camera.height);
+    state.full_res_cache.insert(
+        crate::scene::ImageRef::new(id, 0),
+        Some(sfmtool_core::camera::remap::ImageU8::new(
+            w,
+            h,
+            3,
+            (0..(w * h * 3)).map(|i| (i % 251) as u8).collect(),
+        )),
+    );
+    state
+        .create_point(crate::scene::ImageRef::new(id, 0), [10.0, 12.0], 6.0)
+        .expect("a pixel on the sensor of a decodable image");
+    let created = state.selected_point.expect("selected").point;
+    let minted = crate::point_ids::mint(&state.scene[0], created).expect("an id");
+
+    state.save_node(id).expect("a writable path");
+
+    // The overlay is folded in, so the point is a row of the file's own base.
+    let node = &state.scene[0];
+    let value = node.edited();
+    assert!(value.added.points.is_empty(), "the save materialised");
+    assert_eq!(value.point_count(), 17);
+    let row = state.selected_point.expect("the selection followed").point;
+    assert_eq!(
+        value.point(row).expect("the created point").point().w,
+        0.0,
+        "the created point is still a bearing"
+    );
+
+    // The id minted before the save still names it, through the lineage the
+    // written file records for the edit that created it.
+    let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
+    let (hash, _) = rest.split_once('_').expect("hash and index");
+    assert_eq!(crate::point_ids::resolve(node, hash, 0), Ok(row));
+    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let entry = metadata
+        .lineage
+        .iter()
+        .find(|e| e.hash.starts_with(hash))
+        .expect("the point edit that created it");
+    assert_eq!(entry.kind, sfmr_format::LINEAGE_KIND_POINT_EDIT);
+    assert_eq!(entry.map.forward(0), Some(row));
+}

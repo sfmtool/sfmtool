@@ -342,3 +342,87 @@ class TestAddObservation:
         assert next_value.point_count == points_before
         assert recon.point_count == points_before
         assert forward[report["point"]] == point
+
+
+class TestCreatePoint:
+    """``create_point``: a clicked pixel becomes a point at infinity.
+
+    Built on the same ``to_embedded_patches`` baseline as
+    :class:`TestAddObservation`, so the colour and the patch bitmap are read out
+    of the workspace's own photographs.
+    """
+
+    IMAGE = 0
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        return EditedReconstruction(recon.to_embedded_patches())
+
+    @pytest.fixture
+    def images(self, embedded):
+        from sfmtool._workspace_image import read_workspace_image
+
+        base = embedded.materialize()[0]
+        return [
+            read_workspace_image(base.workspace_dir, name) for name in base.image_names
+        ]
+
+    def test_a_sift_files_base_is_refused(self, edited, images):
+        with pytest.raises(ValueError, match="embedded_patches"):
+            edited.create_point(0, [1.0, 1.0], 8.0, images)
+
+    def test_a_pixel_off_the_sensor_is_refused(self, embedded, images):
+        with pytest.raises(ValueError, match="outside"):
+            embedded.create_point(self.IMAGE, [-5.0, 10.0], 8.0, images)
+
+    def test_a_radius_that_is_not_a_size_is_refused(self, embedded, images):
+        with pytest.raises(ValueError, match="positive size"):
+            embedded.create_point(self.IMAGE, [40.0, 40.0], 0.0, images)
+
+    def test_a_created_point_is_a_bearing_with_one_observation(self, embedded, images):
+        before = embedded.point_count
+        next_value, report = embedded.create_point(
+            self.IMAGE, [60.0, 80.0], 8.0, images
+        )
+
+        assert next_value.point_count == before + 1
+        assert report["image"] == self.IMAGE
+        assert report["half_extent"] > 0.0
+        assert abs(float(np.linalg.norm(report["direction"])) - 1.0) < 1e-9
+
+        record = next_value.point(report["point"])
+        assert record["w"] == 0.0
+        assert list(record["image_indexes"]) == [self.IMAGE]
+        assert list(record["keypoints_xy"][0]) == [60.0, 80.0]
+
+        # This object is untouched, and the two agree on the base.
+        assert embedded.point_count == before
+        assert next_value.base_content_hash() == embedded.base_content_hash()
+
+    def test_a_second_observation_makes_the_bearing_finite(self, embedded, images):
+        # A real correspondence, so the two-pass fit has something to register:
+        # an existing point of the reconstruction, created afresh at its own
+        # keypoint in one image and then sighted at its own keypoint in another.
+        source = next(
+            i
+            for i in range(embedded.point_count)
+            if len(set(int(k) for k in embedded.point(i)["image_indexes"])) >= 2
+        )
+        record = embedded.point(source)
+        first, second = (int(k) for k in record["image_indexes"][:2])
+        here, there = (list(map(float, k)) for k in record["keypoints_xy"][:2])
+
+        created, report = embedded.create_point(first, here, 8.0, images)
+        assert created.point(report["point"])["w"] == 0.0
+
+        next_value, add = created.add_observation(
+            report["point"], second, there, images
+        )
+        record = next_value.point(add["point"])
+        assert add["from_infinity"] is True
+        assert record["w"] == 1.0
+        assert len(record["image_indexes"]) == 2
+        # The fit ran against the provisional patch, so the report carries a real
+        # score rather than a placeholder.
+        assert np.isfinite(add["zncc"])

@@ -15,6 +15,47 @@ use sfmtool_core::EditedReconstruction;
 /// quotes so the two cannot drift.
 pub(crate) const ADD_OBSERVATION_LABEL: &str = "Add observation to track here";
 
+/// The create-a-point entry's label. The trailing ellipsis is the promise the
+/// entry keeps: it opens a prompt for the one thing a click cannot say, the
+/// patch's radius, rather than running the edit on the spot.
+pub(crate) const CREATE_POINT_LABEL: &str = "Create 3D Point here...";
+
+/// What a `sift_files` node's context menu says in place of either entry.
+pub(crate) const NOT_EMBEDDED_PATCHES: &str =
+    "Creating a point and adding an observation need an embedded_patches reconstruction.";
+
+/// The open Create 3D Point prompt: where the user pointed, and the radius
+/// typed into it.
+///
+/// The text rather than the number is what is held, so a half-typed value is
+/// the user's own and neither snaps nor is rounded under them while they type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreatePointPrompt {
+    /// The clicked pixel, in source-image coordinates.
+    pub pixel: [f32; 2],
+    /// What is in the radius field.
+    pub radius_text: String,
+}
+
+impl CreatePointPrompt {
+    /// A prompt at `pixel` offering `radius`.
+    pub fn new(pixel: [f32; 2], radius: f32) -> Self {
+        Self {
+            pixel,
+            radius_text: format!("{radius:.1}"),
+        }
+    }
+
+    /// The radius the field holds, when it holds a usable one.
+    pub fn radius(&self) -> Option<f32> {
+        self.radius_text
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|r| r.is_finite() && *r > 0.0)
+    }
+}
+
 /// Whether the Image Detail context menu offers the add-observation entry for
 /// this node, image and selection, and why not when it is greyed.
 ///
@@ -62,6 +103,7 @@ impl ImageDetail {
         feature_display: &FeatureDisplaySettings,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
+        create_point_prompt: &mut Option<CreatePointPrompt>,
         image_rect: egui::Rect,
         panel_rect: egui::Rect,
         effective_scale: f32,
@@ -267,6 +309,12 @@ impl ImageDetail {
         egui::Popup::context_menu(interact_response).show(|ui| {
             match context_menu_entry {
                 Some(entry) => {
+                    // Creating a point needs nothing but a pixel on the sensor,
+                    // so it is never greyed on a node the edit is defined for.
+                    if ui.add(egui::Button::new(CREATE_POINT_LABEL)).clicked() {
+                        response.open_create_point = true;
+                        ui.close();
+                    }
                     let button = egui::Button::new(ADD_OBSERVATION_LABEL);
                     let clicked = match entry {
                         // Enabled: the reason it can run is the point and the
@@ -287,15 +335,74 @@ impl ImageDetail {
                 // Not an `embedded_patches` node: the entry is absent rather
                 // than greyed, because the edit is not defined here at all.
                 None => {
-                    ui.label(
-                        egui::RichText::new(
-                            "Adding an observation needs an embedded_patches reconstruction.",
-                        )
-                        .weak(),
-                    );
+                    ui.label(egui::RichText::new(NOT_EMBEDDED_PATCHES).weak());
                 }
             }
         });
+
+        // ── The Create 3D Point prompt, and the patch it is describing ──
+        //
+        // The circle is drawn under the prompt rather than in it: the radius is
+        // a size in this image, and the only place it means anything is on the
+        // image, at the pixel the user named.
+        if let Some(prompt) = create_point_prompt.as_mut() {
+            let center = image_to_panel(prompt.pixel[0], prompt.pixel[1]);
+            if let Some(radius) = prompt.radius() {
+                painter.circle_stroke(
+                    center,
+                    radius * effective_scale,
+                    egui::Stroke::new(2.0, egui::Color32::LIGHT_GREEN),
+                );
+            }
+            painter.circle_filled(center, 3.0, egui::Color32::LIGHT_GREEN);
+
+            let mut commit = false;
+            let mut cancel = false;
+            let area = egui::Area::new(ui.id().with("create_point_prompt"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(center + egui::vec2(12.0, 12.0));
+            let inner = area.show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(CREATE_POINT_LABEL);
+                    ui.horizontal(|ui| {
+                        ui.label("Radius (px)");
+                        let field = ui.add(
+                            egui::TextEdit::singleline(&mut prompt.radius_text).desired_width(64.0),
+                        );
+                        field.request_focus();
+                        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            commit = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let ready = prompt.radius().is_some();
+                        if ui.add_enabled(ready, egui::Button::new("Create")).clicked() {
+                            commit = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+            });
+            // Escape, or a click anywhere else, is a cancel: the prompt is a
+            // step in a gesture rather than a window to leave lying open.
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                cancel = true;
+            }
+            let clicked_away = ui.input(|i| i.pointer.any_click())
+                && !ui
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|pos| inner.response.rect.contains(pos));
+            if clicked_away {
+                cancel = true;
+            }
+            match (commit.then(|| prompt.radius()).flatten(), cancel) {
+                (Some(radius), _) => response.create_point = Some((prompt.pixel, radius)),
+                (None, true) => response.cancel_create_point = true,
+                _ => {}
+            }
+        }
 
         // Hit testing for feature clicks (only tracked features)
         if interact_response.clicked() {

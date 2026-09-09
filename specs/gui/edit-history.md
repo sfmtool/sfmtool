@@ -52,6 +52,10 @@ pub enum PointMap {
     /// A point edit that modified points: the index each held before the step
     /// and the one it took after it. Every index not named is unchanged.
     Replaced(Vec<(u32, u32)>),
+    /// A point edit that created points, naming the indexes they took. The
+    /// forward direction is the identity; the inverse has no answer for a
+    /// created index, which is what makes an undo clear a selection on one.
+    Created(Vec<u32>),
     /// A whole-value edit's row map: a materialisation's, or the one
     /// `RowMap::by_scan` reads off a bulk edit's input and output.
     Rows(RowMap),
@@ -109,7 +113,7 @@ pub struct CreatedPoints {
 impl History {
     /// Push a version whose edit created points, recording them.
     pub fn push_creating(&mut self, value: EditedReconstruction, map: PointMap,
-                         label: impl Into<String>, created: CreatedPoints)
+                         label: impl Into<String>, created: Option<CreatedPoints>)
         -> VersionSerial;
 
     /// Where index `index` of version `from` sits in version `to`. Walks back
@@ -138,6 +142,20 @@ hash plus the records it adds
 § "Hashes"). Demo data and a resection therefore hash exactly like a loaded file.
 Those hashes plus this graph are what a point id is minted against and resolved
 through ([goto-point.md](goto-point.md) § "The ID forms and the version graph").
+
+The edit that records a `CreatedPoints` is
+[`edits/create-point.md`](edits/create-point.md): it puts a point in the value
+that no base holds a row for, so the id it is shown under is the edit's own hash
+and its place among that edit's creations, and the record of that has to outlive
+the cursor moving away from the version. Every other edit so far modifies or
+removes points a base already has, and pushes with no created list.
+
+The edit that records a `CreatedPoints` is
+[`edits/create-point.md`](edits/create-point.md): it puts a point in the value
+that no base holds a row for, so the id it is shown under is the edit's own hash
+and its place among that edit's creations, and the record of that has to outlive
+the cursor moving away from the version. Every other edit so far modifies or
+removes points a base already has, and pushes with no created list.
 
 ## What follows a map
 

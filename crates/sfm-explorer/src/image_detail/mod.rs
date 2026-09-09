@@ -18,7 +18,9 @@ mod overlay;
 mod tests;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
-pub(crate) use overlay::{add_observation_entry, ADD_OBSERVATION_LABEL};
+pub(crate) use overlay::{
+    add_observation_entry, CreatePointPrompt, ADD_OBSERVATION_LABEL, CREATE_POINT_LABEL,
+};
 
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{CameraRef, ImageRef, ReconId};
@@ -122,6 +124,14 @@ pub struct ImageDetailResponse {
     pub context_menu_pixel: Option<[f32; 2]>,
     /// Set when the context menu's `Add observation to track here` was clicked.
     pub add_observation: bool,
+    /// Set when the context menu's `Create 3D Point here...` was clicked: the
+    /// caller opens the prompt, because the radius it offers is data the panel
+    /// does not hold.
+    pub open_create_point: bool,
+    /// The pixel and the radius the Create 3D Point prompt was committed with.
+    pub create_point: Option<([f32; 2], f32)>,
+    /// Set when that prompt was dismissed without creating anything.
+    pub cancel_create_point: bool,
 }
 
 impl ImageDetail {
@@ -247,6 +257,7 @@ impl ImageDetail {
         selected_image: Option<usize>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
+        create_point_prompt: &mut Option<CreatePointPrompt>,
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
@@ -260,6 +271,9 @@ impl ImageDetail {
             has_pointer: false,
             context_menu_pixel: None,
             add_observation: false,
+            open_create_point: false,
+            create_point: None,
+            cancel_create_point: false,
         };
 
         // If no image selected, show placeholder
@@ -425,6 +439,7 @@ impl ImageDetail {
             feature_display,
             selected_point,
             hovered_point,
+            create_point_prompt,
             image_rect,
             panel_rect,
             effective_scale,

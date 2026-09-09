@@ -5,6 +5,7 @@
 //! operations (triangulation, filtering, correspondence).
 
 pub mod add_observation;
+pub mod create_point;
 pub(crate) mod data;
 mod edit;
 pub mod edited;
@@ -17,6 +18,8 @@ pub mod triangulation;
 pub use add_observation::{
     add_observation, AddObservationError, AddObservationOptions, AddObservationReport,
 };
+
+pub use create_point::{create_point, CreatePointError, CreatePointOptions, CreatePointReport};
 
 pub use edited::{
     EditError, EditedReconstruction, PointRecord, PointView, RecordObservation, RowMap,

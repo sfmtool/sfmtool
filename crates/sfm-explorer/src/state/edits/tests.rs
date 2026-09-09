@@ -535,3 +535,143 @@ fn the_entry_is_offered_for_an_image_outside_the_track() {
         Some(Ok(())),
     );
 }
+
+// ── Create point: the point edit that creates a point ───────────────────
+
+/// The image every create-point test points into, and the pixel it points at.
+const CREATE_IMAGE: usize = 0;
+const CREATE_PIXEL: [f32; 2] = [10.0, 12.0];
+
+/// [`embedded_state`] with a synthetic photograph cached for `CREATE_IMAGE`, so
+/// the edit's decode finds pixels without a file on disk.
+fn creatable_state() -> (AppState, ReconId) {
+    let mut state = embedded_state();
+    let id = node(&state);
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let (w, h) = (camera.width, camera.height);
+    let data = (0..(w * h * 3))
+        .map(|i| (i % 251) as u8)
+        .collect::<Vec<u8>>();
+    state.full_res_cache.insert(
+        ImageRef::new(id, CREATE_IMAGE),
+        Some(sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data)),
+    );
+    (state, id)
+}
+
+#[test]
+fn creating_a_point_appends_a_bearing_and_selects_it() {
+    let (mut state, id) = creatable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let count = state.scene[0].point_count();
+
+    state
+        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
+        .expect("a pixel on the sensor of a decodable image");
+
+    let node = &state.scene[0];
+    assert!(
+        Arc::ptr_eq(&before, &node.edited().base),
+        "a point edit wrote through the base"
+    );
+    assert_eq!(node.point_count(), count + 1);
+    assert_eq!(node.history.versions().len(), 2);
+
+    let selected = state.selected_point.expect("the created point is selected");
+    assert_eq!(selected.recon, id);
+    let view = state.scene[0]
+        .edited()
+        .point(selected.point)
+        .expect("the created point");
+    assert_eq!(view.point().w, 0.0, "one sighting fixes no distance");
+    assert_eq!(view.observations().len(), 1);
+    assert_eq!(view.observations()[0].image_index, CREATE_IMAGE as u32);
+
+    let log = texts(&state);
+    let last = log.last().expect("one entry per edit");
+    assert!(last.contains("Created point"), "{last}");
+    assert!(last.contains("radius 6.0 px"), "{last}");
+}
+
+#[test]
+fn a_sift_files_node_refuses_creating_a_point() {
+    let mut state = state();
+    let id = node(&state);
+    let why = state
+        .create_point(ImageRef::new(id, 0), CREATE_PIXEL, 6.0)
+        .expect_err("a sift_files node has no room for a featureless observation");
+    assert!(why.contains("embedded_patches"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+#[test]
+fn the_created_points_id_is_minted_against_the_point_edit() {
+    let (mut state, id) = creatable_state();
+    let base_prefix =
+        crate::point_ids::base_hash_prefix(state.scene[0].edited()).expect("a hashable base");
+    state
+        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
+        .expect("a pixel on the sensor of a decodable image");
+
+    let index = state.selected_point.expect("selected").point;
+    let node = &state.scene[0];
+    let minted = crate::point_ids::mint(node, index).expect("the created point has an id");
+    let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
+    let (hash, k) = rest.split_once('_').expect("hash and index");
+    assert_ne!(
+        hash, base_prefix,
+        "a point no base holds cannot be named by a base's hash"
+    );
+    assert_eq!(k, "0", "it is the edit's first creation");
+    assert_eq!(
+        crate::point_ids::resolve(node, hash, 0),
+        Ok(index),
+        "the id resolves back to the point it names"
+    );
+}
+
+#[test]
+fn an_undo_drops_the_created_point_and_the_selection() {
+    let (mut state, id) = creatable_state();
+    let count = state.scene[0].point_count();
+    state
+        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
+        .expect("a pixel on the sensor of a decodable image");
+
+    state.undo(id).expect("one edit to undo");
+    assert_eq!(state.scene[0].point_count(), count);
+    assert_eq!(
+        state.selected_point, None,
+        "the selection sat on a point this version does not hold"
+    );
+}
+
+#[test]
+fn the_prompts_radius_is_the_median_the_reconstruction_already_uses() {
+    let (mut state, id) = creatable_state();
+    let image = ImageRef::new(id, CREATE_IMAGE);
+    let derived = state.create_point_default_radius(image);
+    assert!(
+        derived > 0.0 && derived != super::FALLBACK_PATCH_RADIUS_PX,
+        "a node with patch frames derives its own radius, got {derived}"
+    );
+
+    // Once a point has been created by hand, the radius that made it is what
+    // the next prompt offers.
+    state
+        .create_point(image, CREATE_PIXEL, 3.5)
+        .expect("a pixel on the sensor of a decodable image");
+    assert_eq!(state.create_point_radius, Some(3.5));
+    assert!(state.create_point_prompt.is_none(), "the prompt is closed");
+}
+
+#[test]
+fn a_node_with_no_patch_frames_falls_back_to_the_named_radius() {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
+    let id = node(&state);
+    assert_eq!(
+        state.create_point_default_radius(ImageRef::new(id, 0)),
+        super::FALLBACK_PATCH_RADIUS_PX
+    );
+}

@@ -11,7 +11,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::edited::{EditError, EditedReconstruction, PointRecord, RecordObservation};
-use super::triangulation::triangulate_batch;
+use super::triangulation::{triangulate_batch, Triangulation};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
@@ -46,8 +46,6 @@ pub enum AddObservationError {
     },
     /// The point carries no patch frame, so there is nothing to fit against.
     NoPatchFrame(u32),
-    /// The point is at infinity: a direction, which no pixel re-triangulates.
-    PointAtInfinity(u32),
     /// Fewer decoded views were supplied than the base has images.
     ViewsMissing {
         /// How many were supplied.
@@ -95,12 +93,6 @@ impl std::fmt::Display for AddObservationError {
             ),
             AddObservationError::NoPatchFrame(i) => {
                 write!(f, "point {i} carries no patch frame to fit against")
-            }
-            AddObservationError::PointAtInfinity(i) => {
-                write!(
-                    f,
-                    "point {i} is at infinity, and a direction has no depth to fit"
-                )
             }
             AddObservationError::ViewsMissing { got, expected } => write!(
                 f,
@@ -183,8 +175,11 @@ pub struct AddObservationReport {
     /// How many observations the track holds now.
     pub observation_count: usize,
     /// How far the re-triangulated position moved, in the reconstruction's own
-    /// units.
+    /// units. Zero for a point that was at infinity, which had no position to
+    /// move from.
     pub position_shift: f64,
+    /// Whether the point was at infinity and this observation made it finite.
+    pub from_infinity: bool,
     /// The re-triangulation's condition number.
     pub condition_number: f64,
 }
@@ -276,9 +271,7 @@ pub fn add_observation(
         });
     }
     let point3d = view.point().clone();
-    if point3d.is_at_infinity() {
-        return Err(AddObservationError::PointAtInfinity(point));
-    }
+    let at_infinity = point3d.is_at_infinity();
 
     // ── The patch the fit registers against: the point's stored frame ──
     let (Some(u), Some(v)) = (view.patch_u_halfvec(), view.patch_v_halfvec()) else {
@@ -290,13 +283,14 @@ pub fn add_observation(
     if !(hu > 0.0 && hv > 0.0) {
         return Err(AddObservationError::NoPatchFrame(point));
     }
-    let patch = OrientedPatch::new(point3d.position, u / hu, v / hv, [hu, hv]);
+    let mut patch = OrientedPatch::new(point3d.position, u / hu, v / hv, [hu, hv]);
+    // A `w = 0` point's frame is tangent to the direction sphere and its corners
+    // are directions, so the renderer has to be told which kind it is; the
+    // stored columns are the same two half-vectors either way.
+    patch.w = if at_infinity { 0.0 } else { 1.0 };
 
-    // ── The view set: the track, then the new image ──
-    //
-    // The new view is seeded at the clicked pixel and every other at its stored
-    // keypoint, which is what gives the kernel a consensus to score the new one
-    // against. A single-view localization reports no leave-one-out score at all.
+    // The view set the fit registers over: the track's images seeded at their
+    // stored keypoints, then the new one seeded at the click.
     let track = view.observations();
     let mut view_set: Vec<u32> = track.iter().map(|o| o.image_index).collect();
     let mut seeds: Vec<Option<[f64; 2]>> = (0..track.len())
@@ -305,8 +299,120 @@ pub fn add_observation(
     view_set.push(image);
     seeds.push(Some([pixel[0] as f64, pixel[1] as f64]));
 
+    // ── The record: the track with the new sighting in image order ──
+    //
+    // Built with the clicked pixel in it, so the triangulations below read one
+    // track rather than remembering the new sighting in a second place; the
+    // keypoint and the confidence are written into it once the fit has run.
+    let mut record: PointRecord = view.to_record();
+    let at = record
+        .observations
+        .partition_point(|o| o.image_index < image);
+    record.observations.insert(
+        at,
+        RecordObservation {
+            image_index: image,
+            feature_index: None,
+            keypoint_xy: Some(pixel),
+            confidence: edited.has_observation_confidence().then_some(0),
+        },
+    );
+
+    // ── The patch the fit registers against ──
+    //
+    // A point that has a position registers against the frame it stands on. A
+    // point at **infinity** cannot: the fit anchors every view at the point's
+    // own projection, and a bearing projects into a second camera as the ray
+    // parallel to it rather than as the place the surface is, so under any
+    // parallax the search would pull the sighting back onto the bearing's
+    // projection and undo the very depth the click supplies. So the click is
+    // first used for a **provisional triangulation**, and the fit then runs
+    // against the finite patch that gives -- a frame standing at a depth, whose
+    // projection in both views lands on the surface. Two passes, and the second
+    // is the ordinary finite-point path.
+    let fit_patch = if at_infinity {
+        let provisional = triangulate_record(&record, views)?.point;
+        let scale = placement_scale(&provisional, views);
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(AddObservationError::Triangulation);
+        }
+        OrientedPatch::new(provisional, u / hu, v / hv, [hu * scale, hv * scale])
+    } else {
+        patch.clone()
+    };
+
+    let (keypoint, zncc, shift_px) =
+        fit_keypoint(&fit_patch, image, pixel, views, &view_set, &seeds, options)?;
+
+    let fitted = &mut record.observations[at];
+    fitted.keypoint_xy = Some(keypoint);
+    // The base carries the column or it does not; when it does, the sighting's
+    // confidence is the score the fit reached, in the column's own byte scale.
+    fitted.confidence = edited
+        .has_observation_confidence()
+        .then(|| (zncc.clamp(0.0, 1.0) * 255.0).round() as u8);
+
+    // ── Re-triangulation from every observation, the fitted one included ──
+    let tri = triangulate_record(&record, views)?;
+    // A point that was at infinity becomes finite here: the second bearing is
+    // what gives the track a depth, so the record crosses the boundary and its
+    // angular patch frame becomes a world-unit one, at the depth this final
+    // solve found rather than the provisional one the fit ran against.
+    let position_shift = if at_infinity {
+        promote_from_infinity(&mut record, &tri.point, views);
+        0.0
+    } else {
+        (tri.point - point3d.position).norm()
+    };
+    record.point.position = tri.point;
+
+    let mut next = edited.clone();
+    let new_index = next.replace_point(point, record)?;
+    let observation_count = next
+        .point(new_index)
+        .expect("just added")
+        .observations()
+        .len();
+    Ok((
+        next,
+        AddObservationReport {
+            point: new_index,
+            replaced: point,
+            image,
+            clicked_pixel: pixel,
+            keypoint,
+            shift_px,
+            zncc,
+            observation_count,
+            position_shift,
+            from_infinity: at_infinity,
+            condition_number: tri.condition_number,
+        },
+    ))
+}
+
+/// Where the photometric fit puts the observation of `point` in `image`, the
+/// leave-one-out ZNCC it scored, and how far it moved off `pixel`.
+///
+/// The **discrete** stage is [`localize_patch_keypoints`] over the track's
+/// images followed by the new one, every existing view seeded at its stored
+/// keypoint and the new one at the clicked pixel, which is what gives the new
+/// view a consensus to be scored against. The **sub-pixel** stage is
+/// [`refine_patch_keypoints`], seeded at the discrete answer, and only the new
+/// view's keypoint is read out of it: this edit places one sighting and moves
+/// none.
+#[allow(clippy::too_many_arguments)]
+fn fit_keypoint(
+    patch: &OrientedPatch,
+    image: u32,
+    pixel: [f32; 2],
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    seeds: &[Option<[f64; 2]>],
+    options: &AddObservationOptions,
+) -> Result<([f32; 2], f64, f64), AddObservationError> {
     let localized =
-        localize_patch_keypoints(&patch, views, &view_set, Some(&seeds), &options.localize);
+        localize_patch_keypoints(patch, views, view_set, Some(seeds), &options.localize);
     let slot = localized
         .views
         .iter()
@@ -320,12 +426,8 @@ pub fn add_observation(
             bar: options.min_zncc,
         });
     }
-    // The sub-pixel stage, seeded at the discrete answer, exactly as the embed
-    // pass chains the two. Only the new view's keypoint is read out of it: the
-    // observations the track already had keep their stored pixels, so this edit
-    // moves one sighting and no other.
     let refined = refine_patch_keypoints(
-        &patch,
+        patch,
         views,
         &localized.views,
         Some(
@@ -342,30 +444,25 @@ pub fn add_observation(
         .iter()
         .position(|&i| i == image)
         .map_or(localized.keypoints[slot], |k| refined.keypoints[k]);
-    let keypoint = [fitted[0] as f32, fitted[1] as f32];
-    let shift_px = (fitted[0] - pixel[0] as f64).hypot(fitted[1] - pixel[1] as f64);
+    Ok((
+        [fitted[0] as f32, fitted[1] as f32],
+        zncc,
+        (fitted[0] - pixel[0] as f64).hypot(fitted[1] - pixel[1] as f64),
+    ))
+}
 
-    // ── The record: the track with the new sighting in image order ──
-    let mut record: PointRecord = view.to_record();
-    let at = record
-        .observations
-        .partition_point(|o| o.image_index < image);
-    record.observations.insert(
-        at,
-        RecordObservation {
-            image_index: image,
-            feature_index: None,
-            keypoint_xy: Some(keypoint),
-            // The base carries the column or it does not; when it does, the
-            // sighting's confidence is the score the fit reached, in the
-            // column's own byte scale.
-            confidence: edited
-                .has_observation_confidence()
-                .then(|| (zncc.clamp(0.0, 1.0) * 255.0).round() as u8),
-        },
-    );
-
-    // ── Re-triangulation from every observation, the new one included ──
+/// Triangulate `record`'s whole track from the keypoints it holds.
+///
+/// The rays are built by walking the record rather than the value, so the solve
+/// sees exactly the track the edit is about to store and there is no second
+/// place where the new sighting has to be remembered. Refused on the three
+/// signals the patch spawn refuses on: a non-finite position, an infinite
+/// condition number (the depth is not observable) or a solution behind one of
+/// the cameras that see it.
+fn triangulate_record(
+    record: &PointRecord,
+    views: &[ProjectedImage<'_>],
+) -> Result<Triangulation, AddObservationError> {
     let mut dirs: Vec<Vector3<f64>> = Vec::with_capacity(record.observations.len());
     let mut centers: Vec<Point3<f64>> = Vec::with_capacity(record.observations.len());
     for obs in &record.observations {
@@ -388,32 +485,66 @@ pub fn add_observation(
     {
         return Err(AddObservationError::Triangulation);
     }
-    let position_shift = (tri.point - point3d.position).norm();
-    record.point.position = tri.point;
+    Ok(tri)
+}
 
-    let mut next = edited.clone();
-    let new_index = next.replace_point(point, record)?;
-    let observation_count = next
-        .point(new_index)
-        .expect("just added")
-        .observations()
-        .len();
-    Ok((
-        next,
-        AddObservationReport {
-            point: new_index,
-            replaced: point,
-            image,
-            clicked_pixel: pixel,
-            keypoint,
-            shift_px,
-            zncc,
-            observation_count,
-            position_shift,
-            condition_number: tri.condition_number,
-        },
-    ))
+/// The distance an angular patch extent is multiplied by to become a world one
+/// at `position`: the distance from the camera-cloud centroid, which is the
+/// reference `SfmrReconstruction::materialize_points_at_infinity` measures its
+/// own placement from.
+fn placement_scale(position: &Point3<f64>, views: &[ProjectedImage<'_>]) -> f64 {
+    let mut centroid = Vector3::zeros();
+    for view in views {
+        centroid += view.cam_from_world.inverse_translation_origin().coords;
+    }
+    if !views.is_empty() {
+        centroid /= views.len() as f64;
+    }
+    (position.coords - centroid).norm()
+}
+
+/// Carry `record`, which is at infinity, across to the finite point `position`.
+///
+/// `w` becomes 1, and the patch frame is resized at the depth the
+/// triangulation just found: the stored half-vectors are angular extents
+/// tangent to the direction sphere, so multiplying them by the placement
+/// distance is what keeps the patch the apparent size it had -- the same
+/// rescale `SfmrReconstruction::materialize_points_at_infinity` applies, and
+/// measured from the same reference, the camera-cloud centroid. Leaving them
+/// alone would leave a world-unit patch the size of a radian on a point metres
+/// away.
+///
+/// The bitmap is kept: it is the appearance the observation was accepted for
+/// agreeing with, and resizing the frame does not change what the tile shows.
+/// The normal becomes the resized frame's own, which is the fronto-parallel
+/// surfel the tangent frame turns into.
+fn promote_from_infinity(
+    record: &mut PointRecord,
+    position: &Point3<f64>,
+    views: &[ProjectedImage<'_>],
+) {
+    record.point.w = 1.0;
+    let scale = placement_scale(position, views);
+    if !(scale.is_finite() && scale > 0.0) {
+        return;
+    }
+    for halfvec in [&mut record.patch_u_halfvec, &mut record.patch_v_halfvec] {
+        if let Some(h) = halfvec.as_mut() {
+            for c in h.iter_mut() {
+                *c = (f64::from(*c) * scale) as f32;
+            }
+        }
+    }
+    if let (Some(u), Some(v)) = (record.patch_u_halfvec, record.patch_v_halfvec) {
+        let u = Vector3::new(u[0] as f64, u[1] as f64, u[2] as f64);
+        let v = Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64);
+        let n = u.cross(&v);
+        if n.norm() > 0.0 {
+            let n = n.normalize();
+            record.point.normal = Vector3::new(n.x as f32, n.y as f32, n.z as f32);
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -232,6 +232,20 @@ impl PointTrackDetail {
                 .weak()
                 .small(),
             );
+            // Said in the same place, because the gesture is the same one and
+            // the point it makes is the point this panel then reads: a created
+            // point is a bearing with one observation until a second is added
+            // to it here.
+            ui.label(
+                egui::RichText::new(format!(
+                    "To create a point: right-click where it is in Image Detail and choose \
+                     \u{201c}{}\u{201d}. It is created at infinity, and a second observation \
+                     places it.",
+                    crate::image_detail::CREATE_POINT_LABEL
+                ))
+                .weak()
+                .small(),
+            );
         }
 
         ui.separator();

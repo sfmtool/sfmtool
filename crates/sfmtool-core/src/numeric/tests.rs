@@ -199,6 +199,11 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "the borrowing counterpart of the shared median",
     ),
     (
+        "sfm-explorer/src/state/edits.rs",
+        "median_projected_radius",
+        "delegates: the shared median of the projected patch radii it gathers",
+    ),
+    (
         "sfmtool-core/src/geometry/focal_vote.rs",
         "log_median",
         "delegates: the shared median of the logs, exponentiated",

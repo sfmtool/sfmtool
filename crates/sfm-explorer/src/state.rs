@@ -546,6 +546,19 @@ pub struct AppState {
     /// the menu closes without one.
     pub pending_observation_pixel: Option<[f32; 2]>,
 
+    /// The open "Create 3D Point" prompt: which pixel it was opened at and what
+    /// radius is typed into it. `None` when no prompt is up.
+    ///
+    /// The radius is a value the click cannot carry, so the entry opens a
+    /// prompt rather than running the edit; see
+    /// `specs/gui/edits/create-point.md`.
+    pub create_point_prompt: Option<crate::image_detail::CreatePointPrompt>,
+
+    /// The radius the last created point in this session was given, offered as
+    /// the prompt's value in place of the data-derived default. A user sizing
+    /// one patch by hand is usually about to size the next one the same way.
+    pub create_point_radius: Option<f32>,
+
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
 
@@ -679,6 +692,8 @@ impl AppState {
             sift_cache: HashMap::new(),
             full_res_cache: HashMap::new(),
             pending_observation_pixel: None,
+            create_point_prompt: None,
+            create_point_radius: None,
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),

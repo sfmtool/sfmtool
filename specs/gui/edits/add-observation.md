@@ -181,6 +181,22 @@ The menu's gating and its effect are covered headlessly above.
 
 ---
 
+## The point at infinity
+
+A point created by [`create-point.md`](create-point.md) is a bearing with one
+sighting, and the observation added here is what gives it a depth. The fit takes
+two passes there: the click first triangulates the track provisionally, and the
+photometric fit then runs against the finite patch that depth gives, because a
+bearing projects into a second camera as the parallel ray rather than as the
+place the surface is. The track is then re-triangulated from the fitted keypoint
+and the angular patch frame rescaled at that final depth. The
+viewer's side of it is unchanged -- the same menu entry, the same version shape,
+the same one log line -- and
+[`../../core/reconstruction/add-observation.md`](../../core/reconstruction/add-observation.md)
+is where the mechanism is.
+
+---
+
 ## Non-goals
 
 - Moving or removing an observation a track already holds.
@@ -188,4 +204,3 @@ The menu's gating and its effect are covered headlessly above.
 - Refitting the point's patch frame, normal or bitmap. Those are what the added
   observation is measured against.
 - A keyboard path. The action names a pixel.
-- Adding an observation of a point at infinity, which no pixel re-triangulates.

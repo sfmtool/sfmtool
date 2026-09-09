@@ -48,6 +48,7 @@ fn frame(
             Some(image_index),
             None,
             None,
+            &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
             None,

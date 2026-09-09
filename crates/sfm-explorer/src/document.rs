@@ -89,6 +89,13 @@ pub enum PointMap {
     /// panel's prepared state across the edit. Every index not named is
     /// unchanged, which is what makes the map the size of the edit.
     Replaced(Vec<(u32, u32)>),
+    /// A point edit that **created** points, naming the indexes they took.
+    ///
+    /// Every index the version already held is unchanged, so the forward
+    /// direction is the identity; the created ones are what the inverse has no
+    /// answer for, which is how an undo drops a selection that sits on one
+    /// rather than carrying it back to an index that held nothing.
+    Created(Vec<u32>),
     /// A whole-value edit's row map: a materialisation's, or the one
     /// `RowMap::by_scan` reads off a bulk edit's input and output.
     Rows(RowMap),
@@ -108,6 +115,7 @@ impl PointMap {
                     .find(|&&(from, _)| from == before)
                     .map_or(before, |&(_, to)| to),
             ),
+            PointMap::Created(_) => Some(before),
             PointMap::Rows(map) => map.forward(before),
             PointMap::Chain(steps) => steps
                 .iter()
@@ -126,6 +134,7 @@ impl PointMap {
                     .find(|&&(_, to)| to == after)
                     .map_or(after, |&(from, _)| from),
             ),
+            PointMap::Created(created) => (!created.contains(&after)).then_some(after),
             PointMap::Rows(map) => map.inverse(after),
             PointMap::Chain(steps) => steps
                 .iter()

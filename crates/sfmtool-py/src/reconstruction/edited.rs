@@ -22,7 +22,9 @@ use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointRecord, RecordObservation, RowMap,
 };
-use sfmtool_core::{add_observation, AddObservationOptions, Point3D};
+use sfmtool_core::{
+    add_observation, create_point, AddObservationOptions, CreatePointOptions, Point3D,
+};
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
 
@@ -406,7 +408,73 @@ impl PyEditedReconstruction {
         d.set_item("zncc", report.zncc)?;
         d.set_item("observation_count", report.observation_count)?;
         d.set_item("position_shift", report.position_shift)?;
+        d.set_item("from_infinity", report.from_infinity)?;
         d.set_item("condition_number", report.condition_number)?;
+        Ok((PyEditedReconstruction { inner: next }, d.unbind()))
+    }
+
+    /// Create a point at infinity along `pixel`'s ray in `image`, with one
+    /// observation there.
+    ///
+    /// One sighting fixes a bearing and no distance, so the point is stored as
+    /// the format stores a bearing: ``w = 0``, with the pixel's unit world-space
+    /// ray as its coordinate. Adding a second observation to it re-triangulates
+    /// it to a finite position. Returns ``(EditedReconstruction, report)``; this
+    /// object is not changed, and the returned value shares its base.
+    ///
+    /// `radius_px` is the patch's half-extent in this image's pixels: nothing in
+    /// a pixel says how large the point's patch is, so the caller names it, and
+    /// the stored frame is the angle that many pixels subtend through the camera
+    /// model, distortion included.
+    ///
+    /// `images` is what every patch kernel takes -- a list of ``HxW[xC]``
+    /// ``uint8`` arrays, one per image of the base, or a prebuilt
+    /// :class:`ImagePyramidSet` -- because the colour and the patch bitmap are
+    /// read out of the photograph. Raises ``ValueError`` with the reason when
+    /// the edit is refused.
+    #[pyo3(signature = (image, pixel, radius_px, images))]
+    fn create_point(
+        &self,
+        py: Python<'_>,
+        image: u32,
+        pixel: [f32; 2],
+        radius_px: f32,
+        images: &Bound<'_, PyAny>,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let posed = PosedViews::from_reconstruction(&self.inner.base);
+        let pyramids = resolve_pyramids(&posed, images)?;
+        let views: Vec<ProjectedImage<'_>> = posed
+            .cameras
+            .iter()
+            .zip(&posed.poses)
+            .zip(pyramids.as_slice())
+            .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+                camera,
+                cam_from_world,
+                pyramid,
+            })
+            .collect();
+        let (next, report) = create_point(
+            &self.inner,
+            image,
+            pixel,
+            radius_px,
+            &views,
+            &CreatePointOptions::default(),
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let d = PyDict::new(py);
+        d.set_item("point", report.point)?;
+        d.set_item("image", report.image)?;
+        d.set_item("pixel", PyArray1::from_vec(py, report.pixel.to_vec()))?;
+        d.set_item(
+            "direction",
+            PyArray1::from_vec(py, report.direction.to_vec()),
+        )?;
+        d.set_item("radius_px", report.radius_px)?;
+        d.set_item("half_extent", report.half_extent)?;
+        d.set_item("color", PyArray1::from_vec(py, report.color.to_vec()))?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 

@@ -32,7 +32,7 @@ use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
-use crate::document::{PointMap, VersionSerial};
+use crate::document::{CreatedPoints, PointMap, VersionSerial};
 use crate::scene::{ImageRef, PointRef, ReconId};
 
 use super::AppState;
@@ -211,6 +211,107 @@ impl AppState {
             ),
         );
         Ok(())
+    }
+
+    /// Create a 3D point at `pixel` in `image`, with a patch of `radius_px`.
+    ///
+    /// A point edit, and the first one that creates a point rather than moving
+    /// one: the version's overlay gains an addition the base has no row for, so
+    /// the version is pushed with `push_creating` and the point's id is minted
+    /// against the point edit's own content hash rather than against a base's.
+    /// The point is created at infinity -- one sighting fixes a bearing and no
+    /// distance -- and adding a second observation to it re-triangulates it.
+    ///
+    /// The image is decoded on demand, as add-observation decodes the ones its
+    /// fit needs: the colour and the patch bitmap come out of the photograph.
+    pub fn create_point(
+        &mut self,
+        image: ImageRef,
+        pixel: [f32; 2],
+        radius_px: f32,
+    ) -> Result<(), String> {
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == image.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let (label, image_name) = {
+            let node = &self.scene[index];
+            if node.history.current().has_feature_indexes() {
+                return Err(
+                    "Creating a point needs an embedded_patches reconstruction.".to_string()
+                );
+            }
+            let name = node
+                .recon()
+                .image_table
+                .images
+                .get(image.index())
+                .map(|im| im.name.clone())
+                .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
+            (node.label.clone(), name)
+        };
+        let decoded = self.decode_views_for(image.recon, &[image.index()])?;
+
+        let node = &mut self.scene[index];
+        let edited = node.history.current();
+        let views = decoded.views();
+        let (next, report) = sfmtool_core::create_point(
+            edited,
+            image.image,
+            pixel,
+            radius_px,
+            &views,
+            &sfmtool_core::CreatePointOptions::default(),
+        )
+        .map_err(|e| format!("Cannot create that point: {e}"))?;
+
+        // The point is in no base, so its id is the point edit's hash and its
+        // place among that edit's creations. The hash is over the record as it
+        // now stands, read back out of the value the edit produced.
+        let record = next.point(report.point).expect("just created").to_record();
+        let created = next
+            .point_edit_hash(std::slice::from_ref(&record))
+            .ok()
+            .map(|hash| CreatedPoints {
+                hash,
+                indexes: vec![report.point],
+            });
+
+        let text = format!("Created point in {image_name} ({label}), radius {radius_px:.1} px");
+        let serial = node.history.push_creating(
+            next,
+            PointMap::Created(vec![report.point]),
+            text.clone(),
+            created,
+        );
+        let parent = version_before(node, serial);
+        // The selection moves to the point that was just made: it is what the
+        // user is now looking at, and what the next edit acts on.
+        self.select_point(PointRef::new(image.recon, report.point as usize));
+        self.create_point_prompt = None;
+        self.create_point_radius = Some(radius_px);
+        self.action_log
+            .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+        Ok(())
+    }
+
+    /// The radius the Create 3D Point prompt offers for `image`, in that
+    /// image's pixels.
+    ///
+    /// Data-derived, because the scale a point's patch wants is the scale the
+    /// reconstruction already works at in that view: the median pixel radius of
+    /// the patches this image's own observations project to, or the median over
+    /// every observation of the node when this image has none, or
+    /// [`FALLBACK_PATCH_RADIUS_PX`] when the node has no patch frames at all.
+    pub fn create_point_default_radius(&self, image: ImageRef) -> f32 {
+        let Some(node) = self.node(image.recon) else {
+            return FALLBACK_PATCH_RADIUS_PX;
+        };
+        let edited = node.history.current();
+        median_projected_radius(edited, Some(image.index()))
+            .or_else(|| median_projected_radius(edited, None))
+            .unwrap_or(FALLBACK_PATCH_RADIUS_PX)
     }
 
     /// Delete one image, and with it its observations and any track that is
@@ -507,6 +608,58 @@ impl AppState {
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
     }
+}
+
+/// The patch radius offered when a node says nothing about what one should be:
+/// no patch frames, or none whose projection is readable. Eight pixels is the
+/// order of a SIFT keypoint's own support at the scales these captures are
+/// detected at, which is the size a hand-placed point is usually after.
+pub const FALLBACK_PATCH_RADIUS_PX: f32 = 8.0;
+
+/// How many observations the median is taken over before the walk stops. A
+/// median of a few hundred samples is the same number as a median of a million,
+/// and the walk runs while a menu is open.
+const RADIUS_SAMPLE_CAP: usize = 512;
+
+/// The median pixel radius of the patches `edited`'s observations project to,
+/// over one image or over every image, or `None` when none of them projects.
+///
+/// The radius of one observation is the mean of its projected affine shape's
+/// two axis lengths, which is the ellipse the Image Detail panel draws around
+/// that keypoint: what the prompt offers is the size of the patches already on
+/// screen beside the click.
+fn median_projected_radius(edited: &EditedReconstruction, image: Option<usize>) -> Option<f32> {
+    let mut radii: Vec<f64> = Vec::new();
+    'points: for index in edited.live_indexes() {
+        let Some(view) = edited.point(index) else {
+            continue;
+        };
+        for (k, obs) in view.observations().iter().enumerate() {
+            let at = obs.image_index as usize;
+            if image.is_some_and(|wanted| wanted != at) {
+                continue;
+            }
+            let Some(keypoint) = view.keypoint_xy(k) else {
+                continue;
+            };
+            let Some(shape) = edited.observation_affine_shape(index, at, keypoint) else {
+                continue;
+            };
+            let u = f64::from(shape[0][0]).hypot(f64::from(shape[1][0]));
+            let v = f64::from(shape[0][1]).hypot(f64::from(shape[1][1]));
+            let radius = 0.5 * (u + v);
+            if radius.is_finite() && radius > 0.0 {
+                radii.push(radius);
+            }
+            if radii.len() >= RADIUS_SAMPLE_CAP {
+                break 'points;
+            }
+        }
+    }
+    if radii.is_empty() {
+        return None;
+    }
+    Some(sfmtool_core::numeric::median_in_place(&mut radii) as f32)
 }
 
 /// The serial of the version `serial` was made from, for the log entry.

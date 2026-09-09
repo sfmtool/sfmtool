@@ -72,6 +72,7 @@ pub struct AddObservationReport {
     pub zncc: f64,
     pub observation_count: usize,
     pub position_shift: f64,
+    pub from_infinity: bool,
     pub condition_number: f64,
 }
 
@@ -82,7 +83,6 @@ pub enum AddObservationError {
     ImageAlreadyInTrack(u32),
     PixelOutsideImage { pixel: [f32; 2], size: (u32, u32) },
     NoPatchFrame(u32),
-    PointAtInfinity(u32),
     ViewsMissing { got: usize, expected: usize },
     LocalizationRefused(u32),
     BelowAcceptanceBar { zncc: f64, bar: f64 },
@@ -153,14 +153,66 @@ The call refuses, producing nothing and touching nothing, when the base's
 observations are `.sift` feature indexes, when the edited index names no live
 point, when the image index is past the image table, when that image already
 observes the point, when the pixel is outside the image's own sensor rectangle,
-when fewer views were supplied than the base has images, when the point carries
-no patch frame, or when the point is at infinity. The order is the cheap checks
-first, so a caller greying a menu entry gets the same answers without decoding
-anything.
+when fewer views were supplied than the base has images, or when the point
+carries no patch frame. The order is the cheap checks first, so a caller greying a
+menu entry gets the same answers without decoding anything.
 
-A point at infinity is refused because it is a direction rather than a place: a
-third bearing corroborates it but re-triangulates nothing, so an edit whose
-second half is a re-triangulation has nothing to do for it.
+### 1a. The point at infinity, which this edit makes finite
+
+A point at infinity is a bearing: it has a direction and no distance, and a
+second bearing is exactly what fixes one. So an observation added to such a
+point does not merely join its track -- it carries the point across the
+finite/infinity boundary, and the report says so in `from_infinity`.
+
+Two things are different for it, and only two.
+
+**The fit takes two passes.** The photometric fit anchors every view at the
+point's own projection, and a bearing has none worth anchoring on: a `w = 0`
+point projects into a second camera as the ray *parallel* to it rather than as
+the place the surface is, so under any parallax those are different pixels and a
+search anchored there would pull the sighting back onto the bearing's projection
+and undo the very depth the click supplies. What the fit needs is a patch that
+stands at a depth, and the click is exactly what supplies one:
+
+1. **Provisional triangulation.** The track plus the clicked pixel is
+   triangulated as it stands, giving a finite provisional position. A degenerate
+   solve refuses here, before anything is rendered -- a click along the bearing
+   itself states the same direction twice and fixes nothing.
+2. **The fit**, over the finite patch that provisional position gives: the
+   stored angular half-vectors scaled by the provisional placement distance,
+   standing at the provisional position, with the same axes. That patch projects
+   near the surface in both views, so the ordinary finite-point path runs
+   unchanged -- the existing view seeded at its stored keypoint, the new one at
+   the click, the same two kernel stages, the same acceptance bar -- and the
+   report carries the ZNCC and the shift it really measured.
+3. **The final triangulation**, from the track with the *fitted* keypoint in it,
+   and the frame resized at **that** depth rather than at the provisional one:
+   the scale is recomputed from the final position, so a fit that moved the
+   sighting moves the patch's size with it.
+
+The registration a created point gets this way is limited by its frame's
+orientation rather than by the fit: a point created from one view carries a
+fronto-parallel frame, which is a guess about the surface. That is a reason to
+expect a pixel of residual on a slanted surface, not a reason to skip the fit --
+the sighting still lands on the appearance the track is known by rather than
+where the hand happened to fall.
+
+**The frame is resized at the triangulated depth.** A `w = 0` point's stored
+half-vectors are angular extents tangent to the direction sphere; the same
+numbers on a finite point metres away would describe a patch the size of a
+radian. They are multiplied by the placement distance -- the distance from the
+camera-cloud centroid to the triangulated position, the same reference and the
+same rescale
+`SfmrReconstruction::materialize_points_at_infinity` applies -- so the patch
+keeps the apparent size it had. The bitmap is kept: resizing the frame does not
+change what the tile shows, and the tile is the appearance the point is known
+by. The normal, zero on a `w = 0` row, becomes the resized frame's own, which is
+the fronto-parallel surfel the tangent frame turns into.
+
+`position_shift` is zero for such a point: it had no position to move from. The
+confidence written to `observation_confidence` is the fit's own score, as for any
+finite point. Everything else -- the refusals, the record, the
+materialisation -- is the same call.
 
 ### 2. The patch the fit registers against
 
@@ -267,6 +319,12 @@ observation is known to the pixel. What it pins:
 - The colour, normal and patch frame come through untouched; the modification
   materialises back into the base index it replaced, with the added observation
   as the track's third row.
+- On a point at infinity: the promotion to `w = 1`, the frame scaled at the
+  placement distance, the bitmap kept and the normal taken from the resized
+  frame, and a second sighting along the same bearing refused by the
+  triangulation. Those live beside the create-point tests
+  ([`create-point.md`](create-point.md)), since the point they act on is one a
+  click created.
 
 ## Non-goals
 
@@ -274,8 +332,10 @@ observation is known to the pixel. What it pins:
   their own.
 - Adding an observation on a `sift_files` reconstruction, which would need the
   format to carry an observation with no feature behind it.
-- Refitting the patch frame, the normal or the bitmap. Those are what the added
-  observation is measured against.
+- Refitting the patch frame or the bitmap. Those are what the added observation
+  is measured against. The frame of a point crossing from infinity is rescaled,
+  which is a change of units rather than a refit, and the normal it then states
+  is that frame read back.
 - Bundle adjustment after the re-triangulation.
 - Deciding whether the fit is good enough for a particular purpose. The report
   carries the score and the caller sets the bar.
