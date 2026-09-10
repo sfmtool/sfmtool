@@ -63,7 +63,10 @@ one version is pushed carrying the pose the viewport is at. `Escape`, or
 `Edit > Cancel Camera Move`, cancels: the viewport snaps back to the camera's
 stored pose and no version is pushed. Anything else that ends the lock
 implicitly, which is `,`/`.`, `[`/`]`, double-clicking another frustum,
-selecting another node, closing the node and an MCP tool that edits it,
+selecting another node, closing the node, an MCP tool that edits it and an
+MCP `set_view` that leaves camera view (a fit, a look-through, a placement or
+an explicit exit; a field-of-view change keeps camera view and so keeps the
+lock, as the zoom controls do),
 **commits** first when the pose has changed by more than the dead band below,
 and drops the lock silently otherwise. Closing is the one that cannot commit
 afterwards, so it commits before the close is even asked about; a lock left over

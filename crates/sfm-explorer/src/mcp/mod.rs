@@ -1054,6 +1054,15 @@ pub(crate) fn apply_as_agent(
             stale.extend(
                 edits.and_then(|id| crate::camera_lock::exit_implicitly_for(viewer, state, id)),
             );
+            // A view command that leaves camera view (a fit, a look-through, a
+            // placement, an explicit exit) is a step away from a camera in
+            // hand, exactly as `,` and `.` are: the lock ends first, as a
+            // commit when it has been moved. A field-of-view change keeps
+            // camera view and so keeps the lock, as the zoom controls do.
+            if matches!(command, Command::SetView { view: ref v } if !matches!(v, ViewCommand::Fov { .. }))
+            {
+                stale.extend(crate::camera_lock::exit_implicitly(viewer, state));
+            }
             let before = state.action_log.revision();
             let outcome = apply_with_window(state, viewer, host, command);
             if matches!(outcome, Outcome::Done(Ok(_))) {

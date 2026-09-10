@@ -1147,9 +1147,8 @@ fn dump_tree() {
 #[test]
 fn moving_a_camera_by_hand_lands_a_version() {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-        KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS,
-        VIRTUAL_KEY, VK_M, VK_RETURN,
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEINPUT, MOUSE_EVENT_FLAGS,
     };
     use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
@@ -1168,25 +1167,6 @@ fn moving_a_camera_by_hand_lands_a_version() {
             },
         };
         unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-    }
-
-    fn key(vk: VIRTUAL_KEY) {
-        for flags in [KEYBD_EVENT_FLAGS(0), KEYEVENTF_KEYUP] {
-            let input = INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: vk,
-                        wScan: 0,
-                        dwFlags: flags,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            };
-            unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-            std::thread::sleep(Duration::from_millis(60));
-        }
     }
 
     let viewer = McpViewer::launch();
@@ -1231,8 +1211,54 @@ fn moving_a_camera_by_hand_lands_a_version() {
     mouse_event(MOUSEEVENTF_LEFTUP);
     std::thread::sleep(Duration::from_millis(400));
 
-    key(VK_M);
-    std::thread::sleep(Duration::from_millis(300));
+    // The lock is taken through the Edit menu over accessibility rather than
+    // by a real `M`: a keystroke only reaches the window that holds keyboard
+    // focus, which a runner's desktop does not reliably grant, and what this
+    // test is about is the hand, not the key. The key is covered headlessly.
+    let press_edit_item = |item: &str| {
+        app.locator(r#"button[name="Edit"]"#)
+            .press()
+            .expect("press Edit menu button");
+        app.locator(&format!(r#"button[name="{item}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"))
+            .press()
+            .unwrap_or_else(|_| panic!("press Edit menu item '{item}'"));
+    };
+    let log_texts = || -> Vec<String> {
+        let log = viewer.call(
+            "get_action_log",
+            serde_json::json!({ "since_revision": 0, "limit": 200 }),
+        );
+        log["structuredContent"]["entries"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| e["text"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    press_edit_item("Move Camera");
+    let deadline = std::time::Instant::now() + CONTENT_TIMEOUT;
+    loop {
+        let texts = log_texts();
+        if texts.iter().any(|t| t.starts_with("Moving the camera of ")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the lock was never taken; the log holds {texts:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // The menu closed over the viewport; put the pointer back where the
+    // drag starts, with the same pause the click above needed.
+    for _ in 0..2 {
+        unsafe { SetCursorPos(centre_x, centre_y).ok() };
+        std::thread::sleep(Duration::from_millis(250));
+    }
 
     // An unmodified drag in camera view is a nodal pan, which under the lock
     // turns the camera itself.
@@ -1245,7 +1271,7 @@ fn moving_a_camera_by_hand_lands_a_version() {
     mouse_event(MOUSEEVENTF_LEFTUP);
     std::thread::sleep(Duration::from_millis(300));
 
-    key(VK_RETURN);
+    press_edit_item("Commit Camera Move");
     std::thread::sleep(Duration::from_millis(500));
 
     // The version: the pose the value holds has moved.

@@ -785,6 +785,12 @@ frame from the scene bounds.
 
 The tool an agent calls immediately before `screenshot`.
 
+A form that leaves camera view (a fit, a look-through, a placement, an explicit
+exit) is a step away from a camera the human holds in hand
+([edits/move-camera.md](edits/move-camera.md)), exactly as `,` and `.` are: the
+lock ends first, as a commit when it has been moved. `fov_short_axis_deg` keeps
+camera view and so keeps the lock.
+
 ```jsonc
 { "fit": null }                             // frame everything drawn
 { "fit": "global" }                         // frame one reconstruction, by label

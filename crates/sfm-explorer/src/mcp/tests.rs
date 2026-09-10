@@ -4237,6 +4237,48 @@ fn move_camera_image_commits_a_lock_held_on_the_same_node_first() {
     );
 }
 
+/// A view command that leaves camera view is a step away from a camera in
+/// hand, as `,` and `.` are: the lock ends first, as a commit when it has been
+/// moved. A field-of-view change keeps camera view, so it keeps the lock.
+#[test]
+fn a_view_command_that_leaves_camera_view_commits_a_held_lock_first() {
+    let (mut state, mut viewer) = editable();
+    hold_the_camera(&mut state, &mut viewer, 1);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "fov_short_axis_deg": 40.0 }),
+    );
+    assert!(
+        viewer.camera_lock.is_some(),
+        "a field-of-view change ended the lock"
+    );
+    assert_eq!(version_count(&state), 1);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_view",
+        json!({ "target": [1.0, 2.0, 3.0] }),
+    );
+    assert!(
+        viewer.camera_lock.is_none(),
+        "the lock survived a placement"
+    );
+    assert!(
+        viewer.camera_view.is_none(),
+        "the placement left camera view up"
+    );
+    assert_eq!(version_count(&state), 2, "the hand's move was committed");
+    let texts: Vec<String> = rows(&state).into_iter().map(|row| row.2).collect();
+    assert!(
+        texts.iter().any(|text| text.starts_with("Moved camera ")),
+        "the commit recorded itself; the log holds {texts:?}"
+    );
+}
+
 /// The rule is the wire's rather than the pose edit's: any edit landing on the
 /// node ends the lock first, since an edit under one would leave the reviewer
 /// holding a camera whose stored pose had moved beneath them.
