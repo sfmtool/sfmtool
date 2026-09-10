@@ -189,3 +189,87 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
     assert!(file.shared_vector(0).is_err());
     assert!(verify_kdf::<u8>(&corrupt, roomy()).is_err());
 }
+
+/// The per-section decoded sizes must be the real uncompressed lengths, not the
+/// stored frame lengths the ZIP directory reports.
+///
+/// Entries are STORE-wrapped zstd frames, so `uncompressed_size` from the
+/// directory equals the compressed size for every entry — a summary built on it
+/// reports a 100% compression ratio everywhere, which looks like a plausible
+/// answer rather than a broken one. This asserts against sizes computed from the
+/// data that was written.
+#[test]
+fn summary_decoded_sizes_are_uncompressed_lengths() {
+    // Highly compressible: all-zero vectors, so a correct decoded size must
+    // come out far larger than the stored frame.
+    let vectors = vec![0u8; 3 * 2];
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sizes.kdf");
+    write_kdf(
+        &path,
+        &tiny_u8(&vectors),
+        None,
+        &KdfWriteOptions::tree_local(),
+    )
+    .unwrap();
+
+    let summary = kdf_summary(&path, 1 << 20).unwrap();
+    let section = |name: &str| {
+        summary
+            .sections
+            .iter()
+            .find(|s| s.section == name)
+            .unwrap_or_else(|| panic!("no {name} section"))
+    };
+
+    // Three features, dimension 2, one uint8 vector row each.
+    assert_eq!(section("tree_vectors").decoded_bytes, 3 * 2);
+    // Three nodes, ten uint32 columns each.
+    assert_eq!(section("tree_nodes").decoded_bytes, 3 * 10 * 4);
+    // One uint8 split per node.
+    assert_eq!(section("tree_splits").decoded_bytes, 3);
+    // One uint32 feature ID per feature.
+    assert_eq!(section("tree_feature_ids").decoded_bytes, 3 * 4);
+
+    // The JSON entries are decoded rather than guessed, so they are nonzero and
+    // differ from their stored frames.
+    let metadata = section("metadata");
+    assert!(metadata.decoded_bytes > 0);
+    assert!(
+        metadata.decoded_bytes > metadata.compressed_bytes,
+        "JSON should compress: {metadata:?}"
+    );
+
+    // Nothing may be left unaccounted for.
+    let summed: u64 = summary.sections.iter().map(|s| s.decoded_bytes).sum();
+    assert_eq!(summed, summary.payload_decoded_bytes);
+    assert!(summary.file_bytes > summary.payload_compressed_bytes);
+}
+
+/// A shared-layout file accounts for its descriptor corpus and row map.
+#[test]
+fn summary_accounts_for_the_shared_corpus_and_row_map() {
+    let vectors = [0u8, 0, 1, 1, 9, 9];
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shared.kdf");
+    write_kdf(&path, &tiny_u8(&vectors), None, &KdfWriteOptions::shared(2)).unwrap();
+
+    let summary = kdf_summary(&path, 1 << 20).unwrap();
+    let names: Vec<&str> = summary
+        .sections
+        .iter()
+        .map(|s| s.section.as_str())
+        .collect();
+    assert!(names.contains(&"shared_vectors"));
+    assert!(names.contains(&"shared_row_map"));
+    assert!(!names.contains(&"tree_vectors"));
+    assert_eq!(summary.descriptor_storage, "shared");
+
+    let row_map = summary
+        .sections
+        .iter()
+        .find(|s| s.section == "shared_row_map")
+        .unwrap();
+    // One uint32 storage row per feature.
+    assert_eq!(row_map.decoded_bytes, 3 * 4);
+}

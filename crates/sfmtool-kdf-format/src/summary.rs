@@ -23,10 +23,15 @@ use crate::types::{KdfError, Metadata};
 
 /// One bucket of entries, named by the role its entries play.
 ///
-/// `decoded_bytes` is what the arrays occupy in memory, `compressed_bytes` what
-/// they occupy on disk. Their ratio is the compression the corpus actually
-/// achieved in the order this file stored it, which is the number the format
-/// spec's size projections could only estimate from proxy orderings.
+/// `decoded_bytes` is what the arrays occupy in memory, `compressed_bytes` the
+/// zstd frame stored on disk, excluding ZIP headers. Their ratio is the
+/// compression the corpus actually achieved in the order this file stored it,
+/// which is the number the format spec's size projections could only estimate
+/// from proxy orderings.
+///
+/// The decoded size comes from the shape in each entry's name, not from the ZIP
+/// directory: entries are STORE-wrapped zstd frames, so the directory's
+/// "uncompressed" size is the frame length and would make every ratio 100%.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfSection {
     /// Role of the entries in this bucket, e.g. `"tree_vectors"`.
@@ -66,6 +71,45 @@ pub struct KdfSummary {
     pub payload_decoded_bytes: u64,
     /// Per-role buckets, in a stable order by section name.
     pub sections: Vec<KdfSection>,
+}
+
+/// Decoded size of an array entry, from the shape its name encodes.
+///
+/// **The ZIP directory cannot answer this.** Entries are STORE-compressed
+/// wrappers around an independent zstd frame, so both sizes the directory
+/// carries are the *frame* length; taking `uncompressed_size` for the decoded
+/// size reports a compression ratio of exactly 100% for every entry in every
+/// file, which is wrong in a way that looks entirely plausible.
+///
+/// The names carry the shape instead, which is what they are for. Every array
+/// entry ends `{...}.{counts}.{dtype}.zst`, so the decoded length is the product
+/// of the decimal counts and the scalar width. Returns `None` for `.json.zst`
+/// entries, whose size their name does not describe.
+fn decoded_bytes_from_name(name: &str) -> Option<u64> {
+    let file = name.rsplit('/').next()?;
+    let mut parts: Vec<&str> = file.split('.').collect();
+    if parts.pop()? != "zst" {
+        return None;
+    }
+    let width: u64 = match parts.pop()? {
+        "uint8" => 1,
+        "float32" => 4,
+        "uint32" => 4,
+        "uint128" => 16,
+        _ => return None,
+    };
+    // Trailing decimal tokens are the shape; the leading token is the stem.
+    let mut elements: u64 = 1;
+    let mut saw_count = false;
+    for token in parts.iter().skip(1) {
+        let count: u64 = token.parse().ok()?;
+        elements = elements.checked_mul(count)?;
+        saw_count = true;
+    }
+    if !saw_count {
+        return None;
+    }
+    elements.checked_mul(width)
 }
 
 /// Classify an entry by the role its name encodes.
@@ -132,6 +176,7 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
     let mut payload_compressed = 0u64;
     let mut payload_decoded = 0u64;
     let mut metadata_index = None;
+    let mut json_entries: Vec<(usize, String)> = Vec::new();
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;
         if entry.is_dir() {
@@ -144,7 +189,18 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         if name == "metadata.json.zst" {
             metadata_index = Some(i);
         }
-        let (compressed, decoded) = (entry.compressed_size(), entry.size());
+        // `entry.size()` is the stored zstd frame, not the decoded array; see
+        // `decoded_bytes_from_name`. JSON entries carry no shape in their name,
+        // so they are decoded after this pass — there are at most four of them
+        // and they are small.
+        let compressed = entry.compressed_size();
+        let decoded = match decoded_bytes_from_name(&name) {
+            Some(bytes) => bytes,
+            None => {
+                json_entries.push((i, name.clone()));
+                0
+            }
+        };
         payload_compressed += compressed;
         payload_decoded += decoded;
         let key = section_of(&name);
@@ -157,6 +213,24 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         bucket.entries += 1;
         bucket.compressed_bytes += compressed;
         bucket.decoded_bytes += decoded;
+    }
+
+    // Decode the JSON entries for their true size, so a per-section ratio means
+    // the same thing everywhere in the table.
+    for (i, name) in &json_entries {
+        let mut entry = archive.by_index(*i)?;
+        if entry.size() > max_metadata_bytes as u64 {
+            return Err(KdfError::ResourceLimit(format!(
+                "{name} is over the {max_metadata_bytes}-byte limit"
+            )));
+        }
+        let mut frame = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut frame)?;
+        let decoded = zstd::decode_all(&frame[..])?.len() as u64;
+        payload_decoded += decoded;
+        if let Some(bucket) = buckets.get_mut(section_of(name)) {
+            bucket.decoded_bytes += decoded;
+        }
     }
 
     let index = metadata_index

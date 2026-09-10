@@ -267,6 +267,34 @@ def test_the_layouts_differ_in_exactly_the_sections_they_should(tmp_path):
     )
 
 
+def test_summary_reports_real_decoded_sizes_not_the_stored_frame(tmp_path):
+    """Decoded bytes must be the uncompressed length, not the frame length.
+
+    `.kdf` entries are ZIP STORE wrapping a zstd frame, so the ZIP directory's
+    "uncompressed" size equals the compressed size. A summary built on it reports
+    every section at exactly 100% — a plausible-looking number rather than an
+    obvious failure. Compressible descriptors make the difference unmistakable.
+    """
+    # All-zero descriptors compress to almost nothing, so a decoded size that
+    # merely echoed the stored frame would be off by orders of magnitude.
+    descriptors = np.zeros((_N, _DIM), dtype=np.uint8)
+    descriptors[:, 0] = np.arange(_N, dtype=np.uint8)  # keep the tree splittable
+    forest = _forest(descriptors)
+    summary = kdf_file_summary(str(_export(tmp_path, forest, "tree_local", {})))
+
+    vectors = next(s for s in summary["sections"] if s["section"] == "tree_vectors")
+    # Four trees, each holding one uint8 vector row per feature.
+    assert vectors["decoded_bytes"] == 4 * _N * _DIM
+    assert vectors["compressed_bytes"] < vectors["decoded_bytes"] // 10
+
+    # And the whole payload compresses, rather than reporting a 1.0 ratio.
+    assert summary["payload_compressed_bytes"] < summary["payload_decoded_bytes"]
+    assert (
+        sum(s["decoded_bytes"] for s in summary["sections"])
+        == (summary["payload_decoded_bytes"])
+    )
+
+
 def test_verify_reads_the_whole_file_and_reports_what_it_saw(tmp_path):
     forest = _forest(_descriptors())
     report = verify_kdf(
