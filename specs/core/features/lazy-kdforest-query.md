@@ -351,8 +351,8 @@ below therefore report decoded bytes and read counts directly.
 
 ## What the measurements found
 
-Measured on the three corpora below, at four trees and 16-feature leaves, k = 2,
-a 128-leaf check budget and zstd level 3. Timings are medians of repeated runs on
+Measured on the three corpora below at four trees and 16-feature leaves, k = 2, a
+128-leaf check budget and zstd level 3. Timings are medians of repeated runs on
 one Windows desktop with a local NVMe SSD; the OS page cache is uncontrolled, so
 "cold" means a fresh reader with an empty application cache and nothing stronger.
 
@@ -362,74 +362,103 @@ one Windows desktop with a local NVMe SSD; the OS page cache is uncontrolled, so
 | `dino_dog_toy` | 85 | 694,320 | 262.18 MiB | 78.07 MiB | 3.36x |
 | DinoLedge | 1,196 | 9,701,948 | 3,840.61 MiB | 1,157.26 MiB | 3.32x |
 
-**The size win is the robust result.** One shared corpus is consistently 3.3-3.4x
-smaller than four tree-local copies, across three corpora spanning 276x in size.
-It falls short of the naive 4x because the tree node, split and feature-ID arrays
-are stored either way and the shared layout adds a feature-ID-to-row map, 32.8 MB
-compressed at 9.7M features.
+**One shared corpus is consistently 3.3-3.4x smaller** than four tree-local
+copies, across corpora spanning 276x in size. It falls short of the naive 4x
+because the tree node, split and feature-ID arrays are stored either way and the
+shared layout adds a feature-ID-to-row map — 32.8 MB compressed at 9.7M features,
+against 2.8 GB saved.
 
-**Descriptors compress to 76.4% in kd-tree leaf order.** The size projections in
+**Descriptors compress to 76.4% in kd-tree leaf order.** The projections in
 [kdf-file-format.md](../../formats/kdf-file-format.md) had to estimate this from
 image order and a random shuffle, and said neither bounded leaf order. Leaf order
-turns out to sit just below image order's 76.96-76.98%, so the proxy was accurate
-to within a percentage point.
+sits just below image order's 76.96-76.98%, so the proxy was sound.
 
-**Which layout is faster depends entirely on whether the file fits in the cache**,
-and the two regimes point opposite ways. With a 4 GiB budget holding all of
-DinoLedge's tree-local file, a warm 1,000-query batch takes 0.54 s tree-local
-against 10.62 s shared. With 64-1024 MiB budgets, where neither layout fits, a
-500-query batch takes 3.1-3.3 s tree-local against 3.2-3.8 s shared — a rounding
-error apart, while the shared file is 3.3x smaller.
+**The first thing the benchmark found was a cache defect, not a layout result.**
+`Cache::touch` promoted an entry on every hit by linear-searching a list of every
+resident key, making a cache hit O(resident entries) — 33.5 us per fully-cached
+access on a file holding ~23,000 descriptor blocks. That charged the shared
+layout hardest, because it holds many small blocks rather than a few large chunks
+and resolves each descriptor separately. Fixed in
+[`cache.rs`](../../../crates/sfmtool-kdf-format/src/cache.rs) by stamping entries
+with a counter; per-hit cost is now flat at ~0.19 us regardless of cache size.
+Every number below is post-fix, and the layout comparison inverted when it
+landed: read the pre-fix figures in this file's history as a measurement of that
+defect rather than of the layouts.
 
-**The resident-case gap is a cache bug, not a property of the layout.** Both
-batches above are served entirely from cache with **zero reads**, at 2.9 us per
-hit tree-local and 33.5 us shared — against the tens of nanoseconds a mutex and a
-hash lookup should cost. Holding hits and reads fixed and varying only how many
-objects the cache holds isolates why: on `dino_dog_toy`, four shared exports
-differing only in block size take 0.44, 0.69, 1.09 and 3.57 us per hit as the
-entry count rises from 1,636 to 6,976, with the hit count identical and no row
-reading a byte. `Cache::touch` promotes an entry by linear-searching a
-`VecDeque` of every resident key and then removing from the middle, so each hit
-costs O(resident entries). Tree-local is cheaper only because it holds a few
-thousand large chunks rather than tens of thousands of small blocks, and asks
-half as often — the shared path resolves each descriptor separately, 317,372
-lookups against 185,501 for identical work. Both halves have contained fixes,
-proposed in [drafts/kdf-cache-hit-cost.md](../../drafts/kdf-cache-hit-cost.md).
-Choosing a shipping default on today's resident-case timing would be freezing a
-decision on a number those fixes are expected to move.
+**The shared layout is faster in every regime measured, and far more stable.**
+Cold and warm times for a 1,000-query batch against DinoLedge with a 4 GiB
+budget, and a 2,000-query batch against `dino_dog_toy` with a 256 MiB budget:
 
-**Chunk size trades cold-start cost against read count, steeply.** Seeding a
-four-tree search costs four independent subtree misses whatever the query, so
-read amplification on a single cold query rises with chunk size — on DinoLedge
-tree-local, 187x at 256 KiB to 4,981x at 16 MiB, with the batch slowing 3.4 s to
-25.1 s to match. The shared layout is far flatter, 447x to 830x, because its
-descriptor blocks are sized independently of tree chunks and its tree chunks hold
-no vectors. This is the one axis where the layouts differ in kind rather than
-degree.
+| Chunk target | DinoLedge tree-local | DinoLedge shared | `dino` tree-local | `dino` shared |
+|---|---|---|---|---|
+| 256 KiB | 3.23 s / 0.04 s | 2.56 s / 0.08 s | 1.36 s / 1.14 s | 0.30 s / 0.10 s |
+| 1 MiB | 4.37 s / 0.04 s | 2.44 s / 0.08 s | 3.17 s / 2.99 s | 0.27 s / 0.10 s |
+| 4 MiB | 10.01 s / 6.38 s | 5.17 s / 0.08 s | 14.95 s / 15.05 s | 0.27 s / 0.10 s |
+| 8 MiB | 14.97 s / 11.43 s | 3.63 s / 0.08 s | 29.11 s / 29.63 s | 0.24 s / 0.10 s |
+| 16 MiB | 25.19 s / 21.59 s | 3.63 s / 0.07 s | 57.99 s / 58.48 s | 0.25 s / 0.10 s |
 
-**Shared block size trades single-query latency against batch throughput.** On
-DinoLedge at a 1 MiB chunk target, 16 KiB blocks give the best cold-query
-amplification (164x) and the worst batch (14.4 s, 55,938 reads); 1 MiB blocks
-invert it (4,097x, 4.9 s, 6,289 reads). 256 KiB sits near the knee of both.
+The shared columns barely move. The tree-local columns vary 43x on `dino_dog_toy`
+across the same chunk range, because four vector copies do not fit the budget and
+larger chunks make each eviction cost more to undo. Tree-local's one win is a
+fully resident warm batch — 0.04 s against 0.08 s on DinoLedge — where it scans a
+leaf's descriptors in place while the shared path resolves them one at a time.
+Both are under a tenth of a second, and it is the only cell where tree-local
+leads.
 
-**More query workers did not help any corpus measured.** Per-query work is
+**Shared reaches its plateau on a much smaller budget**, which is the same
+advantage seen from the other side. On `dino_dog_toy`, shared is at full speed by
+256 MiB (0.24 s) while tree-local still needs 1 GiB (0.48 s) and takes 8.03 s at
+64 MiB. A file 3.3x smaller fits a cache 3.3x sooner.
+
+**Smaller shared blocks are now strictly better.** Block size no longer trades
+against throughput — on DinoLedge all four sizes run 2.23-2.31 s cold and
+0.07-0.08 s warm — while cold-start read amplification still rises steeply with
+it, 164x at 16 KiB to 4,097x at 1 MiB. The pre-fix measurement showed 16 KiB
+blocks as the slowest option by 3x; that was the cache defect, which many small
+entries provoked hardest.
+
+**Chunk size still drives cold-start amplification steeply**, tree-local 96x to
+4,373x on `dino_dog_toy` across 256 KiB to 16 MiB, because seeding a four-tree
+search costs four independent subtree misses whatever the query. Shared is far
+flatter, 221x to 576x, since its tree chunks carry no vectors.
+
+**More query workers helped no corpus measured.** Per-query work is
 sub-millisecond at these budgets, so rayon's per-task overhead dominates:
-seoul_bull goes 0.12 s to 0.29 s from one worker to eight, and `dino_dog_toy`
-shared 0.70 s to 1.34 s. Only DinoLedge tree-local improved at all, 3.16 s to
-2.95 s. The default of one worker stands.
+`dino_dog_toy` shared goes 0.24 s to 0.36 s from one worker to eight. The default
+of one worker stands.
 
-**Recall and parity are unaffected by storage, as designed.** Every cell returned
+**Recall and results are unaffected by storage, as designed.** Every cell returned
 neighbors and distances identical to the in-memory forest, and recall@1 against
-exhaustive search was identical across layouts within a corpus: 0.433, 0.557 and
-0.657 respectively at a 128-leaf budget.
+exhaustive search was identical across layouts within a corpus — 0.433, 0.557 and
+0.657 at a 128-leaf budget.
+
+### What this suggests as defaults
+
+On this evidence the shared layout is the better default: 3.3x smaller, faster or
+equal in every regime, insensitive to a chunk-size choice that swings tree-local
+by 43x, and at full speed on a budget a third the size. Small descriptor blocks —
+16 to 64 KiB — cost nothing in throughput and buy an order of magnitude in
+cold-start amplification. A 1 MiB chunk target and one query worker remain
+reasonable.
+
+The API keeps requiring an explicit choice regardless. Tree-local's resident warm
+case is genuinely faster, the margin is a property of the corpus and the budget
+rather than a constant, and a caller who knows their working set fits in memory
+has a real reason to pick it.
 
 ### What this does not settle
 
-No shipping default is set here, and callers still choose a layout explicitly.
-The resident-case measurement is waiting on the batching work above, and these
-runs cover one machine, one filesystem, `uint8` descriptors, and four trees. The
-twenty-tree case, where the shared corpus would avoid nineteen copies rather than
-three, is where the size argument is strongest and is unmeasured.
+These runs cover one machine, one filesystem, `uint8` descriptors and four trees.
+The twenty-tree case, where a shared corpus avoids nineteen copies rather than
+three and the size argument is strongest, is unmeasured. So is `float32`, which
+the format carries and the Python bindings do not expose.
+
+The shared layout still resolves descriptors one at a time, at roughly twice
+tree-local's cache-hit count for identical work; returning a borrow under the
+existing pin and grouping a leaf's reads by block would close the one cell where
+tree-local leads. That remains proposed in
+[drafts/kdf-shared-descriptor-reads.md](../../drafts/kdf-shared-descriptor-reads.md),
+now as the only outstanding half.
 
 ## Acceptance checks
 

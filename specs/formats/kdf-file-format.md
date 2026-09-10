@@ -438,9 +438,9 @@ one million 128-byte vectors and four trees that is 512 MB of uncompressed
 vector bytes, before IDs, nodes and compression. A single shared corpus saves
 space but may require many extra chunks for one leaf. The benchmark in the
 companion query design has measured both layouts: the shared corpus is 3.3-3.4x
-smaller across corpora spanning 276x in size, and how the two compare on time
-depends on whether the file fits in the reader's cache. Because the format
-carries both, choosing between them does not change the version-1 wire contract.
+smaller across corpora spanning 276x in size, and is faster in every regime
+measured except a fully resident warm batch. Because the format carries both,
+choosing between them does not change the version-1 wire contract.
 
 The grouped integer node columns are a deliberate adaptation of the usual
 one-entry-per-column convention: ten separate entries per chunk would cost ten
