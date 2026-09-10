@@ -100,7 +100,7 @@ place.
 
 ## The tool surface
 
-Thirty-five tools. Nine read, twenty-four write, one that writes a file, and
+Thirty-six tools. Nine read, twenty-five write, one that writes a file, and
 one that closes the loop by handing back a picture.
 
 | Tool | Kind | What it does |
@@ -135,13 +135,14 @@ one that closes the loop by handing back a picture.
 | `add_observation` | write | Add one observation of a point to an image, at a pixel |
 | `create_point` | write | Create a 3D point at a pixel, at infinity along its ray |
 | `remove_observation` | write | Take one observation out of a track and re-triangulate it |
+| `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the nine reads and `screenshot` carry
-`readOnlyHint: true`, the twenty-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the twenty-five writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1320,9 +1321,9 @@ different number for a maximized window and the same one for a normal window
 
 ### The editing family
 
-Ten tools that give a node a new version or move its cursor, plus the read that
-lists them and the one that writes a file. What the twelve share is worth
-stating once rather than twelve times.
+Eleven tools that give a node a new version or move its cursor, plus the read
+that lists them and the one that writes a file. What the thirteen share is worth
+stating once rather than thirteen times.
 
 **Each one is a single `AppState` call**: `delete_point`, `add_observation_at`,
 `resect_image_in_place`, `bundle_adjust`, `undo`, `save_node_as`. It is the
@@ -1357,10 +1358,11 @@ is that sentence without the `(v6 → v7)` the entry appends.
 **A refusal pushes no version**, answers as a domain error in the state's own
 words, and leaves the Action Log one failed row. Which of the two writes that
 row depends on who worded the refusal: most `AppState` edits return theirs, and
-the drain records `{tool} failed: {message}`; the in-place resection and the
-adjustment record their own (`Resect IMG_0042 in seoul_bull refused: …`,
-`Bundle adjust of seoul_bull refused: …`), because the vocabulary of that
-refusal belongs to the operation and not to the tool that asked for it. The
+the drain records `{tool} failed: {message}`; the in-place resection, the
+adjustment and the camera move record their own (`Resect IMG_0042 in seoul_bull
+refused: …`, `Bundle adjust of seoul_bull refused: …`, `Cannot move IMG_0004
+(seoul_bull): …`), because the vocabulary of that refusal belongs to the
+operation and not to the tool that asked for it. The
 drain writes its row only when the application recorded no failure of its own,
 so one refusal is one entry either way (§ "Threading").
 
@@ -1369,7 +1371,15 @@ past the deleted one; it, the resection, the adjustment and every cursor move
 renumber points. An agent holding an index it
 read before such a call is holding a statement about something else, and should
 re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
-is what it is for.
+is what it is for. `move_camera_image` renumbers nothing, and is with them only
+in what the drain forgets afterwards: the panels' cached geometry.
+
+**A camera the human is holding is committed first.** An edit arriving on a node
+somebody is placing a camera on with the Move Camera lock ends that lock before
+it lands, as a commit when the camera has been moved and silently otherwise
+([edits/move-camera.md](edits/move-camera.md)). The lock is viewport state, so
+the step is the drain's rather than any tool's (§ "Threading"), and it holds for
+every edit in this family rather than for `move_camera_image` alone.
 
 ### `get_history`
 
@@ -1543,6 +1553,56 @@ Both edits that read pixels decode the photographs they need on demand, through
 the node's full-resolution cache, a handful of images per edit, and nothing
 pre-decodes the table. An image the viewer's process cannot read is a refusal
 naming it.
+
+### `move_camera_image`
+
+One camera image put at a pose, as one version of its reconstruction. It is the
+same `AppState::move_camera` a human reaches through the Move Camera lock
+([edits/move-camera.md](edits/move-camera.md)): the same label, the same Action
+Log line, the same undo, with the pose sent rather than steered.
+
+```jsonc
+// { "reconstruction_label": "seoul_bull", "camera_image": 3,
+//   "world_from_camera": { "quaternion_wxyz": [0.71, 0, 0.71, 0],
+//                          "translation": [1.5, -0.2, 0.9] } }
+{
+  "reconstruction_label": "seoul_bull",
+  "serial": "v8",
+  "cursor": "v8",
+  "label": "Moved camera IMG_0004.jpg (seoul_bull): 3.20 deg, 0.140 scene units",
+  "dirty": true,
+  "report": "Moved camera IMG_0004.jpg (seoul_bull): 3.20 deg, 0.140 scene units, 214 points re-solved, residual 1.9 → 0.8 px (v7 → v8)"
+}
+```
+
+**The pose is world-from-camera in the reconstruction's own frame.** The
+rotation carries camera axes onto world axes and the translation *is* the camera
+centre, which is the `center` field `get_camera_image` reports, so an agent
+reads a pose, adjusts the centre, and sends it straight back. The quaternion is
+normalised on arrival. Where the camera then stands is read back with
+`get_camera_image` rather than restated here, so the reply is the version this
+edit pushed, like every other edit's.
+
+The tracks that image observes are re-triangulated around the new pose where two
+or more pixels still see them; a bearing only it sees turns with it, and
+everything else keeps its position. The image table does not move and no point
+is renumbered, but the geometry a panel cached is a statement about a value the
+node no longer holds, so the drain drops those caches as it does after a bulk
+edit.
+
+**The lock is not on the wire.** An agent has no viewport to steer, and the pose
+is the whole input; there is nothing for a lock to add. What the wire owes a
+lock a *human* is holding is to end it before an edit lands on that node,
+committing it when it has been moved exactly as `,` / `.` or a double-click on
+another frustum would, because an edit landing underneath one would leave the
+reviewer holding a camera whose stored pose had moved beneath them. That is the
+whole editing family's rule and not this tool's: it happens where the GUI thread
+applies the command (§ "Threading"), the lock being the viewport's rather than
+the state's.
+
+The refusals are the tool's own (no such reconstruction, no such camera image)
+and the core function's (the image carries no pose, the pose is not finite),
+the latter worded by the state and recorded once.
 
 ### `resect_camera_image_in_place` / `bundle_adjust`
 
@@ -1740,9 +1800,10 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 **refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
 same words the agent receives.
 
-**A refusal the state already recorded is not recorded twice.** Two `AppState`
-methods word their own: `resect_image_in_place` and `bundle_adjust`, whose
-refusals belong to the operation's vocabulary rather than to the tool that asked
+**A refusal the state already recorded is not recorded twice.** Three `AppState`
+methods word their own: `resect_image_in_place`, `bundle_adjust` and
+`move_camera`, whose refusals belong to the operation's vocabulary rather than
+to the tool that asked
 for it. So the drain writes its row only where the application of that command
 recorded no failed entry of its own. The test is the Action Log's revision
 before and after, which needs no list of which methods those are and cannot fall
@@ -1758,7 +1819,21 @@ the drain's job rather than the command vocabulary's: `apply_as_agent` reports
 the nodes each successful command renumbered and the drain forgets them, exactly
 as the Scene panel's menu and the Edit History panel do around the same
 `AppState` calls. A point edit is not among them, for the same reason the GUI
-keeps its caches across one.
+keeps its caches across one. `move_camera_image` is among them without
+renumbering anything: it installs a whole new base, so the geometry those caches
+describe has moved even though every index still means what it meant.
+
+**The drain ends a camera held in hand before an editing command lands.** The
+Move Camera lock is `Viewer3D`'s, and an edit applied under one would leave the
+reviewer holding a camera whose stored pose had moved beneath them, so before
+each editing command `apply_as_agent` resolves the node it names and ends a lock
+held on that node, committing it where the camera has been moved and dropping it
+silently otherwise, exactly as every other step away from a lock does
+([edits/move-camera.md](edits/move-camera.md)). A commit made this way is a
+version of its own, recorded before the edit that displaced it, and the node it
+pushed on joins the ones whose panel caches the drain forgets. The cursor moves
+are not among the commands that do this, for the same reason the Edit menu's own
+Undo does not end a lock: a held camera survives a step of the cursor.
 
 One tool words its own entries, and for one reason — no state method owns the
 change. `set_window_layout` goes through `AppState::apply_window_layout`, which
@@ -1845,6 +1920,10 @@ pub(crate) enum Command {
                   pixel: [f32; 2], radius_px: Option<f32> },
     RemoveObservation { reconstruction_label: String, point: goto_point::PointQuery,
                         camera_image: CameraImageSel },
+    /// World-from-camera in the node's own frame, in the pieces the wire
+    /// carries: a rotation quaternion and a camera centre.
+    MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
+                      quaternion_wxyz: [f64; 4], translation: [f64; 3] },
     ResectCameraImageInPlace { reconstruction_label: String,
                                camera_image: CameraImageSel, from_matches: bool },
     BundleAdjust { reconstruction_label: String, release_focal: bool },
@@ -1854,6 +1933,9 @@ pub(crate) enum Command {
 }
 
 impl Command {
+    /// The node whose data this command is about to change, read before it is
+    /// applied, for the drain to end a camera held in hand on that node.
+    fn edits(&self) -> Option<&str>;
     /// The node this command may have renumbered, once it has succeeded, for
     /// the drain to drop what the panels cached about the table it had.
     fn renumbers(&self) -> Option<&str>;
@@ -1928,7 +2010,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes thirty-four of the thirty-five tools testable in a headless
+/// makes thirty-five of the thirty-six tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -1972,9 +2054,9 @@ messages and its JSON shapes under headless test, and leaves exactly one tool
 (`screenshot`) needing a window.
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other thirty-four answer with JSON; squeezing an image through a
+picture and the other thirty-five answer with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-thirty-four return a plain `Result<Value, ToolError>` and are widened at the
+thirty-five return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
@@ -2049,7 +2131,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Thirty-five tools are cheap
+relaunch would call tools the new binary does not have. Thirty-six tools are cheap
 to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
 there are no authorization contexts to share a result across.
 
@@ -2267,6 +2349,16 @@ where a test hands no host over.
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
   `AppState` calls these make.
+- **`move_camera_image` pushes a version the reply names**, with the camera
+  standing where the call put it in the node's own frame, the `report` the
+  sentence the edit recorded, and that one sentence in the log as `Mcp`; an
+  image index past the table is refused, pushes nothing and leaves one failed
+  row.
+- **A held Move Camera lock is committed before an edit lands on its node**,
+  which is the wire's rule rather than the pose edit's: `move_camera_image`
+  leaves the hand's move and the wire's as two versions, and a `delete_point`
+  on the same node commits the lock too, its sentence recorded before the one
+  that displaced it.
 - **A refused edit pushes no version and is logged once**: an out-of-range
   camera image leaves one failed row, and a `from_matches` resection with no
   file chosen leaves one failed row that is the **state's** sentence rather than
@@ -2296,7 +2388,7 @@ where a test hands no host over.
   optional ones default to what the schemas say.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **The catalog is thirty-five tools**, nine of them reads and one of them the
+- **The catalog is thirty-six tools**, nine of them reads and one of them the
   `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

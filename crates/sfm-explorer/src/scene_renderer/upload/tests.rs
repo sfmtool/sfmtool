@@ -1577,7 +1577,12 @@ fn sync(
     if renderer.additions_changed(id, edited) {
         renderer.upload_additions(device, queue, id, edited);
     }
-    renderer.update_deleted_mask(queue, id, &edited.deleted_points);
+    renderer.update_point_mask(
+        queue,
+        id,
+        &edited.deleted_points,
+        &std::collections::HashSet::new(),
+    );
     uploaded
 }
 

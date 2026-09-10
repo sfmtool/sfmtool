@@ -261,6 +261,24 @@ pub(super) fn image_context_menu(
     }
 
     ui.separator();
+    // The hand, beside the two estimators: where a resection re-computes a
+    // pose from correspondences, this hands the camera to the reviewer. It
+    // enters camera view first, because the lock *is* camera view with the
+    // camera coming along.
+    let move_camera = ui.add(egui::Button::new("Move Camera")).on_hover_text(
+        "Look through this image and take its camera in hand: every navigation \
+         input moves it, and M or Enter keeps the pose as a version of this \
+         reconstruction.",
+    );
+    if out
+        .hit(row_id(node, &format!("move_camera_{index}")), move_camera)
+        .clicked()
+    {
+        out.response.move_camera = Some(image);
+        ui.close();
+    }
+
+    ui.separator();
     // No confirmation: this is an edit with a history behind it, and Undo is
     // the answer to a mis-click. The resections above show their answer as a
     // second node precisely because they *cannot* be undone.

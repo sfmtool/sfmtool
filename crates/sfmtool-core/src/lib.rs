@@ -38,11 +38,12 @@ pub mod spherical;
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use reconstruction::{
-    add_observation, create_point, remove_observation, AddObservationError, AddObservationOptions,
-    AddObservationReport, CreatePointError, CreatePointOptions, CreatePointReport, EditError,
-    EditedReconstruction, ImageTable, ObservationSource, Point3D, PointConstraintColumns,
-    PointRecord, PointSet, PointView, ReconstructionError, RecordObservation,
-    RemoveObservationError, RemoveObservationReport, RowMap, SfmrImage, SfmrReconstruction,
+    add_observation, create_point, move_camera, remove_observation, AddObservationError,
+    AddObservationOptions, AddObservationReport, CreatePointError, CreatePointOptions,
+    CreatePointReport, EditError, EditedReconstruction, ImageTable, MoveCameraError,
+    MoveCameraReport, ObservationSource, Point3D, PointConstraintColumns, PointRecord, PointSet,
+    PointView, ReconstructionError, RecordObservation, RemoveObservationError,
+    RemoveObservationReport, ReprojectionSample, RowMap, SfmrImage, SfmrReconstruction,
     TrackObservation,
 };
 /// The reconstruction-level bundle adjustment, which is a different function

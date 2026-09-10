@@ -173,6 +173,10 @@ pub struct SceneGraphResponse {
     /// `Delete Image` chosen on an image row. A bulk edit on the node it
     /// belongs to, carried out by `AppState::delete_image` after the frame.
     pub delete_image: Option<ImageRef>,
+    /// `Move Camera` chosen on an image row: look through that image and take
+    /// its camera in hand. Not an edit yet -- the lock is viewport state, and
+    /// the edit is what committing it pushes. See `crate::camera_lock`.
+    pub move_camera: Option<ImageRef>,
 }
 
 /// Scene Graph panel state.

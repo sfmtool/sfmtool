@@ -2755,3 +2755,27 @@ fn closing_a_node_forgets_the_matches_file_chosen_for_it() {
     state.close_node(source);
     assert!(state.resect_matches.is_empty());
 }
+
+// ── Move Camera ─────────────────────────────────────────────────────────
+
+#[test]
+fn the_image_row_offers_move_camera_and_reports_the_image_it_was_chosen_on() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    assert!(
+        panel.hit_rect(row_id(id, "move_camera_2")).is_some(),
+        "the image row's menu offered no Move Camera"
+    );
+    let response = click(&mut panel, &ctx, &mut state, row_id(id, "move_camera_2"));
+    assert_eq!(response.move_camera, Some(ImageRef::new(id, 2)));
+
+    // It is an image's action, not a reconstruction's: the row above offers
+    // alignment and closing, not a camera to take in hand.
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "move_camera_2")).is_none(),
+        "Move Camera leaked onto the reconstruction row's menu"
+    );
+}

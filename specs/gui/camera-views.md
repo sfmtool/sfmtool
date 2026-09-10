@@ -1472,7 +1472,11 @@ once on entry so the background image fills the viewport exactly. See
 
 Camera view is persistent: the background image stays up through
 orientation-only navigation, so the user can free-look around a fisheye image
-with a viewport FOV narrower than the lens.
+with a viewport FOV narrower than the lens. It is also the mode the Move Camera
+edit is made of ([`edits/move-camera.md`](edits/move-camera.md)): with a lock
+held the camera comes along instead of being left behind, and the background is
+turned to the pending pose through the node's model matrix rather than by a
+rebuilt mesh.
 
 That rests on one BG mesh for every camera model. Mesh vertices are unit ray
 directions from `pixel_to_ray`, transformed to world space by the
@@ -1489,18 +1493,29 @@ center. The background image remains visible and the `CameraViewMode` struct
 is preserved. Inputs that translate the camera position exit camera view as
 before.
 
-| Input | Camera method | Moves center? | Keeps camera view? |
-|-------|---------------|---------------|--------------------|
-| Left-drag / two-finger drag / gesture | `nodal_pan()` | No | **Yes** |
-| Alt-drag / Alt+two-finger / Alt+gesture | `orbit()` | Yes | **No** |
-| Shift-drag / middle-drag (pan) | `pan()` | Yes | No |
-| Ctrl-drag / right-drag / scroll wheel / pinch (zoom) | `zoom_fov()` | No | **Yes** |
-| Alt+Ctrl scroll/drag (target push/pull) | `target_push_pull()` | No | Yes |
-| WASD (fly move) | `fly_move()` | Yes | No |
-| Q/E (tilt) | `tilt()` | No | Yes |
-| FOV slider | sets `camera.fov` | No | Yes |
-| Alt+pinch | `target_push_pull()` | No | Yes |
-| Home | resets orientation | N/A | No (explicit reset) |
+| Input | Camera method | Moves center? | Keeps camera view? | Under the Move Camera lock |
+|-------|---------------|---------------|--------------------|----------------------------|
+| Left-drag / two-finger drag / gesture | `nodal_pan()` | No | **Yes** | Yes: turns the camera |
+| Alt-drag / Alt+two-finger / Alt+gesture | `orbit()` | Yes | **No** | Yes: orbits the camera |
+| Shift-drag / middle-drag (pan) | `pan()` | Yes | No | Yes: pans the camera |
+| Ctrl-drag / right-drag / scroll wheel / pinch (zoom) | `zoom_fov()` | No | **Yes** | Yes: the FOV only |
+| Alt+Ctrl scroll/drag (target push/pull) | `target_push_pull()` | No | Yes | Yes: the target only |
+| WASD (fly move) | `fly_move()` | Yes | No | Yes: flies the camera |
+| Q/E (tilt) | `tilt()` | No | Yes | Yes: rolls the camera |
+| FOV slider | sets `camera.fov` | No | Yes | Yes: the FOV only |
+| Alt+pinch | `target_push_pull()` | No | Yes | Yes: the target only |
+| Home | resets orientation | N/A | No (explicit reset) | Refused, with a status line |
+
+**The Move Camera lock** is camera view with the camera coming along: while it is
+held, the pose the viewport is at *is* the pending pose of the image being looked
+through, so no input leaves camera view: every **No** in the fourth column's
+neighbour becomes a **Yes**, and the two inputs that were never part of a pose,
+the field of view and the orbit target, still are not. Every path that would
+otherwise drop camera view goes through one funnel,
+`Viewer3D::leave_camera_view`, which is where the lock is consulted. `Home` is
+the exception: both its forms move the viewport away from the camera by a reset
+rather than by a hand, so neither is a move anybody asked for. The lock, and what
+committing it does, are [`edits/move-camera.md`](edits/move-camera.md).
 
 **Swapped bindings in camera view:** The default (unmodified) drag/scroll/gesture
 performs **nodal pan** (free-look) instead of orbit, keeping camera view active.

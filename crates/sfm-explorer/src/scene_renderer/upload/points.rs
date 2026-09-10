@@ -72,6 +72,7 @@ impl SceneRenderer {
         bundle.point_instance_buffer = Some(buffer);
         bundle.point_alive_buffer = Some(alive_buffer);
         bundle.masked_deleted.clear();
+        bundle.masked_highlighted.clear();
         bundle.point_count = instances.len() as u32;
         // An addition's index is relative to the base's point count and its
         // instances hold edited indexes, so a new base invalidates both. The

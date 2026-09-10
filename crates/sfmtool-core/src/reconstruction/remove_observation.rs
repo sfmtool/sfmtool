@@ -12,7 +12,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::data::ImageTable;
 use super::edited::{EditError, EditedReconstruction, PointRecord};
-use super::triangulation::{triangulate_batch, Triangulation};
+use super::triangulation::{triangulate_track, Triangulation};
 
 /// Why an observation could not be removed. Every variant names what did not
 /// hold, because the caller is a menu entry that has to say so in one sentence.
@@ -106,7 +106,7 @@ pub struct RemoveObservationReport {
 /// they state at all:
 ///
 /// - **Two or more remain**, and the point is finite: it is re-triangulated
-///   from them by [`triangulate_batch`], the same solve
+///   from them by [`triangulate_track`], the same solve
 ///   [`add_observation`](super::add_observation::add_observation) runs.
 /// - **One remains**: a single sighting fixes a bearing and no distance, so the
 ///   point becomes one -- `w = 0`, its coordinate the remaining observation's
@@ -238,15 +238,7 @@ fn observation_ray(
 ) -> Option<nalgebra::Vector3<f64>> {
     let obs = record.observations.get(k)?;
     let [x, y] = obs.keypoint_xy?;
-    let image = table.images.get(obs.image_index as usize)?;
-    let camera = table.cameras.get(image.camera_index as usize)?;
-    let ray = camera.pixel_to_ray(x as f64, y as f64);
-    let cam = Vector3::new(ray[0], ray[1], ray[2]);
-    if !cam.iter().all(|c| c.is_finite()) || cam.norm() <= 0.0 {
-        return None;
-    }
-    let rot = image.quaternion_wxyz.to_rotation_matrix();
-    Some((rot.transpose() * cam).normalize())
+    table.world_ray(obs.image_index as usize, [x as f64, y as f64])
 }
 
 /// Triangulate `record`'s whole track from the keypoints it holds, over the
@@ -254,7 +246,7 @@ fn observation_ray(
 ///
 /// The rays are built by walking the record rather than the value, so the solve
 /// sees exactly the track the edit is about to store. Refused on the three
-/// signals the patch spawn refuses on: a non-finite position, an infinite
+/// signals [`triangulate_track`] refuses on: a non-finite position, an infinite
 /// condition number (the depth is not observable) or a solution behind one of
 /// the cameras that see it.
 fn triangulate_record(
@@ -273,15 +265,7 @@ fn triangulate_record(
         dirs.push(direction);
         centers.push(image.camera_center());
     }
-    let offsets = [0usize, dirs.len()];
-    let tri = triangulate_batch(&dirs, &centers, &offsets)[0];
-    if !tri.point.coords.iter().all(|c| c.is_finite())
-        || !tri.condition_number.is_finite()
-        || !tri.in_front_of_all_cameras
-    {
-        return Err(RemoveObservationError::Triangulation);
-    }
-    Ok(tri)
+    triangulate_track(&dirs, &centers).ok_or(RemoveObservationError::Triangulation)
 }
 
 /// Carry `record`, which stands at `position`, back to a bearing along

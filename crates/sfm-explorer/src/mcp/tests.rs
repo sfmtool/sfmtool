@@ -3073,15 +3073,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Nine reads, twenty-four writes, the one that writes a file, and the one
+    // Nine reads, twenty-five writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 35, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 36, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        24
+        25
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -3927,6 +3927,11 @@ fn every_editing_tool_requires_its_reconstruction_label() {
             "remove_observation",
             json!({ "point": 3, "camera_image": 1 }),
         ),
+        (
+            "move_camera_image",
+            json!({ "camera_image": 1, "world_from_camera": {
+                "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
+        ),
         ("resect_camera_image_in_place", json!({ "camera_image": 1 })),
         ("bundle_adjust", json!({})),
     ] {
@@ -3992,6 +3997,18 @@ fn the_editing_arguments_are_parsed_by_shape() {
             "serial",
         ),
         (
+            "move_camera_image",
+            json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
+            "world_from_camera",
+        ),
+        (
+            "move_camera_image",
+            json!({ "reconstruction_label": "run_a", "camera_image": 1,
+                    "world_from_camera": { "quaternion_wxyz": [1.0, 0.0, 0.0],
+                                           "translation": [0.0, 0.0, 0.0] } }),
+            "quaternion_wxyz",
+        ),
+        (
             "bundle_adjust",
             json!({ "reconstruction_label": "run_a", "release_focal": "yes" }),
             "release_focal",
@@ -4048,6 +4065,22 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             from_matches: false,
         }
     );
+    // The pose arrives in a sub-object, and comes out of the parse as the two
+    // arrays the command carries.
+    assert_eq!(
+        parse(
+            "move_camera_image",
+            json!({ "reconstruction_label": "a", "camera_image": 1,
+                    "world_from_camera": { "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                                           "translation": [1.5, -2.0, 3.0] } })
+        ),
+        Command::MoveCameraImage {
+            reconstruction_label: "a".to_string(),
+            camera_image: super::CameraImageSel::Index(1),
+            quaternion_wxyz: [1.0, 0.0, 0.0, 0.0],
+            translation: [1.5, -2.0, 3.0],
+        }
+    );
     assert_eq!(
         parse(
             "bundle_adjust",
@@ -4068,4 +4101,178 @@ fn the_editing_defaults_are_what_the_schemas_say() {
             path: None,
         }
     );
+}
+
+// ── move_camera_image ───────────────────────────────────────────────────
+//
+// The pose edit the human makes with a lock and the viewport, which an agent
+// makes by sending the pose: it has no hand to place a camera with, and the
+// pose is the whole input.
+
+/// A pose for `run_a`'s image `index`, turned and shifted off where it stands,
+/// in the node's own frame -- which is the frame the tool takes and every read
+/// on this surface reports.
+fn moved_pose(state: &AppState, index: usize) -> (Vec<f64>, Vec<f64>) {
+    let stored = sfmtool_core::reconstruction::move_camera::pose_of(state.scene[0].recon(), index);
+    let turn = nalgebra::UnitQuaternion::from_axis_angle(&nalgebra::Vector3::y_axis(), 0.2_f64);
+    let rotation = turn * stored.rotation.as_nalgebra();
+    let quaternion = rotation.as_ref();
+    (
+        vec![quaternion.w, quaternion.i, quaternion.j, quaternion.k],
+        vec![
+            stored.translation.x + 0.3,
+            stored.translation.y - 0.1,
+            stored.translation.z + 0.05,
+        ],
+    )
+}
+
+/// One `move_camera_image` call, with the pose in the sub-object the wire
+/// carries it in.
+#[track_caller]
+fn move_camera(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    index: usize,
+    quaternion: &[f64],
+    translation: &[f64],
+) -> Value {
+    call(
+        state,
+        viewer,
+        "move_camera_image",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": index,
+            "world_from_camera": {
+                "quaternion_wxyz": quaternion,
+                "translation": translation,
+            },
+        }),
+    )
+}
+
+/// The pose edit pushes a version like every other edit here, and the reply is
+/// that version rather than a second rendering of the pose: where the camera
+/// now stands is what the reads answer.
+#[test]
+fn move_camera_image_pushes_a_version_the_reply_names() {
+    let (mut state, mut viewer) = editable();
+    let (quaternion, translation) = moved_pose(&state, 1);
+
+    let reply = move_camera(&mut state, &mut viewer, 1, &quaternion, &translation);
+
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(reply["reconstruction_label"], "run_a");
+    let serial = state.scene[0].history.current_version().serial.to_string();
+    assert_eq!(reply["serial"], serial);
+    assert_eq!(reply["cursor"], serial);
+    assert_eq!(reply["dirty"], true);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Moved camera "), "{report}");
+    assert!(report.contains(&serial), "{report}");
+    assert!(
+        reply["label"]
+            .as_str()
+            .expect("a label")
+            .starts_with("Moved camera "),
+        "{reply}"
+    );
+
+    // The camera stands where the call put it, in the node's own frame.
+    let centre = state.scene[0].recon().image_table.images[1].camera_center();
+    for (axis, expected) in translation.iter().enumerate() {
+        assert!(
+            (centre[axis] - expected).abs() < 1e-9,
+            "centre {axis}: {centre:?}"
+        );
+    }
+
+    // And it is the agent's row, under the kind every edit of a value is filed
+    // under.
+    let last = rows(&state).pop().expect("one entry per edit");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+}
+
+/// An image the node does not have is refused before anything moves, and the
+/// refusal is the one row it leaves.
+#[test]
+fn move_camera_image_refuses_an_image_that_is_not_there() {
+    let (mut state, mut viewer) = editable();
+    state.action_log.clear();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "move_camera_image",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 99,
+            "world_from_camera": {
+                "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                "translation": [0.0, 0.0, 0.0],
+            },
+        }),
+    );
+    assert!(error.0.contains("out of range"), "{error}");
+    assert_eq!(version_count(&state), 1);
+    assert_eq!(failures(&state).len(), 1, "{:?}", rows(&state));
+}
+
+/// A camera in hand on the node is ended before the wire's own pose lands on
+/// it, and committed because it had been moved: two hands on one image, two
+/// versions, in the order they happened.
+#[test]
+fn move_camera_image_commits_a_lock_held_on_the_same_node_first() {
+    let (mut state, mut viewer) = editable();
+    hold_the_camera(&mut state, &mut viewer, 1);
+
+    let (quaternion, translation) = moved_pose(&state, 1);
+    move_camera(&mut state, &mut viewer, 1, &quaternion, &translation);
+
+    assert!(viewer.camera_lock.is_none(), "the lock survived an edit");
+    assert_eq!(
+        version_count(&state),
+        3,
+        "the hand's move and the wire's are two versions"
+    );
+}
+
+/// The rule is the wire's rather than the pose edit's: any edit landing on the
+/// node ends the lock first, since an edit under one would leave the reviewer
+/// holding a camera whose stored pose had moved beneath them.
+#[test]
+fn another_edit_on_the_node_commits_a_held_lock_too() {
+    let (mut state, mut viewer) = editable();
+    hold_the_camera(&mut state, &mut viewer, 1);
+
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+
+    assert!(viewer.camera_lock.is_none(), "the lock survived an edit");
+    assert_eq!(version_count(&state), 3);
+    // The commit is recorded before the edit that displaced it, as it happened.
+    let texts: Vec<String> = rows(&state).into_iter().map(|row| row.2).collect();
+    let moved = texts
+        .iter()
+        .position(|text| text.starts_with("Moved camera "))
+        .expect("the commit recorded itself");
+    let deleted = texts
+        .iter()
+        .position(|text| text.starts_with("Deleted point 3"))
+        .expect("the edit recorded itself");
+    assert!(moved < deleted, "{texts:?}");
+}
+
+/// Take image `index` of `run_a` in hand and move it past the dead band, which
+/// is what makes an implicit end a commit rather than a silent drop.
+fn hold_the_camera(state: &mut AppState, viewer: &mut Viewer3D, index: usize) {
+    let image = crate::scene::ImageRef::new(state.scene[0].id, index);
+    state.select_image(Some(image));
+    viewer.jump_to_camera_view(image, &state.scene[0]);
+    crate::camera_lock::enter(viewer, state).expect("camera view of a posed image");
+    viewer.camera.nodal_pan(50.0, 0.0);
 }

@@ -1222,3 +1222,74 @@ fn the_gate_and_the_focal_gate_pass_on_a_node_that_can_be_adjusted() {
     // release: the checkbox is greyed and says so.
     assert!(crate::bundle_adjust_prompt::focal_refusal(edited).is_some());
 }
+
+// ── Move camera: the bulk edit that moves one pose ──────────────────────
+
+#[test]
+fn moving_a_camera_pushes_a_new_base_and_leaves_the_image_table_where_it_was() {
+    let (mut state, id) = adjustable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let images = state.scene[0].image_count();
+    let points = state.scene[0].point_count();
+    state.selected_point = Some(PointRef::new(id, 11));
+    // Back to the pose image 1's own keypoints were computed at, which is what
+    // `adjustable_state` moved it off.
+    let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr");
+    let pose = sfmtool_core::reconstruction::move_camera::pose_of(truth.recon(), 1);
+
+    state
+        .move_camera(ImageRef::new(id, 1), &pose)
+        .expect("a posed image and a finite pose");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert_eq!(node.image_count(), images, "the image table moved");
+    assert_eq!(node.point_count(), points, "the move deleted a point");
+    let label = node.history.current_version().label.clone();
+    assert!(label.starts_with("Moved camera "), "{label}");
+    assert!(label.contains("points re-solved"), "{label}");
+    // The identity map: the selection stays on the point it was on, and the
+    // value still holds it.
+    let selected = state.selected_point.expect("the point survived");
+    assert_eq!(selected, PointRef::new(id, 11));
+    assert!(state.scene[0].edited().point(11).is_some());
+}
+
+#[test]
+fn a_move_of_an_image_that_is_not_there_pushes_no_version_and_logs_a_failure() {
+    let (mut state, id) = adjustable_state();
+    let pose = sfmtool_core::reconstruction::move_camera::pose_of(state.scene[0].recon(), 0);
+
+    let why = state
+        .move_camera(ImageRef::new(id, 99), &pose)
+        .expect_err("there is no image 99");
+
+    assert!(why.contains("no longer in the reconstruction"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(
+        state.action_log.entries().last().expect("one entry").failed,
+        "the refusal was logged as a success"
+    );
+}
+
+#[test]
+fn an_undo_of_a_move_puts_the_pose_back() {
+    let (mut state, id) = adjustable_state();
+    let before = state.scene[0].recon().image_table.images[1].camera_center();
+    let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr");
+    let pose = sfmtool_core::reconstruction::move_camera::pose_of(truth.recon(), 1);
+
+    state
+        .move_camera(ImageRef::new(id, 1), &pose)
+        .expect("a posed image and a finite pose");
+    let moved = state.scene[0].recon().image_table.images[1].camera_center();
+    assert!((moved - before).norm() > 1e-6, "the move moved nothing");
+
+    state.undo(id).expect("one edit to undo");
+    let restored = state.scene[0].recon().image_table.images[1].camera_center();
+    assert!((restored - before).norm() < 1e-12);
+}

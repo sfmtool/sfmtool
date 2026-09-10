@@ -131,6 +131,19 @@ scene shows through and it reads as floating over the viewport rather than
 bolted to it. Not lower: slider tracks and checkmarks have to stay legible
 against a bright point cloud.
 
+### The lock banner borrows the style and is not part of the panel
+
+While a camera is being moved by hand ([`edits/move-camera.md`](edits/move-camera.md))
+the viewport draws a three-line banner top-centre, under the camera-position
+line: what is in hand, the residual it costs, and the two keys that end it. It
+is in the HUD's vocabulary, 12 pt text on a translucent dark ground, and it is
+drawn by the viewport's own overlay painter rather than by `show_hud`, for two
+reasons. It describes a gesture the viewport is in the middle of and disappears
+with it, so it is not a control anyone can leave open or closed; and it must not
+be reachable by the pointer at all, since every pixel of the viewport under it
+is navigating the camera the banner is about. The HUD's rect is excluded from
+every pointer path (below); the banner's deliberately is not.
+
 ---
 
 ## Sections

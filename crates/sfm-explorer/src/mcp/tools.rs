@@ -697,6 +697,49 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "move_camera_image",
+            description: "Put one camera image at a pose, as one version of its reconstruction. \
+                          The pose is world-from-camera in the reconstruction's own frame: \
+                          quaternion_wxyz carries camera axes onto world axes and translation is \
+                          the camera centre, which is what get_camera_image reports as center. \
+                          The tracks that image observes are re-triangulated around the new pose \
+                          where two or more pixels see them; a bearing only it sees turns with \
+                          it, and anything else keeps its position. The image table stays put and \
+                          nothing is renumbered. Undo (Ctrl+Z in the window) puts the stored pose \
+                          back.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                    (
+                        "world_from_camera",
+                        json!({
+                            "type": "object",
+                            "description":
+                                "Where to put the camera, in the reconstruction's own frame.",
+                            "properties": {
+                                "quaternion_wxyz": {
+                                    "type": "array",
+                                    "items": { "type": "number" },
+                                    "minItems": 4,
+                                    "maxItems": 4,
+                                    "description":
+                                        "Camera-to-world rotation, WXYZ. Normalised on arrival.",
+                                },
+                                "translation": vec3_schema(
+                                    "The camera centre in world coordinates.",
+                                ),
+                            },
+                            "required": ["quaternion_wxyz", "translation"],
+                            "additionalProperties": false,
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "resect_camera_image_in_place",
             description: "Re-estimate one camera image's pose against structure held out from \
                           it, and install the answer as the reconstruction's next version rather \
@@ -1356,6 +1399,30 @@ pub(crate) fn parse(
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 point: args.point("point")?,
                 camera_image: args.camera_image("camera_image")?,
+            }
+        }
+        "move_camera_image" => {
+            args.reject_unknown(&["reconstruction_label", "camera_image", "world_from_camera"])?;
+            let pose = args
+                .map
+                .get("world_from_camera")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    args.error(
+                        "needs world_from_camera, an object carrying quaternion_wxyz and \
+                         translation.",
+                    )
+                })?;
+            let inner = Args {
+                tool: "move_camera_image.world_from_camera",
+                map: pose,
+            };
+            inner.reject_unknown(&["quaternion_wxyz", "translation"])?;
+            Command::MoveCameraImage {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera_image: args.camera_image("camera_image")?,
+                quaternion_wxyz: inner.required_vec4("quaternion_wxyz")?,
+                translation: inner.required_vec3("translation")?,
             }
         }
         "resect_camera_image_in_place" => {

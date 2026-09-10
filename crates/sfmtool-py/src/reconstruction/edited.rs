@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use nalgebra::Vector3;
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
@@ -29,9 +30,10 @@ use sfmtool_core::reconstruction::bundle_adjust::{
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointRecord, RecordObservation, RowMap,
 };
+use sfmtool_core::reconstruction::move_camera::move_camera as core_move_camera;
 use sfmtool_core::{
     add_observation, create_point, remove_observation, AddObservationOptions, CreatePointOptions,
-    Point3D, SfmrReconstruction,
+    Point3D, RotQuaternion, Se3Transform, SfmrReconstruction,
 };
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
@@ -609,6 +611,76 @@ impl PyEditedReconstruction {
                 ResectInPlaceError::Refused(reason) => PyValueError::new_err(reason),
             })?;
         let d = crate::geometry::resect_images::report_to_py(py, &report)?;
+        Ok((
+            PyEditedReconstruction {
+                inner: EditedReconstruction::new(Arc::new(next)),
+            },
+            d.unbind(),
+        ))
+    }
+
+    /// Put image `image` at `world_from_camera`, and give back the answer as
+    /// this version's successor.
+    ///
+    /// The pose is world-from-camera in **this reconstruction's own frame**:
+    /// ``quaternion_wxyz`` carries camera axes onto world axes and
+    /// ``translation`` is the camera centre. The tracks that image observes are
+    /// then settled on their own evidence (see
+    /// ``specs/core/reconstruction/move-camera.md``): a finite point two or more
+    /// pixels see is re-triangulated at the new pose, with its patch frame
+    /// rescaled and its stored error rewritten; a bearing only this image sees
+    /// rotates with the camera; everything else keeps its position, a track that
+    /// will not re-triangulate included. A **bulk** edit, so the value that
+    /// comes back is a whole new base with an empty overlay, and this object is
+    /// not changed.
+    ///
+    /// Returns:
+    ///     ``(EditedReconstruction, report)``. The report carries ``image``,
+    ///     ``rotation_deg``, ``translation``, ``translation_scene``,
+    ///     ``observed``, ``retriangulated``, ``kept``, ``rotated_bearings``,
+    ///     ``residual_before_px`` and ``residual_after_px`` -- the last two the
+    ///     median and 90th percentile of this image's own reprojection
+    ///     residuals, or ``None`` where the value carries no inline keypoints.
+    ///     Raises ``ValueError`` with the reason when the move is refused.
+    #[pyo3(signature = (image, quaternion_wxyz, translation))]
+    fn move_camera(
+        &self,
+        py: Python<'_>,
+        image: usize,
+        quaternion_wxyz: [f64; 4],
+        translation: [f64; 3],
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let pose = Se3Transform::new(
+            RotQuaternion::from_wxyz_array(quaternion_wxyz),
+            Vector3::from_row_slice(&translation),
+            1.0,
+        );
+        let value = materialised(&self.inner);
+        let (next, report) = py
+            .detach(|| core_move_camera(&value, image, &pose))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let d = PyDict::new(py);
+        d.set_item("image", report.image)?;
+        d.set_item("rotation_deg", report.rotation_deg)?;
+        d.set_item("translation", report.translation)?;
+        d.set_item("translation_scene", report.translation_scene)?;
+        d.set_item("observed", report.observed)?;
+        d.set_item("retriangulated", report.retriangulated)?;
+        d.set_item("kept", report.kept)?;
+        d.set_item("rotated_bearings", report.rotated_bearings)?;
+        d.set_item(
+            "residual_before_px",
+            report
+                .residual_before_px
+                .map(|r| PyArray1::from_vec(py, r.to_vec())),
+        )?;
+        d.set_item(
+            "residual_after_px",
+            report
+                .residual_after_px
+                .map(|r| PyArray1::from_vec(py, r.to_vec())),
+        )?;
         Ok((
             PyEditedReconstruction {
                 inner: EditedReconstruction::new(Arc::new(next)),

@@ -19,6 +19,7 @@ invocation, the version's label and the history entry.
 | [bundle-adjust.md](bundle-adjust.md) | Refine every pose and every point of the selected reconstruction against its observations, from the Edit menu, with the shared focal held or released. |
 | [add-observation.md](add-observation.md) | Add one observation of the selected point to the image on screen, at a right-clicked pixel, placed by the embed pass's own photometric kernel and followed by a re-triangulation of the track. |
 | [create-point.md](create-point.md) | Create a 3D point at a right-clicked pixel, at infinity along that pixel's ray, with a one-observation track and a patch sized by a prompt. |
+| [move-camera.md](move-camera.md) | Move one image's pose by hand: camera view with the camera coming along, so every navigation input moves it, with a live residual readout and one version when the lock is released. |
 | [remove-observation.md](remove-observation.md) | Remove one observation from the selected point's track, from a table row or the Image Detail menu: the shorter track is re-triangulated, one sighting leaves a bearing, and none leaves no point. |
 | [../resect-image.md](../resect-image.md) § "In place" | Re-estimate one image's pose against structure held out from it and keep the answer as a version of the node, rather than as the derived node the same spec's other half lands. |
 

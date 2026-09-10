@@ -165,6 +165,23 @@ pub fn triangulate_batch(
     out
 }
 
+/// Triangulate one track, or `None` when the rays state no usable point.
+///
+/// [`triangulate_batch`] over a single track, plus the three signals that make
+/// a solve unusable rather than merely imprecise: a non-finite position, an
+/// infinite condition number (the depth is not observable at all), or a point
+/// behind one of the cameras that see it. The edits that re-solve one track --
+/// a shortened one, or one whose camera moved -- share this so they cannot
+/// disagree about which solves they will accept.
+pub fn triangulate_track(dirs: &[Vector3<f64>], centers: &[Point3<f64>]) -> Option<Triangulation> {
+    let offsets = [0usize, dirs.len()];
+    let tri = triangulate_batch(dirs, centers, &offsets)[0];
+    (tri.point.coords.iter().all(|c| c.is_finite())
+        && tri.condition_number.is_finite()
+        && tri.in_front_of_all_cameras)
+        .then_some(tri)
+}
+
 /// Depth uncertainty along the mean viewing direction for each track.
 ///
 /// `sigma_rad` is the per-ray angular noise (e.g. `noise_px / fᵢ`), indexed the

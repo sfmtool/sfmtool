@@ -9,7 +9,7 @@
 //! [`SceneRenderer::base_changed`] rather than reading a flag, and a run of
 //! point edits -- which shares one base -- answers "no" every time. What such
 //! an edit does change is the version's deleted set, and that reaches the point
-//! and patch shaders through [`SceneRenderer::update_deleted_mask`], as one
+//! and patch shaders through [`SceneRenderer::update_point_mask`], as one
 //! `u32` per instance written only where the set moved.
 
 use std::collections::HashSet;
@@ -18,6 +18,16 @@ use std::sync::Arc;
 use super::super::SceneRenderer;
 use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
+
+/// The mask word of a point the version in view has deleted: the shaders emit a
+/// clipped vertex for it, so it draws nothing, occludes nothing and answers no
+/// pick.
+pub(crate) const MASK_DELETED: u32 = 0;
+/// The mask word of an ordinary live point.
+pub(crate) const MASK_ALIVE: u32 = 1;
+/// The mask word of a live point the viewport is calling out: drawn in the
+/// hover tint for as long as whatever is calling it out lasts.
+pub(crate) const MASK_HIGHLIGHTED: u32 = 2;
 
 impl SceneRenderer {
     /// Whether `id`'s buffers were built from a base other than `base`.
@@ -42,32 +52,55 @@ impl SceneRenderer {
         }
     }
 
-    /// Bring `id`'s deleted mask in line with `deleted`.
+    /// Bring `id`'s point mask in line with `deleted` and `highlighted`.
     ///
-    /// Writes one `u32` per index that entered or left the set, in both the
-    /// point buffer and -- for a point that carries a surfel -- the patch
+    /// One `u32` per point, carrying both answers because they are one word to
+    /// the shader: `0` deleted, `1` alive, `2` alive and drawn in the hover
+    /// tint. Written only for the indexes that entered or left either set, in
+    /// the point buffer and -- for a point that carries a surfel -- the patch
     /// buffer, so an edit costs its own size rather than the node's. An index at
     /// or above the base's point count is an addition, and is masked in the
     /// additions' own buffers, which the overlay owns alongside the mask.
-    pub fn update_deleted_mask(
+    ///
+    /// The highlight is a *viewport* statement rather than a document one --
+    /// today, the points a camera being moved observes
+    /// ([`crate::camera_lock`]) -- and it rides in this word because a second
+    /// per-point buffer would mean a second vertex attribute and a second
+    /// pipeline layout for one temporary colour.
+    pub fn update_point_mask(
         &mut self,
         queue: &wgpu::Queue,
         id: ReconId,
         deleted: &HashSet<u32>,
+        highlighted: &HashSet<u32>,
     ) {
         let Some(bundle) = self.recons.get_mut(&id) else {
             return;
         };
-        if bundle.masked_deleted == *deleted {
+        if bundle.masked_deleted == *deleted && bundle.masked_highlighted == *highlighted {
             return;
         }
-        let changed: Vec<u32> = bundle
+        let mut changed: Vec<u32> = bundle
             .masked_deleted
             .symmetric_difference(deleted)
             .copied()
             .collect();
+        changed.extend(
+            bundle
+                .masked_highlighted
+                .symmetric_difference(highlighted)
+                .copied(),
+        );
+        changed.sort_unstable();
+        changed.dedup();
         for index in changed {
-            let alive: u32 = u32::from(!deleted.contains(&index));
+            let alive: u32 = if deleted.contains(&index) {
+                MASK_DELETED
+            } else if highlighted.contains(&index) {
+                MASK_HIGHLIGHTED
+            } else {
+                MASK_ALIVE
+            };
             if index < bundle.point_count {
                 if let Some(buffer) = &bundle.point_alive_buffer {
                     queue.write_buffer(buffer, u64::from(index) * 4, bytemuck::bytes_of(&alive));
@@ -107,6 +140,7 @@ impl SceneRenderer {
             }
         }
         bundle.masked_deleted = deleted.clone();
+        bundle.masked_highlighted = highlighted.clone();
     }
 
     /// How many base indexes `id`'s mask currently marks as deleted. For the

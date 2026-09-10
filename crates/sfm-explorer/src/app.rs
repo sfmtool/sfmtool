@@ -330,8 +330,22 @@ impl App {
                     .upload_additions(device, queue, id, edited);
                 uploaded_any = true;
             }
-            self.scene_renderer
-                .update_deleted_mask(queue, id, &node.edited().deleted_points);
+            // The points a camera being moved observes are drawn in the hover
+            // tint for the lock's duration: they are the ones the commit will
+            // move, and telling them from the fixed ones is the whole of what
+            // the reviewer is steering by.
+            static NONE: std::sync::LazyLock<std::collections::HashSet<u32>> =
+                std::sync::LazyLock::new(std::collections::HashSet::new);
+            let highlighted = match self.viewer_3d.camera_lock.as_ref() {
+                Some(lock) if lock.image.recon == id => &lock.highlighted,
+                _ => &NONE,
+            };
+            self.scene_renderer.update_point_mask(
+                queue,
+                id,
+                &node.edited().deleted_points,
+                highlighted,
+            );
         }
 
         // Mirror each node's Scene-panel display state onto its bundle. After
@@ -490,7 +504,11 @@ impl App {
         let bg_transform =
             match hidden_image.and_then(|image| Some((image, self.state.node(image.recon)?))) {
                 Some((image, node)) => {
-                    let transform = node.transform.clone();
+                    // While a camera is in hand the photograph is rigidly
+                    // attached to it, so the mesh -- built around the *stored*
+                    // pose -- is turned by the model matrix instead of rebuilt.
+                    let transform = crate::camera_lock::background_transform(&self.viewer_3d, node)
+                        .unwrap_or_else(|| node.transform.clone());
                     self.scene_renderer
                         .upload_bg_image(device, queue, node.recon(), image);
                     Some(transform)
@@ -792,6 +810,7 @@ impl App {
                                 point_track_detail,
                                 intrinsics_detail,
                             );
+                            crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                             ui.close();
                         }
                         let redo = ui
@@ -813,6 +832,7 @@ impl App {
                                 point_track_detail,
                                 intrinsics_detail,
                             );
+                            crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                             ui.close();
                         }
                         ui.separator();
@@ -844,6 +864,62 @@ impl App {
                                 point_track_detail,
                                 intrinsics_detail,
                             );
+                            ui.close();
+                        }
+                        ui.separator();
+                        // Move Camera, and the two entries a held lock turns it
+                        // into. The gate is the lock's own, so the entry and the
+                        // lock cannot disagree about when a camera can be taken
+                        // in hand.
+                        let locked = viewer_3d.camera_lock.is_some();
+                        let lock_refusal = crate::camera_lock::refusal(app_state, viewer_3d);
+                        let move_camera = ui
+                            .add_enabled(
+                                lock_refusal.is_none() || locked,
+                                egui::Button::new(if locked {
+                                    "Commit Camera Move"
+                                } else {
+                                    "Move Camera"
+                                })
+                                .shortcut_text("M"),
+                            )
+                            .on_disabled_hover_text(lock_refusal.unwrap_or_default())
+                            .on_hover_text(
+                                "Take the camera you are looking through in hand: every \
+                                 navigation input moves it, and committing keeps the pose \
+                                 as one version of the reconstruction.",
+                            );
+                        if move_camera.clicked() {
+                            if locked {
+                                // `move_camera` writes its own lines, success or
+                                // refusal, in the document model's vocabulary;
+                                // what comes back is the node whose geometry
+                                // moved, and whose panel caches describe one it
+                                // no longer holds.
+                                if let Ok(moved) = crate::camera_lock::commit(viewer_3d, app_state)
+                                {
+                                    forget_selected(
+                                        moved,
+                                        image_browser,
+                                        image_detail,
+                                        point_track_detail,
+                                        intrinsics_detail,
+                                    );
+                                }
+                            } else if let Err(message) =
+                                crate::camera_lock::enter(viewer_3d, app_state)
+                            {
+                                app_state
+                                    .action_log
+                                    .fail(crate::action_log::Kind::View, message);
+                            }
+                            ui.close();
+                        }
+                        let cancel_move = ui
+                            .add_enabled(locked, egui::Button::new("Cancel Camera Move"))
+                            .on_disabled_hover_text("No camera is being moved");
+                        if cancel_move.clicked() {
+                            crate::camera_lock::cancel(viewer_3d, app_state);
                             ui.close();
                         }
                         ui.separator();
@@ -951,6 +1027,9 @@ impl App {
                         point_track_detail,
                         intrinsics_detail,
                     );
+                    // A step of the cursor can move the very pose the viewport
+                    // is looking through, and camera view follows the value.
+                    crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                 }
                 if delete && app_state.selected_point.is_some() {
                     let outcome = app_state.delete_selected_point();
@@ -1191,6 +1270,19 @@ impl App {
                     // a click can move the selection between files.
                     self.state.select_image(Some(image));
                     if self.viewer_3d.pending_click_is_double {
+                        // Double-clicking another frustum is a step away from a
+                        // camera held in hand, and a step away commits it.
+                        let moved = crate::camera_lock::exit_implicitly(
+                            &mut self.viewer_3d,
+                            &mut self.state,
+                        );
+                        forget_selected(
+                            moved,
+                            &mut self.image_browser,
+                            &mut self.image_detail,
+                            &mut self.point_track_detail,
+                            &mut self.intrinsics_detail,
+                        );
                         // Double-click on frustum → enter/switch camera view mode
                         if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon)
                         {

@@ -12,6 +12,7 @@ mod edit;
 pub mod edited;
 mod embed;
 pub mod filter;
+pub mod move_camera;
 pub mod point_correspondence;
 pub mod point_estimation;
 pub mod remove_observation;
@@ -26,6 +27,8 @@ pub use bundle_adjust::{
 };
 
 pub use create_point::{create_point, CreatePointError, CreatePointOptions, CreatePointReport};
+
+pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, ReprojectionSample};
 
 pub use remove_observation::{remove_observation, RemoveObservationError, RemoveObservationReport};
 

@@ -135,6 +135,18 @@ impl TabContext<'_> {
         // keyboard arbitration the viewport's own bindings use, so a
         // HUD `DragValue` being typed into still owns the keys.
         if !ui.ctx().egui_wants_keyboard_input() {
+            // The Move Camera keys go first, and for the same reason `[` / `]`
+            // are here: they need the state the viewport is not handed. A
+            // `,` / `.` step reaches the viewport's own handler below on this
+            // same frame, by which time the lock has committed and gone.
+            if let Some(moved) = crate::camera_lock::handle_keys(ui, self.viewer_3d, self.state) {
+                self.forget_recon(moved);
+            }
+            if let Some(moved) =
+                crate::camera_lock::exit_implicitly_on_recon_step(ui, self.viewer_3d, self.state)
+            {
+                self.forget_recon(moved);
+            }
             self.viewer_3d.handle_recon_step(ui, self.state);
         }
         if self.state.selected_recon.is_some() {
@@ -277,32 +289,14 @@ impl TabContext<'_> {
                 // doesn't produce hovered_point.
                 self.state.hovered_point = None;
             }
-            if let Some(img_idx) = response.request_camera_view {
-                let current_time = ui.input(|i| i.time);
-                let image = ImageRef::new(id, img_idx);
-                if self.viewer_3d.camera_view.is_some() {
-                    self.viewer_3d.animated_switch_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                } else {
-                    self.viewer_3d.enter_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                }
-            }
+            let requested_view = response.request_camera_view;
             // Instant camera switch during animation playback. Logs
             // nothing: it follows the selection step that produced it,
             // and a `Looking through …` between every two
             // `Selected image …` would break the coalescing that keeps
             // a scrub to one line.
             if let Some(img_idx) = response.request_camera_switch {
-                if self.viewer_3d.camera_view.is_some() {
+                if self.viewer_3d.camera_view.is_some() && self.viewer_3d.camera_lock.is_none() {
                     self.viewer_3d
                         .switch_camera_view(ImageRef::new(id, img_idx), node);
                 }
@@ -310,10 +304,42 @@ impl TabContext<'_> {
             if let Some(selection) = new_selection {
                 self.state.select_image(selection);
             }
+            // After the node's borrow, because ending a held camera move
+            // needs the state mutably.
+            if let Some(img_idx) = requested_view {
+                self.look_through(ui, ImageRef::new(id, img_idx));
+            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.label("No reconstruction loaded");
             });
+        }
+    }
+
+    /// Look through `image`, ending a held camera move first.
+    ///
+    /// Every panel that asks for a camera view goes through this, so the rule
+    /// that a step away from a camera in hand commits it is stated once rather
+    /// than at each of the panels that can take that step. See
+    /// [`crate::camera_lock`].
+    fn look_through(&mut self, ui: &egui::Ui, image: ImageRef) {
+        if let Some(moved) = crate::camera_lock::exit_implicitly(self.viewer_3d, self.state) {
+            self.forget_recon(moved);
+        }
+        let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon) else {
+            return;
+        };
+        let current_time = ui.input(|i| i.time);
+        if self.viewer_3d.camera_view.is_some() {
+            self.viewer_3d.animated_switch_camera_view(
+                image,
+                node,
+                current_time,
+                &mut self.state.action_log,
+            );
+        } else {
+            self.viewer_3d
+                .enter_camera_view(image, node, current_time, &mut self.state.action_log);
         }
     }
 
@@ -558,25 +584,9 @@ impl TabContext<'_> {
             let new_selection = track_response
                 .select_image
                 .map(|img_idx| ImageRef::new(id, img_idx));
-            if let Some(img_idx) = track_response.request_camera_view {
-                let current_time = ui.input(|i| i.time);
-                let image = ImageRef::new(id, img_idx);
-                if self.viewer_3d.camera_view.is_some() {
-                    self.viewer_3d.animated_switch_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                } else {
-                    self.viewer_3d.enter_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                }
-            }
+            let requested_view = track_response
+                .request_camera_view
+                .map(|img_idx| ImageRef::new(id, img_idx));
             if track_response.has_pointer {
                 // Track detail owns hover state when it has the pointer.
                 self.state.hovered_image =
@@ -604,6 +614,11 @@ impl TabContext<'_> {
             }
             if let Some(image) = new_selection {
                 self.state.select_image(Some(image));
+            }
+            // After the node's borrow, because ending a held camera move needs
+            // the state mutably.
+            if let Some(image) = requested_view {
+                self.look_through(ui, image);
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -652,6 +667,19 @@ impl TabContext<'_> {
         // finer-selection invariant, and a finer selection reported in the same
         // frame should win over it rather than be cleared by it.
         if let Some(id) = response.select_recon {
+            // Selecting another node is a step away from a camera held in hand,
+            // and a step away commits it.
+            if self
+                .viewer_3d
+                .camera_lock
+                .as_ref()
+                .is_some_and(|l| l.image.recon != id)
+            {
+                if let Some(moved) = crate::camera_lock::exit_implicitly(self.viewer_3d, self.state)
+                {
+                    self.forget_recon(moved);
+                }
+            }
             self.state.select_recon(id);
         }
         // Between the two: a camera is coarser than an image (it names the
@@ -668,23 +696,25 @@ impl TabContext<'_> {
             self.state.select_point(point);
         }
         if let Some(image) = response.request_camera_view {
+            self.look_through(ui, image);
+        }
+        // `Move Camera` on an image row: look through it, then take it in hand.
+        // Two steps rather than one because the lock is only ever entered from
+        // camera view, which is the whole of what it is.
+        if let Some(image) = response.move_camera {
+            if let Some(moved) = crate::camera_lock::exit_implicitly(self.viewer_3d, self.state) {
+                self.forget_recon(moved);
+            }
+            // The immediate entry rather than the animated one: the lock is
+            // entered from camera view, and the animated entry does not arrive
+            // there until its ease has finished.
             if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon) {
-                let current_time = ui.input(|i| i.time);
-                if self.viewer_3d.camera_view.is_some() {
-                    self.viewer_3d.animated_switch_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                } else {
-                    self.viewer_3d.enter_camera_view(
-                        image,
-                        node,
-                        current_time,
-                        &mut self.state.action_log,
-                    );
-                }
+                self.viewer_3d.jump_to_camera_view(image, node);
+            }
+            if let Err(message) = crate::camera_lock::enter(self.viewer_3d, self.state) {
+                self.state
+                    .action_log
+                    .fail(crate::action_log::Kind::View, message);
             }
         }
         if response.has_pointer {
@@ -739,6 +769,14 @@ impl TabContext<'_> {
             self.state.reset_node_transform(id);
         }
         if let Some(id) = response.close_node {
+            // Closing a node is a step away from a camera held in hand on it,
+            // and it happens before the question below: an answer that arrives
+            // two frames later would find the pose it was asked about gone.
+            if let Some(moved) =
+                crate::camera_lock::exit_implicitly_for(self.viewer_3d, self.state, id)
+            {
+                self.forget_recon(moved);
+            }
             // A node whose cursor is not at its file is a question, not a
             // close: the prompt asks it, and `app.rs` carries out whichever
             // answer comes back on a later frame.

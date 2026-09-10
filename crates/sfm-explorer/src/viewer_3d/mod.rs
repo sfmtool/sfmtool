@@ -150,6 +150,11 @@ pub struct Viewer3D {
     pub view_initialized: bool,
     /// Camera view mode — active when viewing through a selected camera.
     pub camera_view: Option<CameraViewMode>,
+    /// The camera being moved by hand, when one is: camera view with the camera
+    /// coming along. Held beside [`Viewer3D::camera_view`] because it is the
+    /// same mode with one bit flipped, and it is only ever entered from it.
+    /// See [`crate::camera_lock`].
+    pub camera_lock: Option<crate::camera_lock::CameraLock>,
     /// Last known panel size in physical pixels, used by SceneRenderer
     /// to create offscreen textures at the correct resolution.
     pub panel_size: [u32; 2],
@@ -220,6 +225,7 @@ impl Viewer3D {
             camera: ViewportCamera::default(),
             view_initialized: false,
             camera_view: None,
+            camera_lock: None,
             panel_size: [0, 0],
             hover_pixel: None,
             alt_held: false,
@@ -418,6 +424,10 @@ impl Viewer3D {
         // Update target indicator state for GPU rendering
         self.update_target_indicator_state(ui);
 
+        // The lock banner, over the scene and under nothing: it is what the
+        // viewport is in the middle of.
+        self.draw_lock_banner(&painter, rect, node);
+
         // Draw info overlay
         let fps = 1.0 / ui.input(|i| i.predicted_dt as f64);
         self.draw_info_overlay(
@@ -550,6 +560,18 @@ impl Viewer3D {
         });
     }
 
+    /// Leave camera view, unless a camera is being moved.
+    ///
+    /// Every navigation path that would otherwise drop camera view goes through
+    /// this, which is the whole of what the lock does to navigation: while a
+    /// camera is in hand the viewport *is* the camera, so an input that would
+    /// have left it behind moves it instead. See [`crate::camera_lock`].
+    pub(crate) fn leave_camera_view(&mut self) {
+        if self.camera_lock.is_none() {
+            self.camera_view = None;
+        }
+    }
+
     /// Cancels any in-progress camera transition, snapping to the current interpolated state.
     pub(crate) fn cancel_transition(&mut self) {
         self.target_transition = None;
@@ -623,10 +645,10 @@ impl Viewer3D {
     /// Enter camera view mode **immediately**, with no animated transition.
     ///
     /// Same end state as [`Self::enter_camera_view`], assigned rather than eased
-    /// toward. What the MCP surface's `set_view` uses: an agent that sets the
+    /// toward. What the MCP surface's `set_view` uses -- an agent that sets the
     /// view and screenshots straight afterward would otherwise photograph the
-    /// middle of the ease.
-    #[cfg(feature = "mcp")]
+    /// middle of the ease -- and what `Move Camera` on a Scene Graph image row
+    /// uses, the lock being entered *from* camera view rather than towards it.
     pub fn jump_to_camera_view(&mut self, image_ref: ImageRef, node: &SceneNode) {
         let end = self.compute_camera_view(image_ref, node);
         self.cancel_transition();

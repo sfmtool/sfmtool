@@ -160,6 +160,11 @@ pub(super) struct ReconResources {
     /// a mask update diffs against, so the write is the size of the change.
     pub masked_deleted: HashSet<u32>,
 
+    /// Which indexes the mask currently marks as highlighted -- the viewport
+    /// calling a set of points out, which today is the points a camera being
+    /// moved observes. Diffed the same way, and for the same reason.
+    pub masked_highlighted: HashSet<u32>,
+
     // ── points ──
     pub point_instance_buffer: Option<wgpu::Buffer>,
     /// Per-point liveness, `1` alive and `0` deleted, as a second instance
@@ -262,6 +267,7 @@ impl ReconResources {
             uniform_buffer,
             uploaded_base: None,
             masked_deleted: HashSet::new(),
+            masked_highlighted: HashSet::new(),
             point_instance_buffer: None,
             point_alive_buffer: None,
             point_count: 0,

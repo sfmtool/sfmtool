@@ -1252,7 +1252,11 @@ fn bearing_span(bearings: &[Vector3<f64>]) -> f64 {
 ///
 /// `None` for a reconstruction with no finite structure to measure against — a
 /// rotation-only one, where every displacement is unitless.
-fn scene_scale(recon: &SfmrReconstruction) -> Option<f64> {
+///
+/// Crate-visible because every edit that reports a camera displacement reports
+/// it in this unit: the resection here, and the moved camera in
+/// [`move_camera`](crate::reconstruction::move_camera::move_camera).
+pub(crate) fn scene_scale(recon: &SfmrReconstruction) -> Option<f64> {
     let mut per_image: Vec<Vec<f64>> = vec![Vec::new(); recon.image_table.images.len()];
     for obs in recon.point_set.tracks.iter() {
         let point = &recon.point_set.points[obs.point_index as usize];

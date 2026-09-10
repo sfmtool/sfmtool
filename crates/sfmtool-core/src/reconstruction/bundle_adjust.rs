@@ -490,7 +490,11 @@ pub fn bundle_adjust(
 
 /// Whether a stored pose is one at all. Every `.sfmr` image row has the fields;
 /// a non-finite one is a placeholder rather than a registration.
-fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> bool {
+///
+/// Crate-visible because the same question decides which images enter this
+/// solve and whether
+/// [`move_camera`](super::move_camera::move_camera) has a pose to replace.
+pub(crate) fn is_posed(rotation: &UnitQuaternion<f64>, translation: &Vector3<f64>) -> bool {
     rotation.coords.iter().all(|c| c.is_finite()) && translation.iter().all(|c| c.is_finite())
 }
 
@@ -525,7 +529,11 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool {
 /// A degenerate distance leaves the frame alone: a patch at the camera-cloud
 /// centroid has no angular size to preserve, and scaling by zero would destroy
 /// the frame rather than resize it.
-fn rescale_patch_frame(
+///
+/// Crate-visible because every edit that moves a point has to keep its patch
+/// the size it looked: this solve, and the re-triangulation
+/// [`move_camera`](super::move_camera::move_camera) runs.
+pub(crate) fn rescale_patch_frame(
     out: &mut SfmrReconstruction,
     p: usize,
     before: Option<f64>,

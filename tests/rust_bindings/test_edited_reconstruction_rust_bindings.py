@@ -658,3 +658,103 @@ class TestBundleAdjust:
             pytest.skip("this reconstruction carries inline keypoints")
         with pytest.raises(ValueError, match="inline keypoints"):
             EditedReconstruction(base).bundle_adjust()
+
+
+class TestMoveCamera:
+    """The bulk edit: one image put at a pose, and its tracks settled around it."""
+
+    @pytest.fixture
+    def embedded(self, seoul_bull_workspace):
+        recon = SfmrReconstruction.load(seoul_bull_workspace)
+        return EditedReconstruction(recon.to_embedded_patches())
+
+    def test_an_image_past_the_table_is_refused(self, embedded):
+        with pytest.raises(ValueError, match="past the"):
+            embedded.move_camera(
+                embedded.image_count, [1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+            )
+
+    def test_a_non_finite_pose_is_refused(self, embedded):
+        with pytest.raises(ValueError, match="finite"):
+            embedded.move_camera(0, [1.0, 0.0, 0.0, 0.0], [np.inf, 0.0, 0.0])
+
+    def test_putting_a_camera_back_where_it_stands_changes_nothing_but_the_value(
+        self, embedded
+    ):
+        before = embedded.materialize()[0]
+        image = 0
+        # The stored pose, read back out and handed straight in again: the
+        # rotation is camera-to-world and the translation is the camera centre.
+        stored = before.quaternions_wxyz[image]
+        world_from_camera = [stored[0], -stored[1], -stored[2], -stored[3]]
+        rotation = _rotation_matrix(stored)
+        centre = -rotation.T @ before.translations[image]
+
+        after, report = embedded.move_camera(image, world_from_camera, centre)
+
+        assert report["image"] == image
+        assert report["rotation_deg"] == pytest.approx(0.0, abs=1e-9)
+        assert report["translation"] == pytest.approx(0.0, abs=1e-9)
+        assert report["observed"] > 0
+        assert (
+            report["retriangulated"] + report["kept"] + report["rotated_bearings"]
+            == report["observed"]
+        )
+        # A bulk edit: a whole new base with no overlay on it.
+        assert after.deleted_count == 0
+        value = after.materialize()[0]
+        assert value.image_count == before.image_count
+        assert value.point_count == before.point_count
+        np.testing.assert_allclose(value.quaternions_wxyz[image], stored, atol=1e-12)
+        # This object is untouched.
+        np.testing.assert_array_equal(
+            embedded.materialize()[0].translations, before.translations
+        )
+
+    def test_a_moved_camera_moves_its_pose_and_leaves_the_others_alone(self, embedded):
+        before = embedded.materialize()[0]
+        image = 0
+        stored = before.quaternions_wxyz[image]
+        world_from_camera = [stored[0], -stored[1], -stored[2], -stored[3]]
+        rotation = _rotation_matrix(stored)
+        centre = -rotation.T @ before.translations[image]
+        # A tenth of the capture's own extent, along one axis.
+        extent = float(
+            np.linalg.norm(before.positions.max(axis=0) - before.positions.min(axis=0))
+        )
+        shifted = centre + np.array([0.1 * extent, 0.0, 0.0])
+
+        after, report = embedded.move_camera(image, world_from_camera, shifted)
+
+        assert report["translation"] == pytest.approx(0.1 * extent, rel=1e-9)
+        assert report["translation_scene"] > 0.0
+        assert report["residual_before_px"] is not None
+        assert len(report["residual_after_px"]) == 2
+
+        value = after.materialize()[0]
+        others = [i for i in range(before.image_count) if i != image]
+        np.testing.assert_array_equal(
+            value.quaternions_wxyz[others], before.quaternions_wxyz[others]
+        )
+        np.testing.assert_array_equal(
+            value.translations[others], before.translations[others]
+        )
+        assert not np.array_equal(
+            value.translations[image], before.translations[image]
+        ), "the move moved nothing"
+        if report["retriangulated"]:
+            assert not np.array_equal(value.positions, before.positions), (
+                "points were re-solved and none of them moved"
+            )
+
+
+def _rotation_matrix(wxyz):
+    """The rotation matrix of a WXYZ quaternion, spelled out rather than imported."""
+    w, x, y, z = (float(c) for c in wxyz)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+            [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+            [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+        ]
+    )

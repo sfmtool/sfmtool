@@ -343,9 +343,15 @@ fixed-height for virtualization.
   show the answer as a derived node beside the original, and `Resect Image in
   Place` and `Resect Image in Place from Matches…`, which keep the same answer
   as a version of this reconstruction -- see
-  [resect-image.md](resect-image.md), which owns all four; and `Delete Image`,
-  which removes this image from the reconstruction as one version of it -- see
-  [edit-history.md](edit-history.md), which owns that one.
+  [resect-image.md](resect-image.md), which owns all four; `Move Camera`, which
+  looks through this image and hands its camera to the reviewer, so that every
+  navigation input moves it -- see
+  [edits/move-camera.md](edits/move-camera.md), which owns that one; and
+  `Delete Image`, which removes this image from the reconstruction as one
+  version of it -- see [edit-history.md](edit-history.md), which owns that one.
+  `Move Camera` sits between the estimators and the deletion because it is the
+  third answer to "this pose is wrong": re-estimate it from correspondences,
+  place it by hand, or take the image out.
 - Selected row: highlight + auto-scroll into view when the selection changes
   from another panel (scroll-to happens only on selection *change*, so the
   user's manual scrolling isn't fought).

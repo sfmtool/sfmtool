@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps thirty-four of the
-//!   thirty-five tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps thirty-five of the
+//!   thirty-six tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -205,6 +205,16 @@ pub(crate) enum Command {
         point: crate::goto_point::PointQuery,
         camera_image: CameraImageSel,
     },
+    /// Put one camera image at a pose, as one version of its reconstruction.
+    ///
+    /// The pose is world-from-camera in the reconstruction's own frame, in the
+    /// pieces the wire carries them: a rotation quaternion and a camera centre.
+    MoveCameraImage {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        quaternion_wxyz: [f64; 4],
+        translation: [f64; 3],
+    },
     ResectCameraImageInPlace {
         reconstruction_label: String,
         camera_image: CameraImageSel,
@@ -379,7 +389,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other thirty-four answer with JSON, and squeezing an image through a JSON
+/// the other thirty-five answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -396,7 +406,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the thirty-four tools that speak only JSON.
+/// The answer of the thirty-five tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -467,8 +477,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes thirty-four of the
-/// thirty-five tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes thirty-five of the
+/// thirty-six tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -623,6 +633,18 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &point,
             &camera_image,
+        )),
+        Command::MoveCameraImage {
+            reconstruction_label,
+            camera_image,
+            quaternion_wxyz,
+            translation,
+        } => done(edit::move_camera_image(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            quaternion_wxyz,
+            translation,
         )),
         Command::ResectCameraImageInPlace {
             reconstruction_label,
@@ -961,10 +983,18 @@ fn loaded_list(state: &AppState) -> String {
 ///
 /// A mutating tool that succeeds writes nothing here: the `AppState` and
 /// `Viewer3D` methods it called already did, in the same words the GUI's own
-/// path produces. Two of them word their own **refusal** as well -- the
-/// in-place resection and the adjustment own the vocabulary of the operation
-/// they refused -- so a failed entry is written here only when the batch's
-/// application recorded none, which is what keeps one failure to one entry.
+/// path produces. Three of them word their own **refusal** as well -- the
+/// in-place resection, the adjustment and the camera move own the vocabulary of
+/// the operation they refused -- so a failed entry is written here only when the
+/// batch's application recorded none, which is what keeps one failure to one
+/// entry.
+///
+/// A fourth thing happens before an **editing** command is applied: a camera the
+/// human is holding on the node it names ([`crate::camera_lock`]) is ended, as a
+/// commit when it has been moved. An edit landing under a held lock would leave
+/// the reviewer holding a camera whose stored pose had moved beneath them, and
+/// the lock is the viewport's rather than the state's -- which is why the step
+/// is here, where the GUI thread applies the command, and not in the tool.
 pub(crate) fn apply_as_agent(
     state: &mut AppState,
     viewer: &mut Viewer3D,
@@ -987,6 +1017,16 @@ pub(crate) fn apply_as_agent(
             let run = command.run();
             let query = query_text(state, viewer, &command);
             let renumbers = command.renumbers().map(str::to_string);
+            // Before the revision is read, so that the sentence a committed
+            // lock records belongs to the commit rather than to the edit that
+            // displaced it -- and so that its refusal, if it has one, does not
+            // stand in for the tool's own.
+            let edits = command
+                .edits()
+                .and_then(|label| resolve_reconstruction(state, Some(label)).ok());
+            stale.extend(
+                edits.and_then(|id| crate::camera_lock::exit_implicitly_for(viewer, state, id)),
+            );
             let before = state.action_log.revision();
             let outcome = apply_with_window(state, viewer, host, command);
             if matches!(outcome, Outcome::Done(Ok(_))) {
@@ -1086,9 +1126,57 @@ impl Command {
             Command::AddObservation { .. } => "add_observation",
             Command::CreatePoint { .. } => "create_point",
             Command::RemoveObservation { .. } => "remove_observation",
+            Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
             Command::Screenshot { .. } => "screenshot",
+        }
+    }
+
+    /// The node whose **data** this command is about to change, read before it
+    /// is applied.
+    ///
+    /// What a camera held in hand is ended for: the value under it is about to
+    /// move. Distinct from [`Self::renumbers`], which is read afterwards and is
+    /// about the caches a succeeded command invalidated -- the cursor moves are
+    /// there and not here, because a cursor move under a held lock is what
+    /// `camera_lock::resnap_camera_view` follows rather than something the lock
+    /// has to be given up for.
+    fn edits(&self) -> Option<&str> {
+        match self {
+            Command::DeletePoint {
+                reconstruction_label,
+                ..
+            }
+            | Command::DeleteCameraImage {
+                reconstruction_label,
+                ..
+            }
+            | Command::AddObservation {
+                reconstruction_label,
+                ..
+            }
+            | Command::CreatePoint {
+                reconstruction_label,
+                ..
+            }
+            | Command::RemoveObservation {
+                reconstruction_label,
+                ..
+            }
+            | Command::MoveCameraImage {
+                reconstruction_label,
+                ..
+            }
+            | Command::ResectCameraImageInPlace {
+                reconstruction_label,
+                ..
+            }
+            | Command::BundleAdjust {
+                reconstruction_label,
+                ..
+            } => Some(reconstruction_label),
+            _ => None,
         }
     }
 
@@ -1100,9 +1188,19 @@ impl Command {
     /// nodes named here, exactly as the menus and the Edit History panel do
     /// around the same `AppState` calls. A point edit is not here, for the same
     /// reason the GUI keeps its caches across one: the base does not move.
+    ///
+    /// A camera move renumbers nothing -- the image table stays put and no
+    /// point is deleted -- but it installs a whole new base, so what the panels
+    /// cached *about* the geometry describes a value the node no longer holds.
+    /// It is here for that, which is the same drop the lock's own commit makes
+    /// in the window.
     fn renumbers(&self) -> Option<&str> {
         match self {
             Command::DeleteCameraImage {
+                reconstruction_label,
+                ..
+            }
+            | Command::MoveCameraImage {
                 reconstruction_label,
                 ..
             }
@@ -1172,6 +1270,7 @@ impl Command {
             | Command::AddObservation { .. }
             | Command::CreatePoint { .. }
             | Command::RemoveObservation { .. }
+            | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
             | Command::BundleAdjust { .. } => Kind::Edit,
             Command::SelectReconstruction { .. }

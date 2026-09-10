@@ -586,6 +586,121 @@ impl AppState {
         ))
     }
 
+    /// Put `image` at `world_from_camera`, and install the answer as its node's
+    /// next version.
+    ///
+    /// The pose is in the **node's own frame**, never the displayed one: the
+    /// viewport divides its own pose by the node's `Align to…` transform before
+    /// calling, so this method and the offline binding take the same thing (see
+    /// `crate::camera_lock::pending_pose`).
+    ///
+    /// A bulk edit: a pose lives in the base, and the tracks the image observes
+    /// are re-triangulated around it, so the next version is a whole new base
+    /// under the row map `RowMap::by_scan` reads off the call's input and
+    /// output. The move deletes and creates no points, so that scan produces
+    /// the identity map -- it is still run rather than assumed, because the map
+    /// is a fact about the two values and not about this method.
+    ///
+    /// The image table does not move, so image indexes and the selections and
+    /// decodes keyed by them all still mean what they meant; what the panels
+    /// cached *about* the geometry is the caller's to drop, as it is after the
+    /// resection and the adjustment. Records its own outcome as one Action Log
+    /// entry; the `Err` is for the caller to know the node's caches are still
+    /// good, not to be logged again.
+    pub fn move_camera(
+        &mut self,
+        image: ImageRef,
+        world_from_camera: &sfmtool_core::Se3Transform,
+    ) -> Result<(), String> {
+        match self.move_camera_inner(image, world_from_camera) {
+            Ok(message) => {
+                self.action_log.record(Kind::Edit, message);
+                Ok(())
+            }
+            Err(message) => {
+                self.action_log.fail(Kind::Edit, message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn move_camera_inner(
+        &mut self,
+        image: ImageRef,
+        world_from_camera: &sfmtool_core::Se3Transform,
+    ) -> Result<String, String> {
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == image.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let label = self.scene[index].label.clone();
+        let name = self.scene[index]
+            .recon()
+            .image_table
+            .images
+            .get(image.index())
+            .map(|i| i.name.clone())
+            .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
+        let basename = crate::resect::basename(&name).to_string();
+        let refuse = |why: String| format!("Cannot move {basename} ({label}): {why}");
+
+        // Materialise only when there is an overlay to fold in; an empty one
+        // materialises to its own base, which the move can read directly.
+        let edited = self.scene[index].history.current();
+        let (materialised, mat_map) =
+            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                (None, None)
+            } else {
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
+        let source: &SfmrReconstruction = match materialised.as_ref() {
+            Some(value) => value,
+            None => &self.scene[index].history.current().base,
+        };
+
+        let (moved, report) = sfmtool_core::move_camera(source, image.index(), world_from_camera)
+            .map_err(|e| refuse(e.to_string()))?;
+        // The move deletes and creates no points, so this scan is the identity
+        // map -- read off the two values rather than asserted. The image table
+        // is untouched, so no image map.
+        let scan = RowMap::by_scan(source, &moved, None).map_err(|e| refuse(e.to_string()))?;
+        let mut steps = Vec::new();
+        steps.extend(mat_map);
+        steps.push(PointMap::Rows(scan));
+        let map = PointMap::Chain(steps);
+
+        let mut text = format!(
+            "Moved camera {basename} ({label}): {:.2} deg, {}",
+            report.rotation_deg,
+            match report.translation_scene {
+                Some(scene) => format!("{scene:.3} scene units"),
+                None => format!("{:.4}", report.translation),
+            }
+        );
+        if report.retriangulated > 0 {
+            text.push_str(&format!(", {} points re-solved", report.retriangulated));
+        }
+        let node = &mut self.scene[index];
+        let serial = node.history.push(
+            EditedReconstruction::new(Arc::new(moved)),
+            map,
+            text.clone(),
+        );
+        let parent = version_before(node, serial);
+        self.follow_selection_forward(image.recon);
+        let residual = match (report.residual_before_px, report.residual_after_px) {
+            (Some(before), Some(after)) => {
+                format!(", residual {:.1} → {:.1} px", before[0], after[0])
+            }
+            _ => String::new(),
+        };
+        Ok(format!("{text}{residual} ({parent} → {serial})"))
+    }
+
     /// Bundle-adjust `id`'s current value, and install the answer as its next
     /// version.
     ///

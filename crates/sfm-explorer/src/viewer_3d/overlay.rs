@@ -228,6 +228,60 @@ impl Viewer3D {
     }
 }
 
+impl Viewer3D {
+    /// Draw the lock banner: what camera is in hand, what it costs, and how to
+    /// end it.
+    ///
+    /// In the HUD's own vocabulary -- a small panel of 12 pt text on a dark
+    /// ground -- and in the viewport rather than in the HUD panel, because it
+    /// describes the gesture the viewport is in the middle of and disappears
+    /// with it. Drawn top-centre, under the camera-position line.
+    pub(super) fn draw_lock_banner(&self, painter: &egui::Painter, rect: Rect, node: &SceneNode) {
+        let Some(lock) = self.camera_lock.as_ref() else {
+            return;
+        };
+        if lock.image.recon != node.id {
+            return;
+        }
+        let pending = crate::camera_lock::pending_pose(self, node);
+        let (now, stored) = crate::camera_lock::residuals(lock, &pending);
+        let basename = node
+            .recon()
+            .image_table
+            .images
+            .get(lock.image.index())
+            .map(|image| crate::resect::basename(&image.name))
+            .unwrap_or("?");
+        let lines = crate::camera_lock::banner_lines(basename, &node.label, now, stored);
+
+        let font = egui::FontId::proportional(12.0);
+        let line_height = 16.0;
+        let width = 320.0_f32;
+        let height = line_height * lines.len() as f32 + 10.0;
+        let top_left = Pos2::new(rect.center().x - width / 2.0, rect.top() + 32.0);
+        let panel = Rect::from_min_size(top_left, egui::Vec2::new(width, height));
+        painter.rect_filled(panel, 4.0, Color32::from_rgba_unmultiplied(20, 20, 24, 210));
+        painter.rect_stroke(
+            panel,
+            4.0,
+            Stroke::new(1.0, Color32::from_rgb(235, 215, 150)),
+            egui::StrokeKind::Inside,
+        );
+        for (row, line) in lines.iter().enumerate() {
+            painter.text(
+                Pos2::new(
+                    panel.center().x,
+                    panel.top() + 5.0 + row as f32 * line_height,
+                ),
+                egui::Align2::CENTER_TOP,
+                line,
+                font.clone(),
+                Color32::from_rgb(235, 215, 150),
+            );
+        }
+    }
+}
+
 /// The top-left stats line: entity totals over the nodes actually drawn, led by
 /// the reconstruction count once more than one is contributing.
 ///

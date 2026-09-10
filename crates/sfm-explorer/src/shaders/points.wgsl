@@ -55,9 +55,10 @@ struct VertexInput {
     @location(0) quad_pos: vec2<f32>,       // quad corner (-1..1)
     @location(1) world_pos: vec3<f32>,      // instance: point position
     @location(2) color_packed: u32,         // instance: packed RGBA8
-    // instance: 1 = this point is still in the reconstruction, 0 = the version
-    // in view has deleted it. Its own buffer, written where an edit moved and
-    // nowhere else, so a deletion never rewrites the instance buffer.
+    // instance: 0 = the version in view has deleted this point, 1 = it is in
+    // the reconstruction, 2 = it is in the reconstruction and the viewport is
+    // calling it out. Its own buffer, written where an edit or a highlight
+    // moved and nowhere else, so neither rewrites the instance buffer.
     @location(3) alive: u32,
 }
 
@@ -68,6 +69,9 @@ struct VertexOutput {
     @location(2) view_depth: f32,
     // Global pick index of this point: recon.point_pick_base + instance index.
     @location(3) @interpolate(flat) point3d_index: u32,
+    // 1 = the viewport is calling this point out, and the fragment shader
+    // draws it in the hover tint.
+    @location(4) @interpolate(flat) highlighted: u32,
 }
 
 // Tiny positive NDC depth so an infinity splat sits just in front of the
@@ -79,6 +83,7 @@ const INF_DEPTH: f32 = 1e-6;
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.uv = in.quad_pos;
+    out.highlighted = select(0u, 1u, in.alive == 2u);
 
     // A deleted point emits a clipped vertex, so it draws nothing, occludes
     // nothing and answers no pick — the same treatment a hidden point at
@@ -168,10 +173,13 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     // replace the (already tinted) color outright rather than mixing with it:
     // a tint that could drag the highlight toward itself would cost exactly the
     // legibility the highlight exists for.
+    // A called-out point takes the hover variant of the same tint: it is the
+    // weakest of the three, because the selection and the pointer are about
+    // one point and a call-out is about a set.
     var color = in.color;
     if in.point3d_index == uniforms.selected_point_index {
         color = vec3<f32>(1.0, 1.0, 0.0);
-    } else if in.point3d_index == uniforms.hovered_point_index {
+    } else if in.point3d_index == uniforms.hovered_point_index || in.highlighted == 1u {
         color = vec3<f32>(0.0, 1.0, 1.0);
     }
     out.color = vec4<f32>(color, 1.0);

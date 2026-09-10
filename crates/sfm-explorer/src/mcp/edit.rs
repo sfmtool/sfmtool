@@ -195,6 +195,36 @@ pub(super) fn remove_observation(
     edited(state, id, |state| state.remove_observation(point, image))
 }
 
+/// `move_camera_image`: one camera image put at a pose, by a caller with no
+/// hand to place it with.
+///
+/// The pose is world-from-camera in the reconstruction's **own** frame -- the
+/// rotation carries camera axes onto world axes, the translation is the camera
+/// centre -- which is the frame every read on this surface reports poses in, so
+/// a pose read from `get_camera_image` can be adjusted and sent straight back.
+///
+/// The lock the human places a camera with ([`crate::camera_lock`]) is
+/// deliberately not on the wire: an agent has no viewport to steer, and the
+/// pose is the whole input. What the wire owes a lock somebody is holding is to
+/// end it before an edit lands under it, and that is [`super::apply_as_agent`]'s
+/// job, the lock being the viewport's rather than the state's.
+pub(super) fn move_camera_image(
+    state: &mut AppState,
+    label: &str,
+    selector: &CameraImageSel,
+    quaternion_wxyz: [f64; 4],
+    translation: [f64; 3],
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let image = resolve_camera_image(state, id, selector)?;
+    let pose = sfmtool_core::Se3Transform::new(
+        sfmtool_core::RotQuaternion::from_wxyz_array(quaternion_wxyz),
+        nalgebra::Vector3::from_row_slice(&translation),
+        1.0,
+    );
+    edited(state, id, |state| state.move_camera(image, &pose))
+}
+
 /// `resect_camera_image_in_place`: the resection landed as the node's next
 /// version rather than as a derived node beside it.
 ///

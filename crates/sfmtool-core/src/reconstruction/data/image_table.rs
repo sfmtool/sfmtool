@@ -61,6 +61,25 @@ impl ImageTable {
         &self.cameras[self.images[image_index].camera_index as usize]
     }
 
+    /// The unit world-space ray `pixel` states in image `image_index`, or
+    /// `None` when the index is past the table or the camera model has no ray
+    /// there.
+    ///
+    /// The pose and the lens are both this table's, so every edit that
+    /// triangulates a track -- a shortened one, or one whose camera moved --
+    /// assembles its rays here rather than each spelling the pixel-to-world
+    /// chain out again.
+    pub fn world_ray(&self, image_index: usize, pixel: [f64; 2]) -> Option<nalgebra::Vector3<f64>> {
+        let image = self.images.get(image_index)?;
+        let camera = self.cameras.get(image.camera_index as usize)?;
+        let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
+        let cam = nalgebra::Vector3::new(ray[0], ray[1], ray[2]);
+        if !cam.iter().all(|c| c.is_finite()) || cam.norm() <= 0.0 {
+            return None;
+        }
+        Some((image.quaternion_wxyz.inverse() * cam).normalize())
+    }
+
     /// The distance from the camera-cloud centroid to `position`: what a patch
     /// frame's angular extent is multiplied by to become a world one there, and
     /// what a world extent is divided by to become an angular one.

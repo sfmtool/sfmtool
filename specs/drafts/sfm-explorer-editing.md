@@ -177,11 +177,14 @@ cursor, the truncation and the maps, and
 [`../gui/document-model.md`](../gui/document-model.md) for the budget, which is
 a constant of 4 GiB of unshared bytes per node rather than a setting.
 
-Not built: **coalescing**. An interactive edit that produces intermediate
-values (a drag) is one version, committed when the gesture ends -- the rule the
-Action Log applies to sliders, applied to the history instead of to text. No
-edit produces intermediate values yet, so there is nothing to coalesce; the
-first one that does, a pose drag in Part 5, is where it lands.
+Not built, and no longer needed for the case it was proposed for:
+**coalescing**. An interactive edit that produces intermediate values would be
+one version committed when the gesture ends -- the rule the Action Log applies
+to sliders, applied to the history instead of to text. The gesture that raised
+it, dragging a pose, produces no intermediate value at all: the Move Camera lock
+holds the pending pose in the *viewport* and pushes exactly one version when it
+is released ([`../gui/edits/move-camera.md`](../gui/edits/move-camera.md)).
+Nothing else in Part 5 produces intermediate values either.
 
 ### The log and the history
 
@@ -257,6 +260,13 @@ Families, in the proposed order:
   rather than landing a derived node is built and standing,
   [`../gui/resect-image.md`](../gui/resect-image.md) § "In place". The
   derived-node variant stays as the comparison affordance.
+- **Move camera**: placing one image's pose by hand, by locking the camera to
+  the viewport in camera view, is built and standing,
+  [`../gui/edits/move-camera.md`](../gui/edits/move-camera.md), over the core
+  function in
+  [`../core/reconstruction/move-camera.md`](../core/reconstruction/move-camera.md).
+  The answer to a wrong pose whose correspondences are what is wrong, and the
+  first edit whose input is a gesture rather than a click.
 - **Track edits**: add an observation to a track from a pixel is built and
   standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
   and so is creating a point from a pixel,
@@ -290,6 +300,11 @@ one: a label is the sentence the edit recorded, and the same edit reads the same
 whoever asked for it. Who asked is the Action Log's column, which is where the
 viewer already answers that question.
 
+The one thing the wire owes the window is the camera a reviewer may be holding
+in hand: an edit arriving on that node ends the lock first, as a commit when it
+has been moved. That rule is stated with the family in
+[`../gui/mcp-server.md`](../gui/mcp-server.md).
+
 ---
 
 ## The plan
@@ -318,7 +333,7 @@ steps after it.
    node's own solver run over the value on screen, which is what the edits
    before it change the input to. Remaining: point constraints, bake transform,
    and the other track edits (split, merge).
-8. **Wire surface.** Done: the twelve tools are in
+8. **Wire surface.** Done: the thirteen tools are in
    [`../gui/mcp-server.md`](../gui/mcp-server.md), and a family built after this
    gains a tool there the way the seven already there did.
 

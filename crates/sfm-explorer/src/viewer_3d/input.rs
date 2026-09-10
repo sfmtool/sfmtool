@@ -108,7 +108,7 @@ impl Viewer3D {
             None => {
                 state.select_image(None);
                 if was_in_camera_view {
-                    self.camera_view = None;
+                    self.leave_camera_view();
                 }
             }
         }
@@ -159,7 +159,7 @@ impl Viewer3D {
                 self.camera.nodal_pan(delta.x as f64, delta.y as f64);
             } else if middle_down {
                 // Middle-drag = pan — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.pan(
                     -delta.x as f64,
                     delta.y as f64,
@@ -177,12 +177,12 @@ impl Viewer3D {
                     self.camera.zoom_fov(delta.y as f64 * DRAG_ZOOM_SPEED);
                 } else {
                     // Zoom — exits camera view
-                    self.camera_view = None;
+                    self.leave_camera_view();
                     self.camera.zoom(delta.y as f64 * DRAG_ZOOM_SPEED);
                 }
             } else if modifiers.alt && modifiers.shift {
                 // Alt+Shift+drag = pan — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.pan(
                     -delta.x as f64,
                     delta.y as f64,
@@ -192,7 +192,7 @@ impl Viewer3D {
             } else if modifiers.alt {
                 if self.camera_view.is_some() {
                     // Alt+drag in camera view = orbit — exits camera view
-                    self.camera_view = None;
+                    self.leave_camera_view();
                     self.camera.orbit(delta.x as f64, delta.y as f64);
                 } else {
                     // Alt+drag = nodal pan (free-look) — keeps camera view
@@ -204,12 +204,12 @@ impl Viewer3D {
                     self.camera.zoom_fov(delta.y as f64 * DRAG_ZOOM_SPEED);
                 } else {
                     // Ctrl+drag = zoom (vertical motion) — exits camera view
-                    self.camera_view = None;
+                    self.leave_camera_view();
                     self.camera.zoom(delta.y as f64 * DRAG_ZOOM_SPEED);
                 }
             } else if modifiers.shift {
                 // Shift+drag = pan — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.pan(
                     -delta.x as f64,
                     delta.y as f64,
@@ -221,7 +221,7 @@ impl Viewer3D {
                 self.camera.nodal_pan(delta.x as f64, delta.y as f64);
             } else {
                 // Left-drag = orbit — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.orbit(delta.x as f64, delta.y as f64);
             }
         } else {
@@ -253,7 +253,7 @@ impl Viewer3D {
                     .target_push_pull(delta.y as f64 * TRACKPAD_ZOOM_SPEED);
             } else if mods.alt && mods.shift {
                 // Pan — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.pan(
                     delta.x as f64,
                     -delta.y as f64,
@@ -263,7 +263,7 @@ impl Viewer3D {
             } else if mods.alt {
                 if self.camera_view.is_some() {
                     // Alt+scroll in camera view = orbit — exits camera view
-                    self.camera_view = None;
+                    self.leave_camera_view();
                     self.camera.orbit(-delta.x as f64, delta.y as f64);
                 } else {
                     // Nodal pan (free-look) — keeps camera view
@@ -275,12 +275,12 @@ impl Viewer3D {
                     self.camera.zoom_fov(delta.y as f64 * TRACKPAD_ZOOM_SPEED);
                 } else {
                     // Zoom — exits camera view
-                    self.camera_view = None;
+                    self.leave_camera_view();
                     self.camera.zoom(delta.y as f64 * TRACKPAD_ZOOM_SPEED);
                 }
             } else if mods.shift {
                 // Pan — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.pan(
                     delta.x as f64,
                     -delta.y as f64,
@@ -292,7 +292,7 @@ impl Viewer3D {
                 self.camera.nodal_pan(-delta.x as f64, delta.y as f64);
             } else {
                 // Orbit — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.orbit(-delta.x as f64, delta.y as f64);
             }
         } else if scroll_input.has_mouse_wheel() {
@@ -308,7 +308,7 @@ impl Viewer3D {
                     .zoom_fov(delta.y as f64 * MOUSE_WHEEL_ZOOM_SPEED);
             } else {
                 // Zoom — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 self.camera.zoom(delta.y as f64 * MOUSE_WHEEL_ZOOM_SPEED);
             }
         }
@@ -331,7 +331,7 @@ impl Viewer3D {
                 self.camera.zoom_fov((zoom_delta - 1.0) as f64 * 1.0);
             } else {
                 // Pinch zoom — exits camera view
-                self.camera_view = None;
+                self.leave_camera_view();
                 log::debug!("Pinch zoom_delta: {:.4}", zoom_delta);
                 // zoom_delta > 1 means zoom in (pinch spread), < 1 means zoom out (pinch together)
                 self.camera.zoom((zoom_delta - 1.0) as f64 * 1.0);
@@ -364,13 +364,13 @@ impl Viewer3D {
                         self.camera.target_push_pull(*dy * DRAG_ZOOM_SPEED);
                     } else if modifiers.alt && modifiers.shift {
                         // Pan — exits camera view
-                        self.camera_view = None;
+                        self.leave_camera_view();
                         self.camera
                             .pan(*dx, *dy, rect.width() as f64, rect.height() as f64);
                     } else if modifiers.alt {
                         if self.camera_view.is_some() {
                             // Alt+gesture in camera view = orbit — exits camera view
-                            self.camera_view = None;
+                            self.leave_camera_view();
                             self.camera.orbit(-*dx, *dy);
                         } else {
                             // Nodal pan (free-look) — keeps camera view
@@ -378,7 +378,7 @@ impl Viewer3D {
                         }
                     } else if modifiers.shift {
                         // Pan — exits camera view
-                        self.camera_view = None;
+                        self.leave_camera_view();
                         self.camera
                             .pan(*dx, *dy, rect.width() as f64, rect.height() as f64);
                     } else if modifiers.ctrl || modifiers.command {
@@ -387,7 +387,7 @@ impl Viewer3D {
                             self.camera.zoom_fov(*dy * DRAG_ZOOM_SPEED);
                         } else {
                             // Zoom — exits camera view
-                            self.camera_view = None;
+                            self.leave_camera_view();
                             self.camera.zoom(*dy * DRAG_ZOOM_SPEED);
                         }
                     } else if self.camera_view.is_some() {
@@ -395,7 +395,7 @@ impl Viewer3D {
                         self.camera.nodal_pan(-*dx, *dy);
                     } else {
                         // Orbit — exits camera view
-                        self.camera_view = None;
+                        self.leave_camera_view();
                         self.camera.orbit(-*dx, *dy);
                     }
                 }
@@ -409,7 +409,7 @@ impl Viewer3D {
                         self.camera.zoom_fov((*scale - 1.0) * 35.0);
                     } else {
                         // Zoom — exits camera view
-                        self.camera_view = None;
+                        self.leave_camera_view();
                         self.camera.zoom((*scale - 1.0) * 35.0);
                     }
                 }
@@ -457,7 +457,7 @@ impl Viewer3D {
             }
         });
         if fwd != 0.0 || right != 0.0 || up != 0.0 {
-            self.camera_view = None;
+            self.leave_camera_view();
             self.camera.fly_move(
                 fwd * speed * sprint,
                 right * speed * sprint,
@@ -552,7 +552,18 @@ impl Viewer3D {
                 }
             }
             if i.key_pressed(egui::Key::Home) {
-                self.camera_view = None;
+                // Both forms of Home move the viewport away from the camera by
+                // a *reset* rather than by a hand, so neither is a move anybody
+                // asked for while a camera is in hand.
+                if self.camera_lock.is_some() {
+                    log.fail(
+                        Kind::View,
+                        "Home is refused while a camera is being moved; \
+                         M or Enter commits, Esc cancels.",
+                    );
+                    return;
+                }
+                self.leave_camera_view();
                 if i.modifiers.shift {
                     // Shift+Home = full view reset
                     self.camera = ViewportCamera::default();

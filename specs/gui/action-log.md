@@ -175,6 +175,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User / MCP | `Removed observation of point {index} in {image} ({label}): {n} observations left ({from} → {to})` — or `one observation left, so the point is a bearing at infinity`, or `the point had no other observation and is deleted` |
 | Edit | — | User / MCP | `Resected {image} in place ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})` |
 | Edit | — | User / MCP | `Bundle adjusted {label}: {i} images, {p} points, {o} observations, median residual {before} → {after} px ({from} → {to})`, with `, focal {f0} → {f1}` when the focal was released and `, {n} points deleted` when the solve left points unsupported |
+| Edit | — | User / MCP | `Moved camera {image} ({label}): {deg} deg, {translation}`, the translation in scene units where the value has a scale for them, with `, {n} points re-solved` when any were and `, residual {before} → {after} px` when the value carries keypoints, then ` ({from} → {to})` |
 | Edit | — | User / MCP | `Undo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User / MCP | `Redo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User / MCP | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |
@@ -187,6 +188,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | View | — | User / MCP | `Framed the scene` / `Framed {label}` / `Framed camera #{k} of {label}` |
 | View | — | User / MCP | `Looking through {name}` / `Left camera view` |
 | View | — | User | `Levelled the horizon` / `Reset the view` |
+| View | — | User | `Moving the camera of {image} ({label})` / `Cancelled the camera move of {image} ({label})` / `{image} ({label}) was not moved`: taking a camera in hand, putting it back, and letting go without having moved it ([edits/move-camera.md](edits/move-camera.md)) |
+| View | — | User | `Home is refused while a camera is being moved; M or Enter commits, Esc cancels.` (**failed**) |
 | View | `camera` | MCP | `Camera placed` / `Camera restored` |
 | View | `field of view` | MCP | `Field of view {fov:.1}°` |
 | Display | the control's label | User | `{Control} {on|off}` for HUD checkboxes, e.g. `Grid off` |
@@ -227,6 +230,12 @@ Rules that the table implies:
   selection step whose own `Selected image …` entry already names the image, and
   a `Looking through …` between every two of those would break the coalescing
   that keeps a scrub to one line.
+- **Holding a camera is a `View` entry and moving it is an `Edit` one.** The
+  Move Camera lock is viewport state, so entering it, cancelling it and letting
+  go of it without having moved anything are three `View` lines and the value
+  never changes; only the commit is an edit, and only a commit past the dead
+  band writes one. Nothing is logged for the navigation in between, by the rule
+  below that continuous navigation is not logged.
 - **The go-to-point dialog, the viewport click, the browser strip, the scene
   tree and the `,` / `.` keys all log the same `Selected image …` text**,
   because all of them end in `AppState::select_image`. Which control was used

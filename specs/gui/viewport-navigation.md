@@ -90,6 +90,15 @@ during Zoom to Fit to center on the point cloud.
 | Q / E | Tilt / Roll | Rotate horizon left/right around view axis |
 | , | Previous Camera | In camera view mode: switch to previous camera image index |
 | . | Next Camera | In camera view mode: switch to next camera image index |
+| M | Move Camera | In camera view mode: take that camera in hand, so every navigation input moves it; again to commit |
+| Enter | Commit Camera Move | While a camera is in hand: keep the pose as a version of the reconstruction |
+| Esc | Cancel Camera Move | While a camera is in hand: put the viewport back on the stored pose, and push nothing |
+
+`M`, `Enter` and `Esc` are the [Move Camera](edits/move-camera.md) edit's; the
+last two do nothing when no camera is in hand. While one is, `Home` and
+`Shift+Home` are refused with a status line, and nothing else in the table above
+leaves camera view: the viewport *is* the camera, so what would have moved the
+view moves the pose.
 
 ## Default Behavior
 
