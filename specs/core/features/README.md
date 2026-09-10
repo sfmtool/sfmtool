@@ -8,6 +8,7 @@ from `src/sfmtool/feature_match/`.
 |----------|-------------|
 | [sift.md](sift.md) | The pure-Rust SIFT detector and descriptor: scale space, orientation, SIMD, and threading. |
 | [randomized-kdtree-forest.md](randomized-kdtree-forest.md) | Approximate nearest-neighbour index replacing the exhaustive descriptor scan. |
+| [lazy-kdforest-query.md](lazy-kdforest-query.md) | Persistent, bounded-cache queries over chunked `.kdf` forests. |
 | [track-cluster-matching.md](track-cluster-matching.md) | Cluster-centric alternative to pair-centric matching: build track clusters directly, verify afterwards. |
 | [cluster-covisibility.md](cluster-covisibility.md) | How many clusters each image pair shares, and the grouping queries consumers build on that. |
 | [covisibility-selection.md](covisibility-selection.md) | Three primitives over that structure: appearance displacement, redundancy thinning, and reach. |

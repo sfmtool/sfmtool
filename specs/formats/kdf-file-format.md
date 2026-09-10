@@ -1,9 +1,9 @@
 # The KDF file format
 
-**Status:** Draft. Proposed version 1 for review; no implementation exists.
-The proposal supports immutable, self-contained forests with either tree-local
-vector copies or one shared vector table. Both layouts are specified for
-implementation and comparison; shipping defaults remain benchmark decisions.
+Version 1 supports immutable, self-contained forests with either tree-local
+vector copies or one shared vector table. Both layouts are implemented for
+measurement; callers choose one explicitly because no shipping default is
+established without benchmark results.
 
 A `.kdf` file stores a set of fixed-width vectors and several binary spatial
 partition trees over that set. It supports approximate nearest-neighbor lookup
@@ -20,10 +20,9 @@ image's SIFT file, identified by `(image_index, image_feature_index)`.
 maps each corpus feature ID to its image feature.
 The file contains no reconstructed 3D points.
 
-This proposal uses the [archive container](../formats/archive-container.md).
-The companion [lazy query proposal](lazy-kdforest-query.md) defines the query
+The format uses the [archive container](archive-container.md). The companion
+[lazy query design](../core/features/lazy-kdforest-query.md) defines the query
 API and packing policy; all stored values and validity rules are defined here.
-The intended standing location is `specs/formats/kdf-file-format.md`.
 
 ## Container and entry layout
 
@@ -36,7 +35,7 @@ names are logical prefixes, not separate directory entries. Names are unique.
 | Entry | Meaning |
 |-------|---------|
 | `metadata.json.zst` | Version, dimensions, scalar type, tree and chunk directory |
-| `trees/{t}/chunks/{c}/nodes.8.{M}.uint32.zst` | Eight contiguous node columns |
+| `trees/{t}/chunks/{c}/nodes.10.{M}.uint32.zst` | Ten contiguous node columns |
 | `trees/{t}/chunks/{c}/splits.{M}.{scalar_type}.zst` | Split coordinate for each node |
 | `trees/{t}/chunks/{c}/feature_ids.{P}.uint32.zst` | Original row ID of each locally stored vector |
 | `trees/{t}/chunks/{c}/vectors.{P}.{D}.{scalar_type}.zst` | Local vector rows; tree-local layout only |
@@ -44,16 +43,16 @@ names are logical prefixes, not separate directory entries. Names are unique.
 | `features/blocks/{b}/vectors.{R}.{D}.{scalar_type}.zst` | Shared vector rows; shared layout only |
 | `content_hash.json.zst` | Metadata, chunk and whole-file hashes |
 
-In `nodes.8.{M}.uint32.zst`, the eight columns are contiguous rows of a
-row-major `(8, M)` array. This uses one entry for all integer node fields to
-avoid eight separate reads and frames. Other arrays follow the table literally.
+In `nodes.10.{M}.uint32.zst`, the ten columns are contiguous rows of a
+row-major `(10, M)` array. This uses one entry for all integer node fields to
+avoid ten separate reads and frames. Other arrays follow the table literally.
 `t` and `c` are zero-based decimal integers without leading zeroes; `M`, `P`
 and `D` are decimal counts. Tree-local chunks have all four entries, even when
 P = 0. Shared-layout tree chunks have the first three entries and no vectors.
 
 A reader resolves ZIP offsets once from the central directory. Paths do not
 imply that the ZIP directory must be rescanned for each node. Physical entry
-order does not affect validity. Writers should place each chunk's four entries
+order does not affect validity. Writers place each chunk's three or four entries
 consecutively in the order above, for coalesced reads.
 
 ## Metadata and versioning
@@ -77,7 +76,7 @@ Required fields in `metadata.json.zst`:
 Each tree has `root: [chunk_id, local_node_index]` (or `null` for N = 0),
 and `chunks`, an array in chunk-ID order. Each chunk object has integer
 `node_count` M, `feature_count` P, and `decoded_bytes`. The latter equals
-`32*M + sizeof(scalar_type)*M + 4*P`, plus
+`40*M + sizeof(scalar_type)*M + 4*P`, plus
 `sizeof(scalar_type)*P*D` in tree-local layout.
 Chunk and local node indices fit uint32. M is positive; an empty forest has
 no chunks in any tree. No tree is empty when N is positive.
@@ -152,7 +151,7 @@ integrity hashing below. No source file is opened by a normal query.
 
 ## Nodes, leaves, and identity
 
-The eight uint32 columns of `nodes.8.{M}.uint32.zst`, in order, are:
+The ten uint32 columns of `nodes.10.{M}.uint32.zst`, in order, are:
 
 | Column | Internal node | Leaf node |
 |--------|---------------|-----------|
@@ -161,8 +160,10 @@ The eight uint32 columns of `nodes.8.{M}.uint32.zst`, in order, are:
 | `split_dimension` | Zero-based axis, less than D | Zero |
 | `left_chunk` | Chunk ID within this tree | Zero |
 | `left_node` | Local node index in left chunk | Zero |
+| `left_logical_node_id` | Logical ID of the left child | Zero |
 | `right_chunk` | Chunk ID within this tree | Zero |
 | `right_node` | Local node index in right chunk | Zero |
+| `right_logical_node_id` | Logical ID of the right child | Zero |
 | `leaf_start` | Zero | Start row in this chunk's feature-ID/vector arrays |
 
 Leaf lengths are inferred from consecutive leaf starts in **local node order**:
@@ -175,7 +176,10 @@ zero. A byte split is an unsigned byte, not a quantized floating value.
 Logical node IDs are unique and dense from zero through the tree's node count
 minus one. They preserve the source forest's node identity during repacking;
 they are independent of disk address and available for deterministic traversal
-ties. The root has logical ID zero. References never cross trees.
+ties. Each child reference repeats the addressed child's logical ID, so a lazy
+query can enqueue a far child with the correct tie key without loading that
+child's chunk. The repeated value must match the addressed node. The root has
+logical ID zero. References never cross trees.
 
 Every node is reachable exactly once from its tree's root: no cycles, shared
 children, unreachable nodes, or duplicate child references. Every leaf owns
@@ -264,13 +268,15 @@ may reject files exceeding explicit resource limits.
 
 ## Implementations
 
-Proposed crate: `sfmtool-kdf-format`, alongside the existing crates under
-[crates/](../../crates/), depending on `sfmtool-archive-io` for container
-primitives. It owns encoding, structural validation, indexed chunk reading,
-writing and full verification, with no dependency on `sfmtool-core`. Core owns
-forest construction and queries. There is no Python binding in this proposal.
+The [`sfmtool-kdf-format`](../../crates/sfmtool-kdf-format/) crate sits alongside
+the other format crates under [crates/](../../crates/) and depends on
+`sfmtool-archive-io` for container primitives. It owns encoding, structural
+validation, indexed chunk reading, writing and full verification, with no
+dependency on `sfmtool-core`. Core owns forest construction and queries, in
+[`features/kdforest/persistent.rs`](../../crates/sfmtool-core/src/features/kdforest/persistent.rs).
+There is no Python binding.
 
-## Review decisions
+## Sizing and tradeoffs
 
 ### DinoLedge case study (2026-09-09)
 
@@ -300,9 +306,9 @@ These are calculated topology counts, not a measured serialized forest.
 
 At a 1 MiB decoded target, each tree has one routing chunk of 2,047 internal
 nodes and 2,048 complete-subtree chunks. Each subtree contains 1,023 nodes and
-4,737 or 4,738 descriptors, occupying 659,043 or 659,175 decoded bytes. The
-next parent is too large, so the target underfills to about 644 KiB. One routing
-chunk occupies 67,551 decoded bytes and has no feature rows.
+4,737 or 4,738 descriptors, occupying 667,227 or 667,359 decoded bytes. The
+next parent is too large, so the target underfills to about 652 KiB. One routing
+chunk occupies 83,927 decoded bytes and has no feature rows.
 
 Illustrative layout for a file at the workspace root (chunk 1's exact P depends
 on traversal; 4,737 is one of the two valid sizes):
@@ -323,12 +329,12 @@ DinoLedge.kdf
     image_indexes.3620.uint32.zst
     image_feature_indexes.3620.uint32.zst
   trees/0/chunks/0/                  # upper routing nodes
-    nodes.8.2047.uint32.zst
+    nodes.10.2047.uint32.zst
     splits.2047.uint8.zst
     feature_ids.0.uint32.zst
     vectors.0.128.uint8.zst
   trees/0/chunks/1/                  # complete subtree
-    nodes.8.1023.uint32.zst
+    nodes.10.1023.uint32.zst
     splits.1023.uint8.zst
     feature_ids.4737.uint32.zst
     vectors.4737.128.uint8.zst
@@ -347,8 +353,8 @@ The two image hash arrays together occupy only 38,272 decoded bytes.
 
 ### Size budget: measurements versus projection
 
-Four trees' decoded arrays total **5,399,980,476 bytes (5.400 GB)**:
-4,967,909,376 vector bytes, 155,247,168 feature-ID bytes, and 276,823,932 node/split
+Four trees' decoded arrays total **5,467,089,308 bytes (5.467 GB)**:
+4,967,909,376 vector bytes, 155,247,168 feature-ID bytes, and 343,932,764 node/split
 bytes. Origins add 77,623,584 decoded bytes, but compress particularly well in
 image/feature order: encoding the actual complete mapping as 75 pairs of zstd
 level-3 frames measured **1,408,746 bytes** before ZIP headers. These mappings
@@ -356,16 +362,16 @@ are stored once, not four times.
 
 A compression probe decoded every nineteenth SIFT file in filename order
 (63 files, 65,224,960 descriptor bytes), then compressed descriptor-only blocks
-at zstd level 3 with row counts matching the proposed 1, 8 and 16 MiB layouts.
+at zstd level 3 with row counts matching the 1, 8 and 16 MiB layouts.
 Image-order bytes compressed to 76.96–76.98% of raw size; a seeded random row
 shuffle (Python Random seed 0) compressed to 77.44–77.46%. These are proxy orders,
 **not kd-tree leaf order**, and neither is a bound on its compression. The
 existing complete corpus's descriptor ratio is about 77.01%.
 
 Applying the measured proxy ratios to four vector copies projects **3.82–3.85 GB
-for vectors alone**. Allowing up to the decoded 0.432 GB for ID/node/split arrays
+for vectors alone**. Allowing up to the decoded 0.499 GB for ID/node/split arrays
 as a conservative planning allowance, plus origins and metadata, gives a useful
-rounded planning range of **3.9–4.3 GB (about 3.6–4.0 GiB)** for this `.kdf`.
+rounded planning range of **4.0–4.4 GB (about 3.7–4.1 GiB)** for this `.kdf`.
 This is not a produced file size or a guaranteed bound: actual tree-ordered
 compression, node compression and JSON serialization remain unmeasured.
 ZIP headers/directory are only roughly 6–8 MB at 32,940 entries with these names;
@@ -373,7 +379,7 @@ chunk metadata/hash JSON adds a few MB decoded before compression. Near or over
 4 GiB, writers must enable ZIP64 where individual offsets/sizes require it.
 
 Eight trees roughly double the dominant storage, giving a planning range near
-7.8–8.6 GB. A shared descriptor corpus would remove three raw vector copies
+8.0–8.8 GB. A shared descriptor corpus removes three raw vector copies
 (3.726 GB), approximately 2.87–2.89 GB compressed under these proxy ratios,
 but its random descriptor reads are precisely the tradeoff to benchmark.
 JPEG pixels, SIFT keypoints, affine shapes and thumbnails are not embedded.
@@ -389,16 +395,18 @@ sorted source files is
 This identifies the inspected inventory, not independent verification of all
 source payload hashes. No source files were modified and no `.kdf` was built.
 
-### Remaining format decisions
+### Format tradeoffs
 
 The principal cost is T copies of the descriptor corpus, one per tree. For
 one million 128-byte vectors and four trees that is 512 MB of uncompressed
 vector bytes, before IDs, nodes and compression. A single shared corpus saves
 space but may require many extra chunks for one leaf. The benchmark in the
-companion proposal compares both before freezing version 1.
+companion query design compares both layouts; because the format carries both,
+choosing between them does not change the version-1 wire contract.
 
 The grouped integer node columns are a deliberate adaptation of the usual
-one-entry-per-column convention. Review whether fewer entry reads justify it.
-The format allows arbitrary partitions and supports both descriptor layouts,
-so size tuning and layout selection do not require a version change. Shared
-descriptor performance estimates are in the companion query draft.
+one-entry-per-column convention: ten separate entries per chunk would cost ten
+reads and ten zstd frames to route through a single node. The format allows
+arbitrary partitions and supports both descriptor layouts, so size tuning and
+layout selection do not require a version change. Shared descriptor performance
+estimates are in the companion query design.

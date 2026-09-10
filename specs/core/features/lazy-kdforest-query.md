@@ -1,29 +1,32 @@
 # Lazy KD-Forest Queries
 
-**Status:** Draft. Proposed API and I/O policy for review. The baseline preserves
-the existing forest's search behavior in both descriptor layouts; packing and cache defaults are provisional
-until measured. No implementation or benchmark results are claimed.
-
 A persistent kd-tree forest lets a process search a large set of descriptors
-while keeping only the portions it visits in memory. This proposal adds a
-file-backed query path to core, using chunked trees with either leaf-local vectors
-or a shared vector table. It targets local seekable files, repeated
-queries, and corpora larger than the configured memory cache.
+while keeping only the portions it visits in memory. The file-backed query path
+in core does this over chunked trees with either leaf-local vectors or a shared
+vector table, targeting local seekable files, repeated queries, and corpora
+larger than the configured memory cache. It preserves the in-memory forest's
+search behavior in both layouts.
 
-It extends [randomized kd-tree forests](../core/features/randomized-kdtree-forest.md)
-and uses the proposed [KDF format](kdf-file-format.md). Its intended standing
-location is `specs/core/features/lazy-kdforest-query.md`.
+Packing and cache values are configurable. The starting values below are chosen
+for plausibility rather than measurement; the benchmark plan that would settle
+them is in [Benchmark plan and provisional defaults](#benchmark-plan-and-provisional-defaults),
+and no benchmark results are claimed here.
 
-## Proposed Rust interface and responsibilities
+It extends [randomized kd-tree forests](randomized-kdtree-forest.md)
+and uses the [KDF format](../../formats/kdf-file-format.md).
+
+## Rust interface and responsibilities
 
 The integration belongs beside the existing implementation in
-[core's kdforest module](../../crates/sfmtool-core/src/features/kdforest/mod.rs).
-The proposed `sfmtool-kdf-format` crate owns storage types and validated decoded chunks;
+[core's kdforest module](../../../crates/sfmtool-core/src/features/kdforest/mod.rs).
+The `sfmtool-kdf-format` crate owns storage types and validated decoded chunks;
 core depends on it, never the reverse. Persistence exports the already-built
 topology and feature order rather than rebuilding from a seed. This avoids making
 random-generator or future builder changes part of the file compatibility contract.
 
-API sketch (signatures are proposed, not callable today):
+The public surface is implemented in
+[`kdforest/persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
+and re-exported by the kdforest module:
 
 ```rust
 pub struct KdfWriteOptions {
@@ -37,11 +40,12 @@ pub struct LazyKdForestOptions {
     pub max_leaf_features: usize,     // provisional: 1,048,576
     pub cache_bytes: usize,        // provisional: 256 MiB decoded cache
     pub max_in_flight_bytes: usize,// provisional: 64 MiB decode reservations
+    pub max_compressed_bytes: usize, // provisional: 64 MiB per-entry compressed scratch
     pub max_metadata_bytes: usize, // provisional: 64 MiB
     pub max_chunk_bytes: usize,    // provisional: 64 MiB decoded
     pub query_workers: usize,     // provisional: 1; caller can raise
 }
-pub struct LazyKdForest<S: KdfScalar> { /* storage handle and shared cache */ }
+pub struct LazyKdForest<S: ForestScalar + KdfScalar> { /* file handle, cache, workers */ }
 pub enum DescriptorStorage {
     TreeLocal,
     Shared { target_descriptor_block_bytes: usize },
@@ -59,6 +63,8 @@ impl<S: KdfScalar> LazyKdForest<S> {
         -> Result<Self, KdfError>;
     pub fn search(&self, query: &[S], k: usize, max_leaf_checks: usize,
                   max_dist: Option<f32>) -> Result<Vec<Neighbor>, KdfError>;
+    pub fn search_with_stats(&self, query: &[S], k: usize, max_leaf_checks: usize,
+        max_dist: Option<f32>) -> Result<(Vec<Neighbor>, LazyQueryStats), KdfError>;
     pub fn search_batch_with_distances(&self, queries: &[S], n_queries: usize,
         k: usize, max_leaf_checks: usize, max_dist: Option<f32>)
         -> Result<(Vec<u32>, Vec<f32>), KdfError>;
@@ -67,8 +73,18 @@ impl<S: KdfScalar> LazyKdForest<S> {
     pub fn is_empty(&self) -> bool;
     pub fn resolve_origins(&self, feature_ids: &[u32])
         -> Result<Option<Vec<FeatureOrigin>>, KdfError>;
+    pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError>;
+    pub fn io_stats(&self) -> KdfIoStats;
 }
 ```
+
+`search_with_stats` returns `LazyQueryStats` — leaf checks, heap pushes and pops
+— alongside the neighbors; `search` is the same traversal with the counters
+dropped. The counters exist because they are what the parity tests assert on:
+matching neighbor IDs alone would not catch a file-backed traversal that visits
+a different set of leaves and happens to agree. `io_stats` reports the cache and
+read counters of `KdfIoStats` for the whole file, which is how a test asserts
+that opening reads no chunk payload and that a warm hit causes no read.
 
 `KdfScalar` is a sealed bridge for the existing u8/f32 scalar implementations,
 not an invitation to persist arbitrary user metrics. `Neighbor` retains original
@@ -95,11 +111,11 @@ assert_eq!(neighbors[0].index, 0);
 ```
 
 Storage-level indexed read/write/full-verify interfaces belong to `sfmtool-kdf-format`;
-they accept neutral trees/chunks and expose no ANN algorithm. Exact API names
-there can be settled during implementation without changing the wire contract.
+they accept neutral trees/chunks and expose no ANN algorithm. Those APIs stay
+storage-specific rather than forming a general plugin surface.
 Writing uses a sibling temporary file and publishes only a completed archive;
 it fails if the destination exists. Streaming construction from an out-of-memory
-input corpus is outside this proposal: export initially requires a built forest.
+input corpus is out of scope: export requires an already-built forest.
 
 ### Source references
 
@@ -199,7 +215,7 @@ for predictable leaf access. It is the main review decision, not a free gain.
 ## Search behavior and parity
 
 Use the current in-memory search as the behavioral reference, specifically
-[search.rs](../../crates/sfmtool-core/src/features/kdforest/search.rs), rather
+[search.rs](../../../crates/sfmtool-core/src/features/kdforest/search.rs), rather
 than reproducing the older pseudocode's equality convention. The storage path
 must preserve the following details:
 
@@ -243,7 +259,8 @@ decode trees or descriptors. ZIP metadata/index memory is O(number of entries),
 not constant; enforce the metadata budget on both decoded JSON and index
 allocations, rejecting excess directory entries before unbounded allocation.
 
-On a miss, read only that chunk's four entry ranges and verify/decode them.
+On a miss, read only that chunk's three tree-entry ranges, plus its vector entry
+in tree-local layout, and verify/decode them.
 When entries are adjacent, a reader may coalesce their ranges, including intervening
 ZIP headers. A chunk is a logical cache unit, not necessarily one system call.
 Cache the offset/length index for the handle's lifetime; never reopen or reparse
@@ -326,8 +343,8 @@ shipping defaults; retain configurability even if a clear winner emerges.
 
 ### DinoLedge packing example
 
-The [format case study](kdf-file-format.md#dinoledge-case-study-2026-09-09)
-measures 9,702,948 real 128-D descriptors across 1,196 images. For the proposed
+The [format case study](../../formats/kdf-file-format.md#dinoledge-case-study-2026-09-09)
+measures 9,702,948 real 128-D descriptors across 1,196 images. For the
 four-tree/16-feature-leaf layout, calculated counts are:
 
 | Target decoded size | Subtree chunks per tree | Features per subtree | Actual subtree size | All ZIP entries, including source mapping |
@@ -348,7 +365,7 @@ before best-bin-first expansion. Under the descriptor compression proxy, the
 vector portions of those four subtree reads alone would be roughly 1.87 MB
 versus 29.9 MB compressed. These are structural estimates, not measured query
 I/O or latency. Four cold chunks do not imply four physical reads: each has
-four entries, optionally coalesced, and the OS adds its own caching/read-ahead.
+three or four entries, optionally coalesced, and the OS adds its own caching/read-ahead.
 
 A 256 MiB decoded cache fits roughly 406 of the small subtree chunks after
 routing arrays, versus about 25 of the 16 MiB-target subtrees; actual capacity
@@ -465,51 +482,57 @@ entries. Compare 16, 64, 256 KiB and the subtree-sized baseline, accounting for
 the address map, directory overhead and tree bytes. The tradeoff is particularly
 compelling at twenty trees: roughly 18 GB of avoided compressed copies gives
 considerable room to trade some cold-query latency for capacity and warm reuse.
-Both layouts are part of the proposed wire contract; these measurements choose
-defaults after implementation rather than deciding whether sharing is supported.
+Both layouts are part of the version-1 wire contract, so these measurements
+choose a default rather than deciding whether sharing is supported at all.
 
-### Implementation test cases
+### How parity is tested
 
-Export each reference forest in both layouts, with multiple shared-block sizes.
-Require identical neighbor IDs, distances, evaluation counts and origin mappings.
-Validate missing/forbidden layout entries, invalid storage-row permutations,
-descriptor-block boundaries, empty shared tables, oversized maps and blocks,
-shared hash corruption, and concurrent cache eviction without deadlock. Instrument
-shared open to permit the row map but prohibit descriptor block reads. Layout
-conversion must preserve logical node IDs and leaf member order.
+Parity is the property that carries the risk here, so the tests assert it
+against the in-memory forest rather than against recorded expectations. Each
+case builds a forest, exports it, opens the file, and compares. Chunk and block
+targets are set to a few hundred bytes so that a forest of a few dozen
+descriptors still spans many chunks: the traversal that matters is the one that
+crosses a chunk boundary, and a realistic target would put the whole fixture in
+one chunk and test nothing.
 
-Round-trip u8 and f32 forests, including empty input, a single leaf, repeated
-vectors, equality at split planes, equal-distance heap ties, non-128 dimensions,
-and oversized leaves. Repack each identical forest at several small test chunk
-sizes and require search parity across cache sizes and worker counts. Test the
-soft budget at zero and leaf boundaries, cutoffs and padded batch results.
+[`persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
+holds three cases. The `u8` case exports a four-tree forest in both layouts and
+compares eleven queries at leaf budgets of 0, 1, 7, 31 and 1000, plus a batch
+call. It asserts equal leaf-check counts as well as equal neighbors, because
+matching neighbor IDs alone would not catch a file-backed traversal that visits
+a different set of leaves and agrees by luck — the counts are what pin the
+far-child queue order, and with it the logical-ID tie-break. The `f32` case
+covers signed-zero routing at a split plane, an infinite cutoff, and the two
+rejected queries (NaN coordinate, negative `max_dist`). The concurrency case
+gives eight threads one identical query against a cache smaller than the file,
+so every load races, evicts and is deduplicated; it asserts that opening a
+shared-layout file reads no descriptor block at all.
 
-Instrument a seekable source: opening must read no chunk payload; traversing
-an unvisited chunk must read none of its bytes; a warm resident hit must cause
-no read or decode; concurrent identical misses must load once. Force eviction,
-I/O failures and decode failures and verify there are no hangs or success-shaped
-partial results. Test ZIP64 offsets with sparse fixtures where supported.
+[`sfmtool-kdf-format/src/tests.rs`](../../../crates/sfmtool-kdf-format/src/tests.rs)
+covers the format in isolation: a round trip in both layouts down to node
+addresses and logical IDs, a full `verify_kdf` pass, SIFT origins resolved
+lazily and in the caller's requested order including repeats, the writer's
+refusal to overwrite an existing destination, and a `ResourceLimit` when the
+address-map budget cannot hold the shared row map. The corruption case is the
+one that pins the laziness contract: a damaged shared descriptor block leaves
+`open` succeeding and reading nothing, makes the direct access fail, and makes
+full verification fail.
 
-Reject duplicate/missing entries, unsupported versions, mismatched sizes/hashes,
-truncated frames, invalid node references, cycles, invalid leaf ranges, nonfinite
-data and allocation overflows. Full verifier tests cover duplicate/missing IDs,
-inconsistent cross-tree vectors and split constraints. Corruption in an unread
-chunk may remain undiscovered until access or full verification; test that
-distinction explicitly.
+The negative surface these do not reach — malformed node references, cycles,
+non-contiguous leaf ranges, invalid permutations, wrong entry sets, unsupported
+versions, truncated frames, and `verify_sift_sources` against real `.sift` files
+— is proposed in
+[drafts/kdf-validation-tests.md](../../drafts/kdf-validation-tests.md).
 
-Source tests cover subset/reordered descriptors, origin-block boundaries,
-repeated result IDs, invalid image indices, duplicate origin pairs, both hash
-encodings, workspace relocation, missing/changed SIFT sources and source-vector
-mismatch. Queries must succeed without source files. Resolving a result must
-read only its origin block, never all N mappings.
+## Out of scope
 
-## Scope and review questions
+There are no updates or appends to an existing file, no remote HTTP reads, no
+Python bindings, no CLI, no automatic precision calibration, no alternate
+metrics, and no external descriptor dependencies. Existing in-memory query
+callers keep their current API.
 
-No updates/appends, remote HTTP reads, Python bindings, CLI, automatic precision
-calibration, alternate metrics, or external descriptor dependencies are proposed.
-Existing in-memory query callers keep their current API.
-
-Before implementation, review the T-fold vector storage cost, the proposed
-1 MiB starting point and benchmark scale, and whether float32 support belongs
-in the initial delivery. The wire format and algorithm proposal cover both
-existing scalar types; any narrower delivery should be reflected in these drafts.
+The format and this query path both cover `u8` and `f32`, matching the scalar
+types the in-memory forest already supports. The open questions that remain are
+measurements, not design: whether T-fold vector duplication is worth its cost
+against a shared corpus, and where the chunk-size and cache-budget defaults
+land. Both are settled by the benchmark plan above without a format change.

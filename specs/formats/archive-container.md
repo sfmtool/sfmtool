@@ -12,17 +12,18 @@ files can refer to it by content rather than by path. That shared shape is the
 disk look like, how the hashes are composed, and the Rust primitives the format
 crates call to read and write them.
 
-It describes no format's contents. `.sift`, `.matches`, `.sfmr` and `.camrig`
-each own their entry list, their schemas, their validation rules and their error
-type, and each has its own spec:
+It describes no format's contents. `.sift`, `.matches`, `.sfmr`, `.camrig` and
+`.kdf` each own their entry list, their schemas, their validation rules and their
+error type, and each has its own spec:
 [sift-file-format.md](sift-file-format.md),
 [matches-file-format.md](matches-file-format.md),
 [sfmr-file-format.md](sfmr-file-format.md),
-[camrig-file-format.md](camrig-file-format.md). The container is what stops those
-four from drifting into four different files that merely look alike.
+[camrig-file-format.md](camrig-file-format.md),
+[kdf-file-format.md](kdf-file-format.md). The container is what stops those five
+from drifting into five different files that merely look alike.
 
 The on-disk contract comes before the Rust interface here, because that is what
-the four format specs link to this one for; a caller who wants the functions can
+the five format specs link to this one for; a caller who wants the functions can
 skip to [Rust API](#rust-api).
 
 ## The container on disk
@@ -86,7 +87,7 @@ is not cryptographic; it is chosen for throughput (GB/s) with collision
 resistance good enough that a digest can be used as an identity — a `.sfmr` point
 ID and the `.sift` links inside a `.matches` file both lean on that.
 
-Three rules hold across all four formats:
+Three rules hold across all five formats:
 
 1. **Hashes are taken over uncompressed bytes.** A verifier decompresses an entry
    and hashes the bytes it got, never re-serialized JSON — re-serializing would
@@ -98,13 +99,13 @@ Three rules hold across all four formats:
    streaming hasher, so the digest sees exactly the bytes of the entries and
    nothing separating them; the order is part of the format's contract (`.sfmr`
    and `.matches` group entries into sections and hash each section's entries in
-   lexicographic path order, while `.sift` and `.camrig` make each hashed entry
-   its own one-entry section). An optional entry participates only when it is present,
+   lexicographic path order, `.kdf` fixes a numeric tree/chunk and block order,
+   while `.sift` and `.camrig` make each hashed entry its own one-entry section). An optional entry participates only when it is present,
    which is why each format spec spells out what is in each of its sections under
    which conditions.
 3. **The whole-file digest is XXH128 over the concatenated section digests, each
    written as 16 bytes big-endian**, in the order the format lists, skipping
-   absent optional sections. This one field is called `content_xxh128` in all four
+   absent optional sections. This one field is called `content_xxh128` in all five
    formats.
 
 Note the two byte orders, which are deliberately different and easy to confuse:
@@ -124,7 +125,7 @@ structural constraints only it knows about.
 
 The primitives live in
 [sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs) and are
-used by the four format crates
+used by the five format crates
 ([sift-format](../../crates/sift-format/),
 [matches-format](../../crates/matches-format/),
 [sfmr-format](../../crates/sfmr-format/),
@@ -185,7 +186,7 @@ pub fn format_hash(digest: u128) -> String;                   // 32-char lowerca
 
 **Why this shape.** The surface is entry-at-a-time rather than a
 "Container" object with an entry table — even `DecodedEntries`, which holds a
-whole file, is keyed by name and knows no schema — because the four formats disagree about
+whole file, is keyed by name and knows no schema — because the five formats disagree about
 almost everything above the entry: which entries exist, whether one is optional,
 what a section is, what the metadata means. What they genuinely share is one
 entry's worth of work — compress it, store it, fold it into a hash — so that is
