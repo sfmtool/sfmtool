@@ -45,6 +45,12 @@ pub use reconstruction::{
     RemoveObservationError, RemoveObservationReport, RowMap, SfmrImage, SfmrReconstruction,
     TrackObservation,
 };
+/// The reconstruction-level bundle adjustment, which is a different function
+/// from the array kernel [`geometry::bundle_adjust()`] it runs: it takes a
+/// reconstruction value and hands back another one.
+pub use reconstruction::{
+    bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport,
+};
 /// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on
 /// `sfmr-format` directly.

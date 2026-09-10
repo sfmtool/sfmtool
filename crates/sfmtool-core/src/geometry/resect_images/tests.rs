@@ -890,6 +890,80 @@ fn matches_fixture() -> matches_format::MatchesData {
     }
 }
 
+// ── In place ────────────────────────────────────────────────────────────────
+
+/// The refusal of an in-place resection of `image`, panicking if there was
+/// none. Spelled out rather than `expect_err` because the success side holds an
+/// [`SfmrReconstruction`], which is not `Debug`.
+fn in_place_error(recon: &SfmrReconstruction, image: usize) -> super::ResectInPlaceError {
+    match super::resect_image_in_place(
+        recon,
+        image,
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    ) {
+        Ok((_, report)) => panic!("the estimate was accepted: {report:?}"),
+        Err(error) => error,
+    }
+}
+
+#[test]
+fn in_place_hands_back_the_accepted_value_and_its_report() {
+    let truth = orbit();
+    let target = 0;
+    let source = perturbed(truth.clone(), target, 0.35);
+
+    let (next, report) = super::resect_image_in_place(
+        &source,
+        target,
+        ResectSource::StoredObservations,
+        &ResectImageOptions::default(),
+    )
+    .expect("the orbit corroborates the target");
+
+    assert!(report.refusal.is_none());
+    assert!(report.accepted);
+    assert_eq!(report.image_index, target);
+    // The value is the derived node's, so the pose it carries is the estimate's
+    // and the image table is the source's.
+    assert_eq!(next.image_count(), source.image_count());
+    let fitted = &next.image_table.images[target];
+    let true_pose = &truth.image_table.images[target];
+    assert!(angle_deg(&fitted.quaternion_wxyz, &true_pose.quaternion_wxyz) < 0.1);
+    // The input is left exactly as it was.
+    assert_eq!(
+        source.image_table.images[target].quaternion_wxyz,
+        perturbed(truth, target, 0.35).image_table.images[target].quaternion_wxyz
+    );
+}
+
+#[test]
+fn in_place_refuses_a_refused_estimate_rather_than_installing_it() {
+    let mut source = perturbed(orbit(), 0, 0.35);
+    // Nothing the target says is usable, so the estimate is refused: the
+    // outcome the derived node keeps and this one must not.
+    corrupt_observations(&mut source, 0);
+
+    let error = in_place_error(&source, 0);
+    assert!(
+        matches!(error, super::ResectInPlaceError::Refused(_)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn in_place_passes_a_whole_call_refusal_through() {
+    let source = orbit();
+    let error = in_place_error(&source, source.image_count());
+    assert!(
+        matches!(
+            error,
+            super::ResectInPlaceError::Resect(ResectImageError::ImageOutOfRange { .. })
+        ),
+        "{error:?}"
+    );
+}
+
 // ── Real files ──────────────────────────────────────────────────────────────
 
 /// A candidate solve whose far frames a human adjudicated as wrong. Resecting

@@ -60,4 +60,26 @@ impl ImageTable {
     pub fn camera_for_image(&self, image_index: usize) -> &CameraIntrinsics {
         &self.cameras[self.images[image_index].camera_index as usize]
     }
+
+    /// The distance from the camera-cloud centroid to `position`: what a patch
+    /// frame's angular extent is multiplied by to become a world one there, and
+    /// what a world extent is divided by to become an angular one.
+    ///
+    /// The reference is the mean of **every** camera centre in the table rather
+    /// than of the ones that see any particular point, because that is the
+    /// reference
+    /// [`SfmrReconstruction::materialize_points_at_infinity`](super::SfmrReconstruction::materialize_points_at_infinity)
+    /// places a bearing at. Every edit that resizes a patch frame measures from
+    /// here, so their conversions cancel exactly rather than to within which
+    /// images happen to be in a track.
+    pub fn placement_scale(&self, position: &nalgebra::Point3<f64>) -> f64 {
+        let mut centroid = nalgebra::Vector3::zeros();
+        for image in &self.images {
+            centroid += image.camera_center().coords;
+        }
+        if !self.images.is_empty() {
+            centroid /= self.images.len() as f64;
+        }
+        (position.coords - centroid).norm()
+    }
 }

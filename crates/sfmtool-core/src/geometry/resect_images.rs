@@ -638,6 +638,87 @@ pub fn resect_images(
     })
 }
 
+/// Why an in-place resection produced no value.
+///
+/// Two kinds, because the caller reports them the same way and decides on
+/// neither: the resection could not be attempted at all, or it was attempted and
+/// its estimate was refused. The second is not an error of [`resect_images`],
+/// which reports it through [`ResectImageReport::refusal`] and still hands back
+/// a reconstruction carrying the stored pose; it is an error *here*, because
+/// installing that reconstruction as the image's own next value would move the
+/// structure while leaving the pose the estimate declined to re-state.
+#[derive(Debug)]
+pub enum ResectInPlaceError {
+    /// The resection could not be attempted; see [`ResectImageError`].
+    Resect(ResectImageError),
+    /// The estimate was refused, carrying the reason
+    /// [`ResectImageReport::refusal`] gives.
+    Refused(String),
+}
+
+impl std::fmt::Display for ResectInPlaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResectInPlaceError::Resect(e) => write!(f, "{e}"),
+            ResectInPlaceError::Refused(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+impl std::error::Error for ResectInPlaceError {}
+
+impl From<ResectImageError> for ResectInPlaceError {
+    fn from(value: ResectImageError) -> Self {
+        ResectInPlaceError::Resect(value)
+    }
+}
+
+/// One image's resection as the value to install in place of `recon`, rather
+/// than as a reconstruction to stand beside it.
+///
+/// The estimate is [`resect_images`] on the one-element target set, so the pose
+/// and the structure that come back are exactly the derived node's; what this
+/// adds is the rule an in-place caller needs and a comparison caller does not.
+/// **A refused estimate yields no value.** The derived node shows a refusal as a
+/// held-out re-triangulation the reviewer can look at beside the original; the
+/// same reconstruction installed *as* the original would be a version that moved
+/// the points and left the pose alone.
+///
+/// The returned report is the target's own, and carries no refusal.
+///
+/// # Example
+///
+/// ```no_run
+/// use sfmtool_core::geometry::{
+///     resect_image_in_place, ResectImageOptions, ResectSource,
+/// };
+/// # fn run(recon: &sfmtool_core::SfmrReconstruction)
+/// # -> Result<(), Box<dyn std::error::Error>> {
+/// let (next, report) = resect_image_in_place(
+///     recon,
+///     7,
+///     ResectSource::StoredObservations,
+///     &ResectImageOptions::default(),
+/// )?;
+/// assert!(report.refusal.is_none());
+/// assert_eq!(next.image_count(), recon.image_count());
+/// # Ok(())
+/// # }
+/// ```
+pub fn resect_image_in_place(
+    recon: &SfmrReconstruction,
+    image: usize,
+    source: ResectSource<'_>,
+    options: &ResectImageOptions,
+) -> Result<(SfmrReconstruction, ResectImageReport), ResectInPlaceError> {
+    let mut resected = resect_images(recon, &[image], source, options)?;
+    let report = resected.reports.pop().expect("one target, one report");
+    match report.refusal {
+        Some(reason) => Err(ResectInPlaceError::Refused(reason)),
+        None => Ok((resected.reconstruction, report)),
+    }
+}
+
 /// How many distinct members of `points` satisfy `predicate`.
 fn distinct(points: &[usize], predicate: impl Fn(usize) -> bool) -> usize {
     let mut seen: HashSet<usize> = HashSet::new();

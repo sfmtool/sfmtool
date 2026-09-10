@@ -36,8 +36,8 @@ pub mod viewing_angle;
 pub use batch_resection::{resect_images_batch, BatchResection, ResectOptions};
 pub use bundle_adjust::{
     bundle_adjust, BaSchedule, BundleAdjustment, DistanceReference, FreePointPolicy,
-    PointConstraint, PointConstraints, DEFAULT_NOISE_FLOOR_SCALE, DEFAULT_PROTECTED_LOSS_SCALE,
-    DEFAULT_SCHEDULE,
+    PointConstraint, PointConstraints, PointConstraintsError, DEFAULT_NOISE_FLOOR_SCALE,
+    DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 pub use estimate_intrinsics::{
     escalation_reasons, estimate_intrinsics, ColumnPolicy, EscalationReason, IntrinsicsEstimate,
@@ -54,8 +54,9 @@ pub use relative_pose::{
 };
 pub use reprojection::{inlier_fraction, reprojection_residuals};
 pub use resect_images::{
-    resect_images, ResectImageError, ResectImageOptions, ResectImageReport, ResectSource,
-    ResectTotals, ResectedImages, MIN_BEARINGS, MIN_OTHER_POSED_IMAGES,
+    resect_image_in_place, resect_images, ResectImageError, ResectImageOptions, ResectImageReport,
+    ResectInPlaceError, ResectSource, ResectTotals, ResectedImages, MIN_BEARINGS,
+    MIN_OTHER_POSED_IMAGES,
 };
 pub use resect_translation::{resect_translation, TranslationResection};
 pub use rigid_transform::RigidTransform;

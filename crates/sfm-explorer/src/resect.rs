@@ -17,7 +17,7 @@
 //! resected row — is [`crate::state::AppState::resect_image`]'s job.
 
 pub use sfmtool_core::geometry::{
-    resect_images, ResectImageOptions, ResectImageReport, ResectSource,
+    resect_image_in_place, resect_images, ResectImageOptions, ResectImageReport, ResectSource,
 };
 
 /// Which of the two menu entries was chosen.
@@ -41,12 +41,27 @@ pub enum ResectFrom {
 /// a camera-to-structure distance to divide by, and in its own units when it
 /// does not (a rotation-only reconstruction has no such distance).
 pub fn success_message(image: &str, node: &str, report: &ResectImageReport) -> String {
+    format!("Resected {image} in {node}: {}", outcome_summary(report))
+}
+
+/// What the estimate did, with nothing about where the answer went: `214 pts,
+/// inliers 198/214 (0.93), rotation 12.40°, translation 0.081 (scene-scale), 190
+/// re-triangulated`.
+///
+/// Its own function because the two resections put the same quantities behind
+/// different openings -- one names a node it made, the other a version it
+/// pushed -- and the numbers should not be spelled twice.
+///
+/// The translation is reported in scene-scale units when the reconstruction has
+/// a camera-to-structure distance to divide by, and in its own units when it
+/// does not (a rotation-only reconstruction has no such distance).
+pub fn outcome_summary(report: &ResectImageReport) -> String {
     let translation = match report.translation_scene {
         Some(scaled) => format!("{scaled:.3} (scene-scale)"),
         None => format!("{:.3}", report.translation),
     };
     format!(
-        "Resected {image} in {node}: {} pts, inliers {}/{} ({:.2}), rotation {:.2}°, \
+        "{} pts, inliers {}/{} ({:.2}), rotation {:.2}°, \
          translation {translation}, {} re-triangulated",
         report.correspondences,
         report.inliers,

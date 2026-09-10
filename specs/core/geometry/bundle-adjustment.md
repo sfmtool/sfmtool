@@ -314,9 +314,16 @@ constraint in the same array layout it states the rest of its per-point data. A
 row is ranged where `distance` is not `NaN`; `distance_from` naming a single
 index is `DistanceReference::Image` and one naming a sequence is
 `DistanceReference::ImageMean`.
-The binding raises for a point that is both held and ranged, a distance that is
-not strictly positive, a finite distance with no origin, an origin past the
-image set, and a non-positive or non-finite `noise_floor_scale`.
+The assembly is `PointConstraints::from_arrays`, in the kernel rather than in the
+binding, because a Rust caller reading the same three statements off a
+reconstruction's constraint columns
+([`../reconstruction/bundle-adjust.md`](../reconstruction/bundle-adjust.md))
+has to reach the same verdicts; the binding maps its refusals onto `ValueError`
+and adds none of its own. `None` comes back where every point is free, which is
+the off position the parity requirement is stated against.
+The refusals are a point that is both held and ranged, a distance that is
+not strictly positive, a finite distance with no origin, and an origin past the
+image set; the binding adds a non-positive or non-finite `noise_floor_scale`.
 `distance_from` is ignored on a `NaN` or `+inf` row, which is measured from
 nothing.
 

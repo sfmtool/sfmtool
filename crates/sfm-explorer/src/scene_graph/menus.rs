@@ -166,11 +166,17 @@ fn show_align_menu(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
     });
     out.hit(row_id(id, "align_menu"), menu.response);
 }
-/// The image row's context menu: the two `Resect Image` entries.
+/// The image row's context menu: the four `Resect Image` entries, in two pairs.
 ///
-/// Both are kept visible and greyed rather than hidden when unavailable — the
+/// The first pair shows the answer as a node beside this one, the second
+/// installs it as this node's next version; each pair offers the two
+/// correspondence sources. They share their greying rules, because what a
+/// resection needs of an image is the same question whichever way its answer is
+/// landed.
+///
+/// All are kept visible and greyed rather than hidden when unavailable: the
 /// action exists on every image row, and an entry that vanishes reads as an
-/// action that was never implemented. The hover text says which of the two
+/// action that was never implemented. The hover text says which of the
 /// reasons applies.
 pub(super) fn image_context_menu(
     ui: &mut egui::Ui,
@@ -204,7 +210,7 @@ pub(super) fn image_context_menu(
         )
         .on_disabled_hover_text(matches_hint.unwrap_or_default())
         .on_hover_text(
-            "The same, with the 2D-3D pairs taken from a .matches file — which admits \
+            "The same, with the 2D-3D pairs taken from a .matches file, which admits \
              points this reconstruction never assigned to the image.",
         );
     if out
@@ -212,6 +218,45 @@ pub(super) fn image_context_menu(
         .clicked()
     {
         out.response.resect_image = Some((image, ResectFrom::Matches));
+        ui.close();
+    }
+
+    let in_place = ui
+        .add_enabled(
+            refusal.is_none(),
+            egui::Button::new("Resect Image in Place"),
+        )
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "The same estimate, kept as a version of this reconstruction rather than \
+             shown beside it. Undo (Ctrl+Z) puts the stored pose back.",
+        );
+    if out
+        .hit(row_id(node, &format!("resect_in_place_{index}")), in_place)
+        .clicked()
+    {
+        out.response.resect_image_in_place = Some((image, ResectFrom::Observations));
+        ui.close();
+    }
+
+    let in_place_matches = ui
+        .add_enabled(
+            matches_hint.is_none(),
+            egui::Button::new("Resect Image in Place from Matches…"),
+        )
+        .on_disabled_hover_text(matches_hint.unwrap_or_default())
+        .on_hover_text(
+            "The same, with the 2D-3D pairs taken from a .matches file, which admits \
+             points this reconstruction never assigned to the image.",
+        );
+    if out
+        .hit(
+            row_id(node, &format!("resect_in_place_matches_{index}")),
+            in_place_matches,
+        )
+        .clicked()
+    {
+        out.response.resect_image_in_place = Some((image, ResectFrom::Matches));
         ui.close();
     }
 

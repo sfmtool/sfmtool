@@ -18,13 +18,20 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods};
 
+use sfmtool_core::geometry::batch_resection::ResectOptions;
+use sfmtool_core::geometry::{
+    resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError, ResectSource,
+};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::reconstruction::bundle_adjust::{
+    bundle_adjust as core_bundle_adjust, BundleAdjustOptions,
+};
 use sfmtool_core::reconstruction::edited::{
     EditedReconstruction, PointRecord, RecordObservation, RowMap,
 };
 use sfmtool_core::{
     add_observation, create_point, remove_observation, AddObservationOptions, CreatePointOptions,
-    Point3D,
+    Point3D, SfmrReconstruction,
 };
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
@@ -34,6 +41,20 @@ use super::sfmr_reconstruction::PySfmrReconstruction;
 /// Turn a core edit refusal into a Python `ValueError`.
 fn edit_err(e: sfmtool_core::EditError) -> PyErr {
     PyValueError::new_err(e.to_string())
+}
+
+/// The plain reconstruction a version is, for a **bulk** edit to run over.
+///
+/// Borrowed when the overlay is empty, because an empty one materialises to its
+/// own base and the copy would buy nothing; owned when it is not. This is the
+/// same rule the viewer applies before a bulk edit, so the two reach the core
+/// function with the same value.
+fn materialised(edited: &EditedReconstruction) -> std::borrow::Cow<'_, SfmrReconstruction> {
+    if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+        std::borrow::Cow::Borrowed(&edited.base)
+    } else {
+        std::borrow::Cow::Owned(edited.materialize().0)
+    }
 }
 
 /// The value at `key`, or `None` when the dict does not carry the key (or
@@ -515,6 +536,163 @@ impl PyEditedReconstruction {
         d.set_item("half_extent", report.half_extent)?;
         d.set_item("color", PyArray1::from_vec(py, report.color.to_vec()))?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
+    }
+
+    /// Re-estimate `image`'s pose against structure held out from it, and give
+    /// back the answer as this version's successor.
+    ///
+    /// The estimate is ``geometry.resect_images`` on the one-element target set
+    /// (see ``specs/gui/resect-image.md``): the points the image observes are
+    /// re-triangulated without it, its pose is fit to what is left, and the
+    /// points it observes are re-triangulated again at the new pose. A **bulk**
+    /// edit, so the value that comes back is a whole new base with an empty
+    /// overlay, and this object is not changed.
+    ///
+    /// Unlike ``geometry.resect_images``, a refused estimate raises rather than
+    /// coming back as a reconstruction with the stored pose in it: installed as
+    /// this version's successor, that answer would be a version that moved the
+    /// points and left the pose alone.
+    ///
+    /// Args:
+    ///     image: The image's index in this version's image table.
+    ///     matches_path: Optional ``.matches`` file. Without it the 2D-3D pairs
+    ///         are the image's own stored observations; with it they come from
+    ///         the file's match graph, which requires a ``sift_files``
+    ///         reconstruction.
+    ///     min_obs: Held-out finite correspondences below which the estimate
+    ///         takes the rotation-only path (default 8).
+    ///     accept_gate: Accept the estimate at or above this inlier fraction
+    ///         (default 0.30).
+    ///     seed: RANSAC seed; the same inputs and seed give a bit-identical
+    ///         answer (default 0).
+    ///
+    /// Returns:
+    ///     ``(EditedReconstruction, report)``, the report being the one target's
+    ///     dict of ``geometry.resect_images``. Raises ``ValueError`` with the
+    ///     reason when the estimate is refused or the call cannot be attempted,
+    ///     and ``OSError`` when the observations cannot be read.
+    #[pyo3(signature = (image, *, matches_path=None, min_obs=8, accept_gate=0.30, seed=0))]
+    fn resect_image_in_place(
+        &self,
+        py: Python<'_>,
+        image: usize,
+        matches_path: Option<std::path::PathBuf>,
+        min_obs: usize,
+        accept_gate: f64,
+        seed: u64,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let matches: Option<matches_format::MatchesData> = match &matches_path {
+            Some(path) => Some(
+                py.detach(|| matches_format::read_matches(path))
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
+            ),
+            None => None,
+        };
+        let options = ResectImageOptions {
+            resect: ResectOptions {
+                min_obs,
+                accept_gate,
+                seed,
+            },
+        };
+        let value = materialised(&self.inner);
+        let (next, report) = py
+            .detach(|| {
+                let source = match &matches {
+                    Some(data) => ResectSource::Matches(data),
+                    None => ResectSource::StoredObservations,
+                };
+                resect_image_in_place(&value, image, source, &options)
+            })
+            .map_err(|e| match e {
+                ResectInPlaceError::Resect(e) => crate::geometry::resect_images::err_to_py(e),
+                ResectInPlaceError::Refused(reason) => PyValueError::new_err(reason),
+            })?;
+        let d = crate::geometry::resect_images::report_to_py(py, &report)?;
+        Ok((
+            PyEditedReconstruction {
+                inner: EditedReconstruction::new(Arc::new(next)),
+            },
+            d.unbind(),
+        ))
+    }
+
+    /// Bundle-adjust this version, and give back the answer as its successor.
+    ///
+    /// Every posed image's pose, every point's position and, under ``opt_f``,
+    /// the shared focal are refined together against every observation that
+    /// carries a pixel (see
+    /// ``specs/core/reconstruction/bundle-adjust.md``). A point at infinity goes
+    /// in as the direction it is and comes back as one, a held point comes back
+    /// exactly as it went in, and a point the solve leaves unsupported is
+    /// deleted from the value that comes back. A **bulk** edit, so that value is
+    /// a whole new base with an empty overlay, and this object is not changed.
+    ///
+    /// Args:
+    ///     opt_f: Release the shared focal length (default ``False``). Raises
+    ///         on a camera model whose focal the adjustment cannot solve.
+    ///     schedule: ``[(trim_px, loss_scale), ...]`` staged rounds (default
+    ///         ``[(50, 5), (12, 2), (4, 1)]``).
+    ///     max_iters: LM iteration budget per round (default 60).
+    ///     min_track: Trim survivors a point needs to stay in a round's solve
+    ///         (default 2). A point that falls below it is deleted.
+    ///     min_obs: Below this many trim survivors the round exits degenerate,
+    ///         which this call raises on rather than handing back an unsolved
+    ///         value (default 12).
+    ///
+    /// Returns:
+    ///     ``(EditedReconstruction, report)``. The report carries ``images``,
+    ///     ``points``, ``observations``, ``points_deleted``,
+    ///     ``median_residual_before``, ``median_residual_after``,
+    ///     ``focal_before``, ``focal_after`` and ``focal_released``. Raises
+    ///     ``ValueError`` with the reason when the adjustment is refused.
+    #[pyo3(signature = (*, opt_f=false, schedule=None, max_iters=60, min_track=2, min_obs=12))]
+    fn bundle_adjust(
+        &self,
+        py: Python<'_>,
+        opt_f: bool,
+        schedule: Option<Vec<(f64, f64)>>,
+        max_iters: usize,
+        min_track: usize,
+        min_obs: usize,
+    ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
+        let options = BundleAdjustOptions {
+            opt_f,
+            schedule: match schedule {
+                Some(rounds) => rounds
+                    .into_iter()
+                    .map(|(trim_px, loss_scale)| BaSchedule {
+                        trim_px,
+                        loss_scale,
+                    })
+                    .collect(),
+                None => BundleAdjustOptions::default().schedule,
+            },
+            max_iters,
+            min_track,
+            min_obs,
+        };
+        let value = materialised(&self.inner);
+        let (next, report) = py
+            .detach(|| core_bundle_adjust(&value, &options))
+            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        let d = PyDict::new(py);
+        d.set_item("images", report.images)?;
+        d.set_item("points", report.points)?;
+        d.set_item("observations", report.observations)?;
+        d.set_item("points_deleted", report.points_deleted)?;
+        d.set_item("median_residual_before", report.median_residual_before)?;
+        d.set_item("median_residual_after", report.median_residual_after)?;
+        d.set_item("focal_before", report.focal_before)?;
+        d.set_item("focal_after", report.focal_after)?;
+        d.set_item("focal_released", report.focal_released)?;
+        Ok((
+            PyEditedReconstruction {
+                inner: EditedReconstruction::new(Arc::new(next)),
+            },
+            d.unbind(),
+        ))
     }
 
     /// The plain reconstruction this version is, with every point in its place,

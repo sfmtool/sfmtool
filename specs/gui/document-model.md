@@ -329,8 +329,8 @@ undoing back to the loaded value clears the mask without an upload, and that a
 new base re-uploads exactly once.
 
 `crates/sfm-explorer/tests/ui_basic.rs` covers the menu bar in a real window: the
-Edit menu is present, and its four items are in the accessibility tree even when
-every one of them is greyed.
+Edit menu is present, and its items are in the accessibility tree even when every
+one of them is greyed.
 
 ## Non-goals
 

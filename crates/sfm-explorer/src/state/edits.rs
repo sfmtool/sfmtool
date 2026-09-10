@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! [`AppState`]'s edits: the two operations that give a node a new version, and
-//! the three that move its cursor -- undo, redo, and the Edit History panel's jump,
+//! [`AppState`]'s edits: the operations that give a node a new version, and the
+//! three that move its cursor -- undo, redo, and the Edit History panel's jump,
 //! which is the two of them repeated.
 //!
 //! See `specs/gui/document-model.md` and `specs/gui/edit-history.md`. Each edit
@@ -12,7 +12,8 @@
 //! the *overlay* the new version owns, and a bulk edit builds a whole new base
 //! out of the old one.
 //!
-//! The two are here together because they are the two shapes:
+//! They are here together because two of them are the two shapes every other
+//! one follows:
 //!
 //! - [`AppState::delete_selected_point`] is the **point edit**. It calls
 //!   `EditedReconstruction::delete_point` on a clone of the current value, so
@@ -33,6 +34,7 @@ use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
 use crate::document::{CreatedPoints, PointMap, VersionSerial};
+use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
 use super::AppState;
@@ -465,6 +467,239 @@ impl AppState {
         self.action_log
             .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
         Ok(())
+    }
+
+    /// Re-estimate `image`'s pose against the rest of `source` and install the
+    /// answer as `source`'s next version, rather than as a node beside it.
+    ///
+    /// A bulk edit: the resection re-poses one image and re-triangulates the
+    /// points it observes, so the next version is a whole new base and the map
+    /// is the one `RowMap::by_scan` reads off the call's input and output. The
+    /// image table does not move -- a resection re-poses an image, it does not
+    /// remove one -- so image indexes, the image and camera selections, and the
+    /// decoded pixels keyed by them all still mean what they meant.
+    ///
+    /// A refused *estimate* pushes no version. The derived-node variant keeps
+    /// such an answer, because a held-out re-triangulation beside the original
+    /// is worth looking at; installed as the original it would be a version that
+    /// moved the points and left the pose alone. See
+    /// [`AppState::resect_image`] for that variant and
+    /// `specs/gui/resect-image.md` for both.
+    ///
+    /// Records its own outcome, success or refusal, as one Action Log entry, in
+    /// the vocabulary the derived-node variant reports in; the `Err` is for the
+    /// caller to know the node's caches are still good, not to be logged again.
+    pub fn resect_image_in_place(
+        &mut self,
+        source: ReconId,
+        image: usize,
+        from: ResectFrom,
+    ) -> Result<(), String> {
+        match self.resect_in_place_inner(source, image, from) {
+            Ok(message) => {
+                self.action_log.record(Kind::Edit, message);
+                Ok(())
+            }
+            Err(message) => {
+                self.action_log.fail(Kind::Edit, message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn resect_in_place_inner(
+        &mut self,
+        source: ReconId,
+        image: usize,
+        from: ResectFrom,
+    ) -> Result<String, String> {
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == source)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let label = self.scene[index].label.clone();
+        let name = self.scene[index]
+            .recon()
+            .image_table
+            .images
+            .get(image)
+            .map(|i| i.name.clone())
+            .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
+        let basename = crate::resect::basename(&name).to_string();
+        if from == ResectFrom::Matches {
+            self.load_resect_matches(source)
+                .map_err(|why| crate::resect::failure_message(&basename, &label, &why))?;
+        }
+
+        // Materialise only when there is an overlay to fold in; an empty one
+        // materialises to its own base, which the resection can read directly.
+        let edited = self.scene[index].history.current();
+        let (materialised, mat_map) =
+            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                (None, None)
+            } else {
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
+        let source_value: &SfmrReconstruction = match materialised.as_ref() {
+            Some(value) => value,
+            None => &self.scene[index].history.current().base,
+        };
+
+        let outcome = self.with_resect_source(from, |kind| {
+            crate::resect::resect_image_in_place(
+                source_value,
+                image,
+                kind,
+                &crate::resect::ResectImageOptions::default(),
+            )
+        });
+        let (resected, report) = outcome.map_err(|error| {
+            crate::resect::failure_message(&basename, &label, &error.to_string())
+        })?;
+
+        // The resection may drop a point it could neither re-triangulate nor
+        // hold out, and says nothing about which; the map is read off its input
+        // and its output. The image table is untouched, so no image map.
+        let scan = RowMap::by_scan(source_value, &resected, None)
+            .map_err(|e| crate::resect::failure_message(&basename, &label, &e.to_string()))?;
+        let mut steps = Vec::new();
+        steps.extend(mat_map);
+        steps.push(PointMap::Rows(scan));
+        let map = PointMap::Chain(steps);
+
+        let text = format!("Resected {basename} in place ({label})");
+        let node = &mut self.scene[index];
+        let serial = node.history.push(
+            EditedReconstruction::new(Arc::new(resected)),
+            map,
+            text.clone(),
+        );
+        let parent = version_before(node, serial);
+        self.follow_selection_forward(source);
+        Ok(format!(
+            "{text}: {} ({parent} → {serial})",
+            crate::resect::outcome_summary(&report)
+        ))
+    }
+
+    /// Bundle-adjust `id`'s current value, and install the answer as its next
+    /// version.
+    ///
+    /// A bulk edit: every posed image's pose, every point's position and, when
+    /// the options release it, the shared focal move together, so the next
+    /// version is a whole new base under the row map `RowMap::by_scan` reads off
+    /// the call's input and output. The map is not decoration here -- a point
+    /// the solve leaves unsupported is deleted, and the map is what carries a
+    /// selection over that.
+    ///
+    /// Runs **synchronously** on the GUI thread, as every other edit does. The
+    /// window is unresponsive while it solves.
+    ///
+    /// The image table does not move, so image indexes and the selections keyed
+    /// by them still mean what they meant. Records its own outcome as one Action
+    /// Log entry; the `Err` is for the caller to know the node's caches are
+    /// still good, not to be logged again.
+    pub fn bundle_adjust(
+        &mut self,
+        id: ReconId,
+        options: &sfmtool_core::BundleAdjustOptions,
+    ) -> Result<(), String> {
+        match self.bundle_adjust_inner(id, options) {
+            Ok(message) => {
+                self.action_log.record(Kind::Edit, message);
+                Ok(())
+            }
+            Err(message) => {
+                self.action_log.fail(Kind::Edit, message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn bundle_adjust_inner(
+        &mut self,
+        id: ReconId,
+        options: &sfmtool_core::BundleAdjustOptions,
+    ) -> Result<String, String> {
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == id)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let label = self.scene[index].label.clone();
+        let refuse = |why: String| format!("Bundle adjust of {label} refused: {why}");
+        // The gate is the menu entry's own, so the entry and the edit cannot
+        // disagree about when the adjustment can run.
+        if let Some(why) = crate::bundle_adjust_prompt::refusal(self.scene[index].history.current())
+        {
+            return Err(refuse(why));
+        }
+
+        // Materialise only when there is an overlay to fold in; an empty one
+        // materialises to its own base, which the solve can read directly.
+        let edited = self.scene[index].history.current();
+        let (materialised, mat_map) =
+            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                (None, None)
+            } else {
+                let (value, map) = edited.materialize();
+                (Some(value), Some(PointMap::Rows(map)))
+            };
+        let source: &SfmrReconstruction = match materialised.as_ref() {
+            Some(value) => value,
+            None => &self.scene[index].history.current().base,
+        };
+
+        let (adjusted, report) =
+            sfmtool_core::bundle_adjust(source, options).map_err(|e| refuse(e.to_string()))?;
+        // The solve drops the points it left unsupported and says how many, not
+        // which; the map is read off its input and its output. The image table
+        // is untouched, so no image map.
+        let scan = RowMap::by_scan(source, &adjusted, None).map_err(|e| refuse(e.to_string()))?;
+        let mut steps = Vec::new();
+        steps.extend(mat_map);
+        steps.push(PointMap::Rows(scan));
+        let map = PointMap::Chain(steps);
+
+        let mut text = format!("Bundle adjusted {label}");
+        if report.focal_released {
+            text.push_str(", focal released");
+        }
+        let node = &mut self.scene[index];
+        let serial = node.history.push(
+            EditedReconstruction::new(Arc::new(adjusted)),
+            map,
+            text.clone(),
+        );
+        let parent = version_before(node, serial);
+        self.follow_selection_forward(id);
+        let focal = if report.focal_released {
+            format!(
+                ", focal {:.1} → {:.1}",
+                report.focal_before, report.focal_after
+            )
+        } else {
+            String::new()
+        };
+        let deleted = if report.points_deleted > 0 {
+            format!(", {} points deleted", report.points_deleted)
+        } else {
+            String::new()
+        };
+        Ok(format!(
+            "{text}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{deleted} ({parent} → {serial})",
+            report.images,
+            report.points,
+            report.observations,
+            report.median_residual_before,
+            report.median_residual_after,
+        ))
     }
 
     /// Step `id`'s cursor back one version.

@@ -2421,7 +2421,7 @@ fn closing_the_owning_node_clears_both_selections() {
 /// observations in `.sift` companions that no test has on disk — neither of
 /// which a resection can work from. Here every point is observed by every
 /// camera that can see it, at the pixel that camera actually projects it to.
-fn resectable_node(path: &str) -> SceneNode {
+pub(crate) fn resectable_node(path: &str) -> SceneNode {
     use sfmtool_core::reconstruction::{ObservationSource, TrackObservation};
 
     let mut recon = SfmrReconstruction::demo(120);
@@ -2564,6 +2564,80 @@ fn resect_is_greyed_on_an_image_that_is_not_posed() {
     open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
     let response = click(&mut panel, &ctx, &mut state, row_id(id, "resect_0"));
     assert!(response.resect_image.is_some());
+}
+
+#[test]
+fn the_in_place_entries_sit_beside_the_derived_ones_and_report_their_own_source() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    assert!(
+        panel.hit_rect(row_id(id, "resect_in_place_2")).is_some(),
+        "the image row's menu offered no in-place resection"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "resect_in_place_2"),
+    );
+    assert_eq!(
+        response.resect_image_in_place,
+        Some((ImageRef::new(id, 2), ResectFrom::Observations))
+    );
+    assert_eq!(
+        response.resect_image, None,
+        "the in-place entry also asked for a derived node"
+    );
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "resect_in_place_matches_2"),
+    );
+    assert_eq!(
+        response.resect_image_in_place,
+        Some((ImageRef::new(id, 2), ResectFrom::Matches))
+    );
+}
+
+#[test]
+fn the_in_place_entries_grey_on_the_same_reasons_the_derived_ones_do() {
+    let mut state = shared_shoot(1);
+    state.scene[0].recon_mut().image_table.images[1].translation_xyz =
+        Vector3::new(f64::NAN, 0.0, 0.0);
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_1"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "resect_in_place_1"),
+    );
+    assert_eq!(
+        response.resect_image_in_place, None,
+        "an unposed image was resectable in place"
+    );
+
+    // The matches variant greys on a node with no feature indexes to join a
+    // match row through, exactly as the derived one does.
+    let mut state = resectable_scene();
+    let (mut panel, ctx, id) = with_image_list(&mut state);
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "resect_in_place_matches_0"),
+    );
+    assert_eq!(
+        response.resect_image_in_place, None,
+        "the in-place matches variant was live on an embedded-patches node"
+    );
 }
 
 #[test]

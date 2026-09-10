@@ -1,10 +1,11 @@
 # Resect Image
 
 An action in the Scene Graph panel that re-estimates one image's pose against
-the rest of its reconstruction and shows the result as a new node beside the
-original. The original node is never modified; the derived node is an ordinary
-loaded reconstruction in the same frame, so the two can be compared with every
-existing affordance (tint, solo, per-node visibility, point track detail).
+the rest of its reconstruction. It lands its answer in one of two ways, and the
+menu offers both: as a new node beside the original, which is never modified and
+which the answer can be compared against with every existing affordance (tint,
+solo, per-node visibility, point track detail); or **in place**, as a version of
+the original, which an undo steps back out of.
 
 The shared primitive underneath takes a **set** of target images and holds all
 of them out together, so a group whose members corroborate each other is
@@ -15,6 +16,9 @@ Related specs: [scene-graph.md](scene-graph.md) (nodes, context
 menus, `Align to…` as the template for a per-node action),
 [../core/geometry/reconstruction-growth.md](../core/geometry/reconstruction-growth.md)
 (`resect_images_batch`, the registration primitive this reuses),
+[document-model.md](document-model.md) and [edit-history.md](edit-history.md)
+(the version the in-place variant pushes, and the map the selection follows),
+[edits/README.md](edits/README.md) (the other edit families),
 `seed-candidate-evaluation` (not yet written)
 (the hold-out self-resection channel; same mechanism, read offline).
 
@@ -47,6 +51,12 @@ A second entry, `Resect Image from Matches…`, opens a file chooser for a
 sources"). It is greyed when the source's observations carry no feature
 indexes (an `embedded_patches` file), since matches cannot be joined to them.
 The chosen path is remembered per source node for the session.
+
+Two more, `Resect Image in Place` and `Resect Image in Place from Matches…`,
+run the same two estimates and land them as a version of the source node rather
+than as a node beside it (see "In place"). They grey on the same two reasons as
+their neighbours, and the matches one asks for its file the same way, once per
+source node.
 
 ---
 
@@ -227,6 +237,64 @@ so the log carries the result of the action and not its mechanics.
 
 ---
 
+## In place
+
+The same estimate, kept as a **version** of the source node instead of as a node
+beside it: the node's value becomes the one the resection produced, the Edit
+History gains a row, and `Ctrl+Z` puts the stored pose and the points back. This
+is the edit family of [edits/README.md](edits/README.md) and it is a **bulk**
+edit ([document-model.md](document-model.md), "Two kinds of edit"): a resection
+re-poses an image and re-triangulates the points it observes, so the next version
+is a whole new base with an empty overlay.
+
+The two landings are different questions rather than the same one twice. A
+derived node asks *how far off is this pose*, and answers it by standing the two
+side by side; an in-place resection asserts that the re-estimate is the better
+answer, and puts it in the reconstruction. The derived-node entries are
+unchanged, and neither one is the other's replacement.
+
+### The mechanism
+
+`sfmtool_core::geometry::resect_image_in_place` in
+[resect_images.rs](../../crates/sfmtool-core/src/geometry/resect_images.rs) is
+`resect_images` on the one-element target set plus the one rule an in-place
+caller needs: **a refused estimate yields no value.** A derived node keeps such
+an answer, because a held-out re-triangulation is worth looking at beside the
+original; installed *as* the original it would be a version that moved the points
+and left the pose alone. So a refusal that would have produced a node here
+produces no version, and is reported as a failure.
+
+The viewer's wrapper is `AppState::resect_image_in_place` in
+[state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs), which
+materialises the current value when its overlay is not empty, runs the core
+function over it, and pushes the result with the row map `RowMap::by_scan` reads
+off that call's input and output: the resection may drop a point it can neither
+re-triangulate nor hold out, and says nothing about which. The selection follows
+that map. The image table does not move, so image indexes, the image and camera
+selections and the decoded pixels keyed by them all still mean what they meant;
+what the panels cached *about* the geometry -- rendered patches, prepared track
+rows, per-camera derived quantities -- is dropped, because it describes a
+geometry the node no longer holds.
+
+The same edit is available offline as
+`EditedReconstruction.resect_image_in_place(image, matches_path=…)`, which
+returns `(EditedReconstruction, report)` and raises on the refusal.
+
+### The version
+
+- **Label**: `Resected <image basename> in place (<node label>)`.
+- **Action Log**: one entry of kind `Edit`, the label, the estimate's own
+  quantities, and the serials:
+  `Resected IMG_0007.jpg in place (bull): 214 pts, inliers 198/214 (0.93),
+  rotation 12.40°, translation 0.081 (scene-scale), 190 re-triangulated
+  (v3 → v4)`. A refusal is one **failed** entry carrying the derived variant's
+  own sentence, `Resect <image> in <node> refused: <reason>`.
+- **Selection**: unchanged, but followed through the map: the node is the one
+  already on screen, and the image the menu was opened on is where it was. A
+  point the resection dropped clears the point selection.
+
+---
+
 ## Performance
 
 Held-out re-triangulation and the estimates touch only the observations of the
@@ -234,7 +302,10 @@ points the target set observes (hundreds to a few thousand rows for one
 target); the finite path is `resect_images_batch` over the targets. The panel's
 single-target action runs synchronously in tens of milliseconds on the
 reconstructions the viewer targets. The matches variant additionally parses the
-`.matches` file once per session per source node; that parse is cached.
+`.matches` file once per session per source node; that parse is cached. The
+in-place variant additionally materialises the current value when the overlay is
+not empty, and the answer it pushes is a whole base held by the history until the
+budget releases it ([document-model.md](document-model.md)).
 
 ---
 
@@ -261,19 +332,32 @@ Core (`sfmtool-core`, headless):
 Bindings (`tests/rust_bindings/`): the name-to-index lookup and its
 `ValueError`, the report dict and its per-image list, a refusal returning a
 reconstruction rather than raising, a two-target call, and that the input
-reconstruction is unchanged.
+reconstruction is unchanged. The in-place variant is in
+`test_edited_reconstruction_rust_bindings.py`, on the real reconstruction the
+other edit bindings use: an image past the table raising, and an accepted
+estimate moving that image alone while the value it came from stands.
 
 Explorer (`sfm-explorer` lib tests, headless egui):
 
 - The menu entry appears on image rows only, greys correctly, emits the
   action, and the app creates the derived node with the specified name,
   transform, and selection; a repeat replaces the earlier node.
+- The four entries are on image rows, the in-place pair reports its own source,
+  and both pairs grey on the same two reasons.
+- In place: the version pushed and its new base, the image table standing still,
+  the pose recovered from a perturbation, one Action Log entry naming the image
+  and the serials, an undo putting the pose and the selection back, and both
+  refusals -- one the call could not attempt and one the estimate declined --
+  pushing no version and logging a failure.
 
 ---
 
 ## Non-goals
 
-- No bundle adjustment after resection (see step 4).
+- No bundle adjustment after resection (see step 4). Adjusting the whole node
+  afterwards is its own edit, in [edits/README.md](edits/README.md).
 - No multi-image selection in the panel; one image per action, whatever the
   primitive underneath accepts.
-- No modification of the source node under any outcome.
+- No modification of the source node by the derived-node variant, under any
+  outcome. The in-place variant modifies it by construction, as a version its
+  history holds and an undo steps out of.

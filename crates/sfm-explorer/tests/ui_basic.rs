@@ -346,15 +346,15 @@ fn file_menu_items() {
 /// them is greyed.
 ///
 /// With nothing loaded there is no node to undo in and nothing selected to
-/// delete, so all four items are disabled — which is the state this asserts they
-/// are nonetheless *present* in: an action that vanishes when it does not apply
-/// reads as unimplemented.
+/// delete or adjust, so every item is disabled -- which is the state this asserts
+/// they are nonetheless *present* in: an action that vanishes when it does not
+/// apply reads as unimplemented.
 ///
-/// Only `Delete Image` is asserted by name. The other three carry their
-/// keyboard shortcut in the button's text, and the shortcut is spelled by the
-/// platform (`Ctrl+Z` against `⌘Z`), so matching them on an exact accessible
-/// name would be asserting egui's formatting rather than the menu. What they
-/// do, and when they are enabled, is covered headlessly in
+/// Only the two items with no keyboard shortcut are asserted by name. The
+/// others carry their shortcut in the button's text, and the shortcut is
+/// spelled by the platform (`Ctrl+Z` against `⌘Z`), so matching them on an
+/// exact accessible name would be asserting egui's formatting rather than the
+/// menu. What they do, and when they are enabled, is covered headlessly in
 /// `state/edits/tests.rs`.
 #[test]
 fn edit_menu_items() {
@@ -365,9 +365,11 @@ fn edit_menu_items() {
         .press()
         .expect("press Edit menu button");
 
-    app.locator(r#"button[name="Delete Image"]"#)
-        .wait_attached(CONTENT_TIMEOUT)
-        .expect("Edit menu item 'Delete Image' did not appear");
+    for item in ["Delete Image", "Bundle Adjust..."] {
+        app.locator(&format!(r#"button[name="{item}"]"#))
+            .wait_attached(CONTENT_TIMEOUT)
+            .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"));
+    }
 }
 
 /// The File menu's two save items, and which of them applies to demo data.

@@ -24,6 +24,15 @@ use crate::viewer_3d::Viewer3D;
 #[cfg(test)]
 mod tests;
 
+/// Where a resection's answer goes: beside the source, or into it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Landing {
+    /// A second node beside the source, which is never modified.
+    DerivedNode,
+    /// The source's own next version, which an undo steps back out of.
+    InPlace,
+}
+
 /// Tabs that can appear in the dock area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
@@ -713,7 +722,10 @@ impl TabContext<'_> {
             self.state.align_node(source, target, options);
         }
         if let Some((image, from)) = response.resect_image {
-            self.resect_image(image, from);
+            self.resect_image(image, from, Landing::DerivedNode);
+        }
+        if let Some((image, from)) = response.resect_image_in_place {
+            self.resect_image(image, from, Landing::InPlace);
         }
         if let Some(image) = response.delete_image {
             if let Err(message) = self.state.delete_image(image) {
@@ -749,7 +761,11 @@ impl TabContext<'_> {
     /// the file that choice needs is found out here. The path is remembered per
     /// source node for the session, so working through several images of one
     /// capture asks once.
-    fn resect_image(&mut self, image: ImageRef, from: crate::resect::ResectFrom) {
+    ///
+    /// `landing` is which of the two the menu asked for, and it is the only
+    /// thing that differs between them at this level: the same file question,
+    /// asked once, in front of either answer.
+    fn resect_image(&mut self, image: ImageRef, from: crate::resect::ResectFrom, landing: Landing) {
         if from == crate::resect::ResectFrom::Matches
             && !self.state.resect_matches.contains_key(&image.recon)
         {
@@ -764,7 +780,24 @@ impl TabContext<'_> {
             };
             self.state.resect_matches.insert(image.recon, path);
         }
-        self.state.resect_image(image.recon, image.index(), from);
+        match landing {
+            Landing::DerivedNode => self.state.resect_image(image.recon, image.index(), from),
+            Landing::InPlace => {
+                // A version's poses and points are new, so what the panels
+                // cached *about* them -- the rendered patches, the prepared
+                // track rows, the per-camera derived quantities -- describes a
+                // geometry the node no longer holds. The image table did not
+                // move, so the decoded pixels keyed by an image index did not
+                // become statements about a different image, and they stay.
+                if self
+                    .state
+                    .resect_image_in_place(image.recon, image.index(), from)
+                    .is_ok()
+                {
+                    self.forget_recon(image.recon);
+                }
+            }
+        }
     }
 
     /// Frame `points` in the 3D viewport, if it has been laid out at least

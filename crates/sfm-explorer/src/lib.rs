@@ -15,6 +15,7 @@
 mod action_log;
 mod align;
 mod app;
+mod bundle_adjust_prompt;
 mod cli;
 mod close_prompt;
 mod colormap;

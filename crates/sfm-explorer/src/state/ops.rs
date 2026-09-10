@@ -167,26 +167,18 @@ impl AppState {
             }
         }
 
-        // Both borrows are shared, and the outcome owns its reconstruction — so
-        // nothing here is still borrowed when the scene is written below.
-        let outcome = {
-            let matches = match from {
-                ResectFrom::Observations => None,
-                ResectFrom::Matches => self.resect_matches_cache.as_ref().map(|(_, data)| data),
-            };
-            let kind = match matches {
-                Some(data) => resect::ResectSource::Matches(data),
-                None => resect::ResectSource::StoredObservations,
-            };
-            // The panel's action is one image, which is the set primitive on a
-            // one-element set.
+        // The panel's action is one image, which is the set primitive on a
+        // one-element set. Both borrows are shared, and the outcome owns its
+        // reconstruction, so nothing here is still borrowed when the scene is
+        // written below.
+        let outcome = self.with_resect_source(from, |kind| {
             resect::resect_images(
                 self.scene[index].recon(),
                 &[image],
                 kind,
                 &resect::ResectImageOptions::default(),
             )
-        };
+        });
         let mut resected = match outcome {
             Ok(resected) => resected,
             Err(error) => {
@@ -250,10 +242,34 @@ impl AppState {
         self.select_image(Some(ImageRef::new(new_id, image)));
         Some(message)
     }
+    /// Run `run` over the correspondence source the menu entry `from` names.
+    ///
+    /// The two resections -- the derived node and the in-place version -- differ
+    /// in nothing about *which* correspondences they read, so the choice is made
+    /// once here and neither of them spells it. The `.matches` file itself is put
+    /// in the cache first by [`AppState::load_resect_matches`], which each caller
+    /// runs under its own failure text; this only names it. The reconstruction
+    /// stays the caller's, because the two do not agree on it: the derived node
+    /// resects the node's base and the in-place edit the version's whole value.
+    pub(super) fn with_resect_source<T>(
+        &self,
+        from: ResectFrom,
+        run: impl FnOnce(resect::ResectSource<'_>) -> T,
+    ) -> T {
+        let matches = match from {
+            ResectFrom::Observations => None,
+            ResectFrom::Matches => self.resect_matches_cache.as_ref().map(|(_, data)| data),
+        };
+        let kind = match matches {
+            Some(data) => resect::ResectSource::Matches(data),
+            None => resect::ResectSource::StoredObservations,
+        };
+        run(kind)
+    }
     /// Make sure [`AppState::resect_matches_cache`] holds the `.matches` file
     /// chosen for `source`, reading it if it does not. `Err` carries the reason
     /// for the status line.
-    fn load_resect_matches(&mut self, source: ReconId) -> Result<(), String> {
+    pub(super) fn load_resect_matches(&mut self, source: ReconId) -> Result<(), String> {
         let path = self
             .resect_matches
             .get(&source)

@@ -871,3 +871,354 @@ fn removing_an_observation_that_is_not_there_is_refused_and_leaves_the_history_a
     assert!(why.contains("does not observe"), "{why}");
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
+
+// ── Resect in place: the bulk edit that re-poses one image ──────────────
+
+/// A state holding one node a resection can run on, with image 1's stored pose
+/// pushed off the truth its own keypoints were computed at.
+///
+/// The fixture is the Scene Graph tests' own, because "a node a resection can
+/// run on" is one thing and there is no second answer to it: the demo camera
+/// ring with every observation recomputed as the pixel that camera projects the
+/// point to.
+fn resectable_state() -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    image.translation_xyz += nalgebra::Vector3::new(0.30, -0.20, 0.15);
+    (state, id)
+}
+
+/// How far image `index`'s camera centre stands from `centre`.
+fn centre_offset(state: &AppState, index: usize, centre: nalgebra::Point3<f64>) -> f64 {
+    (state.scene[0].recon().image_table.images[index].camera_center() - centre).norm()
+}
+
+#[test]
+fn resecting_in_place_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
+    let (mut state, id) = resectable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let images = state.scene[0].image_count();
+    let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr")
+        .recon()
+        .image_table
+        .images[1]
+        .camera_center();
+    let moved = centre_offset(&state, 1, truth);
+
+    state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect("the ring corroborates image 1");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert!(
+        node.edited().deleted_points.is_empty() && node.edited().added.points.is_empty(),
+        "the new version arrived with an overlay"
+    );
+    assert_eq!(node.image_count(), images, "the image table moved");
+    let recovered = centre_offset(&state, 1, truth);
+    assert!(
+        recovered < moved * 0.1,
+        "the resection left the camera {recovered} from the truth, having started {moved}"
+    );
+}
+
+#[test]
+fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
+    let (mut state, id) = resectable_state();
+    let entries = texts(&state).len();
+    state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect("the ring corroborates image 1");
+    let logged = texts(&state);
+    assert_eq!(logged.len(), entries + 1, "{logged:?}");
+    let last = logged.last().expect("one entry");
+    assert!(
+        last.starts_with("Resected image_001.jpg in place (run_a): 120 pts, inliers "),
+        "{last}"
+    );
+    let serials = state.scene[0].history.versions();
+    assert!(
+        last.ends_with(&format!(
+            "re-triangulated ({} → {})",
+            serials[0].serial, serials[1].serial
+        )),
+        "{last}"
+    );
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Resected image_001.jpg in place (run_a)"
+    );
+}
+
+#[test]
+fn an_undo_puts_the_stored_pose_and_the_selection_back() {
+    let (mut state, id) = resectable_state();
+    let stored = state.scene[0].recon().image_table.images[1].camera_center();
+    state.selected_point = Some(PointRef::new(id, 9));
+
+    state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect("the ring corroborates image 1");
+    let selected = state.selected_point.expect("the point survived the edit");
+    assert_eq!(selected.recon, id);
+    assert!(
+        (state.scene[0].recon().image_table.images[1].camera_center() - stored).norm() > 1e-6,
+        "the pose did not move"
+    );
+
+    state.undo(id).expect("one version to undo");
+    assert_eq!(
+        state.scene[0].recon().image_table.images[1].camera_center(),
+        stored
+    );
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 9)));
+}
+
+#[test]
+fn a_resection_that_cannot_be_attempted_pushes_no_version_and_logs_a_failure() {
+    let (mut state, id) = resectable_state();
+    state.scene[0].recon_mut().image_table.images[1].translation_xyz =
+        nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
+
+    let why = state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect_err("an unposed target has no pose to re-estimate");
+
+    assert!(why.contains("refused"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    let last = state.action_log.entries().last().expect("one entry");
+    assert!(last.failed, "the refusal was logged as a success");
+    assert_eq!(last.text, why);
+}
+
+#[test]
+fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
+    let (mut state, id) = resectable_state();
+    // Image 1's keypoints now agree with nothing: the estimate finds
+    // correspondences and no consensus among them, which is the refusal that
+    // still produces a derived node and must not produce a version.
+    {
+        let recon = state.scene[0].recon_mut();
+        let rows: Vec<usize> = recon
+            .point_set
+            .tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.image_index == 1)
+            .map(|(row, _)| row)
+            .collect();
+        let sfmtool_core::ObservationSource::EmbeddedPatches { keypoints_xy, .. } =
+            &mut recon.point_set.observations
+        else {
+            panic!("the fixture is embedded_patches");
+        };
+        for (k, row) in rows.iter().enumerate() {
+            keypoints_xy[[*row, 0]] = (k % 97) as f32 * 13.0;
+            keypoints_xy[[*row, 1]] = (k % 53) as f32 * 11.0;
+        }
+    }
+
+    let why = state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect_err("nothing corroborates that pose");
+
+    assert!(why.contains("refused"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(
+        state.action_log.entries().last().expect("one entry").failed,
+        "the refusal was logged as a success"
+    );
+}
+
+// ── Bundle adjust: the bulk edit that moves everything ──────────────────
+
+/// The resectable node with image 1 pushed a few pixels off the pose its own
+/// keypoints were computed at.
+///
+/// A few pixels rather than the resection fixture's tens: the adjustment is a
+/// local refinement whose first round trims what disagrees by more than 50 px,
+/// so a camera perturbed past that is one whose observations leave the solve
+/// rather than one it pulls back.
+fn adjustable_state() -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    image.translation_xyz += nalgebra::Vector3::new(0.02, -0.015, 0.01);
+    (state, id)
+}
+
+#[test]
+fn bundle_adjusting_pushes_a_version_with_a_new_base_and_keeps_the_images() {
+    let (mut state, id) = adjustable_state();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let images = state.scene[0].image_count();
+    let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr")
+        .recon()
+        .image_table
+        .images[1]
+        .camera_center();
+    let moved = centre_offset(&state, 1, truth);
+    state.selected_point = Some(PointRef::new(id, 11));
+
+    state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("the fixture is well posed");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert_eq!(node.image_count(), images, "the image table moved");
+    assert_eq!(
+        node.history.current_version().label,
+        "Bundle adjusted run_a"
+    );
+    // The perturbed camera came back toward the pose its own observations were
+    // computed at.
+    assert!(centre_offset(&state, 1, truth) < moved, "{moved}");
+    // The selection followed the map onto a live point.
+    let selected = state.selected_point.expect("the point survived");
+    assert_eq!(selected.recon, id);
+    assert!(state.scene[0].edited().point(selected.point).is_some());
+}
+
+#[test]
+fn the_log_entry_carries_the_counts_and_the_residuals() {
+    let (mut state, id) = adjustable_state();
+    let entries = texts(&state).len();
+
+    state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("well posed");
+
+    let logged = texts(&state);
+    assert_eq!(logged.len(), entries + 1, "{logged:?}");
+    let last = logged.last().expect("one entry");
+    assert!(
+        last.starts_with("Bundle adjusted run_a: 8 images, "),
+        "{last}"
+    );
+    assert!(last.contains("median residual "), "{last}");
+    assert!(!last.contains("focal"), "the focal was held: {last}");
+    let serials = state.scene[0].history.versions();
+    assert!(
+        last.ends_with(&format!("({} → {})", serials[0].serial, serials[1].serial)),
+        "{last}"
+    );
+}
+
+#[test]
+fn a_released_focal_is_named_in_the_label_and_the_entry() {
+    let (mut state, id) = adjustable_state();
+    // The demo camera is a two-focal PINHOLE, which the adjustment's focal
+    // column is not exact for; a single-focal one of the same geometry is.
+    {
+        let camera = &mut state.scene[0].recon_mut().image_table.cameras[0];
+        let (fx, _) = camera.focal_lengths();
+        let (cx, cy) = camera.principal_point();
+        camera.model = sfmtool_core::CameraModel::SimplePinhole {
+            focal_length: fx,
+            principal_point_x: cx,
+            principal_point_y: cy,
+        };
+    }
+    let options = sfmtool_core::BundleAdjustOptions {
+        opt_f: true,
+        ..sfmtool_core::BundleAdjustOptions::default()
+    };
+
+    state.bundle_adjust(id, &options).expect("well posed");
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Bundle adjusted run_a, focal released"
+    );
+    let last = texts(&state).last().expect("one entry").clone();
+    assert!(last.contains(", focal "), "{last}");
+}
+
+#[test]
+fn an_undo_puts_every_pose_back() {
+    let (mut state, id) = adjustable_state();
+    let before: Vec<nalgebra::Point3<f64>> = state.scene[0]
+        .recon()
+        .image_table
+        .images
+        .iter()
+        .map(|i| i.camera_center())
+        .collect();
+
+    state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("well posed");
+    state.undo(id).expect("one version to undo");
+
+    let after: Vec<nalgebra::Point3<f64>> = state.scene[0]
+        .recon()
+        .image_table
+        .images
+        .iter()
+        .map(|i| i.camera_center())
+        .collect();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn a_node_with_no_inline_keypoints_is_refused_before_anything_is_solved() {
+    let mut state = state();
+    let id = node(&state);
+
+    let why = state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect_err("a sift_files demo carries no keypoints");
+
+    assert!(why.contains("inline keypoints"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    let last = state.action_log.entries().last().expect("one entry");
+    assert!(last.failed, "the refusal was logged as a success");
+    // The menu entry says the same thing, in the same call.
+    assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
+}
+
+#[test]
+fn a_node_whose_images_disagree_about_the_lens_is_refused() {
+    let (mut state, id) = adjustable_state();
+    {
+        let recon = state.scene[0].recon_mut();
+        let second = recon.image_table.cameras[0].clone();
+        recon.image_table.cameras.push(second);
+        recon.image_table.images[2].camera_index = 1;
+    }
+
+    let why = state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect_err("two lenses, one solve");
+
+    assert!(why.contains("one shared camera"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(crate::bundle_adjust_prompt::refusal(state.scene[0].edited()).is_some());
+}
+
+#[test]
+fn the_gate_and_the_focal_gate_pass_on_a_node_that_can_be_adjusted() {
+    let (state, _) = adjustable_state();
+    let edited = state.scene[0].edited();
+    assert_eq!(crate::bundle_adjust_prompt::refusal(edited), None);
+    // The demo camera is a two-focal PINHOLE, whose focal the adjustment cannot
+    // release: the checkbox is greyed and says so.
+    assert!(crate::bundle_adjust_prompt::focal_refusal(edited).is_some());
+}

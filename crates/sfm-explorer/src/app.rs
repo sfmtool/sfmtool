@@ -846,6 +846,26 @@ impl App {
                             );
                             ui.close();
                         }
+                        ui.separator();
+                        // The gate is the edit's own, so the entry and the edit
+                        // cannot disagree about when the adjustment can run.
+                        let refusal = match target.and_then(|id| app_state.node(id)) {
+                            Some(node) => crate::bundle_adjust_prompt::refusal(node.edited()),
+                            None => Some("Select a reconstruction to adjust it".to_string()),
+                        };
+                        let adjust = ui
+                            .add_enabled(refusal.is_none(), egui::Button::new("Bundle Adjust..."))
+                            .on_disabled_hover_text(refusal.unwrap_or_default())
+                            .on_hover_text(
+                                "Refine every pose and point of the selected reconstruction \
+                                 against its observations, as one version of it.",
+                            );
+                        if adjust.clicked() {
+                            if let Some(id) = target {
+                                app_state.open_bundle_adjust(id);
+                            }
+                            ui.close();
+                        }
                     });
                     ui.menu_button("Go", |ui| {
                         if ui
@@ -935,6 +955,26 @@ impl App {
                 if delete && app_state.selected_point.is_some() {
                     let outcome = app_state.delete_selected_point();
                     edit_outcome(app_state, Some(outcome));
+                }
+            }
+
+            // The Bundle Adjust dialog, and the adjustment it asks for. The
+            // solve runs here, synchronously, on the frame `Run` was pressed.
+            if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
+                let options = sfmtool_core::BundleAdjustOptions {
+                    opt_f: answer.release_focal,
+                    ..sfmtool_core::BundleAdjustOptions::default()
+                };
+                if app_state.bundle_adjust(answer.recon, &options).is_ok() {
+                    // Every pose and point moved, so what the panels cached
+                    // about the geometry describes one the node no longer holds.
+                    forget_selected(
+                        Some(answer.recon),
+                        image_browser,
+                        image_detail,
+                        point_track_detail,
+                        intrinsics_detail,
+                    );
                 }
             }
 

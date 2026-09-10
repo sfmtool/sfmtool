@@ -263,7 +263,10 @@ fn removing_down_to_one_view_gives_a_bearing_of_the_same_angular_size() {
     let value = edited(2);
     let before = value.point(0).expect("live");
     let u_before = Vector3::from(before.patch_u_halfvec().expect("a frame").map(f64::from));
-    let depth = placement_scale(&before.point().position, &value.base.image_table);
+    let depth = value
+        .base
+        .image_table
+        .placement_scale(&before.point().position);
 
     let (next, report) = remove_observation(&value, 0, 1).expect("image 1 is in the track");
     assert!(report.to_infinity);

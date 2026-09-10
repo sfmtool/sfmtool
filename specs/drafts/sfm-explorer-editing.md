@@ -253,9 +253,10 @@ Families, in the proposed order:
 - **Bake transform**: apply the node's `Align to…` transform to the value and
   reset the transform to identity. This is the edit that breaks the scene-graph
   invariant, on purpose and only when asked.
-- **Resect in place**: the existing resection applied to the node as a
-  version rather than landing a derived node. The derived-node variant stays as
-  the comparison affordance.
+- **Resect in place**: the existing resection applied to the node as a version
+  rather than landing a derived node is built and standing,
+  [`../gui/resect-image.md`](../gui/resect-image.md) § "In place". The
+  derived-node variant stays as the comparison affordance.
 - **Track edits**: add an observation to a track from a pixel is built and
   standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
   and so is creating a point from a pixel,
@@ -263,8 +264,11 @@ Families, in the proposed order:
   edit an added observation then places, and so is removing an observation,
   [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
   which inverts the first. Split a track and merge two remain.
-- **Bundle adjust**: run the adjustment on the node's value with the
-  constraints it carries, as one version.
+- **Bundle adjust**: running the adjustment on the node's value with the
+  constraints it carries, as one version, is built and standing,
+  [`../gui/edits/bundle-adjust.md`](../gui/edits/bundle-adjust.md), over the core
+  function in
+  [`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md).
 
 Files into: `specs/gui/edits/<family>.md`, one each, in the
 [`../gui/edits/`](../gui/edits/README.md) directory the first family opened;
@@ -304,8 +308,12 @@ steps after it.
    nothing. Removing an observation is done as well,
    [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
    and is the edit that inverts add-observation, including the patch frame's
-   crossing to and from infinity. Remaining: point constraints, bake transform,
-   resect in place, the other track edits (split, merge), and bundle adjust.
+   crossing to and from infinity. Resect in place and bundle adjust are done as
+   well, the two **bulk** edits of the family: the first lands the existing
+   resection as a version of the node it questioned, and the second is the
+   node's own solver run over the value on screen, which is what the edits
+   before it change the input to. Remaining: point constraints, bake transform,
+   and the other track edits (split, merge).
 8. **Wire surface.** Amends `gui/mcp-server.md`.
 
 ## Non-goals

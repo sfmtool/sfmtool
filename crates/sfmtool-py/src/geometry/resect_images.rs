@@ -28,7 +28,7 @@ use crate::PySfmrReconstruction;
 ///
 /// Everything that stops the call from being *attempted* raises; a refused
 /// estimate is one target's outcome and comes back in that target's report.
-fn err_to_py(e: ResectImageError) -> PyErr {
+pub(crate) fn err_to_py(e: ResectImageError) -> PyErr {
     match e {
         ResectImageError::Observations(_) => pyo3::exceptions::PyIOError::new_err(e.to_string()),
         _ => pyo3::exceptions::PyValueError::new_err(e.to_string()),
@@ -37,7 +37,10 @@ fn err_to_py(e: ResectImageError) -> PyErr {
 
 /// One target's report: every field of `ResectImageReport`, plus the `refused`
 /// convenience negation of `accepted`.
-fn report_to_py<'py>(py: Python<'py>, r: &ResectImageReport) -> PyResult<Bound<'py, PyDict>> {
+pub(crate) fn report_to_py<'py>(
+    py: Python<'py>,
+    r: &ResectImageReport,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("image_index", r.image_index)?;
     d.set_item("image_name", &r.image_name)?;

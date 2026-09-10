@@ -181,7 +181,7 @@ viewer").
 ## The Edit menu and its shortcuts
 
 The menu bar's **Edit** menu, in
-[app.rs](../../crates/sfm-explorer/src/app.rs), holds the four actions, each
+[app.rs](../../crates/sfm-explorer/src/app.rs), holds the five actions, each
 greyed with a hover text saying why when it does not apply:
 
 | Item | Shortcut | Enabled when |
@@ -190,6 +190,7 @@ greyed with a hover text saying why when it does not apply:
 | Redo | `Ctrl/Cmd+Y`, also `Ctrl/Cmd+Shift+Z` | it has a version to step forward to |
 | Delete Point | `Delete` | a 3D point is selected |
 | Delete Image | -- | an image is selected |
+| Bundle Adjust... | -- | a reconstruction is selected and can be adjusted ([edits/bundle-adjust.md](edits/bundle-adjust.md)) |
 
 Only one redo spelling is written beside the menu item, because a menu that
 lists two spellings of one action reads as two actions; both are live.
@@ -198,10 +199,11 @@ The shortcuts are gated on egui's own keyboard arbitration, so a text field or a
 `DragValue` being typed into keeps `Delete` and `Ctrl+Z` for its own editing.
 
 `Delete Image` is also on the **image row's context menu** in the Scene Graph
-panel, beside the two `Resect Image` entries, which is where a specific image is
+panel, beside the four `Resect Image` entries, which is where a specific image is
 addressed. It asks for no confirmation: it is an edit with a history behind it,
-and undo is the answer to a mis-click. The resections beside it show their answer
-as a second node precisely because they are not edits and cannot be undone.
+and undo is the answer to a mis-click. Two of the resections beside it show their
+answer as a second node, which is not an edit and cannot be undone; the two
+in-place ones are edits like this one ([resect-image.md](resect-image.md)).
 
 ## The Edit History panel
 

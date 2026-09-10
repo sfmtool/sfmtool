@@ -172,6 +172,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
 | Edit | — | User | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |
 | Edit | — | User | `Removed observation of point {index} in {image} ({label}): {n} observations left ({from} → {to})` — or `one observation left, so the point is a bearing at infinity`, or `the point had no other observation and is deleted` |
+| Edit | — | User | `Resected {image} in place ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})` |
+| Edit | — | User | `Bundle adjusted {label}: {i} images, {p} points, {o} observations, median residual {before} → {after} px ({from} → {to})`, with `, focal {f0} → {f1}` when the focal was released and `, {n} points deleted` when the solve left points unsupported |
 | Edit | — | User | `Undo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User | `Redo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |

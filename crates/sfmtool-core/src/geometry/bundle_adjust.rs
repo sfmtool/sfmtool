@@ -167,7 +167,149 @@ impl PointConstraints {
         self.distance[p] = distance;
         self.reference[p] = reference;
     }
+
+    /// The constraint set three parallel per-point arrays state, or `None` when
+    /// they state nothing beyond "every point free" -- which is the off position
+    /// the kernel's parity requirement is stated against, and is why this is not
+    /// simply always a set.
+    ///
+    /// `held` marks the points the caller owns outright, `distance` carries a
+    /// ranged point's distance (`NaN` where the point is not ranged), and
+    /// `reference` where a finite distance is measured from. The arrays are the
+    /// shape a caller reading columns off a file or arrays out of a numpy world
+    /// already has, and the checks below are the ones neither of them should be
+    /// writing twice: the two constraints are exclusive on one point, a distance
+    /// is strictly positive or `+inf`, a finite one names a reference, and a
+    /// reference names an image that exists.
+    ///
+    /// The messages name the arrays -- `distance[p]`, `distance_from[p]` -- so a
+    /// caller that took them from a keyword argument can hand the sentence
+    /// straight to its user.
+    pub fn from_arrays(
+        held: Option<&[bool]>,
+        distance: Option<&[f64]>,
+        reference: &[Option<DistanceReference>],
+        n_pt: usize,
+        n_img: usize,
+    ) -> Result<Option<Self>, PointConstraintsError> {
+        let mut constraints = PointConstraints::all_free(n_pt);
+        let mut any = false;
+        for p in 0..n_pt {
+            let is_held = held.is_some_and(|h| h[p]);
+            let r = distance.map_or(f64::NAN, |d| d[p]);
+            let is_ranged = !r.is_nan();
+            if is_held && is_ranged {
+                return Err(PointConstraintsError::HeldAndRanged(p));
+            }
+            if is_held {
+                constraints.hold(p);
+                any = true;
+                continue;
+            }
+            if !is_ranged {
+                continue;
+            }
+            if r <= 0.0 {
+                return Err(PointConstraintsError::NotADistance {
+                    point: p,
+                    distance: r,
+                });
+            }
+            let origin = if r.is_finite() {
+                let origin = reference.get(p).cloned().flatten().ok_or(
+                    PointConstraintsError::NoReference {
+                        point: p,
+                        distance: r,
+                    },
+                )?;
+                for &k in origin.images() {
+                    if k as usize >= n_img {
+                        return Err(PointConstraintsError::ReferenceOutOfRange {
+                            point: p,
+                            image: k,
+                            image_count: n_img,
+                        });
+                    }
+                }
+                Some(origin)
+            } else {
+                // A direction is measured from nothing, so an origin given here
+                // is read as the caller stating a reference the geometry never
+                // needs.
+                None
+            };
+            constraints.constrain_distance(p, r, origin);
+            any = true;
+        }
+        Ok(any.then_some(constraints))
+    }
 }
+
+/// Why per-point arrays state no constraint set.
+///
+/// Every variant is a statement the arrays make that the adjustment cannot
+/// honour, rather than a failure of the solve: the caller is building the
+/// constraints, and what it hears back is which point it got wrong.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PointConstraintsError {
+    /// One point is both held and ranged.
+    HeldAndRanged(usize),
+    /// A ranged point's distance is not one: zero, negative, or `-inf`.
+    NotADistance {
+        /// The point.
+        point: usize,
+        /// The distance stated for it.
+        distance: f64,
+    },
+    /// A ranged point's finite distance names no reference to measure from.
+    NoReference {
+        /// The point.
+        point: usize,
+        /// The distance stated for it.
+        distance: f64,
+    },
+    /// A reference names an image the table does not hold.
+    ReferenceOutOfRange {
+        /// The point.
+        point: usize,
+        /// The image named.
+        image: u32,
+        /// How many images there are.
+        image_count: usize,
+    },
+}
+
+impl std::fmt::Display for PointConstraintsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PointConstraintsError::HeldAndRanged(p) => write!(
+                f,
+                "point {p} is both held and ranged; a held point owns its whole \
+                 coordinate, so there is no direction left for a distance to constrain"
+            ),
+            PointConstraintsError::NotADistance { point, distance } => write!(
+                f,
+                "distance[{point}] = {distance} is not a distance; a ranged point needs a \
+                 strictly positive one, +inf for a direction, or NaN to be left free"
+            ),
+            PointConstraintsError::NoReference { point, distance } => write!(
+                f,
+                "distance[{point}] = {distance} is finite and needs a distance_from: a \
+                 distance is measured from a camera centre, not from the world frame"
+            ),
+            PointConstraintsError::ReferenceOutOfRange {
+                point,
+                image,
+                image_count,
+            } => write!(
+                f,
+                "distance_from[{point}] names image {image}, past the {image_count} images"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PointConstraintsError {}
 
 /// How a free point's representation is decided.
 ///

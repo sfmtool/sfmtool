@@ -284,23 +284,6 @@ fn triangulate_record(
     Ok(tri)
 }
 
-/// The distance a world patch extent at `position` is divided by to become an
-/// angular one: the distance from the camera-cloud centroid, which is the
-/// reference `SfmrReconstruction::materialize_points_at_infinity` measures its
-/// own placement from, and the one
-/// [`add_observation`](super::add_observation::add_observation) multiplies by
-/// when a point crosses the other way.
-fn placement_scale(position: &Point3<f64>, table: &ImageTable) -> f64 {
-    let mut centroid = Vector3::zeros();
-    for image in &table.images {
-        centroid += image.camera_center().coords;
-    }
-    if !table.images.is_empty() {
-        centroid /= table.images.len() as f64;
-    }
-    (position.coords - centroid).norm()
-}
-
 /// Carry `record`, which stands at `position`, back to a bearing along
 /// `direction`.
 ///
@@ -330,7 +313,7 @@ fn demote_to_infinity(
         // normal is no statement about a surface.
         *confidence = 0;
     }
-    let scale = placement_scale(position, table);
+    let scale = table.placement_scale(position);
     if !(scale.is_finite() && scale > 0.0) {
         return;
     }

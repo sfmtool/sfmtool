@@ -573,6 +573,10 @@ pub struct AppState {
     /// is waiting on it. See [`crate::close_prompt`].
     pub close_prompt: crate::close_prompt::ClosePrompt,
 
+    /// The dialog `Bundle Adjust...` opens, and the one decision it takes. See
+    /// [`crate::bundle_adjust_prompt`].
+    pub bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt,
+
     /// The `.matches` file each node's matches-backed resection reads, chosen
     /// once per source node and remembered for the session. See
     /// [`crate::resect`].
@@ -698,6 +702,7 @@ impl AppState {
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),
             close_prompt: crate::close_prompt::ClosePrompt::default(),
+            bundle_adjust_prompt: crate::bundle_adjust_prompt::BundleAdjustPrompt::default(),
             resect_matches: HashMap::new(),
             resect_matches_cache: None,
             #[cfg(feature = "mcp")]
@@ -1001,6 +1006,18 @@ impl AppState {
     pub fn open_goto_point(&mut self) {
         let prefill = goto_point::selected_point_id(&self.scene, self.selected_point);
         self.goto_point.open(prefill);
+    }
+
+    /// Open the Bundle Adjust dialog on `id`, with the focal checkbox greyed
+    /// where that camera's focal cannot be released.
+    ///
+    /// The one entry point, so whatever opens the dialog asks the same question
+    /// about the same node.
+    pub fn open_bundle_adjust(&mut self, id: ReconId) {
+        let Some(node) = self.node(id) else { return };
+        let label = node.label.clone();
+        let focal = crate::bundle_adjust_prompt::focal_refusal(node.edited());
+        self.bundle_adjust_prompt.ask(id, label, focal);
     }
 
     /// Select a 3D point, and with it the reconstruction that owns it.

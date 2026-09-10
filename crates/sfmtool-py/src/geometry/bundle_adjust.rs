@@ -68,6 +68,11 @@ fn parse_distance_from(
 /// Build the kernel's point constraints from the three per-point arguments,
 /// or `None` when the caller owns no point -- which is the off position the
 /// parity requirement is stated against.
+///
+/// The rules are [`PointConstraints::from_arrays`]'s, so this binding and the
+/// reconstruction-level adjustment that reads the same statements out of a
+/// file's constraint columns cannot disagree about what they mean; what is left
+/// here is the exception type.
 fn build_constraints(
     held: Option<&[bool]>,
     distance: Option<&[f64]>,
@@ -75,56 +80,8 @@ fn build_constraints(
     n_pt: usize,
     n_img: usize,
 ) -> PyResult<Option<PointConstraints>> {
-    let mut constraints = PointConstraints::all_free(n_pt);
-    let mut any = false;
-    for p in 0..n_pt {
-        let is_held = held.is_some_and(|h| h[p]);
-        let r = distance.map_or(f64::NAN, |d| d[p]);
-        let is_ranged = !r.is_nan();
-        if is_held && is_ranged {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "point {p} is both held and ranged; a held point owns its whole \
-                 coordinate, so there is no direction left for a distance to constrain"
-            )));
-        }
-        if is_held {
-            constraints.hold(p);
-            any = true;
-            continue;
-        }
-        if !is_ranged {
-            continue;
-        }
-        if r <= 0.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "distance[{p}] = {r} is not a distance; a ranged point needs a strictly \
-                 positive one, +inf for a direction, or NaN to be left free"
-            )));
-        }
-        let reference = if r.is_finite() {
-            let reference = origins.get(p).cloned().flatten().ok_or_else(|| {
-                pyo3::exceptions::PyValueError::new_err(format!(
-                    "distance[{p}] = {r} is finite and needs a distance_from: a distance \
-                     is measured from a camera centre, not from the world frame"
-                ))
-            })?;
-            for &k in reference.images() {
-                if k as usize >= n_img {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "distance_from[{p}] names image {k}, past the {n_img} images"
-                    )));
-                }
-            }
-            Some(reference)
-        } else {
-            // A direction is measured from nothing, so an origin given here is
-            // read as the caller stating a reference the geometry never needs.
-            None
-        };
-        constraints.constrain_distance(p, r, reference);
-        any = true;
-    }
-    Ok(any.then_some(constraints))
+    PointConstraints::from_arrays(held, distance, origins, n_pt, n_img)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 /// Staged bundle adjustment for images sharing one camera model.

@@ -204,6 +204,11 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
         "delegates: the shared median of the projected patch radii it gathers",
     ),
     (
+        "sfmtool-core/src/reconstruction/bundle_adjust.rs",
+        "median_residual",
+        "delegates: the shared median of the finite residuals of the points that survived",
+    ),
+    (
         "sfmtool-core/src/geometry/focal_vote.rs",
         "log_median",
         "delegates: the shared median of the logs, exponentiated",

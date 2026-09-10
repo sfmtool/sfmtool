@@ -340,8 +340,10 @@ fixed-height for virtualization.
   elsewhere, e.g. from the 3D viewport pick).
 - Context menu: `Resect Image` and `Resect Image from Matches…`, which
   re-estimate this one image's pose against the rest of its reconstruction and
-  show the answer as a derived node beside the original — see
-  [resect-image.md](resect-image.md), which owns them; and `Delete Image`,
+  show the answer as a derived node beside the original, and `Resect Image in
+  Place` and `Resect Image in Place from Matches…`, which keep the same answer
+  as a version of this reconstruction -- see
+  [resect-image.md](resect-image.md), which owns all four; and `Delete Image`,
   which removes this image from the reconstruction as one version of it -- see
   [edit-history.md](edit-history.md), which owns that one.
 - Selected row: highlight + auto-scroll into view when the selection changes
