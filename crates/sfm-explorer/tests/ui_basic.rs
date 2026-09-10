@@ -1133,49 +1133,35 @@ fn dump_tree() {
     );
 }
 
-/// Moving a camera by hand, in a real window: camera view, `M`, a drag, `Enter`.
+/// Taking a camera in hand, in a real window: the Edit menu and the lock's
+/// release.
 ///
 /// The one part of the Move Camera family a headless frame cannot reach. Every
 /// decision it makes -- the snap, the pending pose, the dead band, the commit --
-/// is asserted in `camera_lock/tests.rs`; what this asks is whether a hand on a
-/// real mouse and a real keyboard reaches them at all, which is the question a
-/// keyboard binding and a drag in a live viewport actually raise.
+/// is asserted in `camera_lock/tests.rs`; what this asks is whether the menu
+/// entry and the release reach a live viewport at all. The banner is painted
+/// rather than built of widgets, so it is not in the accessibility tree and is
+/// covered headlessly instead.
+///
+/// The pose is deliberately not moved here. Synthetic mouse input on Windows
+/// arrives through `WM_POINTER` (`EnableMouseInPointer`, see the right-click
+/// test), and winit renders a moving contact as a touch rather than a drag, so
+/// an injected drag moves no camera in this app -- with a lock held or without
+/// one. What a real window can be asked, and is asked below, is whether the
+/// menu takes the camera in hand and gives it back.
 ///
 /// Windows-only for the reason the right-click test is: injecting real input is
 /// platform code, and one platform proves the wiring.
 #[cfg(windows)]
 #[test]
-fn moving_a_camera_by_hand_lands_a_version() {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-        MOUSEINPUT, MOUSE_EVENT_FLAGS,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
-
-    fn mouse_event(flags: MOUSE_EVENT_FLAGS) {
-        let input = INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        };
-        unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-    }
-
+fn taking_a_camera_in_hand_reaches_a_real_window() {
     let viewer = McpViewer::launch();
     let app = viewer.wait_for_window();
     viewer.initialize();
     load_demo_data(&app);
 
-    // The 3D viewer alone in the dock, so the window's centre is inside the
-    // viewport whatever the window's size happens to be.
+    // The 3D viewer alone in the dock, so nothing but the viewport is under
+    // the menu the test drives.
     viewer.call(
         "set_window_layout",
         serde_json::json!({
@@ -1186,44 +1172,21 @@ fn moving_a_camera_by_hand_lands_a_version() {
         "set_view",
         serde_json::json!({ "look_through": { "camera_image": 0 } }),
     );
-    let before = viewer.call("get_camera_image", serde_json::json!({ "camera_image": 0 }));
-    let before = before["structuredContent"]["quaternion_wxyz"].clone();
 
-    let window = viewer.call("get_window_layout", serde_json::json!({}));
-    let window = &window["structuredContent"]["window"];
-    let at = |key: &str, axis: usize| {
-        window[key][axis].as_i64().unwrap_or_else(|| {
-            panic!("no {key}[{axis}] in {window}");
-        }) as i32
-    };
-    let centre_x = at("outer_position", 0) + at("outer_size", 0) / 2;
-    let centre_y = at("outer_position", 1) + at("outer_size", 1) / 2;
-
-    // Two moves with a pause, as the right-click test does: the app repaints on
-    // demand and egui resolves input against the previous frame's rects.
-    for _ in 0..2 {
-        unsafe { SetCursorPos(centre_x, centre_y).ok() };
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    // A click to activate the window, so the key that follows reaches it.
-    mouse_event(MOUSEEVENTF_LEFTDOWN);
-    std::thread::sleep(Duration::from_millis(120));
-    mouse_event(MOUSEEVENTF_LEFTUP);
-    std::thread::sleep(Duration::from_millis(400));
-
-    // The lock is taken through the Edit menu over accessibility rather than
-    // by a real `M`: a keystroke only reaches the window that holds keyboard
-    // focus, which a runner's desktop does not reliably grant, and what this
-    // test is about is the hand, not the key. The key is covered headlessly.
-    let press_edit_item = |item: &str| {
+    // The menu button toggles, so one opening is one place to look: reopening
+    // it to find a second item would close it instead.
+    let open_edit_menu = || {
         app.locator(r#"button[name="Edit"]"#)
             .press()
             .expect("press Edit menu button");
-        app.locator(&format!(r#"button[name="{item}"]"#))
+    };
+    // Matched on a name *prefix*, for the reason `edit_menu_items` gives: both
+    // spellings of the Move Camera item carry the `M` shortcut in the button's
+    // text, and the shortcut is spelled by the platform.
+    let edit_item = |item: &str| {
+        app.locator(&format!(r#"button[name^="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"))
-            .press()
-            .unwrap_or_else(|_| panic!("press Edit menu item '{item}'"));
     };
     let log_texts = || -> Vec<String> {
         let log = viewer.call(
@@ -1240,66 +1203,33 @@ fn moving_a_camera_by_hand_lands_a_version() {
             })
             .unwrap_or_default()
     };
-    press_edit_item("Move Camera");
-    let deadline = std::time::Instant::now() + CONTENT_TIMEOUT;
-    loop {
-        let texts = log_texts();
-        if texts.iter().any(|t| t.starts_with("Moving the camera of ")) {
-            break;
+    let wait_for_line = |prefix: &str| {
+        let deadline = Instant::now() + CONTENT_TIMEOUT;
+        loop {
+            let texts = log_texts();
+            if texts.iter().any(|text| text.starts_with(prefix)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no '{prefix}' line; the log holds {texts:?}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the lock was never taken; the log holds {texts:?}"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    // The menu closed over the viewport; put the pointer back where the
-    // drag starts, with the same pause the click above needed.
-    for _ in 0..2 {
-        unsafe { SetCursorPos(centre_x, centre_y).ok() };
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    };
 
-    // An unmodified drag in camera view is a nodal pan, which under the lock
-    // turns the camera itself.
-    mouse_event(MOUSEEVENTF_LEFTDOWN);
-    for step in 1..=8 {
-        unsafe { SetCursorPos(centre_x + step * 12, centre_y + step * 4).ok() };
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    std::thread::sleep(Duration::from_millis(150));
-    mouse_event(MOUSEEVENTF_LEFTUP);
-    std::thread::sleep(Duration::from_millis(300));
+    open_edit_menu();
+    edit_item("Move Camera")
+        .press()
+        .expect("press Edit menu item 'Move Camera'");
+    wait_for_line("Moving the camera of image_000.jpg");
 
-    press_edit_item("Commit Camera Move");
-    std::thread::sleep(Duration::from_millis(500));
-
-    // The version: the pose the value holds has moved.
-    let after = viewer.call("get_camera_image", serde_json::json!({ "camera_image": 0 }));
-    let after = after["structuredContent"]["quaternion_wxyz"].clone();
-    assert_ne!(before, after, "the committed move left the pose alone");
-
-    // And the line: the edit recorded itself, in the words the menu's own does.
-    let log = viewer.call(
-        "get_action_log",
-        serde_json::json!({ "since_revision": 0, "limit": 200 }),
-    );
-    let entries = log["structuredContent"]["entries"]
-        .as_array()
-        .unwrap_or_else(|| panic!("no entries in {log}"))
-        .clone();
-    let moved = entries
-        .iter()
-        .find(|entry| {
-            entry["text"]
-                .as_str()
-                .is_some_and(|text| text.starts_with("Moved camera "))
-        })
-        .unwrap_or_else(|| {
-            let texts: Vec<&str> = entries.iter().filter_map(|e| e["text"].as_str()).collect();
-            panic!("no Moved camera entry in {texts:?}")
-        });
-    assert_eq!(moved["kind"], serde_json::json!("edit"));
-    assert_eq!(moved["failed"], serde_json::json!(false));
-    assert_eq!(moved["actor"], serde_json::json!("user"));
+    // One opening for both: with a lock held the same entry commits rather
+    // than takes, and the entry beside it gives the camera back.
+    open_edit_menu();
+    edit_item("Commit Camera Move");
+    edit_item("Cancel Camera Move")
+        .press()
+        .expect("press Edit menu item 'Cancel Camera Move'");
+    wait_for_line("Cancelled the camera move of image_000.jpg");
 }

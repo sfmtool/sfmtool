@@ -272,10 +272,19 @@ Explorer (`sfm-explorer` lib tests, headless):
   camera view onto the pose the version they land on holds.
 
 Windowed (`crates/sfm-explorer/tests/ui_basic.rs`, Windows): camera view on the
-demo reconstruction, a real `M`, a real drag and a real `Enter`, with the moved
-pose and the Action Log line read back over MCP. The one part of the family a
-headless frame cannot reach is whether a hand on a real mouse and keyboard
-arrives at it at all.
+demo reconstruction, `Edit > Move Camera` pressed in a live window, the lock's
+own line read back over MCP, the entry found turned into `Commit Camera Move`
+beside an enabled `Cancel Camera Move`, and the cancel pressed and read back.
+The part a headless frame cannot reach is whether the menu takes the camera in
+hand at all and gives it back.
+
+The pose is not moved there, and the reason is the platform rather than the
+edit: Windows routes injected mouse input through `WM_POINTER`
+([../architecture.md](../architecture.md) carries the same note for the
+right-click path), and a moving contact arrives as a touch
+rather than a drag, so a synthetic drag turns no camera in this app whether a
+lock is held or not. The banner is painted rather than built of widgets, so it
+is not in the accessibility tree either. Both are covered headlessly.
 
 ---
 
