@@ -381,16 +381,22 @@ against 10.62 s shared. With 64-1024 MiB budgets, where neither layout fits, a
 500-query batch takes 3.1-3.3 s tree-local against 3.2-3.8 s shared — a rounding
 error apart, while the shared file is 3.3x smaller.
 
-**The resident-case gap is an implementation artifact, not a property of the
-layout.** Both batches above are served entirely from cache with zero reads; the
-difference is operation count. Tree-local reads a leaf's descriptors as one slice
-of a chunk it already holds, while the shared path resolves each descriptor
-separately — 317,372 cache lookups against 185,501, each taking the cache mutex
-and heap-allocating a vector for one 128-byte descriptor. Batching a leaf's
-descriptor reads by block would close most of it; that work is proposed in
-[drafts/kdf-shared-descriptor-batching.md](../../drafts/kdf-shared-descriptor-batching.md).
+**The resident-case gap is a cache bug, not a property of the layout.** Both
+batches above are served entirely from cache with **zero reads**, at 2.9 us per
+hit tree-local and 33.5 us shared — against the tens of nanoseconds a mutex and a
+hash lookup should cost. Holding hits and reads fixed and varying only how many
+objects the cache holds isolates why: on `dino_dog_toy`, four shared exports
+differing only in block size take 0.44, 0.69, 1.09 and 3.57 us per hit as the
+entry count rises from 1,636 to 6,976, with the hit count identical and no row
+reading a byte. `Cache::touch` promotes an entry by linear-searching a
+`VecDeque` of every resident key and then removing from the middle, so each hit
+costs O(resident entries). Tree-local is cheaper only because it holds a few
+thousand large chunks rather than tens of thousands of small blocks, and asks
+half as often — the shared path resolves each descriptor separately, 317,372
+lookups against 185,501 for identical work. Both halves have contained fixes,
+proposed in [drafts/kdf-cache-hit-cost.md](../../drafts/kdf-cache-hit-cost.md).
 Choosing a shipping default on today's resident-case timing would be freezing a
-decision on a number a bounded optimization is expected to move.
+decision on a number those fixes are expected to move.
 
 **Chunk size trades cold-start cost against read count, steeply.** Seeding a
 four-tree search costs four independent subtree misses whatever the query, so
