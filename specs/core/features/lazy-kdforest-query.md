@@ -297,7 +297,7 @@ Chunk validation checks references before dereference and detects revisited
 logical nodes per query to prevent malformed cycles. Full semantic verification
 is an explicit offline operation, never implicit at lazy open.
 
-## Benchmark plan and provisional defaults
+## Benchmark method
 
 One MiB is 1,048,576 decoded bytes. Start with a configurable 1 MiB target,
 then compare 256 KiB, 1, 4, 8 and 16 MiB; these are experiment settings, not
@@ -336,8 +336,94 @@ Measure recall against exhaustive search on a held-out subset, and separately
 assert exact result/check parity with the in-memory forest. Excluding self for
 recall must use the same postprocessing/reference procedure for both paths;
 it does not add an exclusion option to the API. Repeat runs, report variability,
-and record corpus/query hashes and hardware. Publish results before choosing
-shipping defaults; retain configurability even if a clear winner emerges.
+and record corpus/query hashes and hardware.
+
+[`scripts/benchmark_kdf_layouts.py`](../../../scripts/benchmark_kdf_layouts.py)
+runs this against a workspace's `.sift` files. It builds the forest once per run
+and exports it repeatedly, so every cell in a sweep compares storage against an
+identical forest, query set, k and check budget.
+
+Read amplification is measured on a **single** cold query, not on a batch.
+Within one query the check set is deduplicated, so `checks x dim` is exactly the
+unique evaluated vector bytes the ratio divides into; across a batch it is not,
+because later queries re-evaluate descriptors already decoded. Batch numbers
+below therefore report decoded bytes and read counts directly.
+
+## What the measurements found
+
+Measured on the three corpora below, at four trees and 16-feature leaves, k = 2,
+a 128-leaf check budget and zstd level 3. Timings are medians of repeated runs on
+one Windows desktop with a local NVMe SSD; the OS page cache is uncontrolled, so
+"cold" means a fresh reader with an empty application cache and nothing stronger.
+
+| Corpus | Images | Descriptors | Tree-local | Shared | Ratio |
+|--------|--------|-------------|-----------|--------|-------|
+| `seoul_bull_sculpture` | 17 | 35,167 | 13.94 MiB | 4.08 MiB | 3.42x |
+| `dino_dog_toy` | 85 | 694,320 | 262.18 MiB | 78.07 MiB | 3.36x |
+| DinoLedge | 1,196 | 9,701,948 | 3,840.61 MiB | 1,157.26 MiB | 3.32x |
+
+**The size win is the robust result.** One shared corpus is consistently 3.3-3.4x
+smaller than four tree-local copies, across three corpora spanning 276x in size.
+It falls short of the naive 4x because the tree node, split and feature-ID arrays
+are stored either way and the shared layout adds a feature-ID-to-row map, 32.8 MB
+compressed at 9.7M features.
+
+**Descriptors compress to 76.4% in kd-tree leaf order.** The size projections in
+[kdf-file-format.md](../../formats/kdf-file-format.md) had to estimate this from
+image order and a random shuffle, and said neither bounded leaf order. Leaf order
+turns out to sit just below image order's 76.96-76.98%, so the proxy was accurate
+to within a percentage point.
+
+**Which layout is faster depends entirely on whether the file fits in the cache**,
+and the two regimes point opposite ways. With a 4 GiB budget holding all of
+DinoLedge's tree-local file, a warm 1,000-query batch takes 0.54 s tree-local
+against 10.62 s shared. With 64-1024 MiB budgets, where neither layout fits, a
+500-query batch takes 3.1-3.3 s tree-local against 3.2-3.8 s shared — a rounding
+error apart, while the shared file is 3.3x smaller.
+
+**The resident-case gap is an implementation artifact, not a property of the
+layout.** Both batches above are served entirely from cache with zero reads; the
+difference is operation count. Tree-local reads a leaf's descriptors as one slice
+of a chunk it already holds, while the shared path resolves each descriptor
+separately — 317,372 cache lookups against 185,501, each taking the cache mutex
+and heap-allocating a vector for one 128-byte descriptor. Batching a leaf's
+descriptor reads by block would close most of it; that work is proposed in
+[drafts/kdf-shared-descriptor-batching.md](../../drafts/kdf-shared-descriptor-batching.md).
+Choosing a shipping default on today's resident-case timing would be freezing a
+decision on a number a bounded optimization is expected to move.
+
+**Chunk size trades cold-start cost against read count, steeply.** Seeding a
+four-tree search costs four independent subtree misses whatever the query, so
+read amplification on a single cold query rises with chunk size — on DinoLedge
+tree-local, 187x at 256 KiB to 4,981x at 16 MiB, with the batch slowing 3.4 s to
+25.1 s to match. The shared layout is far flatter, 447x to 830x, because its
+descriptor blocks are sized independently of tree chunks and its tree chunks hold
+no vectors. This is the one axis where the layouts differ in kind rather than
+degree.
+
+**Shared block size trades single-query latency against batch throughput.** On
+DinoLedge at a 1 MiB chunk target, 16 KiB blocks give the best cold-query
+amplification (164x) and the worst batch (14.4 s, 55,938 reads); 1 MiB blocks
+invert it (4,097x, 4.9 s, 6,289 reads). 256 KiB sits near the knee of both.
+
+**More query workers did not help any corpus measured.** Per-query work is
+sub-millisecond at these budgets, so rayon's per-task overhead dominates:
+seoul_bull goes 0.12 s to 0.29 s from one worker to eight, and `dino_dog_toy`
+shared 0.70 s to 1.34 s. Only DinoLedge tree-local improved at all, 3.16 s to
+2.95 s. The default of one worker stands.
+
+**Recall and parity are unaffected by storage, as designed.** Every cell returned
+neighbors and distances identical to the in-memory forest, and recall@1 against
+exhaustive search was identical across layouts within a corpus: 0.433, 0.557 and
+0.657 respectively at a 128-leaf budget.
+
+### What this does not settle
+
+No shipping default is set here, and callers still choose a layout explicitly.
+The resident-case measurement is waiting on the batching work above, and these
+runs cover one machine, one filesystem, `uint8` descriptors, and four trees. The
+twenty-tree case, where the shared corpus would avoid nineteen copies rather than
+three, is where the size argument is strongest and is unmeasured.
 
 ## Acceptance checks
 

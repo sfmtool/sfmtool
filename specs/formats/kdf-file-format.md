@@ -376,17 +376,49 @@ Applying the measured proxy ratios to four vector copies projects **3.82–3.85 
 for vectors alone**. Allowing up to the decoded 0.499 GB for ID/node/split arrays
 as a conservative planning allowance, plus origins and metadata, gives a useful
 rounded planning range of **4.0–4.4 GB (about 3.7–4.1 GiB)** for this `.kdf`.
-This is not a produced file size or a guaranteed bound: actual tree-ordered
-compression, node compression and JSON serialization remain unmeasured.
 ZIP headers/directory are only roughly 6–8 MB at 32,940 entries with these names;
 chunk metadata/hash JSON adds a few MB decoded before compression. Near or over
 4 GiB, writers must enable ZIP64 where individual offsets/sizes require it.
 
 Eight trees roughly double the dominant storage, giving a planning range near
 8.0–8.8 GB. A shared descriptor corpus removes three raw vector copies
-(3.726 GB), approximately 2.87–2.89 GB compressed under these proxy ratios,
-but its random descriptor reads are precisely the tradeoff to benchmark.
+(3.726 GB), approximately 2.87–2.89 GB compressed under these proxy ratios.
 JPEG pixels, SIFT keypoints, affine shapes and thumbnails are not embedded.
+
+### The file this projected: measured
+
+Building the projected file confirms the decoded arithmetic exactly and lands at
+the bottom of the projected range. Four trees over 9,701,948 of these descriptors
+at a 1 MiB chunk target and zstd level 3, via
+[`scripts/benchmark_kdf_layouts.py`](../../scripts/benchmark_kdf_layouts.py):
+
+| Section | Decoded | Stored | Ratio |
+|---------|---------|--------|-------|
+| `tree_vectors` | 4.9674 GB | 3.7975 GB | 76.45% |
+| `tree_feature_ids` | 0.1552 GB | 0.1313 GB | 84.57% |
+| `tree_nodes` | 0.3355 GB | 0.0860 GB | 25.63% |
+| `tree_splits` | 0.0084 GB | 0.0054 GB | 64.90% |
+| `origins` + `images` + JSON | 0.0009 GB | 0.0002 GB | — |
+| **Payload** | **5.4674 GB** | **4.0204 GB** | **73.53%** |
+
+The decoded column reproduces the counts above to the byte: 5.467 GB total,
+155,247,168 feature-ID bytes, and 343,932,764 node and split bytes. The file is
+**4.026 GB** including 5.4 MB of ZIP headers and directory across 32,786 entries.
+
+Two things the projection could not know. Descriptors compress to **76.45%** in
+kd-tree leaf order, marginally better than the 76.96–76.98% image-order proxy —
+so the proxy was sound, and the vectors alone came in at 3.7975 GB, just under
+the projected 3.82–3.85 GB. And the ID/node/split arrays are far from
+incompressible: the ten-column node record compresses to **25.63%**, so those
+arrays cost 0.223 GB stored rather than the 0.499 GB the conservative allowance
+reserved. Both errors push the same way, which is why the total landed at 4.026 GB
+rather than mid-range.
+
+The same forest in the shared layout is **1.212 GB**, 3.32x smaller: one 0.9488 GB
+descriptor corpus at the same 76.41% ratio, plus a 0.0328 GB row map, against
+four copies. That is 2.814 GB saved, against the 2.87–2.89 GB projected. What it
+costs in query time is measured in
+[lazy-kdforest-query.md](../core/features/lazy-kdforest-query.md#what-the-measurements-found).
 
 Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON
 with ZIP + zstd; sum descriptor entry shapes and stored frame sizes. Recursively
@@ -405,8 +437,10 @@ The principal cost is T copies of the descriptor corpus, one per tree. For
 one million 128-byte vectors and four trees that is 512 MB of uncompressed
 vector bytes, before IDs, nodes and compression. A single shared corpus saves
 space but may require many extra chunks for one leaf. The benchmark in the
-companion query design compares both layouts; because the format carries both,
-choosing between them does not change the version-1 wire contract.
+companion query design has measured both layouts: the shared corpus is 3.3-3.4x
+smaller across corpora spanning 276x in size, and how the two compare on time
+depends on whether the file fits in the reader's cache. Because the format
+carries both, choosing between them does not change the version-1 wire contract.
 
 The grouped integer node columns are a deliberate adaptation of the usual
 one-entry-per-column convention: ten separate entries per chunk would cost ten
