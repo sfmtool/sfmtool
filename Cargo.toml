@@ -8,6 +8,7 @@ members = [
     "crates/sfmr-format",
     "crates/matches-format",
     "crates/camrig-format",
+    "crates/sfmtool-kdf-format",
     "crates/sfmr-colmap",
     "crates/sfmtool-core",
     "crates/sfm-explorer",

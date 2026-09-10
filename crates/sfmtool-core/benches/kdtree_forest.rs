@@ -13,7 +13,10 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use sfmtool_core::features::feature_match::descriptor::descriptor_distance_l2_squared;
-use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
+use sfmtool_core::features::kdforest::{
+    DescriptorStorage, KdForestParams, KdForestU8, KdfWriteOptions, LazyKdForestOptions,
+    LazyKdForestU8,
+};
 use std::hint::black_box;
 
 const DIM: usize = 128;
@@ -98,5 +101,72 @@ fn bench_vs_bruteforce(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_build, bench_query, bench_vs_bruteforce);
+fn bench_persistent_layouts(c: &mut Criterion) {
+    let n = 20_000;
+    let points = descriptors(n, 21);
+    let queries = descriptors(256, 22);
+    let forest = KdForestU8::build(&points, n, DIM, KdForestParams::balanced());
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("tree_local", DescriptorStorage::TreeLocal),
+        (
+            "shared_64k",
+            DescriptorStorage::Shared {
+                target_descriptor_block_bytes: 64 << 10,
+            },
+        ),
+    ];
+    let mut paths = Vec::new();
+    for (name, storage) in cases {
+        let path = dir.path().join(format!("{name}.kdf"));
+        forest
+            .write_kdf(
+                &path,
+                None,
+                &KdfWriteOptions {
+                    descriptor_storage: storage,
+                    target_chunk_bytes: 1 << 20,
+                    compression_level: 3,
+                    origin_block_rows: 131_072,
+                },
+            )
+            .unwrap();
+        paths.push((name, path));
+    }
+    let mut group = c.benchmark_group("kdforest_persistent_query_256");
+    for (name, path) in &paths {
+        let lazy = LazyKdForestU8::open(
+            path,
+            LazyKdForestOptions {
+                cache_bytes: 64 << 20,
+                max_in_flight_bytes: 4 << 20,
+                max_chunk_bytes: 4 << 20,
+                max_compressed_bytes: 4 << 20,
+                query_workers: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        group.bench_function(*name, |b| {
+            b.iter(|| {
+                black_box(
+                    lazy.search_batch_with_distances(&queries, 256, 2, 128, None)
+                        .unwrap(),
+                )
+            })
+        });
+    }
+    group.bench_function("eager", |b| {
+        b.iter(|| black_box(forest.search_batch_with_distances(&queries, 256, 2, 128, None)))
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_build,
+    bench_query,
+    bench_vs_bruteforce,
+    bench_persistent_layouts
+);
 criterion_main!(benches);

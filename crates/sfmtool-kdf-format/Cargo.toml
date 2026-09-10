@@ -1,0 +1,27 @@
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sfmtool-kdf-format"
+version = "0.2.0"
+edition = "2021"
+rust-version.workspace = true
+license = "Apache-2.0"
+description = "Persistent chunked randomized kd-forest format for sfmtool"
+
+[dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sfmtool-archive-io = { path = "../sfmtool-archive-io" }
+sift-format = { path = "../sift-format" }
+thiserror = "2"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

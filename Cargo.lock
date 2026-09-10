@@ -4997,8 +4997,26 @@ dependencies = [
  "serde_json",
  "sfmr-format",
  "sfmtool-archive-io",
+ "sfmtool-kdf-format",
  "sift-format",
+ "tempfile",
  "wgpu",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "sfmtool-kdf-format"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "serde",
+ "serde_json",
+ "sfmtool-archive-io",
+ "sift-format",
+ "tempfile",
+ "thiserror 2.0.19",
  "xxhash-rust",
  "zip",
  "zstd",

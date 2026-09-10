@@ -28,6 +28,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 sift-format = { path = "../sift-format" }
 camrig-format = { path = "../camrig-format" }
 matches-format = { path = "../matches-format" }
+sfmtool-kdf-format = { path = "../sfmtool-kdf-format" }
 
 # GPU compute (optional)
 wgpu = { version = "30", features = ["dx12", "vulkan"], optional = true }
@@ -42,6 +43,7 @@ image = "0.25"
 # bytes (rewriting the archive's metadata.json.zst version field).
 zip = { version = "8", default-features = false, features = ["deflate"] }
 zstd = "0.13"
+tempfile = "3"
 
 [[bench]]
 name = "optical_flow"

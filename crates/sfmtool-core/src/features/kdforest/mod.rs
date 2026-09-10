@@ -41,13 +41,19 @@
 mod build;
 mod calibrate;
 mod distance;
+mod persistent;
 mod search;
 
 #[cfg(test)]
 mod tests;
 
 pub use distance::{ForestScalar, OrdF32};
+pub use persistent::{LazyKdForest, LazyKdForestF32, LazyKdForestU8, LazyQueryStats};
 pub use search::Neighbor;
+pub use sfmtool_kdf_format::{
+    DescriptorStorage, FeatureOrigin, KdfError, KdfImageTable, KdfIoStats, KdfSiftSources,
+    KdfWorkspaceContents, KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions,
+};
 
 use build::{build_tree, Tree};
 use rayon::prelude::*;
