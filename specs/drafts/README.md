@@ -23,6 +23,8 @@ area's `README.md`.
 
 | Document | Amends | Proposes |
 |----------|--------|----------|
+| [kdf-file-format.md](kdf-file-format.md) | New format | Immutable chunked `.kdf` forest with tree-local or shared vectors, SFMR-compatible SIFT references and descriptor origins; proposed `sfmtool-kdf-format` crate. |
+| [lazy-kdforest-query.md](lazy-kdforest-query.md) | [core/features/randomized-kdtree-forest.md](../core/features/randomized-kdtree-forest.md) | File-backed ANN with subtree packing, bounded decoded cache, search parity and a chunk-size benchmark plan. |
 | [sift-incremental-extraction-amendment.md](sift-incremental-extraction-amendment.md) | [core/features/sift.md](../core/features/sift.md), [formats/sift-file-format.md](../formats/sift-file-format.md) | A growable `.sift` archive — detect a keypoint pool once, describe it across several commands — and the version-2 on-disk layout that carries it: append-only descriptor chunks, `described_count`, and a stable `feature_set_xxh128` that survives an append. |
 | [sift-gpu-amendment.md](sift-gpu-amendment.md) | [core/features/sift.md](../core/features/sift.md) | A `wgpu` compute backend for SIFT's dense stages (blur, DoG, extrema, descriptor), and the output-parity criterion a non-bit-identical backend needs. |
 | [patch-normal-refine-zncc-weighted-selection-amendment.md](patch-normal-refine-zncc-weighted-selection-amendment.md) | [core/patch/patch-normal-refine-view-subset.md](../core/patch/patch-normal-refine-view-subset.md) | Weighting the D-optimal view pick by per-view ZNCC, so the refinement basis stops preferring the most oblique — and photometrically worst — views. |

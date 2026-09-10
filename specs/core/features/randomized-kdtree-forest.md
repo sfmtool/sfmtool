@@ -202,6 +202,10 @@ which is used during training to select the number of leaf nodes." `T`, `D`, and
 
 ## Out of scope
 
+The forest is memory-resident; persistent storage and lazy queries are proposed
+in [lazy-kdforest-query.md](../../drafts/lazy-kdforest-query.md), with the
+companion [KDF format](../../drafts/kdf-file-format.md).
+
 The companion priority search k-means tree and the paper's automatic algorithm
 and parameter selection are out of scope; should a dataset want either, it is a
 separate spec.
