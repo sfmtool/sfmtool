@@ -274,7 +274,11 @@ the other format crates under [crates/](../../crates/) and depends on
 validation, indexed chunk reading, writing and full verification, with no
 dependency on `sfmtool-core`. Core owns forest construction and queries, in
 [`features/kdforest/persistent.rs`](../../crates/sfmtool-core/src/features/kdforest/persistent.rs).
-There is no Python binding.
+The `uint8` half of both is bound for Python on the `sfmtool.spatial`
+submodule, in
+[`spatial/kdf.rs`](../../crates/sfmtool-py/src/spatial/kdf.rs), so the layout
+comparison below can be run without writing Rust. `float32` is not bound: the
+eager `KdForest` it would be compared against is `uint8` only.
 
 ## Sizing and tradeoffs
 

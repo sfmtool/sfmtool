@@ -85,6 +85,13 @@ pub struct PyKdForest {
     inner: KdForestU8,
 }
 
+impl PyKdForest {
+    /// The wrapped core forest, for the sibling `.kdf` export binding.
+    pub(crate) fn inner(&self) -> &KdForestU8 {
+        &self.inner
+    }
+}
+
 #[pymethods]
 impl PyKdForest {
     /// Build a forest from an `(N, D)` uint8 descriptor array.

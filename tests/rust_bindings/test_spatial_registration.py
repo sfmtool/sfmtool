@@ -9,6 +9,13 @@ _EXPECTED_CLASSES = (
     "KdTree2d",
     "KdTree3d",
     "KdForest",
+    "LazyKdForest",
+)
+
+_EXPECTED_FUNCTIONS = (
+    "write_kdf",
+    "kdf_file_summary",
+    "verify_kdf",
 )
 
 
@@ -18,6 +25,14 @@ def test_all_spatial_bindings_registered():
     assert not missing, f"missing spatial bindings: {missing}"
     for name in _EXPECTED_CLASSES:
         assert isinstance(getattr(spatial, name), type), f"{name} is not a class"
+
+
+def test_all_spatial_functions_registered():
+    """Every expected free function is present on `_sfmtool.spatial`."""
+    missing = [name for name in _EXPECTED_FUNCTIONS if not hasattr(spatial, name)]
+    assert not missing, f"missing spatial functions: {missing}"
+    for name in _EXPECTED_FUNCTIONS:
+        assert callable(getattr(spatial, name)), f"{name} is not callable"
 
 
 def test_spatial_submodule_public_name():

@@ -524,12 +524,59 @@ versions, truncated frames, and `verify_sift_sources` against real `.sift` files
 — is proposed in
 [drafts/kdf-validation-tests.md](../../drafts/kdf-validation-tests.md).
 
+## The Python surface
+
+The benchmark plan above is a Python job — a sweep over corpora, layouts, chunk
+sizes and cache budgets, reporting latency percentiles and recall — so the
+`uint8` path is bound on the `sfmtool.spatial` submodule, in
+[`spatial/kdf.rs`](../../../crates/sfmtool-py/src/spatial/kdf.rs), beside the
+in-memory `KdForest` it is measured against.
+
+```python
+from sfmtool._sfmtool.spatial import (
+    KdForest, LazyKdForest, write_kdf, kdf_file_summary, verify_kdf,
+)
+
+forest = KdForest(descriptors, num_trees=4, leaf_size=16, seed=7)
+write_kdf(forest, "corpus.kdf", layout="shared", descriptor_block_bytes=64 << 10)
+
+lazy = LazyKdForest("corpus.kdf", cache_bytes=256 << 20, query_workers=4)
+indices, distances, stats = lazy.query_with_stats(queries, k=2, max_leaf_checks=128)
+io = lazy.io_stats()
+amplification = io["decoded_bytes"] / (stats["checks"] * lazy.dim)
+```
+
+Three things about that surface follow from what it is for rather than from
+the Rust API it wraps.
+
+`layout` has no default. Which layout to ship is the open question, so a
+caller states one, and `descriptor_block_bytes` is *rejected* for the
+tree-local layout rather than ignored — an argument silently dropped would
+make two cells of a sweep run identically under different labels.
+
+`reset_io_stats` exists because the alternative for separating an open from
+the queries after it, or a cold pass from a warm one, is reopening the file,
+and reopening also drops the cache. The counters zero; what the cache holds
+does not.
+
+`kdf_file_summary` splits a file per role rather than reporting one total,
+reading only the ZIP central directory and the metadata entry, so it costs the
+same on a 5 GB file as on a 5 KB one. `tree_vectors` is what the shared layout
+removes T-1 copies of; `shared_vectors` and `shared_row_map` are what it adds
+back; the tree node, split and feature-ID sections are identical either way,
+which is how a reader can tell a size comparison is comparing one forest
+stored twice rather than two different forests.
+
+Errors are split by what a sweep must do about them: a budget that cannot hold
+what was asked for raises `MemoryError` (try another cell), a malformed or
+damaged file raises `OSError` (stop), and a bad argument raises `ValueError`.
+
 ## Out of scope
 
 There are no updates or appends to an existing file, no remote HTTP reads, no
-Python bindings, no CLI, no automatic precision calibration, no alternate
-metrics, and no external descriptor dependencies. Existing in-memory query
-callers keep their current API.
+CLI, no automatic precision calibration, no alternate metrics, and no external
+descriptor dependencies. Existing in-memory query callers keep their current
+API. The Python bindings cover `uint8` only.
 
 The format and this query path both cover `u8` and `f32`, matching the scalar
 types the in-memory forest already supports. The open questions that remain are
