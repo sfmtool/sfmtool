@@ -229,6 +229,23 @@ impl<S: KdfScalar> Cache<S> {
         }
     }
 
+    /// Zero the cumulative counters, keeping the live gauges.
+    ///
+    /// Resident and in-flight bytes describe what the cache is holding right
+    /// now, so they survive; the peaks restart from those current values rather
+    /// than from zero, which would claim a peak below a byte count already
+    /// resident. A benchmark uses this to separate an open from the queries
+    /// that follow it, or a cold pass from a warm one, without reopening.
+    pub(crate) fn reset_counters(&self) {
+        let mut s = self.state.lock().unwrap();
+        let (resident, in_flight) = (s.resident, s.in_flight);
+        s.counters = Counters {
+            peak_resident: resident,
+            peak_in_flight: in_flight,
+            ..Counters::default()
+        };
+    }
+
     pub(crate) fn stats(&self) -> KdfIoStats {
         let s = self.state.lock().unwrap();
         KdfIoStats {

@@ -123,6 +123,10 @@ where
     pub fn io_stats(&self) -> KdfIoStats {
         self.file.io_stats()
     }
+    /// Zero the cumulative I/O counters, keeping resident and in-flight bytes.
+    pub fn reset_io_stats(&self) {
+        self.file.reset_io_stats();
+    }
     pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError> {
         self.file.image_table()
     }
@@ -198,6 +202,27 @@ where
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
+        self.search_batch_with_stats(queries, n_queries, k, max_leaf_checks, max_dist)
+            .map(|(i, d, _)| (i, d))
+    }
+
+    /// A batch query that also reports the batch's summed traversal counters.
+    ///
+    /// Read amplification — decoded chunk bytes over the vector bytes a query
+    /// actually evaluated — needs both halves, and only this half is countable
+    /// here: `io_stats` sees bytes moved, not how many descriptors those bytes
+    /// were consulted for. The counters are summed over the batch rather than
+    /// returned per query because the ratio is computed over a whole batch, and
+    /// a per-query vector would allocate alongside every result row to say
+    /// something no caller has asked for.
+    pub fn search_batch_with_stats(
+        &self,
+        queries: &[S],
+        n_queries: usize,
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+    ) -> Result<(Vec<u32>, Vec<f32>, LazyQueryStats), KdfError> {
         let expected = n_queries
             .checked_mul(self.dim())
             .ok_or_else(|| KdfError::InvalidQuery("query shape overflow".into()))?;
@@ -214,12 +239,13 @@ where
                 ));
             }
         }
-        let rows: Vec<Result<Vec<Neighbor>, KdfError>> = self.workers.install(|| {
-            queries
-                .par_chunks(self.dim())
-                .map(|q| self.search(q, k, max_leaf_checks, max_dist))
-                .collect()
-        });
+        let rows: Vec<Result<(Vec<Neighbor>, LazyQueryStats), KdfError>> =
+            self.workers.install(|| {
+                queries
+                    .par_chunks(self.dim())
+                    .map(|q| self.search_with_stats(q, k, max_leaf_checks, max_dist))
+                    .collect()
+            });
         let mut indices =
             vec![
                 u32::MAX;
@@ -228,13 +254,18 @@ where
                     .ok_or_else(|| KdfError::ResourceLimit("batch output shape overflow".into()))?
             ];
         let mut distances = vec![f32::INFINITY; indices.len()];
+        let mut total = LazyQueryStats::default();
         for (r, row) in rows.into_iter().enumerate() {
-            for (c, neighbor) in row?.into_iter().enumerate() {
+            let (neighbors, stats) = row?;
+            total.checks += stats.checks;
+            total.pushes += stats.pushes;
+            total.pops += stats.pops;
+            for (c, neighbor) in neighbors.into_iter().enumerate() {
                 indices[r * k + c] = neighbor.index;
                 distances[r * k + c] = neighbor.dist_sq;
             }
         }
-        Ok((indices, distances))
+        Ok((indices, distances, total))
     }
 }
 

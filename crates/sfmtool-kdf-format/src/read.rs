@@ -228,6 +228,14 @@ impl<S: KdfScalar> KdfFile<S> {
     pub fn io_stats(&self) -> KdfIoStats {
         self.cache.stats()
     }
+    /// Zero the cumulative I/O counters, keeping resident and in-flight bytes.
+    ///
+    /// The peaks restart from the current gauges rather than from zero. A
+    /// benchmark uses this to separate an open from the queries that follow it,
+    /// or a cold pass from a warm one, without reopening the file.
+    pub fn reset_io_stats(&self) {
+        self.cache.reset_counters();
+    }
 
     /// Read a single node, retaining no cache pin on return.
     pub fn node(&self, tree: u32, address: NodeAddress) -> Result<DecodedNode<S>, KdfError> {
