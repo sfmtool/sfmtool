@@ -4276,3 +4276,87 @@ fn hold_the_camera(state: &mut AppState, viewer: &mut Viewer3D, index: usize) {
     crate::camera_lock::enter(viewer, state).expect("camera view of a posed image");
     viewer.camera.nodal_pan(50.0, 0.0);
 }
+
+/// `run_a`'s stored pose for image `index`, in its own frame.
+fn stored_pose(state: &AppState, index: usize) -> sfmtool_core::Se3Transform {
+    sfmtool_core::reconstruction::move_camera::pose_of(state.scene[0].recon(), index)
+}
+
+/// Assert the viewport is standing at `expected`, in `run_a`'s own frame.
+#[track_caller]
+fn assert_viewport_at(
+    state: &AppState,
+    viewer: &Viewer3D,
+    expected: &sfmtool_core::Se3Transform,
+    what: &str,
+) {
+    let at = crate::camera_lock::pending_pose(viewer, &state.scene[0]);
+    let degrees = at
+        .rotation
+        .as_nalgebra()
+        .rotation_to(expected.rotation.as_nalgebra())
+        .angle()
+        .to_degrees();
+    let distance = (at.translation - expected.translation).norm();
+    assert!(
+        degrees < 1e-9 && distance < 1e-9,
+        "{what}: the viewport is {degrees} deg and {distance} away from the pose it should show"
+    );
+}
+
+/// A cursor move can restore the pose of the very camera the viewport is
+/// looking through, and camera view follows the value rather than staying where
+/// a hand left it -- so all three moves re-snap it, as the Edit menu's own Undo
+/// and Redo do.
+#[test]
+fn the_cursor_moves_resnap_a_camera_view_onto_the_version_they_land_on() {
+    let (mut state, mut viewer) = editable();
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 1);
+    let first = state.scene[0].history.current_version().serial.to_string();
+    let stored = stored_pose(&state, 1);
+
+    // Moved on the wire, then looked through again: the viewport stands at the
+    // new pose, which is what each cursor move below has to take it off.
+    let (quaternion, translation) = moved_pose(&state, 1);
+    move_camera(&mut state, &mut viewer, 1, &quaternion, &translation);
+    let moved = stored_pose(&state, 1);
+    state.select_image(Some(image));
+    viewer.jump_to_camera_view(image, &state.scene[0]);
+    assert_viewport_at(&state, &viewer, &moved, "the look-through");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_viewport_at(&state, &viewer, &stored, "undo");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "redo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_viewport_at(&state, &viewer, &moved, "redo");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "jump_to_version",
+        json!({ "reconstruction_label": "run_a", "serial": first }),
+    );
+    assert_viewport_at(&state, &viewer, &stored, "jump_to_version");
+
+    // A refused move landed on nothing, so it moves the viewport no more than
+    // the version: a free-look offset the human is holding is theirs to keep.
+    viewer.camera.nodal_pan(40.0, 10.0);
+    let held = crate::camera_lock::pending_pose(&viewer, &state.scene[0]);
+    refused_call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_viewport_at(&state, &viewer, &held, "a refused undo");
+}

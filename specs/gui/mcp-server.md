@@ -1450,6 +1450,16 @@ The ends are refusals in the state's own words: *"Nothing to undo in
 `seoul_bull` shows."* A serial the node never minted is refused here, naming
 `get_history`, before the state is asked.
 
+**A camera view follows the version.** A cursor move can change the pose of the
+very camera the viewport is looking through, so a move that landed re-snaps
+camera view onto the restored pose, exactly as the Edit menu's own Undo and Redo
+do ([edits/move-camera.md](edits/move-camera.md) § "Undo"): the photograph goes
+back with the pose rather than staying where a hand left it. The step is taken
+where the GUI thread applies the command, the viewport being `Viewer3D`'s and
+not the state's, and only where the move succeeded: a refusal landed on no
+version, and snapping then would take a free-look offset away from the human for
+nothing. A camera held in hand suppresses it, as it does in the window.
+
 `jump_to_version` is on the surface because the Edit History panel offers it to
 a human and an agent's reach into the history should match theirs. It is not
 `undo` repeated: the move is one action and one entry, and it is refused whole
@@ -1834,6 +1844,15 @@ version of its own, recorded before the edit that displaced it, and the node it
 pushed on joins the ones whose panel caches the drain forgets. The cursor moves
 are not among the commands that do this, for the same reason the Edit menu's own
 Undo does not end a lock: a held camera survives a step of the cursor.
+
+**A cursor move that landed re-snaps camera view**, in the same place and for
+the same reason: the viewport is `Viewer3D`'s, and a version restored under it
+can hold another pose for the very camera it is looking through. `undo`, `redo`
+and `jump_to_version` call `camera_lock::resnap_camera_view` after the state's
+own call, which is where the Edit menu makes the same call, so the photograph
+goes back with the pose. It is a no-op with no camera view open and while a
+camera is held in hand, and it is skipped for a refused move, which landed on no
+version.
 
 One tool words its own entries, and for one reason — no state method owns the
 change. `set_window_layout` goes through `AppState::apply_window_layout`, which
@@ -2367,6 +2386,11 @@ where a test hands no host over.
   a jump by serial, with no `report` on any of them; the ends refuse in the
   state's words (*"Nothing to undo in `run_a`."*), and a serial the node never
   minted is refused naming `get_history`.
+- **A cursor move re-snaps a camera view onto the version it landed on**: with
+  the viewport looking through an image the wire has moved, `undo`, `redo` and a
+  jump by serial each leave it standing at the pose that version holds, to
+  within a billionth of a degree and of a scene unit; a refused `undo` leaves a
+  free-look offset where the human left it.
 - **`get_history` lists what the panel lists**: every version in order, the
   cursor and disk flags on the right rows, `dirty`, `can_undo` / `can_redo`, an
   `at` in the log's own format, and `held: false` on a version whose value the

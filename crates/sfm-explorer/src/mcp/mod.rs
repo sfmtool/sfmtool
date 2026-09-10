@@ -572,14 +572,23 @@ pub(crate) fn apply_with_window(
         } => done(edit::get_history(state, &reconstruction_label)),
         Command::Undo {
             reconstruction_label,
-        } => done(edit::undo(state, &reconstruction_label)),
+        } => {
+            let reply = edit::undo(state, &reconstruction_label);
+            moved_cursor(state, viewer, reply)
+        }
         Command::Redo {
             reconstruction_label,
-        } => done(edit::redo(state, &reconstruction_label)),
+        } => {
+            let reply = edit::redo(state, &reconstruction_label);
+            moved_cursor(state, viewer, reply)
+        }
         Command::JumpToVersion {
             reconstruction_label,
             serial,
-        } => done(edit::jump_to_version(state, &reconstruction_label, &serial)),
+        } => {
+            let reply = edit::jump_to_version(state, &reconstruction_label, &serial);
+            moved_cursor(state, viewer, reply)
+        }
         Command::SaveReconstruction {
             reconstruction_label,
             path,
@@ -746,6 +755,24 @@ pub(super) const MINIMIZED: &str =
 
 fn done(reply: JsonReply) -> Outcome {
     Outcome::Done(reply.map(ToolOutput::Json))
+}
+
+/// A cursor move's answer, with the viewport following the value it landed on.
+///
+/// A step of the cursor can change the pose of the very camera the viewport is
+/// looking through, and camera view follows the value rather than remembering
+/// where a hand left it -- so the re-snap the Edit menu's own Undo and Redo make
+/// around these `AppState` calls is made here too, the viewport being
+/// [`Viewer3D`]'s and not the state's. `camera_lock::resnap_camera_view` is a
+/// no-op with no camera view open, and while a camera is held in hand.
+///
+/// Only where the move succeeded: a refusal landed on no version, and snapping
+/// then would take a free-look offset away from the human for nothing.
+fn moved_cursor(state: &mut AppState, viewer: &mut Viewer3D, reply: JsonReply) -> Outcome {
+    if reply.is_ok() {
+        crate::camera_lock::resnap_camera_view(viewer, state);
+    }
+    done(reply)
 }
 
 /// The sentence that rides along with a screenshot: what was photographed, at

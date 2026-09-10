@@ -219,6 +219,13 @@ image re-snaps the viewport onto the restored pose, the way camera view follows
 a `,`/`.` switch — so the photograph jumps back with the pose rather than
 staying where the hand left it.
 
+The rule is the cursor's and not the menu's: `undo`, `redo` and `jump_to_version`
+on the wire re-snap it too, where the GUI thread applies them
+([`../mcp-server.md`](../mcp-server.md)), so an agent stepping the history moves
+the photograph in front of the reviewer exactly as their own Undo would. A
+camera held in hand suppresses the re-snap either way: a commit is what releases
+a lock, and until then the viewport is showing the pending pose.
+
 ### The wire
 
 `move_camera_image { reconstruction_label, camera_image, world_from_camera:
@@ -257,8 +264,9 @@ Explorer (`sfm-explorer` lib tests, headless):
   and a refusal pushing no version and logging a failure.
 - `scene_graph/tests.rs`: the image row's `Move Camera` entry and the image it
   reports.
-- `mcp/tests.rs`: the wire tool's reply, its refusal, and that it commits a lock
-  held on the same node first.
+- `mcp/tests.rs`: the wire tool's reply, its refusal, that it commits a lock
+  held on the same node first, and that the wire's three cursor moves re-snap a
+  camera view onto the pose the version they land on holds.
 
 Windowed (`crates/sfm-explorer/tests/ui_basic.rs`, Windows): camera view on the
 demo reconstruction, a real `M`, a real drag and a real `Enter`, with the moved
