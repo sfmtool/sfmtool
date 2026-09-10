@@ -278,13 +278,17 @@ Files into: `specs/gui/edits/<family>.md`, one each, in the
 
 ## Part 6: the wire
 
-`undo`, `redo`, `get_history` (the version list with the cursor, so an agent
-can read what a human did and where they are), `save`, and one tool per edit
-family, each applied on the GUI thread at the same point in the frame as every
-other tool. An agent's edit is a version like any other, attributed in the
-history's label the way the Action Log attributes it, and a human can undo it.
+Done, and standing in [`../gui/mcp-server.md`](../gui/mcp-server.md)
+§ "The editing family": `get_history`, `undo`, `redo`, `jump_to_version`,
+`save_reconstruction`, and one tool per built edit family, each applied on the
+GUI thread at the same point in the frame as every other tool. An agent's edit
+is a version like any other, attributed in the Action Log's actor column, and
+either of the two can undo the other's.
 
-Files into: [`../gui/mcp-server.md`](../gui/mcp-server.md).
+The version's **label** carries no actor, and no convention was invented for
+one: a label is the sentence the edit recorded, and the same edit reads the same
+whoever asked for it. Who asked is the Action Log's column, which is where the
+viewer already answers that question.
 
 ---
 
@@ -314,7 +318,9 @@ steps after it.
    node's own solver run over the value on screen, which is what the edits
    before it change the input to. Remaining: point constraints, bake transform,
    and the other track edits (split, merge).
-8. **Wire surface.** Amends `gui/mcp-server.md`.
+8. **Wire surface.** Done: the twelve tools are in
+   [`../gui/mcp-server.md`](../gui/mcp-server.md), and a family built after this
+   gains a tool there the way the seven already there did.
 
 ## Non-goals
 

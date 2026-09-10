@@ -284,15 +284,18 @@ impl ServerHandler for Viewer {
 ///
 /// Every tool is annotated `openWorldHint: false` — this surface talks to one
 /// process on this machine and nothing else — and the writes
-/// `destructiveHint: false`, because nothing here touches a file on disk:
-/// `close_reconstruction` unloads a reconstruction, it does not delete one.
+/// `destructiveHint: false`, because none of them touches a file on disk:
+/// `close_reconstruction` unloads a reconstruction, it does not delete one, and
+/// an edit makes a new version the human can undo. The exception is
+/// `save_reconstruction`, which can overwrite a file and is annotated
+/// `destructiveHint: true` for it.
 fn advertise(spec: &tools::ToolSpec) -> Tool {
     let read_only = spec.kind == ToolKind::Read;
     let mut annotations = ToolAnnotations::new()
         .read_only(read_only)
         .open_world(false);
     if !read_only {
-        annotations = annotations.destructive(false);
+        annotations = annotations.destructive(spec.kind == ToolKind::Save);
     }
     Tool::new(
         spec.name,

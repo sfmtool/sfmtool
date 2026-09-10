@@ -140,6 +140,7 @@ fn agent_with(
     command: Command,
 ) -> Outcome {
     apply_as_agent(state, viewer, host, vec![command])
+        .outcomes
         .pop()
         .expect("one command, one outcome")
 }
@@ -2090,7 +2091,8 @@ fn show_panel_then_a_screenshot_of_it_is_accepted_in_one_batch() {
             },
             screenshot(Some(Tab::PointTrackDetail), true, None),
         ],
-    );
+    )
+    .outcomes;
     assert!(
         matches!(outcomes[1], Outcome::Deferred(_)),
         "the raised panel was still refused"
@@ -3067,18 +3069,28 @@ fn only_the_reads_are_annotated_read_only() {
             "get_action_log",
             "get_window_layout",
             "get_image_detail_display",
+            "get_history",
             "screenshot",
         ]
     );
-    // Eight reads, fourteen writes, and the one that hands back a picture.
-    assert_eq!(catalog.len(), 23, "the catalog has grown or shrunk");
+    // Nine reads, twenty-four writes, the one that writes a file, and the one
+    // that hands back a picture.
+    assert_eq!(catalog.len(), 35, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        14
+        24
     );
+    // One tool can overwrite something the human cannot undo, and it is the
+    // only one annotated destructive.
+    let saves: Vec<&str> = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Save)
+        .map(|spec| spec.name)
+        .collect();
+    assert_eq!(saves, ["save_reconstruction"]);
 }
 
 /// The two halves of the layout surface advertise the document they share.
@@ -3406,4 +3418,654 @@ fn the_tool_list_is_not_cacheable() {
         &[("MCP-Protocol-Version", PROTOCOL_VERSION)],
     );
     assert_eq!(rpc_result(&body)["ttlMs"], json!(0));
+}
+
+// ── The editing surface ─────────────────────────────────────────────────
+//
+// One fixture for all of it: a node a resection and an adjustment can both run
+// on, which is also an `embedded_patches` node with a path, so every family
+// here has something to work with. It is the Scene Graph tests' own node, for
+// the reason those tests borrow it from each other -- "a node an edit can run
+// on" is one thing, and a second answer to it would be a second thing to keep
+// in step.
+//
+// What these assert about an edit is the boundary and not the edit: the version
+// it pushed, the reply's shape, the refusal's words, and the one Action Log row
+// it left as the agent. What each family *does* to a reconstruction is asserted
+// in `state::edits::tests`, over the same `AppState` calls these make.
+
+/// A scene holding one editable node, `run_a`, selected, with a photograph
+/// cached for its first two images so the edits that read pixels find them.
+fn editable() -> (AppState, Viewer3D) {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let (width, height) = (camera.width, camera.height);
+    for index in 0..2 {
+        let data: Vec<u8> = (0..(width * height * 3)).map(|i| (i % 251) as u8).collect();
+        state.full_res_cache.insert(
+            crate::scene::ImageRef::new(id, index),
+            Some(sfmtool_core::camera::remap::ImageU8::new(
+                width, height, 3, data,
+            )),
+        );
+    }
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    state.window = Some(FakeWindow::default().info());
+    (state, viewer)
+}
+
+/// How many versions `run_a` holds.
+fn version_count(state: &AppState) -> usize {
+    state.scene[0].history.versions().len()
+}
+
+/// The Action Log's rows, oldest first, as `(actor, failed, text)`.
+fn rows(state: &AppState) -> Vec<(Actor, bool, String)> {
+    state
+        .action_log
+        .entries()
+        .map(|entry| (entry.actor, entry.failed, entry.text.clone()))
+        .collect()
+}
+
+/// The failed rows of the Action Log, which is what "one refusal, one entry"
+/// is counted over.
+fn failures(state: &AppState) -> Vec<(Actor, bool, String)> {
+    rows(state).into_iter().filter(|row| row.1).collect()
+}
+
+/// Nudge image 1 off its stored pose, which is what gives a resection and an
+/// adjustment something to pull back.
+fn perturb(state: &mut AppState, distance: f64) {
+    let image = &mut state.scene[0].recon_mut().image_table.images[1];
+    image.translation_xyz += nalgebra::Vector3::new(distance, -distance * 0.7, distance * 0.5);
+}
+
+/// A point edit pushes a version, and the reply says which one and what it did.
+#[test]
+fn delete_point_pushes_a_version_the_reply_names() {
+    let (mut state, mut viewer) = editable();
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(reply["reconstruction_label"], "run_a");
+    let serial = state.scene[0].history.current_version().serial.to_string();
+    assert_eq!(reply["serial"], serial);
+    assert_eq!(reply["cursor"], serial);
+    assert_eq!(reply["label"], "Deleted point 3 in run_a");
+    assert_eq!(reply["dirty"], true);
+    // The report is the sentence the edit recorded, serials and all, which is
+    // where each family's own numbers are.
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Deleted point 3 in run_a"), "{report}");
+    assert!(report.contains(&serial), "{report}");
+
+    // And it is the agent's row, not the human's.
+    let last = rows(&state).pop().expect("one entry per edit");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+}
+
+/// An edit the state refuses pushes no version, answers in the state's words,
+/// and leaves exactly one failed row.
+#[test]
+fn a_refused_edit_pushes_no_version_and_is_logged_once() {
+    let (mut state, mut viewer) = editable();
+    state.action_log.clear();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "run_a", "camera_image": 99 }),
+    );
+    assert!(error.0.contains("out of range"), "{error}");
+    assert_eq!(version_count(&state), 1);
+    assert_eq!(failures(&state).len(), 1, "{:?}", rows(&state));
+}
+
+/// A bulk edit renumbers the image table, and the reply is read off the version
+/// it pushed rather than off the request.
+#[test]
+fn delete_camera_image_renumbers_and_reports_the_version() {
+    let (mut state, mut viewer) = editable();
+    let before = state.scene[0].recon().image_table.images.len();
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
+    );
+    assert_eq!(
+        state.scene[0].recon().image_table.images.len(),
+        before - 1,
+        "the image table did not shrink"
+    );
+    assert!(
+        reply["label"]
+            .as_str()
+            .expect("a label")
+            .starts_with("Deleted image "),
+        "{reply}"
+    );
+}
+
+/// Creating a point takes the prompt's own radius when the call names none, and
+/// the reply's report says which radius it used.
+#[test]
+fn create_point_takes_the_prompts_radius_when_the_call_names_none() {
+    let (mut state, mut viewer) = editable();
+    let points = state.scene[0].point_count();
+    let named = call(
+        &mut state,
+        &mut viewer,
+        "create_point",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0,
+                "pixel": [12.0, 14.0], "radius_px": 6.0 }),
+    );
+    assert_eq!(state.scene[0].point_count(), points + 1);
+    let report = named["report"].as_str().expect("a report");
+    assert!(report.contains("radius 6.0 px"), "{report}");
+
+    // Omitted, it is the radius the Create 3D Point prompt would have offered,
+    // which is a number the tool did not invent.
+    let default =
+        state.create_point_default_radius(crate::scene::ImageRef::new(state.scene[0].id, 0));
+    let unnamed = call(
+        &mut state,
+        &mut viewer,
+        "create_point",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [20.0, 22.0] }),
+    );
+    let report = unnamed["report"].as_str().expect("a report");
+    assert!(
+        report.contains(&format!("radius {default:.1} px")),
+        "{report}"
+    );
+}
+
+/// The track edits reach the same gates the panel's menu entries read.
+#[test]
+fn add_observation_is_refused_for_an_image_that_already_sees_the_point() {
+    let (mut state, mut viewer) = editable();
+    let seen = state.scene[0].edited().track_image_indices(3)[0];
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "add_observation",
+        json!({ "reconstruction_label": "run_a", "point": 3,
+                "camera_image": seen, "pixel": [10.0, 10.0] }),
+    );
+    assert!(error.0.contains("already observes"), "{error}");
+    assert_eq!(version_count(&state), 1);
+}
+
+/// Removing an observation reports what became of the point, which is the
+/// family's own report and is in the sentence it recorded.
+#[test]
+fn remove_observation_reports_what_became_of_the_point() {
+    let (mut state, mut viewer) = editable();
+    let image = state.scene[0].edited().track_image_indices(3)[0];
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "remove_observation",
+        json!({ "reconstruction_label": "run_a", "point": 3, "camera_image": image }),
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("observations left"), "{report}");
+    assert_eq!(version_count(&state), 2);
+}
+
+/// The in-place resection lands as the node's next version, and its report is
+/// the resection's own summary.
+#[test]
+fn resecting_in_place_pushes_a_version_and_reports_the_estimate() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.30);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "resect_camera_image_in_place",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
+    );
+    assert_eq!(version_count(&state), 2);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("in place"), "{report}");
+    assert!(report.contains("inliers"), "{report}");
+}
+
+/// From-matches reads the file chosen for the node in the viewer; with none
+/// chosen the state refuses in its own words, and that refusal is the one row
+/// the log gets.
+#[test]
+fn resecting_from_matches_without_a_chosen_file_is_refused_in_the_states_words() {
+    let (mut state, mut viewer) = editable();
+    state.action_log.clear();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "resect_camera_image_in_place",
+        json!({ "reconstruction_label": "run_a", "camera_image": 1, "from_matches": true }),
+    );
+    assert!(error.0.contains(".matches"), "{error}");
+    assert_eq!(version_count(&state), 1);
+
+    let failed = failures(&state);
+    assert_eq!(failed.len(), 1, "one refusal is one entry");
+    // The state's own sentence, not the drain's `{tool} failed: …` wrapper.
+    assert!(
+        !failed[0]
+            .2
+            .starts_with("resect_camera_image_in_place failed"),
+        "{:?}",
+        failed[0]
+    );
+    assert_eq!(failed[0].0, Actor::Mcp);
+}
+
+/// The adjustment runs on the node's value and reports its residuals.
+#[test]
+fn bundle_adjust_pushes_a_version_and_reports_its_residuals() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.02);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "bundle_adjust",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(version_count(&state), 2);
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("median residual"), "{report}");
+    assert!(!report.contains("focal released"), "{report}");
+}
+
+/// Undo, redo and the jump answer with the version now showing, and refuse at
+/// the ends in the state's words.
+#[test]
+fn the_cursor_moves_answer_with_the_version_now_showing() {
+    let (mut state, mut viewer) = editable();
+    let first = state.scene[0].history.current_version().serial.to_string();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    let edited = state.scene[0].history.current_version().serial.to_string();
+
+    let undone = call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(undone["cursor"], first);
+    assert_eq!(undone["dirty"], false);
+    // A cursor move made no version, so it reports none of its own.
+    assert_eq!(undone["report"], Value::Null);
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(error.0, "Nothing to undo in run_a.");
+
+    let redone = call(
+        &mut state,
+        &mut viewer,
+        "redo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(redone["cursor"], edited);
+
+    let jumped = call(
+        &mut state,
+        &mut viewer,
+        "jump_to_version",
+        json!({ "reconstruction_label": "run_a", "serial": first }),
+    );
+    assert_eq!(jumped["cursor"], first);
+    assert_eq!(jumped["label"], state.scene[0].history.versions()[0].label);
+}
+
+/// A serial the node does not hold is refused naming the read that lists them.
+#[test]
+fn a_serial_that_is_not_a_version_of_the_node_is_refused() {
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "jump_to_version",
+        json!({ "reconstruction_label": "run_a", "serial": "v99999" }),
+    );
+    assert!(error.0.contains("v99999"), "{error}");
+    assert!(error.0.contains("get_history"), "{error}");
+}
+
+/// `get_history` is the Edit History panel's reading of the same list: every
+/// version in order, the cursor, the version on disk, and the released rows.
+#[test]
+fn get_history_lists_the_versions_with_the_cursor_and_the_released_rows() {
+    let (mut state, mut viewer) = editable();
+    for point in [3, 4] {
+        call(
+            &mut state,
+            &mut viewer,
+            "delete_point",
+            json!({ "reconstruction_label": "run_a", "point": point }),
+        );
+    }
+    // The budget releases a version's value while keeping its row. Reaching the
+    // real budget from a test would mean a reconstruction of gigabytes, so the
+    // release itself is what is arranged -- on the oldest version, which is the
+    // one the budget takes first and the one an undo does not need.
+    state.scene[0].history.versions_mut_for_test()[0].value = None;
+
+    let history = call(
+        &mut state,
+        &mut viewer,
+        "get_history",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let versions = history["versions"].as_array().expect("a version list");
+    assert_eq!(versions.len(), 3);
+    assert_eq!(history["reconstruction_label"], "run_a");
+    assert_eq!(history["dirty"], true);
+    assert_eq!(history["can_undo"], true);
+    assert_eq!(history["can_redo"], false);
+    assert_eq!(history["cursor"], versions[2]["serial"]);
+    assert_eq!(history["disk_serial"], versions[0]["serial"]);
+
+    assert_eq!(versions[0]["is_on_disk"], true);
+    assert_eq!(versions[2]["is_cursor"], true);
+    assert_eq!(versions[0]["is_cursor"], false);
+    assert_eq!(versions[0]["held"], false, "the released row says so");
+    assert_eq!(versions[2]["held"], true);
+    assert!(
+        versions[2]["label"]
+            .as_str()
+            .expect("a label")
+            .starts_with("Deleted point 4"),
+        "{history}"
+    );
+    // The same instant format the Action Log's own rows carry.
+    let at = versions[0]["at"].as_str().expect("a timestamp");
+    assert!(at.len() >= 19 && at.as_bytes()[10] == b'T', "{at}");
+}
+
+/// A node that came from no file has no version on disk, and says so rather
+/// than naming one.
+#[test]
+fn a_node_from_no_file_reports_no_version_on_disk() {
+    let (mut state, mut viewer) = two_reconstructions();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+    let history = call(
+        &mut state,
+        &mut viewer,
+        "get_history",
+        json!({ "reconstruction_label": "demo" }),
+    );
+    assert_eq!(history["path"], Value::Null);
+    assert_eq!(history["disk_serial"], Value::Null);
+    assert_eq!(history["versions"][0]["is_on_disk"], false);
+}
+
+/// A directory of this test's own under the system temp dir, emptied first so a
+/// rerun does not read a previous run's file.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sfm_explorer_mcp_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    dir
+}
+
+/// Save As writes where it is told and re-points the node; Save afterwards
+/// writes over what Save As chose.
+#[test]
+fn save_reconstruction_writes_to_a_path_and_then_over_it() {
+    let dir = temp_dir("save");
+    let path = dir.join("edited.sfmr");
+    // A plain demo node rather than [`editable`]'s: what a save is about is the
+    // file it writes, and this one is a value the writer accepts whole.
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        &dir.join("recon.sfmr"),
+        SfmrReconstruction::demo(64),
+    ));
+    let mut viewer = Viewer3D::new();
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "recon", "point": 3 }),
+    );
+
+    let saved = call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({ "reconstruction_label": "recon", "path": path.display().to_string() }),
+    );
+    assert!(path.exists(), "the file was not written");
+    // Save As re-points and re-labels the node, so the reply says what to call
+    // it next time.
+    assert_eq!(saved["reconstruction_label"], "edited");
+    assert_eq!(saved["path"], path.display().to_string());
+    assert_eq!(
+        saved["serial"],
+        state.scene[0].history.disk_serial().to_string()
+    );
+    assert!(!state.is_dirty(state.scene[0].id), "a save leaves it clean");
+
+    // And with no path it goes over the file the node now has.
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "edited", "point": 4 }),
+    );
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({ "reconstruction_label": "edited" }),
+    );
+    assert_eq!(again["path"], path.display().to_string());
+    assert!(!state.is_dirty(state.scene[0].id));
+}
+
+/// A node that came from no file is refused a pathless save, in the words the
+/// File menu's own Save uses.
+#[test]
+fn saving_a_node_from_no_file_without_a_path_is_refused() {
+    let (mut state, mut viewer) = two_reconstructions();
+    state.append_node(SceneNode::demo(SfmrReconstruction::demo(16)));
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "save_reconstruction",
+        json!({ "reconstruction_label": "demo" }),
+    );
+    assert!(error.0.contains("came from no file"), "{error}");
+}
+
+/// The editing tools name their reconstruction rather than defaulting to the
+/// selection, and an unknown label is refused naming what is loaded.
+#[test]
+fn every_editing_tool_requires_its_reconstruction_label() {
+    let (mut state, mut viewer) = editable();
+    for (name, arguments) in [
+        ("get_history", json!({})),
+        ("undo", json!({})),
+        ("redo", json!({})),
+        ("jump_to_version", json!({ "serial": "v0" })),
+        ("save_reconstruction", json!({})),
+        ("delete_point", json!({ "point": 3 })),
+        ("delete_camera_image", json!({ "camera_image": 1 })),
+        (
+            "add_observation",
+            json!({ "point": 3, "camera_image": 1, "pixel": [1.0, 1.0] }),
+        ),
+        (
+            "create_point",
+            json!({ "camera_image": 0, "pixel": [1.0, 1.0] }),
+        ),
+        (
+            "remove_observation",
+            json!({ "point": 3, "camera_image": 1 }),
+        ),
+        ("resect_camera_image_in_place", json!({ "camera_image": 1 })),
+        ("bundle_adjust", json!({})),
+    ] {
+        let error = refused_call(&mut state, &mut viewer, name, arguments);
+        assert!(error.0.contains("reconstruction_label"), "{name}: {error}");
+    }
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_history",
+        json!({ "reconstruction_label": "run_b" }),
+    );
+    assert!(error.0.contains("run_a"), "{error}");
+}
+
+/// A point id belonging to another reconstruction is refused rather than
+/// edited: the two handles one call carries have to name the same node.
+#[test]
+fn a_point_from_another_reconstruction_is_refused() {
+    let (mut state, mut viewer) = editable();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/other.sfmr"),
+        SfmrReconstruction::demo(16),
+    ));
+    let other = state.scene[1].id;
+    let id = crate::point_ids::mint(&state.scene[1], 2).expect("a point id");
+    state.select_recon(other);
+
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": id }),
+    );
+    assert!(error.0.contains("other"), "{error}");
+    assert_eq!(version_count(&state), 1);
+}
+
+/// The editing arguments are parsed by shape before anything is applied.
+#[test]
+fn the_editing_arguments_are_parsed_by_shape() {
+    for (name, arguments, expected) in [
+        (
+            "create_point",
+            json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [1.0] }),
+            "pixel",
+        ),
+        (
+            "create_point",
+            json!({ "reconstruction_label": "run_a", "camera_image": 0,
+                    "pixel": [1.0, 2.0], "radius_px": 0.0 }),
+            "greater than zero",
+        ),
+        (
+            "add_observation",
+            json!({ "reconstruction_label": "run_a", "point": 1, "camera_image": 0 }),
+            "needs pixel",
+        ),
+        (
+            "jump_to_version",
+            json!({ "reconstruction_label": "run_a", "serial": 4 }),
+            "serial",
+        ),
+        (
+            "bundle_adjust",
+            json!({ "reconstruction_label": "run_a", "release_focal": "yes" }),
+            "release_focal",
+        ),
+        (
+            "save_reconstruction",
+            json!({ "reconstruction_label": "run_a", "path": 7 }),
+            "path",
+        ),
+        (
+            "delete_point",
+            json!({ "reconstruction_label": "run_a", "point_index": 3 }),
+            "point_index",
+        ),
+        (
+            "undo",
+            json!({ "reconstruction_label": "run_a", "steps": 2 }),
+            "steps",
+        ),
+    ] {
+        let map = arguments.as_object().cloned().expect("an object");
+        let error = tools::parse(name, Some(&map)).expect_err("refused at the parse");
+        assert!(error.0.contains(expected), "{name}: {error}");
+    }
+}
+
+/// The optional arguments have the defaults the tools advertise.
+#[test]
+fn the_editing_defaults_are_what_the_schemas_say() {
+    let parse = |name: &str, arguments: Value| {
+        let map = arguments.as_object().cloned().expect("an object");
+        tools::parse(name, Some(&map)).expect("a well-formed call")
+    };
+    assert_eq!(
+        parse(
+            "create_point",
+            json!({ "reconstruction_label": "a", "camera_image": 0, "pixel": [1.5, 2.5] })
+        ),
+        Command::CreatePoint {
+            reconstruction_label: "a".to_string(),
+            camera_image: super::CameraImageSel::Index(0),
+            pixel: [1.5, 2.5],
+            radius_px: None,
+        }
+    );
+    assert_eq!(
+        parse(
+            "resect_camera_image_in_place",
+            json!({ "reconstruction_label": "a", "camera_image": "images/x.jpg" })
+        ),
+        Command::ResectCameraImageInPlace {
+            reconstruction_label: "a".to_string(),
+            camera_image: super::CameraImageSel::Name("images/x.jpg".to_string()),
+            from_matches: false,
+        }
+    );
+    assert_eq!(
+        parse(
+            "bundle_adjust",
+            json!({ "reconstruction_label": "a", "release_focal": true })
+        ),
+        Command::BundleAdjust {
+            reconstruction_label: "a".to_string(),
+            release_focal: true,
+        }
+    );
+    assert_eq!(
+        parse(
+            "save_reconstruction",
+            json!({ "reconstruction_label": "a" })
+        ),
+        Command::SaveReconstruction {
+            reconstruction_label: "a".to_string(),
+            path: None,
+        }
+    );
 }

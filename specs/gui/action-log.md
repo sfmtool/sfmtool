@@ -15,8 +15,9 @@ The Action Log is the longer-term record that status line was standing in for.
 It is a dock panel, docked by default as a second tab beside the Image Browser
 strip, that shows a scrolling, timestamped, terminal-style list of every action
 taken in the viewer: opening and closing files, changing the scene graph,
-moving the selection, framing the view, playing the image animation, and every
-call the MCP endpoint applies. Each entry says which of three actors did it —
+moving the selection, framing the view, playing the image animation, editing a
+reconstruction and walking its history, saving it, and every call the MCP
+endpoint applies. Each entry says which of three actors did it —
 the user at the window, an agent over MCP, or the viewer itself — and the
 viewport status line becomes a view of the log's most recent entry rather than
 a separate piece of state.
@@ -155,8 +156,8 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | File | — | User / MCP | `Closed {label}` |
 | File | — | User / MCP | `Closed all ({n})` — one entry, not one per node |
 | File | — | User | `Loaded demo data` |
-| File | — | User | `Saved {label} at {serial} to {path}` -- one entry per save, the serial being the version that reached the disk ([saving.md](saving.md)) |
-| File | — | User | the reason a save was refused -- **failed**: the node is not loaded, the node came from no file (Save), the version at the cursor was released to keep the node inside the history budget, or the write itself failed |
+| File | — | User / MCP | `Saved {label} at {serial} to {path}` -- one entry per save, the serial being the version that reached the disk ([saving.md](saving.md)) |
+| File | — | User / MCP | the reason a save was refused -- **failed**: the node is not loaded, the node came from no file (Save), the version at the cursor was released to keep the node inside the history budget, or the write itself failed |
 | Scene | — | User / MCP | `Soloed {label}` / `Ended the solo` |
 | Scene | — | User / MCP | `{label} hidden` / `{label} shown` |
 | Scene | — | User / MCP | `{Points|Camera images|Patches|Points at infinity} of {label} hidden/shown` |
@@ -167,17 +168,17 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Scene | — | User | `Align {src} → {tgt} failed: {reason}` — existing text, **failed** |
 | Scene | — | User | `Resected {image} in {label}: …` — existing text |
 | Scene | — | User | `Resect {image} in {label} refused: {reason}` — existing text, **failed** |
-| Edit | — | User | `Deleted point {index} in {label} ({from} → {to})` |
-| Edit | — | User | `Deleted image {name} from {label} ({from} → {to})` |
-| Edit | — | User | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
-| Edit | — | User | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |
-| Edit | — | User | `Removed observation of point {index} in {image} ({label}): {n} observations left ({from} → {to})` — or `one observation left, so the point is a bearing at infinity`, or `the point had no other observation and is deleted` |
-| Edit | — | User | `Resected {image} in place ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})` |
-| Edit | — | User | `Bundle adjusted {label}: {i} images, {p} points, {o} observations, median residual {before} → {after} px ({from} → {to})`, with `, focal {f0} → {f1}` when the focal was released and `, {n} points deleted` when the solve left points unsupported |
-| Edit | — | User | `Undo: {what the version was labelled} ({from} → {to})` |
-| Edit | — | User | `Redo: {what the version was labelled} ({from} → {to})` |
-| Edit | — | User | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |
-| Edit | — | User | the reason an edit, undo, redo or jump was refused — **failed** |
+| Edit | — | User / MCP | `Deleted point {index} in {label} ({from} → {to})` |
+| Edit | — | User / MCP | `Deleted image {name} from {label} ({from} → {to})` |
+| Edit | — | User / MCP | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
+| Edit | — | User / MCP | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |
+| Edit | — | User / MCP | `Removed observation of point {index} in {image} ({label}): {n} observations left ({from} → {to})` — or `one observation left, so the point is a bearing at infinity`, or `the point had no other observation and is deleted` |
+| Edit | — | User / MCP | `Resected {image} in place ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})` |
+| Edit | — | User / MCP | `Bundle adjusted {label}: {i} images, {p} points, {o} observations, median residual {before} → {after} px ({from} → {to})`, with `, focal {f0} → {f1}` when the focal was released and `, {n} points deleted` when the solve left points unsupported |
+| Edit | — | User / MCP | `Undo: {what the version was labelled} ({from} → {to})` |
+| Edit | — | User / MCP | `Redo: {what the version was labelled} ({from} → {to})` |
+| Edit | — | User / MCP | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |
+| Edit | — | User / MCP | the reason an edit, undo, redo or jump was refused — **failed** |
 | Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
 | Selection | `image` | User / MCP | `Selected image {name} in {label}` |
 | Selection | `camera intrinsics` | User / MCP | `Selected camera intrinsics #{k} in {label}` |
@@ -200,9 +201,9 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Layout | — | User | `Save layout to {path}: {error}` / `Load layout from {path}: {reason}` — **failed** |
 | Layout | — | MCP | `Set layout` / `Reset layout` — the panel portion of a `set_window_layout`, which `apply_window_layout` leaves to its caller to word |
 | Window | — | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
-| Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` |
+| Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` / `get_history {label}` |
 | Query | — | MCP | `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target — every picture taken is its own line |
-| any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses |
+| any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses, except where the `AppState` method it called worded its own refusal (the in-place resection and the adjustment): the drain stands down there rather than writing a second row saying the same thing |
 
 Rules that the table implies:
 

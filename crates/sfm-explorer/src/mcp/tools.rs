@@ -33,8 +33,14 @@ use crate::window::WindowState;
 pub(crate) enum ToolKind {
     /// Changes nothing.
     Read,
-    /// Changes the scene, the selection or the view. Never a file on disk.
+    /// Changes the scene, the selection, the view, or what a loaded
+    /// reconstruction holds. Never a file on disk: an edit makes a new version
+    /// in memory, and undo puts it back.
     Write,
+    /// Writes a file. One tool, `save_reconstruction`, and the reason the kind
+    /// exists at all: it is the only call on this surface that can overwrite
+    /// something the human cannot undo.
+    Save,
 }
 
 /// One advertised tool.
@@ -48,7 +54,7 @@ pub(crate) struct ToolSpec {
 /// Every tool this surface advertises, in the order `tools/list` reports them:
 /// the reads first, then the writes, then the one that hands back a picture.
 pub(crate) fn catalog() -> Vec<ToolSpec> {
-    use ToolKind::{Read, Write};
+    use ToolKind::{Read, Save, Write};
     vec![
         ToolSpec {
             name: "get_scene",
@@ -215,6 +221,19 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           selected.",
             kind: Read,
             schema: object(&[], &[]),
+        },
+        ToolSpec {
+            name: "get_history",
+            description: "One reconstruction's versions, oldest first: every edit anyone has \
+                          made to it this session, with the sentence the edit recorded as each \
+                          version's label and the time it was made. cursor names the version the \
+                          viewer is showing, disk_serial the one its file holds (null when it \
+                          came from no file), and dirty says the two differ. A version whose \
+                          value the history budget released is listed with held: false: what \
+                          happened there is still known, but the cursor can no longer go to it, \
+                          and neither can jump_to_version.",
+            kind: Read,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
             name: "open_reconstruction",
@@ -521,6 +540,207 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[("panel_name", panel_name_schema())]),
         },
         ToolSpec {
+            name: "undo",
+            description: "Step one reconstruction's history back a version, exactly as the Edit \
+                          menu's Undo does. Refused when it is already on its first version. The \
+                          reply is the version now showing.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
+            name: "redo",
+            description: "Step one reconstruction's history forward a version. Refused when \
+                          there is nothing ahead of the cursor, since an edit made after an undo \
+                          discards what was ahead. The reply is the version now showing.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
+            name: "jump_to_version",
+            description: "Move one reconstruction's cursor straight to a version, which is what \
+                          clicking a row of the Edit History panel does. The move is the run of \
+                          undos or redos between the two, so the selection lands where stepping \
+                          would have put it, and it is refused whole when any version on the way, \
+                          the destination included, has had its value released.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "serial",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "Which version, spelled as get_history and the Action Log spell \
+                                 it: \"v12\".",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "save_reconstruction",
+            description: "Write one reconstruction to disk. With no path it is written over the \
+                          file it came from, and a reconstruction that came from no file is \
+                          refused; with a path it is written there and the node is re-pointed at \
+                          it, taking that file's name as its label, so read the reply's \
+                          reconstruction_label back before the next call. The version written is \
+                          the one at the cursor, and it becomes the version the history calls \
+                          clean.",
+            kind: Save,
+            schema: object(
+                &[(
+                    "path",
+                    json!({
+                        "type": "string",
+                        "description":
+                            "Where to write it, as the viewer's process can see it. Omit to \
+                             write over the file the reconstruction came from.",
+                    }),
+                )],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "delete_point",
+            description: "Delete one 3D point and its whole track. A point edit: every other \
+                          point keeps the index it had, so indexes an agent is holding stay \
+                          good, and undo puts it back.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("point", point_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "delete_camera_image",
+            description: "Delete one camera image, its observations, and any track left with \
+                          none. A bulk edit: every image index at or after the deleted one moves \
+                          down by one and the surviving points are renumbered, so indexes read \
+                          before the call no longer mean what they meant. Deleting the only image \
+                          is refused.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "add_observation",
+            description: "Add one observation of a 3D point to a camera image that does not \
+                          already see it, at a named pixel. The pixel is a starting point: the \
+                          embed pass's photometric kernel places the keypoint from there and the \
+                          track is re-triangulated, and the reply's report says how far it moved \
+                          and how well it matched. Needs an embedded_patches reconstruction, one \
+                          whose observations carry inline keypoints, and the photographs, which \
+                          are decoded on demand.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("point", point_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "create_point",
+            description: "Create a 3D point at a pixel of one camera image. The point is made at \
+                          infinity along that pixel's ray, since one sighting fixes a bearing and no \
+                          distance, with a one-observation track, its colour read from the \
+                          photograph and a patch of the named radius; add_observation in a second \
+                          image is what brings it to a finite depth. Needs an embedded_patches \
+                          reconstruction.",
+            kind: Write,
+            schema: object(
+                &[(
+                    "radius_px",
+                    json!({
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "description":
+                            "The patch's radius in this image's pixels. Omit for the radius the \
+                             viewer's own prompt would offer: the median radius the image's \
+                             existing patches project to.",
+                    }),
+                )],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "remove_observation",
+            description: "Remove one camera image's observation from a point's track, and \
+                          re-triangulate what is left. The reply's report says what became of the \
+                          point: fewer observations, a bearing at infinity where one sighting is \
+                          left, or deleted where none is.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("point", point_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "resect_camera_image_in_place",
+            description: "Re-estimate one camera image's pose against structure held out from \
+                          it, and install the answer as the reconstruction's next version rather \
+                          than as a derived node beside it. A bulk edit: the points the image \
+                          observes are re-triangulated and the surviving ones are renumbered, \
+                          while the image table stays put. A refused estimate pushes no version.",
+            kind: Write,
+            schema: object(
+                &[(
+                    "from_matches",
+                    flag(
+                        "Estimate against a .matches file rather than against the \
+                         reconstruction's own observations. The file is the one already chosen \
+                         for this reconstruction in the viewer; with none chosen the call is \
+                         refused, since this surface opens no file dialog.",
+                    ),
+                )],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "bundle_adjust",
+            description: "Refine every pose and every point of one reconstruction against its \
+                          observations, as one version. A bulk edit, and it runs synchronously on \
+                          the viewer's own thread: the window is unresponsive while it solves, \
+                          and a large reconstruction can take longer than a tool call is allowed \
+                          to wait. The reply's report carries the counts and the median residual \
+                          before and after. Needs inline keypoints and one shared lens.",
+            kind: Write,
+            schema: object(
+                &[(
+                    "release_focal",
+                    flag(
+                        "Solve the shared focal length as well as the poses and points. Defaults \
+                         to false, which holds it where it is.",
+                    ),
+                )],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
             name: "screenshot",
             description: "A PNG of the window as the human sees it — menu bar, every panel, \
                           status line — or, with panel_name, of one panel's body cropped from the \
@@ -598,6 +818,38 @@ fn reconstruction_label_schema() -> Value {
             "Which reconstruction, by the label get_scene reports. Omit for the selected one. A \
              label is unique across the scene and survives every edit, which is why it rather \
              than any internal id is the handle.",
+    })
+}
+
+/// The reconstruction argument of a tool that edits one, reads its history or
+/// writes it out.
+///
+/// Required rather than defaulting to the selection, which is the one place
+/// this surface departs from "omit for the selected one": the selection is the
+/// *human's*, it moves under the agent between calls, and an edit that landed
+/// on whatever was last clicked would be an edit the agent could not check it
+/// had asked for. A read of the history is required for the same reason its
+/// answer would otherwise be about a node the caller did not name.
+fn edited_label_schema() -> Value {
+    json!({
+        "type": "string",
+        "description":
+            "Which reconstruction, by the label get_scene reports. Named rather than defaulting \
+             to the selected one: the selection belongs to the human at the window and can move \
+             between calls.",
+    })
+}
+
+/// A pixel in one camera image's own pixel coordinates.
+fn pixel_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": { "type": "number" },
+        "minItems": 2,
+        "maxItems": 2,
+        "description":
+            "A pixel [x, y] in the camera image's own coordinates, as get_point reports an \
+             observation's xy.",
     })
 }
 
@@ -1034,6 +1286,93 @@ pub(crate) fn parse(
                 panel: args.panel("panel_name")?,
             }
         }
+        "get_history" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::GetHistory {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "undo" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::Undo {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "redo" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::Redo {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "jump_to_version" => {
+            args.reject_unknown(&["reconstruction_label", "serial"])?;
+            Command::JumpToVersion {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                serial: args.required_string("serial")?,
+            }
+        }
+        "save_reconstruction" => {
+            args.reject_unknown(&["reconstruction_label", "path"])?;
+            Command::SaveReconstruction {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                path: args.optional_string("path")?.map(std::path::PathBuf::from),
+            }
+        }
+        "delete_point" => {
+            args.reject_unknown(&["reconstruction_label", "point"])?;
+            Command::DeletePoint {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                point: args.point("point")?,
+            }
+        }
+        "delete_camera_image" => {
+            args.reject_unknown(&["reconstruction_label", "camera_image"])?;
+            Command::DeleteCameraImage {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera_image: args.camera_image("camera_image")?,
+            }
+        }
+        "add_observation" => {
+            args.reject_unknown(&["reconstruction_label", "point", "camera_image", "pixel"])?;
+            Command::AddObservation {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                point: args.point("point")?,
+                camera_image: args.camera_image("camera_image")?,
+                pixel: args.pixel("pixel")?,
+            }
+        }
+        "create_point" => {
+            args.reject_unknown(&["reconstruction_label", "camera_image", "pixel", "radius_px"])?;
+            Command::CreatePoint {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera_image: args.camera_image("camera_image")?,
+                pixel: args.pixel("pixel")?,
+                radius_px: args.radius("radius_px")?,
+            }
+        }
+        "remove_observation" => {
+            args.reject_unknown(&["reconstruction_label", "point", "camera_image"])?;
+            Command::RemoveObservation {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                point: args.point("point")?,
+                camera_image: args.camera_image("camera_image")?,
+            }
+        }
+        "resect_camera_image_in_place" => {
+            args.reject_unknown(&["reconstruction_label", "camera_image", "from_matches"])?;
+            Command::ResectCameraImageInPlace {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera_image: args.camera_image("camera_image")?,
+                from_matches: args.optional_bool("from_matches")?.unwrap_or(false),
+            }
+        }
+        "bundle_adjust" => {
+            args.reject_unknown(&["reconstruction_label", "release_focal"])?;
+            Command::BundleAdjust {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
+            }
+        }
         "screenshot" => {
             args.reject_unknown(&["panel_name", "hud", "max_dimension"])?;
             let panel = match args.map.get("panel_name") {
@@ -1449,6 +1788,35 @@ impl Args<'_> {
                 .ok_or_else(|| self.wrong_type(key, &expected, value))?;
         }
         Ok(Some(out))
+    }
+
+    /// A pixel in a camera image, as the edits that take one want it.
+    ///
+    /// `f32` because that is what a `.sfmr` keypoint is and what every edit
+    /// below this takes; the wire's number is `f64` and narrows here rather
+    /// than in each tool body.
+    fn pixel(&self, key: &str) -> Result<[f32; 2], ToolError> {
+        let [x, y] = self
+            .optional_numbers::<2>(key)?
+            .ok_or_else(|| self.error(format!("needs {key}: a pixel [x, y].")))?;
+        Ok([x as f32, y as f32])
+    }
+
+    /// A patch radius in pixels: positive, or absent for the viewer's own
+    /// default.
+    ///
+    /// Zero and negative are refused rather than passed on, because a patch
+    /// with no extent is not a smaller patch: it is a request the edit has no
+    /// answer for, and the prompt the human uses cannot express it either.
+    fn radius(&self, key: &str) -> Result<Option<f32>, ToolError> {
+        match self.optional_f64(key)? {
+            None => Ok(None),
+            Some(radius) if radius.is_finite() && radius > 0.0 => Ok(Some(radius as f32)),
+            Some(_) => Err(self.error(format!(
+                "wants {key} to be a radius greater than zero, or absent for the median radius \
+                 the image's own patches project to."
+            ))),
+        }
     }
 
     /// A panel argument, by the name the layout file spells it with.

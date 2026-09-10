@@ -747,9 +747,8 @@ fn the_edit_history_panel_lists_the_loaded_version() {
 /// A viewer with its MCP endpoint live, and the address it printed.
 struct McpViewer {
     /// Held for its `Drop`, which kills the viewer and releases the
-    /// serialization lock. Read on macOS and Linux, where the accessibility
-    /// root is found by pid.
-    #[allow(dead_code)]
+    /// serialization lock, and read for the pid the accessibility root is
+    /// found by.
     guard: Guard,
     address: String,
 }
@@ -805,21 +804,31 @@ impl McpViewer {
     ///
     /// Not [`attach`]: while the endpoint is live the title carries an
     /// `[MCP :port]` suffix, which an exact-name match does not find.
+    ///
+    /// **The pid is part of the match on every platform.** A developer running
+    /// this suite very likely has a viewer of their own open, which is the
+    /// whole point of the surface being tested; matching on the title alone
+    /// would drive theirs while the assertions read this one, and every
+    /// interaction would silently land in the wrong window. On Windows the
+    /// title still has to come into it, since `by_pid` roots at the first
+    /// top-level window for the process and that is one of winit's helper
+    /// windows rather than the UI (see [`try_attach_app`]).
     fn wait_for_window(&self) -> App {
         init();
+        let pid = self.guard.child().id();
         #[cfg(windows)]
         {
             App::find(ATTACH_TIMEOUT, |d| {
-                d.name
-                    .as_deref()
-                    .is_some_and(|name| name.starts_with("SfM Explorer"))
+                d.pid == Some(pid)
+                    && d.name
+                        .as_deref()
+                        .is_some_and(|name| name.starts_with("SfM Explorer"))
             })
             .expect("sfm-explorer window did not appear")
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            App::by_pid(self.guard.child().id(), ATTACH_TIMEOUT)
-                .expect("sfm-explorer did not appear")
+            App::by_pid(pid, ATTACH_TIMEOUT).expect("sfm-explorer did not appear")
         }
     }
 
@@ -1014,6 +1023,97 @@ fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
     assert!(
         message.contains("closed") && message.contains("show_panel"),
         "{message}"
+    );
+}
+
+/// The editing surface against a real viewer: an edit over the wire, the
+/// version it made, the undo that takes it back, and the Action Log the human
+/// beside the window is reading.
+///
+/// Here rather than only in `mcp::tests` for the one thing the headless tests
+/// cannot show: that an edit applied inside a real frame reaches the window the
+/// human is looking at, attributed to the agent, and that the history and the
+/// log both know about it afterwards. What each edit *does* to a reconstruction
+/// is asserted headlessly, over the same `AppState` calls.
+#[test]
+fn a_point_can_be_deleted_over_the_wire_and_undone() {
+    let viewer = McpViewer::launch();
+    let app = viewer.wait_for_window();
+    viewer.initialize();
+    load_demo_data(&app);
+    // The node arrives in a frame of its own, after the button press returns,
+    // so the first call waits for it rather than racing it.
+    let deadline = std::time::Instant::now() + CONTENT_TIMEOUT;
+    let label = loop {
+        let scene = viewer.call("get_scene", serde_json::json!({}));
+        if let Some(label) = scene["structuredContent"]["scene"][0]["label"].as_str() {
+            break label.to_string();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the demo node never appeared: {scene}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let deleted = viewer.call(
+        "delete_point",
+        serde_json::json!({ "reconstruction_label": label, "point": 3 }),
+    );
+    assert_ne!(
+        deleted["isError"],
+        serde_json::Value::Bool(true),
+        "{deleted}"
+    );
+    let made = deleted["structuredContent"].clone();
+    assert_eq!(made["label"], format!("Deleted point 3 in {label}"));
+    let serial = made["serial"]
+        .as_str()
+        .expect("a version serial")
+        .to_string();
+
+    let history = viewer.call(
+        "get_history",
+        serde_json::json!({ "reconstruction_label": label }),
+    )["structuredContent"]
+        .clone();
+    let versions = history["versions"].as_array().expect("a version list");
+    assert_eq!(versions.len(), 2, "{history}");
+    assert_eq!(history["cursor"], serde_json::Value::String(serial.clone()));
+    assert_eq!(history["dirty"], true);
+    assert_eq!(history["can_undo"], true);
+    // The node came from no file, so nothing of it is on disk.
+    assert_eq!(history["disk_serial"], serde_json::Value::Null);
+
+    let undone = viewer.call("undo", serde_json::json!({ "reconstruction_label": label }))
+        ["structuredContent"]
+        .clone();
+    assert_eq!(undone["cursor"], versions[0]["serial"]);
+    assert_eq!(undone["dirty"], false);
+
+    // Both rows are the agent's, in the words the human's own Edit menu would
+    // have written.
+    let log = viewer.call("get_action_log", serde_json::json!({ "actors": ["mcp"] }))
+        ["structuredContent"]
+        .clone();
+    let texts: Vec<String> = log["entries"]
+        .as_array()
+        .expect("a list of entries")
+        .iter()
+        .map(|entry| {
+            assert_eq!(entry["actor"], "mcp", "{entry}");
+            entry["text"].as_str().unwrap_or_default().to_string()
+        })
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with(&format!("Deleted point 3 in {label}"))),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text.starts_with("Undo: ")),
+        "{texts:?}"
     );
 }
 

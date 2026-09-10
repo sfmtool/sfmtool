@@ -16,8 +16,9 @@ This is an opt-in control surface for the running viewer, speaking the
 and can then enumerate the loaded scene graph, open and close `.sfmr` files,
 move the selection and the 3D camera, choose what the Image Detail panel draws
 over its photograph, arrange the panels, size and place the window, read back
-everything that has happened in the viewer, and photograph the window or any
-panel in it. The human keeps the window in front of them the whole
+everything that has happened in the viewer, edit a loaded reconstruction and
+walk its history, write it out, and photograph the window or any panel in it.
+The human keeps the window in front of them the whole
 time and watches it change.
 
 The window itself is part of what the surface drives, because the window is
@@ -30,9 +31,9 @@ see the result in the Action Log.
 
 The surface is deliberately narrow. The viewer's own invariants
 (§ "Addressing", § "Threading") are what it is shaped around, not the other way
-round, and it edits no reconstruction data — the intrinsics case in particular
-runs into a viewer-wide invariant with an answer of its own (§ "Editing
-reconstruction data").
+round: an edit over the wire is the same `AppState` call the menu makes, so it
+is a version in the same history, undoable by whichever of the two did not make
+it (§ "Editing reconstruction data").
 
 [mcp]: https://modelcontextprotocol.io/
 
@@ -99,8 +100,8 @@ place.
 
 ## The tool surface
 
-Twenty-three tools. Eight read, fourteen write, one that closes the loop by
-handing back a picture.
+Thirty-five tools. Nine read, twenty-four write, one that writes a file, and
+one that closes the loop by handing back a picture.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -112,6 +113,7 @@ handing back a picture.
 | `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
+| `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -126,14 +128,31 @@ handing back a picture.
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
 | `hide_panel` | write | Close a panel |
+| `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
+| `jump_to_version` | write | Move its cursor straight to a version |
+| `delete_point` | write | Delete one 3D point and its track |
+| `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
+| `add_observation` | write | Add one observation of a point to an image, at a pixel |
+| `create_point` | write | Create a 3D point at a pixel, at infinity along its ray |
+| `remove_observation` | write | Take one observation out of a track and re-triangulate it |
+| `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
+| `bundle_adjust` | write | Refine every pose and point of one reconstruction |
+| `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the eight reads and `screenshot` carry
-`readOnlyHint: true`, the fourteen writes `destructiveHint: false` (nothing here
-touches a file on disk — `close_reconstruction` unloads, it does not delete;
-`set_window_layout` changes the window and the dock, not the layout file the
-menu saves), and every one of them `openWorldHint: false`. Every `inputSchema`
-is closed (`additionalProperties: false`).
+Every tool is annotated: the nine reads and `screenshot` carry
+`readOnlyHint: true`, the twenty-four writes `destructiveHint: false` (none of
+them touches a file on disk: `close_reconstruction` unloads, it does not
+delete; `set_window_layout` changes the window and the dock, not the layout file
+the menu saves; an **edit** makes a new version of a loaded value, which the
+human can undo), and every one of them `openWorldHint: false`. Every
+`inputSchema` is closed (`additionalProperties: false`).
+
+**`save_reconstruction` is the one tool annotated `destructiveHint: true`**, and
+the one whose `ToolKind` is neither read nor write but `Save`. It is the only
+call on this surface that can overwrite something no undo brings back, and a
+client that treats a destructive tool differently, with a confirmation or a
+stricter policy, should treat this one differently and none of the others.
 
 ### The wire vocabulary
 
@@ -269,6 +288,33 @@ fields take the entity's name and their schema carries the union, so both
 spellings are valid calls. A union of *representations* reads as one question
 with two phrasings; a union of *intents* is the thing the five separate
 selection tools, and `set_view`'s exclusive forms, keep out of a single tool.
+
+#### `version` and its `serial`
+
+One state a node's reconstruction has been in is a **version**, and its handle
+is a **serial**, spelled `"v12"`, which is the form the Edit History panel puts on a
+row and the Action Log puts in `Go to: … (v11 → v12)`. The wire takes back what
+the viewer hands out, so `jump_to_version` accepts that spelling and no other,
+and a human who has just read a serial off the panel can paste it into a call.
+
+`serial` is the field on a version and the argument that names one;
+`disk_serial` is the same attribute in the role of "the version the file holds",
+and `cursor` the same attribute in the role of "the version being shown", by the
+`<entity>_<attribute>` rule above. `label` on a version is the sentence the edit
+that made it recorded, which is what the panel draws and what `get_history`
+carries.
+
+#### An edit names its reconstruction
+
+`reconstruction_label` is optional on the reads and on the selection tools;
+omitted, they take the selected reconstruction. On every tool in the editing
+family, `get_history` and `save_reconstruction` included, it is **required**.
+
+The selection belongs to the human at the window. It moves while the agent
+works, and an edit that landed on whatever was last clicked would be an edit the
+agent had no way to check it had asked for. So the family that changes data says
+which data, every time, and a call that names a label nothing answers to is
+refused listing what is loaded rather than falling back to a default.
 
 #### Where the GUI has no word, the code's word wins
 
@@ -1272,6 +1318,271 @@ not carry it.
 different number for a maximized window and the same one for a normal window
 (§ "`get_window_layout`").
 
+### The editing family
+
+Ten tools that give a node a new version or move its cursor, plus the read that
+lists them and the one that writes a file. What the twelve share is worth
+stating once rather than twelve times.
+
+**Each one is a single `AppState` call**: `delete_point`, `add_observation_at`,
+`resect_image_in_place`, `bundle_adjust`, `undo`, `save_node_as`. It is the
+same call the menu, the panel or the keyboard makes. So an agent's edit is a
+version in the same history, with the same label, drawn on the same Edit History
+rows, undone by the same Undo; the actor column is the only thing that differs,
+and it differs because the drain moved the Action Log's actor for the batch
+(§ "Threading"). A human can undo an agent's edit and an agent can undo a
+human's. Neither is special-cased anywhere.
+
+**Every edit answers with the version it pushed:**
+
+```jsonc
+{ "reconstruction_label": "seoul_bull",
+  "serial": "v7",                       // the version this edit made
+  "cursor": "v7",                       // and it is what the node now shows
+  "label": "Deleted point 1207 in seoul_bull",
+  "dirty": true,                        // the cursor is off the version on disk
+  "report": "Deleted point 1207 in seoul_bull (v6 → v7)" }
+```
+
+**`report` is the sentence the edit recorded**, and it is where each family's own
+numbers are: add-observation's ZNCC and how far the keypoint moved from the
+named pixel, remove-observation's account of what became of the point, the
+resection's inlier count and rotation, the adjustment's residual before and
+after. Those numbers exist in exactly one place, the Action Log entry the
+`AppState` method wrote, in the words the human is reading off the panel, and
+the reply carries that text rather than a second rendering of the same report
+that could come to disagree with it. `label` is the version's own label, which
+is that sentence without the `(v6 → v7)` the entry appends.
+
+**A refusal pushes no version**, answers as a domain error in the state's own
+words, and leaves the Action Log one failed row. Which of the two writes that
+row depends on who worded the refusal: most `AppState` edits return theirs, and
+the drain records `{tool} failed: {message}`; the in-place resection and the
+adjustment record their own (`Resect IMG_0042 in seoul_bull refused: …`,
+`Bundle adjust of seoul_bull refused: …`), because the vocabulary of that
+refusal belongs to the operation and not to the tool that asked for it. The
+drain writes its row only when the application recorded no failure of its own,
+so one refusal is one entry either way (§ "Threading").
+
+**A bulk edit renumbers.** `delete_camera_image` moves every image index at or
+past the deleted one; it, the resection, the adjustment and every cursor move
+renumber points. An agent holding an index it
+read before such a call is holding a statement about something else, and should
+re-read rather than reuse. A qualified `pt3d_<hash>_<index>` id survives, which
+is what it is for.
+
+### `get_history`
+
+The Edit History panel's reading of the same list, as JSON: the whole of what
+the node has been, in order.
+
+```jsonc
+// get_history { "reconstruction_label": "seoul_bull" }
+{
+  "reconstruction_label": "seoul_bull",
+  "path": "C:/work/seoul_bull.sfmr",   // null for a node that came from no file
+  "cursor": "v7",                       // the version the viewer is showing
+  "disk_serial": "v0",                  // the version its file holds; null with no file
+  "dirty": true,                        // cursor ≠ disk_serial
+  "can_undo": true,
+  "can_redo": false,
+  "versions": [
+    { "serial": "v0", "label": "Opened seoul_bull from C:/work/seoul_bull.sfmr",
+      "at": "2026-09-09T11:02:14.880-07:00",
+      "held": true, "is_cursor": false, "is_on_disk": true },
+    { "serial": "v6", "label": "Created point in images/IMG_0042.jpg (seoul_bull), radius 7.5 px",
+      "at": "2026-09-09T11:07:41.020-07:00",
+      "held": true, "is_cursor": false, "is_on_disk": false },
+    { "serial": "v7", "label": "Deleted point 1207 in seoul_bull",
+      "at": "2026-09-09T11:08:02.117-07:00",
+      "held": true, "is_cursor": true, "is_on_disk": false }
+  ]
+}
+```
+
+**`held` is whether the version's value is still there.** The history's memory
+budget releases the value of a version the cursor is not on
+([document-model.md](document-model.md) § "The history budget"); the row keeps its
+place, its label and its map, and what happened there is still known, but the
+cursor can no longer go to it, so `jump_to_version` refuses a destination, or a
+version on the way to one, whose `held` is false. The panel draws such a row
+disabled and says the same thing in a tooltip.
+
+**`at` is the format the Action Log's own rows use**, RFC 3339 to the
+millisecond in the zone the panel formats in, because a version is read next
+to the entries around it, and the two timestamps should be comparable without
+arithmetic.
+
+**`disk_serial` is `null` for a node that came from no file**, along with
+`is_on_disk: false` on every row: demo data and a derived node have no file
+holding any of their versions, and `path` beside it says so. Such a node is not
+`dirty` until something is done to it ([saving.md](saving.md)), and a
+`save_reconstruction` on it needs a path.
+
+### `undo` / `redo` / `jump_to_version`
+
+```jsonc
+// undo             { "reconstruction_label": "seoul_bull" }
+// redo             { "reconstruction_label": "seoul_bull" }
+// jump_to_version  { "reconstruction_label": "seoul_bull", "serial": "v6" }
+{ "reconstruction_label": "seoul_bull", "cursor": "v6", "serial": "v6",
+  "label": "Created point in images/IMG_0042.jpg (seoul_bull), radius 7.5 px",
+  "dirty": true }
+```
+
+`AppState::undo`, `redo` and `jump_to_version`, which is the whole of it: the
+selection follows the maps, the panels' caches are dropped, and the entry names
+the version and the two serials. There is no `report`, because a cursor move
+made no version to report on; the reply names the one it landed on.
+
+The ends are refusals in the state's own words: *"Nothing to undo in
+`seoul_bull`."*, *"Nothing to redo in `seoul_bull`."*, *"`v6` is already what
+`seoul_bull` shows."* A serial the node never minted is refused here, naming
+`get_history`, before the state is asked.
+
+`jump_to_version` is on the surface because the Edit History panel offers it to
+a human and an agent's reach into the history should match theirs. It is not
+`undo` repeated: the move is one action and one entry, and it is refused whole
+where any version it would pass through has been released.
+
+### `save_reconstruction`
+
+```jsonc
+// save_reconstruction { "reconstruction_label": "seoul_bull" }
+// save_reconstruction { "reconstruction_label": "seoul_bull",
+//                       "path": "C:/work/seoul_bull_edited.sfmr" }
+{ "reconstruction_label": "seoul_bull_edited",   // read this back: a save-as renames
+  "path": "C:/work/seoul_bull_edited.sfmr",
+  "serial": "v7" }                               // the version the file now holds
+```
+
+With no path it is `AppState::save_node`, which writes over the file the node
+came from and refuses a node that came from none: *"`demo` came from no file —
+use Save As to choose one."* With a path it is `AppState::save_node_as`, which
+writes there and **re-points the node at it**, taking that file's stem as the
+node's label. So the reply's `reconstruction_label` is what the next call must
+use, exactly as `open_reconstruction`'s returned label is.
+
+No dialog is involved on either side. The path-taking half has always been the
+`AppState` method; the file chooser belongs to the menu that calls it
+([saving.md](saving.md)), and this surface opens no dialog on an agent's behalf:
+a modal dialog would stop the GUI thread pumping, so every queued tool call
+would time out against it.
+
+`serial` is the version that reached the disk, which the history now calls
+clean. A save with an overlay materialises first, and that materialisation is a
+version like any other, so the serial in the reply can be one the call itself
+made ([saving.md](saving.md) § "Materialise on save").
+
+### `delete_point` / `delete_camera_image`
+
+```jsonc
+// delete_point        { "reconstruction_label": "seoul_bull", "point": 1207 }
+// delete_point        { "reconstruction_label": "seoul_bull", "point": "pt3d_a1b2c3d4_1207" }
+// delete_camera_image { "reconstruction_label": "seoul_bull", "camera_image": 3 }
+// delete_camera_image { "reconstruction_label": "seoul_bull",
+//                       "camera_image": "images/IMG_0042.jpg" }
+```
+
+The two edits the document model was built on
+([document-model.md](document-model.md) § "Two kinds of edit"): a **point edit**,
+which leaves every other index where it was, and a **bulk edit**, which produces
+a whole new base. Deleting the only image is refused: it would leave nothing.
+
+**A point and a reconstruction named in one call have to agree.** A bare index
+is a coordinate in the reconstruction the call named, not in the selected one; a
+qualified `pt3d_<hash>_<index>` id that resolves to a different node is refused
+naming both. The resolution is `goto_point`'s, the same one `get_point` and the
+Go to Point dialog use, so an id means the same thing wherever it is sent.
+
+### `add_observation` / `create_point` / `remove_observation`
+
+The three track edits. The two that put structure in need an
+`embedded_patches` reconstruction, whose observations carry inline keypoints and
+patch frames, and refuse a `sift_files` one in the state's words: that is the
+gate the Image Detail menu entry reads, so the tool and the entry cannot
+disagree about when the edit can run. `remove_observation` reads no photograph
+and works on either.
+
+```jsonc
+// create_point     { "reconstruction_label": "seoul_bull", "camera_image": 3,
+//                    "pixel": [131.4, 208.9], "radius_px": 7.5 }
+// add_observation  { "reconstruction_label": "seoul_bull", "point": 1207,
+//                    "camera_image": 4, "pixel": [142.0, 197.5] }
+// remove_observation { "reconstruction_label": "seoul_bull", "point": 1207,
+//                      "camera_image": 4 }
+```
+
+`pixel` is `[x, y]` in that camera image's own pixels, the same numbers a track
+observation's `xy` reports, which is where an agent gets one.
+
+**`add_observation` is the explicit-pixel form**, `AppState::add_observation_at`.
+The GUI's own entry reads the pixel a right-click left on the state; an agent has
+no pointer, so it names the pixel. The pixel is a **starting point** and not the
+answer: the embed pass's photometric kernel places the keypoint from there and
+the track is re-triangulated, and the `report` says how well it matched and how
+far it moved: *"ZNCC 0.984, 0.31 px from the click"*. An image that already
+observes the point is refused.
+
+**`create_point` makes a bearing.** One sighting fixes a direction and no
+distance, so the point is created at infinity along the pixel's ray with a
+one-observation track; `add_observation` in a second image is what brings it to
+a finite depth. `radius_px` omitted takes the radius the viewer's own Create 3D
+Point prompt would offer, the median radius that image's existing patches
+project to, then the node's, then a named constant
+([edits/create-point.md](edits/create-point.md)), so a call that names none
+makes the point the human would have made. Zero and negative are refused: a
+patch with no extent is not a smaller patch.
+
+**`remove_observation` reports what became of the point.** The shorter track is
+re-triangulated, and the `report` is the state's own account: *"3 observations
+left"*, *"one observation left, so the point is a bearing at infinity"*, or
+*"the point had no other observation and is deleted"*.
+
+Both edits that read pixels decode the photographs they need on demand, through
+the node's full-resolution cache, a handful of images per edit, and nothing
+pre-decodes the table. An image the viewer's process cannot read is a refusal
+naming it.
+
+### `resect_camera_image_in_place` / `bundle_adjust`
+
+The two bulk edits.
+
+```jsonc
+// resect_camera_image_in_place { "reconstruction_label": "seoul_bull",
+//                                "camera_image": "images/IMG_0042.jpg" }
+// resect_camera_image_in_place { "reconstruction_label": "seoul_bull",
+//                                "camera_image": 3, "from_matches": true }
+// bundle_adjust { "reconstruction_label": "seoul_bull", "release_focal": true }
+```
+
+`resect_camera_image_in_place` is the resection landed as the node's next
+version rather than as the derived node beside it that `Resect Image…` also
+offers ([resect-image.md](resect-image.md) § "In place"). The image table does
+not move, so image indexes and the selections keyed by them still mean what they
+meant; the points the image observes are re-triangulated, so point indexes do
+not. A refused *estimate* pushes no version.
+
+**`from_matches` takes the file the viewer already has.** The correspondence
+source is either the reconstruction's own observations (the default) or a
+`.matches` file, and the file is the one chosen for this node in the Scene panel.
+With none chosen the state refuses, *"…refused: no .matches file chosen"*, and
+this surface does not open a file chooser to fix it, for the reason
+`save_reconstruction` does not: a modal dialog stops the GUI thread and every
+queued call times out behind it.
+
+`bundle_adjust` is the node's own solver run over the value on screen
+([edits/bundle-adjust.md](edits/bundle-adjust.md)), with the one decision the
+dialog collects, whether the shared focal is released, as `release_focal`.
+Everything else is the core function's defaults. It needs inline keypoints and
+one shared lens, and says which is missing when it refuses.
+
+**It runs synchronously on the GUI thread**, as every edit does: the window is
+unresponsive while it solves, and a reconstruction large enough to take more
+than the apply timeout will time out the call while the solve goes on and
+finishes. An agent that gets a timeout from this tool should read `get_history`
+rather than retry, since the version may well have been pushed.
+
 ## Addressing
 
 The wire vocabulary is chosen so that an id an agent reads in one reply is an id
@@ -1429,6 +1740,26 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 **refusal** is recorded as a failed entry, `{tool} failed: {message}`, in the
 same words the agent receives.
 
+**A refusal the state already recorded is not recorded twice.** Two `AppState`
+methods word their own: `resect_image_in_place` and `bundle_adjust`, whose
+refusals belong to the operation's vocabulary rather than to the tool that asked
+for it. So the drain writes its row only where the application of that command
+recorded no failed entry of its own. The test is the Action Log's revision
+before and after, which needs no list of which methods those are and cannot fall
+out of step with one.
+
+**The drain drops what the panels cached about a node an edit renumbered.** A
+bulk edit gives a node a whole new base and a cursor move lands on one, so an
+image index or a point index in the Image Browser's textures, the Image Detail
+panel's rendered patches, the Point Track table's prepared rows or the Camera
+Intrinsics panel's derived quantities is afterwards a statement about something
+else. Those panels are `App`'s fields and not `AppState`'s, which is why this is
+the drain's job rather than the command vocabulary's: `apply_as_agent` reports
+the nodes each successful command renumbered and the drain forgets them, exactly
+as the Scene panel's menu and the Edit History panel do around the same
+`AppState` calls. A point edit is not among them, for the same reason the GUI
+keeps its caches across one.
+
 One tool words its own entries, and for one reason — no state method owns the
 change. `set_window_layout` goes through `AppState::apply_window_layout`, which
 deliberately records nothing because its three callers word it differently: the
@@ -1451,6 +1782,7 @@ testable without a window:
 | `mod` + `read` / `write` / `view` / `render` | The command vocabulary, applied to `(&mut AppState, &mut Viewer3D)` |
 | `layout` | The four layout tools and their shared reply, over `AppState`'s own document and panel operations |
 | `display` | The `image_detail_display` document: its render, the parse of a change into `ImageDetailDisplayChange`, and the apply — over the two settings structs and the diff-and-record function in `crate::state` that the toolbar shares, unconditional because the human's changes are logged in every build |
+| `edit` | The editing family: the version list, the three cursor moves, the save, and one function per edit family, each of them one `AppState` call, wrapped in the reply that names the version it pushed |
 | `window` | The `window` block renderer, and nothing else: what a window *is*, how a placement is applied, and the `WindowHost` seam are `crate::window`'s, unconditional because Panels ▸ Save Layout… needs them in every build |
 | `frame` | The three phases `run_ui_and_paint` calls: the drain, the surface copy, and the deferred screenshot |
 | `mod::apply_as_agent` | The drain's application phase without the channel: the Action Log's actor switch, one `apply` per command, and the query and refusal entries |
@@ -1493,9 +1825,38 @@ pub(crate) enum Command {
     SetWindowLayout { document: serde_json::Value },
     ShowPanel { panel: Tab },
     HidePanel { panel: Tab },
+    /// The editing family. `reconstruction_label` is a plain `String` on every
+    /// one of them: an edit names the node it edits (§ "An edit names its
+    /// reconstruction").
+    GetHistory { reconstruction_label: String },
+    Undo { reconstruction_label: String },
+    Redo { reconstruction_label: String },
+    /// `serial` as the viewer spells it, `"v12"`, resolved against the node's
+    /// own version list.
+    JumpToVersion { reconstruction_label: String, serial: String },
+    /// `None` is Save, over the node's own path; `Some` is Save As.
+    SaveReconstruction { reconstruction_label: String, path: Option<PathBuf> },
+    DeletePoint { reconstruction_label: String, point: goto_point::PointQuery },
+    DeleteCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
+    AddObservation { reconstruction_label: String, point: goto_point::PointQuery,
+                     camera_image: CameraImageSel, pixel: [f32; 2] },
+    /// `radius_px: None` takes `AppState::create_point_default_radius`.
+    CreatePoint { reconstruction_label: String, camera_image: CameraImageSel,
+                  pixel: [f32; 2], radius_px: Option<f32> },
+    RemoveObservation { reconstruction_label: String, point: goto_point::PointQuery,
+                        camera_image: CameraImageSel },
+    ResectCameraImageInPlace { reconstruction_label: String,
+                               camera_image: CameraImageSel, from_matches: bool },
+    BundleAdjust { reconstruction_label: String, release_focal: bool },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
     /// parse refuses it elsewhere.
     Screenshot { panel: Option<Tab>, hud: bool, max_dimension: Option<u32> },
+}
+
+impl Command {
+    /// The node this command may have renumbered, once it has succeeded, for
+    /// the drain to drop what the panels cached about the table it had.
+    fn renumbers(&self) -> Option<&str>;
 }
 ```
 
@@ -1504,7 +1865,10 @@ pub(crate) enum Command {
 filed. `SetImageDetailDisplay` is `Kind::Display` — the kind the HUD's own
 controls record under, since the Image Detail toolbar is the same sort of thing
 on a different panel — and `GetImageDetailDisplay` a `Kind::Query` like every
-other read. Everything the window portion is made of — `WindowChange`, `WindowState`,
+other read. The seven edit commands and the three cursor moves are `Kind::Edit`
+and `SaveReconstruction` is `Kind::File`, which is where the GUI's own rows for
+them go, so a refusal is filed where its success would have been.
+Everything the window portion is made of — `WindowChange`, `WindowState`,
 `WindowInfo`, `MonitorInfo`, `NormalRect`, `fit_to_monitor` and the `WindowHost`
 trait — lives in `crate::window` and is spelled out in
 [panel-layout.md](panel-layout.md) § "The window"; the document itself, and
@@ -1564,7 +1928,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes twenty-two of the twenty-three tools testable in a headless
+/// makes thirty-four of the thirty-five tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -1577,10 +1941,18 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply a frame's worth of commands **as the agent**: the Action Log's actor
 /// moved to `Mcp` for the batch, a `Query` entry per read, a failed entry per
-/// refusal. The drain is this plus the channel, which is what puts the
-/// attribution under the same headless test as the vocabulary.
+/// refusal the application did not word itself. The drain is this plus the
+/// channel, which is what puts the attribution under the same headless test as
+/// the vocabulary.
 pub(crate) fn apply_as_agent(state: &mut AppState, viewer: &mut Viewer3D,
-                             host: &mut dyn WindowHost, commands: Vec<Command>) -> Vec<Outcome>;
+                             host: &mut dyn WindowHost, commands: Vec<Command>) -> Applied;
+
+/// What a batch did: one outcome per command, and the nodes a command
+/// renumbered, for the caller's panels to forget.
+pub(crate) struct Applied {
+    pub(crate) outcomes: Vec<Outcome>,
+    pub(crate) stale: Vec<ReconId>,
+}
 
 /// Start the server. Returns once it is bound and listening, or with the bind
 /// error; the runtime lives on its own thread from here.
@@ -1600,9 +1972,9 @@ messages and its JSON shapes under headless test, and leaves exactly one tool
 (`screenshot`) needing a window.
 
 `ToolOutput` has two shapes rather than one because `screenshot` answers with a
-picture and the other twenty-two answer with JSON; squeezing an image through a
+picture and the other thirty-four answer with JSON; squeezing an image through a
 JSON field would mean a magic key the transport has to know to look for. The
-twenty-two return a plain `Result<Value, ToolError>` and are widened at the
+thirty-four return a plain `Result<Value, ToolError>` and are widened at the
 `apply_with_window` dispatch, so nothing below it has to name the shape it is
 not.
 
@@ -1677,7 +2049,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Twenty-three tools are cheap
+relaunch would call tools the new binary does not have. Thirty-five tools are cheap
 to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
 there are no authorization contexts to share a result across.
 
@@ -1735,7 +2107,8 @@ Two levels, and the distinction matters to a client:
   range, an unreadable `.sfmr`, an unknown tint name, a degenerate `set_view`, a
   layout document that does not validate, a size for a window that is maximized,
   a screenshot of a minimized window, of a panel that is not drawn, or of a
-  viewport that has not rendered yet, and the 10 s apply timeout.
+  viewport that has not rendered yet, every edit the state declines, and the
+  10 s apply timeout.
 
 The line is whose problem it is: a request that does not fit the advertised
 schema is the client's, and a request the viewer will not carry out is the
@@ -1750,9 +2123,10 @@ reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`."*
 status line and in the panel, where before only a success reached them. It is
 recorded by the drain rather than by the method that produced it, which is why
 every `AppState` method the MCP layer calls returns its failure instead of
-logging it: one failure, one entry. Protocol errors are **not** logged — they
-never reach the viewer, and a request the GUI thread never saw belongs in the
-agent's own transcript.
+logging it, with the two exceptions that word their own, where the drain stands
+down instead (§ "Threading"). One failure, one entry, either way. Protocol errors
+are **not** logged — they never reach the viewer, and a request the GUI thread
+never saw belongs in the agent's own transcript.
 
 **An unknown argument is refused by name rather than ignored.** The schemas say
 `additionalProperties: false`, but a schema binds only the clients that enforce
@@ -1881,9 +2255,49 @@ where a test hands no host over.
   factor of 1.5 gives the expected pixel rectangle, clipped to the frame, and
   `None` for a panel the dock has never laid out. The readback's unpad and its
   BGRA swizzle are tested over a synthetic padded buffer, in `mcp::frame`.
+- **The editing family, against a node an edit can run on**: the Scene Graph
+  tests' own resectable node, which is `embedded_patches`, has a path, and is
+  the fixture a resection and an adjustment both need, one thing rather than
+  five near-copies of it. What is asserted is the boundary and not the edit:
+  `delete_point` pushes a version whose serial, label and `report` the reply
+  names, and leaves that one sentence in the log as `Mcp`; `delete_camera_image`
+  shrinks the image table; `create_point` takes the prompt's own default radius
+  when the call names none and says which it used; `remove_observation` reports
+  what became of the point; the in-place resection and the adjustment push a
+  version and report the estimate and the residuals. What each family *does* to
+  a reconstruction is asserted in `state::edits::tests`, over the same
+  `AppState` calls these make.
+- **A refused edit pushes no version and is logged once**: an out-of-range
+  camera image leaves one failed row, and a `from_matches` resection with no
+  file chosen leaves one failed row that is the **state's** sentence rather than
+  the drain's `{tool} failed: …` wrapper.
+- **The cursor moves answer with the version now showing**, undo then redo then
+  a jump by serial, with no `report` on any of them; the ends refuse in the
+  state's words (*"Nothing to undo in `run_a`."*), and a serial the node never
+  minted is refused naming `get_history`.
+- **`get_history` lists what the panel lists**: every version in order, the
+  cursor and disk flags on the right rows, `dirty`, `can_undo` / `can_redo`, an
+  `at` in the log's own format, and `held: false` on a version whose value the
+  test released, the budget's effect arranged directly, since reaching the real
+  budget would mean a reconstruction of gigabytes. A node from no file reports
+  `path`, `disk_serial` and every `is_on_disk` as null or false.
+- **`save_reconstruction` writes and re-points**: a save-as to a temp directory
+  produces the file, renames the node after it, leaves the node clean and
+  returns the serial the disk now holds; a save with no path afterwards goes
+  over that same file; a node that came from no file is refused a pathless save
+  in the File menu's own words.
+- **Every editing tool requires its `reconstruction_label`**, walked over the
+  whole family, and an unknown one is refused naming what is loaded. A
+  `pt3d_<hash>_<index>` id resolving to a different node than the call named is
+  refused rather than edited.
+- **The editing arguments are parsed by shape**: a two-element `pixel`, a
+  positive `radius_px`, a `serial` that is a string, the two booleans, an
+  optional `path`, and an unknown argument on any of them refused by name; the
+  optional ones default to what the schemas say.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **The catalog is twenty-three tools**, eight of them reads;
+- **The catalog is thirty-five tools**, nine of them reads and one of them the
+  `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud` and `max_dimension`.
@@ -1930,6 +2344,14 @@ tool is everything before the pixels: that it defers, what it defers with, that
 it refuses a minimized window, and that its caption is built while the state is
 still borrowed.
 
+**One editing test runs against a real viewer too**, in the same file and by the
+same route: load the demo node, delete a point over the wire, read `get_history`
+back, undo, and read the Action Log. Not because any of that needs a frame,
+since it is all under headless test above, but because the claim the editing family
+makes is that an agent's edit lands in the window the human is looking at, in
+the same history and attributed to the agent, and a real viewer is the only
+place that claim can be checked end to end.
+
 **A `set_window_layout` window portion against a real window** is not covered:
 maximize, read back `maximized`, restore, read back the original inner size —
 the round trip, not pixel positions, since where a window manager actually puts
@@ -1938,40 +2360,36 @@ startup load ([panel-layout.md](panel-layout.md) § "Testing").
 
 ## Editing reconstruction data
 
-The surface changes what is loaded, what is selected and how it is drawn. It
-changes no reconstruction data, and the reason is a viewer-wide invariant worth
-stating:
+The surface edits reconstruction data, and the invariant it does that under is
+the document model's, stated in value terms
+([document-model.md](document-model.md)):
 
-> **Nothing in the viewer mutates a loaded `SfmrReconstruction`.** Per-node
-> `transform` is view state that reaches the GPU as a model matrix and never
-> touches the reconstruction. Even `Align to…` only writes the node's transform,
-> and `Resect Image` — which genuinely computes new geometry — publishes it as a
-> *new derived node* beside the source rather than editing it.
+> **The loaded value is never mutated.** A node holds a *history* of versions
+> with a cursor on one of them, and an edit is a function from the value at the
+> cursor to the next value, pushed as a new version. Nothing writes through the
+> value the previous version holds, so a version is still exactly what it was
+> and undo is a move of the cursor rather than an inverse operation.
 
-Editing intrinsics in place would break that, and the breakage is not
-theoretical: the content hash stops describing the contents, so every
-`pt3d_<hash>_<index>` id in flight starts naming a reconstruction that no longer
-exists; every frustum, distorted mesh and image quad built from those intrinsics
-needs re-upload; and the human has no way to tell an edited node from a loaded
-one, or to get back.
+That is what makes an agent's edit safe to offer at all. The content hash still
+describes the contents, because the contents of any given version never change;
+`pt3d_<hash>_<index>` ids keep resolving across an edit through the version
+graph ([goto-point.md](goto-point.md) § "The ID forms and the version graph");
+the human can see what happened in the Edit History panel and go back
+to any of it; and per-node `transform` stays what it always was, view state
+that reaches the GPU as a model matrix and is not part of the value.
 
-The answer the codebase already has is `resect_image`'s. A `set_camera_intrinsics`
-would **produce a derived node**:
+Which is also why the wire needs no vocabulary of its own for any of this. The
+tools are the menu's own `AppState` calls (§ "The editing family"), the history
+is the panel's own list (§ "`get_history`"), and the save is the File menu's
+(§ "`save_reconstruction`"). An agent and a human editing the same node take
+turns rather than working in two different worlds.
 
-```jsonc
-// { "reconstruction_label": "seoul_bull", "camera_intrinsics_index": 0,
-//   "params": { "focal_length_x": 410.0, "radial_distortion_k1": -0.028 } }
-{ "label": "seoul_bull (intrinsics 0 edited)", "replaced": false }
-```
-
-— named for its provenance, inheriting the source's transform so it lands
-exactly on top, replaced in place when the same edit is repeated, and leaving
-the source untouched. The agent then flips `set_reconstruction_display` between
-the two, or screenshots both. Saving it is `sfm xform`'s job, as it already is.
-
-That is a real design with real work behind it (partial-parameter merge against
-`CameraModel`, re-upload invalidation, the derived-node lifecycle) and it should
-land as its own change.
+**Editing intrinsics is still not on the surface.** `set_camera_intrinsics`
+would be an edit like the others under this model, but it has real work behind
+it (a partial-parameter merge against `CameraModel`, and the re-upload of every
+frustum, distorted mesh and image quad built from the lens that changed), and it
+should land as its own change, with an edit spec beside the rest in
+[edits/](edits/README.md).
 
 ### Loose images, and the names held for them
 
@@ -2020,8 +2438,15 @@ Other candidates, in rough order of value:
   machine is a different problem.
 - **No headless mode.** The window is the point. An MCP server with no window
   behind it would be a worse `sfm inspect`.
-- **No persistence of what an agent did.** The endpoint is not remembered
-  between runs, and neither is anything an agent set through it. The viewer does
+- **No dialogs on an agent's behalf.** `save_reconstruction` takes a path and
+  `resect_camera_image_in_place` takes the `.matches` file the viewer already
+  has; neither opens a chooser when it has none. A modal `rfd` dialog stops the
+  GUI thread pumping, so every queued tool call would time out behind a window
+  only the human can answer.
+- **No persistence of what an agent *set*.** The endpoint is not remembered
+  between runs, and neither is any display state, arrangement or selection an
+  agent set through it. What an agent *edits* is a different thing, and
+  `save_reconstruction` is how that reaches a file. The viewer does
   restore a layout at startup — the one *the human* saved to
   `~/.sfm-explorer-default-layout.json` ([panel-layout.md](panel-layout.md)
   § "The default layout file")— and an agent that wants its arrangement to
@@ -2051,6 +2476,9 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
+| `create_point` `radius_px` | the Create 3D Point prompt's own default (`AppState::create_point_default_radius`) | The patch's radius in the image's pixels. Must be greater than zero. |
+| `resect_camera_image_in_place` `from_matches` | `false`, the reconstruction's own observations | The other source is the `.matches` file already chosen for the node in the viewer. |
+| `bundle_adjust` `release_focal` | `false`, the shared focal is held | The one decision the Bundle Adjust dialog collects. |
 
 ## Open questions
 

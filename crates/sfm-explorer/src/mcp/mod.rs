@@ -7,8 +7,9 @@
 //! See `specs/gui/mcp-server.md`. Started with `sfm-explorer --mcp`, the viewer
 //! hosts a small HTTP server on loopback; a connected agent can enumerate the
 //! scene graph, open and close `.sfmr` files, move the selection and the 3D
-//! camera, choose what the Image Detail panel draws over its photograph, and
-//! take a screenshot of the viewport.
+//! camera, choose what the Image Detail panel draws over its photograph, edit a
+//! loaded reconstruction and walk its history, save it, and take a screenshot
+//! of the viewport.
 //!
 //! ## The shape of this module, and why
 //!
@@ -26,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps twenty-two of the
-//!   twenty-three tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps thirty-four of the
+//!   thirty-five tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -43,6 +44,7 @@ use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
 mod display;
+mod edit;
 mod frame;
 mod layout;
 mod read;
@@ -63,7 +65,9 @@ pub(crate) use server::serve;
 ///
 /// A reconstruction is named by its **label**, so these carry a `String` that
 /// [`apply_with_window`] resolves against `AppState::scene`. `Option<String>` means "the
-/// selected reconstruction if omitted". The `ReconId` never crosses the wire:
+/// selected reconstruction if omitted"; the editing tools take a plain
+/// `String`, because an edit names the node it edits rather than landing on
+/// whatever the human last clicked. The `ReconId` never crosses the wire:
 /// a label is unique across the scene and survives every edit of the node it
 /// names (see "Addressing" in `specs/gui/mcp-server.md`).
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +154,65 @@ pub(crate) enum Command {
     },
     HidePanel {
         panel: crate::dock::Tab,
+    },
+    /// One node's version list, its cursor, and what a save would find.
+    GetHistory {
+        reconstruction_label: String,
+    },
+    Undo {
+        reconstruction_label: String,
+    },
+    Redo {
+        reconstruction_label: String,
+    },
+    /// The Edit History panel's jump, by the serial the panel and the log
+    /// spell (`"v12"`).
+    JumpToVersion {
+        reconstruction_label: String,
+        serial: String,
+    },
+    /// Write the node out: over its own path when the call named none, and to
+    /// a named path otherwise, which re-points the node at it.
+    SaveReconstruction {
+        reconstruction_label: String,
+        path: Option<PathBuf>,
+    },
+    DeletePoint {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+    },
+    DeleteCameraImage {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+    },
+    AddObservation {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+        camera_image: CameraImageSel,
+        pixel: [f32; 2],
+    },
+    CreatePoint {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        pixel: [f32; 2],
+        /// `None` takes the radius the Create 3D Point prompt would offer for
+        /// this image, which is the median radius its own observations project
+        /// to.
+        radius_px: Option<f32>,
+    },
+    RemoveObservation {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+        camera_image: CameraImageSel,
+    },
+    ResectCameraImageInPlace {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        from_matches: bool,
+    },
+    BundleAdjust {
+        reconstruction_label: String,
+        release_focal: bool,
     },
     /// A picture of the presented window, or of one panel's body cropped from
     /// it.
@@ -316,7 +379,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other twenty-two answer with JSON, and squeezing an image through a JSON
+/// the other thirty-four answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -333,7 +396,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the twenty-two tools that speak only JSON.
+/// The answer of the thirty-four tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -404,8 +467,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes twenty-two of the
-/// twenty-three tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes thirty-four of the
+/// thirty-five tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -494,6 +557,91 @@ pub(crate) fn apply_with_window(
         }
         Command::ShowPanel { panel } => done(layout::show_panel(state, host, panel)),
         Command::HidePanel { panel } => done(layout::hide_panel(state, host, panel)),
+        Command::GetHistory {
+            reconstruction_label,
+        } => done(edit::get_history(state, &reconstruction_label)),
+        Command::Undo {
+            reconstruction_label,
+        } => done(edit::undo(state, &reconstruction_label)),
+        Command::Redo {
+            reconstruction_label,
+        } => done(edit::redo(state, &reconstruction_label)),
+        Command::JumpToVersion {
+            reconstruction_label,
+            serial,
+        } => done(edit::jump_to_version(state, &reconstruction_label, &serial)),
+        Command::SaveReconstruction {
+            reconstruction_label,
+            path,
+        } => done(edit::save_reconstruction(
+            state,
+            &reconstruction_label,
+            path.as_deref(),
+        )),
+        Command::DeletePoint {
+            reconstruction_label,
+            point,
+        } => done(edit::delete_point(state, &reconstruction_label, &point)),
+        Command::DeleteCameraImage {
+            reconstruction_label,
+            camera_image,
+        } => done(edit::delete_camera_image(
+            state,
+            &reconstruction_label,
+            &camera_image,
+        )),
+        Command::AddObservation {
+            reconstruction_label,
+            point,
+            camera_image,
+            pixel,
+        } => done(edit::add_observation(
+            state,
+            &reconstruction_label,
+            &point,
+            &camera_image,
+            pixel,
+        )),
+        Command::CreatePoint {
+            reconstruction_label,
+            camera_image,
+            pixel,
+            radius_px,
+        } => done(edit::create_point(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            pixel,
+            radius_px,
+        )),
+        Command::RemoveObservation {
+            reconstruction_label,
+            point,
+            camera_image,
+        } => done(edit::remove_observation(
+            state,
+            &reconstruction_label,
+            &point,
+            &camera_image,
+        )),
+        Command::ResectCameraImageInPlace {
+            reconstruction_label,
+            camera_image,
+            from_matches,
+        } => done(edit::resect_camera_image_in_place(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            from_matches,
+        )),
+        Command::BundleAdjust {
+            reconstruction_label,
+            release_focal,
+        } => done(edit::bundle_adjust(
+            state,
+            &reconstruction_label,
+            release_focal,
+        )),
         Command::Screenshot {
             panel,
             hud,
@@ -751,6 +899,35 @@ pub(super) fn resolve_point(
         .map_err(ToolError)
 }
 
+/// The 3D point a tool named, **inside** the reconstruction the same call
+/// named.
+///
+/// The editing tools name their reconstruction and their point separately, and
+/// the two have to agree: a bare index is a coordinate in that node's value,
+/// and a qualified id that resolves somewhere else is a refusal rather than an
+/// edit quietly applied to the wrong file. Goes through the same parse and
+/// lookup [`resolve_point`] does, with the named node standing where the
+/// selected one usually does, so an id means the same thing here as it does in
+/// `get_point`.
+pub(super) fn resolve_point_in(
+    state: &AppState,
+    reconstruction: ReconId,
+    query: &crate::goto_point::PointQuery,
+) -> Result<PointRef, ToolError> {
+    let point = crate::goto_point::resolve_point_query(&state.scene, Some(reconstruction), query)
+        .map_err(ToolError)?;
+    if point.recon != reconstruction {
+        let named = state.node(reconstruction).map(|node| node.label.as_str());
+        let holder = state.node(point.recon).map(|node| node.label.as_str());
+        return Err(ToolError::new(format!(
+            "That point id belongs to {}, not to {}.",
+            holder.unwrap_or("another reconstruction"),
+            named.unwrap_or("the reconstruction named"),
+        )));
+    }
+    Ok(point)
+}
+
 /// `" — loaded: a, b."`, or a note that nothing is, to hang off a
 /// "no such reconstruction" message.
 fn loaded_list(state: &AppState) -> String {
@@ -784,19 +961,23 @@ fn loaded_list(state: &AppState) -> String {
 ///
 /// A mutating tool that succeeds writes nothing here: the `AppState` and
 /// `Viewer3D` methods it called already did, in the same words the GUI's own
-/// path produces.
+/// path produces. Two of them word their own **refusal** as well -- the
+/// in-place resection and the adjustment own the vocabulary of the operation
+/// they refused -- so a failed entry is written here only when the batch's
+/// application recorded none, which is what keeps one failure to one entry.
 pub(crate) fn apply_as_agent(
     state: &mut AppState,
     viewer: &mut Viewer3D,
     host: &mut dyn crate::window::WindowHost,
     commands: Vec<Command>,
-) -> Vec<Outcome> {
+) -> Applied {
     debug_assert_eq!(
         state.action_log.actor(),
         crate::action_log::Actor::User,
         "the agent's commands were applied with the actor already moved",
     );
     state.action_log.set_actor(crate::action_log::Actor::Mcp);
+    let mut stale: Vec<ReconId> = Vec::new();
     let outcomes = commands
         .into_iter()
         .map(|command| {
@@ -805,11 +986,21 @@ pub(crate) fn apply_as_agent(
             let kind = command.kind();
             let run = command.run();
             let query = query_text(state, viewer, &command);
+            let renumbers = command.renumbers().map(str::to_string);
+            let before = state.action_log.revision();
             let outcome = apply_with_window(state, viewer, host, command);
+            if matches!(outcome, Outcome::Done(Ok(_))) {
+                stale.extend(
+                    renumbers
+                        .as_deref()
+                        .and_then(|label| resolve_reconstruction(state, Some(label)).ok()),
+                );
+            }
             match (&outcome, query) {
-                (Outcome::Done(Err(error)), _) => state
+                (Outcome::Done(Err(error)), _) if !recorded_a_failure(state, before) => state
                     .action_log
                     .fail(kind, format!("{tool} failed: {error}")),
+                (Outcome::Done(Err(_)), _) => {}
                 // A read that folds goes through `query`, which puts the
                 // tool in both the kind and the run; `screenshot` has no run
                 // and is recorded as the discrete act it is.
@@ -823,7 +1014,28 @@ pub(crate) fn apply_as_agent(
         })
         .collect();
     state.action_log.set_actor(crate::action_log::Actor::User);
-    outcomes
+    Applied { outcomes, stale }
+}
+
+/// What a frame's batch of commands did.
+pub(crate) struct Applied {
+    /// One outcome per command, in the order they were applied.
+    pub(crate) outcomes: Vec<Outcome>,
+    /// The nodes a command renumbered ([`Command::renumbers`]), for the caller
+    /// to drop what its panels cached about the table they had.
+    pub(crate) stale: Vec<ReconId>,
+}
+
+/// Whether anything applied since revision `before` recorded a refusal of its
+/// own.
+///
+/// The two bulk edits word their own refusals, because the vocabulary of "this
+/// resection could not be attempted" belongs to the resection and not to the
+/// tool that asked for it. The drain's `{tool} failed: …` row would be a second
+/// line saying the same thing, so it is written only where the state wrote
+/// none.
+fn recorded_a_failure(state: &AppState, before: u64) -> bool {
+    state.action_log.since(before).any(|entry| entry.failed)
 }
 
 // ── The Action Log's view of a command ───────────────────────────────────
@@ -864,7 +1076,55 @@ impl Command {
             Command::SetWindowLayout { .. } => "set_window_layout",
             Command::ShowPanel { .. } => "show_panel",
             Command::HidePanel { .. } => "hide_panel",
+            Command::GetHistory { .. } => "get_history",
+            Command::Undo { .. } => "undo",
+            Command::Redo { .. } => "redo",
+            Command::JumpToVersion { .. } => "jump_to_version",
+            Command::SaveReconstruction { .. } => "save_reconstruction",
+            Command::DeletePoint { .. } => "delete_point",
+            Command::DeleteCameraImage { .. } => "delete_camera_image",
+            Command::AddObservation { .. } => "add_observation",
+            Command::CreatePoint { .. } => "create_point",
+            Command::RemoveObservation { .. } => "remove_observation",
+            Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
+            Command::BundleAdjust { .. } => "bundle_adjust",
             Command::Screenshot { .. } => "screenshot",
+        }
+    }
+
+    /// The node this command may have renumbered, once it has succeeded.
+    ///
+    /// A bulk edit gives the node a whole new base and a cursor move lands on
+    /// one, so an image index or a point index a panel cached is afterwards a
+    /// statement about something else. The drain drops those caches for the
+    /// nodes named here, exactly as the menus and the Edit History panel do
+    /// around the same `AppState` calls. A point edit is not here, for the same
+    /// reason the GUI keeps its caches across one: the base does not move.
+    fn renumbers(&self) -> Option<&str> {
+        match self {
+            Command::DeleteCameraImage {
+                reconstruction_label,
+                ..
+            }
+            | Command::ResectCameraImageInPlace {
+                reconstruction_label,
+                ..
+            }
+            | Command::BundleAdjust {
+                reconstruction_label,
+                ..
+            }
+            | Command::Undo {
+                reconstruction_label,
+            }
+            | Command::Redo {
+                reconstruction_label,
+            }
+            | Command::JumpToVersion {
+                reconstruction_label,
+                ..
+            } => Some(reconstruction_label),
+            _ => None,
         }
     }
 
@@ -897,8 +1157,23 @@ impl Command {
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
             | Command::GetImageDetailDisplay
+            | Command::GetHistory { .. }
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
-            Command::OpenReconstruction { .. } | Command::CloseReconstruction { .. } => Kind::File,
+            Command::OpenReconstruction { .. }
+            | Command::CloseReconstruction { .. }
+            | Command::SaveReconstruction { .. } => Kind::File,
+            // The kind every edit, cursor move and refusal of one is filed
+            // under, whoever asked for it.
+            Command::Undo { .. }
+            | Command::Redo { .. }
+            | Command::JumpToVersion { .. }
+            | Command::DeletePoint { .. }
+            | Command::DeleteCameraImage { .. }
+            | Command::AddObservation { .. }
+            | Command::CreatePoint { .. }
+            | Command::RemoveObservation { .. }
+            | Command::ResectCameraImageInPlace { .. }
+            | Command::BundleAdjust { .. } => Kind::Edit,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }
@@ -973,6 +1248,9 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
+        Command::GetHistory {
+            reconstruction_label,
+        } => format!("get_history {reconstruction_label}"),
         Command::Screenshot {
             panel,
             hud,

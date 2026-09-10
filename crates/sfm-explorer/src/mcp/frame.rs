@@ -104,8 +104,21 @@ impl App {
             replies.push(reply);
         }
         let mut host = window.clone();
-        let outcomes = apply_as_agent(&mut self.state, &mut self.viewer_3d, &mut host, commands);
-        for (outcome, reply) in outcomes.into_iter().zip(replies) {
+        let applied = apply_as_agent(&mut self.state, &mut self.viewer_3d, &mut host, commands);
+        // A bulk edit or a cursor move renumbers, so what the panels cached
+        // about the table they had -- rendered patches, prepared track rows,
+        // per-camera derived quantities -- describes a geometry the node no
+        // longer holds. Dropped here for the same reason the menus and the Edit
+        // History panel drop it around the same `AppState` calls; the panels
+        // are `App`'s, which is why this is the drain's job and not the
+        // vocabulary's.
+        for id in applied.stale {
+            self.image_browser.forget_recon(id);
+            self.image_detail.forget_recon(id);
+            self.point_track_detail.forget_recon(id);
+            self.intrinsics_detail.forget_recon(id);
+        }
+        for (outcome, reply) in applied.outcomes.into_iter().zip(replies) {
             match outcome {
                 // A dropped receiver means the client hung up mid-call, which
                 // is normal and not worth a log line.
