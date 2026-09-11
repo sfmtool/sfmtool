@@ -245,10 +245,13 @@ impl<S: KdfScalar> KdfFile<S> {
         let address_map_bytes = storage_rows
             .as_ref()
             .map_or(0, |v| std::mem::size_of_val(v.as_slice()));
+        // The largest item a caller may ask for bounds the shard count: admission
+        // is per shard, so a shard too small for one chunk could never admit it.
         let cache = Cache::new(
             options.cache_bytes,
             options.max_in_flight_bytes,
             address_map_bytes,
+            options.max_chunk_bytes,
         );
         Ok(Self {
             archive: Mutex::new(archive),
@@ -294,6 +297,21 @@ impl<S: KdfScalar> KdfFile<S> {
             logical: 0,
         })
     }
+    /// Feature IDs in stored corpus order: entry `r` is the feature at row `r`.
+    ///
+    /// The inverse of the stored row map, and the order a self-join should visit
+    /// its queries in — consecutive rows share a descriptor block, so reading
+    /// them in this order is what lets a bounded cache serve a corpus it cannot
+    /// hold. `None` in tree-local layout, which has no shared corpus.
+    pub fn storage_order(&self) -> Option<Vec<u32>> {
+        let rows = self.storage_rows.as_ref()?;
+        let mut order = vec![0u32; rows.len()];
+        for (id, &row) in rows.iter().enumerate() {
+            order[row as usize] = id as u32;
+        }
+        Some(order)
+    }
+
     pub fn io_stats(&self) -> KdfIoStats {
         self.cache.stats()
     }
@@ -358,6 +376,44 @@ impl<S: KdfScalar> KdfFile<S> {
             feature_ids: ids,
             vectors,
         })
+    }
+
+    /// Total nodes in one tree, summed over its chunks.
+    ///
+    /// A caller sizing a per-query visited-node set needs this without decoding
+    /// anything; the chunk directory already holds it.
+    pub fn tree_node_count(&self, tree: usize) -> usize {
+        self.metadata.trees[tree]
+            .chunks
+            .iter()
+            .map(|c| c.node_count as usize)
+            .sum()
+    }
+
+    /// [`shared_vector`](Self::shared_vector) into a caller-owned buffer.
+    ///
+    /// The allocating form returns a fresh `Vec` per descriptor, which a search
+    /// calls once per checked candidate — so a batch of queries spends much of
+    /// its time in the allocator rather than in distance work. This reuses one
+    /// buffer across a whole query.
+    pub fn shared_vector_into(&self, feature_id: u32, out: &mut Vec<S>) -> Result<(), KdfError> {
+        let rows = self
+            .storage_rows
+            .as_ref()
+            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
+        let row = *rows
+            .get(feature_id as usize)
+            .ok_or_else(|| KdfError::InvalidQuery("feature ID out of range".into()))?
+            as usize;
+        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let pin = self.descriptor_block((row / q) as u32)?;
+        let Cached::Descriptor(vectors) = &*pin else {
+            unreachable!()
+        };
+        let base = (row % q) * self.dim();
+        out.clear();
+        out.extend_from_slice(&vectors[base..base + self.dim()]);
+        Ok(())
     }
 
     /// Copy one vector from the shared corpus. Tree-local callers use `leaf`.

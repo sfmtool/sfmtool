@@ -111,6 +111,13 @@ pub enum ClusterMatchError {
     CorpusSmallerThanFloor { n: usize, d: usize },
     /// `image_starts` is not a valid CSR offset array over the corpus.
     BadOffsets { n: usize },
+    /// The supplied neighbour table does not match the corpus and `d`.
+    BadNeighborTable {
+        expected_width: usize,
+        width: usize,
+        rows: usize,
+        indexes: usize,
+    },
 }
 
 impl std::fmt::Display for ClusterMatchError {
@@ -124,6 +131,16 @@ impl std::fmt::Display for ClusterMatchError {
             Self::BadOffsets { n } => write!(
                 f,
                 "image_starts must be non-decreasing, start at 0, and end at N ({n})"
+            ),
+            Self::BadNeighborTable {
+                expected_width,
+                width,
+                rows,
+                indexes,
+            } => write!(
+                f,
+                "neighbour table must be {rows} x {expected_width}; got width {width} \
+                 and {indexes} indexes"
             ),
         }
     }
@@ -157,12 +174,93 @@ pub fn background_floor_clusters(
 ) -> Result<Clusters, ClusterMatchError> {
     let n = descriptors.nrows();
     let dim = descriptors.ncols();
+    let k = params.d + 1;
+    let corpus: Cow<'_, [u8]> = match descriptors.as_slice() {
+        Some(s) => Cow::Borrowed(s),
+        None => Cow::Owned(descriptors.iter().copied().collect()),
+    };
+    let timing = *CLUSTER_TIMING;
+    let t = std::time::Instant::now();
+    let forest = KdForestU8::build(&corpus, n, dim, params.forest);
+    let t_build = t.elapsed();
+    let t = std::time::Instant::now();
+    // Self-join batch: process the queries in the forest's descriptor-space
+    // locality order so consecutive queries hit cache-resident point rows
+    // (identical results in identical positions — only the schedule changes).
+    let (indexes, distances_sq) = forest.search_batch_with_distances_ordered(
+        &corpus,
+        n,
+        k,
+        params.forest.max_leaf_checks,
+        None,
+        forest.locality_order(),
+    );
+    let t_query = t.elapsed();
+    if timing {
+        eprintln!(
+            "CLUSTER_TIMING build={:.1}ms query={:.1}ms",
+            t_build.as_secs_f64() * 1e3,
+            t_query.as_secs_f64() * 1e3
+        );
+    }
+    background_floor_clusters_from_neighbors(
+        n,
+        image_starts,
+        params,
+        &NeighborTable {
+            indexes,
+            distances_sq,
+            width: k,
+        },
+    )
+}
+
+/// The k-NN table [`background_floor_clusters`] computes before clustering.
+///
+/// Row `i` occupies `indexes[i * width .. (i + 1) * width]`, nearest first,
+/// with `u32::MAX` and `f32::INFINITY` padding unfilled slots. Distances are
+/// **squared** L2, as the forest reports them.
+#[derive(Clone, Debug)]
+pub struct NeighborTable {
+    pub indexes: Vec<u32>,
+    pub distances_sq: Vec<f32>,
+    /// Query width, which the matcher requires to be `d + 1`.
+    pub width: usize,
+}
+
+/// [`background_floor_clusters`] from a k-NN table computed elsewhere.
+///
+/// The clustering stage never looks at a descriptor — only at neighbour indexes
+/// and distances — so it is separable from the search that produced them. That
+/// is what lets the same clustering run over a table from the in-memory forest
+/// or from a file-backed one, and it means a corpus too large to hold can still
+/// be clustered once its neighbours are known.
+pub fn background_floor_clusters_from_neighbors(
+    n: usize,
+    image_starts: &[u32],
+    params: &BackgroundFloorParams,
+    neighbors: &NeighborTable,
+) -> Result<Clusters, ClusterMatchError> {
     if n == 0 {
         return Err(ClusterMatchError::EmptyCorpus);
     }
     if n <= params.d {
         return Err(ClusterMatchError::CorpusSmallerThanFloor { n, d: params.d });
     }
+    let k = params.d + 1;
+    if neighbors.width != k
+        || neighbors.indexes.len() != n * k
+        || neighbors.distances_sq.len() != n * k
+    {
+        return Err(ClusterMatchError::BadNeighborTable {
+            expected_width: k,
+            width: neighbors.width,
+            rows: n,
+            indexes: neighbors.indexes.len(),
+        });
+    }
+    let idx = &neighbors.indexes;
+    let dist_sq = &neighbors.distances_sq;
     let offsets_valid = image_starts.len() >= 2
         && image_starts[0] == 0
         && image_starts.windows(2).all(|w| w[0] <= w[1])
@@ -180,32 +278,7 @@ pub fn background_floor_clusters(
         image_of[lo..hi].fill(img as u32);
     }
 
-    // The query width is derived, not configured: the background rank `d` is
-    // the last column of a `d + 1`-wide query (self + the `d` nearest others).
-    let k = params.d + 1;
-
-    let corpus: Cow<'_, [u8]> = match descriptors.as_slice() {
-        Some(s) => Cow::Borrowed(s),
-        None => Cow::Owned(descriptors.iter().copied().collect()),
-    };
-
     let timing = *CLUSTER_TIMING;
-    let t = std::time::Instant::now();
-    let forest = KdForestU8::build(&corpus, n, dim, params.forest);
-    let t_build = t.elapsed();
-    let t = std::time::Instant::now();
-    // Self-join batch: process the queries in the forest's descriptor-space
-    // locality order so consecutive queries hit cache-resident point rows
-    // (identical results in identical positions — only the schedule changes).
-    let (idx, dist_sq) = forest.search_batch_with_distances_ordered(
-        &corpus,
-        n,
-        k,
-        params.forest.max_leaf_checks,
-        None,
-        forest.locality_order(),
-    );
-    let t_query = t.elapsed();
     let t = std::time::Instant::now();
 
     // Per-row within-radius cross-image candidates, with the L2 distance kept
@@ -304,11 +377,10 @@ pub fn background_floor_clusters(
     }
 
     if timing {
+        // Build and query are timed by whoever produced the neighbour table;
+        // this stage reports only the work it does itself.
         eprintln!(
-            "CLUSTER_TIMING floor build_ms={:.1} query_ms={:.1} radius_ms={:.1} seed_ms={:.1} \
-             n={} clusters={}",
-            t_build.as_secs_f64() * 1e3,
-            t_query.as_secs_f64() * 1e3,
+            "CLUSTER_TIMING floor radius_ms={:.1} seed_ms={:.1} n={} clusters={}",
             t_radius.as_secs_f64() * 1e3,
             t.elapsed().as_secs_f64() * 1e3,
             n,

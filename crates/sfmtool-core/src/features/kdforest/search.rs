@@ -90,13 +90,13 @@ pub(super) struct QueryStats {
 /// which words were touched so [`clear`](Checked::clear) costs O(words touched)
 /// — i.e. O(checks) — instead of re-zeroing the whole `N/64`-word buffer every
 /// query.
-struct Checked {
+pub(super) struct Checked {
     bits: Vec<u64>,
     touched: Vec<u32>,
 }
 
 impl Checked {
-    fn new(n: usize) -> Self {
+    pub(super) fn new(n: usize) -> Self {
         Self {
             bits: vec![0u64; n.div_ceil(64)],
             touched: Vec::new(),
@@ -105,7 +105,7 @@ impl Checked {
 
     /// Mark point `i` as checked; returns `true` if it was not already marked.
     #[inline]
-    fn insert(&mut self, i: u32) -> bool {
+    pub(super) fn insert(&mut self, i: u32) -> bool {
         let word = i as usize / 64;
         let bit = 1u64 << (i % 64);
         if self.bits[word] == 0 {
@@ -118,7 +118,7 @@ impl Checked {
     }
 
     /// Zero only the words touched since the last clear.
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         for &word in &self.touched {
             self.bits[word as usize] = 0;
         }

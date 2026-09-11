@@ -58,6 +58,123 @@ fn extract_corpus<'py>(
     Ok((descriptors, n, dim))
 }
 
+/// Background-floor track-cluster matcher over a persistent `.kdf` forest.
+///
+/// The out-of-core twin of `background_floor_clusters`: it opens a shared-layout
+/// `.kdf`, runs the same self-join against it, and clusters the result. Neither
+/// the corpus nor the forest is held in memory — each query descriptor is read
+/// from the file, used and dropped, and the index stays on disk behind a bounded
+/// cache. What remains resident is that cache plus the `N x (d + 1)` neighbour
+/// table the clustering stage consumes.
+///
+/// Results are identical to the in-memory matcher on the same forest, because
+/// the file stores that forest's exact topology and leaf order.
+///
+/// Args:
+///     path: A shared-layout `.kdf` written from the forest to match against.
+///     image_starts: (n_images + 1,) uint32 CSR offsets over the corpus, in the
+///         same feature-ID order the `.kdf` was written from.
+///     d: Background rank; the k-NN query width is d + 1 (default 10).
+///     alpha: Keep cross-image neighbours within alpha * floor (default 0.8).
+///     min_size: Record a cluster only if it spans >= this many images.
+///     max_leaf_checks: Per-query budget. A `.kdf` stores no build-time default,
+///         so this is always the caller's choice (default 128).
+///     cache_bytes / max_chunk_bytes / query_workers: reader limits, as for
+///         `LazyKdForest`.
+///
+/// Returns:
+///     Tuple (cluster_starts, member_images, member_features), as for
+///     `background_floor_clusters`.
+///
+/// Raises:
+///     ValueError: The file is tree-local, so it has no corpus to draw queries
+///         from, or the inputs disagree with each other.
+///     OSError: The file is malformed or damaged.
+#[pyfunction]
+#[pyo3(signature = (path, image_starts, d=10, alpha=0.8, min_size=2,
+                    max_leaf_checks=128, cache_bytes=None, max_chunk_bytes=None,
+                    query_workers=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn background_floor_clusters_kdf(
+    py: Python<'_>,
+    path: std::path::PathBuf,
+    image_starts: &Bound<'_, PyAny>,
+    d: usize,
+    alpha: f32,
+    min_size: usize,
+    max_leaf_checks: usize,
+    cache_bytes: Option<usize>,
+    max_chunk_bytes: Option<usize>,
+    query_workers: Option<usize>,
+) -> PyResult<(Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
+    use sfmtool_core::features::cluster_match::NeighborTable;
+    use sfmtool_core::features::kdforest::{LazyKdForestOptions, LazyKdForestU8};
+
+    if d == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "d (background rank) must be at least 1",
+        ));
+    }
+    let image_starts = extract_u32_1d(image_starts, "image_starts")?;
+    let starts: Cow<'_, [u32]> = to_contiguous!(image_starts);
+
+    let mut options = LazyKdForestOptions::default();
+    if let Some(v) = cache_bytes {
+        options.cache_bytes = v;
+        options.max_in_flight_bytes = v;
+    }
+    if let Some(v) = max_chunk_bytes {
+        options.max_chunk_bytes = v;
+        options.max_compressed_bytes = v;
+    }
+    if let Some(v) = query_workers {
+        options.query_workers = v;
+    }
+
+    let params = BackgroundFloorParams {
+        d,
+        alpha,
+        min_size,
+        forest: resolve_forest_params(None, "accurate", None, None, Some(max_leaf_checks), None)?,
+    };
+
+    let clusters = py
+        .detach(|| -> Result<_, String> {
+            let lazy = LazyKdForestU8::open(&path, options).map_err(|e| e.to_string())?;
+            let n = lazy.len();
+            let (indexes, distances_sq) = lazy
+                .self_join_with_distances(d + 1, max_leaf_checks, None)
+                .map_err(|e| e.to_string())?;
+            // The corpus and the index are both gone from memory by here; only
+            // the neighbour table and the clustering scratch remain.
+            drop(lazy);
+            cluster_match::background_floor_clusters_from_neighbors(
+                n,
+                &starts,
+                &params,
+                &NeighborTable {
+                    indexes,
+                    distances_sq,
+                    width: d + 1,
+                },
+            )
+            .map_err(|e| e.to_string())
+        })
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+
+    let cluster_starts =
+        numpy::PyArray1::from_vec(py, clusters.cluster_starts.into_raw_vec_and_offset().0);
+    let member_images =
+        numpy::PyArray1::from_vec(py, clusters.member_images.into_raw_vec_and_offset().0);
+    let member_features =
+        numpy::PyArray1::from_vec(py, clusters.member_features.into_raw_vec_and_offset().0);
+    Ok((
+        cluster_starts.into_any().unbind(),
+        member_images.into_any().unbind(),
+        member_features.into_any().unbind(),
+    ))
+}
+
 /// Background-floor track-cluster matcher: materialize the clusters.
 ///
 /// Args:
@@ -466,6 +583,7 @@ pub fn refine_cluster_patches<'py>(
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(background_floor_clusters, m)?)?;
+    m.add_function(wrap_pyfunction!(background_floor_clusters_kdf, m)?)?;
     m.add_function(wrap_pyfunction!(clusters_to_pair_matches, m)?)?;
     m.add_function(wrap_pyfunction!(refine_cluster_patches, m)?)?;
     Ok(())

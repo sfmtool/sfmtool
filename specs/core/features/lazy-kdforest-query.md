@@ -608,15 +608,103 @@ This leaves the existing default of 16 in place, and identifies the one case for
 changing it: a corpus where stored size dominates and query latency does not, where
 leaf 128 buys 7% of the file for 1.9x the cold query.
 
-**More query workers helped no corpus measured.** Per-query work is
-sub-millisecond at these budgets, so rayon's per-task overhead dominates:
-`dino_dog_toy` shared goes 0.24 s to 0.36 s from one worker to eight. The default
-of one worker stands.
+**Query workers pay off only once the cache is sharded.** Every node and every
+descriptor a query touches takes a cache lock, so with one lock for the whole
+cache the workers serialize on it and adding them does nothing. The cache is split
+into up to 16 independently locked shards, chosen by the low bits of the cache key.
+Interleaved arms, nine rounds of 20,000 queries against a fully resident
+`dino_dog_toy` file, k = 11:
+
+| Cache | Workers | Median | Range |
+|-------|---------|--------|-------|
+| 1 shard | 1 | 74.2 us | 61.9-86.0 |
+| 16 shards | 1 | 72.4 us | 59.6-81.5 |
+| 1 shard | 4 | 72.6 us | 69.1-76.9 |
+| 16 shards | 4 | **46.8 us** | 45.8-49.1 |
+
+Sharding costs nothing at one worker, which is what makes it safe to apply
+unconditionally, and it is the only thing that makes a second worker worth having:
+unsharded, four workers match one; sharded, they are 1.55x faster. Removing the
+contention also tightens the spread to about +/-3%, against +/-15% for the
+contended arms.
+
+The shard count is not free to choose. Admission is per shard, so a shard smaller
+than the largest item a caller may ask for could never admit it and the caller
+would block forever; the count is capped at `cache_bytes / max_chunk_bytes`. A
+cache only just large enough for one chunk collapses to a single shard, which is
+the unsharded cache.
+
+Keys are dense block and chunk indexes, so their low bits spread uniformly across
+shards with no hashing. Sharding on the cached *contents* instead — a descriptor's
+leading bytes, say — would be badly skewed, because SIFT descriptors carry many
+small and zero components and most keys would land in a few shards.
+
+The maps themselves are keyed with XXH3 rather than the standard library's
+SipHash-1-3. SipHash exists to resist hash flooding from attacker-chosen keys;
+these keys are dense integers this crate generates while walking a file it has
+already validated, and the crate already hashes every stored section with XXH3, so
+this adds no dependency and no second hash to justify.
+
+An earlier version of this section attributed workers not helping to rayon's
+per-task overhead on sub-millisecond queries. That was wrong — it was lock
+contention, which is why sharding fixes it and task overhead would not.
+
+**A note on measuring any of this.** Timings on this machine drift by up to 2x
+between runs, enough to invent effects and hide real ones: during this work a
+single sample suggested one change was worth 3.2x, repeated runs put the same
+configuration at half that speed, and a third run put it back. Comparisons here
+are therefore *interleaved* — every arm measured in every round, so drift is
+shared rather than attributed to one arm — and reported as medians with ranges. A
+timing claim in this file that is not measured that way should be distrusted.
 
 **Recall and results are unaffected by storage, as designed.** Every cell returned
 neighbors and distances identical to the in-memory forest, and recall@1 against
 exhaustive search was identical across layouts within a corpus — 0.433, 0.557 and
 0.657 at a 128-leaf budget.
+
+**A cache lookup per descriptor is the wrong shape for a whole-corpus algorithm,
+and tuning the cache does not change that.** One query at a 128-check budget makes
+about 241 cache lookups — 132 for descriptors, the rest for nodes. The in-memory
+forest answers the same query in about 1 us, because a resident leaf is a slice it
+indexes directly and a descriptor comparison is a few nanoseconds. The file-backed
+path, fully resident and with every fix below applied, takes about 47 us.
+
+Four costs have come off that path, every one invisible in a profile of the
+algorithm and obvious in the data structure. Promoting an entry on a hit walked an
+ordered recency list, making a hit O(resident entries). It then hashed the key
+twice, once to read the value and once inside the recency update. Dropping a pin
+called `notify_all` unconditionally, waking nobody, once per node and per
+descriptor examined. And one lock served every access, so workers could not run.
+What remains after all four is a lock, a hash lookup and an `Arc` clone per
+descriptor, against an in-memory path that does an indexed read — which is a
+difference in kind, not in tuning.
+
+For the sparse queries this path was designed around, 47 us is fine: the
+alternative is not having the corpus at all. For an algorithm that queries *every*
+descriptor it is not. The whole-corpus matcher in
+[track-cluster-matching.md](track-cluster-matching.md) runs correctly against a
+`.kdf`, returning byte-identical clusters at every scale measured, at tens of
+microseconds per query against the in-memory path's ~1 us.
+
+Reaching ~1 us means a descriptor access costing nanoseconds, which means no lock
+and no hash lookup on the path: the corpus indexed directly, with the operating
+system's page cache doing the caching. That is the memory-mapped flat-array design
+[kdf-file-format.md](../../formats/kdf-file-format.md) records as the shape a
+mapping consumer wants, and this measurement is the argument for it rather than
+against.
+
+**And an out-of-core index is not an out-of-core algorithm.** Cluster matching is
+a self-join, so the file-backed path also supplies its own queries — it reads each
+descriptor back out of the `.kdf` in stored order, uses it and drops it, and never
+materializes the corpus. That works, and the clustering stage never looks at a
+descriptor at all, only at neighbour indexes and distances. But the matcher's own
+intermediates are `Theta(N * d)`: a neighbour table and a candidate array, each
+`N * (d + 1)` entries, in both paths. At 9.7M descriptors that is roughly 850 MB
+each against a 1.24 GB corpus, so taking the index out of core removes about a
+third of the footprint and no more. Measured at 696k descriptors the two paths peak
+within 7% of each other, most of which is the Python process floor. Making this
+algorithm genuinely out-of-core needs those arrays streamed too, which is work on
+the matcher rather than on the index.
 
 ### What this suggests as defaults
 

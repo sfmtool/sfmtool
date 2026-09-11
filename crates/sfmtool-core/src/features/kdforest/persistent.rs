@@ -4,7 +4,7 @@
 //! Persistence bridge and file-backed best-bin-first traversal.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::BinaryHeap;
 use std::path::Path;
 
 use rayon::prelude::*;
@@ -21,6 +21,7 @@ type QueueEntry<D> = (Reverse<D>, u32, u32, u32, u32);
 
 use super::build::Node;
 use super::distance::ForestScalar;
+use super::search::Checked;
 use super::{KdForest, Neighbor};
 use crate::features::kdforest::{
     KdfError, KdfImageTable, KdfIoStats, KdfSiftSources, KdfWriteOptions, LazyKdForestOptions,
@@ -113,6 +114,10 @@ where
 pub struct LazyKdForest<S: ForestScalar + KdfScalar> {
     file: KdfFile<S>,
     workers: rayon::ThreadPool,
+    /// Start of each tree's logical node IDs in one flat index space, plus a
+    /// final total. Lets one bitset cover every tree's nodes.
+    tree_node_offsets: Vec<u32>,
+    total_nodes: usize,
 }
 
 pub type LazyKdForestU8 = LazyKdForest<u8>;
@@ -130,7 +135,19 @@ where
             .thread_name(|i| format!("kdf-query-{i}"))
             .build()
             .map_err(|e| KdfError::ResourceLimit(format!("could not create query pool: {e}")))?;
-        Ok(Self { file, workers })
+        let mut tree_node_offsets = Vec::with_capacity(file.tree_count() + 1);
+        let mut total = 0usize;
+        for tree in 0..file.tree_count() {
+            tree_node_offsets.push(total as u32);
+            total += file.tree_node_count(tree);
+        }
+        tree_node_offsets.push(total as u32);
+        Ok(Self {
+            file,
+            workers,
+            tree_node_offsets,
+            total_nodes: total,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -177,29 +194,55 @@ where
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Result<(Vec<Neighbor>, LazyQueryStats), KdfError> {
+        let mut scratch = self.new_scratch();
+        let stats = self.search_into(query, k, max_leaf_checks, max_dist, &mut scratch)?;
+        Ok((scratch.result.neighbors(), stats))
+    }
+
+    /// A scratch buffer sized for this forest, to reuse across many queries.
+    pub fn new_scratch(&self) -> LazySearchScratch<S> {
+        LazySearchScratch::new(self.len(), self.total_nodes, self.dim())
+    }
+
+    /// One query, reusing `scratch`; results are left in it.
+    ///
+    /// The allocating entry points build a scratch per call, which is the right
+    /// shape for a single query and the wrong one for a batch: a query's dedup
+    /// sets, priority queue and descriptor buffer are all short-lived and all
+    /// the same size every time, so a batch that reallocates them per query
+    /// spends most of its time in the allocator.
+    fn search_into(
+        &self,
+        query: &[S],
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+        scratch: &mut LazySearchScratch<S>,
+    ) -> Result<LazyQueryStats, KdfError> {
         validate_query(query, self.dim(), max_dist)?;
         let cutoff = max_dist.map(S::cutoff_sq).unwrap_or(S::MAX_DIST);
+        scratch.reset(k, cutoff);
+        if k == 0 || self.is_empty() {
+            return Ok(LazyQueryStats::default());
+        }
         let mut search = Search::<S> {
             file: &self.file,
             query,
-            queue: BinaryHeap::new(),
-            checked: HashSet::new(),
-            visited_nodes: HashSet::new(),
-            result: ResultSet::new(k, cutoff),
+            tree_node_offsets: &self.tree_node_offsets,
+            scratch,
             stats: LazyQueryStats::default(),
         };
-        if k == 0 || self.is_empty() {
-            return Ok((Vec::new(), search.stats));
-        }
-        for ti in 0..self.file.tree_count() {
-            if let Some(root) = self.file.root(ti) {
+        for ti in 0..search.file.tree_count() {
+            if let Some(root) = search.file.root(ti) {
                 search.descend(ti as u32, root, S::ZERO_DIST)?;
             }
         }
-        while let Some((Reverse(priority), tree, logical, chunk, local)) = search.queue.pop() {
+        while let Some((Reverse(priority), tree, logical, chunk, local)) =
+            search.scratch.queue.pop()
+        {
             search.stats.pops += 1;
             if search.stats.checks >= max_leaf_checks as u64
-                || priority > search.result.worst_dist()
+                || priority > search.scratch.result.worst_dist()
             {
                 break;
             }
@@ -213,7 +256,7 @@ where
                 priority,
             )?;
         }
-        Ok((search.result.into_neighbors(), search.stats))
+        Ok(search.stats)
     }
 
     pub fn search_batch_with_distances(
@@ -237,6 +280,132 @@ where
     /// returned per query because the ratio is computed over a whole batch, and
     /// a per-query vector would allocate alongside every result row to say
     /// something no caller has asked for.
+    /// [`search_batch_with_distances`](Self::search_batch_with_distances) with
+    /// the queries *processed* in `order`, results still written to their own
+    /// rows.
+    ///
+    /// Only the schedule changes, never the answers. It matters more here than
+    /// for the in-memory forest: consecutive queries in descriptor-space
+    /// locality order tend to reach the same tree chunks and descriptor blocks,
+    /// so the cache serves them instead of the file. `order` must be a
+    /// permutation of `0..n_queries`.
+    pub fn search_batch_with_distances_ordered(
+        &self,
+        queries: &[S],
+        n_queries: usize,
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+        order: &[u32],
+    ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
+        if order.len() != n_queries {
+            return Err(KdfError::InvalidQuery(format!(
+                "order has {} entries, expected {n_queries}",
+                order.len()
+            )));
+        }
+        let expected = n_queries
+            .checked_mul(self.dim())
+            .ok_or_else(|| KdfError::InvalidQuery("query shape overflow".into()))?;
+        if queries.len() != expected {
+            return Err(KdfError::InvalidQuery(format!(
+                "queries contain {} scalars, expected {expected}",
+                queries.len()
+            )));
+        }
+        let width = k
+            .checked_mul(n_queries)
+            .ok_or_else(|| KdfError::ResourceLimit("batch output shape overflow".into()))?;
+        let mut indices = vec![u32::MAX; width];
+        let mut distances = vec![f32::INFINITY; width];
+
+        let dim = self.dim();
+        let results: Vec<Result<(usize, Vec<Neighbor>), KdfError>> = self.workers.install(|| {
+            order
+                .par_iter()
+                .map_init(
+                    || self.new_scratch(),
+                    |scratch, &row| {
+                        let at = row as usize;
+                        let q = queries.get(at * dim..(at + 1) * dim).ok_or_else(|| {
+                            KdfError::InvalidQuery("order is out of range".into())
+                        })?;
+                        self.search_into(q, k, max_leaf_checks, max_dist, scratch)?;
+                        Ok((at, scratch.result.neighbors()))
+                    },
+                )
+                .collect()
+        });
+        for row in results {
+            let (at, found) = row?;
+            for (c, neighbor) in found.into_iter().enumerate() {
+                indices[at * k + c] = neighbor.index;
+                distances[at * k + c] = neighbor.dist_sq;
+            }
+        }
+        Ok((indices, distances))
+    }
+
+    /// Query every stored descriptor against the forest, holding none of them.
+    ///
+    /// This is the self-join a whole-corpus matcher needs, and the reason it
+    /// exists separately: the batch calls above take the queries as a slice, so
+    /// a self-join through them would require the entire corpus in memory —
+    /// exactly what a file-backed index is for avoiding. Here each query is read
+    /// from the file, used, and dropped.
+    ///
+    /// Rows are visited in stored order, so consecutive queries fall in the same
+    /// descriptor block and the cache serves most of the reads. Results are
+    /// written to each feature's own row, so the output is identical to a batch
+    /// over the corpus in feature-ID order.
+    ///
+    /// Shared layout only; a tree-local file has no corpus to read queries from.
+    /// Peak memory is the cache budget plus the `n * k` result table, not the
+    /// corpus.
+    pub fn self_join_with_distances(
+        &self,
+        k: usize,
+        max_leaf_checks: usize,
+        max_dist: Option<f32>,
+    ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
+        let order = self.file.storage_order().ok_or_else(|| {
+            KdfError::InvalidQuery(
+                "a self-join needs the shared descriptor layout; this file is tree-local".into(),
+            )
+        })?;
+        let n = self.len();
+        let width = n
+            .checked_mul(k)
+            .ok_or_else(|| KdfError::ResourceLimit("batch output shape overflow".into()))?;
+        let mut indices = vec![u32::MAX; width];
+        let mut distances = vec![f32::INFINITY; width];
+
+        let rows: Vec<Result<(usize, Vec<Neighbor>), KdfError>> = self.workers.install(|| {
+            order
+                .par_iter()
+                .map_init(
+                    || (self.new_scratch(), Vec::with_capacity(self.dim())),
+                    |(scratch, query), &id| {
+                        self.file.shared_vector_into(id, query)?;
+                        // `query` and `scratch.descriptor` are separate buffers:
+                        // the search reads candidates into the latter while the
+                        // former still holds the query it is comparing against.
+                        self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
+                        Ok((id as usize, scratch.result.neighbors()))
+                    },
+                )
+                .collect()
+        });
+        for row in rows {
+            let (at, found) = row?;
+            for (c, neighbor) in found.into_iter().enumerate() {
+                indices[at * k + c] = neighbor.index;
+                distances[at * k + c] = neighbor.dist_sq;
+            }
+        }
+        Ok((indices, distances))
+    }
+
     pub fn search_batch_with_stats(
         &self,
         queries: &[S],
@@ -265,7 +434,14 @@ where
             self.workers.install(|| {
                 queries
                     .par_chunks(self.dim())
-                    .map(|q| self.search_with_stats(q, k, max_leaf_checks, max_dist))
+                    .map_init(
+                        || self.new_scratch(),
+                        |scratch, q| {
+                            let stats =
+                                self.search_into(q, k, max_leaf_checks, max_dist, scratch)?;
+                            Ok((scratch.result.neighbors(), stats))
+                        },
+                    )
                     .collect()
             });
         let mut indices =
@@ -317,13 +493,49 @@ fn validate_query<S: KdfScalar>(
     Ok(())
 }
 
+/// Per-worker reusable scratch for the file-backed query path.
+///
+/// The in-memory forest threads one of these through a batch so the priority
+/// queue, dedup sets and result buffer are allocated once per worker rather than
+/// once per query; this is the same idea for the lazy path, where it matters
+/// more because the descriptor buffer is reused too.
+///
+/// Both dedup sets are bitsets with a touched-word list rather than hash sets:
+/// they are reset per query, and an O(words touched) reset is what makes reuse
+/// worth anything. `visited` is indexed by a tree's node offset plus the node's
+/// logical ID, which the format guarantees is dense within a tree.
+pub struct LazySearchScratch<S: ForestScalar> {
+    queue: BinaryHeap<QueueEntry<S::Dist>>,
+    checked: Checked,
+    visited: Checked,
+    result: ResultSet<S>,
+    descriptor: Vec<S>,
+}
+
+impl<S: ForestScalar> LazySearchScratch<S> {
+    fn new(features: usize, nodes: usize, dim: usize) -> Self {
+        Self {
+            queue: BinaryHeap::new(),
+            checked: Checked::new(features),
+            visited: Checked::new(nodes),
+            result: ResultSet::new(0, S::MAX_DIST),
+            descriptor: Vec::with_capacity(dim),
+        }
+    }
+
+    fn reset(&mut self, k: usize, cutoff: S::Dist) {
+        self.queue.clear();
+        self.checked.clear();
+        self.visited.clear();
+        self.result.reset(k, cutoff);
+    }
+}
+
 struct Search<'a, S: ForestScalar + KdfScalar> {
     file: &'a KdfFile<S>,
     query: &'a [S],
-    queue: BinaryHeap<QueueEntry<S::Dist>>,
-    checked: HashSet<u32>,
-    visited_nodes: HashSet<(u32, u32)>,
-    result: ResultSet<S>,
+    tree_node_offsets: &'a [u32],
+    scratch: &'a mut LazySearchScratch<S>,
     stats: LazyQueryStats,
 }
 
@@ -335,7 +547,8 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
         priority: S::Dist,
     ) -> Result<(), KdfError> {
         loop {
-            if !self.visited_nodes.insert((tree, address.logical)) {
+            let flat = self.tree_node_offsets[tree as usize] + address.logical;
+            if !self.scratch.visited.insert(flat) {
                 return Err(KdfError::InvalidFormat(format!(
                     "tree {tree} revisits logical node {}",
                     address.logical
@@ -356,8 +569,8 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
                             (left, right)
                         };
                     let far_priority = priority + S::axis_dist_sq(q, split);
-                    if far_priority <= self.result.worst_dist() {
-                        self.queue.push((
+                    if far_priority <= self.scratch.result.worst_dist() {
+                        self.scratch.queue.push((
                             Reverse(far_priority),
                             tree,
                             far.logical,
@@ -372,24 +585,25 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
                     let leaf = self.file.leaf(tree, address)?;
                     if let Some(vectors) = leaf.vectors {
                         for (i, id) in leaf.feature_ids.into_iter().enumerate() {
-                            if self.checked.insert(id) {
+                            if self.scratch.checked.insert(id) {
                                 self.stats.checks += 1;
                                 let d = S::dist_sq(
                                     self.query,
                                     &vectors[i * self.file.dim()..(i + 1) * self.file.dim()],
                                 );
-                                self.result.consider(id, d);
+                                self.scratch.result.consider(id, d);
                             }
                         }
                     } else {
                         // `leaf` copied the IDs and released its tree pin before
                         // descriptor-cache admission, preventing pin cycles.
                         for id in leaf.feature_ids {
-                            if self.checked.insert(id) {
+                            if self.scratch.checked.insert(id) {
                                 self.stats.checks += 1;
-                                let vector = self.file.shared_vector(id)?;
-                                let d = S::dist_sq(self.query, &vector);
-                                self.result.consider(id, d);
+                                self.file
+                                    .shared_vector_into(id, &mut self.scratch.descriptor)?;
+                                let d = S::dist_sq(self.query, &self.scratch.descriptor);
+                                self.scratch.result.consider(id, d);
                             }
                         }
                     }
@@ -430,10 +644,16 @@ impl<S: ForestScalar> ResultSet<S> {
             self.items.pop();
         }
     }
-    fn into_neighbors(self) -> Vec<Neighbor> {
+    fn reset(&mut self, k: usize, cutoff: S::Dist) {
+        self.k = k;
+        self.cutoff = cutoff;
+        self.items.clear();
+        self.items.reserve(k);
+    }
+    fn neighbors(&self) -> Vec<Neighbor> {
         self.items
-            .into_iter()
-            .map(|(index, d)| Neighbor {
+            .iter()
+            .map(|&(index, d)| Neighbor {
                 index,
                 dist_sq: S::dist_sq_to_f32(d),
             })
