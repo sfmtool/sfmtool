@@ -511,6 +511,42 @@ that revisits its corpus; it is entirely about cold and one-shot queries.
 search costs four independent subtree misses whatever the query. Shared is far
 flatter, 221x to 576x, since its tree chunks carry no vectors.
 
+**Larger leaves improve locality and shrink the file, and lose anyway.** A leaf's
+members are contiguous in the stored corpus, so a bigger leaf puts more of them in
+one block; a bigger leaf also means fewer nodes, so the tree arrays shrink. Both
+effects are real and measurable. But leaf size changes the index, so the comparison
+has to be at equal recall, not at equal budget —
+[`scripts/kdf_leaf_size.py`](../../../scripts/kdf_leaf_size.py) finds the smallest
+budget reaching a recall target for each leaf size and measures there. On DinoLedge,
+four trees, 4 KiB blocks, recall@1 >= 0.65:
+
+| Leaf | Budget | Recall | Checks | Blocks | Reuse | File | Tree arrays | Cold batch |
+|------|--------|--------|--------|--------|-------|------|------------|-----------|
+| 8 | 128 | 0.677 | 128 | 81 | 36.7% | 1,326 MB | 326 MB | 2.29 s |
+| 16 | 128 | 0.657 | 134 | 114 | 14.9% | 1,228 MB | 228 MB | **1.49 s** |
+| 32 | 256 | 0.679 | 274 | 163 | 40.5% | 1,180 MB | 179 MB | 2.01 s |
+| 64 | 512 | 0.685 | 514 | 244 | 52.5% | 1,155 MB | 155 MB | 3.02 s |
+| 128 | 512 | 0.678 | 518 | 260 | 49.8% | **1,144 MB** | 143 MB | 2.84 s |
+
+Block reuse rises with leaf size as predicted, 14.9% to 52.5%, and the file falls
+14% across the range, almost all of it the tree arrays more than halving. What
+undoes both is the budget column. The check budget counts descriptors examined, and
+visiting a leaf examines all of its members, so a leaf of 128 spends 128 checks to
+look at one neighbourhood where a leaf of 16 spends 16 and can look at eight. Recall
+per check falls, the budget needed to recover it doubles or quadruples, and the extra
+distance work costs more than the locality saves. Batch reads move the same way,
+83,369 at leaf 16 against 206,619 at leaf 128, for the same reason.
+
+Leaf 8 loses on both counts — the largest file *and* slow, because more nodes mean
+more tree chunk bytes to traverse — so 16 dominates it outright. On `dino_dog_toy`
+the cold-time optimum was leaf 32 rather than 16, the two within about 30% of each
+other, so the exact best value is corpus-dependent while the shape is not: below 16
+is wasteful, and above 32 trades query time away for file size at a poor rate.
+
+This leaves the existing default of 16 in place, and identifies the one case for
+changing it: a corpus where stored size dominates and query latency does not, where
+leaf 128 buys 7% of the file for 1.9x the cold query.
+
 **More query workers helped no corpus measured.** Per-query work is
 sub-millisecond at these budgets, so rayon's per-task overhead dominates:
 `dino_dog_toy` shared goes 0.24 s to 0.36 s from one worker to eight. The default
@@ -526,6 +562,10 @@ exhaustive search was identical across layouts within a corpus — 0.433, 0.557 
 On this evidence the shared layout is the better default: 3.3x smaller, faster or
 equal in every regime, insensitive to a chunk-size choice that swings tree-local
 by 43x, and at full speed on a budget a third the size.
+
+Leaf size stays at **16**; larger leaves improve descriptor locality and shrink the
+file but need a bigger check budget for the same recall, and that costs more than it
+saves.
 
 For descriptor blocks the knee is around **4 to 8 KiB**, which is where most of
 the cold-query gain has been taken and the file has grown by well under 1%. Going
