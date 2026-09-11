@@ -523,6 +523,11 @@ impl PyLazyKdForest {
 ///     sources: Optional dict of SIFT provenance with keys `workspace`,
 ///         `image_names`, `feature_tool_hashes`, `sift_content_hashes`,
 ///         `image_indexes` and `image_feature_indexes`.
+///     descriptor_order: Order the shared corpus is stored in, as a permutation
+///         of 0..N where entry r is the feature at row r. None uses tree 0's
+///         leaf order. Any permutation is valid — the stored row map is what a
+///         reader follows — so this selects an ordering policy without changing
+///         the file format. Ignored for layout="tree_local".
 ///
 /// Raises:
 ///     FileExistsError: `path` already exists. Writing goes through a sibling
@@ -531,7 +536,8 @@ impl PyLazyKdForest {
 ///     ValueError: The options or the sources are inconsistent.
 #[pyfunction]
 #[pyo3(signature = (forest, path, *, layout, descriptor_block_bytes=None, chunk_bytes=None,
-                    compression_level=None, origin_block_rows=None, sources=None))]
+                    compression_level=None, origin_block_rows=None, sources=None,
+                    descriptor_order=None))]
 #[allow(clippy::too_many_arguments)]
 fn write_kdf(
     py: Python<'_>,
@@ -543,6 +549,7 @@ fn write_kdf(
     compression_level: Option<i32>,
     origin_block_rows: Option<usize>,
     sources: Option<&Bound<'_, PyAny>>,
+    descriptor_order: Option<Vec<u32>>,
 ) -> PyResult<()> {
     let mut options = KdfWriteOptions::tree_local();
     options.descriptor_storage = parse_storage(layout, descriptor_block_bytes)?;
@@ -567,8 +574,15 @@ fn write_kdf(
         )));
     }
     let inner = forest.inner();
-    py.detach(|| inner.write_kdf(&path, sources.as_ref(), &options))
-        .map_err(to_py_err)
+    py.detach(|| {
+        inner.write_kdf_ordered(
+            &path,
+            sources.as_ref(),
+            &options,
+            descriptor_order.as_deref(),
+        )
+    })
+    .map_err(to_py_err)
 }
 
 /// Account for a `.kdf`'s size without decoding its payloads.

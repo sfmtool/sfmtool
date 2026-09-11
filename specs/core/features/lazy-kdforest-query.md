@@ -440,12 +440,46 @@ scatter dominates, most of a large block is waste — and it is why a 1,000-quer
 batch touches 87% of a DinoLedge file's entries at 64 KiB blocks: 130 scattered
 draws per query against 18,950 blocks reaches almost all of them.
 
-There is headroom here. At four trees, ~130 checks span roughly eight leaves, so an
-assignment that kept each leaf's members together would need on the order of ten
-block reads rather than 90. No single assignment can do that for all T trees at
-once, but nothing in the format prevents trying: the storage-row map is an explicit
-permutation a writer may choose freely, so this is a writer policy question with no
-wire-format consequence.
+Two alternative orderings were measured against it and neither is worth adopting.
+The storage-row map is an explicit permutation a writer may choose freely, so this
+is a writer policy question with no wire-format consequence, and
+[`scripts/kdf_descriptor_orderings.py`](../../../scripts/kdf_descriptor_orderings.py)
+compares policies on one forest. At four trees and 4 KiB blocks, one cold query:
+
+| Policy | `dino` blocks | `dino` reuse | DinoLedge blocks | DinoLedge reuse | DinoLedge batch reads |
+|--------|--------------|-------------|-----------------|----------------|----------------------|
+| tree-0 leaf order | 90 | 30.8% | 114 | 14.9% | 83,369 |
+| Morton over 3 principal components | 123 | 5.4% | 133 | 0.7% | 110,409 |
+| greedy co-occurrence packing | 74 | 43.1% | 111 | 17.2% | 86,551 |
+
+A **projection order** — descriptor-space locality via a Z-order curve over the top
+principal components — is clearly *worse*, and the reasoning that motivated it was
+wrong. Every tree's leaf is spatially compact, so an order preserving descriptor-space
+locality ought to serve all T trees at once. But three principal components are far
+too lossy a summary of 128 correlated dimensions: descriptors adjacent on the curve
+are frequently not leaf-mates in any tree, so the order gives up the one thing the
+default reliably has — tree 0's leaves exactly contiguous — and buys almost nothing
+back. Reuse falls to 0.7% at 9.7M descriptors and a batch reads 32% more.
+
+**Greedy co-occurrence packing** — walking leaves round-robin across trees and
+emitting each leaf's not-yet-placed members together — does beat the default on the
+metric it targets, 74 blocks against 90 at 694k descriptors. The advantage nearly
+vanishes at 9.7M (111 against 114) and reverses on batch reads. It is not a win.
+
+The pattern across the three suggests the benefit is close to *conserved*: the
+default gives one tree almost perfect locality and the rest none; greedy spreads a
+middling amount across all trees; the projection gives none to anyone. A descriptor
+sits in T leaves with T different memberships, and a linear order can satisfy one of
+them. If that reading is right, better packing — true hypergraph partitioning, say —
+would also be bounded, and the way past it is bounded duplication rather than
+cleverer ordering: store the corpus once plus extra copies only of the descriptors
+whose leaf-mates are most scattered. That needs a format change, which the row map
+alone cannot express.
+
+Worth noting what none of this affects. A batch large enough to touch most of the
+corpus is a full scan whatever the order — at 694k descriptors and 4 KiB blocks,
+all three policies read ~22,200 blocks of the 21,698 that exist. Ordering matters to
+sparse and one-shot queries only.
 
 **Shared block size trades cold query time against file size, and the balance
 sits far smaller than it first appeared.** Once descriptor blocks stopped being one

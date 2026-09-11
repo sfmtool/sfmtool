@@ -562,7 +562,31 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
     };
 
     let (storage_digest, descriptor_digests) = if let Some(q) = descriptor_rows {
-        let order = &data.trees[0].feature_ids;
+        let tree_zero = &data.trees[0].feature_ids;
+        let order: &[u32] = match data.descriptor_order {
+            Some(explicit) => {
+                if explicit.len() != data.feature_count {
+                    return Err(KdfError::ShapeMismatch(format!(
+                        "descriptor_order has {} entries, expected {}",
+                        explicit.len(),
+                        data.feature_count
+                    )));
+                }
+                let mut seen = vec![false; data.feature_count];
+                for &id in explicit {
+                    let slot = seen.get_mut(id as usize).ok_or_else(|| {
+                        KdfError::InvalidFormat("descriptor_order has an out-of-range ID".into())
+                    })?;
+                    if std::mem::replace(slot, true) {
+                        return Err(KdfError::InvalidFormat(
+                            "descriptor_order repeats an ID".into(),
+                        ));
+                    }
+                }
+                explicit
+            }
+            None => tree_zero,
+        };
         let mut storage_rows = vec![0u32; data.feature_count];
         for (row, &id) in order.iter().enumerate() {
             storage_rows[id as usize] = row as u32;

@@ -56,7 +56,7 @@ pub use sfmtool_kdf_format::{
     KdfWriteOptions, LazyKdForestOptions, Verification,
 };
 
-use build::{build_tree, Tree};
+use build::{build_tree, Node, Tree};
 use rayon::prelude::*;
 
 /// Print per-query search diagnostics to stderr when `SFMTOOL_KDFOREST_STATS=1`.
@@ -302,6 +302,33 @@ impl<S: ForestScalar> KdForest<S> {
     /// [`search_batch_with_distances_ordered`](KdForest::search_batch_with_distances_ordered).
     pub fn locality_order(&self) -> &[u32] {
         &self.trees[0].point_ids
+    }
+
+    /// One tree's leaf-ordered point IDs and the start of each leaf within them.
+    ///
+    /// Together over all trees this is the hypergraph a shared-corpus ordering
+    /// policy optimizes against: each leaf is a set of point IDs that a single
+    /// query evaluates together, so an assignment that keeps a leaf's members in
+    /// one descriptor block turns its reads into one read. Returned rather than
+    /// computed inside the writer because choosing that assignment is a policy
+    /// question, and the useful policies are easier to try outside Rust.
+    pub fn tree_leaves(&self, tree: usize) -> (&[u32], Vec<u32>) {
+        let t = &self.trees[tree];
+        let mut starts: Vec<u32> = t
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Leaf { start, .. } => Some(*start),
+                _ => None,
+            })
+            .collect();
+        starts.sort_unstable();
+        (&t.point_ids, starts)
+    }
+
+    /// Number of trees in the forest.
+    pub fn num_trees(&self) -> usize {
+        self.trees.len()
     }
 
     fn search_batch_inner(

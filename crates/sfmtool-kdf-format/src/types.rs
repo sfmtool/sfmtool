@@ -234,6 +234,15 @@ pub struct KdfForestData<'a, S: KdfScalar> {
     pub dimension: usize,
     pub trees: Vec<KdfTree<S>>,
     pub provenance: Option<serde_json::Value>,
+    /// Order the shared corpus is stored in: row `r` holds feature
+    /// `descriptor_order[r]`. Must be a permutation of `0..feature_count`.
+    ///
+    /// `None` means tree 0's leaf order, which makes tree 0's leaves contiguous
+    /// and leaves every other tree scattered. Any permutation is valid — the
+    /// stored row map is what a reader follows — so which one to choose is a
+    /// writer policy question with no effect on the wire format. Ignored in
+    /// tree-local layout, where each chunk carries its own vectors.
+    pub descriptor_order: Option<&'a [u32]>,
 }
 
 /// Disk address plus the logical ID needed by deterministic queue ordering.

@@ -45,6 +45,22 @@ where
         sources: Option<&KdfSiftSources>,
         options: &KdfWriteOptions,
     ) -> Result<(), KdfError> {
+        self.write_kdf_ordered(path, sources, options, None)
+    }
+
+    /// [`write_kdf`](Self::write_kdf) with an explicit shared-corpus order.
+    ///
+    /// `descriptor_order[r]` is the feature stored at row `r`. `None` keeps tree
+    /// 0's leaf order. Exists so an ordering policy can be measured without
+    /// rebuilding the forest or touching the format: the row map a reader
+    /// follows is stored either way.
+    pub fn write_kdf_ordered(
+        &self,
+        path: &Path,
+        sources: Option<&KdfSiftSources>,
+        options: &KdfWriteOptions,
+        descriptor_order: Option<&[u32]>,
+    ) -> Result<(), KdfError> {
         let trees = self
             .trees
             .iter()
@@ -81,7 +97,13 @@ where
                 "split_dim_candidates": self.params.split_dim_candidates,
                 "leaf_size": self.params.leaf_size,
                 "seed": self.params.seed,
+                "descriptor_order": if descriptor_order.is_some() {
+                    "explicit"
+                } else {
+                    "tree_0_leaf_order"
+                },
             })),
+            descriptor_order,
         };
         sfmtool_kdf_format::write_kdf(path, &data, sources, options)
     }

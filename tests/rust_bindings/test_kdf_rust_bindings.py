@@ -445,3 +445,87 @@ def test_opening_a_file_that_is_not_a_kdf_is_an_os_error(tmp_path):
 def test_a_missing_file_is_a_file_not_found_error(tmp_path):
     with pytest.raises(FileNotFoundError):
         LazyKdForest(str(tmp_path / "absent.kdf"))
+
+
+# ── Descriptor ordering ───────────────────────────────────────────────────
+
+
+def test_leaf_layout_describes_every_leaf(tmp_path):
+    """The leaf hypergraph an ordering policy is optimized against."""
+    descriptors = _descriptors()
+    forest = _forest(descriptors, num_trees=3, leaf_size=8)
+    assert forest.num_trees == 3
+    seen = set()
+    for tree in range(forest.num_trees):
+        ids, starts = forest.leaf_layout(tree)
+        # Every point appears exactly once in a tree's leaf order.
+        assert sorted(ids.tolist()) == list(range(_N))
+        assert starts[0] == 0
+        assert list(starts) == sorted(starts)
+        assert starts[-1] < len(ids)
+        # Leaves partition the ids, and none is empty.
+        bounds = list(starts) + [len(ids)]
+        assert all(b > a for a, b in zip(bounds, bounds[1:]))
+        seen.add(tuple(ids.tolist()))
+    # Randomized trees give different orders, which is why one tree's order
+    # cannot serve the others.
+    assert len(seen) == 3
+
+
+def test_leaf_layout_rejects_a_tree_that_does_not_exist(tmp_path):
+    forest = _forest(_descriptors(), num_trees=2)
+    with pytest.raises(IndexError, match="out of range"):
+        forest.leaf_layout(2)
+
+
+def test_an_explicit_descriptor_order_changes_no_answer(tmp_path):
+    """Reordering the corpus is invisible above the storage layer.
+
+    This is what makes an ordering policy safe to try: the stored row map is what
+    a reader follows, so a different order is a different file with identical
+    results.
+    """
+    descriptors = _descriptors()
+    forest = _forest(descriptors)
+    queries = descriptors[:16]
+
+    default = LazyKdForest(
+        str(
+            _export(
+                tmp_path, forest, "shared", {"descriptor_block_bytes": _BLOCK_BYTES}
+            )
+        )
+    )
+    want = default.query(queries, k=3, max_leaf_checks=64)
+
+    rng = np.random.default_rng(1)
+    shuffled = rng.permutation(_N).astype(np.uint32).tolist()
+    path = tmp_path / "reordered.kdf"
+    write_kdf(
+        forest,
+        str(path),
+        layout="shared",
+        chunk_bytes=_CHUNK_BYTES,
+        descriptor_block_bytes=_BLOCK_BYTES,
+        descriptor_order=shuffled,
+    )
+    got = LazyKdForest(str(path)).query(queries, k=3, max_leaf_checks=64)
+    assert np.array_equal(want[0], got[0])
+    assert np.allclose(want[1], got[1])
+    assert verify_kdf(str(path))["features"] == _N
+
+
+def test_a_malformed_descriptor_order_is_refused(tmp_path):
+    forest = _forest(_descriptors())
+    for order, match in [
+        (list(range(_N - 1)), "expected"),
+        ([0] * _N, "repeats"),
+    ]:
+        with pytest.raises((ValueError, OSError)):
+            write_kdf(
+                forest,
+                str(tmp_path / f"bad{len(order)}{order[0]}.kdf"),
+                layout="shared",
+                descriptor_block_bytes=_BLOCK_BYTES,
+                descriptor_order=order,
+            )

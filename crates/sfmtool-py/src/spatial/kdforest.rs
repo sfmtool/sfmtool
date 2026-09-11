@@ -170,6 +170,40 @@ impl PyKdForest {
         self.inner.params().max_leaf_checks
     }
 
+    /// One tree's leaf-ordered point IDs and each leaf's start within them.
+    ///
+    /// Args:
+    ///     tree: Zero-based tree index.
+    ///
+    /// Returns:
+    ///     Tuple (point_ids, leaf_starts) as uint32 arrays. Leaf i owns
+    ///     `point_ids[leaf_starts[i] : leaf_starts[i+1]]`, the last leaf running
+    ///     to the end.
+    ///
+    /// Over all trees this is the hypergraph a shared-corpus descriptor ordering
+    /// is optimized against: each leaf is a set of IDs one query evaluates
+    /// together, so an assignment keeping a leaf's members in one descriptor
+    /// block turns its reads into one read.
+    fn leaf_layout<'py>(&self, py: Python<'py>, tree: usize) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+        if tree >= self.inner.num_trees() {
+            return Err(pyo3::exceptions::PyIndexError::new_err(format!(
+                "tree {tree} out of range; the forest has {}",
+                self.inner.num_trees()
+            )));
+        }
+        let (ids, starts) = self.inner.tree_leaves(tree);
+        Ok((
+            numpy::PyArray1::from_slice(py, ids).into_any().unbind(),
+            numpy::PyArray1::from_vec(py, starts).into_any().unbind(),
+        ))
+    }
+
+    /// Number of trees in the forest.
+    #[getter]
+    fn num_trees(&self) -> usize {
+        self.inner.num_trees()
+    }
+
     /// Approximate k-NN query for a batch of descriptors.
     ///
     /// Args:

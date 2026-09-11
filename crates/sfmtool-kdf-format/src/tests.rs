@@ -24,6 +24,7 @@ fn tiny_u8<'a>(vectors: &'a [u8]) -> KdfForestData<'a, u8> {
             feature_ids: vec![0, 1, 2],
         }],
         provenance: None,
+        descriptor_order: None,
     }
 }
 
@@ -290,4 +291,66 @@ fn summary_accounts_for_the_shared_corpus_and_row_map() {
         .unwrap();
     // One uint32 storage row per feature.
     assert_eq!(row_map.decoded_bytes, 3 * 4);
+}
+
+/// An explicit storage order is honoured, and answers do not depend on it.
+///
+/// The row map is what a reader follows, so reordering the corpus must be
+/// invisible above the storage layer — that invisibility is what makes an
+/// ordering policy safe to change.
+#[test]
+fn an_explicit_descriptor_order_is_stored_and_changes_no_answer() {
+    let vectors = [0u8, 0, 1, 1, 9, 9];
+    let dir = tempfile::tempdir().unwrap();
+    let options = KdfWriteOptions {
+        target_chunk_bytes: 90,
+        ..KdfWriteOptions::shared(2)
+    };
+
+    let mut reference = None;
+    for order in [None, Some(&[2u32, 0, 1][..]), Some(&[1u32, 2, 0][..])] {
+        let path = dir
+            .path()
+            .join(format!("{}.kdf", order.map_or(0, |o| o[0] + 1)));
+        let mut data = tiny_u8(&vectors);
+        data.descriptor_order = order;
+        write_kdf(&path, &data, None, &options).unwrap();
+        let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
+        // Feature IDs, not rows: the same ID must give the same vector whatever
+        // row it was stored in.
+        let got: Vec<Vec<u8>> = (0..3).map(|id| file.shared_vector(id).unwrap()).collect();
+        assert_eq!(
+            got,
+            vec![vec![0, 0], vec![1, 1], vec![9, 9]],
+            "order={order:?}"
+        );
+        verify_kdf::<u8>(&path, roomy()).unwrap();
+        match &reference {
+            None => reference = Some(got),
+            Some(first) => assert_eq!(first, &got),
+        }
+    }
+}
+
+/// A storage order that is not a permutation is refused, with the reason named.
+#[test]
+fn a_malformed_descriptor_order_is_refused() {
+    let vectors = [0u8, 0, 1, 1, 9, 9];
+    let dir = tempfile::tempdir().unwrap();
+    for (order, want) in [
+        (&[0u32, 1][..], "expected 3"),
+        (&[0u32, 1, 1][..], "repeats"),
+        (&[0u32, 1, 7][..], "out-of-range"),
+    ] {
+        let path = dir.path().join(format!(
+            "bad{}.kdf",
+            order.len() * 10 + order[2 % order.len()] as usize
+        ));
+        let mut data = tiny_u8(&vectors);
+        data.descriptor_order = Some(order);
+        let err = write_kdf(&path, &data, None, &KdfWriteOptions::shared(2))
+            .expect_err("must reject")
+            .to_string();
+        assert!(err.contains(want), "order={order:?} gave {err:?}");
+    }
 }
