@@ -381,6 +381,11 @@ one of them is greyed.
 ## Non-goals
 
 - Editing across nodes in one version. An edit names one node.
+- Running an edit off the GUI thread. Every edit is applied inside the frame
+  that asked for it, so a long one freezes the window. A worker thread for the
+  bulk edits, under a panel that reports what it is doing, is proposed in
+  [`../drafts/background-process-panel.md`](../drafts/background-process-panel.md);
+  the value semantics above are what make it safe.
 - Undo of display state -- the eyes, the tint, the node transform, the panel
   layout. Those are not versions of the reconstruction.
 - Persisting the history. Saving a node is proposed in

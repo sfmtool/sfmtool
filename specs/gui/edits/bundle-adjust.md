@@ -93,7 +93,8 @@ the lens the value already carries, so this edit reads nothing off disk.
 
 It runs **synchronously**, on the GUI thread, on the frame `Run` was pressed. The
 window is unresponsive while it solves. Running it in the background is a
-non-goal, below.
+non-goal, below, and is proposed in
+[../../drafts/background-process-panel.md](../../drafts/background-process-panel.md).
 
 ### The version
 
@@ -176,7 +177,9 @@ button exists, and that is what the menu test already does.
 - Running in the background, with the viewer live while it solves. The viewer's
   edits are synchronous, and an adjustment that could be interrupted, undone or
   edited over while it ran would be a second document model rather than a longer
-  one.
+  one. A worker thread that holds the value it was handed, with every edit of
+  the busy node refused rather than raced, is proposed in
+  [../../drafts/background-process-panel.md](../../drafts/background-process-panel.md).
 - Releasing the distortion parameters. The dialog offers the focal and nothing
   else; a caller staging a distortion release runs the kernel offline.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the
@@ -184,4 +187,5 @@ button exists, and that is what the menu test already does.
 - Choosing the schedule, the iteration budget or the trim floors from the dialog.
   They are the core function's defaults, and a value that needs different ones
   needs a different tool.
-- Reporting progress, or a per-round trace. One entry, after it has run.
+- Reporting progress, or a per-round trace. One entry, after it has run; live
+  progress arrives with the background panel above.
