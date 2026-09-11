@@ -474,6 +474,14 @@ advantage seen from the other side. On `dino_dog_toy`, shared is at full speed b
 256 MiB (0.24 s) while tree-local still needs 1 GiB (0.48 s) and takes 8.03 s at
 64 MiB. A file 3.3x smaller fits a cache 3.3x sooner.
 
+**The hash directory grows with the block count, and is read at open.**
+`descriptor_blocks_xxh128` holds one digest per descriptor block, so a small block
+size makes a large directory: 9.7M descriptors in 4 KiB blocks is ~303,000 digests,
+around 10 MB of JSON parsed before the first query, and 2 KiB blocks double it.
+This is the part of a small block size that is *not* free — the container made block
+count free in ZIP entries, but not here — and it is most of why open time climbs as
+blocks shrink, the offsets array being the smaller term.
+
 **Descriptor block reuse is a tree-0 effect, and it collapses as trees are
 added.** The shared corpus is laid out in tree-0 leaf order, so tree 0's leaves are
 contiguous and share blocks; every other randomized tree partitions the corpus
@@ -705,6 +713,70 @@ third of the footprint and no more. Measured at 696k descriptors the two paths p
 within 7% of each other, most of which is the Python process floor. Making this
 algorithm genuinely out-of-core needs those arrays streamed too, which is work on
 the matcher rather than on the index.
+
+### Two real access patterns, and which one this path suits
+
+The measurements above vary storage against a fixed synthetic query set. These two
+vary the *workload*, because the answer to "is a file-backed index worth it" turns
+out to depend far more on that than on any packing choice. Both are measured by
+[`scripts/kdf_new_image_query.py`](../../../scripts/kdf_new_image_query.py) and
+[`scripts/kdf_patch_localize.py`](../../../scripts/kdf_patch_localize.py), and both
+return results identical to the in-memory forest at every cache budget tried.
+
+**Fitting a new image into an existing capture.** A capture is indexed, an image
+arrives, and its descriptors need their neighbours. Ten images are withheld from
+the index, spread through the sequence so each arrival's temporal neighbours are
+still present — the situation a real arrival is in, where withholding a contiguous
+run would measure the hardest case instead.
+
+| Corpus | In memory, first answer | Per image after | `.kdf` open | Per image |
+|--------|------------------------|-----------------|------------|-----------|
+| 630k, 77 images | 0.9 s | 0.01 s | 12 ms | 0.31 s |
+| 9.6M, 1,186 images | 13.3 s | 0.27 s | 189 ms | 0.47 s |
+
+The in-memory path is faster per image but cannot answer anything until it has read
+every `.sift` file and rebuilt the forest — 13.3 s at 9.6M descriptors, against a
+189 ms open. So a `.kdf` wins outright for a handful of arrivals and loses once the
+rebuild amortizes: the crossover is about three images at 630k and about fifty at
+9.6M.
+
+It does *not* save memory for this pattern, which was the surprise. **A whole image
+is not a sparse query**: 8,192 descriptors at a 128-leaf budget make about a million
+checks, which reach 279,658 of a DinoLedge file's ~303,000 descriptor blocks — 92%
+of the corpus. The cache therefore has to hold nearly everything or it thrashes, and
+the difference is not subtle: 256 MiB against that 1.2 GB file takes 24 s per image
+with 730,000 evictions, while 4 GiB takes 0.47 s with none. A budget large enough to
+be fast is a budget as large as the corpus.
+
+**Localizing a patch.** Given a rectangle in one image, take the constellation of
+features inside it, look each one up, group the hits by source image, and keep the
+images whose correspondences survive RANSAC on an affine model. `k` is larger here —
+32 rather than the matcher's 11 — because most of a constellation feature's nearest
+neighbours belong to images that do not contain the patch, and RANSAC needs the right
+image to be among the candidates at all.
+
+This is the pattern the file-backed path suits, and the contrast with a whole image
+is the reason. A 400-pixel patch is 100-1,400 features, so on the 696k corpus it
+touches 2,784 blocks and decodes 15 MB — against 279,658 blocks for a whole image.
+
+| Corpus | Query, in memory | Query, `.kdf` | RANSAC | Reads | Decoded |
+|--------|-----------------|--------------|--------|-------|---------|
+| 696k, 85 images | 1.4 ms | 32 ms | ~433 ms | 2,784 | 15 MB |
+| 9.7M, 1,196 images | 7.3 ms | 280 ms | ~2 s | 11,605 | 93 MB |
+
+The index query is ~7% of end-to-end work at 696k and a similar order at 9.7M;
+geometric verification dominates both. So the file-backed path's per-query overhead,
+which is 20-40x on the query alone, costs a few percent of the job — and buys an
+index that need not be rebuilt or held.
+
+Chunk size does not help this pattern, which is worth stating because it looks like
+it should: a sparse query descends through tree chunks, so smaller chunks ought to
+pull less. Measured from 128 KiB to 4 MiB, decoded bytes move from 19.7 to 21.7 MB
+and query time not at all beyond noise. The reason is already in
+[Packing policy](#packing-policy): shared-layout chunks are packed with weights that
+include vector bytes the layout does not store, so a chunk underfills its target by
+roughly 17x and the target is close to decorative there. What drives decoded volume
+is how many distinct blocks scattered queries reach, not how big each one is.
 
 ### What this suggests as defaults
 

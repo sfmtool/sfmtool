@@ -114,12 +114,15 @@ impl<S: KdfScalar> KdfFile<S> {
         let remaining = remaining
             .checked_sub(metadata_raw.len())
             .ok_or_else(|| KdfError::ResourceLimit("metadata exceeds budget".into()))?;
-        let hash_raw = read_bounded_json_raw(
-            &mut archive,
-            &entries,
-            "content_hash.json.zst",
-            remaining.min(options.max_compressed_bytes),
-        )?;
+        // Bounded by the metadata budget alone, not by `max_compressed_bytes`.
+        // The hash directory is metadata read once at open, while
+        // `max_compressed_bytes` exists to cap a per-query decode buffer; tying
+        // the two meant a caller who wanted a small query buffer could not open
+        // the file at all. It matters because this entry grows with the block
+        // count — one digest per descriptor block — so a small block size makes
+        // it large: 9.7M descriptors in 4 KiB blocks is ~303,000 digests.
+        let hash_raw =
+            read_bounded_json_raw(&mut archive, &entries, "content_hash.json.zst", remaining)?;
         let hashes: ContentHash = serde_json::from_slice(&hash_raw)?;
         validate_metadata::<S>(&metadata, &hashes, &options)?;
         if hash_string(xxh3_128(&metadata_raw)) != hashes.metadata_xxh128 {
