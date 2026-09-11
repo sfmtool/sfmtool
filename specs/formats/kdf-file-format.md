@@ -562,3 +562,21 @@ reads and ten zstd frames to route through a single node. The format allows
 arbitrary partitions and supports both descriptor layouts, so size tuning and
 layout selection do not require a version change. Shared descriptor performance
 estimates are in the companion query design.
+
+Shared descriptors are compressed, and therefore blocked and indexed, rather than
+stored as one flat fixed-stride array a reader could index arithmetically. The flat
+form is genuinely attractive on paper: it deletes the block-size choice, deletes
+`features/block_offsets`, and makes a descriptor read exactly `D * w` bytes at
+`row * D * w`. It costs 24% of a shared file, descriptors compressing to 76.4%.
+
+What makes that trade unattractive is the storage layer's granularity. A filesystem
+read is a page, commonly 4 KiB, so a 128-byte descriptor read moves a page anyway;
+scattered access pays about one page per descriptor in either form. Compression does
+not add a page to that cost — it *removes* pages, by raising how many descriptors a
+page holds. The choice is therefore not "fewer bytes versus simpler addressing" but
+"fewer pages versus simpler addressing", and blocking wins on the axis that turned
+out to dominate.
+
+A flat array remains the better shape for a consumer that memory-maps the corpus and
+leaves caching to the operating system, which is a different design rather than a
+tuning of this one.

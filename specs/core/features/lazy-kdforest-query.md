@@ -209,8 +209,11 @@ allocation sizes and benchmark comparisons misleading.
 The per-tree vector copies are intentional. A shared vector table in original
 ID order can scatter one 16-feature leaf over 16 descriptor chunks. Reordering a
 shared table by tree 0 improves that tree, but gives no corresponding guarantee
-for the other randomized trees. Duplication trades disk capacity and write time
-for predictable leaf access. It is the main review decision, not a free gain.
+for the other randomized trees — measured, that is 89% block reuse at one tree
+falling to 31% at four, in
+[What the measurements found](#what-the-measurements-found). Duplication trades disk
+capacity and write time for predictable leaf access. It is the main review decision,
+not a free gain.
 
 ## Search behavior and parity
 
@@ -409,6 +412,40 @@ leads.
 advantage seen from the other side. On `dino_dog_toy`, shared is at full speed by
 256 MiB (0.24 s) while tree-local still needs 1 GiB (0.48 s) and takes 8.03 s at
 64 MiB. A file 3.3x smaller fits a cache 3.3x sooner.
+
+**Descriptor block reuse is a tree-0 effect, and it collapses as trees are
+added.** The shared corpus is laid out in tree-0 leaf order, so tree 0's leaves are
+contiguous and share blocks; every other randomized tree partitions the corpus
+differently and contributes scatter. Measured on `dino_dog_toy` with 4 KiB blocks
+(32 rows), one cold query, varying only the tree count — descriptor accesses equal
+the check count exactly, one block lookup per check, so a miss is a block read and
+the remainder is reuse:
+
+| Trees | Checks | Blocks read | Checks per block | Block reuse |
+|-------|--------|------------|-----------------|-------------|
+| 1 | 136 | 15 | 9.07 | 89% |
+| 2 | 131 | 38 | 3.45 | 71% |
+| 4 | 130 | 90 | 1.44 | 31% |
+| 8 | 135 | 103 | 1.31 | 24% |
+
+At eight trees nearly every check needs its own block. It is tempting to expect the
+opposite — the trees converge on the same near neighbours, so their leaves should
+hit the same blocks repeatedly — and the convergence is real, but it never becomes a
+block access: the per-query `checked` set means a descriptor evaluated by one tree
+is not re-evaluated by another. The overlap is absorbed as *fewer checks*, and what
+remains to be read is exactly the non-overlapping part, which scatters.
+
+This is the quantity behind two other results. It is why small blocks win — when
+scatter dominates, most of a large block is waste — and it is why a 1,000-query
+batch touches 87% of a DinoLedge file's entries at 64 KiB blocks: 130 scattered
+draws per query against 18,950 blocks reaches almost all of them.
+
+There is headroom here. At four trees, ~130 checks span roughly eight leaves, so an
+assignment that kept each leaf's members together would need on the order of ten
+block reads rather than 90. No single assignment can do that for all T trees at
+once, but nothing in the format prevents trying: the storage-row map is an explicit
+permutation a writer may choose freely, so this is a writer policy question with no
+wire-format consequence.
 
 **Shared block size trades cold query time against file size, and the balance
 sits far smaller than it first appeared.** Once descriptor blocks stopped being one
