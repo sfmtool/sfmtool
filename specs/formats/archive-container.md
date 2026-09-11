@@ -40,7 +40,11 @@ recipes in the format specs work.
 ### Every entry is a zstandard frame
 
 Each entry's stored bytes are a single zstd frame, and by convention every entry
-name ends in `.zst`. zstd is chosen over the ZIP-native deflate for the ratio and
+name ends in `.zst`. The one exception in this repository is `.kdf`'s shared
+descriptor corpus, which concatenates one frame per block into a single entry and
+is named `.frames` to say so; `.kdf` explains why under
+[Where this format departs from the container conventions](kdf-file-format.md#where-this-format-departs-from-the-container-conventions).
+A reader of any other format may assume one frame per entry. zstd is chosen over the ZIP-native deflate for the ratio and
 for decompression speed on the large numeric columns. The level is a **choice of
 each format's writer**, not a property of the container: `write_sift`,
 `write_matches` and `write_camrig` take it as an argument and `.sfmr` carries it
@@ -62,6 +66,20 @@ big-endian target rather than silently producing byte-swapped files.
 Tables are columnar — one entry per field, one primitive type per entry — so a
 consumer can read the columns it needs and skip the rest, and so similar values
 compress together.
+
+This convention assumes what is true of every format here but one: that the entry
+count follows the *schema*, so it stays small however large the data. `.kdf` is the
+exception — it has an entry per tree chunk and per descriptor block, so entry count
+grows with the corpus — and it groups a chunk's integer arrays into one entry for
+that reason.
+
+Two conditions made that sound there, and both are the test to apply before doing
+the same elsewhere. The fields must be **always read together**, so no consumer
+ever wants one without the others. And they must **compress alike**: `.kdf` tried
+folding its descriptor vectors in beside those integer columns and reverted it,
+because one zstd frame holding both 76%-compressible bulk data and 46%-compressible
+columns compressed each worse than two frames did. Where a grouping is made, the
+format spec says what lies at which offset.
 
 ### Entry names encode shape and type
 

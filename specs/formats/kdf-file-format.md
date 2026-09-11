@@ -26,34 +26,47 @@ API and packing policy; all stored values and validity rules are defined here.
 
 ## Container and entry layout
 
-ZIP entries use STORE, with one independent zstd frame per entry, no external
-dictionary, encryption, or multi-volume archives. ZIP64 is supported and
-required when ZIP sizes or offsets exceed their ordinary limits. Binary arrays
-are little-endian, row-major, without headers. JSON is compact UTF-8. Directory
-names are logical prefixes, not separate directory entries. Names are unique.
+ZIP entries use STORE, no external dictionary, encryption, or multi-volume
+archives. ZIP64 is supported and required when ZIP sizes or offsets exceed their
+ordinary limits. Binary arrays are little-endian, row-major, without headers.
+JSON is compact UTF-8. Directory names are logical prefixes, not separate
+directory entries. Names are unique.
 
 | Entry | Meaning |
 |-------|---------|
 | `metadata.json.zst` | Version, dimensions, scalar type, tree and chunk directory |
-| `trees/{t}/chunks/{c}/nodes.10.{M}.uint32.zst` | Ten contiguous node columns |
-| `trees/{t}/chunks/{c}/splits.{M}.{scalar_type}.zst` | Split coordinate for each node |
-| `trees/{t}/chunks/{c}/feature_ids.{P}.uint32.zst` | Original row ID of each locally stored vector |
+| `trees/{t}/chunks/{c}/chunk.{M}.{P}.{scalar_type}.zst` | One chunk's node columns, splits and feature IDs |
 | `trees/{t}/chunks/{c}/vectors.{P}.{D}.{scalar_type}.zst` | Local vector rows; tree-local layout only |
 | `features/storage_rows.{N}.uint32.zst` | Original feature ID to shared storage row; shared layout only |
-| `features/blocks/{b}/vectors.{R}.{D}.{scalar_type}.zst` | Shared vector rows; shared layout only |
+| `features/corpus.{N}.{D}.{scalar_type}.frames` | The shared vector corpus, one zstd frame per block; shared layout only |
+| `features/block_offsets.{B}.uint64.zst` | Where each corpus frame starts; shared layout only |
 | `content_hash.json.zst` | Metadata, chunk and whole-file hashes |
 
-In `nodes.10.{M}.uint32.zst`, the ten columns are contiguous rows of a
-row-major `(10, M)` array. This uses one entry for all integer node fields to
-avoid ten separate reads and frames. Other arrays follow the table literally.
-`t` and `c` are zero-based decimal integers without leading zeroes; `M`, `P`
-and `D` are decimal counts. Tree-local chunks have all four entries, even when
-P = 0. Shared-layout tree chunks have the first three entries and no vectors.
+Every entry is a single zstd frame **except** `features/corpus`, which is a
+concatenation of one frame per descriptor block and is named `.frames` to say so.
+[Where this format departs from the container conventions](#where-this-format-departs-from-the-container-conventions)
+explains both that and the grouped chunk entry.
+
+A chunk entry holds, concatenated in this order and with no padding or header
+between them:
+
+1. ten node columns, a row-major `(10, M)` `uint32` array;
+2. one split coordinate per node, `M` values of the scalar type;
+3. the original row ID of each locally stored vector, `P` `uint32` values.
+
+So it decodes to exactly `40*M + w*M + 4*P` bytes for scalar width `w`, and a
+reader rejects an entry that decodes to any other length. A chunk's vectors are a
+*separate* entry, present only in tree-local layout and decoding to `w*P*D` bytes;
+the reasoning for that split is in
+[Where this format departs from the container conventions](#where-this-format-departs-from-the-container-conventions).
+
+`t` and `c` are zero-based decimal integers without leading zeroes; `M`, `P`, `D`
+and `B` are decimal counts. Every chunk has exactly one `chunk` entry, even when
+P = 0, and in tree-local layout exactly one `vectors` entry beside it.
 
 A reader resolves ZIP offsets once from the central directory. Paths do not
 imply that the ZIP directory must be rescanned for each node. Physical entry
-order does not affect validity. Writers place each chunk's three or four entries
-consecutively in the order above, for coalesced reads.
+order does not affect validity.
 
 ## Metadata and versioning
 
@@ -222,10 +235,22 @@ remain distinct rows. This is deduplication across trees, not across identities.
 
 The row permutation is explicit, not inferred from tree topology. A writer may
 choose any order; readers use the stored map. Leaf membership/order and origin
-mapping do not change when storage rows are reordered. Each block is a complete
-independent zstd frame. Readers locate a vector by division/remainder of its
-storage row by Q. A full verifier checks the map is a permutation and validates
-all referenced vectors. Shared block byte length is exactly R*D*scalar width.
+mapping do not change when storage rows are reordered. Readers locate a vector by
+division/remainder of its storage row by Q. A full verifier checks the map is a
+permutation and validates all referenced vectors. Block b decodes to exactly
+R*D*scalar width bytes.
+
+Every block is a complete independent zstd frame, and all B = `ceil(N/Q)` of them
+are stored back to back in the single `features/corpus` entry, in block order.
+`features/block_offsets` holds B+1 `uint64` values: block b occupies the stored
+bytes `[offsets[b], offsets[b+1])` of that entry, measured from its first stored
+byte. `offsets[0]` is zero, the values never decrease, and `offsets[B]` equals the
+entry's stored length — a reader checks all three at open, because a truncated or
+reordered offsets array would otherwise surface as an unexplained decode failure
+on whichever block happened to be read first. Reading a block is therefore a seek
+to a recorded offset followed by decoding one frame; nothing outside that range is
+read or decoded. N = 0 has an empty storage-row entry, an empty corpus, and
+`block_offsets` holding the single value zero.
 
 Both layouts are introduced in version 1. Their entry sets are mutually
 exclusive and readers implementing version 1 support both. Converting layouts
@@ -237,12 +262,17 @@ vector bytes and source mappings; hashes and chunk boundaries may change.
 `content_hash.json.zst` has `metadata_xxh128`, `chunks_xxh128` (an array of
 arrays indexed by tree then chunk), and `content_xxh128`. Each value is a
 32-character lowercase hexadecimal XXH128 digest, except the nested arrays.
-Metadata hashes the exact decoded JSON bytes. A chunk hashes the concatenated
-decoded bytes of nodes, splits, feature IDs, and, in tree-local layout, vectors,
-in that order. Shared layout additionally requires `storage_rows_xxh128` (the
+Metadata hashes the exact decoded JSON bytes. A chunk hashes its `chunk` entry's
+decoded bytes followed, in tree-local layout, by its `vectors` entry's — which is
+the same value as hashing nodes, splits, feature IDs and then vectors in sequence,
+since the first three are concatenated in that order inside the one entry. Shared layout additionally requires `storage_rows_xxh128` (the
 decoded row map's digest) and `descriptor_blocks_xxh128` (an array of digests
-over each block's decoded vector bytes in numeric block order). These fields
-are absent in tree-local layout.
+over each block's decoded vector bytes in numeric block order — per block, not
+over the container entry that holds them, so a digest identifies the same bytes
+whatever entry they are packed into). These fields are absent in tree-local
+layout. `features/block_offsets` is covered by no digest of its own: it is
+addressing rather than content, and a wrong value is caught by the three
+structural checks on it plus the block digest of whatever it addressed.
 SIFT mode additionally requires `images_xxh128` (one digest over the four images
 entries' decoded bytes in lexicographic path order) and `origins_xxh128` (an
 array of block digests, each hashing image_indexes then image_feature_indexes decoded
@@ -265,6 +295,89 @@ also checks reachability, ID permutations, cross-tree vector equality and split
 constraints; it necessarily reads the whole file. Lazy access does not certify
 unread chunks. All size arithmetic is checked before allocation, and readers
 may reject files exceeding explicit resource limits.
+
+## Where this format departs from the container conventions
+
+The [archive container](archive-container.md) sets conventions all the formats in
+this repository follow, and two of them are about what an entry is: **one entry
+per field, one primitive type per entry**, and **each entry's stored bytes are a
+single zstd frame**, with the shape in the name so a reader knows the exact
+decoded length before decompressing. Those conventions buy something real — a
+consumer reads the columns it wants and skips the rest, and `unzip -l` plus a
+`zstd -d` explains the file without this spec.
+
+This format breaks both, deliberately, in two places. The reason is that `.kdf`
+is the only format here whose entry count scales with the *data*, rather than
+with the schema.
+
+A `.sfmr`, `.sift`, `.matches` or `.camrig` file has a fixed set of entries: one
+per column the schema defines, however large the reconstruction. A `.kdf` has one
+per tree chunk and one per descriptor block, so a 9.7M-descriptor corpus reaches
+tens or hundreds of thousands of entries. At that scale the conventions stop being
+free:
+
+- A ZIP entry costs about 164 bytes of local header and central directory record
+  with names of this length, and a reader parses the whole central directory
+  before it can do anything. That is linear in entry count at roughly 5.6 us per
+  entry: 131,260 entries cost 735 ms of open latency, paid before the first query.
+- Independent zstd frames do not share compression context, so cutting the same
+  bytes into more entries compresses them slightly worse.
+
+Both departures buy back that cost without changing what is stored.
+
+**A chunk's three integer arrays share one entry.** Node columns, splits and
+feature IDs are always read together — decoding a node needs the columns and the
+splits, reaching a leaf needs the IDs — so the "read the columns you want" benefit
+never applied to them. The name still carries every count, so the decoded length is
+still known before decompressing and still checked; what is given up is one
+primitive type per entry, and the section above says what lies at which offset
+instead. This is the same trade the format already makes for the ten node columns,
+one level up.
+
+Grouping is not quite free, and the measurement says so: those three arrays
+compress to 25.6%, 64.9% and 84.6% separately, and sharing one frame gives 45.7%
+overall — 2.4% more stored bytes than the three frames cost, or 5.3 MB on a 4 GB
+file. It is paid for by halving the entry count and the open latency with it.
+
+**A chunk's vectors do not join them**, even though a tree-local chunk always reads
+its vectors along with its topology. Folding them in was tried and reverted: bulk
+descriptor bytes compress at 76%, the integer columns at 46%, and one zstd frame
+containing both compresses each worse than two frames do. On DinoLedge it cost 0.7%
+of total file size — 28 MB — to save one read per chunk. So the grouping rule this
+format follows is narrower than "always read together": group fields that are
+always read together **and** compress alike.
+
+**The descriptor corpus is one entry of many frames.** Blocks must stay
+independently decodable — reading one descriptor may not require decompressing the
+corpus — so they remain one frame each, and each keeps its own digest. What changes
+is that the frames are concatenated into a single entry and addressed by a stored
+offsets array instead of by the ZIP directory.
+
+This is the departure that matters most, because the useful configurations use
+small blocks: at 16 KiB on DinoLedge, blocks were ~76,000 of ~100,000 entries and
+are now two, taking open latency from 674 ms to 130 ms. It also makes block size
+free in entry count, which it was not before — the choice is now purely about
+read granularity. Unlike the grouping above it costs nothing in compression,
+because the frames are unchanged; only their addressing moved.
+
+The entry is named `.frames` rather than `.zst` so that a tool which assumes one
+frame per entry fails honestly instead of decoding only the first block and
+reporting success.
+
+What is preserved is the part that carries the weight. The file is still a ZIP of
+STORE entries, so standard tools still list it and still extract any entry. Binary
+arrays are still little-endian and row-major with no headers of their own. Names
+still encode shape and type, and every decoded length is still derivable from a
+name and checked against it. The digests still cover decoded bytes, still compose
+into `content_xxh128` the same way, and still identify the same byte sequences they
+did when those bytes sat in separate entries. A reader that knows this section can
+still be written against the spec alone, in another language, without consulting
+the implementation — which is the standard `specs/formats/` is actually held to.
+
+The one genuine loss is shell-level inspection of the corpus: `unzip` will hand
+over `features/corpus...frames`, and splitting it into blocks needs the offsets
+array rather than a `zstd -d`. The tradeoff was accepted because the alternative is
+a file whose open cost grows without bound in the number of descriptors.
 
 ## Implementations
 
@@ -395,15 +508,14 @@ at a 1 MiB chunk target and zstd level 3, via
 | Section | Decoded | Stored | Ratio |
 |---------|---------|--------|-------|
 | `tree_vectors` | 4.9674 GB | 3.7975 GB | 76.45% |
-| `tree_feature_ids` | 0.1552 GB | 0.1313 GB | 84.57% |
-| `tree_nodes` | 0.3355 GB | 0.0860 GB | 25.63% |
-| `tree_splits` | 0.0084 GB | 0.0054 GB | 64.90% |
-| `origins` + `images` + JSON | 0.0009 GB | 0.0002 GB | — |
-| **Payload** | **5.4674 GB** | **4.0204 GB** | **73.53%** |
+| `tree_chunks` | 0.4992 GB | 0.2280 GB | 45.69% |
+| `metadata` + `content_hash` | 0.0008 GB | 0.0001 GB | — |
+| **Payload** | **5.4674 GB** | **4.0257 GB** | **73.63%** |
 
-The decoded column reproduces the counts above to the byte: 5.467 GB total,
-155,247,168 feature-ID bytes, and 343,932,764 node and split bytes. The file is
-**4.026 GB** including 5.4 MB of ZIP headers and directory across 32,786 entries.
+The decoded column reproduces the counts above to the byte: 5.467 GB total, and
+`tree_chunks` holds the 155,247,168 feature-ID bytes and 343,932,764 node and split
+bytes together. The file is **4.028 GB** including 2.7 MB of ZIP headers and
+directory across 16,394 entries.
 
 Two things the projection could not know. Descriptors compress to **76.45%** in
 kd-tree leaf order, marginally better than the 76.96–76.98% image-order proxy —
@@ -414,10 +526,12 @@ arrays cost 0.223 GB stored rather than the 0.499 GB the conservative allowance
 reserved. Both errors push the same way, which is why the total landed at 4.026 GB
 rather than mid-range.
 
-The same forest in the shared layout is **1.212 GB**, 3.32x smaller: one 0.9488 GB
-descriptor corpus at the same 76.41% ratio, plus a 0.0328 GB row map, against
-four copies. That is 2.814 GB saved, against the 2.87–2.89 GB projected. What it
-costs in query time is measured in
+The same forest in the shared layout is **1.212 GB**, 3.33x smaller: one 0.9489 GB
+descriptor corpus at the same 76.41% ratio, plus a 0.0328 GB row map and a 0.0001 GB
+offsets array, against four copies. That is 2.816 GB saved, against the
+2.87–2.89 GB projected. Its `tree_chunks` section is byte-identical to tree-local's,
+which is what makes the comparison a measurement of storage rather than of two
+different forests. What the layout costs in query time is measured in
 [lazy-kdforest-query.md](../core/features/lazy-kdforest-query.md#what-the-measurements-found).
 
 Reproduction: enumerate sorted `features/*/*.sift`; read metadata and hash JSON

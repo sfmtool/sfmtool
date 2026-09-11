@@ -410,12 +410,30 @@ advantage seen from the other side. On `dino_dog_toy`, shared is at full speed b
 256 MiB (0.24 s) while tree-local still needs 1 GiB (0.48 s) and takes 8.03 s at
 64 MiB. A file 3.3x smaller fits a cache 3.3x sooner.
 
-**Smaller shared blocks are now strictly better.** Block size no longer trades
-against throughput — on DinoLedge all four sizes run 2.23-2.31 s cold and
-0.07-0.08 s warm — while cold-start read amplification still rises steeply with
-it, 164x at 16 KiB to 4,097x at 1 MiB. The pre-fix measurement showed 16 KiB
-blocks as the slowest option by 3x; that was the cache defect, which many small
-entries provoked hardest.
+**Shared block size trades cold query time against file size, and the balance
+sits far smaller than it first appeared.** Once descriptor blocks stopped being one
+ZIP entry each, block size became free in entry count, which had been the whole
+penalty for small blocks. What remains is a genuine two-sided tradeoff, measured on
+DinoLedge with a 4 GiB budget and a 1,000-query batch:
+
+| Block | Rows | File | Open | Cold batch | Decoded | Seed amp. |
+|-------|------|------|------|-----------|---------|-----------|
+| 2 KiB | 16 | 1,247.8 MB | 239 ms | 1.18 s | 466 MiB | 76x |
+| 4 KiB | 32 | 1,228.4 MB | 165 ms | 1.45 s | 602 MiB | 89x |
+| 8 KiB | 64 | 1,218.5 MB | 145 ms | 1.60 s | 816 MiB | 114x |
+| 16 KiB | 128 | 1,213.8 MB | 130 ms | 1.86 s | 1,091 MiB | 164x |
+| 64 KiB | 512 | 1,211.6 MB | 113 ms | 2.10 s | 1,458 MiB | 437x |
+| 256 KiB | 2,048 | 1,211.9 MB | 139 ms | 2.04 s | 1,407 MiB | 1,407x |
+
+Smaller blocks waste less per descriptor fetched — 466 MiB decoded at 2 KiB
+against 1,458 MiB at 64 KiB for the same answers — and that dominates the extra
+reads, because a read is now a seek to an offset rather than a directory lookup.
+Against it, small frames compress worse (34 MB more file at 2 KiB than at 16 KiB,
+mostly lost zstd context rather than frame headers) and the offsets array grows
+enough to show up at open.
+
+A warm batch is 0.07-0.08 s at every size, so none of this matters to a workload
+that revisits its corpus; it is entirely about cold and one-shot queries.
 
 **Chunk size still drives cold-start amplification steeply**, tree-local 96x to
 4,373x on `dino_dog_toy` across 256 KiB to 16 MiB, because seeding a four-tree
@@ -436,10 +454,19 @@ exhaustive search was identical across layouts within a corpus — 0.433, 0.557 
 
 On this evidence the shared layout is the better default: 3.3x smaller, faster or
 equal in every regime, insensitive to a chunk-size choice that swings tree-local
-by 43x, and at full speed on a budget a third the size. Small descriptor blocks —
-16 to 64 KiB — cost nothing in throughput and buy an order of magnitude in
-cold-start amplification. A 1 MiB chunk target and one query worker remain
-reasonable.
+by 43x, and at full speed on a budget a third the size.
+
+For descriptor blocks the knee is around **4 to 8 KiB**, which is where most of
+the cold-query gain has been taken and the file has grown by well under 1%. Going
+to 2 KiB buys another 0.27 s on a cold batch for 2.8% more file and twice the open
+latency, which is the right trade only for a corpus queried once. A 1 MiB chunk
+target and one query worker remain reasonable.
+
+Note this recommendation moved twice under measurement, both times because
+something unrelated to the layouts was dominating: first a cache whose hit cost
+scaled with its size, then one ZIP directory record per descriptor block. The
+figure to distrust in future is any block-size guidance that has not been
+re-derived since the last change to how a block is addressed.
 
 The API keeps requiring an explicit choice regardless. Tree-local's resident warm
 case is genuinely faster, the margin is a property of the corpus and the budget
@@ -683,10 +710,11 @@ does not.
 `kdf_file_summary` splits a file per role rather than reporting one total,
 reading only the ZIP central directory and the metadata entry, so it costs the
 same on a 5 GB file as on a 5 KB one. `tree_vectors` is what the shared layout
-removes T-1 copies of; `shared_vectors` and `shared_row_map` are what it adds
-back; the tree node, split and feature-ID sections are identical either way,
-which is how a reader can tell a size comparison is comparing one forest
-stored twice rather than two different forests.
+removes T-1 copies of; `shared_vectors`, `shared_row_map` and
+`shared_block_offsets` are what it adds back; `tree_chunks` — a chunk's node,
+split and feature-ID arrays, which share one entry — is byte-identical either way,
+which is how a reader can tell a size comparison is comparing one forest stored
+twice rather than two different forests.
 
 Errors are split by what a sweep must do about them: a budget that cannot hold
 what was asked for raises `MemoryError` (try another cell), a malformed or

@@ -172,8 +172,14 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
         let name = entry.name().to_string();
         let mut raw = Vec::new();
         entry.read_to_end(&mut raw).unwrap();
-        if name.starts_with("features/blocks/0/") {
-            raw[0] ^= 0x55;
+        // The descriptor corpus is one entry of per-block frames, so damaging
+        // block 0 means damaging the first frame in it. Byte 8 is inside that
+        // frame and past its magic, so the failure surfaces as either a decode
+        // error or a digest mismatch — both of which must be errors, and neither
+        // of which may appear before the block is asked for.
+        if name.starts_with("features/corpus.") {
+            assert!(raw.len() > 8, "corpus container is unexpectedly small");
+            raw[8] ^= 0x55;
         }
         output
             .start_file(
@@ -222,14 +228,26 @@ fn summary_decoded_sizes_are_uncompressed_lengths() {
             .unwrap_or_else(|| panic!("no {name} section"))
     };
 
-    // Three features, dimension 2, one uint8 vector row each.
-    assert_eq!(section("tree_vectors").decoded_bytes, 3 * 2);
-    // Three nodes, ten uint32 columns each.
-    assert_eq!(section("tree_nodes").decoded_bytes, 3 * 10 * 4);
-    // One uint8 split per node.
-    assert_eq!(section("tree_splits").decoded_bytes, 3);
-    // One uint32 feature ID per feature.
-    assert_eq!(section("tree_feature_ids").decoded_bytes, 3 * 4);
+    // The chunk's three integer arrays share one entry: ten uint32 node columns
+    // per node, one uint8 split per node, one uint32 feature ID per feature.
+    // Three nodes and three features here.
+    let chunks = section("tree_chunks");
+    assert_eq!(chunks.entries, 1, "the integer arrays share one entry");
+    assert_eq!(
+        chunks.decoded_bytes,
+        3 * 10 * 4 + 3 + 3 * 4,
+        "decoded size must come from the shape in the name"
+    );
+    // Vectors stay their own entry, so their bytes are still attributable.
+    let vectors = section("tree_vectors");
+    assert_eq!(vectors.entries, 1);
+    assert_eq!(vectors.decoded_bytes, 3 * 2);
+    // The regression this guards: reading the size off the ZIP directory would
+    // report the stored frame instead, making the two equal.
+    assert_ne!(
+        chunks.decoded_bytes, chunks.compressed_bytes,
+        "decoded size looks like the stored frame length"
+    );
 
     // The JSON entries are decoded rather than guessed, so they are nonzero and
     // differ from their stored frames.

@@ -230,12 +230,15 @@ def test_summary_describes_the_file_it_was_given(tmp_path, layout, extra):
 def test_the_layouts_differ_in_exactly_the_sections_they_should(tmp_path):
     """This is the measurement the bindings exist for.
 
-    Tree-local keeps one vector copy per tree; shared keeps one corpus plus a
-    row map. Topology is identical either way, so the tree node, split and
-    feature-ID sections must match byte for byte — if they did not, a size
-    comparison between the layouts would be measuring two different forests.
+    Tree-local keeps one vector copy per tree; shared keeps one corpus plus a row
+    map. A chunk's integer arrays share one entry but its vectors do not, which is
+    what keeps this comparison honest: `tree_chunks` must be byte-identical across
+    the layouts, so any size difference between the files is descriptors and
+    nothing else.
     """
-    forest = _forest(_descriptors())
+    trees = 4
+    descriptors = _descriptors()
+    forest = _forest(descriptors, num_trees=trees)
     local = kdf_file_summary(str(_export(tmp_path, forest, "tree_local", {})))
     shared = kdf_file_summary(
         str(
@@ -248,23 +251,25 @@ def test_the_layouts_differ_in_exactly_the_sections_they_should(tmp_path):
     def section(summary, name):
         return next((s for s in summary["sections"] if s["section"] == name), None)
 
-    for name in ("tree_nodes", "tree_splits", "tree_feature_ids"):
-        assert section(local, name) == section(shared, name), (
-            f"{name} should be identical"
-        )
+    # Same forest, same partition. If these differed, a size comparison would be
+    # measuring two different trees rather than two ways of storing one.
+    assert local["chunks_per_tree"] == shared["chunks_per_tree"]
+    assert local["nodes_per_tree"] == shared["nodes_per_tree"]
 
-    assert section(local, "tree_vectors") is not None
-    assert section(shared, "tree_vectors") is None, (
-        "shared layout stores no tree-local vectors"
-    )
+    assert section(local, "shared_vectors") is None
+    assert section(local, "shared_row_map") is None
     assert section(shared, "shared_vectors") is not None
     assert section(shared, "shared_row_map") is not None
+    assert section(shared, "shared_block_offsets") is not None
 
-    # Four trees, so the shared corpus should be far smaller than four copies.
-    assert (
-        section(shared, "shared_vectors")["decoded_bytes"]
-        < section(local, "tree_vectors")["decoded_bytes"]
-    )
+    # Identical topology bytes: the only thing that moved is the descriptors.
+    assert section(local, "tree_chunks") == section(shared, "tree_chunks")
+
+    # Tree-local holds T copies; the shared corpus holds one.
+    corpus = section(shared, "shared_vectors")["decoded_bytes"]
+    assert corpus == _N * _DIM
+    assert section(local, "tree_vectors")["decoded_bytes"] == trees * corpus
+    assert section(shared, "tree_vectors") is None
 
 
 def test_summary_reports_real_decoded_sizes_not_the_stored_frame(tmp_path):

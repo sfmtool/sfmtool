@@ -51,7 +51,7 @@ MIB = 1 << 20
 
 # Stage 1 screens these with four trees and 16-feature leaves, per the plan.
 CHUNK_SIZES = [256 * KIB, 1 * MIB, 4 * MIB, 8 * MIB, 16 * MIB]
-BLOCK_SIZES = [16 * KIB, 64 * KIB, 256 * KIB, 1 * MIB]
+BLOCK_SIZES = [2 * KIB, 4 * KIB, 8 * KIB, 16 * KIB, 64 * KIB, 256 * KIB]
 CACHE_BUDGETS = [64 * MIB, 256 * MIB, 1024 * MIB]
 WORKER_COUNTS = [1, 4, 8]
 

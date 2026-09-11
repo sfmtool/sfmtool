@@ -359,3 +359,80 @@ pub(crate) struct ContentHash {
 pub(crate) struct ImagesMetadata {
     pub image_count: u32,
 }
+
+/// Node columns packed into every chunk's node array.
+pub(crate) const NODE_COLUMNS: usize = 10;
+
+/// Name of a tree chunk's grouped topology entry.
+///
+/// One entry carries a chunk's node columns, splits and feature IDs,
+/// concatenated in that order. The counts are in the name so a reader still
+/// knows the exact decoded length before decompressing.
+///
+/// Vectors are deliberately **not** in here, even though a tree-local chunk
+/// always reads them alongside: they are bulk near-incompressible descriptor
+/// bytes, and sharing a zstd frame with the highly compressible integer columns
+/// made both compress worse. Measured on a 9.7M-descriptor corpus, folding them
+/// in cost 0.7% of total file size to save one read per chunk.
+pub(crate) fn chunk_entry_name<S: KdfScalar>(
+    tree: usize,
+    chunk: usize,
+    nodes: usize,
+    features: usize,
+) -> String {
+    format!(
+        "trees/{tree}/chunks/{chunk}/chunk.{nodes}.{features}.{}.zst",
+        S::TYPE_NAME
+    )
+}
+
+/// Name of a tree-local chunk's vector entry; absent in shared layout.
+pub(crate) fn chunk_vectors_entry_name<S: KdfScalar>(
+    tree: usize,
+    chunk: usize,
+    features: usize,
+    dimension: usize,
+) -> String {
+    format!(
+        "trees/{tree}/chunks/{chunk}/vectors.{features}.{dimension}.{}.zst",
+        S::TYPE_NAME
+    )
+}
+
+/// Byte ranges of the three arrays inside a chunk's topology entry.
+///
+/// Returned as end offsets so a reader can split one decoded buffer without
+/// repeating the arithmetic at each call site.
+pub(crate) struct ChunkSpans {
+    pub nodes_end: usize,
+    pub splits_end: usize,
+    pub total: usize,
+}
+
+pub(crate) fn chunk_spans<S: KdfScalar>(nodes: usize, features: usize) -> ChunkSpans {
+    let scalar = std::mem::size_of::<S>();
+    let nodes_end = NODE_COLUMNS * nodes * 4;
+    let splits_end = nodes_end + nodes * scalar;
+    ChunkSpans {
+        nodes_end,
+        splits_end,
+        total: splits_end + features * 4,
+    }
+}
+
+/// Name of the shared descriptor corpus container.
+///
+/// `.frames` rather than `.zst`: the entry holds one independent zstd frame per
+/// descriptor block, not a single frame, so the extension says so instead of
+/// implying a whole-entry decompression that would fail.
+pub(crate) fn corpus_entry_name<S: KdfScalar>(features: usize, dimension: usize) -> String {
+    format!(
+        "features/corpus.{features}.{dimension}.{}.frames",
+        S::TYPE_NAME
+    )
+}
+
+/// Name of the array giving each corpus frame's start, plus a final end offset.
+pub(crate) fn block_offsets_entry_name(count: usize) -> String {
+    format!("features/block_offsets.{count}.uint64.zst")
+}

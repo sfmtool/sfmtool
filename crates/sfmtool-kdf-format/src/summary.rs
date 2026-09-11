@@ -19,7 +19,7 @@ use std::path::Path;
 
 use zip::ZipArchive;
 
-use crate::types::{KdfError, Metadata};
+use crate::types::{KdfError, Metadata, NODE_COLUMNS};
 
 /// One bucket of entries, named by the role its entries play.
 ///
@@ -85,19 +85,56 @@ pub struct KdfSummary {
 /// entry ends `{...}.{counts}.{dtype}.zst`, so the decoded length is the product
 /// of the decimal counts and the scalar width. Returns `None` for `.json.zst`
 /// entries, whose size their name does not describe.
+fn scalar_width(name: &str) -> Option<u64> {
+    match name {
+        "uint8" => Some(1),
+        "float32" => Some(4),
+        "uint32" => Some(4),
+        "uint128" => Some(16),
+        _ => None,
+    }
+}
+
 fn decoded_bytes_from_name(name: &str) -> Option<u64> {
     let file = name.rsplit('/').next()?;
     let mut parts: Vec<&str> = file.split('.').collect();
-    if parts.pop()? != "zst" {
+    let suffix = parts.pop()?;
+
+    // `chunk.{M}.{P}[.{D}].{scalar}.zst` is the one heterogeneous entry: ten
+    // uint32 node columns, then one split per node, then one uint32 per feature.
+    // The generic product-of-counts rule below cannot express a sum of arrays.
+    if parts.first() == Some(&"chunk") && suffix == "zst" {
+        let width = scalar_width(parts.pop()?)?;
+        let counts: Vec<u64> = parts[1..]
+            .iter()
+            .map(|t| t.parse().ok())
+            .collect::<Option<_>>()?;
+        let [nodes, features] = counts.as_slice() else {
+            return None;
+        };
+        let columns = NODE_COLUMNS as u64;
+        return Some(columns * nodes * 4 + nodes * width + features * 4);
+    }
+
+    // `corpus.{N}.{D}.{scalar}.frames` holds one zstd frame per descriptor
+    // block, so it must be sized from the name rather than decoded: decoding it
+    // would expand the entire corpus to learn a number the name already gives.
+    if parts.first() == Some(&"corpus") && suffix == "frames" {
+        let width = scalar_width(parts.pop()?)?;
+        let counts: Vec<u64> = parts[1..]
+            .iter()
+            .map(|t| t.parse().ok())
+            .collect::<Option<_>>()?;
+        let [features, dimension] = counts.as_slice() else {
+            return None;
+        };
+        return features.checked_mul(*dimension)?.checked_mul(width);
+    }
+
+    if suffix != "zst" {
         return None;
     }
-    let width: u64 = match parts.pop()? {
-        "uint8" => 1,
-        "float32" => 4,
-        "uint32" => 4,
-        "uint128" => 16,
-        _ => return None,
-    };
+    let width = scalar_width(parts.pop()?)?;
     // Trailing decimal tokens are the shape; the leading token is the stem.
     let mut elements: u64 = 1;
     let mut saw_count = false;
@@ -127,17 +164,17 @@ fn section_of(name: &str) -> &'static str {
         "origins"
     } else if name.starts_with("features/storage_rows.") {
         "shared_row_map"
-    } else if name.starts_with("features/blocks/") {
+    } else if name.starts_with("features/block_offsets.") {
+        "shared_block_offsets"
+    } else if name.starts_with("features/corpus.") {
         "shared_vectors"
     } else if name.starts_with("trees/") {
-        // Tree entries split four ways, and the split is the entire point:
-        // `tree_vectors` is what the shared layout removes T-1 copies of.
+        // A chunk's three integer arrays share one entry; its vectors do not, so
+        // `tree_vectors` is still exactly what the shared layout removes T-1
+        // copies of, and `tree_chunks` is identical between the two layouts.
         match name.rsplit('/').next().unwrap_or("") {
-            n if n.starts_with("nodes.") => "tree_nodes",
-            n if n.starts_with("splits.") => "tree_splits",
-            n if n.starts_with("feature_ids.") => "tree_feature_ids",
             n if n.starts_with("vectors.") => "tree_vectors",
-            _ => "tree_other",
+            _ => "tree_chunks",
         }
     } else {
         "other"
