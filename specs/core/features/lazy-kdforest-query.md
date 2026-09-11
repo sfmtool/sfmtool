@@ -300,6 +300,67 @@ Chunk validation checks references before dereference and detects revisited
 logical nodes per query to prevent malformed cycles. Full semantic verification
 is an explicit offline operation, never implicit at lazy open.
 
+## Where this sits in the literature
+
+The search this executes is Best-Bin-First, and the budget that bounds it is not
+an invention here. Lowe's SIFT paper reaches for BBF for exactly the reason the
+in-memory forest does — "no algorithms are known that can identify the exact
+nearest neighbors of points in high dimensional spaces that are any more efficient
+than exhaustive search" — and bounds it the same way: "an approximate answer can be
+returned with low cost by cutting off further search after a specific number of the
+nearest bins have been explored. In our implementation, we cut off search after
+checking the first 200 nearest-neighbor candidates."
+([Lowe 2004](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf) § 7.2.) That cutoff is
+this module's `max_leaf_checks`, by way of Beis & Lowe's `Emax`
+([1997](https://www.cs.ubc.ca/~lowe/papers/cvpr97.pdf)), and the forest of several
+randomized trees searched through one shared queue is
+[Muja & Lowe 2009](https://www.cs.ubc.ca/~lowe/papers/09muja.pdf).
+
+None of those three papers is about storage. Lowe 2004 does not mention disk,
+external memory, RAM or caching anywhere; Beis & Lowe mention memory three times
+and every one is about the index's footprint, never about reading it from anywhere.
+Both assume the index is resident.
+
+The paper that does confront a corpus too large for memory is
+[Muja & Lowe 2014](https://www.cs.ubc.ca/~lowe/papers/14mujaPAMI.pdf) § 5, and it
+names this design as one of three options before discarding it:
+
+> When dealing with such large amounts of data, possible solutions include
+> performing some dimensionality reduction on the data, keeping the data on the disk
+> and loading only parts of it in the main memory or distributing the data on
+> several computers and using a distributed nearest neighbor search algorithm.
+>
+> [...] Storing the data on the disk involves significant performance penalties due
+> to the performance gap between memory and disk access times. In FLANN we used the
+> approach of performing distributed nearest neighbor search across multiple
+> machines.
+
+"Keeping the data on the disk and loading only parts of it in the main memory" is
+precisely what this module does. FLANN went the other way, to MPI across a compute
+cluster, on a one-sentence argument about the memory-to-disk latency gap.
+
+That argument was sound for the storage of its time and is worth re-examining rather
+than inheriting, which is what the measurements below do. On a local NVMe device the
+gap it invokes is smaller by orders of magnitude than it was for a spinning disk, and
+the measured cost of not being resident is a 1.5-2 s cold batch of 1,000 queries
+against a 3.8 GB file, falling to 0.07 s once the working set is cached. The case for
+one machine reading a file it cannot hold is stronger now than when FLANN declined
+it; nothing here contradicts the 2014 reasoning on 2014 hardware.
+
+Two consequences for reading the numbers below. First, the distributed approach
+remains the better answer past the point where one machine's storage or bandwidth is
+the limit — this is not a replacement for it, and no measurement here speaks to a
+corpus spanning machines. Second, recall figures here are **not** comparable to
+Lowe's "less than a 5% loss in the number of correct matches" at 200 candidates, for
+two reasons: that is loss of correct matches *after the ratio test*, whereas recall@1
+below is raw, and it is measured on 100,000 keypoints against 9.7 million here. Lowe
+is explicit that the ratio test is what makes the raw figure the wrong one to look
+at — "there is no need to exactly solve the most difficult cases in which many
+neighbors are at very similar distances", because those are the cases the ratio test
+rejects anyway. A raw recall@1 of 0.65 at a 128-check budget is therefore consistent
+with a matcher that loses very few usable matches, and the two numbers should not be
+set against each other.
+
 ## Benchmark method
 
 One MiB is 1,048,576 decoded bytes. Start with a configurable 1 MiB target,
