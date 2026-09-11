@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use nalgebra::Point3;
+use ndarray::Array4;
 use sfmtool_core::{Se3Transform, SfmrReconstruction};
 
 use super::gpu_types::FALLBACK_POINT_SIZE;
@@ -38,6 +39,21 @@ pub(super) struct PatchResources {
     /// not its point index, and this is what turns a deleted point index into
     /// the entry of `alive_buffer` to clear.
     pub slot_of_point: HashMap<u32, u32>,
+    /// The bitmap column these tiles were written from, held by pointer.
+    ///
+    /// What decides whether the atlas survives a new base. A bulk edit rewrites
+    /// poses, positions and patch frames and leaves the pixels alone, and
+    /// materialisation keeps the column's `Arc` when no edit touched a patch --
+    /// so pointer equality here is an exact answer to "are these the same
+    /// tiles", and the answer is yes for every edit the viewer has.
+    pub uploaded_bitmaps: Arc<Array4<u8>>,
+    /// The point each instance slot was packed from, in slot order.
+    ///
+    /// The other half of that question. The atlas is compacted over the points
+    /// that carry a patch, so it is only reusable if the same points pack into
+    /// the same slots; this is what that comparison reads. `slot_of_point` is
+    /// this inverted, and is what the mask writer reads instead.
+    pub packed_points: Vec<u32>,
     /// The atlas itself. Nothing reads it after the bind group is built — it is
     /// held so the node *owns* its atlas: dropping the bundle is what returns
     /// that GPU memory, which is the whole point of per-node resources.
@@ -191,6 +207,14 @@ pub(super) struct ReconResources {
     // ── thumbnails: per-recon atlas + bind group ──
     pub thumbnail_texture: Option<wgpu::Texture>,
     pub thumbnail_view: Option<wgpu::TextureView>,
+    /// The thumbnail column this atlas was written from, held by pointer.
+    ///
+    /// The atlas is a function of that column and the image count alone, so an
+    /// edit that leaves both alone leaves the atlas correct -- and every edit
+    /// that is not about the image table does. See
+    /// [`PatchResources::uploaded_bitmaps`], which is the same reuse key for the
+    /// other atlas.
+    pub uploaded_thumbnails: Option<Arc<Array4<u8>>>,
     /// Per-recon `ImageQuadUniforms` (view-projection + this atlas's grid).
     pub image_quad_uniform_buffer: Option<wgpu::Buffer>,
     /// Shared by the pinhole and distorted image-quad pipelines.
@@ -284,6 +308,7 @@ impl ReconResources {
             distorted_quad_index_count: 0,
             thumbnail_texture: None,
             thumbnail_view: None,
+            uploaded_thumbnails: None,
             image_quad_uniform_buffer: None,
             image_quad_bind_group: None,
             atlas_cols: 0,

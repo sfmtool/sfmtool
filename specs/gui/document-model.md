@@ -229,6 +229,30 @@ A load and a bulk edit each hand the node a base the renderer has not seen, and
 the three uploads run. A point edit, an undo of one, and a redo of one
 all leave the base the same allocation, so none of them does.
 
+**The two atlases are keyed on their own pixels, not on the base.** A new base
+is a coarse signal: it says the value changed, not which part of it. The
+thumbnail atlas is a function of the image table's thumbnail column, and the
+patch atlas of the patch bitmap column and the packing over it, and a bulk edit
+rewrites poses, positions and patch frames while touching neither column.
+Rebuilding an atlas means a texture allocation and one `write_texture` per tile,
+which on a node with tens of thousands of patches is the whole cost of the
+upload; the instances are a single buffer write. So each upload holds the column
+it was built from, by pointer -- materialisation keeps that `Arc` when no edit
+touched a patch -- and rebuilds only when the pointer moves, or, for patches,
+when the set of points carrying one packs into different slots. `delete_image`
+builds both columns afresh and so takes the rebuild path, which is right: its
+table is a different table. This is what makes stepping through a node's history
+cost the edit rather than the node.
+
+**The scene scale is the view's, not the data's.** `length_scale` is derived
+from the union of the loaded nodes on the two occasions that leave the viewer
+nothing to keep: a node arriving, whose data nothing has been sized against yet,
+and a node transform, which changes the world the scale is measured in. A bulk
+edit is neither, though it reaches the upload phase exactly as a load does. The
+upload phase tells the two apart by asking whether the node had a base before
+this one (`has_uploaded_base`), so an edit leaves the Scene slider, and every
+sizing that reads it, where the user put it.
+
 **The deleted set reaches the shaders as a mask.** Each bundle carries, beside
 its point instance buffer, a second instance buffer of one `u32` per point: `1`
 alive, `0` deleted. `update_deleted_mask` writes only the entries the set moved,

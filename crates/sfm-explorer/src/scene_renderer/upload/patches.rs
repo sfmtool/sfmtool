@@ -3,6 +3,8 @@
 
 //! Patch surfel instance buffer + bitmap atlas upload.
 
+use std::sync::Arc;
+
 use super::super::gpu_types::{PatchInstance, PatchUniforms};
 use super::super::recon::PatchResources;
 use super::super::SceneRenderer;
@@ -30,10 +32,97 @@ impl SceneRenderer {
         // The bind group below needs the patch pipeline's layout and the
         // node's bundle, neither of which may exist yet.
         self.ensure_recon(device, id);
+        // The atlas is the expensive half of this upload by a wide margin: one
+        // texture allocation and one `write_texture` per patch, which is tens of
+        // thousands of them on a real embedded-patches node. The instances are a
+        // single buffer write. A bulk edit moves poses, positions and patch
+        // frames and does not touch a single texel, so when the tiles and the
+        // packing are the same the atlas is kept and only the instances are
+        // rewritten -- which is what makes stepping through a node's history
+        // cost the edit rather than the node.
+        if self.repack_patches(device, id, &recon.point_set) {
+            return;
+        }
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
         let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
+    }
+
+    /// Rewrite the base's patch instances over the atlas the node already holds,
+    /// when that atlas is still the right one. `false` when it is not, and the
+    /// caller must rebuild.
+    ///
+    /// Reusable means the tiles are the same pixels (the bitmap column, by
+    /// pointer) and the same points pack into the same slots -- both of which
+    /// hold across every edit the viewer has, and neither of which is assumed:
+    /// a `false` here is a correct full rebuild, not a failure.
+    fn repack_patches(
+        &mut self,
+        device: &wgpu::Device,
+        id: ReconId,
+        point_set: &sfmtool_core::PointSet,
+    ) -> bool {
+        let Some(bundle) = self.recons.get_mut(&id) else {
+            return false;
+        };
+        let Some(patch) = bundle.patch.as_mut() else {
+            return false;
+        };
+        let (Some(u_halfvecs), Some(v_halfvecs)) = (
+            &point_set.patch_u_halfvec_xyz,
+            &point_set.patch_v_halfvec_xyz,
+        ) else {
+            return false;
+        };
+        let Some(bitmaps) = point_set.patch_bitmaps_y_x_rgba.as_ref() else {
+            return false;
+        };
+        if !Arc::ptr_eq(bitmaps, &patch.uploaded_bitmaps) {
+            return false;
+        }
+        let packed = packed_points(point_set, u_halfvecs, v_halfvecs, bitmaps);
+        // The slot a tile sits in is its position in this list, so an atlas
+        // built from a different list addresses different tiles.
+        if packed != patch.packed_points {
+            return false;
+        }
+
+        let instances: Vec<PatchInstance> = packed
+            .iter()
+            .enumerate()
+            .map(|(slot, &point)| {
+                let i = point as usize;
+                let p = &point_set.points[i];
+                PatchInstance {
+                    center: [
+                        p.position.x as f32,
+                        p.position.y as f32,
+                        p.position.z as f32,
+                    ],
+                    w: p.w as f32,
+                    u_halfvec: [u_halfvecs[[i, 0]], u_halfvecs[[i, 1]], u_halfvecs[[i, 2]]],
+                    _pad0: 0.0,
+                    v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
+                    atlas_layer: slot as u32,
+                    point_index: point,
+                }
+            })
+            .collect();
+        patch.instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("patch instances"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        // A new base carries no overlay, so every patch starts alive; the frame's
+        // mask write puts the version's deleted set back over the top.
+        let alive = vec![1u32; instances.len().max(1)];
+        patch.alive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("patch liveness"),
+            contents: bytemuck::cast_slice(&alive),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        true
     }
 
     /// The surfel instances and bitmap atlas for one point set, with each
@@ -81,20 +170,7 @@ impl SceneRenderer {
             return None;
         }
 
-        // Collect the points that carry a patch: a point with no patch is an
-        // all-zero `u` row. Bound the scan by every parallel array's length so a
-        // short frame/bitmap array can't index out of range. The instance/atlas
-        // buffers are compacted, so an instance's atlas slot is not its point
-        // index.
-        let n_rows = point_set
-            .points
-            .len()
-            .min(bitmaps.shape()[0])
-            .min(u_halfvecs.nrows())
-            .min(v_halfvecs.nrows());
-        let point_indices: Vec<usize> = (0..n_rows)
-            .filter(|&i| (0..3).any(|k| u_halfvecs[[i, k]] != 0.0))
-            .collect();
+        let point_indices = packed_points(point_set, u_halfvecs, v_halfvecs, bitmaps);
         let patch_count = point_indices.len() as u32;
         if patch_count == 0 {
             return None;
@@ -139,11 +215,12 @@ impl SceneRenderer {
         // Write each patch's RGBA tile into its atlas cell and build the
         // corresponding instance.
         let mut instances: Vec<PatchInstance> = Vec::with_capacity(patch_count_clamped as usize);
-        for (slot, &i) in point_indices
+        for (slot, &point) in point_indices
             .iter()
             .enumerate()
             .take(patch_count_clamped as usize)
         {
+            let i = point as usize;
             let tile = bitmaps.index_axis(ndarray::Axis(0), i);
             let page = slot as u32 / patches_per_page;
             let idx_in_page = slot as u32 % patches_per_page;
@@ -186,7 +263,7 @@ impl SceneRenderer {
                 _pad0: 0.0,
                 v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
                 atlas_layer: slot as u32,
-                point_index: index_offset + i as u32,
+                point_index: index_offset + point,
             });
         }
 
@@ -260,6 +337,13 @@ impl SceneRenderer {
             instance_buffer,
             alive_buffer,
             slot_of_point,
+            uploaded_bitmaps: Arc::clone(bitmaps),
+            // The clamped list, so a node whose patches did not all fit is
+            // compared against what the atlas actually holds.
+            packed_points: point_indices
+                .into_iter()
+                .take(patch_count_clamped as usize)
+                .collect(),
             atlas_texture: texture,
             uniform_buffer,
             bind_group,
@@ -282,4 +366,33 @@ impl SceneRenderer {
         );
         Some(resources)
     }
+}
+
+/// The points that carry a patch, ascending: a point with no patch is an
+/// all-zero `u` row.
+///
+/// The atlas and the instance buffer are both compacted over this list, so a
+/// patch's slot is its position here and not its point index. The scan is
+/// bounded by every parallel array's length, so a short frame or bitmap array
+/// cannot index out of range.
+///
+/// Shared by the build and the repack because it *is* the packing: the repack is
+/// only sound if it produces the same list the atlas was written from, and two
+/// copies of this filter could drift apart without either one looking wrong.
+fn packed_points(
+    point_set: &sfmtool_core::PointSet,
+    u_halfvecs: &ndarray::Array2<f32>,
+    v_halfvecs: &ndarray::Array2<f32>,
+    bitmaps: &ndarray::Array4<u8>,
+) -> Vec<u32> {
+    let n_rows = point_set
+        .points
+        .len()
+        .min(bitmaps.shape()[0])
+        .min(u_halfvecs.nrows())
+        .min(v_halfvecs.nrows());
+    (0..n_rows)
+        .filter(|&i| (0..3).any(|k| u_halfvecs[[i, k]] != 0.0))
+        .map(|i| i as u32)
+        .collect()
 }

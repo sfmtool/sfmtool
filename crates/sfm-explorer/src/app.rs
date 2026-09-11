@@ -307,11 +307,17 @@ impl App {
         // version's deleted set, which reaches the shaders as the mask written
         // at the end of each iteration. See `specs/gui/document-model.md`.
         let mut uploaded_any = false;
+        let mut arrived_any = false;
         for i in 0..self.state.scene.len() {
             let node = &self.state.scene[i];
             let id = node.id;
             let base = std::sync::Arc::clone(&node.edited().base);
             if self.scene_renderer.base_changed(id, &base) {
+                // A node arriving in the scene and a node whose base an edit
+                // replaced are the same upload, and are told apart only here:
+                // the scene scale below is derived for the first but not the
+                // second. See `has_uploaded_base`.
+                arrived_any |= !self.scene_renderer.has_uploaded_base(id);
                 let recon = node.recon();
                 self.scene_renderer.upload_points(device, id, recon);
                 self.scene_renderer
@@ -389,9 +395,16 @@ impl App {
         }
 
         // `length_scale` is global and re-derived from the union of the loaded
-        // nodes, exactly as it is re-derived on load today. Frustum geometry
-        // below depends on it, so it has to settle before that upload.
-        if uploaded_any || transform_changed {
+        // nodes, on the two occasions that give the viewer no scale to keep: a
+        // node arriving, which brings data nothing has been sized against yet,
+        // and a transform, which is a change of the world the scale is measured
+        // in. An edit is neither. A bulk edit hands its node a new base and so
+        // reaches the upload phase exactly as a load does, but the viewer has
+        // been looking at that node all along -- re-deriving here would throw
+        // away the scene scale the user set, which is a view preference and not
+        // a property of the data. Frustum geometry below depends on the value,
+        // so it has to settle before that upload.
+        if arrived_any || transform_changed {
             if let Some(seed) = self.scene_renderer.length_scale_seed() {
                 self.state.length_scale = seed;
             }

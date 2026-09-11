@@ -1846,3 +1846,184 @@ fn a_created_point_at_infinity_uploads_as_an_addition_of_its_own() {
     let patch = additions.patch.as_ref().expect("it carries a bitmap");
     assert_eq!(patch.slot_of_point.get(&created), Some(&0));
 }
+
+// ── an edit keeps the atlases its pixels did not change ──────────────────
+
+/// A bulk edit's output: the same node, with its points moved.
+///
+/// What every whole-value edit the viewer has does to a patched node -- resect
+/// in place, bundle adjust, move camera all rewrite poses, positions and patch
+/// frames. None of them touches a texel, and the bitmap column comes through as
+/// the same `Arc`, which is what the atlas is keyed on.
+fn with_points_moved(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+    for p in &mut recon.point_set.points {
+        p.position.x += 0.25;
+    }
+    if let Some(u) = recon.point_set.patch_u_halfvec_xyz.as_mut() {
+        *u *= 1.5;
+    }
+    recon
+}
+
+#[test]
+fn a_new_base_keeps_the_patch_atlas_when_the_tiles_are_the_same() {
+    let (device, queue) = device();
+    let before = with_patches(demo(8), 4, &[true; 8], None, None);
+    let mut r = SceneRenderer::new();
+
+    r.upload_patches(&device, &queue, RECON, &before);
+    let atlas = bundle(&r)
+        .patch
+        .as_ref()
+        .expect("the fixture carries patches")
+        .atlas_texture
+        .clone();
+    let instances = bundle(&r).patch.as_ref().unwrap().instance_buffer.clone();
+
+    let after = with_points_moved(before.clone());
+    assert!(
+        Arc::ptr_eq(
+            after.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap(),
+            before.point_set.patch_bitmaps_y_x_rgba.as_ref().unwrap(),
+        ),
+        "the premise: a bulk edit carries the bitmap column through by pointer",
+    );
+    r.upload_patches(&device, &queue, RECON, &after);
+
+    let patch = bundle(&r).patch.as_ref().expect("patches survive the edit");
+    assert_eq!(
+        patch.atlas_texture, atlas,
+        "the same tiles were re-uploaded into a new atlas",
+    );
+    assert_ne!(
+        patch.instance_buffer, instances,
+        "the instances moved, so they must have been rewritten",
+    );
+    assert_eq!(patch.count, 8);
+}
+
+#[test]
+fn a_new_base_rebuilds_the_patch_atlas_when_the_tiles_are_not() {
+    let (device, queue) = device();
+    let before = with_patches(demo(8), 4, &[true; 8], None, None);
+    let mut r = SceneRenderer::new();
+
+    r.upload_patches(&device, &queue, RECON, &before);
+    let atlas = bundle(&r).patch.as_ref().unwrap().atlas_texture.clone();
+
+    // A different bitmap column: what an edit that re-embedded the patches
+    // would hand over, and the atlas has to be built again for it.
+    let after = with_patches(demo(8), 4, &[true; 8], None, None);
+    r.upload_patches(&device, &queue, RECON, &after);
+
+    assert_ne!(
+        bundle(&r).patch.as_ref().unwrap().atlas_texture,
+        atlas,
+        "new tiles must not be drawn from the old atlas",
+    );
+}
+
+#[test]
+fn a_new_base_rebuilds_the_patch_atlas_when_the_packing_moves() {
+    let (device, queue) = device();
+    let mut present = [true; 8];
+    let before = with_patches(demo(8), 4, &present, None, None);
+    let mut r = SceneRenderer::new();
+
+    r.upload_patches(&device, &queue, RECON, &before);
+    let atlas = bundle(&r).patch.as_ref().unwrap().atlas_texture.clone();
+
+    // The same tiles, but one point no longer carries a patch: every patch
+    // after it packs one slot earlier, so the atlas addresses the wrong tiles.
+    present[2] = false;
+    let mut after = before.clone();
+    let mut u = Array2::<f32>::zeros((8, 3));
+    for (i, &is_present) in present.iter().enumerate() {
+        if is_present {
+            u[[i, 0]] = 0.1;
+        }
+    }
+    after.point_set.patch_u_halfvec_xyz = Some(u);
+    r.upload_patches(&device, &queue, RECON, &after);
+
+    let patch = bundle(&r).patch.as_ref().unwrap();
+    assert_ne!(
+        patch.atlas_texture, atlas,
+        "the packing moved under the atlas"
+    );
+    assert_eq!(patch.count, 7);
+}
+
+#[test]
+fn a_new_base_keeps_the_thumbnail_atlas_when_the_images_are_the_same() {
+    let (device, queue) = device();
+    let before = demo(8);
+    let mut r = SceneRenderer::new();
+
+    r.upload_thumbnails(&device, &queue, RECON, &before);
+    let atlas = bundle(&r)
+        .thumbnail_texture
+        .clone()
+        .expect("the demo carries thumbnails");
+
+    let after = with_points_moved(before.clone());
+    r.upload_thumbnails(&device, &queue, RECON, &after);
+
+    assert_eq!(
+        bundle(&r).thumbnail_texture.clone().unwrap(),
+        atlas,
+        "an edit that left the image table alone rebuilt its atlas",
+    );
+}
+
+#[test]
+fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
+    let (device, queue) = device();
+    let before = demo(8);
+    let mut r = SceneRenderer::new();
+
+    r.upload_thumbnails(&device, &queue, RECON, &before);
+    let atlas = bundle(&r).thumbnail_texture.clone().unwrap();
+
+    // What `delete_image` hands over: a shorter table with its own thumbnails.
+    let mut after = demo(8);
+    after.image_table.images.pop();
+    let kept = after
+        .image_table
+        .thumbnails_y_x_rgb
+        .slice(ndarray::s![..7, .., .., ..])
+        .to_owned();
+    after.image_table.thumbnails_y_x_rgb = Arc::new(kept);
+    r.upload_thumbnails(&device, &queue, RECON, &after);
+
+    assert_ne!(
+        bundle(&r).thumbnail_texture.clone().unwrap(),
+        atlas,
+        "a table of 7 images must not be drawn from an atlas of 8",
+    );
+}
+
+#[test]
+fn a_node_has_arrived_once_its_first_base_is_uploaded() {
+    let (device, _queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+    let base = Arc::new(recon.clone());
+
+    assert!(
+        !r.has_uploaded_base(RECON),
+        "a node the renderer has never seen has not arrived yet"
+    );
+    r.upload_points(&device, RECON, &recon);
+    r.set_uploaded_base(RECON, Arc::clone(&base));
+    assert!(r.has_uploaded_base(RECON));
+
+    // The distinction the scene scale rides on: a bulk edit hands the node a
+    // base the renderer has not seen, and the node has still already arrived.
+    let edited = Arc::new(with_points_moved(recon));
+    assert!(r.base_changed(RECON, &edited), "a new base is a new upload");
+    assert!(
+        r.has_uploaded_base(RECON),
+        "but not a new node, so the view keeps the scale it was given"
+    );
+}

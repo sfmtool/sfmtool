@@ -44,6 +44,21 @@ impl SceneRenderer {
         }
     }
 
+    /// Whether `id` has ever had a base uploaded.
+    ///
+    /// The difference between a node the renderer is meeting for the first time
+    /// and one whose base an edit replaced. Both reach the upload phase as a
+    /// [`Self::base_changed`], and they are the same work; what separates them is
+    /// what the *view* owes them. A node arriving in the scene has no scene scale
+    /// yet and gets one derived from its data; a node the viewer has been looking
+    /// at already has whatever scale the viewer chose, and an edit is not a reason
+    /// to take it away.
+    pub fn has_uploaded_base(&self, id: ReconId) -> bool {
+        self.recons
+            .get(&id)
+            .is_some_and(|bundle| bundle.uploaded_base.is_some())
+    }
+
     /// Record which base `id`'s buffers now hold. Called by the upload phase
     /// once the three per-node uploads have run.
     pub fn set_uploaded_base(&mut self, id: ReconId, base: Arc<SfmrReconstruction>) {

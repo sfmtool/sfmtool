@@ -3,6 +3,8 @@
 
 //! Embedded camera thumbnail atlas upload.
 
+use std::sync::Arc;
+
 use super::super::gpu_types::{ImageQuadUniforms, MAX_ATLAS_COLS, THUMBNAIL_SIZE};
 use super::super::SceneRenderer;
 use crate::scene::ReconId;
@@ -28,6 +30,23 @@ impl SceneRenderer {
             return;
         }
         self.ensure_recon(device, id);
+        // The atlas is a function of the thumbnail column and the image count,
+        // and of nothing else. An edit that leaves the image table alone leaves
+        // it correct, so the node keeps the one it has rather than paying a
+        // texture allocation and one `write_texture` per image to arrive at the
+        // same pixels. `delete_image` is the edit that does move the table, and
+        // it builds a new column, so it does not take this path.
+        let thumbnails = &recon.image_table.thumbnails_y_x_rgb;
+        let bundle = self.recons.get(&id).expect("just ensured");
+        let reusable = bundle
+            .uploaded_thumbnails
+            .as_ref()
+            .is_some_and(|uploaded| Arc::ptr_eq(uploaded, thumbnails))
+            && bundle.thumbnail_view.is_some()
+            && thumbnails.shape()[0] as u32 == image_count;
+        if reusable {
+            return;
+        }
 
         // Compute atlas grid dimensions, respecting GPU texture size limits.
         // Images are packed into a 2D texture array: each layer ("page") holds a
@@ -138,6 +157,7 @@ impl SceneRenderer {
         bundle.atlas_rows = actual_rows_per_page;
         bundle.images_per_page = images_per_page;
         bundle.thumbnail_view = Some(texture_view);
+        bundle.uploaded_thumbnails = Some(Arc::clone(&recon.image_table.thumbnails_y_x_rgb));
         bundle.image_quad_uniform_buffer = Some(uniform_buf);
         bundle.thumbnail_texture = Some(texture);
         log::info!(
