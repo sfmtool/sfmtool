@@ -86,6 +86,11 @@ pub struct PyKdForest {
 }
 
 impl PyKdForest {
+    /// Wrap a forest built elsewhere, for the sibling `.kdf` load binding.
+    pub(crate) fn from_inner(inner: KdForestU8) -> Self {
+        Self { inner }
+    }
+
     /// The wrapped core forest, for the sibling `.kdf` export binding.
     pub(crate) fn inner(&self) -> &KdForestU8 {
         &self.inner

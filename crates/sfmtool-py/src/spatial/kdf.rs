@@ -585,6 +585,61 @@ fn write_kdf(
     .map_err(to_py_err)
 }
 
+/// Load a `.kdf` fully into memory as a `KdForest`.
+///
+/// The third option between querying a file lazily and rebuilding an index from
+/// the descriptor corpus. The file stores the exact topology, leaf order and
+/// feature IDs of the forest it was written from, so this is decompression and
+/// reassembly rather than a build — no median splits and no randomization to
+/// reproduce — and the result answers exactly as the original did.
+///
+/// Use it when many queries will follow: it pays the whole file's read up front
+/// and then queries at in-memory speed, where `LazyKdForest` pays almost nothing
+/// up front and more per query.
+///
+/// Args:
+///     path: The `.kdf` to load. Either descriptor layout works.
+///     max_chunk_bytes / max_compressed_bytes / max_metadata_bytes: reader
+///         limits, as for `LazyKdForest`. The cache only buffers the load here,
+///         so its budget bounds working memory during the read, not after.
+///
+/// Returns:
+///     A `KdForest` holding the corpus and every tree.
+///
+/// Raises:
+///     OSError: The file is malformed, or a hash does not match.
+///     MemoryError: A limit is too small for the file's chunks.
+#[pyfunction]
+#[pyo3(signature = (path, *, cache_bytes=None, max_chunk_bytes=None,
+                    max_compressed_bytes=None, max_metadata_bytes=None))]
+fn read_kdf(
+    py: Python<'_>,
+    path: PathBuf,
+    cache_bytes: Option<usize>,
+    max_chunk_bytes: Option<usize>,
+    max_compressed_bytes: Option<usize>,
+    max_metadata_bytes: Option<usize>,
+) -> PyResult<super::kdforest::PyKdForest> {
+    let mut options = LazyKdForestOptions::default();
+    if let Some(v) = cache_bytes {
+        options.cache_bytes = v;
+        options.max_in_flight_bytes = v;
+    }
+    if let Some(v) = max_chunk_bytes {
+        options.max_chunk_bytes = v;
+    }
+    if let Some(v) = max_compressed_bytes {
+        options.max_compressed_bytes = v;
+    }
+    if let Some(v) = max_metadata_bytes {
+        options.max_metadata_bytes = v;
+    }
+    let inner = py
+        .detach(|| sfmtool_core::features::kdforest::KdForestU8::read_kdf(&path, options))
+        .map_err(to_py_err)?;
+    Ok(super::kdforest::PyKdForest::from_inner(inner))
+}
+
 /// Account for a `.kdf`'s size without decoding its payloads.
 ///
 /// This is the file half of the layout comparison. It reads the ZIP central
@@ -687,6 +742,7 @@ fn verify_kdf<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Py<PyDict>> {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLazyKdForest>()?;
     m.add_function(wrap_pyfunction!(write_kdf, m)?)?;
+    m.add_function(wrap_pyfunction!(read_kdf, m)?)?;
     m.add_function(wrap_pyfunction!(kdf_file_summary, m)?)?;
     m.add_function(wrap_pyfunction!(verify_kdf, m)?)?;
     Ok(())

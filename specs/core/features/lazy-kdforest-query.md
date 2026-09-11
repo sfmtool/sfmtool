@@ -729,16 +729,31 @@ the index, spread through the sequence so each arrival's temporal neighbours are
 still present — the situation a real arrival is in, where withholding a contiguous
 run would measure the hardest case instead.
 
-| Corpus | In memory, first answer | Per image after | `.kdf` open | Per image |
-|--------|------------------------|-----------------|------------|-----------|
-| 630k, 77 images | 0.9 s | 0.01 s | 12 ms | 0.31 s |
-| 9.6M, 1,186 images | 13.3 s | 0.27 s | 189 ms | 0.47 s |
+There are three ways to be ready to answer, not two. The index can be rebuilt from
+the `.sift` corpus, loaded from a `.kdf` into the same in-memory structure, or
+queried from the file without materializing it at all. At 9.6M descriptors and
+1,186 images:
 
-The in-memory path is faster per image but cannot answer anything until it has read
-every `.sift` file and rebuilt the forest — 13.3 s at 9.6M descriptors, against a
-189 ms open. So a `.kdf` wins outright for a handful of arrivals and loses once the
-rebuild amortizes: the crossover is about three images at 630k and about fifty at
-9.6M.
+| Ready by | Time to first answer | Per image after |
+|----------|---------------------|-----------------|
+| Rebuilding from `.sift` | 13-19 s | 0.37 s |
+| Loading the `.kdf` | 32 s | 0.36 s |
+| Opening the `.kdf` | **0.22 s** | 0.57 s |
+
+**Loading is slower than rebuilding**, which is worth stating because it is the
+opposite of what a persisted index is supposed to buy. The build is not the
+expensive part: median splits over 9.7M points take about 9 s, while loading has to
+decompress the corpus and every tree array and then scatter 9.7M descriptors into
+feature-ID order, which is a random write across a 1.24 GB array. Persisting the
+forest is therefore not a way to start faster in memory — it is a way not to be in
+memory at all.
+
+That is what the third row is for. Opening is two orders of magnitude quicker than
+either, so a `.kdf` wins outright for a handful of arrivals and loses once a rebuild
+amortizes: the crossover is about three images at 630k descriptors and about fifty
+at 9.6M. Reloading is exact — a forest read back from a file answers identically to
+the one written, because the file stores its topology, leaf order and feature IDs
+rather than the seed it was built from.
 
 It does *not* save memory for this pattern, which was the surprise. **A whole image
 is not a sparse query**: 8,192 descriptors at a 128-leaf budget make about a million

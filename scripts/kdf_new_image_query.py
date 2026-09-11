@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 
 from sfmtool._sfmtool import build_profile
-from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, write_kdf
+from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, read_kdf, write_kdf
 from sfmtool.sift.file import SiftReader
 
 KIB = 1 << 10
@@ -178,6 +178,35 @@ def main() -> None:
         f" {statistics.median(eager) / statistics.median(len(a) for a in arrivals) * 1e6:>8.0f}"
         f" {'-':>10} {'-':>8} {'ref':>6}"
     )
+
+    # Loading the file into the in-memory structure: no build, no .sift reads,
+    # then full in-memory query speed.
+    t = time.perf_counter()
+    # The load walks the corpus in storage order, so a modest cache suffices
+    # however large the file — it only ever holds the blocks in flight.
+    loaded = read_kdf(str(path), cache_bytes=256 * MIB, max_compressed_bytes=64 * MIB)
+    load_seconds = time.perf_counter() - t
+    loaded_per_image, agree = [], True
+    for i, arrival in enumerate(arrivals):
+        t = time.perf_counter()
+        got = loaded.query(arrival, k=args.k, max_leaf_checks=args.budget)
+        loaded_per_image.append(time.perf_counter() - t)
+        agree = agree and np.array_equal(got[0], reference[i][0])
+    print(
+        f"{'kdf -> memory':>20} {load_seconds * 1e3:>8.0f} {loaded_per_image[0]:>10.2f}"
+        f" {statistics.median(loaded_per_image[1:]):>8.2f}"
+        f" {statistics.median(loaded_per_image) / statistics.median(len(a) for a in arrivals) * 1e6:>8.0f}"
+        f" {'-':>10} {'-':>8} {'yes' if agree else 'NO':>6}"
+    )
+    rows.append(
+        {
+            "path": "kdf-loaded",
+            "load_seconds": load_seconds,
+            "per_image_seconds": loaded_per_image,
+            "identical": bool(agree),
+        }
+    )
+    del loaded
 
     for mib in (int(v) for v in args.caches.split(",")):
         budget = mib * MIB

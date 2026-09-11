@@ -19,9 +19,10 @@ use sfmtool_kdf_format::{
 /// repacking happened to place the child.
 type QueueEntry<D> = (Reverse<D>, u32, u32, u32, u32);
 
-use super::build::Node;
+use super::build::{Node, Tree};
 use super::distance::ForestScalar;
 use super::search::Checked;
+use super::KdForestParams;
 use super::{KdForest, Neighbor};
 use crate::features::kdforest::{
     KdfError, KdfImageTable, KdfIoStats, KdfSiftSources, KdfWriteOptions, LazyKdForestOptions,
@@ -107,6 +108,143 @@ where
             descriptor_order,
         };
         sfmtool_kdf_format::write_kdf(path, &data, sources, options)
+    }
+}
+
+/// Recover build settings from a file's provenance, falling back to the
+/// balanced preset for anything a writer did not record.
+fn build_params_from(provenance: Option<&serde_json::Value>) -> KdForestParams {
+    let mut params = KdForestParams::balanced();
+    let Some(value) = provenance else {
+        return params;
+    };
+    let get = |key: &str| value.get(key).and_then(|v| v.as_u64());
+    if let Some(v) = get("num_trees") {
+        params.num_trees = v as usize;
+    }
+    if let Some(v) = get("leaf_size") {
+        params.leaf_size = v as usize;
+    }
+    if let Some(v) = get("split_dim_candidates") {
+        params.split_dim_candidates = v as usize;
+    }
+    if let Some(v) = get("seed") {
+        params.seed = v;
+    }
+    params
+}
+
+impl<S> KdForest<S>
+where
+    S: ForestScalar + KdfScalar,
+{
+    /// Rebuild a full in-memory forest from a `.kdf`, without re-running a build.
+    ///
+    /// The third option between querying the file lazily and rebuilding from the
+    /// `.sift` corpus. The file stores the exact topology, leaf order and feature
+    /// IDs of the forest it was written from, so this is decompression and
+    /// reassembly — no median splits, no randomization, and no dependence on the
+    /// builder having stayed the same.
+    ///
+    /// Node identity is what makes reassembly possible: every node carries the
+    /// logical ID it had in the source arena, and every child reference repeats
+    /// the addressed child's logical ID, so the arena is rebuilt by placing each
+    /// node at its own ID and rewriting child links to the IDs already stored.
+    ///
+    /// Leaf ranges are chunk-local on disk, so each chunk's feature IDs are
+    /// appended to the tree's point list and its leaf starts shifted by where
+    /// that chunk landed. The resulting point order is a valid leaf order but not
+    /// necessarily the byte-for-byte order the original build produced; leaf
+    /// membership, and therefore every query result, is identical either way.
+    pub fn read_kdf(path: &Path, options: LazyKdForestOptions) -> Result<Self, KdfError> {
+        let file = KdfFile::<S>::open(path, options)?;
+        let n_points = file.len();
+        let dim = file.dim();
+        let mut points = vec![S::ZERO; n_points * dim];
+        let mut have_points = false;
+        let mut trees = Vec::with_capacity(file.tree_count());
+
+        for ti in 0..file.tree_count() {
+            let mut nodes = vec![Node::Leaf { start: 0, len: 0 }; file.tree_node_count(ti)];
+            let mut point_ids: Vec<u32> = Vec::with_capacity(n_points);
+            for ci in 0..file.chunk_count(ti) {
+                let chunk = file.decoded_chunk(ti as u32, ci as u32)?;
+                let base = point_ids.len() as u32;
+                // Tree-local layout carries the corpus in its chunks, so the one
+                // pass that reads every chunk also collects the points; the
+                // shared layout keeps them elsewhere and is handled below.
+                if let Some(vectors) = &chunk.vectors {
+                    have_points = true;
+                    for (row, &id) in chunk.feature_ids.iter().enumerate() {
+                        let to = id as usize * dim;
+                        points[to..to + dim].copy_from_slice(&vectors[row * dim..(row + 1) * dim]);
+                    }
+                }
+                point_ids.extend_from_slice(&chunk.feature_ids);
+                for (local, node) in chunk.nodes.iter().enumerate() {
+                    let logical = chunk.logical_node_ids[local] as usize;
+                    let slot = nodes.get_mut(logical).ok_or_else(|| {
+                        KdfError::InvalidFormat(format!(
+                            "tree {ti} logical node {logical} is out of range"
+                        ))
+                    })?;
+                    *slot = match *node {
+                        DecodedNode::Internal {
+                            split_dimension,
+                            split,
+                            left,
+                            right,
+                        } => Node::Internal {
+                            split_dim: split_dimension,
+                            split_val: split,
+                            left: left.logical,
+                            right: right.logical,
+                        },
+                        DecodedNode::Leaf { start, len } => Node::Leaf {
+                            start: base + start,
+                            len,
+                        },
+                    };
+                }
+            }
+            trees.push(Tree { nodes, point_ids });
+        }
+
+        if !have_points {
+            // Shared layout: one pass over the blocks, scattering each block's
+            // rows to the feature IDs the row map names. Two things this avoids,
+            // both measured at 9.7M descriptors. Walking feature-ID order instead
+            // of storage order makes a bounded cache decode a block per
+            // descriptor, because feature-ID order is the tree-0 leaf permutation
+            // — twenty minutes against seconds. And reading through the
+            // single-vector accessor pays a lock and a cache lookup per
+            // descriptor, which cost more than rebuilding the index from
+            // scratch.
+            let order = file.storage_order().ok_or_else(|| {
+                KdfError::InvalidFormat("shared layout without a storage row map".into())
+            })?;
+            let (rows, blocks) = file.descriptor_block_shape().ok_or_else(|| {
+                KdfError::InvalidFormat("shared layout without a block shape".into())
+            })?;
+            for block in 0..blocks {
+                let vectors = file.descriptor_block_vectors(block as u32)?;
+                let base = block * rows;
+                for (row, vector) in vectors.chunks_exact(dim).enumerate() {
+                    let to = order[base + row] as usize * dim;
+                    points[to..to + dim].copy_from_slice(vector);
+                }
+            }
+        }
+
+        Ok(Self {
+            points,
+            n_points,
+            dim,
+            // The writer records its build settings; they do not affect the
+            // stored topology, only what a later query defaults its budget to.
+            params: build_params_from(file.provenance()),
+            trees,
+        })
     }
 }
 
@@ -746,6 +884,80 @@ mod tests {
                 .search_batch_with_distances(&queries, 11, 3, 30, None)
                 .unwrap();
             assert_eq!(got, expected);
+        }
+    }
+
+    /// A forest reloaded from a file answers exactly as the one written did.
+    ///
+    /// This is what makes the file an index rather than a cache of one: the
+    /// topology, leaf membership and feature IDs all survive the round trip, so
+    /// no rebuild is needed and no randomization has to be reproduced. Checked in
+    /// both layouts, because tree-local carries the corpus in its chunks while
+    /// shared keeps it in one table and the reload paths differ.
+    #[test]
+    fn a_forest_reloaded_from_a_file_answers_identically() {
+        let dim = 7;
+        let n = 200;
+        let points: Vec<u8> = (0..n * dim)
+            .map(|i| ((i * 31 + i / 3) % 251) as u8)
+            .collect();
+        let forest = KdForest::build(
+            &points,
+            n,
+            dim,
+            KdForestParams {
+                num_trees: 3,
+                leaf_size: 8,
+                seed: 5,
+                ..KdForestParams::balanced()
+            },
+        );
+        let queries: Vec<u8> = (0..9 * dim).map(|i| ((i * 17 + 5) % 255) as u8).collect();
+
+        for storage in [
+            DescriptorStorage::TreeLocal,
+            DescriptorStorage::Shared {
+                target_descriptor_block_bytes: 21,
+            },
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("round.kdf");
+            forest
+                .write_kdf(
+                    &path,
+                    None,
+                    &KdfWriteOptions {
+                        descriptor_storage: storage,
+                        target_chunk_bytes: 300,
+                        compression_level: 1,
+                        origin_block_rows: 8,
+                    },
+                )
+                .unwrap();
+            let reloaded = KdForest::<u8>::read_kdf(&path, LazyKdForestOptions::default()).unwrap();
+
+            assert_eq!(reloaded.len(), forest.len(), "storage={storage:?}");
+            assert_eq!(reloaded.dim(), forest.dim());
+            assert_eq!(
+                reloaded.params().num_trees,
+                3,
+                "params came from provenance"
+            );
+            assert_eq!(reloaded.params().leaf_size, 8);
+            for (budget, query) in [0usize, 3, 40, 500]
+                .into_iter()
+                .flat_map(|b| queries.chunks(dim).map(move |q| (b, q)))
+            {
+                assert_eq!(
+                    reloaded.search(query, 4, budget, None),
+                    forest.search(query, 4, budget, None),
+                    "storage={storage:?}, budget={budget}"
+                );
+            }
+            // The corpus itself must survive, not merely the topology.
+            let batch = reloaded.search_batch_with_distances(&points, n, 1, 200, None);
+            let want = forest.search_batch_with_distances(&points, n, 1, 200, None);
+            assert_eq!(batch, want, "storage={storage:?}");
         }
     }
 

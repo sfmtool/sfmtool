@@ -315,6 +315,61 @@ impl<S: KdfScalar> KdfFile<S> {
         Some(order)
     }
 
+    /// The writer's recorded build settings, if it left any.
+    ///
+    /// Provenance is free-form, so this returns the raw value rather than a typed
+    /// record: the format does not constrain what a writer puts there, and a
+    /// reader that rebuilds an index wants the settings without the format having
+    /// to agree with the builder about their shape.
+    pub fn provenance(&self) -> Option<&serde_json::Value> {
+        self.metadata.provenance.as_ref()
+    }
+
+    /// Descriptor rows per shared block, and how many blocks there are.
+    ///
+    /// Together with [`storage_order`](Self::storage_order) these let a caller
+    /// read the corpus a block at a time instead of a descriptor at a time.
+    pub fn descriptor_block_shape(&self) -> Option<(usize, usize)> {
+        let rows = self.metadata.descriptor_block_rows? as usize;
+        Some((rows, self.len().div_ceil(rows)))
+    }
+
+    /// Every vector in one shared descriptor block, row-major.
+    ///
+    /// Bulk counterpart to [`shared_vector`](Self::shared_vector). Reading a
+    /// corpus through the single-vector accessor costs a cache lookup, an `Arc`
+    /// clone and a lock acquisition *per descriptor*, which on a nine-million
+    /// descriptor corpus is slower than rebuilding the index from scratch. This
+    /// pays those once per block.
+    pub fn descriptor_block_vectors(&self, block: u32) -> Result<Vec<S>, KdfError> {
+        let pin = self.descriptor_block(block)?;
+        let Cached::Descriptor(vectors) = &*pin else {
+            unreachable!("descriptor key yields descriptors")
+        };
+        Ok(vectors.clone())
+    }
+
+    /// Chunks in one tree.
+    pub fn chunk_count(&self, tree: usize) -> usize {
+        self.metadata.trees[tree].chunks.len()
+    }
+
+    /// A whole decoded chunk, copied out of the cache.
+    ///
+    /// The node-at-a-time accessors are what a query wants; rebuilding an
+    /// in-memory forest wants the opposite, every node of every chunk exactly
+    /// once, and going through them would decode each chunk once per node it
+    /// holds. The copy is deliberate: the caller keeps the result while the pin
+    /// is released, so a bulk read does not hold the cache full of chunks it has
+    /// already finished with.
+    pub fn decoded_chunk(&self, tree: u32, chunk: u32) -> Result<DecodedTreeChunk<S>, KdfError> {
+        let pin = self.tree_chunk(tree, chunk)?;
+        let Cached::Tree(decoded) = &*pin else {
+            unreachable!("tree key yields a tree chunk")
+        };
+        Ok(decoded.clone())
+    }
+
     pub fn io_stats(&self) -> KdfIoStats {
         self.cache.stats()
     }
