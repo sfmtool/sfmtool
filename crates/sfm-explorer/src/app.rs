@@ -13,7 +13,8 @@
 //! - [`App::process_pick_readback`] — apply hover/selection from GPU pick.
 
 use std::sync::Arc;
-#[cfg(target_os = "windows")]
+// Unconditional: the frame loop times its Action Log entries on every platform.
+// The DirectManipulation tick below is the Windows-only user of it.
 use std::time::Instant;
 
 use egui_dock::{DockArea, DockState};
