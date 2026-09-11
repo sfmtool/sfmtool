@@ -45,6 +45,7 @@ fn frame(
             ui,
             node.edited(),
             node.id,
+            node.history.current_version().serial,
             Some(image_index),
             None,
             None,
@@ -239,4 +240,120 @@ fn the_embedded_overlay_skips_a_deleted_point_and_shows_an_addition() {
     assert!(!after.contains(&3), "the replaced index still drew");
     assert!(after.contains(&moved), "the addition drew no feature");
     assert_eq!(after.len(), before.len());
+}
+
+/// Deleting a point takes its features out of the overlay on the next frame.
+///
+/// The panel prepares the overlay once and keeps it across frames, and a point
+/// edit renumbers nothing, so nothing else in the panel's cache key moves when
+/// one lands. Before the version joined that key the overlay outlived the edit,
+/// and all three of the symptoms that follow are the one stale list: the
+/// deleted point's features went on drawing, a click on one selected an index
+/// the version has no point at, and the Point Track panel -- which reads that
+/// index *through* the version -- then showed nothing while a second delete
+/// refused, because there was no live point there to delete.
+///
+/// A `sift_files` node, so the assertion also covers the half of the rebuild
+/// that reads `image_feature_to_point`: that map belongs to the base and still
+/// names the deleted row, so a rebuilt overlay is only correct if it maps
+/// through the version.
+#[test]
+fn deleting_a_point_takes_its_features_out_of_the_overlay() {
+    use crate::document::PointMap;
+    use crate::state::OverlayMode;
+
+    let mut node = demo_node("/runs/overlay.sfmr");
+    // A point observed in image 0, named the way the panel names it: through
+    // the base's per-image feature map, which is what the overlay reads.
+    let (&feature, &point) = node.recon().point_set.image_feature_to_point[0]
+        .iter()
+        .next()
+        .expect("the demo's first image tracks features");
+    // Sized the way the panel sizes its own read: feature indexes are the
+    // `.sift` file's, so they are not dense over a track's members.
+    let count = node.recon().point_set.max_track_feature_index[0] as usize + 1;
+    let sift = crate::state::CachedSiftFeatures {
+        positions_xy: (0..count).map(|i| [40.0 + i as f32, 30.0]).collect(),
+        affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
+        read_count: count,
+    };
+    assert!(
+        (feature as usize) < count,
+        "the feature index has to be inside the cache the frame is given",
+    );
+
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let image = pixels(1920, 1080);
+    let display = FeatureDisplaySettings {
+        overlay_mode: OverlayMode::Features,
+        tracked_only: true,
+        ..Default::default()
+    };
+
+    let offered = |detail: &ImageDetail| -> Vec<u32> {
+        detail
+            .feature_overlay
+            .as_ref()
+            .expect("a frame prepared the overlay")
+            .features
+            .iter()
+            .map(|f| f.point_index)
+            .collect()
+    };
+
+    overlay_frame(&mut detail, &ctx, &node, &sift, &image, &display);
+    assert!(
+        offered(&detail).contains(&point),
+        "the point is in the overlay before it is deleted",
+    );
+
+    let mut next = node.history.current().clone();
+    next.delete_point(point).expect("delete the live point");
+    node.history
+        .push(next, PointMap::Removed(vec![point]), "deleted".to_string());
+
+    overlay_frame(&mut detail, &ctx, &node, &sift, &image, &display);
+    assert!(
+        !offered(&detail).contains(&point),
+        "the deleted point is still offered by the overlay: {:?}",
+        offered(&detail),
+    );
+}
+
+/// One frame of the panel over a node that has a SIFT cache behind it.
+///
+/// Separate from [`frame`], which pages through images to test the view state
+/// and hands the panel no features at all.
+fn overlay_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    sift: &crate::state::CachedSiftFeatures,
+    image: &ImageU8,
+    feature_display: &FeatureDisplaySettings,
+) {
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        ..Default::default()
+    };
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(0),
+            None,
+            None,
+            &mut None,
+            &[],
+            &crate::platform::ScrollInput::default(),
+            Some(sift),
+            Some(image),
+            feature_display,
+            &mut intrinsics_display,
+        );
+    });
 }

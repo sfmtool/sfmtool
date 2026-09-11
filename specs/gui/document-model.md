@@ -171,15 +171,37 @@ not one.
 
 ### What a bulk edit owes the rest of the viewer
 
-A point edit shifts no index, so nothing outside the node has to be told. A bulk
-edit renumbers the image table, and a cached decode or a selected index keyed by
-an image is then a statement about a different photo. So `delete_image`, undo and
-redo each drop the state-level caches for the node (the SIFT and full-resolution
-caches) and clear its image, camera and hover selections, and the caller drops
-the panel-local texture caches -- the same three-part release closing a node
-performs. The node keeps its `ReconId` through all of it, which is what makes an
-edit different from closing and re-opening: the tint, the transform, the solo
-and the MCP addressing carry over untouched.
+A point edit moves no image index, so nothing keyed by one has to be told; what
+it does owe is the section below. A bulk edit renumbers the image table, and a
+cached decode or a selected index keyed by an image is then a statement about a
+different photo. So `delete_image`, undo and redo each drop the state-level
+caches for the node (the SIFT and full-resolution caches) and clear its image,
+camera and hover selections, and the caller drops the panel-local texture
+caches -- the same three-part release closing a node performs. The node keeps
+its `ReconId` through all of it, which is what makes an edit different from
+closing and re-opening: the tint, the transform, the solo and the MCP addressing
+carry over untouched.
+
+### What a point edit owes it
+
+What a point edit owes is everything that is a statement *about* the points
+rather than keyed by an index: which of them are live, and which point an index
+resolves to.
+
+The 3D viewport pays that every frame, through the deleted mask below. A panel
+that prepares a list once and keeps it across frames pays it by putting the
+version's serial in the key it decides staleness with. The Image Detail panel's
+feature overlay is the one that prepares such a list, and the serial is why a
+deleted point's features stop being drawn on the next frame; without it the
+overlay outlives the edit, and a click lands on an index the version has no
+point at.
+
+A panel reading an index *into the base* has to follow it as well.
+`PointSet::image_feature_to_point` is built once per base and says nothing about
+the versions above it, so the overlay maps every entry through
+`EditedReconstruction::live_index_of_base`: the base index itself when no edit
+touched the point, the addition that superseded it when one replaced it, and
+nothing at all when the version deleted it.
 
 ## Change detection by identity
 

@@ -190,6 +190,47 @@ fn a_replacement_goes_back_to_its_base_index() {
 }
 
 #[test]
+fn a_base_row_is_followed_to_wherever_its_point_now_lives() {
+    let base = Arc::new(fixture(6));
+    let mut edited = EditedReconstruction::new(Arc::clone(&base));
+    edited.delete_point(1).unwrap();
+    let moved = edited.replace_point(4, new_record(9, 8)).unwrap();
+    // A second replacement of the same point: the chain's middle link is now
+    // dead, and only the last one is the answer.
+    let moved_again = edited.replace_point(moved, new_record(10, 8)).unwrap();
+
+    assert_eq!(
+        edited.live_index_of_base(0),
+        Some(0),
+        "an untouched row is its own index"
+    );
+    assert_eq!(
+        edited.live_index_of_base(1),
+        None,
+        "a deleted row has nowhere to be followed to"
+    );
+    assert_eq!(
+        edited.live_index_of_base(4),
+        Some(moved_again),
+        "a twice-replaced row lands on the live end of its chain, not the dead middle"
+    );
+    assert_eq!(
+        edited.live_index_of_base(6),
+        None,
+        "an addition is not a base row, so it is not this accessor's question"
+    );
+
+    // What the base rows follow to is exactly what is live and descended from
+    // one, so the two accessors cannot disagree.
+    for index in edited.live_indexes() {
+        if index < base.point_count() as u32 {
+            assert_eq!(edited.live_index_of_base(index), Some(index));
+        }
+    }
+    assert!(edited.point(moved).is_none(), "the middle link is deleted");
+}
+
+#[test]
 fn a_record_must_carry_exactly_the_base_columns() {
     let base = Arc::new(fixture(6));
     let mut edited = EditedReconstruction::new(base);

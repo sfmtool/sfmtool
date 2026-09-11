@@ -23,6 +23,7 @@ pub(crate) use overlay::{
     CREATE_POINT_LABEL,
 };
 
+use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};
 use crate::scene::{CameraRef, ImageRef, ReconId};
 use crate::state::{
@@ -46,6 +47,14 @@ struct FeatureOverlayState {
     /// The image this overlay was built for. A ref, so a file replacement that
     /// leaves the same index selected still invalidates it.
     image: ImageRef,
+    /// The node version this overlay was built for. A point edit leaves the
+    /// image table alone, so nothing here is keyed by an index that moved, but
+    /// it does change which points are live, and the overlay is a statement
+    /// about the live ones: the features it draws, and the point each one
+    /// selects. Serials are minted once and never reused, so a new version and
+    /// a cursor move back onto an old one both arrive here as a different
+    /// value.
+    version: VersionSerial,
     overlay_mode: OverlayMode,
     tracked_only: bool,
     max_features: Option<usize>,
@@ -258,6 +267,7 @@ impl ImageDetail {
         ui: &mut egui::Ui,
         edited: &EditedReconstruction,
         recon_id: ReconId,
+        version: VersionSerial,
         selected_image: Option<usize>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
@@ -306,9 +316,15 @@ impl ImageDetail {
         // Determine whether to show features based on overlay mode
         let show_features = feature_display.overlay_mode != OverlayMode::None;
 
-        // Rebuild overlay if settings changed (mode, filters, etc.)
+        // Rebuild the overlay when the settings it was built under changed
+        // (mode, filters) or when the value underneath it did. The version is
+        // in the key because an edit that renumbers nothing still moves what
+        // the overlay says: a deleted point's features have to stop being drawn
+        // and stop being selectable, or a click lands on an index the version
+        // no longer has a point at.
         let cache_valid = self.feature_overlay.as_ref().is_some_and(|c| {
             c.image == image_ref
+                && c.version == version
                 && c.overlay_mode == feature_display.overlay_mode
                 && c.tracked_only == feature_display.tracked_only
                 && c.max_features == feature_display.max_features
@@ -316,15 +332,15 @@ impl ImageDetail {
                 && c.max_feature_size == feature_display.max_feature_size
         });
         if show_features && !cache_valid {
-            self.load_display_features(edited, image_ref, sift_features, feature_display);
+            self.load_display_features(edited, image_ref, version, sift_features, feature_display);
         } else if !show_features {
             // In None mode, still load tracked features for selected point display
             let tracked_overlay_valid = self
                 .feature_overlay
                 .as_ref()
-                .is_some_and(|c| c.image == image_ref && c.tracked_only);
+                .is_some_and(|c| c.image == image_ref && c.version == version && c.tracked_only);
             if !tracked_overlay_valid {
-                self.load_tracked_features(edited, image_ref, sift_features);
+                self.load_tracked_features(edited, image_ref, version, sift_features);
             }
         }
 
@@ -487,6 +503,7 @@ impl ImageDetail {
         &mut self,
         edited: &EditedReconstruction,
         image: ImageRef,
+        version: VersionSerial,
         cached_sift: Option<&CachedSiftFeatures>,
     ) {
         let recon = &*edited.base;
@@ -505,6 +522,7 @@ impl ImageDetail {
             );
             self.feature_overlay = Some(FeatureOverlayState {
                 image,
+                version,
                 overlay_mode: OverlayMode::None,
                 tracked_only: true,
                 max_features: None,
@@ -520,6 +538,7 @@ impl ImageDetail {
         if feature_to_point.is_empty() || cached_sift.is_none() {
             self.feature_overlay = Some(FeatureOverlayState {
                 image,
+                version,
                 overlay_mode: OverlayMode::None,
                 tracked_only: true,
                 max_features: None,
@@ -535,11 +554,18 @@ impl ImageDetail {
         let mut features = Vec::with_capacity(feature_to_point.len());
         for (&feat_idx, &point_idx) in feature_to_point {
             let fi = feat_idx as usize;
+            // The map is the base's, so a row it still names may be a point
+            // this version deleted (no feature at all, it is the deleted point
+            // that must stop being drawn) or one an edit replaced (the same
+            // feature, selecting the addition that superseded it).
+            let Some(live) = edited.live_index_of_base(point_idx) else {
+                continue;
+            };
             if fi < num_features {
                 features.push(DisplayFeature {
                     position: cached.positions_xy[fi],
                     affine_shape: cached.affine_shapes[fi],
-                    point_index: point_idx,
+                    point_index: live,
                     max_track_angle_deg: f32::NAN,
                     inverse_depth_z: f32::NAN,
                     condition_number: f32::NAN,
@@ -557,6 +583,7 @@ impl ImageDetail {
         );
         self.feature_overlay = Some(FeatureOverlayState {
             image,
+            version,
             overlay_mode: OverlayMode::None,
             tracked_only: true,
             max_features: None,
@@ -572,6 +599,7 @@ impl ImageDetail {
         &mut self,
         edited: &EditedReconstruction,
         image: ImageRef,
+        version: VersionSerial,
         cached_sift: Option<&CachedSiftFeatures>,
         settings: &FeatureDisplaySettings,
     ) {
@@ -609,6 +637,7 @@ impl ImageDetail {
             );
             self.feature_overlay = Some(FeatureOverlayState {
                 image,
+                version,
                 overlay_mode: settings.overlay_mode,
                 tracked_only: settings.tracked_only,
                 max_features: settings.max_features,
@@ -623,6 +652,7 @@ impl ImageDetail {
         let Some(cached) = cached_sift else {
             self.feature_overlay = Some(FeatureOverlayState {
                 image,
+                version,
                 overlay_mode: settings.overlay_mode,
                 tracked_only: settings.tracked_only,
                 max_features: settings.max_features,
@@ -669,9 +699,12 @@ impl ImageDetail {
                 }
             }
 
+            // Through the version: a base row this version deleted leaves the
+            // feature untracked rather than pointing at a dead index, and one
+            // an edit replaced points at the addition that superseded it.
             let point_index = feature_to_point
                 .get(&(i as u32))
-                .copied()
+                .and_then(|&base| edited.live_index_of_base(base))
                 .unwrap_or(UNTRACKED);
 
             // Skip untracked features if tracked_only is set
@@ -705,6 +738,7 @@ impl ImageDetail {
         );
         self.feature_overlay = Some(FeatureOverlayState {
             image,
+            version,
             overlay_mode: settings.overlay_mode,
             tracked_only: settings.tracked_only,
             max_features: settings.max_features,

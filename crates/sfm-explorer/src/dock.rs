@@ -429,6 +429,7 @@ impl TabContext<'_> {
                 ui,
                 node.edited(),
                 id,
+                node.history.current_version().serial,
                 selected_image,
                 selected_point,
                 hovered_point,

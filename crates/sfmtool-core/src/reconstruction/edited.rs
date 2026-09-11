@@ -430,6 +430,41 @@ impl EditedReconstruction {
         self.deleted_points.contains(&index)
     }
 
+    /// Where the point a *base row* holds lives in this version, or `None` when
+    /// the version deleted it outright.
+    ///
+    /// The base index itself when no edit has touched the point, and the
+    /// addition that superseded it when one replaced it. `replace_point`
+    /// carries the base index a record descends from forward through a chain,
+    /// so a point modified twice still answers here, and the deleted set picks
+    /// the one link of that chain which is live.
+    ///
+    /// The accessor for a caller holding an index *into the base* rather than
+    /// into the version. `PointSet::image_feature_to_point` is the one in the
+    /// viewer: it is built once per base and says nothing about what the
+    /// versions above it did, so reading it without this turns a deleted point
+    /// into a feature that still draws and still selects.
+    ///
+    /// Linear in the addition count, which is the number of hand edits a
+    /// version stands on rather than anything that scales with the scene.
+    pub fn live_index_of_base(&self, base_index: u32) -> Option<u32> {
+        let base_count = self.base.point_count() as u32;
+        if base_index >= base_count {
+            return None;
+        }
+        if !self.deleted_points.contains(&base_index) {
+            return Some(base_index);
+        }
+        self.replaces
+            .iter()
+            .enumerate()
+            .map(|(a, replaced)| (base_count + a as u32, replaced))
+            .find(|(index, replaced)| {
+                **replaced == Some(base_index) && !self.deleted_points.contains(index)
+            })
+            .map(|(index, _)| index)
+    }
+
     /// The point at `index`, or `None` when that index names no live point.
     ///
     /// Below the base's point count the index is a base index; at or above it,
