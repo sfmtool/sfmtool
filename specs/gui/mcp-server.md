@@ -902,6 +902,15 @@ transcript.
       "text": "set_window_layout failed: layout.main: unknown key \"fracton\""
     },
     {
+      "revision": 520,
+      "at": "2026-09-02T12:41:10.115-07:00",
+      "actor": "mcp",
+      "kind": "edit",
+      "failed": false,
+      "took_ms": 412.6,
+      "text": "Resected IMG_0007.jpg in place (seoul_bull): 3011 pts, ..."
+    },
+    {
       "revision": 522,
       "at": "2026-09-02T12:41:12.870-07:00",
       "actor": "mcp",
@@ -924,6 +933,14 @@ to the newest of the run, which is what the agent needs to be told about.
 `revision` in the reply is the counter now, and sending it back as the next
 `since_revision` reads the gap and nothing else; `since_revision: 0`, or an
 omitted one, is the start.
+
+**`took_ms` is what the action cost**, in milliseconds: the wall time from
+recording it to the end of the frame that showed its result, GPU uploads and
+draw included ([action-log.md](action-log.md) § "What an action cost"). It is
+how an agent finds out that its own command was slow, and which one. The field
+is **absent**, not null, on a row the viewer has not drawn a frame for yet and
+on a row whose run folded under it — a reader that wants the number asks again,
+and one that does not is handed nothing to special-case.
 
 **Order is log order**, oldest first, because the agent reads it as a
 transcript. `limit` defaults to `200` and is capped at `1000`

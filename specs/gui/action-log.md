@@ -57,36 +57,36 @@ The body is a vertical scroll area of one-line, fixed-height rows in the
 monospace font, oldest at the top, newest at the bottom:
 
 ```
-14:03:07  Viewer  SfM Explorer 0.2.0 started
-14:03:07  Viewer  MCP endpoint listening on http://127.0.0.1:8787/mcp
-14:03:08  User    Opened seoul_bull from C:\data\seoul_bull.sfmr
-14:03:41  User    Selected image IMG_0007.jpg in seoul_bull
-14:04:02  MCP     get_scene
-14:04:02  MCP     Opened global from C:\data\global.sfmr
-14:04:03  MCP     Aligned global → seoul_bull: 15/17 cameras, RMS 0.031
-14:04:05  MCP     screenshot viewer_3d 1280×720
-14:04:19  MCP     select_camera_image failed: No loaded reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`.
-14:05:10  User    Closed all (2)
+14:03:07  Viewer          SfM Explorer 0.2.0 started
+14:03:07  Viewer          MCP endpoint listening on http://127.0.0.1:8787/mcp
+14:03:08  User     1.84 s Opened seoul_bull from C:\data\seoul_bull.sfmr
+14:03:41  User      <1 ms Selected image IMG_0007.jpg in seoul_bull
+14:04:02  MCP       <1 ms get_scene
+14:04:02  MCP      1.20 s Opened global from C:\data\global.sfmr
+14:04:03  MCP      412 ms Aligned global → seoul_bull: 15/17 cameras, RMS 0.031
+14:04:05  MCP       38 ms screenshot viewer_3d 1280×720
+14:04:19  MCP       <1 ms select_camera_image failed: No loaded reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`.
+14:05:10  User      67 ms Closed all (2)
 ```
 
-Three columns: the local time of day to the second, the actor, and the text.
-Hovering a row shows the full timestamp with date and UTC offset, the entry's
-kind (`Kind::label`, which for a query is the tool's name), and the text. A
-text longer than the row is truncated with an ellipsis and shown whole in that
-same tooltip; rows never wrap, because the list is virtualized on a uniform row
-height. The kind rides on the tooltip rather than in a column of its own: it is
-what a row is *about*, which the text usually says already, and the one time it
-is worth asking is the one time a hover costs nothing.
+Four columns: the local time of day to the second, the actor, what the action
+cost, and the text. Hovering a row shows the full timestamp with date and UTC
+offset, the entry's kind (`Kind::label`, which for a query is the tool's name),
+and the text. A text longer than the row is truncated with an ellipsis and shown
+whole in that same tooltip; rows never wrap, because the list is virtualized on a
+uniform row height. The kind rides on the tooltip rather than in a column of its
+own: it is what a row is *about*, which the text usually says already, and the
+one time it is worth asking is the one time a hover costs nothing.
 
 Colour carries the rest of the entry's shape, so the columns stay clean:
 
-| Entry | Time | Actor | Text |
-|-------|------|-------|------|
-| Action by the user | weak | default | default |
-| Action over MCP | weak | hyperlink colour | default |
-| Action by the viewer | weak | weak | default |
-| Query over MCP (a read-only tool) | weak | weak | weak |
-| Failed, any actor | weak | as above | `error_fg_color` |
+| Entry | Time | Actor | Cost | Text |
+|-------|------|-------|------|------|
+| Action by the user | weak | default | weak | default |
+| Action over MCP | weak | hyperlink colour | weak | default |
+| Action by the viewer | weak | weak | weak | default |
+| Query over MCP (a read-only tool) | weak | weak | weak | weak |
+| Failed, any actor | weak | as above | weak | `error_fg_color` |
 
 The actor column is what makes an MCP row visually distinct — there is no
 `MCP:` prefix in the text, because the text of an action never depends on who
@@ -357,6 +357,37 @@ Chosen over `chrono` for a smaller dependency graph and over `time` because
 workspace MSRV is 1.95; `jiff` needs 1.70. On Windows and macOS the zone comes
 from the OS; on Linux from `/etc/localtime` or `TZ`, falling back to UTC with a
 one-time `log::warn!` if neither resolves, which is `jiff`'s own behaviour.
+
+## What an action cost
+
+Every entry also carries `took`, the wall time the viewer spent between
+recording the action and putting the frame that shows its result on the screen.
+It is the wait the person who took the action actually sits through, which is
+not the same as the cost of the state change: an edit's visible cost is mostly
+the GPU uploads and the draw that follow it, and a number that measured only the
+handler would say an edit was instant while the window sat still for a second.
+
+The frame loop divides the two cases at its upload phase. An entry written
+*before* that phase began has had its uploads run and its pixels drawn by the
+end of the same frame, so that frame times it; this is every command an agent
+sent, which the drain applies in phase 0. An entry written *after* it — anything
+the egui pass handled, so every click, key and menu item — has not, and the next
+frame times it instead. `ActionLog::settle` is called once per frame with the
+instant the upload phase began, and stamps exactly the entries that instant is
+past.
+
+An entry that has not been drawn yet has no cost rather than a zero one: the
+column is blank, and `took_ms` is absent from the wire row. A run that folds
+mints a new revision, so the surviving row is timed and the value it replaced
+drops out untimed — a slider drag reports the cost of the frame that showed
+where it ended up, which is the only one of its values anyone waited for.
+
+The reader's units are milliseconds up to a second and seconds past it, and
+`<1 ms` below a millisecond rather than `0 ms`: the action did happen, and a
+rounded zero reads like a measurement that failed. The column is right-aligned
+so a slow row stands out of a column of fast ones without the numbers being
+read, and weak, because it is the one column that is about the viewer rather
+than about the action.
 
 ## Rust API
 

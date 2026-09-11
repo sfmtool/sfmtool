@@ -1796,6 +1796,10 @@ fn the_action_log_read_returns_a_transcript_with_the_clock_beside_it() {
     assert_eq!(row["failed"], json!(false));
     assert_eq!(row["text"], "Opened alpha from /runs/alpha.sfmr");
     assert!(row["tool"].is_null(), "only a query row carries a tool");
+    assert!(
+        row["took_ms"].is_null(),
+        "a row the viewer has not drawn a frame for does not claim a cost yet",
+    );
     // RFC 3339 in the panel's zone, so the agent's time and the human's row
     // are the same time.
     let at = row["at"].as_str().expect("a timestamp");
@@ -4401,4 +4405,28 @@ fn the_cursor_moves_resnap_a_camera_view_onto_the_version_they_land_on() {
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_viewport_at(&state, &viewer, &held, "a refused undo");
+}
+
+/// A drawn action carries what it cost on the wire, in milliseconds.
+///
+/// The agent's half of the Action Log's duration column: an agent driving the
+/// viewer can read back how long its own command took to reach the screen,
+/// which is the measurement that `get_action_log` is otherwise silent about.
+#[test]
+fn get_action_log_reports_what_a_drawn_action_cost() {
+    let (mut state, mut viewer) = quiet_scene();
+    state
+        .action_log
+        .record(Kind::File, "Opened alpha from /runs/alpha.sfmr");
+    state.action_log.settle(std::time::Instant::now());
+
+    let reply = ok(&mut state, &mut viewer, action_log_read(0, &Actor::ALL));
+
+    let entries = reply["entries"].as_array().expect("an array");
+    let row = entries.last().expect("at least the open");
+    let took = row["took_ms"].as_f64().expect("a drawn row carries a cost");
+    assert!(
+        (0.0..60_000.0).contains(&took),
+        "a plausible number of milliseconds, got {took}",
+    );
 }

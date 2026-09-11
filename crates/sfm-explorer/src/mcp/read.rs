@@ -92,6 +92,15 @@ fn entry(log: &ActionLog, entry: &crate::action_log::Entry) -> Value {
         "failed": entry.failed,
         "text": entry.text,
     });
+    // Absent rather than null while an action has not been drawn yet, and
+    // absent forever on a row whose run folded under it. A reader that wants
+    // the number can ask again; one that does not is not handed a null to
+    // special-case.
+    if let Some(took) = entry.took {
+        row.as_object_mut()
+            .expect("a log row is an object")
+            .insert("took_ms".into(), json!(took.as_secs_f64() * 1000.0));
+    }
     if let crate::action_log::Kind::Query(tool) = entry.kind {
         row.as_object_mut()
             .expect("a log row is an object")

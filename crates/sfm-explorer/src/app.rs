@@ -142,6 +142,13 @@ impl App {
         }
 
         // Phase 1: sync all GPU buffers/uniforms from the current app state.
+        //
+        // When this began is what divides the log entries this frame can time
+        // from the ones that have to wait for the next: an entry written before
+        // it has its uploads and its draw in this frame, and one written after
+        // it -- everything the egui pass handles -- does not. See
+        // `ActionLog::settle`.
+        let uploads_began = Instant::now();
         self.prepare_uploads(&device, &queue);
 
         // Phase 2: render the 3D scene into the offscreen texture. The encoder is
@@ -266,6 +273,10 @@ impl App {
         cmd_bufs.push(encoder.finish());
         queue.submit(cmd_bufs);
         queue.present(output);
+
+        // The frame is on its way to the screen, so every action it drew is
+        // done being waited on: each of those log entries learns what it cost.
+        self.state.action_log.settle(uploads_began);
 
         // Phase 4: apply hover/selection from the 5x5 depth + pick readback.
         self.process_pick_readback(&device);

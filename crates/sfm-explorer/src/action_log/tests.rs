@@ -444,14 +444,25 @@ fn mute_nests() {
 // ── The clipboard export ────────────────────────────────────────────────
 
 #[test]
-fn the_clipboard_text_carries_the_date_the_actor_and_the_failures() {
+fn the_clipboard_text_carries_the_date_the_actor_the_cost_and_the_failures() {
     let mut log = log();
     log.set_actor(Actor::Mcp);
     log.record_at(at(0.0), Kind::Scene, None, false, "text");
     log.record_at(at(0.0), Kind::File, None, true, "text");
+    // No frame has been drawn, so the cost column is blank rather than zero:
+    // these actions have not finished being waited on.
     assert_eq!(
         log.to_clipboard_text(),
-        "2026-09-01 14:04:03  MCP     text\n2026-09-01 14:04:03  MCP   ! text\n"
+        "2026-09-01 14:04:03  MCP              text\n\
+         2026-09-01 14:04:03  MCP   !          text\n"
+    );
+
+    // A frame whose upload phase ran after both writes settles both.
+    log.settle(std::time::Instant::now());
+    assert_eq!(
+        log.to_clipboard_text(),
+        "2026-09-01 14:04:03  MCP       <1 ms  text\n\
+         2026-09-01 14:04:03  MCP   !   <1 ms  text\n"
     );
 }
 
@@ -551,5 +562,115 @@ fn clear_empties_the_buffer_and_the_next_frame_paints_no_rows() {
     assert!(
         !texts.iter().any(|text| text == "Opened alpha"),
         "a cleared entry was still painted: {texts:?}"
+    );
+}
+
+// ── What an action cost ─────────────────────────────────────────────────
+
+/// The entry at `index`, or a panic naming what was there instead.
+fn took_of(log: &ActionLog, index: usize) -> Option<std::time::Duration> {
+    log.get(index).expect("an entry at that index").took
+}
+
+#[test]
+fn a_frame_times_the_entries_its_upload_phase_had_already_seen() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::File, None, false, "before the uploads");
+    let uploads_began = std::time::Instant::now();
+    log.record_at(at(1.0), Kind::View, None, false, "after the uploads");
+
+    log.settle(uploads_began);
+
+    assert!(
+        took_of(&log, 0).is_some(),
+        "an entry written before the upload phase has been drawn by now"
+    );
+    assert_eq!(
+        took_of(&log, 1),
+        None,
+        "one written after it has not: its uploads are the next frame's"
+    );
+
+    // And the next frame, whose upload phase is later still, picks it up.
+    log.settle(std::time::Instant::now());
+    assert!(took_of(&log, 1).is_some(), "the next frame settles it");
+}
+
+#[test]
+fn a_settled_entry_keeps_the_cost_it_was_given() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::File, None, false, "once");
+    log.settle(std::time::Instant::now());
+    let first = took_of(&log, 0).expect("settled");
+
+    // Later frames have nothing to settle and must not re-time what is done:
+    // the number is the wait that happened, not the age of the row.
+    log.settle(std::time::Instant::now());
+    assert_eq!(took_of(&log, 0), Some(first));
+}
+
+#[test]
+fn a_run_that_folds_carries_the_timing_of_the_row_that_survived() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Display, Some("Scene scale"), false, "0.1");
+    log.record_at(at(0.1), Kind::Display, Some("Scene scale"), false, "0.2");
+    assert_eq!(log.len(), 1, "the drag is one row");
+
+    log.settle(std::time::Instant::now());
+
+    assert_eq!(texts(&log), ["0.2"]);
+    assert!(
+        took_of(&log, 0).is_some(),
+        "the surviving row is timed, from the value that replaced the other"
+    );
+}
+
+#[test]
+fn the_cost_column_reads_in_the_unit_the_question_is_asked_in() {
+    use std::time::Duration;
+    assert_eq!(ActionLog::format_took(Duration::from_micros(400)), "<1 ms");
+    assert_eq!(ActionLog::format_took(Duration::from_millis(4)), "4 ms");
+    assert_eq!(ActionLog::format_took(Duration::from_millis(990)), "990 ms");
+    assert_eq!(
+        ActionLog::format_took(Duration::from_millis(1240)),
+        "1.24 s"
+    );
+}
+
+#[test]
+fn an_untimed_entry_costs_nothing_to_hold_and_is_bounded() {
+    let mut log = log();
+    // Nothing calls `settle` here, which is every headless use of the log.
+    for i in 0..(ActionLog::CAPACITY.min(3_000)) {
+        log.record_at(at(i as f64), Kind::View, None, false, format!("{i}"));
+    }
+    assert!(
+        log.pending_len() <= 1_024,
+        "the queue of writes waiting to be timed has to be bounded: {}",
+        log.pending_len(),
+    );
+}
+
+#[test]
+fn a_settled_row_paints_what_it_cost_and_an_unsettled_one_paints_nothing() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
+    log.settle(std::time::Instant::now());
+    log.record_at(at(1.0), Kind::Edit, None, false, "Deleted point 8");
+
+    let texts = painted(&mut log);
+
+    assert!(
+        texts.iter().any(|text| text == "<1 ms"),
+        "the settled row shows its cost, only {texts:?}",
+    );
+    assert_eq!(
+        texts.iter().filter(|text| text.ends_with("ms")).count(),
+        1,
+        "the row that has not been drawn yet claims no cost: {texts:?}",
+    );
+    assert!(
+        texts.iter().any(|text| text == "Deleted point 8"),
+        "{texts:?}"
     );
 }

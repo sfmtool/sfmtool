@@ -34,6 +34,8 @@
 
 use std::collections::VecDeque;
 
+use std::time::Instant;
+
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
@@ -214,6 +216,21 @@ pub(crate) struct Entry {
     /// coalesces, in either direction.
     pub failed: bool,
     pub text: String,
+    /// How long the viewer took to show this action's result, or `None` while
+    /// it has not been shown yet.
+    ///
+    /// Wall time from the moment the action was recorded to the end of the
+    /// first frame drawn *after* the upload phase saw it -- which is the wait
+    /// the person who took it actually sits through, and not the cost of the
+    /// state change alone. A command an agent sent is applied before that
+    /// phase and so settles in its own frame; a click handled in the egui pass
+    /// runs after it and settles in the next one. Either way the number covers
+    /// the GPU uploads and the draw the action caused.
+    ///
+    /// `None` also for an entry whose run folded before a frame could settle
+    /// it: the fold gives the row a new revision, and the timing follows the
+    /// row that survived.
+    pub took: Option<std::time::Duration>,
 }
 
 /// The buffer, the recording rules, and the local zone the panel formats in.
@@ -229,6 +246,15 @@ pub(crate) struct ActionLog {
     zone: TimeZone,
     /// How many entries have been dropped off the front at [`ActionLog::CAPACITY`].
     dropped: usize,
+    /// Entries written but not yet timed, as `(revision, when it was written)`.
+    ///
+    /// A frame settles the ones the upload phase had already seen, so this holds
+    /// at most the writes of one frame in the steady state. It is still bounded
+    /// ([`ActionLog::PENDING_CAPACITY`]) because nothing outside the viewer's
+    /// frame loop calls [`ActionLog::settle`] -- a headless test, or a
+    /// `--no-default-features` build with no window, would otherwise grow it
+    /// without limit.
+    pending: Vec<(u64, Instant)>,
     /// The log's clock: one tick per write, whether the write appended an
     /// entry or folded into the newest one.
     ///
@@ -244,6 +270,11 @@ impl ActionLog {
     /// Entries kept. Past this the oldest goes and the toolbar reports how many
     /// have been dropped.
     pub(crate) const CAPACITY: usize = 10_000;
+
+    /// Writes held waiting to be timed. A frame settles what it saw, so this is
+    /// a bound on a queue that is otherwise a frame deep -- it matters only when
+    /// nothing is calling [`ActionLog::settle`] at all.
+    const PENDING_CAPACITY: usize = 1_024;
 
     /// Largest gap between two like entries for the newer to replace the older.
     pub(crate) const COALESCE_WINDOW: SignedDuration = SignedDuration::from_secs(1);
@@ -262,6 +293,7 @@ impl ActionLog {
             mute: 0,
             zone,
             dropped: 0,
+            pending: Vec::new(),
             revision: 0,
         }
     }
@@ -359,6 +391,7 @@ impl ActionLog {
             run,
             failed,
             text: text.into(),
+            took: None,
         };
         // The mirror is unconditional and precedes coalescing: a `RUST_LOG`
         // capture is the stream of what happened, and folding a run away is a
@@ -369,6 +402,7 @@ impl ActionLog {
                 .entries
                 .back_mut()
                 .expect("coalesce found a last entry") = entry;
+            self.await_timing();
             return;
         }
         if self.entries.len() >= Self::CAPACITY {
@@ -376,6 +410,62 @@ impl ActionLog {
             self.dropped += 1;
         }
         self.entries.push_back(entry);
+        self.await_timing();
+    }
+
+    /// Put the entry just written in the queue waiting to be timed.
+    ///
+    /// After the write in both branches of `record_at`, coalescing included: a
+    /// fold mints a new revision, so the folded row is the one that gets timed
+    /// and the value it replaced drops out of the queue unstamped.
+    fn await_timing(&mut self) {
+        if self.pending.len() >= Self::PENDING_CAPACITY {
+            self.pending.remove(0);
+        }
+        self.pending.push((self.revision, Instant::now()));
+    }
+
+    /// How many writes are waiting to be timed. For the test that holds the
+    /// bound on a log nothing is settling.
+    #[cfg(test)]
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Stamp every entry the frame that is ending had already written before
+    /// its upload phase, with the time from the write to now.
+    ///
+    /// `uploads_began` is when this frame's upload phase started. An entry
+    /// written before it has had its GPU work done and its pixels drawn by the
+    /// time this is called, so the elapsed time is the whole wait. One written
+    /// after it -- anything the egui pass handled, which is every click and
+    /// keystroke -- has not, and waits for the next frame.
+    ///
+    /// Called once per frame from the viewer's frame loop, at the end.
+    pub(crate) fn settle(&mut self, uploads_began: Instant) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut still_waiting = Vec::new();
+        for (revision, written) in std::mem::take(&mut self.pending) {
+            if written > uploads_began {
+                still_waiting.push((revision, written));
+                continue;
+            }
+            // Found by revision rather than by position: entries drop off the
+            // front at capacity, and a row whose run folded is gone under a
+            // revision of its own.
+            if let Some(entry) = self
+                .entries
+                .iter_mut()
+                .rev()
+                .find(|entry| entry.revision == revision)
+            {
+                entry.took = Some(now.duration_since(written));
+            }
+        }
+        self.pending = still_waiting;
     }
 
     /// Whether `entry` should replace the newest entry rather than follow it.
@@ -523,16 +613,38 @@ impl ActionLog {
     }
 
     /// One entry as the clipboard and the `log::info!` mirror render it: the
-    /// full date, the actor, a `!` where colour would have said "failed", and
-    /// the text.
+    /// full date, the actor, a `!` where colour would have said "failed", how
+    /// long it took, and the text.
+    ///
+    /// The duration column is blank in the mirror and filled in the clipboard,
+    /// and that is not an inconsistency: the mirror is written at the moment of
+    /// the action, when what it cost is still in the future.
     pub(crate) fn line(&self, entry: &Entry) -> String {
         format!(
-            "{}  {:<6}{} {}",
+            "{}  {:<6}{} {:>7}  {}",
             self.format(entry.at, "%Y-%m-%d %H:%M:%S"),
             entry.actor.label(),
             if entry.failed { '!' } else { ' ' },
+            entry.took.map(Self::format_took).unwrap_or_default(),
             entry.text,
         )
+    }
+
+    /// How long an action took, for a reader: `4 ms`, `1.24 s`.
+    ///
+    /// Milliseconds up to a second and seconds past it, because the two
+    /// questions a reader has are different on either side of that line. Below
+    /// a millisecond the answer is `<1 ms` rather than `0 ms`: the action did
+    /// happen, and a rounded zero reads like a measurement that failed.
+    pub(crate) fn format_took(took: std::time::Duration) -> String {
+        let ms = took.as_secs_f64() * 1000.0;
+        if ms >= 1000.0 {
+            format!("{:.2} s", ms / 1000.0)
+        } else if ms >= 1.0 {
+            format!("{ms:.0} ms")
+        } else {
+            "<1 ms".to_string()
+        }
     }
 
     /// `at` in this log's zone, through `jiff`'s `strftime`.

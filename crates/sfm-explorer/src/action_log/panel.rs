@@ -18,6 +18,10 @@ const TIME_WIDTH: f32 = 76.0;
 /// Width of the actor column: `Viewer` plus the same clear gap before the text.
 const ACTOR_WIDTH: f32 = 62.0;
 
+/// Width of the duration column: `<1 ms` through `99.99 s` in the monospace
+/// font, plus the gap before the text.
+const TOOK_WIDTH: f32 = 64.0;
+
 /// The panel body. Draws the toolbar and the virtualized list into `ui`.
 pub(crate) fn show(ui: &mut egui::Ui, log: &mut ActionLog) {
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
@@ -128,6 +132,15 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
         ui.spacing_mut().item_spacing.x = 0.0;
         monospace(ui, TIME_WIDTH, &log.format(entry.at, "%H:%M:%S"), weak);
         monospace(ui, ACTOR_WIDTH, entry.actor.label(), actor_color);
+        // Right-aligned, so the slow rows stand out of a column of small ones
+        // without anyone having to read the numbers. Weak, because it is the
+        // one column that is about the viewer rather than about the action.
+        monospace_right(
+            ui,
+            TOOK_WIDTH,
+            &entry.took.map(ActionLog::format_took).unwrap_or_default(),
+            weak,
+        );
         ui.add(
             egui::Label::new(
                 egui::RichText::new(&entry.text)
@@ -142,7 +155,22 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
     .on_hover_text(tooltip);
 }
 
-/// One fixed-width monospace cell, so the three columns line up down the list
+/// The same cell, with its text against the right edge and a gap after it.
+fn monospace_right(ui: &mut egui::Ui, width: f32, text: &str, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(width, ui.available_height()),
+        egui::Sense::hover(),
+    );
+    ui.painter().text(
+        rect.right_center() - egui::vec2(8.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        text,
+        egui::TextStyle::Monospace.resolve(ui.style()),
+        color,
+    );
+}
+
+/// One fixed-width monospace cell, so the columns line up down the list
 /// however wide their contents are.
 fn monospace(ui: &mut egui::Ui, width: f32, text: &str, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(
