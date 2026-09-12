@@ -419,14 +419,21 @@ from a message, which appends and is kept:
 - `count` gives the panel the numbers, `42 of 85`; the status gives it the name.
   Neither is derivable from the other.
 
-A status is live state, so it reaches the Background panel and nothing else: it
-is **not** kept in the Action Log entry, because by the time the entry exists
-the answer is "finished". A synchronous operation therefore has nowhere to put
-one, which costs nothing: it holds the GUI thread, so nothing could have drawn
-it. Status is worth setting in the kernels that a background operation reaches,
-and harmless everywhere else. It is also not the viewport status line, which stays
-what it is, the newest Action Log entry
-([action-log.md](../gui/action-log.md)).
+A status is live state, so it is **not** kept in the Action Log entry: by the
+time the entry exists the answer is "finished". Its reader is a panel drawing an
+operation while it runs, which is why the collector keeps the newest one and no
+entry does.
+
+A **synchronous** operation therefore has nowhere to put a status, which costs
+nothing: it holds the GUI thread, so nothing could have drawn one anyway. The
+bundle adjustment no longer holds it
+([../drafts/background-process-panel.md](../drafts/background-process-panel.md)),
+so a status it set could be drawn today, and it sets none; the panel that would
+draw one is the part of that draft still unbuilt. Status is worth setting in the
+kernels a background operation reaches, and harmless everywhere else.
+
+It is also not the viewport status line, which stays what it is, the newest
+Action Log entry ([action-log.md](action-log.md)).
 
 ### Where a message ends up
 

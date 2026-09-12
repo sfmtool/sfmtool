@@ -139,7 +139,8 @@ one that closes the loop by handing back a picture.
 | `remove_observation` | write | Take one observation out of a track and re-triangulate it |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
-| `bundle_adjust` | write | Refine every pose and point of one reconstruction |
+| `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
+| `cancel_background` | write | Stop the operation running on a worker, when it can be stopped |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
@@ -1704,11 +1705,41 @@ dialog collects, whether the shared focal is released, as `release_focal`.
 Everything else is the core function's defaults. It needs inline keypoints and
 one shared lens, and says which is missing when it refuses.
 
-**It runs synchronously on the GUI thread**, as every edit does: the window is
-unresponsive while it solves, and a reconstruction large enough to take more
-than the apply timeout will time out the call while the solve goes on and
-finishes. An agent that gets a timeout from this tool should read `get_history`
-rather than retry, since the version may well have been pushed.
+**`bundle_adjust` runs on a worker thread**, so the window stays usable while it
+solves and this call answers one of two ways
+([../drafts/background-process-panel.md](../drafts/background-process-panel.md)).
+An adjustment that finishes within 200 ms replies as any edit does, with the
+cursor, the serial and the report, so a small reconstruction sees no difference.
+One still running at 200 ms replies with a handle instead:
+
+```jsonc
+{
+  "running": true,                          // present and true only in this case
+  "operation": "Bundle adjust",
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2                         // names this run, for cancel_background
+}
+```
+
+`running` is the discriminator, so a reader tests one field. The threshold is
+about when a wait stops feeling immediate rather than about what any
+reconstruction costs: under roughly 100 ms a reply reads as instantaneous, and a
+second is where a caller starts wondering, so 200 ms answers normally inside the
+window where nobody had begun to.
+
+The outcome reaches the log whichever way the call answered, with the whole
+operation's cost and the stages it reported
+([operation-progress.md](operation-progress.md)), so an agent that took a handle
+reads `get_action_log` to find out what happened. `cancel_background` stops it;
+the adjustment polls between rounds and between iterations, and a cancelled one
+writes a failed entry, pushes no version, and keeps the breakdown of how far it
+got.
+
+**Only this operation runs on a worker so far.** Every other edit is still
+synchronous on the GUI thread, and a reconstruction large enough to take more
+than the apply timeout will still time out the call while the work goes on and
+finishes. An agent that gets a timeout from one of those should read
+`get_history` rather than retry, since the version may well have been pushed.
 
 ## Addressing
 

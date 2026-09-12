@@ -202,7 +202,17 @@ a queue is state with no demand behind it, and is a non-goal below.
 
 Quitting while an operation runs abandons it. The result would have nowhere to
 land, and a viewer that refuses to close is worse than a solve that has to be
-run again.
+run again. Refusing a *node* close is a different matter and does happen, which
+means `close_node` and `close_all` return a `Result` where they used to return
+nothing: a close that cannot be refused cannot be one of the operations
+`busy_refusal` covers.
+
+**A job that panics reports a failure.** It cannot be detected by the channel
+disconnecting, because the collector the worker and the panel share holds a
+sender of its own and the channel therefore stays open; so the worker catches
+the unwind and sends `Failed` itself. Without that a panicking kernel would
+leave an operation that never finishes, a panel that never clears and a node
+that stays busy for the session.
 
 ### When it finishes
 
@@ -227,8 +237,18 @@ frame that installed it, which is the sort of number that discredits a whole
 column.
 
 A **cancelled** operation writes a failed entry, *"{operation} of {label}
-cancelled after {elapsed}"*, and pushes no version. A **failed** one writes the
-refusal the kernel returned, as the synchronous edit does.
+cancelled"*, and pushes no version. A **failed** one writes the refusal the
+kernel returned, as the synchronous edit does.
+
+Both are timed from `started` like a successful one, and both keep what the
+operation reported before it stopped. A solve cancelled seventeen seconds in
+spent those seventeen seconds, and a row costing it at the milliseconds of the
+frame that collected the answer is the number the paragraph above warns about,
+whichever way the operation ended. The elapsed is not repeated in the sentence
+for the same reason: the cost column already carries it, and two spellings of
+one number can only disagree. Keeping the breakdown is what makes a cancelled
+solve informative rather than merely abandoned, since it shows the round it
+reached and the median it had got to by then.
 
 Nothing is logged when an operation *starts*. The log records outcomes, not
 intentions ([gui/action-log.md](../gui/action-log.md)), and what is running is
@@ -304,6 +324,12 @@ pub(crate) struct BackgroundProcess {
     pub node: ReconId,
     pub label: String,
     pub started: std::time::Instant,
+    /// Who asked, so the entry this writes belongs to them and not to the
+    /// viewer, however many minutes later it lands.
+    pub actor: Actor,
+    /// Which run this is, so a handle names an operation rather than merely
+    /// the fact that one was running.
+    pub id: u64,
     /// Where the worker reports, and where the panel reads. Shared, taken by
     /// `&`, never borrowed mutably
     /// ([../gui/operation-progress.md](../gui/operation-progress.md) § "In the viewer").
@@ -336,13 +362,24 @@ pub(crate) enum Report {
     Done(Box<Finished>),
 }
 
-pub(crate) struct Finished {
-    /// The next value, and the map from the input's rows to its own.
-    pub outcome: Result<(SfmrReconstruction, PointMap), String>,
-    /// The version's label, and the Action Log sentence up to the serials,
-    /// which only the GUI thread can know.
-    pub version_label: String,
-    pub text: String,
+/// How an operation ended.
+///
+/// Three ways rather than a `Result`, because only the job knows it was
+/// cancelled: the kernel is what met the flag and said so, and deciding at poll
+/// time from the flag alone races a solve that finished on its own between the
+/// last poll and the cancel.
+pub(crate) enum Finished {
+    Produced {
+        /// The next value, and the map from the input's rows to its own.
+        value: SfmrReconstruction,
+        map: PointMap,
+        /// The version's label, and the Action Log sentence up to the serials,
+        /// which only the GUI thread can know.
+        version_label: String,
+        text: String,
+    },
+    Cancelled,
+    Failed(String),
 }
 ```
 
@@ -362,12 +399,24 @@ impl AppState {
     pub fn start_background(&mut self, operation: Operation, id: ReconId)
         -> Result<(), String>;
 
-    /// Apply every report the worker has sent. Returns whether anything
-    /// changed, so the frame knows to redraw.
-    pub fn poll_background(&mut self) -> bool;
+    /// Apply every report the worker has sent.
+    ///
+    /// The frame asks two questions of this, not one: whether to repaint, which
+    /// is true of every report, and whether a version landed, which is true
+    /// only at the end and is what tells the panels to drop the caches they
+    /// keep about a table that has just been renumbered. Answering with one
+    /// bool would flush every texture on every report, which during a long
+    /// solve is a thousand flushes for one renumbering.
+    pub fn poll_background(&mut self) -> Polled;
 
-    /// Ask the operation to stop. Silently does nothing when it cannot.
+    /// Ask the operation to stop.
     pub fn cancel_background(&mut self);
+
+    /// Why a cancel is refused right now, or `None`.
+    ///
+    /// The sentence has to exist somewhere readable, because the button carries
+    /// it as a tooltip and the wire carries it as a refusal.
+    pub fn cancel_refusal(&self) -> Option<String>;
 }
 ```
 
@@ -387,19 +436,49 @@ thousand repaints, and no event is ever in two places.
 
 ## On the wire
 
-A tool that starts a background operation **returns when the operation starts**,
-not when it finishes:
+A tool that starts a background operation answers **one of two ways, decided by
+how long the operation takes**, not by which tool it is.
 
-```json
-{"started": "Bundle adjust", "label": "guard"}
+An operation that finishes within `REPLY_DIRECTLY_WITHIN` replies exactly as it
+does today, with its normal result. An agent adjusting a small reconstruction
+sees no change at all, and the wire break is paid only by the calls that were
+already broken. One still running at the threshold replies with a handle:
+
+```jsonc
+{
+  "running": true,                          // present and true only in this case
+  "operation": "Bundle adjust",
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2                         // names this run, not merely "one is running"
+}
 ```
 
-The agent then polls, or reads the outcome out of the log. This is a break with
-what `bundle_adjust` does today, and it is the right break: the alternative is
-the call that exists, which times out on any reconstruction worth adjusting
-(§ "The problem"), so the agent gets an error for a solve that is going fine and
-has no way to tell that from one that failed. Returning immediately makes the
-two distinguishable, and the wire already has the vocabulary to follow up.
+`running` is the discriminator, so a reader tests one field rather than sniffing
+the shape. `operation_id` names *which* run, so a poll still answers about an
+operation that has since finished and been replaced.
+
+The alternative, replying with a handle always, would change the shape for every
+caller including one whose solve was over before the reply was written. The
+other alternative, the call as it exists, times out on any reconstruction worth
+adjusting (§ "The problem"), so an agent gets an error for a solve that is going
+fine and cannot tell it from one that failed.
+
+**The threshold is a perception one.** Below roughly 100 ms a reply reads as
+instantaneous; up to about a second a caller stays in flow and simply sees the
+system working; past that, attention wanders and a wait wants explaining.
+`REPLY_DIRECTLY_WITHIN` is 200 ms: just past instantaneous, well short of
+anything anyone would call slow, so a handle comes back only for operations that
+genuinely are. It is deliberately not justified by what any one reconstruction
+costs, since a constant argued from a fixture ages the moment the fixture does.
+
+**Nothing blocks to reach it.** Waiting out the threshold on the GUI thread
+would trade one long freeze for a short freeze on every call. The tool starts
+the operation and defers its reply through the path screenshots already use
+([../gui/mcp-server.md](../gui/mcp-server.md) § "screenshot"), and each frame
+the resolver sends the result if the operation has finished or the handle if the
+threshold has passed, whichever is true first. A deferred reply also has to
+request a repaint, or an idle viewer never reaches the clock that would answer
+it.
 
 **The timeout's own message needs the same correction.** It reads "It may be
 showing a modal dialog, or be mid-drag", which names two things that are not
@@ -473,6 +552,7 @@ Background's home position is the left edge with Scene as its group-mate.
 |-----------|---------|---------|
 | left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background takes the rest |
 | Background home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
+| `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
 
 ## Non-goals
 
