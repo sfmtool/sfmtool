@@ -664,41 +664,56 @@ that revisits its corpus; it is entirely about cold and one-shot queries.
 search costs four independent subtree misses whatever the query. Shared is far
 flatter, 221x to 576x, since its tree chunks carry no vectors.
 
-**Larger leaves improve locality and shrink the file, and lose anyway.** A leaf's
-members are contiguous in the stored corpus, so a bigger leaf puts more of them in
-one block; a bigger leaf also means fewer nodes, so the tree arrays shrink. Both
-effects are real and measurable. But leaf size changes the index, so the comparison
-has to be at equal recall, not at equal budget —
+**Leaf size 32–64 is the measured file-backed range.** A leaf's members are
+contiguous in the stored corpus, so larger leaves place more of them in one block
+and need smaller tree arrays. They also examine more descriptors per visited
+neighbourhood. Because leaf size changes the index,
 [`scripts/kdf_leaf_size.py`](../../../scripts/kdf_leaf_size.py) finds the smallest
-budget reaching a recall target for each leaf size and measures there. On DinoLedge,
-four trees, 4 KiB blocks, recall@1 >= 0.65:
+integer check budget reaching the recall target for each forest before timing it.
+The earlier power-of-two budget grid overshot that target unevenly and made large
+leaves appear more expensive than an equal-recall comparison supports.
 
-| Leaf | Budget | Recall | Checks | Blocks | Reuse | File | Tree arrays | Cold batch |
-|------|--------|--------|--------|--------|-------|------|------------|-----------|
-| 8 | 128 | 0.677 | 128 | 81 | 36.7% | 1,326 MB | 326 MB | 2.29 s |
-| 16 | 128 | 0.657 | 134 | 114 | 14.9% | 1,228 MB | 228 MB | **1.49 s** |
-| 32 | 256 | 0.679 | 274 | 163 | 40.5% | 1,180 MB | 179 MB | 2.01 s |
-| 64 | 512 | 0.685 | 514 | 244 | 52.5% | 1,155 MB | 155 MB | 3.02 s |
-| 128 | 512 | 0.678 | 518 | 260 | 49.8% | **1,144 MB** | 143 MB | 2.84 s |
+The optimized reader was measured on 570,889 `dino_dog_toy` descriptors, with
+1,000 descriptors held out, four trees, four workers, 4 KiB descriptor blocks,
+64 KiB tree chunks and recall@1 >= 0.65. The table reports the median of three
+independent forest/query seeds; each seed's time is itself the median of three
+fresh-reader batches:
 
-Block reuse rises with leaf size as predicted, 14.9% to 52.5%, and the file falls
-14% across the range, almost all of it the tree arrays more than halving. What
-undoes both is the budget column. The check budget counts descriptors examined, and
-visiting a leaf examines all of its members, so a leaf of 128 spends 128 checks to
-look at one neighbourhood where a leaf of 16 spends 16 and can look at eight. Recall
-per check falls, the budget needed to recover it doubles or quadruples, and the extra
-distance work costs more than the locality saves. Batch reads move the same way,
-83,369 at leaf 16 against 206,619 at leaf 128, for the same reason.
+| Leaf | Exact budget range | File | 64 MiB batch | 256 MiB batch |
+|---:|---:|---:|---:|---:|
+| 8 | 157–182 | 80.5 MB | 270 ms | 194 ms |
+| 16 | 190–221 | 76.4 MB | 234 ms | 155 ms |
+| 32 | 241–278 | 73.6 MB | **210 ms** | 135 ms |
+| 64 | 345–415 | 72.3 MB | 218 ms | 138 ms |
+| 128 | 524–548 | **71.4 MB** | 217 ms | **132 ms** |
 
-Leaf 8 loses on both counts — the largest file *and* slow, because more nodes mean
-more tree chunk bytes to traverse — so 16 dominates it outright. On `dino_dog_toy`
-the cold-time optimum was leaf 32 rather than 16, the two within about 30% of each
-other, so the exact best value is corpus-dependent while the shape is not: below 16
-is wasteful, and above 32 trades query time away for file size at a poor rate.
+At 64 MiB, leaf 32 is fastest and leaf 64 is within 4%; at 256 MiB, leaves
+32–128 differ by 6 ms. Leaf 8 is consistently slower. Leaf 128 saves only 1.2%
+of file size over leaf 64 and has the widest pressured-cache timing range, so 64
+is the useful upper end rather than 128.
 
-This leaves the existing default of 16 in place, and identifies the one case for
-changing it: a corpus where stored size dominates and query latency does not, where
-leaf 128 buys 7% of the file for 1.9x the cold query.
+Whole-image and patch-constellation holdouts expose a cache-dependent crossover.
+These compare leaf 16 at budget 210 with leaf 64 at budget 384, using the
+seed-zero calibrated budgets and rounding leaf 64 up from 383. Every lazy
+neighbour index and distance equals its in-memory forest reference:
+
+| Workload | Cache | Leaf 16 | Leaf 64 |
+|---|---:|---:|---:|
+| Held-out image, later-image median | 16 MiB | **5.12 s** | 5.92 s |
+| Held-out image, later-image median | 64 MiB | 1.81 s | **1.42 s** |
+| Held-out image, later-image median | 256 MiB | **0.169 s** | 0.265 s |
+| Patch constellation, median query | 16 MiB | **231 ms** | 353 ms |
+| Patch constellation, median query | 64 MiB | 100 ms | **75 ms** |
+| Patch constellation, median query | 256 MiB | **14 ms** | 19 ms |
+
+At 64 MiB, leaf 64's smaller file and tree working set reduce reads enough to
+outweigh its larger check budget. At 16 MiB, that budget produces more repeated
+misses; with the whole file resident, the additional distance work is exposed.
+The general forest default remains 16. Leaf 64 is a good explicit choice for a
+shared persistent index when its cache is near the active working-set size; the
+target workload and cache budget decide whether that trade is favorable.
+[The recorded measurements](kdf-leaf-size-2026-09-11.json) include all three
+seeds and both holdout comparisons.
 
 **Query workers pay off only once the cache is sharded.** Every node and every
 descriptor a query touches takes a cache lock, so with one lock for the whole
@@ -882,15 +897,17 @@ On this evidence the shared layout is the better default: 3.3x smaller, faster o
 equal in every regime, insensitive to a chunk-size choice that swings tree-local
 by 43x, and at full speed on a budget a third the size.
 
-Leaf size stays at **16**; larger leaves improve descriptor locality and shrink the
-file but need a bigger check budget for the same recall, and that costs more than it
-saves.
+Leaf size **16** remains the general forest default. For a shared persistent index,
+the measured range is **32 to 64**. Leaf 64 is a useful explicit choice when the
+decoded cache is near the active working-set size; smaller or fully resident caches
+can favor leaf 16 or 32 once the check budget is calibrated to equal recall.
 
 For descriptor blocks the knee is around **4 to 8 KiB**, which is where most of
 the cold-query gain has been taken and the file has grown by well under 1%. Going
 to 2 KiB buys another 0.27 s on a cold batch for 2.8% more file and twice the open
 latency, which is the right trade only for a corpus queried once. A 1 MiB chunk
-target and one query worker remain reasonable.
+target remains reasonable. Query worker count is an execution setting and should
+be measured separately from the stored layout.
 
 Note this recommendation moved twice under measurement, both times because
 something unrelated to the layouts was dominating: first a cache whose hit cost

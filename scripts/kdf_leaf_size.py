@@ -74,12 +74,24 @@ def exact_nearest(
 def budget_for_recall(
     forest, queries, truth, target: float
 ) -> tuple[int | None, float]:
-    """Smallest budget in `BUDGETS` whose recall@1 reaches `target`."""
+    """Smallest integer budget whose recall@1 reaches `target`."""
+    lower = 0
     for budget in BUDGETS:
         idx, _ = forest.query(queries, k=2, max_leaf_checks=budget)
         recall = float(np.mean(idx[:, 0] == truth))
         if recall >= target:
-            return budget, recall
+            upper = budget
+            while lower < upper:
+                candidate = (lower + upper) // 2
+                idx, _ = forest.query(queries, k=2, max_leaf_checks=candidate)
+                candidate_recall = float(np.mean(idx[:, 0] == truth))
+                if candidate_recall >= target:
+                    upper = candidate
+                else:
+                    lower = candidate + 1
+            idx, _ = forest.query(queries, k=2, max_leaf_checks=lower)
+            return lower, float(np.mean(idx[:, 0] == truth))
+        lower = budget + 1
     return None, recall
 
 
@@ -91,6 +103,8 @@ def main() -> None:
     p.add_argument("--trees", type=int, default=4)
     p.add_argument("--queries", type=int, default=1000)
     p.add_argument("--recall", type=float, default=0.60, help="iso-recall target")
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--cache-mib", type=int, default=4096)
     p.add_argument("--block-bytes", type=int, default=4 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB)
     p.add_argument("--seed", type=int, default=0)
@@ -127,16 +141,18 @@ def main() -> None:
     out = Path(args.scratch)
     out.mkdir(parents=True, exist_ok=True)
     opts = dict(
-        cache_bytes=4 * GIB,
+        cache_bytes=args.cache_mib * MIB,
         max_in_flight_bytes=4 * GIB,
         max_chunk_bytes=4 * GIB,
         max_compressed_bytes=4 * GIB,
+        query_workers=args.workers,
     )
     rows = []
 
     print(
         f"\niso-recall comparison at recall@1 >= {args.recall:.2f},"
-        f" {args.trees} trees, {args.block_bytes // KIB} KiB blocks\n"
+        f" {args.trees} trees, {args.block_bytes // KIB} KiB blocks,"
+        f" {args.cache_mib} MiB cache, {args.workers} workers\n"
     )
     print(
         f"{'leaf':>5} {'budget':>7} {'recall':>7} {'checks':>7} {'blocks':>7} {'reuse':>7}"
@@ -160,7 +176,8 @@ def main() -> None:
             chunk_bytes=args.chunk_bytes,
             descriptor_block_bytes=len(index) * index.shape[1],
         )
-        probe = LazyKdForest(str(solo), **opts)
+        probe_opts = opts | {"cache_bytes": 4 * GIB}
+        probe = LazyKdForest(str(solo), **probe_opts)
         probe.query(queries[:1], k=2, max_leaf_checks=budget)
         chunk_reads = probe.io_stats()["read_calls"] - 1
         del probe
@@ -215,6 +232,7 @@ def main() -> None:
             "tree_chunks_bytes": int(chunk_mb * 1e6),
             "chunks_per_tree": summary["chunks_per_tree"][0],
             "cold_seconds": statistics.median(runs),
+            "cold_seconds_runs": runs,
             "batch_reads": batch["read_calls"],
             "batch_decoded": batch["decoded_bytes"],
         }
@@ -235,6 +253,10 @@ def main() -> None:
                         "queries": int(len(queries)),
                     },
                     "trees": args.trees,
+                    "workers": args.workers,
+                    "cache_bytes": args.cache_mib * MIB,
+                    "chunk_bytes": args.chunk_bytes,
+                    "seed": args.seed,
                     "recall_target": args.recall,
                     "block_bytes": args.block_bytes,
                     "results": rows,

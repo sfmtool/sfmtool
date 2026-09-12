@@ -1,0 +1,78 @@
+{
+  "date": "2026-09-11",
+  "platform": "Windows",
+  "corpus_descriptors": 570889,
+  "indexed_descriptors": 569889,
+  "queries": 1000,
+  "trees": 4,
+  "workers": 4,
+  "recall_at_1_target": 0.65,
+  "descriptor_block_bytes": 4096,
+  "tree_chunk_bytes": 65536,
+  "method": "Each leaf uses the smallest integer check budget reaching the target. Times are medians of three fresh-reader batches. OS cache was not flushed.",
+  "leaf_results": [
+    {
+      "leaf_size": 8,
+      "file_bytes": 80476167,
+      "budgets_by_seed": [164, 182, 157],
+      "seconds_64_mib_by_seed": [0.2700, 0.3182, 0.2454],
+      "reads_64_mib_by_seed": [46942, 50176, 46208],
+      "seconds_256_mib_by_seed": [0.1663, 0.1941, 0.1967],
+      "reads_256_mib_by_seed": [24497, 24696, 24430]
+    },
+    {
+      "leaf_size": 16,
+      "file_bytes": 76436262,
+      "budgets_by_seed": [210, 190, 221],
+      "seconds_64_mib_by_seed": [0.2339, 0.2241, 0.2393],
+      "reads_64_mib_by_seed": [46271, 42892, 47523],
+      "seconds_256_mib_by_seed": [0.1474, 0.1572, 0.1552],
+      "reads_256_mib_by_seed": [24400, 24215, 24507]
+    },
+    {
+      "leaf_size": 32,
+      "file_bytes": 73554584,
+      "budgets_by_seed": [278, 275, 241],
+      "seconds_64_mib_by_seed": [0.2101, 0.2147, 0.1987],
+      "reads_64_mib_by_seed": [44383, 43567, 40860],
+      "seconds_256_mib_by_seed": [0.1586, 0.1342, 0.1354],
+      "reads_256_mib_by_seed": [23909, 23797, 23661]
+    },
+    {
+      "leaf_size": 64,
+      "file_bytes": 72252785,
+      "budgets_by_seed": [383, 345, 415],
+      "seconds_64_mib_by_seed": [0.2184, 0.1885, 0.2223],
+      "reads_64_mib_by_seed": [46212, 43549, 48856],
+      "seconds_256_mib_by_seed": [0.1384, 0.1611, 0.1334],
+      "reads_256_mib_by_seed": [23385, 23095, 23535]
+    },
+    {
+      "leaf_size": 128,
+      "file_bytes": 71417266,
+      "budgets_by_seed": [524, 527, 548],
+      "seconds_64_mib_by_seed": [0.2098, 0.2171, 0.2520],
+      "reads_64_mib_by_seed": [48193, 49172, 51037],
+      "seconds_256_mib_by_seed": [0.1254, 0.1319, 0.1476],
+      "reads_256_mib_by_seed": [22614, 22583, 22723]
+    }
+  ],
+  "holdout_comparison": {
+    "leaf_16_budget": 210,
+    "leaf_64_budget": 384,
+    "held_out_images": 3,
+    "held_out_image_descriptors": 23238,
+    "image_later_seconds": {
+      "16_mib": {"leaf_16": 5.1181, "leaf_64": 5.9157},
+      "64_mib": {"leaf_16": 1.8137, "leaf_64": 1.4217},
+      "256_mib": {"leaf_16": 0.1686, "leaf_64": 0.2647}
+    },
+    "constellation_patches": 8,
+    "constellation_query_milliseconds": {
+      "16_mib": {"leaf_16": 230.9481, "leaf_64": 352.7859},
+      "64_mib": {"leaf_16": 100.4608, "leaf_64": 75.2688},
+      "256_mib": {"leaf_16": 13.9129, "leaf_64": 19.4424}
+    },
+    "lazy_matches_in_memory": true
+  }
+}
