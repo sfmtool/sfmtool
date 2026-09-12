@@ -45,7 +45,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sfmtool_core::progress::{Event, Level, Phase, Progress};
 
@@ -109,6 +109,23 @@ pub(crate) struct Count {
     pub total: Option<u64>,
     /// What is being counted, singular: `"image"`, `"iteration"`.
     pub unit: &'static str,
+}
+
+/// What an operation has reported so far, as a panel draws it mid-flight.
+///
+/// The rows are what [`Collector::take`] would hand an Action Log entry if the
+/// operation stopped here, with one difference that is the whole point of the
+/// type: a phase that is **still open** carries the time it has been open, so a
+/// stage forty seconds into a run says forty seconds rather than nothing. When
+/// that run closes the same row reads the same way, which is what lets one
+/// panel watch an operation and another read about it afterwards without the
+/// two ever disagreeing.
+pub(crate) struct Live {
+    /// The rows, in the order they first appeared, folded as an entry's are.
+    pub(crate) rows: Vec<Detail>,
+    /// Which of `rows` are open, outermost first. The last of them is the stage
+    /// the operation is actually in, which is what a spinner names.
+    pub(crate) open: Vec<usize>,
 }
 
 /// Somewhere for one operation's events to land. Shared, never borrowed
@@ -184,24 +201,24 @@ impl Collector {
         lock(&self.state).take()
     }
 
+    /// The same rows, copied rather than taken, for a panel drawing an
+    /// operation that is still reporting.
+    pub(crate) fn live(&self) -> Live {
+        lock(&self.state).live()
+    }
+
     /// What the operation last said it was doing, if anything.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn status(&self) -> Option<String> {
         lock(&self.state).status.clone()
     }
 
     /// The newest count the operation reported, if any.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn count(&self) -> Option<Count> {
         lock(&self.state).count
     }
 
     /// How far along the operation is, in `0.0..=1.0` of the whole, if it has
     /// said.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn fraction(&self) -> Option<f32> {
         lock(&self.state).fraction
     }
@@ -238,6 +255,14 @@ struct Open {
     depth: u8,
     /// Which row of [`State::rows`] the phase folds into.
     row: usize,
+    /// When this run of the phase was entered.
+    ///
+    /// The guard on the other side of the sink keeps one of these too and
+    /// reports the difference as `took` when it closes, but a panel drawing a
+    /// stage that has not closed cannot wait for that, so the collector times
+    /// the open run itself. The two are the same clock read a few instructions
+    /// apart.
+    since: Instant,
 }
 
 /// What fold a phase belongs to: the row of the phase enclosing it, and its
@@ -328,7 +353,11 @@ impl State {
             });
             rows.len() - 1
         });
-        self.open.push(Open { depth, row });
+        self.open.push(Open {
+            depth,
+            row,
+            since: Instant::now(),
+        });
     }
 
     /// Close a phase, adding its cost to the row its fold owns.
@@ -369,6 +398,47 @@ impl State {
                 Some(_) => *last = Some(note.to_string()),
             }
         }
+    }
+
+    /// Everything recorded so far, copied, with every open phase's current run
+    /// added to the time its row carries.
+    ///
+    /// An abandoned phase is dropped exactly as [`State::take`] drops it, and
+    /// the open indexes move with it: a row saying nothing is noise in a live
+    /// panel for the same reason it is noise in an entry, and two views that
+    /// disagreed about which rows exist would leave one of them wrong.
+    fn live(&self) -> Live {
+        let mut rows = self.rows.clone();
+        let mut is_open = vec![false; rows.len()];
+        for open in &self.open {
+            if let Some(flag) = is_open.get_mut(open.row) {
+                *flag = true;
+            }
+            if let Some(Detail::Phase { took, .. }) = rows.get_mut(open.row) {
+                *took += open.since.elapsed();
+            }
+        }
+        // Where each surviving row lands once the abandoned ones are gone.
+        let mut moved: Vec<Option<usize>> = Vec::with_capacity(rows.len());
+        let mut next = 0;
+        for (index, row) in rows.iter().enumerate() {
+            let abandoned = matches!(row, Detail::Phase { runs: 0, .. }) && !is_open[index];
+            moved.push((!abandoned).then(|| {
+                next += 1;
+                next - 1
+            }));
+        }
+        let open = self
+            .open
+            .iter()
+            .filter_map(|open| moved.get(open.row).copied().flatten())
+            .collect();
+        let rows = rows
+            .into_iter()
+            .zip(&moved)
+            .filter_map(|(row, moved)| moved.map(|_| row))
+            .collect();
+        Live { rows, open }
     }
 
     /// Everything recorded, leaving the state empty.

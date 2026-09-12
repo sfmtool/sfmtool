@@ -2729,7 +2729,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
     assert_eq!(names, ["DISPLAY1", "DISPLAY2"], "the current monitor first");
 
     let panels = reply["panels"].as_object().expect("a panels map");
-    assert_eq!(panels.len(), Tab::ALL.len(), "all seven, always");
+    assert_eq!(panels.len(), Tab::ALL.len(), "all nine, always");
     for tab in Tab::ALL {
         assert_eq!(
             panel(&reply, tab.wire_name())["open"],
@@ -2738,7 +2738,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
             tab.wire_name()
         );
     }
-    // The default layout has two multi-tab nodes, so three of the seven sit
+    // The default layout has two multi-tab nodes, so four of the nine sit
     // behind a sibling rather than in front of it.
     let active: Vec<&str> = Tab::ALL
         .iter()
@@ -2747,7 +2747,13 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
         .collect();
     assert_eq!(
         active,
-        ["scene", "viewer_3d", "image_browser", "image_detail"]
+        [
+            "scene",
+            "background",
+            "viewer_3d",
+            "image_browser",
+            "image_detail"
+        ]
     );
 }
 

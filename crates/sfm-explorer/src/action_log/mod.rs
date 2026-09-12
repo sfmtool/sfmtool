@@ -48,6 +48,9 @@ mod panel;
 mod tests;
 
 pub(crate) use panel::show;
+// The row vocabulary of a breakdown, which the Background panel draws too: the
+// live form of an entry's detail and the entry's own are one thing said once.
+pub(crate) use panel::{detail_row, detail_text, Breakdown};
 
 /// Who took an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -994,8 +997,11 @@ impl ActionLog {
     /// breakdown rather than an event of it, and the wire carries it as a
     /// field of its own.
     pub(crate) fn detail_in_draw_order(entry: &Entry) -> impl Iterator<Item = &Detail> + '_ {
-        (0..panel::detail_rows(entry))
-            .filter_map(|row| panel::detail_at(entry, row))
+        let breakdown = panel::Breakdown::of(entry);
+        (0..panel::detail_rows(&breakdown))
+            .filter_map(|row| panel::detail_at(&breakdown, row))
+            .collect::<Vec<_>>()
+            .into_iter()
             .filter_map(|index| entry.detail.get(index))
     }
 
@@ -1007,8 +1013,9 @@ impl ActionLog {
     /// would mean one of them is lying to somebody.
     #[cfg(test)]
     pub(crate) fn drawn_detail(entry: &Entry) -> Vec<String> {
-        (0..panel::detail_rows(entry))
-            .map(|row| panel::detail_text(&panel::detail_row(entry, row)))
+        let breakdown = panel::Breakdown::of(entry);
+        (0..panel::detail_rows(&breakdown))
+            .map(|row| panel::detail_text(&panel::detail_row(&breakdown, row)))
             .collect()
     }
 
@@ -1061,7 +1068,7 @@ impl ActionLog {
             if !self.is_expanded(entry.revision) {
                 continue;
             }
-            for row in 0..panel::detail_rows(entry) {
+            for row in 0..panel::detail_rows(&panel::Breakdown::of(entry)) {
                 out.push_str(&Self::detail_line(entry, row));
                 out.push('\n');
             }
@@ -1073,7 +1080,7 @@ impl ActionLog {
     /// [`ActionLog::line`] lays out, so that a phase's cost lands under its
     /// entry's on the clipboard as it does in the panel.
     fn detail_line(entry: &Entry, row: usize) -> String {
-        let row = panel::detail_row(entry, row);
+        let row = panel::detail_row(&panel::Breakdown::of(entry), row);
         // The rule the panel paints above the overhead, in the one spelling a
         // text buffer has for it. Without it a pasted breakdown reads as though
         // the operation did the uploading.
@@ -1118,7 +1125,10 @@ impl ActionLog {
     pub(crate) fn format_took(took: std::time::Duration) -> String {
         let ms = took.as_secs_f64() * 1000.0;
         if ms >= 1000.0 {
-            format!("{:.2} s", ms / 1000.0)
+            // One decimal, because this column is read while it moves: the
+            // Background panel redraws a running operation ten times a second,
+            // and a hundredths digit there is a digit that only ever spins.
+            format!("{:.1} s", ms / 1000.0)
         } else if ms >= 1.0 {
             format!("{ms:.0} ms")
         } else {

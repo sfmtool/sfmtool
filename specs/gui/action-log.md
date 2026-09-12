@@ -59,10 +59,10 @@ monospace font, oldest at the top, newest at the bottom:
 ```
 14:03:07  Viewer          SfM Explorer 0.2.0 started
 14:03:07  Viewer          MCP endpoint listening on http://127.0.0.1:8787/mcp
-14:03:08  User     1.84 s Opened seoul_bull from C:\data\seoul_bull.sfmr
+14:03:08  User      1.8 s Opened seoul_bull from C:\data\seoul_bull.sfmr
 14:03:41  User      <1 ms Selected image IMG_0007.jpg in seoul_bull
 14:04:02  MCP       <1 ms get_scene
-14:04:02  MCP      1.20 s Opened global from C:\data\global.sfmr
+14:04:02  MCP       1.2 s Opened global from C:\data\global.sfmr
 14:04:03  MCP      412 ms Aligned global → seoul_bull: 15/17 cameras, RMS 0.031
 14:04:05  MCP       38 ms screenshot viewer_3d 1280×720
 14:04:19  MCP       <1 ms select_camera_image failed: No loaded reconstruction is labelled `globl` — loaded: `seoul_bull`, `global`.
@@ -384,7 +384,12 @@ where it ended up, which is the only one of its values anyone waited for.
 
 The reader's units are milliseconds up to a second and seconds past it, and
 `<1 ms` below a millisecond rather than `0 ms`: the action did happen, and a
-rounded zero reads like a measurement that failed. The column is right-aligned
+rounded zero reads like a measurement that failed. Seconds carry **one**
+decimal, because this is the spelling a running operation is read in as well:
+the Background panel
+([drafts/background-process-panel.md](../drafts/background-process-panel.md))
+redraws ten times a second, and a hundredths digit there is a digit that only
+ever spins. The column is right-aligned
 so a slow row stands out of a column of fast ones without the numbers being
 read, and weak, because it is the one column that is about the viewer rather
 than about the action.
