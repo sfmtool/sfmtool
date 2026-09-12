@@ -18,7 +18,7 @@
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use sfmtool_core::progress::Level;
+use sfmtool_core::progress::{Level, Progress};
 
 use super::{
     render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, CameraImageSel,
@@ -393,11 +393,15 @@ fn warm_track_sift_cache(state: &mut AppState, point: crate::scene::PointRef) {
         let Some(node) = crate::scene::node_by_id(scene, point.recon) else {
             return;
         };
+        // No progress: this warms the cache for one agent's query rather than
+        // for a frame, and the tool's own entry is a `<1 ms` row that nothing
+        // expands.
         ensure_sift_cached(
             sift_cache,
             node.recon(),
             ImageRef::new(point.recon, image_index),
             read_count,
+            &Progress::none(),
         );
     }
 }

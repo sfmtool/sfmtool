@@ -691,16 +691,15 @@ The operations:
 
 | Phase | Where | Seen at |
 |-------|-------|---------|
-| `open`, with `read` and `append node` under it | `AppState::load_file` | 1.84 s for the dino set |
+| `open`, with `read`, `convert convention`, `derive` and `append node` under it | `AppState::load_file` over `SfmrReconstruction::load` | 143 ms of a 1.45 s dino open |
 | `save`, with `materialise` over `lineage` and `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
-| the `sfmtool_core` call's own stages, which it reports itself | the kernel a bulk edit runs | 838 ms for a resection in place |
+| the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection in place |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
-| `localize` and `refine` | `add_observation`'s two kernel calls | |
+| `localize` and `refine` | the two calls `add_observation` makes | |
 | `decode views` | the full-resolution decode an edit needs | |
-| `sift cache` | the Image Detail overlay's feature load | |
 
 The five under `uploads` open in `App::prepare_uploads` rather than in the
 `upload` functions they wrap: those take `&mut SceneRenderer` and no `Progress`,
@@ -715,14 +714,37 @@ A row of that table that expands to nothing but `elsewhere` is a gap in the
 coverage rather than a curiosity, and the way to find one is to read the log
 after using the viewer normally.
 
-`read` is one row over what a `.sfmr` load does in its entirety, rather than the
-three it divides into. The decode and the derived-index build are inside
-`SfmrReconstruction::load`, and `sfm-explorer` deliberately does not reach past
-`sfmtool-core` to `sfmr-format`: splitting them means threading a `Progress`
-through that call, which the read is a present-tense row for until somebody
-does. What a save stamps is four field assignments and not a stage; the work
-beside the fold is the lineage walk, which is why `lineage` sits under
-`materialise` where the code does it rather than beside it.
+**An open's stages are `SfmrReconstruction::load`'s own**, because they are
+where `sfm-explorer` cannot reach: it deliberately does not depend on
+`sfmr-format`, so the read, the convention upgrade and the derived-index build
+are named by the core function that does them and the viewer only adds
+`append node`. `read` is one row over `read_sfmr`, which decompresses and
+hash-checks inside itself. `convert convention` is the upgrade a file below the
+canonical-convention version gets, and its guard is cancelled when the file is
+already canonical, so a current file records no row for it.
+
+`localize` and `refine` are the two calls `add_observation` makes, not stages
+inside the kernels: each call registers one patch over a handful of views and
+has no overview stage within it, and every other caller runs them once per point
+inside a rayon loop, where a phase per call would be the per-item timing
+§ "Non-goals" refuses. The call site is the boundary worth naming.
+
+The kernel a bulk edit wraps is one row named after it, except the bundle
+adjustment, which takes a `Progress` and reports its own stages underneath. One
+row keeps the dominant cost of a resection out of `elsewhere` without inventing
+a boundary inside a call that has none to offer; if those kernels later take a
+`Progress`, their stages nest under the row that is already there.
+
+`sift cache` is not an operation's. The Image Detail overlay's feature load runs
+during the egui pass, so it belongs to the frame's collector and reaches an
+entry under `overhead: uploading and drawing`. It records only a real read: a
+cache hit is every frame after the first, and a missing `.sift` companion is
+retried every frame, so its guard is cancelled in both cases rather than putting
+a row in every entry in the log.
+
+What a save stamps is four field assignments and not a stage; the work beside
+the fold is the lineage walk, which is why `lineage` sits under `materialise`
+where the code does it rather than beside it.
 
 Detail adds, under those: the stages inside each kernel, the per-buffer steps
 inside `uploads`, and the per-pass steps inside `scene render`.

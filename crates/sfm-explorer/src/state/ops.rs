@@ -25,7 +25,6 @@ use crate::align::{self, AlignOptions};
 use crate::progress::Collector;
 use crate::resect::{self, ResectFrom};
 use crate::scene::{ImageRef, ReconId, SceneNode};
-use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
 
 use super::AppState;
@@ -44,8 +43,8 @@ impl AppState {
     /// vocabularies. Success is logged here, because there the text is the same
     /// whoever asked.
     ///
-    /// The entry carries the two stages an open has: the file becoming a
-    /// reconstruction, and the reconstruction becoming a node. It is recorded
+    /// The entry carries the stages an open has: the three the load reports
+    /// for itself, and then the reconstruction becoming a node. It is recorded
     /// with [`crate::action_log::ActionLog::record_done`] from the instant
     /// below, so the row says how long the open took rather than how long
     /// writing the row took.
@@ -55,24 +54,14 @@ impl AppState {
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
         let open = collector.phase("open");
-        // One phase for the whole of `SfmrReconstruction::load`: reading the
-        // archive, decompressing its sections and building the derived indexes
-        // are three stages of that call and not of this one, and the boundaries
-        // between them are not reachable from here: the viewer goes through
-        // `sfmtool-core` and does not depend on `sfmr-format`.
-        let read = {
-            let mut phase = open.phase("read");
-            let read = SfmrReconstruction::load(path);
-            if let Ok(recon) = &read {
-                progress_note!(
-                    phase,
-                    "{} points, {} images",
-                    recon.point_count(),
-                    recon.image_count()
-                );
-            }
-            read
-        };
+        // The load names its own three stages -- the archive read, the
+        // convention upgrade an older file needs, and the build of the value
+        // and its derived indexes -- and they nest directly under `open`. This
+        // method used to stand one `read` row over the whole call, because the
+        // boundaries inside it were not reachable from here; a row of its own
+        // above the three would now only add an indent and a second name for
+        // what they say between them.
+        let read = SfmrReconstruction::load(path, &open);
         match read {
             Ok(recon) => {
                 log::info!(

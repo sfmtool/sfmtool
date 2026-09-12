@@ -417,8 +417,18 @@ impl PyEditedReconstruction {
         if let Some(bar) = min_zncc {
             options.min_zncc = bar;
         }
-        let (next, report) = add_observation(&self.inner, point, image, pixel, &views, &options)
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        // The kernel names its two stages to a `Progress`; the bindings ask for
+        // none, so the Python-visible signature is unchanged.
+        let (next, report) = add_observation(
+            &self.inner,
+            point,
+            image,
+            pixel,
+            &views,
+            &options,
+            &Progress::none(),
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let d = PyDict::new(py);
         d.set_item("point", report.point)?;

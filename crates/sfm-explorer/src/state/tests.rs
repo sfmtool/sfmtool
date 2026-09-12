@@ -201,3 +201,48 @@ fn every_overlay_mode_round_trips_through_its_wire_name() {
     assert_eq!(OverlayMode::from_wire_name("Features"), None);
     assert_eq!(OverlayMode::from_wire_name("reproj error"), None);
 }
+
+// ── The `.sift` read the overlays ask for ───────────────────────────────
+
+/// Neither a warm cache nor a missing companion is a stage.
+///
+/// The panels ask on every frame, so a row for either would land in every
+/// entry those frames settle, saying only that the question was asked. What is
+/// left is the read itself, which is the row the design's table names.
+#[test]
+fn only_a_real_sift_read_records_a_stage() {
+    let recon = SfmrReconstruction::demo(8);
+    let image = ImageRef::new(ReconId::next(), 0);
+
+    // Warm: the cache already holds more features than the caller asked for.
+    let mut cache = HashMap::new();
+    cache.insert(
+        image,
+        CachedSiftFeatures {
+            positions_xy: vec![[1.0, 2.0]; 4],
+            affine_shapes: vec![[[1.0, 0.0], [0.0, 1.0]]; 4],
+            read_count: 4,
+        },
+    );
+    let collector = crate::progress::Collector::new(false);
+    assert!(
+        ensure_sift_cached(&mut cache, &recon, image, 2, &collector.progress()).is_some(),
+        "a warm cache answered nothing"
+    );
+    assert!(
+        collector.take().is_empty(),
+        "a cache hit left a row in every frame's entry"
+    );
+
+    // Missing: a demo value has no `.sift` companions on disk at all.
+    let mut cache = HashMap::new();
+    let collector = crate::progress::Collector::new(false);
+    assert!(
+        ensure_sift_cached(&mut cache, &recon, image, 2, &collector.progress()).is_none(),
+        "there is no file to read"
+    );
+    assert!(
+        collector.take().is_empty(),
+        "a failed read left a row in every frame's entry"
+    );
+}

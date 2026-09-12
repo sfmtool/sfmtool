@@ -16,7 +16,8 @@ use jiff::Timestamp;
 use sfmtool_core::progress::Level;
 use sfmtool_core::SfmrReconstruction;
 
-use crate::scene::{PointRef, ReconId};
+use crate::scene::{ImageRef, PointRef, ReconId};
+use crate::state::edits::tests::{creatable_state, CREATE_IMAGE, CREATE_PIXEL};
 use crate::state::AppState;
 
 use super::{show, ActionLog, Actor, Entry, Kind, Run, Work};
@@ -1257,13 +1258,20 @@ fn opened_and_edited(dir: &Path) -> (AppState, ReconId) {
 /// next operation gets covered: one that forgets to name its stages fails
 /// this, instead of being found much later by somebody expanding its row and
 /// seeing nothing but `elsewhere`.
+///
+/// One operation of the design's table is missing, and deliberately: adding an
+/// observation cannot be driven to a *success* headless, because its
+/// photometric fit refuses to register a patch in the synthetic pixels a demo
+/// node stands behind, and this test reads an entry that did not fail. Its
+/// stages are held in `sfmtool-core` instead, where the textured-plane fixture
+/// the fit needs already lives.
 #[test]
 fn every_operation_names_at_least_one_stage() {
     /// Drive one operation once, in a directory of its own, and hand back the
     /// state it left.
     type Drive = fn(&Path) -> AppState;
 
-    let operations: [(&str, Drive); 7] = [
+    let operations: [(&str, Drive); 11] = [
         ("open", |dir| {
             let mut state = AppState::new();
             state
@@ -1309,6 +1317,41 @@ fn every_operation_names_at_least_one_stage() {
                 .expect("the fixture is well posed");
             state
         }),
+        ("delete image", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            state
+                .delete_image(ImageRef::new(id, 1))
+                .expect("a demo value has more than one image");
+            state
+        }),
+        ("resect in place", |_| {
+            let (mut state, id) = adjustable_scene();
+            state
+                .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+                .expect("the fixture's image 1 resects from its own observations");
+            state
+        }),
+        ("move camera", |_| {
+            let (mut state, id) = adjustable_scene();
+            // Back to the pose image 1's own keypoints were computed at, which
+            // is what `adjustable_scene` moved it off.
+            let truth = crate::scene_graph::tests::resectable_node("/runs/truth.sfmr");
+            let pose = sfmtool_core::reconstruction::move_camera::pose_of(truth.recon(), 1);
+            state
+                .move_camera(ImageRef::new(id, 1), &pose)
+                .expect("the fixture's image 1 can be posed");
+            state
+        }),
+        ("create point", |_| {
+            // The one fixture here that is not a file: creating a point reads
+            // the photograph, and a demo node's pixels are cached rather than
+            // on disk.
+            let (mut state, id) = creatable_state();
+            state
+                .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
+                .expect("a pixel on the sensor of a decodable image");
+            state
+        }),
     ];
 
     for (what, drive) in operations {
@@ -1326,10 +1369,14 @@ fn every_operation_names_at_least_one_stage() {
     }
 }
 
-/// What an open is made of: the file becoming a reconstruction, and the
+/// What an open is made of: the stages the load names for itself, and the
 /// reconstruction becoming a node.
+///
+/// Two rows for the load rather than three: the fixture was written by the
+/// current writer, so it is already canonical and the convention upgrade's
+/// guard closes nothing.
 #[test]
-fn opening_a_file_names_the_read_and_the_append() {
+fn opening_a_file_names_the_loads_stages_and_the_append() {
     let dir = temp_dir("open_stages");
     let path = openable_file(&dir);
     let mut state = AppState::new();
@@ -1341,6 +1388,7 @@ fn opening_a_file_names_the_read_and_the_append() {
         recon.point_count(),
         recon.image_count()
     );
+    let derive = format!("{} observations", recon.point_set.tracks.len());
     let entry = state
         .action_log
         .entries()
@@ -1348,7 +1396,12 @@ fn opening_a_file_names_the_read_and_the_append() {
         .expect("the open's entry");
     assert_eq!(
         phase_rows(&entry.detail),
-        [("open", 0, 1), ("read", 1, 1), ("append node", 1, 1)],
+        [
+            ("open", 0, 1),
+            ("read", 1, 1),
+            ("derive", 1, 1),
+            ("append node", 1, 1)
+        ],
         "{:?}",
         entry.detail,
     );
@@ -1356,6 +1409,11 @@ fn opening_a_file_names_the_read_and_the_append() {
         phase_note(&entry.detail, "read"),
         Some(read),
         "the read did not say what it read",
+    );
+    assert_eq!(
+        phase_note(&entry.detail, "derive"),
+        Some(derive),
+        "the derive did not say what came out of it",
     );
     assert_timed_from_the_work(&mut state.action_log);
 }

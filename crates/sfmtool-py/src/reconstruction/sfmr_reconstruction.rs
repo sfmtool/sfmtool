@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use sfmtool_core::analysis::infinity::Classification;
 use sfmtool_core::geometry::viewing_angle::viewing_rays;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
+use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::triangulation::{depth_uncertainty_batch, triangulate_batch};
 use sfmtool_core::SfmrReconstruction;
 
@@ -45,9 +46,12 @@ pub struct PySfmrReconstruction {
 #[pymethods]
 impl PySfmrReconstruction {
     /// Load a reconstruction from a `.sfmr` file path.
+    ///
+    /// The core call reports its stages to a `Progress`; the bindings pass
+    /// `Progress::none()`, so the Python-visible signature is unchanged.
     #[staticmethod]
     fn load(path: PathBuf) -> PyResult<Self> {
-        let inner = SfmrReconstruction::load(&path)
+        let inner = SfmrReconstruction::load(&path, &Progress::none())
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }

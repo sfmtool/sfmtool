@@ -15,6 +15,8 @@ use crate::scene_renderer::{
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
 use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
 
@@ -1145,11 +1147,19 @@ impl Default for AppState {
 ///
 /// Reads up to `read_count` features from the `.sift` file. If a cached entry
 /// exists with at least `read_count` features, returns it directly.
+///
+/// `progress` names the read, and only the read: the `sift cache` phase opens
+/// below the cache test and is cancelled when the read fails, so neither a hit
+/// -- which is every frame after the first -- nor a missing companion leaves a
+/// row under every entry the panel's frames settle.
+/// `&Progress::none()` reports nothing, which is what a caller outside a frame
+/// passes.
 pub fn ensure_sift_cached<'a>(
     cache: &'a mut HashMap<ImageRef, CachedSiftFeatures>,
     recon: &SfmrReconstruction,
     image: ImageRef,
     read_count: usize,
+    progress: &Progress<'_>,
 ) -> Option<&'a CachedSiftFeatures> {
     let image_idx = image.index();
 
@@ -1162,6 +1172,7 @@ pub fn ensure_sift_cached<'a>(
     }
 
     // Load from disk
+    let mut phase = progress.phase("sift cache");
     let sift_path = recon.sift_path_for_image(image_idx);
     let sift_data = match sift_format::read_sift_partial(&sift_path, read_count) {
         Ok(d) => d,
@@ -1171,9 +1182,15 @@ pub fn ensure_sift_cached<'a>(
                 sift_path.display(),
                 e
             );
+            // A read that produced nothing cached nothing, so the next frame
+            // asks again: a recorded row here would land in every entry of a
+            // session whose `.sift` companions are missing, saying the same
+            // thing the log already said once per frame.
+            phase.cancel();
             return None;
         }
     };
+    progress_note!(phase, "{} features", sift_data.positions_xy.nrows());
 
     let n = sift_data.positions_xy.nrows();
     let mut positions_xy = Vec::with_capacity(n);

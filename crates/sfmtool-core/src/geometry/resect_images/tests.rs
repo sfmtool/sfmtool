@@ -27,6 +27,7 @@ use sfmr_format::{
 };
 
 use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::progress::Progress;
 use crate::reconstruction::{
     ImageTable, ObservationSource, Point3D, PointSet, SfmrImage, SfmrReconstruction,
     TrackObservation,
@@ -975,7 +976,8 @@ const FAR_FRAME: &str = "frames/20250425_135433677_2651.jpg";
 const INFINITY_SOLVE: &str = r"C:\DataSets\workspace-prep\evo-survey-20260823\results\20240702_224718414\candidate_solves\h08.sfmr";
 
 fn report_of(path: &str, image: &str) -> super::ResectImageReport {
-    let recon = SfmrReconstruction::load(std::path::Path::new(path)).expect("load");
+    let recon =
+        SfmrReconstruction::load(std::path::Path::new(path), &Progress::none()).expect("load");
     let index = recon
         .image_table
         .images
@@ -1027,7 +1029,8 @@ fn resects_the_adjudicated_far_frame() {
 #[test]
 #[ignore = "reads a candidate solve from outside the repository"]
 fn resects_a_member_of_the_infinity_candidate() {
-    let recon = SfmrReconstruction::load(std::path::Path::new(INFINITY_SOLVE)).expect("load");
+    let recon = SfmrReconstruction::load(std::path::Path::new(INFINITY_SOLVE), &Progress::none())
+        .expect("load");
     let infinity = recon
         .point_set
         .points

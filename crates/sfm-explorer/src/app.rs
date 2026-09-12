@@ -21,7 +21,7 @@ use egui_dock::{DockArea, DockState};
 use egui_winit::State as EguiWinitState;
 use winit::window::Window;
 
-use sfmtool_core::progress::Phase;
+use sfmtool_core::progress::{Phase, Progress};
 use sfmtool_core::progress_note;
 
 use crate::dock::{self, Tab, TabContext};
@@ -189,8 +189,11 @@ impl App {
         // 0.36 a `TexturesDelta` debug-asserts on drop that nothing was left
         // unapplied, and every path out of this function below has to say so.
         let (clipped_primitives, mut textures_delta, pixels_per_point) = {
-            let _phase = frame.phase("egui pass");
-            self.run_egui_pass(&window, &mut egui_winit_state)
+            // The guard is handed to the pass as well as timing it: a panel
+            // body that reads a `.sift` file off disk reports under this
+            // phase, which is where it happened.
+            let phase = frame.phase("egui pass");
+            self.run_egui_pass(&window, &mut egui_winit_state, &phase)
         };
         self.egui_winit_state = Some(egui_winit_state);
 
@@ -545,7 +548,7 @@ impl App {
             // The rays are built through the node's transform on the CPU rather
             // than by a model matrix on the GPU, so this phase is the build as
             // much as the upload.
-            let _phase = uploads.phase("track rays");
+            let rays = uploads.phase("track rays");
             let selected = self
                 .state
                 .selected_point
@@ -568,6 +571,7 @@ impl App {
                                 recon,
                                 ImageRef::new(id, img_idx),
                                 read_count,
+                                &rays,
                             );
                         }
                     }
@@ -709,6 +713,7 @@ impl App {
         &mut self,
         window: &Arc<Window>,
         egui_winit_state: &mut EguiWinitState,
+        progress: &Progress<'_>,
     ) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         // The Panels menu's Save and Load carry the window's placement as well
         // as the panels, so the menu body is drawn with a host. A clone of the
@@ -1273,6 +1278,7 @@ impl App {
                     image_detail,
                     point_track_detail,
                     intrinsics_detail,
+                    frame: *progress,
                     scene_texture_id,
                     hover_depth,
                     hover_pick,

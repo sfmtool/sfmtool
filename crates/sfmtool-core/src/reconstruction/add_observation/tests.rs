@@ -19,6 +19,7 @@ use crate::camera::{CameraIntrinsics, CameraModel};
 use crate::geometry::RigidTransform;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::{Event, Progress};
 use crate::reconstruction::data::{
     ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
 };
@@ -235,6 +236,7 @@ fn a_sift_files_reconstruction_is_refused() {
         [10.0, 10.0],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("a sift_files base has no room for a featureless observation");
     assert_eq!(err, AddObservationError::NotEmbeddedPatches);
@@ -251,6 +253,7 @@ fn an_image_already_in_the_track_is_refused() {
         [64.0, 64.0],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("image 1 already observes the point");
     assert_eq!(err, AddObservationError::ImageAlreadyInTrack(1));
@@ -267,6 +270,7 @@ fn an_image_past_the_table_is_refused() {
         [64.0, 64.0],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("there is no image 9");
     assert_eq!(
@@ -290,6 +294,7 @@ fn a_point_that_is_not_live_is_refused() {
         [64.0, 64.0],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("point 0 was deleted");
     assert_eq!(err, AddObservationError::NoSuchPoint(0));
@@ -307,6 +312,7 @@ fn a_pixel_outside_the_image_is_refused() {
             pixel,
             &scene.views(),
             &AddObservationOptions::default(),
+            &Progress::none(),
         )
         .expect_err("the pixel is off the sensor");
         assert!(matches!(err, AddObservationError::PixelOutsideImage { .. }));
@@ -325,6 +331,7 @@ fn too_few_views_is_refused() {
         [64.0, 64.0],
         &views[..2],
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("the fit has no pixels for image 2");
     assert_eq!(
@@ -352,6 +359,7 @@ fn an_unreachable_acceptance_bar_refuses_rather_than_adding() {
         [truth[0] as f32, truth[1] as f32],
         &scene.views(),
         &options,
+        &Progress::none(),
     )
     .expect_err("no ZNCC clears a bar above one");
     assert!(matches!(
@@ -378,6 +386,7 @@ fn the_fit_lands_the_added_observation_on_the_truth() {
         clicked,
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the patch registers in image 2");
 
@@ -431,6 +440,7 @@ fn the_retriangulation_moves_the_point_toward_the_truth() {
         [truth[0] as f32, truth[1] as f32],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the patch registers in image 2");
 
@@ -455,6 +465,7 @@ fn the_edit_leaves_the_base_and_the_input_value_alone() {
         [truth[0] as f32, truth[1] as f32],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the patch registers in image 2");
 
@@ -485,6 +496,7 @@ fn the_point_keeps_its_place_and_its_columns_through_materialisation() {
         [truth[0] as f32, truth[1] as f32],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the patch registers in image 2");
 
@@ -512,5 +524,169 @@ fn the_point_keeps_its_place_and_its_columns_through_materialisation() {
         plain.point_set.points[0].position,
         after.point().position,
         "the materialised point is the edited one"
+    );
+}
+
+// ── What the edit says it is doing ───────────────────────────────────
+
+/// One phase a run closed: its name, its depth, and what it said it did.
+type ClosedPhase = (&'static str, u8, Option<String>);
+
+/// The `Leave` of every phase a run closed, in order.
+fn closed_phases(events: &std::sync::Mutex<Vec<ClosedPhase>>) -> Vec<ClosedPhase> {
+    events.lock().unwrap().clone()
+}
+
+/// Everything the edit writes into the point it replaced, as bit patterns: the
+/// position, the patch frame and the track's keypoints. Bits rather than a
+/// tolerance, because the question is whether reporting moved anything at all.
+fn edit_bits(value: &EditedReconstruction, point: u32) -> Vec<u64> {
+    let view = value.point(point).expect("the edited point is live");
+    let mut bits = Vec::new();
+    bits.extend(view.point().position.coords.iter().map(|c| c.to_bits()));
+    bits.push(view.point().w.to_bits());
+    bits.extend(view.point().normal.iter().map(|c| u64::from(c.to_bits())));
+    for (k, observation) in view.observations().iter().enumerate() {
+        bits.push(u64::from(observation.image_index));
+        if let Some(keypoint) = view.keypoint_xy(k) {
+            bits.extend(keypoint.iter().map(|c| u64::from(c.to_bits())));
+        }
+    }
+    for halfvec in [view.patch_u_halfvec(), view.patch_v_halfvec()]
+        .into_iter()
+        .flatten()
+    {
+        bits.extend(halfvec.iter().map(|c| u64::from(c.to_bits())));
+    }
+    bits
+}
+
+/// The same for the report.
+fn report_bits(report: &AddObservationReport) -> Vec<u64> {
+    let mut bits = vec![
+        u64::from(report.point),
+        u64::from(report.replaced),
+        u64::from(report.image),
+        report.shift_px.to_bits(),
+        report.zncc.to_bits(),
+        report.observation_count as u64,
+        report.position_shift.to_bits(),
+        u64::from(report.from_infinity),
+        report.condition_number.to_bits(),
+    ];
+    bits.extend(report.clicked_pixel.iter().map(|c| u64::from(c.to_bits())));
+    bits.extend(report.keypoint.iter().map(|c| u64::from(c.to_bits())));
+    bits
+}
+
+/// The two kernel calls are the two stages, and each says how many views it
+/// ran over.
+#[test]
+fn a_recorded_run_names_the_localize_and_the_refine() {
+    let scene = Scene::new();
+    let value = edited(&scene, WORLD);
+    let truth = scene.project(2, WORLD);
+
+    let events = std::sync::Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Leave {
+            phase, depth, note, ..
+        } = event
+        {
+            events
+                .lock()
+                .unwrap()
+                .push((phase, depth, note.map(str::to_string)));
+        }
+    };
+    add_observation(
+        &value,
+        0,
+        2,
+        [truth[0] as f32, truth[1] as f32],
+        &scene.views(),
+        &AddObservationOptions::default(),
+        &Progress::to(&sink),
+    )
+    .expect("the patch registers in image 2");
+
+    let phases = closed_phases(&events);
+    assert_eq!(
+        phases
+            .iter()
+            .map(|(name, depth, _)| (*name, *depth))
+            .collect::<Vec<_>>(),
+        [("localize", 0), ("refine", 0)],
+        "{phases:?}"
+    );
+    // Three views: the two the track already held, seeded at their stored
+    // keypoints, and the one the observation is being added in.
+    for (name, _, note) in &phases {
+        assert_eq!(
+            note.as_deref(),
+            Some("3 views"),
+            "{name} did not say how many views it ran over"
+        );
+    }
+}
+
+/// Reporting is a side channel, so a recorded run has to place the observation
+/// exactly where a silent one does.
+#[test]
+fn reporting_moves_not_one_bit_of_the_added_observation() {
+    let scene = Scene::new();
+    let value = edited(&scene, WORLD);
+    let truth = scene.project(2, WORLD);
+    let clicked = [(truth[0] + 1.5) as f32, (truth[1] - 1.0) as f32];
+
+    let (quiet, quiet_report) = add_observation(
+        &value,
+        0,
+        2,
+        clicked,
+        &scene.views(),
+        &AddObservationOptions::default(),
+        &Progress::none(),
+    )
+    .expect("the patch registers in image 2");
+
+    let events = std::sync::Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Leave {
+            phase, depth, note, ..
+        } = event
+        {
+            events
+                .lock()
+                .unwrap()
+                .push((phase, depth, note.map(str::to_string)));
+        }
+    };
+    // Detail on as well, so every phase this call can open is open while the
+    // arithmetic runs.
+    let (loud, loud_report) = add_observation(
+        &value,
+        0,
+        2,
+        clicked,
+        &scene.views(),
+        &AddObservationOptions::default(),
+        &Progress::to(&sink).detailed(true),
+    )
+    .expect("the patch registers in image 2");
+
+    assert!(
+        !closed_phases(&events).is_empty(),
+        "the recorded run reported nothing, so it proves nothing"
+    );
+    assert_eq!(
+        report_bits(&quiet_report),
+        report_bits(&loud_report),
+        "the two runs disagree about the report"
+    );
+    assert_eq!(
+        edit_bits(&quiet, quiet_report.point),
+        edit_bits(&loud, loud_report.point),
+        "the two runs disagree about the value"
     );
 }

@@ -613,12 +613,15 @@ fn the_entry_is_offered_for_an_image_outside_the_track() {
 // ── Create point: the point edit that creates a point ───────────────────
 
 /// The image every create-point test points into, and the pixel it points at.
-const CREATE_IMAGE: usize = 0;
-const CREATE_PIXEL: [f32; 2] = [10.0, 12.0];
+///
+/// `pub(crate)` for the Action Log's coverage table, which drives this edit
+/// among the rest rather than restating the fixture.
+pub(crate) const CREATE_IMAGE: usize = 0;
+pub(crate) const CREATE_PIXEL: [f32; 2] = [10.0, 12.0];
 
 /// [`embedded_state`] with a synthetic photograph cached for `CREATE_IMAGE`, so
 /// the edit's decode finds pixels without a file on disk.
-fn creatable_state() -> (AppState, ReconId) {
+pub(crate) fn creatable_state() -> (AppState, ReconId) {
     let mut state = embedded_state();
     let id = node(&state);
     let camera = &state.scene[0].recon().image_table.cameras[0];
@@ -1366,4 +1369,82 @@ fn an_undo_of_a_move_puts_the_pose_back() {
     state.undo(id).expect("one edit to undo");
     let restored = state.scene[0].recon().image_table.images[1].camera_center();
     assert!((restored - before).norm() < 1e-12);
+}
+
+// ── What an edit says its time went on ─────────────────────────────────
+
+/// The four stages every bulk edit has, over the one that is not the
+/// adjustment: the overlay fold, the kernel, the row map read off its two
+/// values, and the version push.
+#[test]
+fn a_bulk_edit_names_the_fold_the_kernel_the_map_and_the_push() {
+    let (mut state, id) = adjustable_state();
+    // A point edit first, so there is an overlay to fold and the fold is one of
+    // the rows rather than a stage that did not run.
+    state
+        .delete_point(PointRef::new(id, 7))
+        .expect("a live point");
+
+    state
+        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .expect("the fixture's image 1 resects from its own observations");
+
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [
+            ("materialise", 0, 1),
+            ("resect", 0, 1),
+            ("row map", 0, 1),
+            ("push version", 0, 1)
+        ],
+        "{:?}",
+        entry.detail,
+    );
+    assert_timed_from_the_work(&mut state.action_log);
+}
+
+/// An empty overlay materialises to its own base, so the fold does not run and
+/// leaves no row: three stages rather than four.
+#[test]
+fn a_bulk_edit_with_nothing_to_fold_names_no_materialise() {
+    let mut state = state();
+    let id = node(&state);
+
+    state.delete_image(ImageRef::new(id, 1)).expect("an image");
+
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [("subset", 0, 1), ("row map", 0, 1), ("push version", 0, 1)],
+        "{:?}",
+        entry.detail,
+    );
+}
+
+/// Creating a point is the decode, the spawn and the push, and the decode is
+/// where a slow one spends its time.
+#[test]
+fn creating_a_point_names_the_decode_the_spawn_and_the_push() {
+    let (mut state, id) = creatable_state();
+
+    state
+        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
+        .expect("a pixel on the sensor of a decodable image");
+
+    let entry = newest(&state);
+    assert!(!entry.failed, "{}", entry.text);
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [
+            ("decode views", 0, 1),
+            ("create point", 0, 1),
+            ("push version", 0, 1)
+        ],
+        "{:?}",
+        entry.detail,
+    );
+    assert_timed_from_the_work(&mut state.action_log);
 }

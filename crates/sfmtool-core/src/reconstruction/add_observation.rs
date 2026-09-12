@@ -16,6 +16,8 @@ use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::normal_refine::ProjectedImage;
+use crate::progress::Progress;
+use crate::progress_note;
 
 /// Why an observation could not be added. Every variant names what did not
 /// hold, because the caller is a menu entry that has to say so in one sentence.
@@ -205,10 +207,20 @@ pub struct AddObservationReport {
 /// The base behind `edited`'s `Arc` is not written: the returned value shares
 /// it, and the point is delete-and-re-added into the overlay.
 ///
+/// `progress` is where this call names its two kernel stages, `localize` and
+/// `refine`, the discrete photometric registration and the sub-pixel stage
+/// chained after it, each saying how many views it ran over. The stages inside
+/// those two kernels are not phases of their own: a call registers one patch
+/// over a handful of views, and every other caller runs them once per point
+/// inside a rayon loop, where a phase per call would be timing per item. Pass
+/// `&Progress::none()` to report nothing, which is one branch per report and
+/// no behaviour change at all.
+///
 /// # Example
 ///
 /// ```no_run
 /// # use std::sync::Arc;
+/// # use sfmtool_core::progress::Progress;
 /// # use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 /// # use sfmtool_core::reconstruction::add_observation::{
 /// #     add_observation, AddObservationOptions,
@@ -223,12 +235,14 @@ pub struct AddObservationReport {
 ///     [120.5, 88.25],
 ///     views,
 ///     &AddObservationOptions::default(),
+///     &Progress::none(),
 /// )?;
 /// assert_eq!(report.replaced, 42);
 /// assert!(Arc::ptr_eq(&edited.base, &next.base));
 /// # Ok(())
 /// # }
 /// ```
+#[allow(clippy::too_many_arguments)]
 pub fn add_observation(
     edited: &EditedReconstruction,
     point: u32,
@@ -236,6 +250,7 @@ pub fn add_observation(
     pixel: [f32; 2],
     views: &[ProjectedImage<'_>],
     options: &AddObservationOptions,
+    progress: &Progress<'_>,
 ) -> Result<(EditedReconstruction, AddObservationReport), AddObservationError> {
     // An observation placed at a pixel has a keypoint and no feature index, so
     // this refuses before it reads anything else.
@@ -341,8 +356,9 @@ pub fn add_observation(
         patch.clone()
     };
 
-    let (keypoint, zncc, shift_px) =
-        fit_keypoint(&fit_patch, image, pixel, views, &view_set, &seeds, options)?;
+    let (keypoint, zncc, shift_px) = fit_keypoint(
+        &fit_patch, image, pixel, views, &view_set, &seeds, options, progress,
+    )?;
 
     let fitted = &mut record.observations[at];
     fitted.keypoint_xy = Some(keypoint);
@@ -401,6 +417,10 @@ pub fn add_observation(
 /// [`refine_patch_keypoints`], seeded at the discrete answer, and only the new
 /// view's keypoint is read out of it: this edit places one sighting and moves
 /// none.
+///
+/// The two stages are the two phases `progress` reports: they are the whole of
+/// what this function does, and they are what an added observation's time goes
+/// on.
 #[allow(clippy::too_many_arguments)]
 fn fit_keypoint(
     patch: &OrientedPatch,
@@ -410,9 +430,15 @@ fn fit_keypoint(
     view_set: &[u32],
     seeds: &[Option<[f64; 2]>],
     options: &AddObservationOptions,
+    progress: &Progress<'_>,
 ) -> Result<([f32; 2], f64, f64), AddObservationError> {
-    let localized =
-        localize_patch_keypoints(patch, views, view_set, Some(seeds), &options.localize);
+    let localized = {
+        let mut phase = progress.phase("localize");
+        let localized =
+            localize_patch_keypoints(patch, views, view_set, Some(seeds), &options.localize);
+        progress_note!(phase, "{} views", localized.views.len());
+        localized
+    };
     let slot = localized
         .views
         .iter()
@@ -426,19 +452,24 @@ fn fit_keypoint(
             bar: options.min_zncc,
         });
     }
-    let refined = refine_patch_keypoints(
-        patch,
-        views,
-        &localized.views,
-        Some(
-            &localized
-                .keypoints
-                .iter()
-                .map(|&k| Some(k))
-                .collect::<Vec<_>>(),
-        ),
-        &options.refine,
-    );
+    let refined = {
+        let mut phase = progress.phase("refine");
+        let refined = refine_patch_keypoints(
+            patch,
+            views,
+            &localized.views,
+            Some(
+                &localized
+                    .keypoints
+                    .iter()
+                    .map(|&k| Some(k))
+                    .collect::<Vec<_>>(),
+            ),
+            &options.refine,
+        );
+        progress_note!(phase, "{} views", refined.views.len());
+        refined
+    };
     let fitted = refined
         .views
         .iter()

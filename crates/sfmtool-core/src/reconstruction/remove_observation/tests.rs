@@ -15,6 +15,7 @@ use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::progress::Progress;
 use crate::reconstruction::data::{
     ObservationSource, Point3D, SfmrImage, SfmrReconstruction, TrackObservation,
 };
@@ -349,6 +350,7 @@ fn adding_an_observation_back_brings_the_point_home() {
         [truth[0] as f32, truth[1] as f32],
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the patch registers in image 1");
 

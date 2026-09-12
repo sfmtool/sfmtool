@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use nalgebra::Point3;
 
+use crate::progress::Progress;
 use crate::reconstruction::add_observation::tests::{
     edited, fixture, fixture_with_columns, Scene, IMG_W, WORLD,
 };
@@ -367,6 +368,7 @@ fn create_then_observe(scene: &Scene) -> (EditedReconstruction, AddObservationRe
         clicked,
         &scene.views(),
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect("the second sighting triangulates the bearing");
     (next, add, report.half_extent)
@@ -503,6 +505,7 @@ fn a_second_sighting_along_the_same_bearing_is_refused() {
         [u as f32, v as f32],
         &views,
         &AddObservationOptions::default(),
+        &Progress::none(),
     )
     .expect_err("parallel rays have no intersection");
     assert_eq!(err, AddObservationError::Triangulation);

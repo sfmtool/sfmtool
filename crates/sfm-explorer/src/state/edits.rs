@@ -31,6 +31,7 @@ use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::progress_note;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -123,6 +124,9 @@ impl AppState {
     /// demand through the node's full-resolution cache and turned into pyramids
     /// for this call. A handful of images per edit; nothing pre-decodes the
     /// table.
+    ///
+    /// That decode is the stage a slow one spends its time in, and the entry
+    /// says so: see [`AppState::add_observation_at`].
     pub fn add_observation(&mut self, point: PointRef, image: ImageRef) -> Result<(), String> {
         let pixel = self
             .pending_observation_pixel
@@ -131,12 +135,22 @@ impl AppState {
     }
 
     /// [`AppState::add_observation`] at an explicit pixel.
+    ///
+    /// The entry carries the stages the edit has: the decode the fit needs, the
+    /// two the kernel names for itself (`localize` and `refine`), and the
+    /// version push. It is recorded with
+    /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
+    /// the row says what the edit cost rather than what writing the row cost.
     pub fn add_observation_at(
         &mut self,
         point: PointRef,
         image: ImageRef,
         pixel: [f32; 2],
     ) -> Result<(), String> {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
         if point.recon != image.recon {
             return Err("The point and the image belong to different reconstructions.".to_string());
         }
@@ -177,11 +191,17 @@ impl AppState {
                 .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
             (node.label.clone(), name, needed)
         };
-        let decoded = self.decode_views_for(point.recon, &needed)?;
+        let decoded = {
+            let mut phase = collector.phase("decode views");
+            progress_note!(phase, "{} images", needed.len());
+            self.decode_views_for(point.recon, &needed)?
+        };
 
         let node = &mut self.scene[index];
         let edited = node.history.current();
         let views = decoded.views();
+        // The kernel's own two stages nest directly under this operation, since
+        // the collector's `Progress` is at the top of it.
         let (next, report) = sfmtool_core::add_observation(
             edited,
             point.point,
@@ -189,6 +209,7 @@ impl AppState {
             pixel,
             &views,
             &sfmtool_core::AddObservationOptions::default(),
+            &collector.progress(),
         )
         .map_err(|e| format!("Cannot add that observation: {e}"))?;
 
@@ -197,22 +218,27 @@ impl AppState {
             "Added observation of point {} in {image_name} ({label})",
             point.point
         );
-        let serial = node.history.push(
-            next,
-            PointMap::Replaced(vec![(point.point, moved)]),
-            text.clone(),
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(
+                next,
+                PointMap::Replaced(vec![(point.point, moved)]),
+                text.clone(),
+            )
+        };
         let parent = version_before(node, serial);
         // The selection stays on the point, which has taken a new index; the
         // map is what moves it there.
         self.follow_selection_forward(point.recon);
         self.pending_observation_pixel = None;
-        self.action_log.record(
+        self.action_log.record_done(
             Kind::Edit,
+            started,
             format!(
                 "{text}: ZNCC {:.3}, {:.2} px from the click ({parent} → {serial})",
                 report.zncc, report.shift_px
             ),
+            collector.take(),
         );
         Ok(())
     }
@@ -294,12 +320,18 @@ impl AppState {
     ///
     /// The image is decoded on demand, as add-observation decodes the ones its
     /// fit needs: the colour and the patch bitmap come out of the photograph.
+    /// That decode is what a slow one spends its time in, and the entry names
+    /// it alongside the spawn and the version push.
     pub fn create_point(
         &mut self,
         image: ImageRef,
         pixel: [f32; 2],
         radius_px: f32,
     ) -> Result<(), String> {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
         let index = self
             .scene
             .iter()
@@ -321,20 +353,26 @@ impl AppState {
                 .ok_or_else(|| "That image is no longer in the reconstruction.".to_string())?;
             (node.label.clone(), name)
         };
-        let decoded = self.decode_views_for(image.recon, &[image.index()])?;
+        let decoded = {
+            let _phase = collector.phase("decode views");
+            self.decode_views_for(image.recon, &[image.index()])?
+        };
 
         let node = &mut self.scene[index];
         let edited = node.history.current();
         let views = decoded.views();
-        let (next, report) = sfmtool_core::create_point(
-            edited,
-            image.image,
-            pixel,
-            radius_px,
-            &views,
-            &sfmtool_core::CreatePointOptions::default(),
-        )
-        .map_err(|e| format!("Cannot create that point: {e}"))?;
+        let (next, report) = {
+            let _phase = collector.phase("create point");
+            sfmtool_core::create_point(
+                edited,
+                image.image,
+                pixel,
+                radius_px,
+                &views,
+                &sfmtool_core::CreatePointOptions::default(),
+            )
+            .map_err(|e| format!("Cannot create that point: {e}"))?
+        };
 
         // The point is in no base, so its id is the point edit's hash and its
         // place among that edit's creations. The hash is over the record as it
@@ -349,20 +387,27 @@ impl AppState {
             });
 
         let text = format!("Created point in {image_name} ({label}), radius {radius_px:.1} px");
-        let serial = node.history.push_creating(
-            next,
-            PointMap::Created(vec![report.point]),
-            text.clone(),
-            created,
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push_creating(
+                next,
+                PointMap::Created(vec![report.point]),
+                text.clone(),
+                created,
+            )
+        };
         let parent = version_before(node, serial);
         // The selection moves to the point that was just made: it is what the
         // user is now looking at, and what the next edit acts on.
         self.select_point(PointRef::new(image.recon, report.point as usize));
         self.create_point_prompt = None;
         self.create_point_radius = Some(radius_px);
-        self.action_log
-            .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+        self.action_log.record_done(
+            Kind::Edit,
+            started,
+            format!("{text} ({parent} → {serial})"),
+            collector.take(),
+        );
         Ok(())
     }
 
@@ -391,7 +436,17 @@ impl AppState {
     /// image index at or after the deleted one moves down by one and the
     /// surviving points are renumbered. The caller drops its panel-local caches
     /// for the node afterwards, exactly as it does when a node is closed.
+    ///
+    /// The entry carries the four stages a bulk edit has -- the overlay fold,
+    /// the subset itself, the row map read off its two values, and the version
+    /// push -- and is recorded with
+    /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
+    /// the row says what the edit cost rather than what writing the row cost.
     pub fn delete_image(&mut self, image: ImageRef) -> Result<(), String> {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
         let index = self
             .scene
             .iter()
@@ -419,6 +474,7 @@ impl AppState {
             if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
                 (None, None)
             } else {
+                let _phase = collector.phase("materialise");
                 let (value, map) = edited.materialize();
                 (Some(value), Some(PointMap::Rows(map)))
             };
@@ -430,9 +486,12 @@ impl AppState {
         let keep: Vec<u32> = (0..source.image_count() as u32)
             .filter(|&i| i != removed)
             .collect();
-        let subset = source
-            .subset_by_image_indices(&keep, true)
-            .map_err(|e| format!("Cannot delete that image: {e}"))?;
+        let subset = {
+            let _phase = collector.phase("subset");
+            source
+                .subset_by_image_indices(&keep, true)
+                .map_err(|e| format!("Cannot delete that image: {e}"))?
+        };
 
         // Where each image of `source` went, which is the keep list read the
         // other way round: the deleted one goes nowhere, and everything past it
@@ -443,8 +502,11 @@ impl AppState {
         }
         // The subset says nothing about which points it dropped, so the map is
         // read off its input and its output.
-        let subset_map = RowMap::by_scan(source, &subset, Some(&image_map))
-            .map_err(|e| format!("Cannot delete that image: {e}"))?;
+        let subset_map = {
+            let _phase = collector.phase("row map");
+            RowMap::by_scan(source, &subset, Some(&image_map))
+                .map_err(|e| format!("Cannot delete that image: {e}"))?
+        };
 
         let mut steps = Vec::new();
         steps.extend(mat_map);
@@ -454,11 +516,14 @@ impl AppState {
         let label = node.label.clone();
         let text = format!("Deleted image {name} from {label}");
         let node = &mut self.scene[index];
-        let serial = node.history.push(
-            EditedReconstruction::new(Arc::new(subset)),
-            map,
-            text.clone(),
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(
+                EditedReconstruction::new(Arc::new(subset)),
+                map,
+                text.clone(),
+            )
+        };
         let parent = version_before(node, serial);
         self.follow_selection_forward(image.recon);
         // Every image index at or past the deleted one moved, so an image,
@@ -466,8 +531,12 @@ impl AppState {
         // about a different image. The node keeps its identity; what it held
         // about images does not.
         self.forget_images_of(image.recon);
-        self.action_log
-            .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+        self.action_log.record_done(
+            Kind::Edit,
+            started,
+            format!("{text} ({parent} → {serial})"),
+            collector.take(),
+        );
         Ok(())
     }
 
@@ -491,15 +560,27 @@ impl AppState {
     /// Records its own outcome, success or refusal, as one Action Log entry, in
     /// the vocabulary the derived-node variant reports in; the `Err` is for the
     /// caller to know the node's caches are still good, not to be logged again.
+    ///
+    /// The entry carries the four stages a bulk edit has -- the overlay fold,
+    /// the resection itself, the row map read off its two values, and the
+    /// version push -- and is recorded with
+    /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
+    /// the row says what the resection cost rather than what writing the row
+    /// cost.
     pub fn resect_image_in_place(
         &mut self,
         source: ReconId,
         image: usize,
         from: ResectFrom,
     ) -> Result<(), String> {
-        match self.resect_in_place_inner(source, image, from) {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
+        match self.resect_in_place_inner(source, image, from, &collector) {
             Ok(message) => {
-                self.action_log.record(Kind::Edit, message);
+                self.action_log
+                    .record_done(Kind::Edit, started, message, collector.take());
                 Ok(())
             }
             Err(message) => {
@@ -516,6 +597,7 @@ impl AppState {
         source: ReconId,
         image: usize,
         from: ResectFrom,
+        collector: &Collector,
     ) -> Result<String, String> {
         let index = self
             .scene
@@ -543,6 +625,7 @@ impl AppState {
             if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
                 (None, None)
             } else {
+                let _phase = collector.phase("materialise");
                 let (value, map) = edited.materialize();
                 (Some(value), Some(PointMap::Rows(map)))
             };
@@ -551,14 +634,21 @@ impl AppState {
             None => &self.scene[index].history.current().base,
         };
 
-        let outcome = self.with_resect_source(from, |kind| {
-            crate::resect::resect_image_in_place(
-                source_value,
-                image,
-                kind,
-                &crate::resect::ResectImageOptions::default(),
-            )
-        });
+        // One row over the kernel, which takes no `Progress` of its own: the
+        // stages inside it are not reachable from here, and this is the row
+        // that keeps the resection's own time out of `elsewhere` until they
+        // are.
+        let outcome = {
+            let _phase = collector.phase("resect");
+            self.with_resect_source(from, |kind| {
+                crate::resect::resect_image_in_place(
+                    source_value,
+                    image,
+                    kind,
+                    &crate::resect::ResectImageOptions::default(),
+                )
+            })
+        };
         let (resected, report) = outcome.map_err(|error| {
             crate::resect::failure_message(&basename, &label, &error.to_string())
         })?;
@@ -566,8 +656,11 @@ impl AppState {
         // The resection may drop a point it could neither re-triangulate nor
         // hold out, and says nothing about which; the map is read off its input
         // and its output. The image table is untouched, so no image map.
-        let scan = RowMap::by_scan(source_value, &resected, None)
-            .map_err(|e| crate::resect::failure_message(&basename, &label, &e.to_string()))?;
+        let scan = {
+            let _phase = collector.phase("row map");
+            RowMap::by_scan(source_value, &resected, None)
+                .map_err(|e| crate::resect::failure_message(&basename, &label, &e.to_string()))?
+        };
         let mut steps = Vec::new();
         steps.extend(mat_map);
         steps.push(PointMap::Rows(scan));
@@ -575,11 +668,14 @@ impl AppState {
 
         let text = format!("Resected {basename} in place ({label})");
         let node = &mut self.scene[index];
-        let serial = node.history.push(
-            EditedReconstruction::new(Arc::new(resected)),
-            map,
-            text.clone(),
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(
+                EditedReconstruction::new(Arc::new(resected)),
+                map,
+                text.clone(),
+            )
+        };
         let parent = version_before(node, serial);
         self.follow_selection_forward(source);
         Ok(format!(
@@ -609,14 +705,25 @@ impl AppState {
     /// resection and the adjustment. Records its own outcome as one Action Log
     /// entry; the `Err` is for the caller to know the node's caches are still
     /// good, not to be logged again.
+    ///
+    /// The entry carries the four stages a bulk edit has -- the overlay fold,
+    /// the move itself, the row map read off its two values, and the version
+    /// push -- and is recorded with
+    /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
+    /// the row says what the move cost rather than what writing the row cost.
     pub fn move_camera(
         &mut self,
         image: ImageRef,
         world_from_camera: &sfmtool_core::Se3Transform,
     ) -> Result<(), String> {
-        match self.move_camera_inner(image, world_from_camera) {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
+        match self.move_camera_inner(image, world_from_camera, &collector) {
             Ok(message) => {
-                self.action_log.record(Kind::Edit, message);
+                self.action_log
+                    .record_done(Kind::Edit, started, message, collector.take());
                 Ok(())
             }
             Err(message) => {
@@ -632,6 +739,7 @@ impl AppState {
         &mut self,
         image: ImageRef,
         world_from_camera: &sfmtool_core::Se3Transform,
+        collector: &Collector,
     ) -> Result<String, String> {
         let index = self
             .scene
@@ -656,6 +764,7 @@ impl AppState {
             if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
                 (None, None)
             } else {
+                let _phase = collector.phase("materialise");
                 let (value, map) = edited.materialize();
                 (Some(value), Some(PointMap::Rows(map)))
             };
@@ -664,12 +773,21 @@ impl AppState {
             None => &self.scene[index].history.current().base,
         };
 
-        let (moved, report) = sfmtool_core::move_camera(source, image.index(), world_from_camera)
-            .map_err(|e| refuse(e.to_string()))?;
+        // One row over the kernel, which takes no `Progress` of its own: the
+        // re-triangulation inside it is where a slow move's time goes, and this
+        // is what keeps that time out of `elsewhere`.
+        let (moved, report) = {
+            let _phase = collector.phase("move camera");
+            sfmtool_core::move_camera(source, image.index(), world_from_camera)
+                .map_err(|e| refuse(e.to_string()))?
+        };
         // The move deletes and creates no points, so this scan is the identity
         // map -- read off the two values rather than asserted. The image table
         // is untouched, so no image map.
-        let scan = RowMap::by_scan(source, &moved, None).map_err(|e| refuse(e.to_string()))?;
+        let scan = {
+            let _phase = collector.phase("row map");
+            RowMap::by_scan(source, &moved, None).map_err(|e| refuse(e.to_string()))?
+        };
         let mut steps = Vec::new();
         steps.extend(mat_map);
         steps.push(PointMap::Rows(scan));
@@ -687,11 +805,14 @@ impl AppState {
             text.push_str(&format!(", {} points re-solved", report.retriangulated));
         }
         let node = &mut self.scene[index];
-        let serial = node.history.push(
-            EditedReconstruction::new(Arc::new(moved)),
-            map,
-            text.clone(),
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(
+                EditedReconstruction::new(Arc::new(moved)),
+                map,
+                text.clone(),
+            )
+        };
         let parent = version_before(node, serial);
         self.follow_selection_forward(image.recon);
         let residual = match (report.residual_before_px, report.residual_after_px) {

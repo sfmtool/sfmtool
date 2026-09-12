@@ -2,7 +2,48 @@ use sfmr_format::{
     RigFrameData, SfmrData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
+use crate::progress::{Event, Progress};
+
 use super::*;
+
+/// One phase a load closed: its name, its depth, and what it said it did.
+type ClosedPhase = (&'static str, u8, Option<String>);
+
+/// Load `path` with a live sink, and hand back the value along with every
+/// phase the load closed.
+///
+/// The `Leave` events rather than the `Enter`s, because a stage that did not
+/// run cancels its guard and so closes nothing: a row is built from the close,
+/// and the enter such a stage already sent is what a collector drops.
+fn load_recording(path: &std::path::Path) -> (SfmrReconstruction, Vec<ClosedPhase>) {
+    let left = std::sync::Mutex::new(Vec::new());
+    let sink = |event: Event<'_>| {
+        if let Event::Leave {
+            phase, depth, note, ..
+        } = event
+        {
+            left.lock()
+                .unwrap()
+                .push((phase, depth, note.map(str::to_string)));
+        }
+    };
+    let recon = SfmrReconstruction::load(path, &Progress::to(&sink)).expect("the file loads");
+    let phases = left.lock().unwrap().clone();
+    (recon, phases)
+}
+
+/// The names of `phases`, in the order they closed.
+fn phase_names(phases: &[ClosedPhase]) -> Vec<&'static str> {
+    phases.iter().map(|(name, _, _)| *name).collect()
+}
+
+/// What the phase called `name` said it did, if it closed at all.
+fn phase_note(phases: &[ClosedPhase], name: &str) -> Option<String> {
+    phases
+        .iter()
+        .find(|(phase, _, _)| *phase == name)
+        .and_then(|(_, _, note)| note.clone())
+}
 
 #[test]
 fn test_observations_for_point() {
@@ -964,8 +1005,20 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     );
 
     // Load applies the COLMAP→canonical upgrade: the result matches the
-    // canonical ground truth and reports the current version.
-    let loaded = SfmrReconstruction::load(&v4_path).unwrap();
+    // canonical ground truth and reports the current version. The upgrade is
+    // one of the load's stages, and this is the file it runs for, so the
+    // recorded load is what says the guard is conditional rather than dead.
+    let (loaded, phases) = load_recording(&v4_path);
+    assert_eq!(
+        phase_names(&phases),
+        ["read", "convert convention", "derive"],
+        "{phases:?}"
+    );
+    assert_eq!(
+        phase_note(&phases, "convert convention").as_deref(),
+        Some("from version 4"),
+        "the upgrade did not say what it upgraded from"
+    );
     assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
     assert_eq!(
         loaded.image_table.images.len(),
@@ -1001,7 +1054,7 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
         sfmr_format::read_sfmr_metadata(&saved).unwrap().version,
         sfmr_format::SFMR_FORMAT_VERSION
     );
-    let reloaded = SfmrReconstruction::load(&saved).unwrap();
+    let reloaded = SfmrReconstruction::load(&saved, &Progress::none()).unwrap();
     for (li, ri) in reloaded
         .image_table
         .images
@@ -1140,7 +1193,7 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
             version
         );
 
-        let mut loaded = SfmrReconstruction::load(&path).unwrap();
+        let mut loaded = SfmrReconstruction::load(&path, &Progress::none()).unwrap();
         let ctx = format!("v{version}");
 
         // Poses and points come back exactly as stored — no conversion touched
@@ -1231,7 +1284,7 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
         sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
     );
 
-    let loaded = SfmrReconstruction::load(&v5_path).unwrap();
+    let loaded = SfmrReconstruction::load(&v5_path, &Progress::none()).unwrap();
     assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
     let resaved = dir.join("resaved.sfmr");
     loaded.save(&resaved).unwrap();
@@ -1240,7 +1293,7 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
         sfmr_format::SFMR_FORMAT_VERSION
     );
 
-    let mut reloaded = SfmrReconstruction::load(&resaved).unwrap();
+    let mut reloaded = SfmrReconstruction::load(&resaved, &Progress::none()).unwrap();
     for (li, ri) in reloaded
         .image_table
         .images
@@ -1266,6 +1319,132 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
     assert_eq!(stored, recomputed, "resaved: recomputed errors differ");
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// A current-version `.sfmr` file of `points` demo points, in a directory of
+/// its own, with the workspace marker a load resolves against.
+///
+/// The marker is what makes the file loadable at all: a load resolves the
+/// workspace directory by searching upward for one, and a lone `.sfmr` in a
+/// temp directory is refused rather than guessed at.
+fn saved_demo(name: &str, points: usize) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sfmr_core_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").unwrap();
+    let path = dir.join("demo.sfmr");
+    SfmrReconstruction::demo(points).save(&path).unwrap();
+    path
+}
+
+/// Every number a load writes into the value, as bit patterns: the poses, the
+/// points, their patch frames and the observation columns. Bits rather than a
+/// tolerance, because the question is whether reporting moved anything at all.
+fn load_bits(recon: &SfmrReconstruction) -> Vec<u64> {
+    let mut bits = Vec::new();
+    for image in &recon.image_table.images {
+        bits.push(u64::from(image.camera_index));
+        bits.extend(image.quaternion_wxyz.coords.iter().map(|c| c.to_bits()));
+        bits.extend(image.translation_xyz.iter().map(|c| c.to_bits()));
+        bits.extend(image.name.bytes().map(u64::from));
+    }
+    for point in &recon.point_set.points {
+        bits.extend(point.position.coords.iter().map(|c| c.to_bits()));
+        bits.push(point.w.to_bits());
+        bits.push(u64::from(point.error.to_bits()));
+        bits.extend(point.normal.iter().map(|c| u64::from(c.to_bits())));
+        bits.extend(point.color.iter().map(|c| u64::from(*c)));
+    }
+    for observation in &recon.point_set.tracks {
+        bits.push(u64::from(observation.image_index));
+        bits.push(u64::from(observation.point_index));
+    }
+    bits.extend(
+        recon
+            .point_set
+            .observation_counts
+            .iter()
+            .map(|c| u64::from(*c)),
+    );
+    bits.extend(
+        recon
+            .point_set
+            .observation_offsets
+            .iter()
+            .map(|o| *o as u64),
+    );
+    if let Some(keypoints) = recon.point_set.keypoints_xy() {
+        bits.extend(keypoints.iter().map(|k| u64::from(k.to_bits())));
+    }
+    for column in [
+        &recon.point_set.patch_u_halfvec_xyz,
+        &recon.point_set.patch_v_halfvec_xyz,
+    ] {
+        if let Some(array) = column.as_ref() {
+            bits.extend(array.iter().map(|v| u64::from(v.to_bits())));
+        }
+    }
+    bits
+}
+
+/// What a load names, and what it says each stage did.
+#[test]
+fn a_recorded_load_names_the_read_and_the_derive() {
+    let path = saved_demo("load_phases", 32);
+    let (recon, phases) = load_recording(&path);
+
+    // Two rows rather than three: the writer wrote a canonical file, so the
+    // convention upgrade did not run and its guard closed nothing.
+    assert_eq!(phase_names(&phases), ["read", "derive"], "{phases:?}");
+    assert!(
+        phases.iter().all(|(_, depth, _)| *depth == 0),
+        "a load's stages sit at the top of whatever it was called inside: {phases:?}"
+    );
+
+    let read = format!(
+        "{} points, {} images",
+        recon.point_count(),
+        recon.image_count()
+    );
+    assert_eq!(
+        phase_note(&phases, "read"),
+        Some(read),
+        "the read did not say how much it read"
+    );
+    let derive = format!("{} observations", recon.point_set.tracks.len());
+    assert_eq!(
+        phase_note(&phases, "derive"),
+        Some(derive),
+        "the derive did not say how much came out"
+    );
+}
+
+/// Reporting is a side channel, so a load that reports has to hand back the
+/// value a silent one does, to the bit.
+#[test]
+fn reporting_moves_not_one_bit_of_what_a_load_returns() {
+    let path = saved_demo("load_parity", 48);
+    let quiet = SfmrReconstruction::load(&path, &Progress::none()).expect("the file loads");
+    let (loud, phases) = load_recording(&path);
+
+    assert!(
+        !phases.is_empty(),
+        "the recorded load reported nothing, so it proves nothing"
+    );
+    assert_eq!(
+        load_bits(&quiet),
+        load_bits(&loud),
+        "the two loads disagree about a number"
+    );
+    // The columns above are the numbers; this is every byte, the thumbnails,
+    // the cameras and the depth statistics included, since the hash is taken
+    // over exactly what a save of the value would write.
+    assert_eq!(
+        quiet.content_xxh128().unwrap().content_xxh128,
+        loud.content_xxh128().unwrap().content_xxh128,
+        "the two loads do not serialise to the same bytes"
+    );
+    assert_eq!(quiet.workspace_dir, loud.workspace_dir);
 }
 
 #[test]

@@ -9,6 +9,7 @@
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
 use egui_dock::TabViewer;
+use sfmtool_core::progress::Progress;
 
 use crate::action_log::Kind;
 use crate::image_browser::ImageBrowser;
@@ -70,6 +71,16 @@ pub(crate) struct TabContext<'a> {
     pub image_detail: &'a mut ImageDetail,
     pub point_track_detail: &'a mut PointTrackDetail,
     pub intrinsics_detail: &'a mut IntrinsicsDetail,
+    /// Where the panel work that can outlast a frame reports: the `.sift`
+    /// reads the overlays ask for.
+    ///
+    /// The **egui pass's own** `Progress`, not the frame collector's, and that
+    /// is not a detail: a phase carries its depth, and one opened at the top
+    /// of the frame while the pass is open would read as the pass's sibling
+    /// rather than its child -- which would leave the pass's own row unclosed.
+    /// A panel body runs inside the pass, so what it opens nests under it and
+    /// reaches the entry the frame settles.
+    pub frame: Progress<'a>,
     // Per-frame values needed by viewer_3d.show():
     pub scene_texture_id: Option<egui::TextureId>,
     pub hover_depth: Option<f32>,
@@ -413,6 +424,7 @@ impl TabContext<'_> {
                     recon,
                     ImageRef::new(id, idx),
                     read_count,
+                    &self.frame,
                 )
             });
             // Full-res CPU pixels come from the shared cache (also
@@ -545,6 +557,7 @@ impl TabContext<'_> {
                             recon,
                             ImageRef::new(id, img_idx),
                             need,
+                            &self.frame,
                         );
                     }
                 }

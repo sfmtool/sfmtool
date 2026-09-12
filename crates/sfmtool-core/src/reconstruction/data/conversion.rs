@@ -21,6 +21,8 @@ use sfmr_format::{
 };
 
 use crate::camera::CameraIntrinsics;
+use crate::progress::Progress;
+use crate::progress_note;
 
 use super::{
     compute_observation_offsets, count_points_at_infinity, ImageTable, ObservationSource, Point3D,
@@ -79,8 +81,41 @@ impl SfmrReconstruction {
     /// writes a new current-version file with new hashes. A file at or above
     /// the canonical-convention version is already canonical and is loaded
     /// untouched.
-    pub fn load(path: &Path) -> Result<Self, SfmrError> {
-        let mut data = sfmr_format::read_sfmr(path)?;
+    ///
+    /// `progress` is where this call names the three stages an open divides
+    /// into: `read`, the archive entries and the decompression
+    /// [`sfmr_format::read_sfmr`] does; `convert convention`, the upgrade
+    /// above; and `derive`, the columns becoming the in-memory value and its
+    /// derived indexes. The `read` says how much it read and the `derive` how
+    /// many observations came out, both of which the code already knows. The
+    /// upgrade's guard is **cancelled** for a file that is already canonical,
+    /// since a stage that did not run should leave no row rather than an empty
+    /// one under every open. Pass `&Progress::none()` to report nothing, which
+    /// is one branch per report and no behaviour change at all.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sfmtool_core::progress::Progress;
+    /// use sfmtool_core::SfmrReconstruction;
+    /// # fn run(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    /// let recon = SfmrReconstruction::load(path, &Progress::none())?;
+    /// println!("{} points", recon.point_count());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn load(path: &Path, progress: &Progress<'_>) -> Result<Self, SfmrError> {
+        let mut data = {
+            let mut phase = progress.phase("read");
+            let data = sfmr_format::read_sfmr(path)?;
+            progress_note!(
+                phase,
+                "{} points, {} images",
+                data.metadata.point_count,
+                data.metadata.image_count
+            );
+            data
+        };
         // read_sfmr resolves workspace best-effort; here we require it
         let workspace_dir = match data.workspace_dir {
             Some(ref dir) => dir.clone(),
@@ -90,14 +125,24 @@ impl SfmrReconstruction {
         // on the current format version: every later version is canonical too,
         // so `< SFMR_FORMAT_VERSION` would re-apply the conversion to files that
         // are already canonical each time the format version moves.
+        let mut convert = progress.phase("convert convention");
         if data.metadata.version < sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION {
+            progress_note!(convert, "from version {}", data.metadata.version);
             crate::geometry::convention::sfmr_data_colmap_to_canonical(&mut data);
+            drop(convert);
+        } else {
+            convert.cancel();
         }
         // The in-memory arrays are the current structural layout in the current
         // convention whatever the file said, so the reconstruction reports the
         // current version (and a subsequent `save` writes it).
         data.metadata.version = sfmr_format::SFMR_FORMAT_VERSION;
-        let mut recon = Self::from_sfmr_data(data)?;
+        let mut recon = {
+            let mut phase = progress.phase("derive");
+            let recon = Self::from_sfmr_data(data)?;
+            progress_note!(phase, "{} observations", recon.point_set.tracks.len());
+            recon
+        };
         recon.workspace_dir = workspace_dir;
         Ok(recon)
     }
