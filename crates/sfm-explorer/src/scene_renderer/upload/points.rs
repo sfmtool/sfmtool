@@ -8,6 +8,7 @@ use super::super::auto_point_size::{
 };
 use super::super::gpu_types::PointInstance;
 use super::super::SceneRenderer;
+use super::Uploaded;
 use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
@@ -17,12 +18,15 @@ impl SceneRenderer {
     ///
     /// Converts positions from f64 to f32, packs colors into u32, and
     /// computes the node's auto point size from nearest-neighbor distances.
+    ///
+    /// Always [`Uploaded::Built`]: nothing here can be kept, and the caller
+    /// only reaches it when the base moved.
     pub fn upload_points(
         &mut self,
         device: &wgpu::Device,
         id: ReconId,
         recon: &SfmrReconstruction,
-    ) {
+    ) -> Uploaded {
         let instances: Vec<PointInstance> = recon
             .point_set
             .points
@@ -88,5 +92,6 @@ impl SceneRenderer {
         self.assign_pick_bases();
 
         log::info!("Uploaded {count} points to GPU (auto point size: {size:.4})");
+        Uploaded::Built(count as usize)
     }
 }

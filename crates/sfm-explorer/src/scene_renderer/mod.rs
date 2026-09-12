@@ -50,6 +50,8 @@ pub use gpu_types::{
 };
 pub use picking::PickTarget;
 pub use recon::NodeDisplay;
+/// What an upload did, which is what the frame's phase note beside it says.
+pub(crate) use upload::Uploaded;
 
 // ── SceneRenderer ───────────────────────────────────────────────────────
 

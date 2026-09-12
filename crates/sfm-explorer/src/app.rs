@@ -21,11 +21,15 @@ use egui_dock::{DockArea, DockState};
 use egui_winit::State as EguiWinitState;
 use winit::window::Window;
 
+use sfmtool_core::progress::Phase;
+use sfmtool_core::progress_note;
+
 use crate::dock::{self, Tab, TabContext};
 use crate::goto_point;
 use crate::platform;
+use crate::progress::Collector;
 use crate::scene::ImageRef;
-use crate::scene_renderer::{NodeDisplay, PickTarget};
+use crate::scene_renderer::{NodeDisplay, PickTarget, Uploaded};
 use crate::App;
 
 #[cfg(target_os = "windows")]
@@ -97,6 +101,18 @@ impl App {
         // lets `run_egui_pass` take a non-`Option` `&Window`.
         let window = self.window.clone().unwrap();
 
+        // Where this frame's own phases land. Built here, once per frame, for
+        // two reasons: it is where the detail level the Action Log currently
+        // holds is read, and it is where the events of a frame that ended early
+        // (one that could not present, and so never reached `settle`) are
+        // dropped rather than charged to the next frame's entries.
+        //
+        // The clone is what lets the guards below stand around the `&mut self`
+        // phase calls: a guard borrowing `self.frame` would conflict with every
+        // one of them.
+        self.frame = Arc::new(Collector::new(self.state.action_log.detailed_timing()));
+        let frame = Arc::clone(&self.frame);
+
         // Phase 0: refresh the window snapshot, then apply every MCP tool call
         // that has arrived since the last frame. First, ahead of everything
         // else, so a command's effect is in the very frame the agent's request
@@ -111,7 +127,7 @@ impl App {
         // (`AppState::observe_window`). An idle viewer renders no frames at all.
         self.state.observe_window(&window);
         #[cfg(feature = "mcp")]
-        self.drain_mcp(&window);
+        self.drain_mcp(&window, &frame);
 
         // Keep the window title in step with the loaded file. Compared against
         // the last applied title rather than set unconditionally: `set_title`
@@ -150,7 +166,7 @@ impl App {
         // it -- everything the egui pass handles -- does not. See
         // `ActionLog::settle`.
         let uploads_began = Instant::now();
-        self.prepare_uploads(&device, &queue);
+        self.prepare_uploads(&device, &queue, &frame);
 
         // Phase 2: render the 3D scene into the offscreen texture. The encoder is
         // created here (not inside `render_scene`) because it is shared with the
@@ -158,7 +174,10 @@ impl App {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render encoder"),
         });
-        self.render_scene(&queue, &mut encoder);
+        {
+            let _phase = frame.phase("scene render");
+            self.render_scene(&queue, &mut encoder);
+        }
 
         // Phase 3: run the egui/dock UI, publish accessibility, and tessellate.
         // `egui_winit::State` is not `Clone` and `run_egui_pass` needs it `&mut`,
@@ -169,8 +188,10 @@ impl App {
         // `mut` only so the delta can be `clear`ed once handled: since epaint
         // 0.36 a `TexturesDelta` debug-asserts on drop that nothing was left
         // unapplied, and every path out of this function below has to say so.
-        let (clipped_primitives, mut textures_delta, pixels_per_point) =
-            self.run_egui_pass(&window, &mut egui_winit_state);
+        let (clipped_primitives, mut textures_delta, pixels_per_point) = {
+            let _phase = frame.phase("egui pass");
+            self.run_egui_pass(&window, &mut egui_winit_state)
+        };
         self.egui_winit_state = Some(egui_winit_state);
 
         // --- Acquire the surface, encode the egui pass, submit, and present. ---
@@ -269,15 +290,21 @@ impl App {
         #[cfg(feature = "mcp")]
         let surface_copy = self.encode_screenshot_copy(&device, &mut encoder, &output.texture);
 
-        // Submit
-        let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
-        cmd_bufs.push(encoder.finish());
-        queue.submit(cmd_bufs);
-        queue.present(output);
+        // Submit. Scoped so the phase closes before the settle below reads the
+        // frame's events, which is the one ordering constraint here: a present
+        // still open would be a present nothing had recorded.
+        {
+            let _phase = frame.phase("present");
+            let mut cmd_bufs: Vec<wgpu::CommandBuffer> = user_cmd_bufs;
+            cmd_bufs.push(encoder.finish());
+            queue.submit(cmd_bufs);
+            queue.present(output);
+        }
 
         // The frame is on its way to the screen, so every action it drew is
-        // done being waited on: each of those log entries learns what it cost.
-        self.state.action_log.settle(uploads_began);
+        // done being waited on: each of those log entries learns what it cost,
+        // and inherits what this frame spent showing it.
+        self.state.action_log.settle(uploads_began, frame.take());
 
         // Phase 4: apply hover/selection from the 5x5 depth + pick readback.
         self.process_pick_readback(&device);
@@ -303,7 +330,13 @@ impl App {
     /// Everything node-shaped here is a loop over `state.scene`, keyed by
     /// `ReconId`. The scene still holds at most one node (phase 3 lifts that),
     /// so the loops run once — but the renderer no longer assumes it.
-    fn prepare_uploads(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    ///
+    /// The five uploads the frame names sit under one `uploads` phase, and each
+    /// says what it did as well as what it cost: an upload that kept what the
+    /// GPU already held and one that rewrote it in no time both read `<1 ms`,
+    /// and the note is the only thing that tells them apart.
+    fn prepare_uploads(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Collector) {
+        let uploads = frame.phase("uploads");
         // A node that has left the scene takes its GPU bundle with it.
         let scene = &self.state.scene;
         self.scene_renderer
@@ -331,10 +364,23 @@ impl App {
                 // second. See `has_uploaded_base`.
                 arrived_any |= !self.scene_renderer.has_uploaded_base(id);
                 let recon = node.recon();
-                self.scene_renderer.upload_points(device, id, recon);
-                self.scene_renderer
-                    .upload_thumbnails(device, queue, id, recon);
-                self.scene_renderer.upload_patches(device, queue, id, recon);
+                {
+                    let mut phase = uploads.phase("points");
+                    let did = self.scene_renderer.upload_points(device, id, recon);
+                    note_upload(&mut phase, did, "point", "points");
+                }
+                {
+                    let mut phase = uploads.phase("thumbnails");
+                    let did = self
+                        .scene_renderer
+                        .upload_thumbnails(device, queue, id, recon);
+                    note_upload(&mut phase, did, "image", "images");
+                }
+                {
+                    let mut phase = uploads.phase("patch atlas");
+                    let did = self.scene_renderer.upload_patches(device, queue, id, recon);
+                    note_upload(&mut phase, did, "tile", "tiles");
+                }
                 self.scene_renderer.set_uploaded_base(id, base);
                 uploaded_any = true;
             }
@@ -358,12 +404,23 @@ impl App {
                 Some(lock) if lock.image.recon == id => &lock.highlighted,
                 _ => &NONE,
             };
-            self.scene_renderer.update_point_mask(
+            let mut phase = uploads.phase("deleted mask");
+            let written = self.scene_renderer.update_point_mask(
                 queue,
                 id,
                 &node.edited().deleted_points,
                 highlighted,
             );
+            if written == 0 {
+                // Unlike the three above, this runs on every frame rather than
+                // when something decided to upload, and the usual answer is
+                // that the mask already says what the version says. A row of
+                // that under every entry would be noise, and a phase that
+                // wrote nothing is a phase that did not run.
+                phase.cancel();
+            } else {
+                note_upload(&mut phase, Uploaded::Built(written), "entry", "entries");
+            }
         }
 
         // Mirror each node's Scene-panel display state onto its bundle. After
@@ -485,6 +542,10 @@ impl App {
         // owns the selected point — and, having no per-recon `model` matrix of
         // their own, they are built through that node's transform on the CPU.
         if point_selection_changed || transform_changed {
+            // The rays are built through the node's transform on the CPU rather
+            // than by a model matrix on the GPU, so this phase is the build as
+            // much as the upload.
+            let _phase = uploads.phase("track rays");
             let selected = self
                 .state
                 .selected_point
@@ -1514,6 +1575,19 @@ fn forget_selected(
     image_detail.forget_recon(id);
     point_track_detail.forget_recon(id);
     intrinsics_detail.forget_recon(id);
+}
+
+/// The note beside an upload's time: `reused`, or how much it wrote.
+///
+/// A count of one is ordinary for the deleted mask, which is what the two
+/// spellings of the unit are for.
+fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
+    match did {
+        Uploaded::Reused => progress_note!(*phase, "reused"),
+        Uploaded::Built(n) => {
+            progress_note!(*phase, "{n} {}", if n == 1 { unit } else { units })
+        }
+    }
 }
 
 /// Whether `point` names a point the version on screen still holds.

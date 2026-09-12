@@ -82,18 +82,22 @@ impl SceneRenderer {
     /// ([`crate::camera_lock`]) -- and it rides in this word because a second
     /// per-point buffer would mean a second vertex attribute and a second
     /// pipeline layout for one temporary colour.
+    ///
+    /// Returns how many indexes it wrote, which is what the frame's phase note
+    /// says beside the time: this runs on every frame for every node, so zero
+    /// is the usual answer and is the one that means nothing happened.
     pub fn update_point_mask(
         &mut self,
         queue: &wgpu::Queue,
         id: ReconId,
         deleted: &HashSet<u32>,
         highlighted: &HashSet<u32>,
-    ) {
+    ) -> usize {
         let Some(bundle) = self.recons.get_mut(&id) else {
-            return;
+            return 0;
         };
         if bundle.masked_deleted == *deleted && bundle.masked_highlighted == *highlighted {
-            return;
+            return 0;
         }
         let mut changed: Vec<u32> = bundle
             .masked_deleted
@@ -108,6 +112,7 @@ impl SceneRenderer {
         );
         changed.sort_unstable();
         changed.dedup();
+        let written = changed.len();
         for index in changed {
             let alive: u32 = if deleted.contains(&index) {
                 MASK_DELETED
@@ -156,6 +161,7 @@ impl SceneRenderer {
         }
         bundle.masked_deleted = deleted.clone();
         bundle.masked_highlighted = highlighted.clone();
+        written
     }
 
     /// How many base indexes `id`'s mask currently marks as deleted. For the

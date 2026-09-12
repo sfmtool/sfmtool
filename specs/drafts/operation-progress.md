@@ -468,8 +468,8 @@ place:
                       3.8 ms    selection follow
                    1874.2 ms  uploads
                    1203.4 ms    points
-                    502.1 ms    patch atlas
                       <1 ms    thumbnails  reused
+                    502.1 ms    patch atlas
                       1.1 ms    deleted mask
                     167.6 ms    track rays
                     412.0 ms  scene render
@@ -574,7 +574,8 @@ own work, and it is why the parameter is worth its virality.
 `uploads`, `scene render`, `egui pass`, `present`. Those genuinely belong to
 whatever entries the frame settles, because one upload and one draw showed all
 of them, so `ActionLog::settle` appends the frame's events to every entry it
-stamps and says `frame shared with 2 other entries` when there was more than
+stamps and says `frame shared with 2 other entries`, or `1 other entry`, when
+there was more than
 one. A frame that stamps nothing discards its events.
 
 One consequence is worth stating because it looks like a bug otherwise. An entry
@@ -646,10 +647,10 @@ The frame, which every settled entry inherits:
 |-------|-------|-----------------|
 | `mcp drain` | `App::drain_mcp` | the number of commands, when more than one |
 | `uploads` | `App::prepare_uploads` | |
-| `points` | `upload::points` | the instance count, when it rebuilt |
-| `patch atlas` | `upload::patches` | `reused`, or the tile count it packed |
-| `thumbnails` | `upload::thumbnails` | `reused`, or the image count |
-| `deleted mask` | `upload::overlay` | the number of entries written |
+| `points` | `App::prepare_uploads` | the instance count, when it rebuilt |
+| `thumbnails` | `App::prepare_uploads` | `reused`, or the image count |
+| `patch atlas` | `App::prepare_uploads` | `reused`, or the tile count it packed |
+| `deleted mask` | `App::prepare_uploads`, only when it wrote | the number of entries written |
 | `track rays` | the CPU-space rebuild | |
 | `scene render` | Phase 2 | |
 | `egui pass` | Phase 3 | |
@@ -669,6 +670,15 @@ The operations:
 | `localize` and `refine` | `add_observation`'s two kernel calls | |
 | `decode views` | the full-resolution decode an edit needs | |
 | `sift cache` | the Image Detail overlay's feature load | |
+
+The five under `uploads` open in `App::prepare_uploads` rather than in the
+`upload` functions they wrap: those take `&mut SceneRenderer` and no `Progress`,
+and the caller is what holds the frame's collector. Each returns what the phase
+needs for its note, which is the skip it had already decided rather than a
+signal invented for the row. `deleted mask` is the one that does not always
+record: it is called every frame for every node and usually writes nothing, so
+its guard is cancelled when it wrote nothing rather than leaving an empty row
+under every entry in the log.
 
 A row of that table that expands to nothing but `elsewhere` is a gap in the
 coverage rather than a curiosity, and the way to find one is to read the log

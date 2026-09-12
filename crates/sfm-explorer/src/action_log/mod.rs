@@ -574,13 +574,27 @@ impl ActionLog {
     /// after it -- anything the egui pass handled, which is every click and
     /// keystroke -- has not, and waits for the next frame.
     ///
+    /// `frame` is what the frame itself reported: the uploads, the two draws
+    /// and the present, which are nobody's operation. They are appended to
+    /// every entry this stamps, because one upload and one draw showed all of
+    /// them, and each such entry says how many others it shared the frame
+    /// with. A frame that stamps nothing has nobody to charge and drops them.
+    ///
     /// Called once per frame from the viewer's frame loop, at the end.
-    pub(crate) fn settle(&mut self, uploads_began: Instant) {
+    ///
+    /// One consequence looks like a bug and is not. An entry written during the
+    /// egui pass (which is every click, every key and every menu item) does
+    /// not carry the tail of the frame it was written in: it was written after
+    /// that frame's upload phase, so it is not stamped until the *next* frame,
+    /// and the next frame is the one that shows its result. The millisecond or
+    /// two of its own frame lands in `elsewhere`.
+    pub(crate) fn settle(&mut self, uploads_began: Instant, frame: Vec<Detail>) {
         if self.pending.is_empty() {
             return;
         }
         let now = Instant::now();
         let mut still_waiting = Vec::new();
+        let mut stamped = Vec::new();
         for (revision, written) in std::mem::take(&mut self.pending) {
             if written > uploads_began {
                 still_waiting.push((revision, written));
@@ -596,9 +610,50 @@ impl ActionLog {
                 .find(|entry| entry.revision == revision)
             {
                 entry.took = Some(now.duration_since(written));
+                stamped.push(revision);
             }
         }
         self.pending = still_waiting;
+        self.share_frame(&stamped, frame);
+    }
+
+    /// Give every entry `stamped` the frame's own events, and tell it how many
+    /// others got the same ones.
+    ///
+    /// The sharing line is worth the row: a phase table that is the whole of
+    /// three entries at once is not the breakdown of any one of them, and
+    /// without the line a reader would take one frame's uploads to be the cost
+    /// of the one action they are looking at.
+    fn share_frame(&mut self, stamped: &[u64], frame: Vec<Detail>) {
+        if frame.is_empty() || stamped.is_empty() {
+            return;
+        }
+        let others = stamped.len() - 1;
+        // From the back, and no further than the last one found: what a frame
+        // stamps was written in it, so they are the newest entries there are.
+        let mut left = stamped.len();
+        for entry in self.entries.iter_mut().rev() {
+            if left == 0 {
+                break;
+            }
+            if !stamped.contains(&entry.revision) {
+                continue;
+            }
+            left -= 1;
+            let mut detail = std::mem::take(&mut entry.detail);
+            detail.extend(frame.iter().cloned());
+            if others > 0 {
+                let entries = if others == 1 { "entry" } else { "entries" };
+                detail.push(Detail::Message {
+                    level: Level::Info,
+                    depth: 0,
+                    text: format!("frame shared with {others} other {entries}"),
+                });
+            }
+            // Capped again rather than trusted: the write capped what the
+            // operation reported, and the frame's events arrive after it.
+            entry.detail = Self::capped(detail);
+        }
     }
 
     /// Whether `entry` should replace the newest entry rather than follow it.

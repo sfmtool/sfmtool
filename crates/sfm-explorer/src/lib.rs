@@ -56,6 +56,7 @@ use image_browser::ImageBrowser;
 use image_detail::ImageDetail;
 use intrinsics_detail::IntrinsicsDetail;
 use point_track_detail::PointTrackDetail;
+use progress::Collector;
 use scene::{CameraRef, ImageRef, PointRef};
 use scene_graph::SceneGraphPanel;
 use scene_renderer::SceneRenderer;
@@ -195,6 +196,7 @@ pub fn run() {
         point_track_detail: PointTrackDetail::new(),
         intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
+        frame: Arc::new(Collector::new(false)),
         prev_frustum_length_scale: 0.0,
         prev_frustum_size_multiplier: 0.0,
         prev_selected_image: None,
@@ -295,6 +297,20 @@ pub(crate) struct App {
     pub(crate) point_track_detail: PointTrackDetail,
     pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
+    /// Where this frame's own phases land: the uploads, the two draws and the
+    /// present, which are nobody's operation and everybody's wait.
+    ///
+    /// Here rather than on [`AppState`] because that is what the panels borrow,
+    /// and behind an `Arc` because the phase guards are opened around
+    /// `&mut self` calls in the frame loop, which a guard borrowing a field of
+    /// `self` could not be. Replaced at the top of every frame, which is both
+    /// how it reads the detail level the Action Log currently holds and how the
+    /// events of a frame that ended early are dropped.
+    ///
+    /// What becomes of the events is [`action_log::ActionLog::settle`]'s: they
+    /// belong to whichever entries this frame stamped, because one upload and
+    /// one draw showed all of them.
+    pub(crate) frame: Arc<Collector>,
     pub(crate) prev_frustum_length_scale: f32,
     pub(crate) prev_frustum_size_multiplier: f32,
     pub(crate) prev_selected_image: Option<ImageRef>,

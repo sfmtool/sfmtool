@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::super::gpu_types::{PatchInstance, PatchUniforms};
 use super::super::recon::PatchResources;
 use super::super::SceneRenderer;
+use super::Uploaded;
 use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
@@ -22,13 +23,17 @@ impl SceneRenderer {
     ///
     /// v1 renders textured patches only: a reconstruction that carries patch
     /// frames but no bitmaps uploads nothing (flat-shaded fallback is deferred).
+    ///
+    /// [`Uploaded::Reused`] when the atlas survived and only the instances were
+    /// rewritten, which is the expensive half kept and what the frame's phase
+    /// note says as `reused`; otherwise the tiles it packed.
     pub fn upload_patches(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         id: ReconId,
         recon: &SfmrReconstruction,
-    ) {
+    ) -> Uploaded {
         // The bind group below needs the patch pipeline's layout and the
         // node's bundle, neither of which may exist yet.
         self.ensure_recon(device, id);
@@ -41,12 +46,14 @@ impl SceneRenderer {
         // rewritten -- which is what makes stepping through a node's history
         // cost the edit rather than the node.
         if self.repack_patches(device, id, &recon.point_set) {
-            return;
+            return Uploaded::Reused;
         }
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
         let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0);
+        let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
+        Uploaded::Built(packed)
     }
 
     /// Rewrite the base's patch instances over the atlas the node already holds,

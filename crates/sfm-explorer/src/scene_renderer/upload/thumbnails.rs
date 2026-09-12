@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::super::gpu_types::{ImageQuadUniforms, MAX_ATLAS_COLS, THUMBNAIL_SIZE};
 use super::super::SceneRenderer;
+use super::Uploaded;
 use crate::scene::ReconId;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
@@ -18,16 +19,20 @@ impl SceneRenderer {
     /// Packs all 128×128 RGB thumbnails into a single large 2D texture arranged
     /// as a grid, avoiding the 256-layer limit of texture arrays. Also creates
     /// the node's image quad uniform buffer.
+    ///
+    /// [`Uploaded::Reused`] when the atlas the node already holds is still the
+    /// right one, which is the answer on every edit that leaves the image table
+    /// alone, and what the frame's phase note says as `reused`.
     pub fn upload_thumbnails(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         id: ReconId,
         recon: &SfmrReconstruction,
-    ) {
+    ) -> Uploaded {
         let image_count = recon.image_table.images.len() as u32;
         if image_count == 0 {
-            return;
+            return Uploaded::Built(0);
         }
         self.ensure_recon(device, id);
         // The atlas is a function of the thumbnail column and the image count,
@@ -45,7 +50,7 @@ impl SceneRenderer {
             && bundle.thumbnail_view.is_some()
             && thumbnails.shape()[0] as u32 == image_count;
         if reusable {
-            return;
+            return Uploaded::Reused;
         }
 
         // Compute atlas grid dimensions, respecting GPU texture size limits.
@@ -169,5 +174,6 @@ impl SceneRenderer {
             cols,
             actual_rows_per_page,
         );
+        Uploaded::Built(image_count_clamped as usize)
     }
 }

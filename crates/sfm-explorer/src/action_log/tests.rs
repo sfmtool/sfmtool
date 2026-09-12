@@ -463,7 +463,7 @@ fn the_clipboard_text_carries_the_date_the_actor_the_cost_and_the_failures() {
     );
 
     // A frame whose upload phase ran after both writes settles both.
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
     assert_eq!(
         log.to_clipboard_text(),
         "2026-09-01 14:04:03  MCP       <1 ms  text\n\
@@ -584,7 +584,7 @@ fn a_frame_times_the_entries_its_upload_phase_had_already_seen() {
     let uploads_began = std::time::Instant::now();
     log.record_at(at(1.0), Kind::View, None, false, "after the uploads");
 
-    log.settle(uploads_began);
+    log.settle(uploads_began, Vec::new());
 
     assert!(
         took_of(&log, 0).is_some(),
@@ -597,7 +597,7 @@ fn a_frame_times_the_entries_its_upload_phase_had_already_seen() {
     );
 
     // And the next frame, whose upload phase is later still, picks it up.
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
     assert!(took_of(&log, 1).is_some(), "the next frame settles it");
 }
 
@@ -605,12 +605,12 @@ fn a_frame_times_the_entries_its_upload_phase_had_already_seen() {
 fn a_settled_entry_keeps_the_cost_it_was_given() {
     let mut log = log();
     log.record_at(at(0.0), Kind::File, None, false, "once");
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
     let first = took_of(&log, 0).expect("settled");
 
     // Later frames have nothing to settle and must not re-time what is done:
     // the number is the wait that happened, not the age of the row.
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
     assert_eq!(took_of(&log, 0), Some(first));
 }
 
@@ -621,7 +621,7 @@ fn a_run_that_folds_carries_the_timing_of_the_row_that_survived() {
     log.record_at(at(0.1), Kind::Display, Some("Scene scale"), false, "0.2");
     assert_eq!(log.len(), 1, "the drag is one row");
 
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
 
     assert_eq!(texts(&log), ["0.2"]);
     assert!(
@@ -660,7 +660,7 @@ fn an_untimed_entry_costs_nothing_to_hold_and_is_bounded() {
 fn a_settled_row_paints_what_it_cost_and_an_unsettled_one_paints_nothing() {
     let mut log = log();
     log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
-    log.settle(std::time::Instant::now());
+    log.settle(std::time::Instant::now(), Vec::new());
     log.record_at(at(1.0), Kind::Edit, None, false, "Deleted point 8");
 
     let texts = painted(&mut log);
@@ -775,7 +775,7 @@ fn record_done_times_from_when_the_work_began() {
         .checked_sub(Duration::from_millis(120))
         .expect("a clock with 120 ms behind it");
     log.record_done(Kind::Edit, started, "Bundle adjusted run_a", Vec::new());
-    log.settle(Instant::now());
+    log.settle(Instant::now(), Vec::new());
 
     let took = log.entries().next_back().expect("an entry").took;
     assert!(
@@ -878,6 +878,165 @@ fn a_fold_takes_the_new_values_detail_and_drops_the_replaced_ones() {
 
     assert_eq!(texts(&log), ["Point size 4"]);
     assert_eq!(detail_phases(&log), [("second", 0, 1)]);
+}
+
+// -- The frame's detail, shared by the entries it settled ----------------
+
+/// What a frame reports: one upload phase with a child, and a draw.
+///
+/// Through a real [`Collector`], since the point is that what the frame's
+/// collector hands `settle` is what the entries end up carrying.
+fn frame_events() -> Vec<Detail> {
+    let frame = Collector::new(false);
+    {
+        let uploads = frame.phase("uploads");
+        drop(uploads.phase("points"));
+    }
+    drop(frame.phase("scene render"));
+    frame.take()
+}
+
+/// The message rows of one entry's detail, in order.
+fn message_texts(detail: &[Detail]) -> Vec<&str> {
+    detail
+        .iter()
+        .filter_map(|row| match row {
+            Detail::Message { text, .. } => Some(text.as_str()),
+            Detail::Phase { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn settle_gives_the_frames_events_to_the_entry_it_stamps() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
+
+    log.settle(Instant::now(), frame_events());
+
+    let entry = log.entries().next_back().expect("an entry");
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [("uploads", 0, 1), ("points", 1, 1), ("scene render", 0, 1)],
+        "the upload and the draw that showed this entry are not on it",
+    );
+    assert_eq!(
+        message_texts(&entry.detail),
+        Vec::<&str>::new(),
+        "an entry that had the frame to itself claimed it was shared",
+    );
+}
+
+#[test]
+fn two_entries_settled_by_one_frame_carry_it_and_say_they_shared_it() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
+    log.record_at(at(0.1), Kind::Edit, None, false, "Deleted point 8");
+
+    log.settle(Instant::now(), frame_events());
+
+    let entries: Vec<&Entry> = log.entries().collect();
+    assert_eq!(
+        phase_rows(&entries[0].detail),
+        phase_rows(&entries[1].detail)
+    );
+    for entry in entries {
+        assert_eq!(
+            message_texts(&entry.detail),
+            ["frame shared with 1 other entry"],
+            "one upload and one draw showed both, and {} does not say so",
+            entry.text,
+        );
+    }
+}
+
+#[test]
+fn a_frame_that_stamps_nothing_discards_its_events() {
+    let mut log = log();
+    // Written after this frame's upload phase, which is every click: it waits
+    // for the next frame, and this one has nobody to charge.
+    let uploads_began = Instant::now();
+    log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
+
+    log.settle(uploads_began, frame_events());
+    log.settle(Instant::now(), Vec::new());
+
+    let entry = log.entries().next_back().expect("an entry");
+    assert!(entry.took.is_some(), "the next frame settles it");
+    assert!(
+        entry.detail.is_empty(),
+        "an entry inherited a frame that did not stamp it: {:?}",
+        entry.detail,
+    );
+}
+
+/// An entry reads as a transcript, so what it did itself comes before what the
+/// frame that showed it spent.
+#[test]
+fn an_entry_carries_its_own_detail_and_then_the_frames() {
+    let mut log = log();
+    let collector = Collector::new(false);
+    drop(collector.phase("materialise"));
+    drop(collector.phase("push version"));
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        collector.take(),
+    );
+
+    log.settle(Instant::now(), frame_events());
+
+    assert_eq!(
+        detail_phases(&log),
+        [
+            ("materialise", 0, 1),
+            ("push version", 0, 1),
+            ("uploads", 0, 1),
+            ("points", 1, 1),
+            ("scene render", 0, 1),
+        ],
+    );
+}
+
+/// The frame's phases are the entry's, so they come out of what had no name.
+#[test]
+fn a_frame_leaves_less_of_the_entry_elsewhere() {
+    let uploads = vec![
+        phase("uploads", 0, 120, None),
+        // Already inside its parent's 120 ms, and so not counted twice.
+        phase("points", 1, 100, None),
+    ];
+    let alone = elsewhere_after(Vec::new());
+    let shared = elsewhere_after(uploads);
+    assert!(
+        shared < alone,
+        "the frame's uploads left `elsewhere` where it was: {shared:?} against {alone:?}",
+    );
+    // The parent's 120 ms and not its child's 100 ms as well, give or take
+    // the clock between two runs of the same entry.
+    assert!(
+        (alone - shared).abs_diff(Duration::from_millis(120)) < Duration::from_millis(5),
+        "a nested phase was counted a second time: {alone:?} against {shared:?}",
+    );
+}
+
+/// `elsewhere` for one entry that took 400 ms, named 20 ms of it itself, and
+/// was settled by a frame reporting `frame`.
+fn elsewhere_after(frame: Vec<Detail>) -> Duration {
+    let mut log = log();
+    let started = Instant::now()
+        .checked_sub(Duration::from_millis(400))
+        .expect("a clock with 400 ms behind it");
+    log.record_done(
+        Kind::Edit,
+        started,
+        "Bundle adjusted run_a",
+        vec![phase("push version", 0, 20, None)],
+    );
+    log.settle(Instant::now(), frame);
+    let entry = log.entries().next_back().expect("an entry");
+    ActionLog::elsewhere(entry).expect("a settled entry with phases")
 }
 
 // -- `elsewhere`, the line that makes the breakdown add up ----------------

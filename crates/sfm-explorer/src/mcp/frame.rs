@@ -21,10 +21,13 @@ use std::sync::Arc;
 use image::{ImageEncoder, ImageFormat};
 use winit::window::Window;
 
+use sfmtool_core::progress_note;
+
 use super::{
     apply_as_agent, panel_crop, Deferred, Outcome, Reply, Request, ScreenshotSource, ToolError,
     ToolOutput,
 };
+use crate::progress::Collector;
 use crate::App;
 
 /// Why a `screenshot` of the window is refused where the platform will not let
@@ -77,7 +80,12 @@ impl App {
     /// This is the only point in the process where MCP touches application
     /// state. Everything a reply reports was read here, at one instant, with
     /// exclusive access — which is why a `get_scene` can never straddle a load.
-    pub(crate) fn drain_mcp(&mut self, window: &Arc<Window>) {
+    ///
+    /// `frame` arrives as an argument rather than being read off `self`: the
+    /// phase guard has to stand around the state this mutates, which a guard
+    /// borrowing a field of `self` could not do. The caller has already cloned
+    /// it out for the same reason.
+    pub(crate) fn drain_mcp(&mut self, window: &Arc<Window>, frame: &Collector) {
         if self.mcp_rx.is_none() {
             return;
         }
@@ -93,6 +101,13 @@ impl App {
         }
         if requests.is_empty() {
             return;
+        }
+        // Opened only now, past the early return above: a frame with nothing
+        // waiting for it drained nothing, and that is the great majority of
+        // frames.
+        let mut phase = frame.phase("mcp drain");
+        if requests.len() > 1 {
+            progress_note!(phase, "{} commands", requests.len());
         }
         // Split so the application phase can be a plain function over
         // `(&mut AppState, &mut Viewer3D)` — which is what puts the whole of

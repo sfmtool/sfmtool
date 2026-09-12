@@ -20,3 +20,21 @@ mod track_rays;
 
 #[cfg(test)]
 mod tests;
+
+/// What an upload did, for the note beside its phase's time in an Action Log
+/// entry.
+///
+/// An upload that kept what the GPU already held and one that rewrote it in
+/// under a millisecond both read `<1 ms`, and nothing in the timing tells them
+/// apart. Each upload below already decides whether what it holds is still the
+/// right thing; this is that decision handed back to the caller, which is the
+/// only place the frame's phases are opened and so the only place that can say
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Uploaded {
+    /// What the GPU held was still right, and nothing was written.
+    Reused,
+    /// Written, over this many items, in whichever unit the upload counts:
+    /// points, atlas tiles, images.
+    Built(usize),
+}

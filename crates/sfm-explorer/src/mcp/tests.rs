@@ -4418,7 +4418,9 @@ fn get_action_log_reports_what_a_drawn_action_cost() {
     state
         .action_log
         .record(Kind::File, "Opened alpha from /runs/alpha.sfmr");
-    state.action_log.settle(std::time::Instant::now());
+    state
+        .action_log
+        .settle(std::time::Instant::now(), Vec::new());
 
     let reply = ok(&mut state, &mut viewer, action_log_read(0, &Actor::ALL));
 

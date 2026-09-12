@@ -31,6 +31,7 @@ use super::super::recon::{NodeDisplay, ReconResources};
 use super::super::uniforms::recon_uniforms;
 use super::super::SceneRenderer;
 use super::track_rays::track_ray_edges;
+use super::Uploaded;
 use crate::scene::{ImageRef, NodeTint, PointRef, ReconId, TINT_PALETTE};
 use crate::state::CachedSiftFeatures;
 
@@ -2025,5 +2026,74 @@ fn a_node_has_arrived_once_its_first_base_is_uploaded() {
     assert!(
         r.has_uploaded_base(RECON),
         "but not a new node, so the view keeps the scale it was given"
+    );
+}
+
+// -- what an upload says it did ------------------------------------------
+//
+// The frame's phase note is the only thing that tells an upload which kept
+// what the GPU already held from one that rewrote it in under a millisecond,
+// since both read `<1 ms`. These are the answers it is built from.
+
+#[test]
+fn upload_points_reports_the_instances_it_wrote() {
+    let (device, _queue) = device();
+    let recon = demo(12);
+    let mut r = SceneRenderer::new();
+
+    assert_eq!(r.upload_points(&device, RECON, &recon), Uploaded::Built(12),);
+}
+
+#[test]
+fn upload_thumbnails_reports_the_atlas_it_kept() {
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon),
+        Uploaded::Built(DEMO_IMAGES as usize),
+    );
+    assert_eq!(
+        r.upload_thumbnails(&device, &queue, RECON, &recon),
+        Uploaded::Reused,
+        "the second call paid a texture allocation and said nothing about it",
+    );
+}
+
+#[test]
+fn upload_patches_reports_the_tiles_it_packed_and_the_atlas_it_kept() {
+    let (device, queue) = device();
+    let present = [true, false, true, true, false, true, true];
+    let before = with_patches(demo(present.len()), 16, &present, None, None);
+    let mut r = SceneRenderer::new();
+
+    assert_eq!(
+        r.upload_patches(&device, &queue, RECON, &before),
+        Uploaded::Built(5),
+    );
+    // A bulk edit moves the surfels over the same tiles: the expensive half of
+    // the upload is kept, which is what `reused` beside the time means.
+    let after = with_points_moved(before);
+    assert_eq!(
+        r.upload_patches(&device, &queue, RECON, &after),
+        Uploaded::Reused,
+    );
+}
+
+#[test]
+fn update_point_mask_reports_the_entries_it_wrote() {
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+    r.upload_points(&device, RECON, &recon);
+
+    let deleted: std::collections::HashSet<u32> = [1, 4].into_iter().collect();
+    let none = std::collections::HashSet::new();
+    assert_eq!(r.update_point_mask(&queue, RECON, &deleted, &none), 2);
+    assert_eq!(
+        r.update_point_mask(&queue, RECON, &deleted, &none),
+        0,
+        "the mask already said this, and a frame that wrote nothing opens no phase",
     );
 }
