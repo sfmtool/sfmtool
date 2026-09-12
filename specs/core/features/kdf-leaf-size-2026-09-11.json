@@ -74,5 +74,50 @@
       "256_mib": {"leaf_16": 13.9129, "leaf_64": 19.4424}
     },
     "lazy_matches_in_memory": true
+  },
+  "dinoledge_256_mib": {
+    "corpus_descriptors": 9702948,
+    "held_out_images": 2,
+    "constellation_patches": 4,
+    "note": "Budgets are the previous 1000-query calibration grid points. Recall differs slightly, so this is a practical bracket rather than exact iso-recall.",
+    "results": [
+      {
+        "leaf_size": 16,
+        "budget": 128,
+        "recall_at_1": 0.657,
+        "file_bytes": 1256198340,
+        "later_image_seconds": 3.7705217,
+        "reads_first_image": 677358,
+        "evictions_later_image": 674374,
+        "constellation_query_milliseconds": 89.0084,
+        "reads_per_constellation": 14636,
+        "decoded_bytes_per_constellation": 60675378
+      },
+      {
+        "leaf_size": 32,
+        "budget": 256,
+        "recall_at_1": 0.679,
+        "file_bytes": 1209935720,
+        "later_image_seconds": 6.0888185,
+        "reads_first_image": 1208432,
+        "evictions_later_image": 1207813,
+        "constellation_query_milliseconds": 134.4708,
+        "reads_per_constellation": 25421,
+        "decoded_bytes_per_constellation": 102574236
+      },
+      {
+        "leaf_size": 64,
+        "budget": 512,
+        "recall_at_1": 0.685,
+        "file_bytes": 1187984706,
+        "later_image_seconds": 11.4495324,
+        "reads_first_image": 2252895,
+        "evictions_later_image": 2242808,
+        "constellation_query_milliseconds": 236.0638,
+        "reads_per_constellation": 45607,
+        "decoded_bytes_per_constellation": 183842586
+      }
+    ],
+    "lazy_matches_in_memory": true
   }
 }

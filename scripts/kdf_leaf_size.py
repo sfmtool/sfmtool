@@ -51,24 +51,15 @@ def load_corpus(features: Path) -> np.ndarray:
     return np.vstack(blocks)
 
 
-def exact_nearest(
-    index: np.ndarray, queries: np.ndarray, db_block: int = 262_144
-) -> np.ndarray:
-    """Exact top-1 index per query, blocked over both queries and database."""
-    best_dist = np.full(len(queries), np.inf, dtype=np.float32)
-    best_idx = np.zeros(len(queries), dtype=np.uint32)
-    for j in range(0, len(index), db_block):
-        db = index[j : j + db_block].astype(np.float32)
-        db_sq = np.einsum("ij,ij->i", db, db)
-        for i in range(0, len(queries), 512):
-            q = queries[i : i + 512].astype(np.float32)
-            d = db_sq[None, :] - 2.0 * (q @ db.T)
-            local = np.argmin(d, axis=1)
-            local_dist = d[np.arange(len(q)), local]
-            better = local_dist < best_dist[i : i + len(q)]
-            best_dist[i : i + len(q)][better] = local_dist[better]
-            best_idx[i : i + len(q)][better] = (local[better] + j).astype(np.uint32)
-    return best_idx
+def exact_nearest(index: np.ndarray, queries: np.ndarray) -> np.ndarray:
+    """Exact top-1 index per query, without a query-by-database temporary."""
+    exhaustive = KdForest(index, num_trees=1, leaf_size=len(index), seed=0)
+    indices, _ = exhaustive.query(
+        queries,
+        k=1,
+        max_leaf_checks=len(index),
+    )
+    return indices[:, 0]
 
 
 def budget_for_recall(

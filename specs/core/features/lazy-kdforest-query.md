@@ -709,11 +709,29 @@ neighbour index and distance equals its in-memory forest reference:
 At 64 MiB, leaf 64's smaller file and tree working set reduce reads enough to
 outweigh its larger check budget. At 16 MiB, that budget produces more repeated
 misses; with the whole file resident, the additional distance work is exposed.
-The general forest default remains 16. Leaf 64 is a good explicit choice for a
-shared persistent index when its cache is near the active working-set size; the
-target workload and cache budget decide whether that trade is favorable.
+
+A 256 MiB cache is resident for this 72–80 MB corpus, but pressured for
+DinoLedge's 1.19–1.26 GB files. Two held-out DinoLedge images and four patch
+constellations were therefore measured at the established 1,000-query calibration
+points: leaf 16 at budget 128 (recall 0.657), leaf 32 at 256 (0.679) and leaf 64
+at 512 (0.685). The larger leaves have slightly higher recall, so the table is a
+practical bracket rather than an exact iso-recall comparison:
+
+| Leaf | File | Held-out image | Reads/first image | Patch query | Reads/patch |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 1,256 MB | **3.77 s** | 677,358 | **89 ms** | 14,636 |
+| 32 | 1,210 MB | 6.09 s | 1,208,432 | 134 ms | 25,421 |
+| 64 | **1,188 MB** | 11.45 s | 2,252,895 | 236 ms | 45,607 |
+
+All lazy results equal their in-memory forest's indices and distances. With
+256 MiB holding about one fifth of the file, reads scale with the check budget;
+the 5% file reduction from leaf 16 to 64 does not offset four times as many checks.
+The general forest default remains 16, and it is also the measured choice for a
+large shared index with a 256 MiB cache. Leaf 32–64 remains useful when the cache
+is near the complete stored working set or file size has more weight than query
+latency.
 [The recorded measurements](kdf-leaf-size-2026-09-11.json) include all three
-seeds and both holdout comparisons.
+small-corpus seeds and both corpora's holdout comparisons.
 
 **Query workers pay off only once the cache is sharded.** Every node and every
 descriptor a query touches takes a cache lock, so with one lock for the whole
@@ -897,10 +915,11 @@ On this evidence the shared layout is the better default: 3.3x smaller, faster o
 equal in every regime, insensitive to a chunk-size choice that swings tree-local
 by 43x, and at full speed on a budget a third the size.
 
-Leaf size **16** remains the general forest default. For a shared persistent index,
-the measured range is **32 to 64**. Leaf 64 is a useful explicit choice when the
-decoded cache is near the active working-set size; smaller or fully resident caches
-can favor leaf 16 or 32 once the check budget is calibrated to equal recall.
+Leaf size **16** remains the general forest default and the measured choice when a
+256 MiB cache is substantially smaller than the index. For a shared persistent
+index whose cache is close to its stored working set, **32 to 64** is the measured
+range. Leaf 64 is useful near that cache threshold; resident execution can favor
+leaf 16 or 32 once the check budget is calibrated to equal recall.
 
 For descriptor blocks the knee is around **4 to 8 KiB**, which is where most of
 the cold-query gain has been taken and the file has grown by well under 1%. Going
