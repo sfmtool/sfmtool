@@ -8,7 +8,7 @@ in `sfmtool-core` adds one parameter to the long-running functions specified by
 [core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md),
 [core/reconstruction/add-observation.md](../core/reconstruction/add-observation.md)
 and the other kernels under [core/patch/](../core/patch/) that a viewer
-operation reaches, together with the options structs that carry it.
+operation reaches.
 
 ## What a long computation cannot say
 
@@ -200,14 +200,18 @@ with this codebase:
 
 The cost is real and worth stating plainly: **it is viral.** Seven `prof`
 modules and some twenty-five gate sites convert, and every function in each call
-chain grows a parameter. Top-level entry points can carry it in the options
-struct they already take (`BundleAdjustOptions`, `AddObservationOptions`);
-internal helpers cannot, and take it directly.
+chain grows a parameter. It goes in as a parameter of its own rather than as a
+field of the options struct a top-level entry point already takes, for two
+reasons. An options struct says what a call is allowed to move and how hard it
+should try, which a reporting channel is not; and a `BundleAdjustOptions<'a>`
+would carry that lifetime into `Default`, into every construction site, into the
+viewer signatures that name it, and across the binding boundary. One rule for
+every function in the chain is also easier to follow than two.
 
 ### Through the Python bindings
 
-`sfmtool-py` re-exports several of the functions that grow this parameter, and
-`BundleAdjustOptions` crosses that boundary. **The bindings pass
+`sfmtool-py` re-exports several of the functions that grow this parameter.
+**The bindings pass
 `Progress::none()`** and gain nothing: a Python-visible progress callback would
 have to be `Sync` and callable from inside a rayon region, which means
 reacquiring the GIL per report from arbitrary worker threads, and the Python

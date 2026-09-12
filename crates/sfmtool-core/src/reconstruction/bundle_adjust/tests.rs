@@ -9,12 +9,14 @@
 //! projection -- so an adjustment run from a perturbed copy of it has somewhere
 //! to converge to. It needs no pixels, because the adjustment reads none.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
 use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::progress::{Event, Level};
 use crate::reconstruction::data::{
     ObservationSource, Point3D, PointConstraintColumns, SfmrImage, SfmrReconstruction,
     TrackObservation,
@@ -246,8 +248,8 @@ fn the_poses_and_the_points_converge_on_the_truth() {
     let source = source;
     let before_worst = worst_point_error(&source, &truth);
 
-    let (out, report) =
-        bundle_adjust(&source, &BundleAdjustOptions::default()).expect("the fixture is well posed");
+    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("the fixture is well posed");
 
     assert_eq!(report.images, IMAGES);
     assert_eq!(report.points, POINTS);
@@ -287,7 +289,7 @@ fn the_input_is_untouched() {
         .collect();
     let positions: Vec<Point3<f64>> = source.point_set.points.iter().map(|p| p.position).collect();
 
-    bundle_adjust(&source, &BundleAdjustOptions::default()).expect("well posed");
+    bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).expect("well posed");
 
     for (image, translation) in source.image_table.images.iter().zip(&poses) {
         assert_eq!(image.translation_xyz, *translation);
@@ -309,7 +311,7 @@ fn a_released_focal_is_found_and_reported() {
         opt_f: true,
         ..BundleAdjustOptions::default()
     };
-    let (out, report) = bundle_adjust(&source, &options).expect("well posed");
+    let (out, report) = bundle_adjust(&source, &options, &Progress::none()).expect("well posed");
 
     assert!(report.focal_released);
     assert_eq!(report.focal_before, FOCAL * 1.06);
@@ -338,8 +340,8 @@ fn a_point_at_infinity_comes_back_a_direction() {
     source.point_set.points[0].normal = Vector3::zeros();
     source.rebuild_derived_fields();
 
-    let (out, report) =
-        bundle_adjust(&source, &BundleAdjustOptions::default()).expect("well posed");
+    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("well posed");
 
     assert_eq!(report.points_deleted, 0);
     let point = &out.point_set.points[0];
@@ -360,7 +362,8 @@ fn a_held_point_comes_back_exactly() {
     source.point_set.point_constraints = Some(columns);
     let held = source.point_set.points[3].position;
 
-    let (out, _) = bundle_adjust(&source, &BundleAdjustOptions::default()).expect("well posed");
+    let (out, _) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("well posed");
 
     assert_eq!(out.point_set.points[3].position, held);
     // And the constraint travels with it.
@@ -382,8 +385,8 @@ fn a_point_the_trim_wears_out_is_deleted_and_the_scan_says_so() {
     // and it comes back non-finite.
     let source = with_one_sighting(perturbed(), 5);
 
-    let (out, report) =
-        bundle_adjust(&source, &BundleAdjustOptions::default()).expect("well posed");
+    let (out, report) = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("well posed");
 
     assert_eq!(report.points_deleted, 1);
     assert_eq!(
@@ -412,7 +415,8 @@ fn a_patch_frame_follows_its_point_in_depth() {
         .image_table
         .placement_scale(&moved.point_set.points[7].position);
 
-    let (out, _) = bundle_adjust(&moved, &BundleAdjustOptions::default()).expect("well posed");
+    let (out, _) = bundle_adjust(&moved, &BundleAdjustOptions::default(), &Progress::none())
+        .expect("well posed");
 
     let settled = out
         .image_table
@@ -452,7 +456,7 @@ fn a_value_with_no_keypoints_is_refused() {
     source.metadata.feature_source = sfmr_format::FEATURE_SOURCE_SIFT_FILES.to_string();
 
     assert_eq!(
-        bundle_adjust(&source, &BundleAdjustOptions::default()).err(),
+        bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).err(),
         Some(BundleAdjustError::NoKeypoints)
     );
 }
@@ -465,7 +469,7 @@ fn two_cameras_over_the_posed_images_are_refused() {
     source.image_table.images[2].camera_index = 1;
 
     assert_eq!(
-        bundle_adjust(&source, &BundleAdjustOptions::default()).err(),
+        bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).err(),
         Some(BundleAdjustError::MixedCameras { cameras: 2 })
     );
 }
@@ -489,11 +493,11 @@ fn a_focal_release_on_a_model_that_cannot_take_one_is_refused() {
     };
 
     assert_eq!(
-        bundle_adjust(&source, &options).err(),
+        bundle_adjust(&source, &options, &Progress::none()).err(),
         Some(BundleAdjustError::FocalNotReleasable("PINHOLE"))
     );
     // Without the release it runs: the model is only a problem for the focal.
-    assert!(bundle_adjust(&source, &BundleAdjustOptions::default()).is_ok());
+    assert!(bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).is_ok());
 }
 
 #[test]
@@ -503,7 +507,7 @@ fn an_unposed_table_and_an_empty_schedule_are_refused() {
         image.translation_xyz = Vector3::new(f64::NAN, 0.0, 0.0);
     }
     assert_eq!(
-        bundle_adjust(&source, &BundleAdjustOptions::default()).err(),
+        bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).err(),
         Some(BundleAdjustError::NoPosedImages)
     );
 
@@ -512,7 +516,7 @@ fn an_unposed_table_and_an_empty_schedule_are_refused() {
         ..BundleAdjustOptions::default()
     };
     assert_eq!(
-        bundle_adjust(&perturbed(), &options).err(),
+        bundle_adjust(&perturbed(), &options, &Progress::none()).err(),
         Some(BundleAdjustError::EmptySchedule)
     );
 }
@@ -533,7 +537,7 @@ fn a_solve_that_exits_degenerate_is_refused_rather_than_emptying_the_value() {
         keypoints_xy[[row, 1]] = ((row * 7) % 440) as f32;
     }
 
-    let error = bundle_adjust(&source, &BundleAdjustOptions::default())
+    let error = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
         .err()
         .expect("nothing survives the trim");
     assert!(
@@ -552,11 +556,407 @@ fn a_constraint_the_adjustment_cannot_honour_is_refused() {
     columns.constraint_distances[2] = 4.0;
     source.point_set.point_constraints = Some(columns);
 
-    let error = bundle_adjust(&source, &BundleAdjustOptions::default())
+    let error = bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none())
         .err()
         .expect("that constraint names no reference");
     assert!(
         matches!(error, BundleAdjustError::Constraints(_)),
         "{error:?}"
     );
+}
+
+// -- What the call reports ---------------------------------------------------
+
+/// An owned mirror of [`Event`], because an `Event<'a>` borrows its text only
+/// for the duration of the sink call.
+#[derive(Debug, Clone, PartialEq)]
+enum Owned {
+    Enter(&'static str, u8),
+    Leave(&'static str, u8, Option<String>),
+    Message(Level, u8, String),
+    Count(u64, Option<u64>, &'static str),
+    Fraction(f32),
+}
+
+/// Somewhere for the events to land, with the cancel flag beside them so that
+/// the sink can set it as it reads. That is how an operation is really
+/// cancelled (something watching what it says decides it has seen enough), and
+/// it stops a test mid-run with no timer in it.
+#[derive(Default)]
+struct Collector {
+    events: Mutex<Vec<Owned>>,
+    cancel: AtomicBool,
+    /// Set the flag the first time a round is counted.
+    stop_after_a_round: bool,
+}
+
+impl Collector {
+    fn recording() -> Self {
+        Self::default()
+    }
+
+    fn cancelling() -> Self {
+        Self {
+            stop_after_a_round: true,
+            ..Self::default()
+        }
+    }
+
+    fn push(&self, event: Event<'_>) {
+        let owned = match event {
+            Event::Enter { phase, depth } => Owned::Enter(phase, depth),
+            Event::Leave {
+                phase, depth, note, ..
+            } => Owned::Leave(phase, depth, note.map(str::to_string)),
+            Event::Message { level, depth, text } => Owned::Message(level, depth, text.to_string()),
+            Event::Count { done, total, unit } => {
+                if self.stop_after_a_round && unit == "round" {
+                    self.cancel.store(true, Ordering::Relaxed);
+                }
+                Owned::Count(done, total, unit)
+            }
+            Event::Fraction { of_whole } => Owned::Fraction(of_whole),
+            // The adjustment sets no status, and a status is live state a
+            // finished entry would not keep anyway.
+            Event::Status { .. } => return,
+        };
+        self.events.lock().unwrap().push(owned);
+    }
+
+    fn events(&self) -> Vec<Owned> {
+        self.events.lock().unwrap().clone()
+    }
+
+    /// `(name, depth)` of every phase opened.
+    fn entered(&self) -> Vec<(&'static str, u8)> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Enter(name, depth) => Some((name, depth)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `(name, depth, note)` of every phase closed.
+    fn left(&self) -> Vec<(&'static str, u8, Option<String>)> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Leave(name, depth, note) => Some((name, depth, note)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Every phase boundary at `depth`, `Enter` and `Leave` told apart by the
+    /// leading character.
+    fn boundaries_at(&self, depth: u8) -> Vec<String> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Enter(name, d) if d == depth => Some(format!(">{name}")),
+                Owned::Leave(name, d, _) if d == depth => Some(format!("<{name}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn messages(&self) -> Vec<(Level, u8, String)> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Message(level, depth, text) => Some((level, depth, text)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn fractions(&self) -> Vec<f32> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Fraction(f) => Some(f),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn counts(&self, unit: &str) -> Vec<(u64, Option<u64>)> {
+        self.events()
+            .into_iter()
+            .filter_map(|event| match event {
+                Owned::Count(done, total, u) if u == unit => Some((done, total)),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Every number the adjustment writes into the value, as bit patterns: the
+/// poses, the camera, the points and the patch frames. Bits rather than a
+/// tolerance, because the question is whether reporting moved anything at all.
+fn value_bits(recon: &SfmrReconstruction) -> Vec<u64> {
+    let mut bits = Vec::new();
+    for image in &recon.image_table.images {
+        bits.extend(image.quaternion_wxyz.coords.iter().map(|c| c.to_bits()));
+        bits.extend(image.translation_xyz.iter().map(|c| c.to_bits()));
+    }
+    for camera in &recon.image_table.cameras {
+        let (fx, fy) = camera.focal_lengths();
+        bits.push(fx.to_bits());
+        bits.push(fy.to_bits());
+    }
+    for point in &recon.point_set.points {
+        bits.extend(point.position.coords.iter().map(|c| c.to_bits()));
+        bits.push(point.w.to_bits());
+        bits.push(u64::from(point.error.to_bits()));
+    }
+    for column in [
+        &recon.point_set.patch_u_halfvec_xyz,
+        &recon.point_set.patch_v_halfvec_xyz,
+    ] {
+        if let Some(array) = column.as_ref() {
+            bits.extend(array.iter().map(|v| u64::from(v.to_bits())));
+        }
+    }
+    bits
+}
+
+/// The same for the report.
+fn report_bits(report: &BundleAdjustReport) -> Vec<u64> {
+    vec![
+        report.images as u64,
+        report.points as u64,
+        report.observations as u64,
+        report.points_deleted as u64,
+        report.median_residual_before.to_bits(),
+        report.median_residual_after.to_bits(),
+        report.focal_before.to_bits(),
+        report.focal_after.to_bits(),
+        u64::from(report.focal_released),
+    ]
+}
+
+fn same_bits(a: &[u64], b: &[u64], what: &str) {
+    assert_eq!(a.len(), b.len(), "{what}: different lengths");
+    for (i, (x, y)) in a.iter().zip(b).enumerate() {
+        assert_eq!(x, y, "{what} {i}: {x:016x} against {y:016x}");
+    }
+}
+
+/// The defaults with the focal released, so the shared camera is part of the
+/// answer the parity test compares.
+fn released() -> BundleAdjustOptions {
+    BundleAdjustOptions {
+        opt_f: true,
+        ..BundleAdjustOptions::default()
+    }
+}
+
+#[test]
+fn reporting_moves_not_one_bit_of_the_answer() {
+    let source = perturbed();
+    let (quiet, quiet_report) =
+        bundle_adjust(&source, &released(), &Progress::none()).expect("well posed");
+
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+    // Detail on as well, so every phase this call can open is open while the
+    // arithmetic runs.
+    let progress = Progress::to(&sink).detailed(true);
+    let (loud, loud_report) = bundle_adjust(&source, &released(), &progress).expect("well posed");
+
+    assert!(
+        !collector.events().is_empty(),
+        "the recorded run reported nothing, so it proves nothing"
+    );
+    same_bits(&value_bits(&quiet), &value_bits(&loud), "value");
+    same_bits(
+        &report_bits(&quiet_report),
+        &report_bits(&loud_report),
+        "report",
+    );
+}
+
+#[test]
+fn a_recorded_run_names_its_stages() {
+    let source = perturbed();
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+
+    bundle_adjust(
+        &source,
+        &BundleAdjustOptions::default(),
+        &Progress::to(&sink),
+    )
+    .expect("well posed");
+
+    // The four stages of the call, opened and closed in order at the top.
+    assert_eq!(
+        collector.boundaries_at(0),
+        [
+            ">gather arrays",
+            "<gather arrays",
+            ">residuals before",
+            "<residuals before",
+            ">solve",
+            "<solve",
+            ">write back",
+            "<write back",
+        ]
+    );
+
+    // The kernel's rounds sit under the solve, one per schedule round, each
+    // saying what it trimmed at.
+    let rounds: Vec<_> = collector
+        .left()
+        .into_iter()
+        .filter(|(name, ..)| *name == "round")
+        .collect();
+    assert_eq!(rounds.len(), DEFAULT_SCHEDULE.len());
+    assert!(rounds.iter().all(|(_, depth, _)| *depth == 1), "{rounds:?}");
+    assert_eq!(
+        rounds[0].2.as_deref(),
+        Some("trim 50 px, loss scale 5"),
+        "{rounds:?}"
+    );
+
+    // Detail is off, so the stages inside an LM iteration are not recorded.
+    assert!(
+        collector
+            .entered()
+            .iter()
+            .all(|(name, _)| *name != "linearise"),
+        "detail was off"
+    );
+
+    // And the size of the problem is stated once, beside the stages rather
+    // than inside one of them.
+    assert_eq!(
+        collector.messages(),
+        [(
+            Level::Info,
+            0,
+            format!(
+                "{IMAGES} images, {POINTS} points, {} observations",
+                source.point_set.tracks.len()
+            )
+        )]
+    );
+}
+
+#[test]
+fn detail_adds_the_stages_inside_an_iteration() {
+    let source = perturbed();
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+
+    bundle_adjust(
+        &source,
+        &BundleAdjustOptions::default(),
+        &Progress::to(&sink).detailed(true),
+    )
+    .expect("well posed");
+
+    // Under a round, which is under the solve.
+    for name in ["linearise", "normal equations", "damping ladder"] {
+        assert!(
+            collector.entered().contains(&(name, 2)),
+            "no {name} at depth 2"
+        );
+    }
+    // Every iteration is counted against the budget it was given.
+    let iterations = collector.counts("iteration");
+    assert!(!iterations.is_empty());
+    assert!(iterations
+        .iter()
+        .all(|&(done, total)| total == Some(DEFAULT_MAX_ITERS as u64)
+            && done < DEFAULT_MAX_ITERS as u64));
+}
+
+#[test]
+fn the_fraction_only_ever_moves_forward() {
+    let source = perturbed();
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+
+    bundle_adjust(
+        &source,
+        &BundleAdjustOptions::default(),
+        &Progress::to(&sink),
+    )
+    .expect("well posed");
+
+    let fractions = collector.fractions();
+    assert!(!fractions.is_empty(), "nothing moved the bar");
+    for pair in fractions.windows(2) {
+        assert!(pair[1] >= pair[0], "{} then {}", pair[0], pair[1]);
+    }
+    assert!(
+        fractions.iter().all(|f| (0.0..=1.0).contains(f)),
+        "{fractions:?}"
+    );
+    // The solve owns the middle of the range, so the last thing reported is
+    // its last round ending: inside the range rather than at the end of it.
+    let last = *fractions.last().expect("not empty");
+    assert!((0.9..=1.0).contains(&last), "{last}");
+}
+
+#[test]
+fn a_cancelled_adjustment_refuses_and_writes_nothing() {
+    let source = perturbed();
+    let poses: Vec<Vector3<f64>> = source
+        .image_table
+        .images
+        .iter()
+        .map(|i| i.translation_xyz)
+        .collect();
+    let positions: Vec<Point3<f64>> = source.point_set.points.iter().map(|p| p.position).collect();
+
+    let collector = Collector::cancelling();
+    let sink = |event: Event<'_>| collector.push(event);
+    let progress = Progress::to(&sink).cancelled_by(&collector.cancel);
+
+    let error = bundle_adjust(&source, &BundleAdjustOptions::default(), &progress)
+        .err()
+        .expect("the sink stopped it");
+    assert_eq!(error, BundleAdjustError::Cancelled);
+
+    // It stopped where it was told to: the first round finished, the second
+    // never opened, and nothing was written back.
+    let rounds = collector
+        .entered()
+        .iter()
+        .filter(|(name, _)| *name == "round")
+        .count();
+    assert_eq!(rounds, 1);
+    assert!(
+        collector
+            .entered()
+            .iter()
+            .all(|(name, _)| *name != "write back"),
+        "a cancelled adjustment wrote something back"
+    );
+
+    for (image, translation) in source.image_table.images.iter().zip(&poses) {
+        assert_eq!(image.translation_xyz, *translation);
+    }
+    for (point, position) in source.point_set.points.iter().zip(&positions) {
+        assert_eq!(point.position, *position);
+    }
+}
+
+#[test]
+fn a_silent_run_reaches_no_sink_it_was_not_handed() {
+    let source = perturbed();
+    let collector = Collector::recording();
+    let sink = |event: Event<'_>| collector.push(event);
+    // Built, and deliberately not passed: `Progress::none()` carries no sink,
+    // and nothing in the call reaches one by any other route.
+    let _elsewhere = Progress::to(&sink);
+
+    bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).expect("well posed");
+
+    assert!(collector.events().is_empty(), "{:?}", collector.events());
 }

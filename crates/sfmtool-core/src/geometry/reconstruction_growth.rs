@@ -49,6 +49,7 @@ use crate::geometry::bundle_adjust::{
 };
 use crate::geometry::pose_refine::refine_absolute_pose;
 use crate::numeric::{median, splitmix64};
+use crate::progress::Progress;
 use crate::reconstruction::triangulation::triangulate_batch;
 use crate::CameraIntrinsics;
 
@@ -666,6 +667,7 @@ pub fn grow_reconstruction(
             BA_MAX_ITERS,
             BA_MIN_TRACK,
             BA_MIN_OBS,
+            &Progress::none(),
         );
         // The adjustment re-triangulates only the observations it was given,
         // wiping every other cluster's point — refill from the full
@@ -1066,6 +1068,7 @@ pub fn grow_reconstruction(
         BA_MAX_ITERS,
         BA_MIN_TRACK,
         BA_MIN_OBS,
+        &Progress::none(),
     );
     let focal = ba.focal;
     let cam_final = camera.with_focal(focal);

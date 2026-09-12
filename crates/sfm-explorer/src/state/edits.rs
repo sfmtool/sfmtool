@@ -772,7 +772,8 @@ impl AppState {
         };
 
         let (adjusted, report) =
-            sfmtool_core::bundle_adjust(source, options).map_err(|e| refuse(e.to_string()))?;
+            sfmtool_core::bundle_adjust(source, options, &sfmtool_core::Progress::none())
+                .map_err(|e| refuse(e.to_string()))?;
         // The solve drops the points it left unsupported and says how many, not
         // which; the map is read off its input and its output. The image table
         // is untouched, so no image map.

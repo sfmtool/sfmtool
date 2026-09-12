@@ -20,6 +20,8 @@ use crate::geometry::bundle_adjust::{
     DEFAULT_PROTECTED_LOSS_SCALE, DEFAULT_SCHEDULE,
 };
 use crate::numeric::median_in_place;
+use crate::progress::Progress;
+use crate::progress_info;
 use sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
 
 /// LM iteration budget per round, the kernel's own default.
@@ -94,6 +96,9 @@ pub enum BundleAdjustError {
     /// The value's constraint columns state something the adjustment cannot
     /// honour.
     Constraints(PointConstraintsError),
+    /// The caller asked the adjustment to stop, and it did, so there is no
+    /// solved state to write back.
+    Cancelled,
     /// A round exited degenerate: fewer than `min_obs` observations survived a
     /// trim, and the state passed through untouched.
     Degenerate {
@@ -133,6 +138,11 @@ impl std::fmt::Display for BundleAdjustError {
             BundleAdjustError::EmptySchedule => {
                 write!(f, "the schedule has no rounds to run")
             }
+            BundleAdjustError::Cancelled => write!(
+                f,
+                "the adjustment was asked to stop before it had an answer, so nothing \
+                 was written back"
+            ),
             BundleAdjustError::Constraints(e) => write!(f, "{e}"),
             BundleAdjustError::Degenerate {
                 observations,
@@ -205,13 +215,24 @@ pub struct BundleAdjustReport {
 /// the state that came back, because the column would otherwise describe a
 /// geometry the value no longer holds.
 ///
+/// `progress` is where this call names its four stages (gathering the kernel's
+/// arrays, the residuals it starts from, the solve, writing the answer back),
+/// says how big the problem is, and passes on the rounds and iterations the
+/// kernel reports underneath. It is also how the call is asked to stop: a
+/// cancelled adjustment returns [`BundleAdjustError::Cancelled`] and writes
+/// nothing, because a half-converged state is not an answer anybody asked for.
+/// Pass `&Progress::none()` to report nothing and never stop, which is one
+/// branch per report and no behaviour change at all.
+///
 /// # Example
 ///
 /// ```no_run
+/// use sfmtool_core::progress::Progress;
 /// use sfmtool_core::reconstruction::bundle_adjust::{bundle_adjust, BundleAdjustOptions};
 /// # fn run(recon: &sfmtool_core::SfmrReconstruction)
 /// # -> Result<(), Box<dyn std::error::Error>> {
-/// let (next, report) = bundle_adjust(recon, &BundleAdjustOptions::default())?;
+/// let (next, report) =
+///     bundle_adjust(recon, &BundleAdjustOptions::default(), &Progress::none())?;
 /// println!(
 ///     "{} px -> {} px over {} observations",
 ///     report.median_residual_before, report.median_residual_after, report.observations
@@ -222,6 +243,7 @@ pub struct BundleAdjustReport {
 pub fn bundle_adjust(
     recon: &SfmrReconstruction,
     options: &BundleAdjustOptions,
+    progress: &Progress<'_>,
 ) -> Result<(SfmrReconstruction, BundleAdjustReport), BundleAdjustError> {
     if options.schedule.is_empty() {
         return Err(BundleAdjustError::EmptySchedule);
@@ -269,6 +291,11 @@ pub fn bundle_adjust(
         return Err(BundleAdjustError::FocalNotReleasable(camera.model_name()));
     }
 
+    // The solve is all of the time; the other three walk arrays the size of the
+    // reconstruction once. An estimate, as every set of weights is.
+    let [p_gather, p_before, p_solve, p_write] = progress.split([0.04, 0.04, 0.90, 0.02]);
+
+    let gather = p_gather.phase("gather arrays");
     // ── The arrays the kernel takes ────────────────────────────────────────
     let mut quats: Vec<UnitQuaternion<f64>> = posed
         .iter()
@@ -311,6 +338,7 @@ pub fn bundle_adjust(
     if uv.is_empty() {
         return Err(BundleAdjustError::NoObservations);
     }
+    let points_in_solve = in_solve.iter().filter(|&&s| s).count();
 
     // A constraint describes its own point, and the reference it measures from
     // is an image: the same re-indexing the observations went through applies,
@@ -353,12 +381,22 @@ pub fn bundle_adjust(
         None => None,
     };
 
+    drop(gather);
+    progress_info!(
+        progress,
+        "{} images, {} points, {} observations",
+        posed.len(),
+        points_in_solve,
+        uv.len()
+    );
+
     // ── The two solves ────────────────────────────────────────────────────
     //
     // The first is the kernel over an **empty** schedule, which runs no round
     // and reports the residuals at the state it was handed: the "before" median
     // is then measured by the same projection the "after" one is, rather than by
     // a second spelling of it here.
+    let residuals = p_before.phase("residuals before");
     let before = crate::geometry::bundle_adjust::bundle_adjust(
         camera,
         &mut quats.clone(),
@@ -379,8 +417,11 @@ pub fn bundle_adjust(
         options.max_iters,
         options.min_track,
         options.min_obs,
+        &residuals,
     );
+    drop(residuals);
 
+    let solve = p_solve.phase("solve");
     let solved = crate::geometry::bundle_adjust::bundle_adjust(
         camera,
         &mut quats,
@@ -401,7 +442,16 @@ pub fn bundle_adjust(
         options.max_iters,
         options.min_track,
         options.min_obs,
+        &solve,
     );
+    drop(solve);
+    // A stopped solve broke off between rounds, so what it holds is the state
+    // of whichever round last finished: a refusal rather than an answer, and
+    // nothing is written back, because the caller would otherwise keep a value
+    // built from a solve that never converged.
+    if progress.is_cancelled() {
+        return Err(BundleAdjustError::Cancelled);
+    }
     // Every residual infinite is the kernel's degenerate exit, which passes the
     // state through: read as a per-point verdict it would delete the whole
     // point set, so it is the call's refusal instead.
@@ -412,6 +462,7 @@ pub fn bundle_adjust(
         });
     }
 
+    let _write_back = p_write.phase("write back");
     // ── Writing the answer back ───────────────────────────────────────────
     let mut out = recon.clone();
     for (slot, &i) in posed.iter().enumerate() {
@@ -472,7 +523,7 @@ pub fn bundle_adjust(
 
     let report = BundleAdjustReport {
         images: posed.len(),
-        points: in_solve.iter().filter(|&&s| s).count(),
+        points: points_in_solve,
         observations: uv.len(),
         points_deleted,
         median_residual_before: median_residual(&before.residual_norms, &obs_pt, &keep),

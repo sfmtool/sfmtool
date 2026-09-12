@@ -24,6 +24,7 @@ use sfmtool_core::geometry::{
     resect_image_in_place, BaSchedule, ResectImageOptions, ResectInPlaceError, ResectSource,
 };
 use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::progress::Progress;
 use sfmtool_core::reconstruction::bundle_adjust::{
     bundle_adjust as core_bundle_adjust, BundleAdjustOptions,
 };
@@ -746,7 +747,7 @@ impl PyEditedReconstruction {
         };
         let value = materialised(&self.inner);
         let (next, report) = py
-            .detach(|| core_bundle_adjust(&value, &options))
+            .detach(|| core_bundle_adjust(&value, &options, &Progress::none()))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
 
         let d = PyDict::new(py);

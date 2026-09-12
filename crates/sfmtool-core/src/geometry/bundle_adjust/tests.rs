@@ -116,6 +116,7 @@ fn run(s: &mut Scene, opt_f: bool, schedule: &[BaSchedule]) -> BundleAdjustment 
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -147,6 +148,7 @@ fn run_masked(
         60,
         2,
         min_obs,
+        &Progress::none(),
     )
 }
 
@@ -177,6 +179,7 @@ fn run_protected(
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -979,6 +982,7 @@ fn directions_lock_rotations_for_focal_release() {
         150,
         2,
         12,
+        &Progress::none(),
     );
     assert!(
         (out_plain.focal - 500.0).abs() > 25.0,
@@ -1011,6 +1015,7 @@ fn directions_lock_rotations_for_focal_release() {
         150,
         2,
         12,
+        &Progress::none(),
     );
     assert!(
         (out.focal - 500.0).abs() < 5.0,
@@ -1112,6 +1117,7 @@ fn protected_all_false_with_infinity_mask_matches_bit_for_bit() {
         60,
         2,
         12,
+        &Progress::none(),
     );
     assert_bitwise_equal(&plain, &out_plain, &prot, &out_prot);
 }
@@ -1364,6 +1370,7 @@ fn protected_direction_observation_composes_with_infinity_mask() {
         60,
         2,
         12,
+        &Progress::none(),
     );
     assert!(
         angle_between(s.points[victim], d_true) > 1e-6,
@@ -1562,6 +1569,7 @@ fn protected_long_range_observations_correct_a_drifted_gauge() {
             150,
             2,
             12,
+            &Progress::none(),
         )
     };
     let drift = || make_drifted_scene(0.8, 0.5);
@@ -2193,6 +2201,7 @@ fn run_k1(s: &mut Scene, opt_f: bool, opt_k1: bool, schedule: &[BaSchedule]) -> 
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -2224,6 +2233,7 @@ fn run_k1_masked(
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -2628,6 +2638,7 @@ fn run_bspline(
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -2659,6 +2670,7 @@ fn run_bspline_masked(
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 
@@ -3738,6 +3750,7 @@ fn run_constrained(
         60,
         2,
         12,
+        &Progress::none(),
     )
 }
 

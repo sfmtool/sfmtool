@@ -34,6 +34,7 @@ use crate::geometry::focal_vote::ortho_cost;
 use crate::geometry::homography_estimation::{estimate_homography, HomographyOptions};
 use crate::geometry::resect_translation::resect_translation;
 use crate::geometry::rotation::{polar_rotation, rotation_angle};
+use crate::progress::Progress;
 use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 use crate::CameraIntrinsics;
 
@@ -790,6 +791,7 @@ pub fn rotation_init(
         BA_MAX_ITERS,
         BA_MIN_TRACK,
         BA_MIN_OBS,
+        &Progress::none(),
     );
 
     // The scale gauge is flat under the adjustment (it can wander); pin it

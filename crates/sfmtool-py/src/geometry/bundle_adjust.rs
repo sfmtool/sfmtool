@@ -14,6 +14,7 @@ use sfmtool_core::geometry::{
     bundle_adjust as core_bundle_adjust, BaSchedule, DistanceReference, FreePointPolicy,
     PointConstraints,
 };
+use sfmtool_core::progress::Progress;
 
 use crate::geometry::PyCameraIntrinsics;
 
@@ -462,6 +463,7 @@ pub fn bundle_adjust<'py>(
             max_iters,
             min_track,
             min_obs,
+            &Progress::none(),
         );
         (out, quats, trans, pts)
     });

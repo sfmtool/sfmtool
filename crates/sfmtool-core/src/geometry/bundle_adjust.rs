@@ -24,6 +24,8 @@ use crate::camera::distortion::bspline::{
 };
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
+use crate::progress::Progress;
+use crate::progress_note;
 use crate::reconstruction::point_estimation::{
     estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet,
     PointDistance, PointRules,
@@ -651,6 +653,17 @@ fn bspline_step_admissible(bspline: &[f64], d_max: f64) -> bool {
 /// (no model carries both parameters). Callers stage the releases — fixed →
 /// `opt_f` → `opt_f` plus the model's distortion release — so the distortion
 /// rung opens on a focal that has already settled.
+///
+/// `progress` is where the rounds and the LM iterations inside them are
+/// reported: one phase per schedule round, carrying that round's trim and loss
+/// scale, and an iteration count under it, so a caller knows which round a long
+/// solve is in. It is also how this call is asked to stop, which it is between
+/// rounds and between iterations; a stopped solve returns the state it had
+/// reached rather than an error, since it has no `Result` to put one in, and
+/// the caller asks `Progress::is_cancelled` again to find out. Pass
+/// `&Progress::none()` to report nothing and never stop: every method on it is
+/// a branch on a null sink, so the solve runs exactly as it did before this
+/// parameter existed.
 #[allow(clippy::too_many_arguments)]
 pub fn bundle_adjust(
     cam: &CameraIntrinsics,
@@ -672,6 +685,7 @@ pub fn bundle_adjust(
     max_iters: usize,
     min_track: usize,
     min_obs: usize,
+    progress: &Progress<'_>,
 ) -> BundleAdjustment {
     if let Some(mask) = protected {
         assert_eq!(
@@ -730,6 +744,7 @@ pub fn bundle_adjust(
         max_iters,
         min_track,
         min_obs,
+        progress,
     )
 }
 
@@ -1326,6 +1341,13 @@ fn observation_blocks<const CAM_COLS: usize>(
 /// spline's local support. `bspline0` is the current coefficient vector
 /// (read-only outside the spline instantiation, where the camera's own
 /// fixed spline rides along inside `cam0`).
+///
+/// `progress` counts the iterations, names the stages inside one of them at the
+/// detail level, and is polled at the top of each: an iteration boundary is
+/// where this solve holds a consistent state, since a candidate step is only
+/// ever written once it has improved the cost. A stopped solve scatters back
+/// what the last accepted step left, which is what it would have returned had
+/// the budget run out there.
 #[allow(clippy::too_many_arguments)]
 fn solve_lm<const CAM_COLS: usize>(
     cam0: &CameraIntrinsics,
@@ -1347,6 +1369,7 @@ fn solve_lm<const CAM_COLS: usize>(
     max_iters: usize,
     protected: Option<&[bool]>,
     protected_loss_scale: f64,
+    progress: &Progress<'_>,
 ) -> (f64, f64, Vec<f64>) {
     // The spline instantiation is selected by width; the staged loop only
     // requests it for a released, well-formed spline.
@@ -1533,7 +1556,15 @@ fn solve_lm<const CAM_COLS: usize>(
     let mut prev_cost = cost_at(&cam, &q, &t, &x);
 
     let analytic = cam.model.supports_pixel_jacobian();
-    for _ in 0..max_iters {
+    for iter in 0..max_iters {
+        // An iteration boundary is this solve's stopping point: every state
+        // below is either the last accepted step's or a candidate nothing has
+        // been written from.
+        if progress.is_cancelled() {
+            break;
+        }
+        progress.count(iter as u64, Some(max_iters as u64), "iteration");
+        let linearise = progress.detail_phase("linearise");
         // ── Linearize at the current state ───────────────────────────────
         // Tangent bases B(d) = [b1 | b2] for the direction points, rebuilt at
         // each linearization.
@@ -1586,8 +1617,10 @@ fn solve_lm<const CAM_COLS: usize>(
                 .map(|(kk, &k)| observation_blocks(&st, k, obs_ci[kk], obs_cp[kk], s2s[kk]))
                 .collect()
         };
+        drop(linearise);
 
         // ── Accumulate the normal-equation blocks ────────────────────────
+        let equations = progress.detail_phase("normal equations");
         let mut h_cc = DMatrix::<f64>::zeros(d, d);
         let mut g_c = DVector::<f64>::zeros(d);
         let mut v_pp: Vec<Matrix3<f64>> = vec![Matrix3::zeros(); n_pt];
@@ -1639,7 +1672,10 @@ fn solve_lm<const CAM_COLS: usize>(
             }
         }
 
+        drop(equations);
+
         // ── Damping ladder: re-damp and re-solve from this linearization ──
+        let ladder = progress.detail_phase("damping ladder");
         let mut improved = false;
         for _ in 0..12 {
             let mut s = h_cc.clone();
@@ -1902,6 +1938,7 @@ fn solve_lm<const CAM_COLS: usize>(
                 break;
             }
         }
+        drop(ladder);
         if !improved || lambda.is_infinite() {
             break;
         }
@@ -1954,6 +1991,7 @@ fn bundle_adjust_staged(
     max_iters: usize,
     min_track: usize,
     min_obs: usize,
+    progress: &Progress<'_>,
 ) -> BundleAdjustment {
     let n_obs = obs_img.len();
     assert_eq!(obs_pt.len(), n_obs, "obs_img and obs_pt length mismatch");
@@ -2031,7 +2069,23 @@ fn bundle_adjust_staged(
         .map(|(bspline, _, _)| bspline.to_vec())
         .unwrap_or_default();
 
-    for (rnd, stage) in schedule.iter().enumerate() {
+    // A share of the range per round. Even shares, because the rounds run the
+    // same solve over a tightening trim and none of them is predictably the
+    // expensive one; an estimate, like every other set of weights.
+    let rounds = progress.split_evenly(schedule.len());
+    for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
+        // Between rounds the poses and the points hold what the last round
+        // settled on, which is a whole answer to hand back.
+        if progress.is_cancelled() {
+            break;
+        }
+        let mut round = p_round.phase("round");
+        progress_note!(
+            round,
+            "trim {} px, loss scale {}",
+            stage.trim_px,
+            stage.loss_scale
+        );
         let cam_now = if opt_bspline {
             cam.with_focal_bspline(f, &bspline)
         } else {
@@ -2126,6 +2180,7 @@ fn bundle_adjust_staged(
                 max_iters,
                 protected,
                 protected_loss_scale,
+                &round,
             )
         } else {
             solve_lm::<BASE_CAM_COLS>(
@@ -2148,8 +2203,11 @@ fn bundle_adjust_staged(
                 max_iters,
                 protected,
                 protected_loss_scale,
+                &round,
             )
         };
+        drop(round);
+        progress.count(rnd as u64 + 1, Some(schedule.len() as u64), "round");
     }
 
     let cam_final = if opt_bspline {
