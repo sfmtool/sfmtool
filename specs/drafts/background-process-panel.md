@@ -7,8 +7,13 @@ Amends [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md) § "Non-goals
 [gui/panel-layout.md](../gui/panel-layout.md) § "Home positions",
 [gui/action-log.md](../gui/action-log.md),
 [gui/mcp-server.md](../gui/mcp-server.md) and
-[gui/operation-progress.md](../gui/operation-progress.md), whose collector keeps
-a status, a count and a fraction that nothing draws until this is built.
+[gui/operation-progress.md](../gui/operation-progress.md), whose collector's
+status, count and fraction this panel is the first reader of, and which gained
+`Collector::live` for it.
+
+The worker and the panel are built. What is left is the read surface an agent
+sees: `get_background_process`, the `background` block in `get_scene`, and any
+operation other than the bundle adjustment.
 
 Its case is measured. A bundle adjustment of `dino_dog_toy-embedded` (85 images,
 21 009 points, 392 489 observations) holds the GUI thread for 95 seconds: the
@@ -122,8 +127,11 @@ tree.
 
 The panel is not blank when nothing is running. It shows the last operation of
 the session, greyed: its name, its node, what it cost, and its phases, collapsed
-under a toggle that works as the Action Log's does. A session that has run
-nothing says `Nothing running` and no more.
+under a toggle that works as the Action Log's does. Those phases are the
+transcript the panel drew while it ran, not the entry's folded breakdown: an
+operation that collapsed into a summary at the instant it finished would be a
+panel that changed its mind about what the reader had just watched. A session
+that has run nothing says `Nothing running` and no more.
 
 ### Running
 
@@ -134,13 +142,28 @@ nothing says `Nothing running` and no more.
 │ ██████░░░░░░░░░░░  round 2/3 │
 │ 42.7 s elapsed       [Cancel]│
 │                              │
+│     damping ladder    2.0 s  │
+│     linearise         51 ms  │
+│     normal equations  46 ms  │
+│     damping ladder   ▶ 4.7 s │
+└──────────────────────────────┘
+```
+
+The table is scrolled to its end, because that is where the operation is.
+Earlier rows are above it, and none of them is a summary of another:
+
+```
 │ gather arrays          2 ms  │
+│ • 85 images, 21009 points, … │
 │ residuals before      10 ms  │
-│ solve              ▸ 42.6 s  │
-│   round x2         ▸ 42.6 s  │
-│     linearise x71     2.9 s  │
-│     normal equations  1.9 s  │
-│     damping ladder   37.8 s  │
+│   • median 1.014 px over 39… │
+│ solve              ▶ 42.6 s  │
+│   • 3 rounds, trim 50/12/4 px│
+│   round            ▶ 21.4 s  │
+│     linearise         48 ms  │
+│     normal equations  44 ms  │
+│     damping ladder    1.8 s  │
+│     linearise         51 ms  │
 └──────────────────────────────┘
 ```
 
@@ -149,9 +172,9 @@ nothing says `Nothing running` and no more.
 - **Progress** is a bar with the kernel's own count and unit when anything
   underneath reports one, and a spinner with the open phase's name when nothing
   does. The bar is a statement about how much of the work is behind you, never a
-  prediction of when it will end: it steps at every phase boundary, because
-  something did finish, and moves smoothly only across the stages that actually
-  report counts ([../gui/operation-progress.md](../gui/operation-progress.md) § "Nesting").
+  prediction of when it will end: it moves only where a stage reports a count,
+  and a stage that reports none moves it not at all. The step at a boundary is
+  the next stage's range beginning rather than anything the panel adds ([../gui/operation-progress.md](../gui/operation-progress.md) § "Nesting").
   Nothing interpolates across a silent stage, and there is never a synthesised
   percentage, because a bar moving at a rate nobody measured makes a promise
   about the finish.
@@ -165,7 +188,8 @@ nothing says `Nothing running` and no more.
   the sketch above has no status row because the bundle adjustment sets none,
   and the row is absent rather than blank when an operation says nothing.
 - **Elapsed** counts up from the instant the operation started, which is the
-  number the person is actually watching.
+  number the person is actually watching. A frame is asked for every 100 ms so
+  that it keeps counting through a stage that reports nothing.
 - **Cancel** is present always and enabled only when the operation can be
   cancelled, with a tooltip saying so when it cannot. The alternative, hiding
   the button, leaves the reader wondering whether they missed it.
@@ -176,10 +200,36 @@ nothing says `Nothing running` and no more.
   running, so ticking **Detailed timing** before starting a long operation is how
   somebody watches a kernel's internals
   ([../gui/operation-progress.md](../gui/operation-progress.md) § "Two levels").
-  Repeated stages fold as they do in an entry, which is what makes the table a
-  table rather than a log: the sketch's `round x2` and `linearise x71` are two
-  rows rather than seventy-three, and their counts climb while the reader
-  watches.
+  **Nothing folds here, and no two things are ever combined into one row.**
+  Each run of a stage is its own row with the cost that run took and the note
+  that run gave, each message is its own row, and two runs that said different
+  things say both, separately. This is the opposite of what an Action Log entry
+  does with the same events, and deliberately so: an entry is read afterwards
+  and answers where the time went, for which `round x2` with the ends of its
+  note joined is the right summary. A reader watching is asking what the viewer
+  is doing now and what it has done so far, and a summary of something they can
+  watch unfold tells them less than the thing itself. The entry stays the
+  summary of exactly what the panel showed, with every run counted in the row it
+  folds into and the costs adding up.
+
+  The table is therefore a log rather than a table, and a long detailed
+  operation writes a lot of it: a three-round, sixty-iteration adjustment with
+  **Detailed timing** on opens `linearise` and its two siblings five hundred and
+  forty times, and every one of those is a row. It is virtualized on a uniform
+  row height, as the Action Log's list is, so only the rows in view are drawn.
+  The table **follows its tail**: the stage that is running is the
+  newest row, and this panel is narrow enough that the stages which finished
+  first fill it. Without that, a 102 second solve showed `gather arrays`, which
+  cost 2 ms, for the whole of it, and the reader had to scroll to find out what
+  the viewer was doing. It holds still the moment the reader scrolls up, which
+  is the Action Log's rule for its own list.
+- **A row too wide for the column is truncated and says the whole of itself on
+  hover**, as an Action Log detail row does. The panel is a fraction of the
+  window's width, so that is the common case here rather than the rare one, and
+  it applies to the node's label on the idle row as much as to a stage's note.
+  The cost is reserved before the names are drawn: a long label would otherwise
+  push the number off the panel, and the number is what a reader came here
+  for.
 
 ### What the rest of the viewer does meanwhile
 
@@ -480,33 +530,56 @@ threshold has passed, whichever is true first. A deferred reply also has to
 request a repaint, or an idle viewer never reaches the clock that would answer
 it.
 
-**The timeout's own message needs the same correction.** It reads "It may be
-showing a modal dialog, or be mid-drag", which names two things that are not
-what happened and omits the one that did. Once an operation can be in the
-background, a call that times out while one is running should say so and point
-at `get_background_process`, and a call that times out with nothing running
-keeps the message it has, which is then true.
+**The timeout's own message follows what is running.** It used to read "It may
+be showing a modal dialog, or be mid-drag", which names two things that are not
+what happened and omits the one that did. A call that times out while an
+operation is running now names the operation and the node it is on and points at
+`get_background_process`; a call that times out with nothing running keeps the
+message it had, which is then true. The thread composing that sentence is the
+one thread that cannot ask `AppState`, since it is composing it precisely
+because the GUI thread did not answer, so it reads a small shared notice,
+`background::BusyNotice`, written where `AppState::background` is written and
+nowhere else.
 
-A new read tool, **`get_background_process`**, reports what is running:
-the operation, the label, the seconds elapsed, the progress as `done`, `total`
-and `unit` when there is one, the open phase, and the completed phases in the
-shape `get_action_log { "detail": true }` already returns them in
+A read tool, **`get_background_process`**, reports what is running: the
+operation, the label, the seconds elapsed, `fraction` of the whole where
+anything reported one, whether it can be cancelled, the progress as `done`,
+`total` and `unit` where there is one, the status, the open phase, and the
+stages so far in the shape `get_action_log { "detail": true }` returns them in
 ([../gui/mcp-server.md](../gui/mcp-server.md) § "get_action_log"), so an agent
-that reads a finished operation and a running one parses one shape. With
-nothing running it reports the last operation of the session, marked `finished`,
-so one call answers both "is it done" and "what did it cost".
+that reads a finished operation and a running one parses one shape. The rows are
+the panel's transcript rather than the entry's folded summary, for the reason
+the panel does not fold (§ "Running"): this tool answers about an operation
+being watched. `get_action_log { "detail": true }` is where the summary is. With nothing
+running it reports the last operation of the session, marked `finished`, so one
+call answers both "is it done" and "what did it cost". `elapsed_s` carries both
+halves of that: seconds so far while it runs, seconds in total once it is over.
 
-`get_scene` gains a `background` block of the same shape, beside
-`status_message`, so an agent that already polls `get_scene` learns that the
-viewer is busy without a second call, and knows not to send an edit that would
-be refused.
+**The phase list is capped at the size an entry's is**,
+`ActionLog::DETAIL_EVENTS`, with a `"{n} earlier events dropped"` row. Not a
+size limit chosen for the wire: it is the number the Action Log already applies
+to these rows. It keeps the **last** of them rather than the first, which is the
+opposite of an entry's cap, because this list is the panel's transcript and
+nothing has collapsed the repetition in it: the first 128 rows of a long solve
+are its first few seconds. An entry's first 128 rows are its shape, because the
+fold got there first.
+
+`get_scene` gains a `background` block beside `status_message`, so an agent that
+already polls `get_scene` learns that the viewer is busy without a second call,
+and knows not to send an edit that would be refused. It is the same shape with
+everything unbounded left out: `running`, `operation`, `reconstruction_label`,
+`operation_id`, `elapsed_s` and `fraction`, and `null` with nothing running.
+The phase table belongs to the tool an agent asks when it wants it, because
+`get_scene` is the most-polled call on the surface and a block that grew with
+the solve would be paid for on every poll; the open phase and the status line go
+with it, being narrative rather than something a caller acts on. `null` rather
+than the last operation for a second reason as well: a block that outlived its
+operation would make `background != null` stop meaning "the viewer is busy",
+which is the one thing it is read for.
 
 A **`cancel_background`** tool cancels what is running, and refuses when the
 operation cannot be cancelled, with the same sentence the button's tooltip
 carries.
-
-The MCP spec's warning that a long `bundle_adjust` will time out while the solve
-goes on is deleted, because the behaviour it describes is gone.
 
 ## Testing
 
@@ -539,6 +612,27 @@ Panel, through `test_support::run_frame_headless`:
   one stops it and writes the cancelled entry. A declaration nothing checks is a
   declaration that rots.
 
+`crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
+editing fixture's node, so the wire is read at an instant the test chose:
+
+- `get_background_process` answers one shape running and finished: the same
+  `operation`, `reconstruction_label` and `operation_id` either way, a cost no
+  shorter than the elapsed it was read at, and `running` telling the two apart.
+  A session that has run nothing answers `running: false, finished: false` and
+  no more.
+- **Its `phases` is the transcript and the entry is the summary of it**: every
+  run the wire reported is counted in the row the entry folds it into, and the
+  entry is then held to the panel's own rows through the agreement assertion
+  every other breakdown test ends on.
+- A breakdown longer than `DETAIL_EVENTS` is the dropped line and the last 128
+  rows, and reads the same after the operation ends as it did during it.
+- **`get_scene`'s `background` block does not grow with the solve**: its whole
+  key set is asserted, so a field added to the most-polled reply on the surface
+  is a deliberate act. It is `null` before an operation and again after it.
+- The apply timeout's message names the operation only while one is running, and
+  the notice it reads is empty before the operation, set during it, and empty
+  again afterwards.
+
 `crates/sfm-explorer/tests/ui_basic.rs`: the Background panel is in the
 accessibility tree, and **Panels ▸ Background** ticks it.
 
@@ -553,6 +647,8 @@ Background's home position is the left edge with Scene as its group-mate.
 | left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background takes the rest |
 | Background home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
 | `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
+| repaint tick while running | `100 ms` | The elapsed counts up between reports, and a worker deep in a silent stage sends none for a frame to ride on |
+| seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([../gui/action-log.md](../gui/action-log.md)) |
 
 ## Non-goals
 

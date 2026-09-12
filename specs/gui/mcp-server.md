@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Thirty-six tools. Nine read, twenty-five write, one that writes a file, and
-one that closes the loop by handing back a picture.
+Forty tools. Eleven read, twenty-seven write, one that writes a file, and one
+that closes the loop by handing back a picture.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -116,6 +116,7 @@ one that closes the loop by handing back a picture.
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
+| `get_background_process` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -144,8 +145,8 @@ one that closes the loop by handing back a picture.
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the nine reads and `screenshot` carry
-`readOnlyHint: true`, the twenty-five writes `destructiveHint: false` (none of
+Every tool is annotated: the eleven reads and `screenshot` carry
+`readOnlyHint: true`, the twenty-seven writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -390,6 +391,7 @@ addressable. No arguments.
     "looking_through": null               // a camera image, in camera-view mode
   },
   "status_message": null,
+  "background": null,                     // or the block below; see § "get_background_process"
   "action_log_revision": 530,             // the Action Log's clock — see § "get_action_log"
   "window_title": "SfM Explorer - seoul_bull.sfmr [MCP :8787]",
   "window": { "state": "normal", … }      // see § "The window block"
@@ -409,6 +411,36 @@ much of the desktop is it" is a question an agent asks before deciding whether
 a screenshot is worth taking at all, and a second call for it every time is a
 call too many. It is `null` only before the window exists, which no tool call
 can be answered ahead of.
+
+**`background` says whether the viewer is busy, and stops there.** It is `null`
+whenever nothing is running, and otherwise the first six fields of
+`get_background_process`'s running reply and no more:
+
+```jsonc
+"background": {
+  "running": true,
+  "operation": "Bundle adjust",
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2,
+  "elapsed_s": 42.7,
+  "fraction": 0.61                        // absent where nothing has reported one
+}
+```
+
+An agent that already polls `get_scene` learns from this that an edit of that
+label would be refused, without a second call. What it does **not** carry is
+anything whose size depends on the operation: the phase table, which a
+three-round, sixty-iteration adjustment reports hundreds of rows of, is
+`get_background_process`'s, and the open phase and the status line go with it
+because they are narrative rather than something a caller acts on. This is the
+most-polled tool on the surface, and a block that grew with the solve would be
+paid for on every poll by every agent.
+
+It is `null` rather than the last operation for the same reason, and for a
+second one: a block that went on describing a solve that ended half an hour ago
+would make `background != null` stop meaning "the viewer is busy", which is the
+one thing it is read for. What the last operation cost is
+`get_background_process`'s answer and the Action Log's.
 
 **`display` reports `visible` and `drawn` both.** `visible` is the node's own
 master eye; `drawn` is the composition `visible && (no solo, or the solo is me)`
@@ -964,6 +996,100 @@ yet. What a stage is, what folds and what `elsewhere` means are
 
 The case it exists for is the second call: an agent reads the log, finds a slow
 row, and asks again with `detail` set and `since_revision` just below that row.
+
+### `get_background_process`
+
+What the viewer is busy with. One operation runs at a time, viewer-wide
+([../drafts/background-process-panel.md](../drafts/background-process-panel.md)),
+so this names none and takes no arguments.
+
+```jsonc
+{
+  "running": true,
+  "operation": "Bundle adjust",
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2,                          // the id bundle_adjust's handle carried
+  "elapsed_s": 42.7,                          // how long it has been going
+  "fraction": 0.61,                           // of the whole, where anything reported one
+  "cancellable": true,                        // whether cancel_background would do anything
+  "progress": { "done": 2, "total": 3, "unit": "round" },   // the kernel's own count
+  "status": "refining images/IMG_0042.jpg",   // what it says it is doing right now
+  "phase": "damping ladder",                  // the stage it is inside
+  "phases": [                                 // what it has spent its time on so far
+    { "kind": "phase", "name": "gather arrays", "depth": 0, "ms": 2.1 },
+    { "kind": "phase", "name": "solve", "depth": 0, "ms": 42600.0 },
+    { "kind": "phase", "name": "round", "depth": 1, "ms": 42600.0, "runs": 2 },
+    // The open one is in here too, carrying the time it has been open.
+    { "kind": "phase", "name": "damping ladder", "depth": 2, "ms": 37800.0 }
+  ]
+}
+```
+
+With nothing running it reports the last operation of the session instead:
+
+```jsonc
+{
+  "running": false,
+  "finished": true,
+  "operation": "Bundle adjust",
+  "reconstruction_label": "dino_dog_toy-embedded",
+  "operation_id": 2,
+  "elapsed_s": 95.3,                          // what the whole operation cost
+  "failed": false,
+  "text": "Bundle adjusted dino_dog_toy-embedded: 85 images, … (3 → 4)",
+  "phases": [ … ]
+}
+```
+
+A session that has run nothing answers `{ "running": false, "finished": false }`
+and no more.
+
+**One call answers both "is it done" and "what did it cost".** The question an
+agent brings here is a single one asked at an unknown moment (the solve it
+started, is it still going, and what has it spent), and a surface that answered
+only about a live operation would need a second tool for the other half, which a
+caller would have to choose between before knowing which it had. So the two
+replies are one shape: `running` tells them apart, `operation`,
+`reconstruction_label` and `operation_id` mean the same thing in both, and
+`elapsed_s` is the seconds so far while it runs and the seconds in total once it
+is over. `finished` is absent from a running reply and present in both idle
+ones, so a reader never has to tell a missing key from a false one.
+
+**`phases` carries `get_action_log`'s `detail` rows**, field for field and in
+the same order (§ "get_action_log"), built by the same function from the same
+collector, so one parser reads both. What it carries is the **transcript**: one
+row per run of a stage and one per message, unfolded, which is what the
+Background panel draws. The entry the operation leaves behind is the folded
+summary of that transcript, so the two are one account of one solve presented
+for two questions, and every run reported here is counted in the row the entry
+folds it into. A reader that wants the shape of a finished operation rather than
+its transcript asks `get_action_log { "detail": true }`. `elapsed_s` is in
+seconds where the breakdown is in milliseconds, deliberately: this is a
+wall-clock a reader compares against their own patience and is minutes-scale by
+construction, where `ms` is a per-stage cost that is usually sub-second.
+
+**The list is capped at the size an entry's is**, 128 rows
+(`ActionLog::DETAIL_EVENTS`), with a `{ "kind": "message" }` row reading
+`"{n} earlier events dropped"`. The size is not a limit picked for the wire: it
+is the number the Action Log already applies to these rows.
+
+It keeps the **last** rows rather than the first, which is the opposite of what
+an entry's cap does, because these are not an entry's rows. `phases` is the
+transcript the Background panel draws, unfolded, so nothing has collapsed the
+repetition in it: the first 128 rows of a long solve are its first few seconds
+and say nothing about where it has got to. An entry's first 128 rows are its
+shape, because folding has already collapsed the repetition underneath them. The
+panel has the same problem and answers it the same way, by following its tail.
+
+`operation_id` is the id a `bundle_adjust` handle carried, so an agent holding
+one can tell an answer about its own run from an answer about a later one.
+`fraction` is the collector's own mapped sum of what the stages reported and is
+therefore measured rather than synthesised: a stage that reports nothing does
+not move it, and nothing interpolates across one. `progress` is the innermost
+count in the kernel's own unit, with `total` absent where the operation does not
+know how many there are, and the whole block absent where it reports no count.
+`status`, `phase` and `progress` are all absent rather than null where the
+operation has said nothing.
 
 ### `get_timing_detail`, `set_timing_detail`
 
@@ -1727,10 +1853,11 @@ reconstruction costs: under roughly 100 ms a reply reads as instantaneous, and a
 second is where a caller starts wondering, so 200 ms answers normally inside the
 window where nobody had begun to.
 
-The outcome reaches the log whichever way the call answered, with the whole
-operation's cost and the stages it reported
-([operation-progress.md](operation-progress.md)), so an agent that took a handle
-reads `get_action_log` to find out what happened. `cancel_background` stops it;
+An agent that took a handle asks `get_background_process` how the run is going
+and, once it is over, what it cost (§ "get_background_process"); the same answer
+reaches the Action Log, with the whole operation's cost and the stages it
+reported ([operation-progress.md](operation-progress.md)), whichever way the
+call answered. `cancel_background` stops it;
 the adjustment polls between rounds and between iterations, and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
@@ -1880,6 +2007,19 @@ calls a frame; an idle viewer renders none at all.
 legitimately stop pumping (a modal `rfd` file dialog is open, the user is
 dragging the window on Windows), and an agent must get "the viewer is busy"
 rather than a hung connection.
+
+**The message says what is running when something is.** A timeout's second
+sentence is a guess at the cause, and a guess that names something measurable
+beats one that lists possibilities: with an operation on a worker the viewer
+names it and the node it is on, and points at `get_background_process`; with
+nothing running the two guesses above are all there is, and they are then the
+right ones. The fact is read off a small shared notice
+(`background::BusyNotice`) written where `AppState::background` is written,
+because the thread composing this message is the one thread that cannot ask the
+state, being the one composing it precisely because the GUI thread did not
+answer. The
+message does not promise that `get_background_process` will answer either: every
+tool on this surface goes through the same GUI thread.
 
 **Every applied command records an Action Log entry as actor `MCP`**, and the
 viewport status line shows the most recent entry that is not a successful
@@ -2500,7 +2640,32 @@ where a test hands no host over.
   optional ones default to what the schemas say.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **The catalog is thirty-six tools**, nine of them reads and one of them the
+- **`get_background_process` reads one shape running and finished**: a session
+  that has run nothing answers `running: false, finished: false` and nothing
+  else; a held fake operation answers with the operation, the label, the id, the
+  elapsed, `cancellable`, the kernel's count, the open phase and the stages so
+  far; once it is over the same call answers `finished: true` about the same
+  `operation_id` with a cost no shorter than the elapsed it was read at, and
+  with how it ended in the Action Log's own `failed` and `text`. Its `phases` is
+  the transcript and that operation's `get_action_log` `detail` is the summary
+  of it: every run the wire reported is counted in the row the entry folds it
+  into, and the entry is then held to the panel's own rows through the agreement
+  assertion every other breakdown test ends on. A breakdown longer than
+  `DETAIL_EVENTS` keeps the last 128 rows after the dropped line, and reads the
+  same after the operation ends as during it.
+- **`get_scene` says the viewer is busy and stops there**: `background` is
+  `null` before an operation and again after it, and while one runs it carries
+  exactly `running`, `operation`, `reconstruction_label`, `operation_id`,
+  `elapsed_s` and `fraction`. The whole key set is asserted, so a field added to
+  it later is a deliberate act rather than a drift in the most-polled reply on
+  the surface.
+- **The apply timeout's message follows what is running**: with nothing running
+  it is the sentence it always was, and with an operation running it names the
+  operation and the node and points at `get_background_process` instead of
+  guessing at a dialog. The notice it reads is written where the process is
+  written, so it is empty before an operation, says what is running during it,
+  and is empty again afterwards.
+- **The catalog is forty tools**, eleven of them reads and one of them the
   `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
@@ -2675,6 +2840,7 @@ Other candidates, in rough order of value:
 | `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. |
 | `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
+| Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_process`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |

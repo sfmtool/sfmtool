@@ -48,6 +48,9 @@ mod panel;
 mod tests;
 
 pub(crate) use panel::show;
+// The row vocabulary of a breakdown, which the Background panel draws too: the
+// live form of an entry's detail and the entry's own are one thing said once.
+pub(crate) use panel::{detail_row, detail_text, Breakdown};
 
 /// Who took an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -590,18 +593,48 @@ impl ActionLog {
     /// The first rows rather than the last: an operation's shape is in the
     /// order it did things, and a breakdown truncated at the front would say
     /// nothing about where it started.
+    ///
+    /// This holds for a *folded* breakdown, where the first rows are the
+    /// operation's own stages and the fold has already collapsed the repetition
+    /// underneath them. A transcript is capped the other way round
+    /// ([`ActionLog::capped_recent`]).
     fn capped(mut detail: Vec<Detail>) -> Vec<Detail> {
         if detail.len() <= Self::DETAIL_EVENTS {
             return detail;
         }
         let dropped = detail.len() - Self::DETAIL_EVENTS;
         detail.truncate(Self::DETAIL_EVENTS);
-        detail.push(Detail::Message {
+        detail.push(Self::dropped_row(dropped, "more"));
+        detail
+    }
+
+    /// The same cap, keeping the **last** rows rather than the first.
+    ///
+    /// For an unfolded transcript, which is what the Background panel draws and
+    /// what `get_background_process` reports
+    /// (`specs/gui/operation-progress.md`). Nothing has collapsed the
+    /// repetition there, so the first hundred and twenty-eight rows of a long
+    /// solve are the first few seconds of it and say nothing about where it has
+    /// got to. The panel has the same problem and answers it the same way, by
+    /// following its tail.
+    pub(crate) fn capped_recent(detail: Vec<Detail>) -> Vec<Detail> {
+        if detail.len() <= Self::DETAIL_EVENTS {
+            return detail;
+        }
+        let dropped = detail.len() - Self::DETAIL_EVENTS;
+        let mut kept = vec![Self::dropped_row(dropped, "earlier")];
+        kept.extend(detail.into_iter().skip(dropped));
+        kept
+    }
+
+    /// The row that stands for what a cap left out, in the one spelling both
+    /// caps use.
+    fn dropped_row(dropped: usize, which: &str) -> Detail {
+        Detail::Message {
             level: Level::Info,
             depth: 0,
-            text: format!("{dropped} more events dropped"),
-        });
-        detail
+            text: format!("{dropped} {which} events dropped"),
+        }
     }
 
     /// Put the entry just written in the queue waiting to be timed, from
@@ -982,8 +1015,13 @@ impl ActionLog {
         any.then(|| took.saturating_sub(named))
     }
 
-    /// An entry's breakdown in the order the panel draws it, which is not the
-    /// order it was recorded in.
+    /// A breakdown in the order the panel draws it, which is not the order it
+    /// was recorded in.
+    ///
+    /// A [`panel::Breakdown`] rather than an [`Entry`], because the wire
+    /// carries a running operation's rows as well as a finished entry's
+    /// (`specs/gui/mcp-server.md` § "get_background_process") and there is one
+    /// order for both.
     ///
     /// [`ActionLog::elsewhere`] closes the operation's own account before the
     /// overhead the frame charged, so `panel::detail_row` reorders, and a
@@ -993,10 +1031,15 @@ impl ActionLog {
     /// operation did. `elsewhere` itself is not in here: it is a row of the
     /// breakdown rather than an event of it, and the wire carries it as a
     /// field of its own.
-    pub(crate) fn detail_in_draw_order(entry: &Entry) -> impl Iterator<Item = &Detail> + '_ {
-        (0..panel::detail_rows(entry))
-            .filter_map(|row| panel::detail_at(entry, row))
-            .filter_map(|index| entry.detail.get(index))
+    pub(crate) fn detail_in_draw_order<'a>(
+        breakdown: &panel::Breakdown<'a>,
+    ) -> impl Iterator<Item = &'a Detail> {
+        let detail = breakdown.detail;
+        (0..panel::detail_rows(breakdown))
+            .filter_map(|row| panel::detail_at(breakdown, row))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(move |index| detail.get(index))
     }
 
     /// Every row of an entry's breakdown as the panel draws it, indent and
@@ -1007,8 +1050,9 @@ impl ActionLog {
     /// would mean one of them is lying to somebody.
     #[cfg(test)]
     pub(crate) fn drawn_detail(entry: &Entry) -> Vec<String> {
-        (0..panel::detail_rows(entry))
-            .map(|row| panel::detail_text(&panel::detail_row(entry, row)))
+        let breakdown = panel::Breakdown::of(entry);
+        (0..panel::detail_rows(&breakdown))
+            .map(|row| panel::detail_text(&panel::detail_row(&breakdown, row)))
             .collect()
     }
 
@@ -1061,7 +1105,7 @@ impl ActionLog {
             if !self.is_expanded(entry.revision) {
                 continue;
             }
-            for row in 0..panel::detail_rows(entry) {
+            for row in 0..panel::detail_rows(&panel::Breakdown::of(entry)) {
                 out.push_str(&Self::detail_line(entry, row));
                 out.push('\n');
             }
@@ -1073,7 +1117,7 @@ impl ActionLog {
     /// [`ActionLog::line`] lays out, so that a phase's cost lands under its
     /// entry's on the clipboard as it does in the panel.
     fn detail_line(entry: &Entry, row: usize) -> String {
-        let row = panel::detail_row(entry, row);
+        let row = panel::detail_row(&panel::Breakdown::of(entry), row);
         // The rule the panel paints above the overhead, in the one spelling a
         // text buffer has for it. Without it a pasted breakdown reads as though
         // the operation did the uploading.
@@ -1118,7 +1162,10 @@ impl ActionLog {
     pub(crate) fn format_took(took: std::time::Duration) -> String {
         let ms = took.as_secs_f64() * 1000.0;
         if ms >= 1000.0 {
-            format!("{:.2} s", ms / 1000.0)
+            // One decimal, because this column is read while it moves: the
+            // Background panel redraws a running operation ten times a second,
+            // and a hundredths digit there is a digit that only ever spins.
+            format!("{:.1} s", ms / 1000.0)
         } else if ms >= 1.0 {
             format!("{ms:.0} ms")
         } else {

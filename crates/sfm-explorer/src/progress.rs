@@ -31,7 +31,7 @@
 //! status in particular is never part of an entry, because by the time the
 //! entry exists the answer to "what is it doing" is "finished".
 //!
-//! ## Repeated phases fold
+//! ## Repeated phases fold, in the entry
 //!
 //! A guard goes where the code already has a boundary, and for a loop body that
 //! means once per trip: a bundle adjustment of three rounds at sixty iterations
@@ -42,10 +42,16 @@
 //! row, whose time is the sum and which carries the count, ordered by first
 //! appearance. Folding happens as the events arrive, which is what makes the
 //! cap count rows kept rather than phases opened.
+//!
+//! The unfolded sequence is kept too, and is what [`Collector::live`] returns.
+//! A reader watching an operation is watching it happen, so the Background
+//! panel draws each round as it arrives with what that round cost and said,
+//! while the entry that outlives it is the summary. One collector, two
+//! questions.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sfmtool_core::progress::{Event, Level, Phase, Progress};
 
@@ -109,6 +115,25 @@ pub(crate) struct Count {
     pub total: Option<u64>,
     /// What is being counted, singular: `"image"`, `"iteration"`.
     pub unit: &'static str,
+}
+
+/// What an operation has reported so far, as a panel draws it mid-flight.
+///
+/// Two things separate this from what [`Collector::take`] hands an Action Log
+/// entry, and both are about watching rather than reading:
+///
+/// - **A phase that is still open carries the time it has been open**, so a
+///   stage forty seconds into a run says forty seconds rather than nothing.
+/// - **Nothing is folded.** Each run of a phase is its own row with its own
+///   cost and its own note, in the order it happened. The entry folds because
+///   the question it answers afterwards is where the time went; a reader
+///   watching wants to see each round arrive.
+pub(crate) struct Live {
+    /// The rows, one per run and one per message, in the order they happened.
+    pub(crate) rows: Vec<Detail>,
+    /// Which of `rows` are open, outermost first. The last of them is the stage
+    /// the operation is actually in, which is what a spinner names.
+    pub(crate) open: Vec<usize>,
 }
 
 /// Somewhere for one operation's events to land. Shared, never borrowed
@@ -184,24 +209,24 @@ impl Collector {
         lock(&self.state).take()
     }
 
+    /// The same rows, copied rather than taken, for a panel drawing an
+    /// operation that is still reporting.
+    pub(crate) fn live(&self) -> Live {
+        lock(&self.state).live()
+    }
+
     /// What the operation last said it was doing, if anything.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn status(&self) -> Option<String> {
         lock(&self.state).status.clone()
     }
 
     /// The newest count the operation reported, if any.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn count(&self) -> Option<Count> {
         lock(&self.state).count
     }
 
     /// How far along the operation is, in `0.0..=1.0` of the whole, if it has
     /// said.
-    // Read by the Background panel, which is not built yet.
-    #[allow(dead_code)]
     pub(crate) fn fraction(&self) -> Option<f32> {
         lock(&self.state).fraction
     }
@@ -238,6 +263,17 @@ struct Open {
     depth: u8,
     /// Which row of [`State::rows`] the phase folds into.
     row: usize,
+    /// Which row of [`State::transcript`] this run of it is, which is a row of
+    /// its own however many times the phase has been entered before.
+    line: usize,
+    /// When this run of the phase was entered.
+    ///
+    /// The guard on the other side of the sink keeps one of these too and
+    /// reports the difference as `took` when it closes, but a panel drawing a
+    /// stage that has not closed cannot wait for that, so the collector times
+    /// the open run itself. The two are the same clock read a few instructions
+    /// apart.
+    since: Instant,
 }
 
 /// What fold a phase belongs to: the row of the phase enclosing it, and its
@@ -252,8 +288,21 @@ type Fold = (Option<usize>, &'static str);
 
 #[derive(Default)]
 struct State {
-    /// The rows, in the order they first appeared.
+    /// The rows, in the order they first appeared, folded: this is the entry's
+    /// breakdown, and it answers "where did the time go".
     rows: Vec<Detail>,
+    /// The same events, unfolded and in the order they happened: one row per
+    /// run of a phase and one per message, which is what a panel watching a
+    /// live operation draws.
+    ///
+    /// Kept beside `rows` rather than instead of them because the two answer
+    /// different questions. A reader watching an operation wants to see it
+    /// happen, round by round, each with what it said; a reader finding the
+    /// entry afterwards wants to know where the time went, and a transcript of
+    /// five hundred and forty `linearise` rows is no answer to that. Folding
+    /// as the events arrive is also what keeps the entry inside
+    /// `ActionLog::DETAIL_EVENTS`, so it cannot become a post-pass.
+    transcript: Vec<Detail>,
     /// The phases entered and not yet left, innermost last.
     open: Vec<Open>,
     /// Which row each fold has already claimed.
@@ -283,6 +332,11 @@ impl State {
                     Level::Warn => log::warn!(target: "sfm_explorer::progress", "{text}"),
                 }
                 self.rows.push(Detail::Message {
+                    level,
+                    depth,
+                    text: text.to_string(),
+                });
+                self.transcript.push(Detail::Message {
                     level,
                     depth,
                     text: text.to_string(),
@@ -328,7 +382,23 @@ impl State {
             });
             rows.len() - 1
         });
-        self.open.push(Open { depth, row });
+        // This run's own row, whatever the fold did: a phase entered for the
+        // fortieth time is the fortieth line of the transcript.
+        self.transcript.push(Detail::Phase {
+            name,
+            depth,
+            took: Duration::ZERO,
+            cpu: None,
+            note: None,
+            note_last: None,
+            runs: 1,
+        });
+        self.open.push(Open {
+            depth,
+            row,
+            line: self.transcript.len() - 1,
+            since: Instant::now(),
+        });
     }
 
     /// Close a phase, adding its cost to the row its fold owns.
@@ -342,7 +412,19 @@ impl State {
             return;
         }
         let row = open.row;
+        let line = open.line;
         self.open.pop();
+        // The transcript's row is this run alone, so it takes the cost and the
+        // note as they came, with nothing to reconcile against another run.
+        if let Some(Detail::Phase {
+            took: spent,
+            note: said,
+            ..
+        }) = self.transcript.get_mut(line)
+        {
+            *spent = took;
+            *said = note.map(str::to_string);
+        }
         let Some(Detail::Phase {
             name: folded,
             took: total,
@@ -371,6 +453,28 @@ impl State {
         }
     }
 
+    /// The transcript so far, copied, with every open phase carrying the time
+    /// it has been open.
+    ///
+    /// Unfolded, which is the difference between this and what
+    /// [`State::take`] hands the entry: a reader watching an operation is
+    /// watching it *happen*, so each round is its own row with the cost that
+    /// round took and the note that round gave. Nothing is summed and no note
+    /// is merged, because a summary of something the reader is watching
+    /// unfold is a summary of something they can already see.
+    fn live(&self) -> Live {
+        let mut rows = self.transcript.clone();
+        for open in &self.open {
+            if let Some(Detail::Phase { took, .. }) = rows.get_mut(open.line) {
+                *took = open.since.elapsed();
+            }
+        }
+        Live {
+            open: self.open.iter().map(|open| open.line).collect(),
+            rows,
+        }
+    }
+
     /// Everything recorded, leaving the state empty.
     ///
     /// A phase that was entered and never left is dropped. The row exists
@@ -382,6 +486,7 @@ impl State {
     fn take(&mut self) -> Vec<Detail> {
         self.open.clear();
         self.folds.clear();
+        self.transcript.clear();
         let mut rows = std::mem::take(&mut self.rows);
         rows.retain(|row| !matches!(row, Detail::Phase { runs: 0, .. }));
         rows

@@ -25,8 +25,16 @@ const DEFAULT_JSON: &str = r#"{
       "split": "left_right",
       "fraction": 0.18,
       "first": {
-        "tabs": ["scene"],
-        "active": "scene"
+        "split": "top_bottom",
+        "fraction": 0.72,
+        "first": {
+          "tabs": ["scene"],
+          "active": "scene"
+        },
+        "second": {
+          "tabs": ["background"],
+          "active": "background"
+        }
       },
       "second": {
         "split": "top_bottom",
@@ -141,6 +149,33 @@ fn the_action_log_shares_the_bottom_node_with_the_image_browser() {
     );
 }
 
+/// The left column is a top-bottom split, not a second set of tabs: the tree
+/// and what the viewer is busy with are read at the same time, so one hiding
+/// the other would defeat the panel.
+#[test]
+fn the_left_column_splits_the_tree_over_the_background_panel() {
+    let LayoutNode::Split { first, .. } = Layout::default().main.expect("a default arrangement")
+    else {
+        panic!("the default layout does not split its root");
+    };
+    let LayoutNode::Split {
+        split,
+        fraction,
+        first: top,
+        second: bottom,
+    } = *first
+    else {
+        panic!("the left column is not a split: {first:?}");
+    };
+    assert_eq!(split, SplitDirection::TopBottom);
+    assert!(
+        (fraction - 0.72).abs() < 1e-6,
+        "the tree's share is {fraction}, not 0.72"
+    );
+    assert_eq!(*top, LayoutNode::leaf(&[Tab::SceneGraph]));
+    assert_eq!(*bottom, LayoutNode::leaf(&[Tab::Background]));
+}
+
 #[test]
 fn the_default_round_trips_through_a_dock() {
     let layout = Layout::default();
@@ -242,6 +277,7 @@ fn tab_all_is_in_the_menus_order() {
         Tab::ALL,
         [
             Tab::SceneGraph,
+            Tab::Background,
             Tab::Viewer3D,
             Tab::ImageBrowser,
             Tab::ImageDetail,
@@ -309,6 +345,10 @@ fn a_panel_goes_home_to_a_group_mate() {
         (Tab::IntrinsicsDetail, Tab::ImageDetail),
         (Tab::ActionLog, Tab::ImageBrowser),
         (Tab::ImageBrowser, Tab::ActionLog),
+        // Not a multi-tab node of the default layout, and a group-mate anyway:
+        // re-opening the Background panel puts it back beside the tree.
+        (Tab::Background, Tab::SceneGraph),
+        (Tab::SceneGraph, Tab::Background),
     ] {
         let mut state = state();
         state.hide_panel(tab);
@@ -333,6 +373,7 @@ fn a_panel_goes_home_to_a_group_mate() {
 fn a_panel_with_no_group_mate_splits_the_root() {
     for (tab, split, fraction, first_is_new) in [
         (Tab::SceneGraph, SplitDirection::LeftRight, 0.18, true),
+        (Tab::Background, SplitDirection::LeftRight, 0.18, true),
         (Tab::ImageBrowser, SplitDirection::TopBottom, 0.80, false),
         (Tab::ImageDetail, SplitDirection::LeftRight, 0.67, false),
     ] {
@@ -482,8 +523,8 @@ fn an_unknown_panel_name_lists_them_all() {
     let message = layout_refusal(r#"{"main": {"tabs": ["viewer3d"], "active": "viewer3d"}}"#);
     assert_eq!(
         message,
-        "layout.main: unknown panel \"viewer3d\"; the panels are scene, viewer_3d, image_browser, \
-         image_detail, point_track, camera_intrinsics, action_log, edit_history"
+        "layout.main: unknown panel \"viewer3d\"; the panels are scene, background, viewer_3d, \
+         image_browser, image_detail, point_track, camera_intrinsics, action_log, edit_history"
     );
 }
 

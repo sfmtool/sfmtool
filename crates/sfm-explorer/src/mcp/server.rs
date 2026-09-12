@@ -59,6 +59,33 @@ use super::{Reply, Request, ToolOutput};
 /// "the viewer is busy" rather than a hung connection.
 const APPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// What to tell a caller whose call the GUI thread did not answer.
+///
+/// Two sentences rather than one, because the second half of a timeout message
+/// is a guess at the cause and a guess that names something measurable beats
+/// one that lists possibilities. With an operation on a worker the viewer can
+/// say which operation and on what, and point at the tool that reports on it;
+/// with nothing running the original guesses are all there is, and they are
+/// then the right ones.
+///
+/// It does not promise that `get_background_process` will answer, because it
+/// cannot: every tool on this surface goes through the same GUI thread, and a
+/// thread that missed this call may miss that one too.
+pub(super) fn timeout_message(busy: Option<crate::background::Busy>) -> String {
+    let seconds = APPLY_TIMEOUT.as_secs();
+    match busy {
+        Some(busy) => format!(
+            "The viewer did not answer within {seconds} seconds. {} is running in the background \
+             on {}; get_background_process says how far along it has got.",
+            busy.operation, busy.label
+        ),
+        None => format!(
+            "The viewer did not answer within {seconds} seconds. It may be showing a modal \
+             dialog, or be mid-drag."
+        ),
+    }
+}
+
 /// Why the endpoint could not be brought up.
 ///
 /// Fatal to startup, deliberately: two viewers on one port is the common
@@ -97,6 +124,7 @@ impl std::error::Error for ServeError {}
 pub(crate) fn serve(
     port: u16,
     tx: mpsc::UnboundedSender<Request>,
+    busy: crate::background::BusyNotice,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Result<SocketAddr, ServeError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -120,6 +148,7 @@ pub(crate) fn serve(
     let handler = Viewer {
         tx,
         wake: Arc::new(wake),
+        busy,
     };
     let config = StreamableHttpServerConfig::default()
         // Every request is answered on its own, so there is nothing for a
@@ -161,6 +190,11 @@ pub(crate) fn serve(
 struct Viewer {
     tx: mpsc::UnboundedSender<Request>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// What is running off the GUI thread, for [`timeout_message`]. The only
+    /// piece of viewer state this thread reads directly, and it is here
+    /// because the thread that owns the rest of it is the thread that has
+    /// stopped answering.
+    busy: crate::background::BusyNotice,
 }
 
 impl Viewer {
@@ -185,11 +219,7 @@ impl Viewer {
                 None,
             )),
             Err(_) => Err(ErrorData::internal_error(
-                format!(
-                    "The viewer did not answer within {} seconds. It may be showing a modal \
-                     dialog, or be mid-drag.",
-                    APPLY_TIMEOUT.as_secs()
-                ),
+                timeout_message(crate::background::busy(&self.busy)),
                 None,
             )),
         }

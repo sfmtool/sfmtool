@@ -23,7 +23,8 @@ use std::sync::Arc;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{BundleAdjustOptions, SfmrReconstruction};
 
-use crate::action_log::{Actor, Entry};
+use crate::action_log::{ActionLog, Actor, Entry};
+use crate::progress::Detail;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -566,4 +567,548 @@ fn a_bulk_edit_of_the_busy_node_is_refused_too() {
 
     gate.open();
     state.finish_background();
+}
+
+// -- The panel -------------------------------------------------------------
+
+/// The input one headless frame of the panel is given: narrow and tall, which
+/// is the shape of the bottom of the left column.
+fn input() -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(260.0, 400.0),
+        )),
+        ..Default::default()
+    }
+}
+
+/// Every string one headless frame of the panel painted, with where it landed.
+///
+/// The positions are what a hover test needs: a tooltip only appears over a
+/// widget the context already knows about, so the click-through of
+/// `action_log::tests` applies here too and the caller owns the context.
+fn painted_at(
+    ctx: &egui::Context,
+    state: &mut AppState,
+    input: egui::RawInput,
+) -> Vec<(String, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((text.galley.text().to_owned(), text.pos)),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut output = ctx.run_ui(input, |ui| super::panel::show(ui, state));
+    output.textures_delta.clear();
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// Everything one frame of the panel painted, in a context of its own.
+fn painted(state: &mut AppState) -> Vec<String> {
+    let ctx = egui::Context::default();
+    crate::test_support::painted_texts(&ctx, input(), |ui| super::panel::show(ui, state))
+}
+
+/// A job that opens a phase and leaves it open at the gate, having reported no
+/// number at all: the case the panel has nothing to draw a bar from.
+fn open_phase_job(gate: mpsc::Receiver<()>, said: mpsc::Sender<()>) -> Job {
+    Box::new(move |progress| {
+        let _open = progress.phase("gather arrays");
+        said.send(()).expect("the test is listening");
+        let _ = gate.recv();
+        Finished::Failed("the fake worker produced nothing".to_string())
+    })
+}
+
+/// A job that reports a folded phase table, a message and a count, closes all
+/// of it, and then waits at the gate.
+///
+/// Closed before the wait on purpose: what the panel draws then is exactly what
+/// the entry will hold, so the two can be compared row for row rather than
+/// allowing for a run that was still going when one of them was read.
+fn counted_job(gate: mpsc::Receiver<()>, said: mpsc::Sender<()>) -> Job {
+    Box::new(move |progress| {
+        drop(progress.phase("gather arrays"));
+        {
+            let solve = progress.phase("solve");
+            for round in 1..=2u64 {
+                let mut phase = solve.phase("round");
+                phase.note(format_args!("median 1.{round}0 px"));
+                drop(phase);
+                solve.count(round, Some(2), "round");
+            }
+            solve.message(
+                sfmtool_core::progress::Level::Info,
+                format_args!("median 0.412 px"),
+            );
+        }
+        said.send(()).expect("the test is listening");
+        let _ = gate.recv();
+        Finished::Failed("the fake worker produced nothing".to_string())
+    })
+}
+
+/// Start the fake work for `operation` on `id` and come back once it has
+/// reported everything it means to, so the panel is read at an instant the test
+/// chose rather than one the scheduler did.
+fn running(state: &mut AppState, id: ReconId, operation: Operation) -> Gate {
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let job: Job = if operation.cancellable {
+        counted_job(gate.held(), said)
+    } else {
+        open_phase_job(gate.held(), said)
+    };
+    state
+        .start_background(operation, id, job)
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background();
+    gate
+}
+
+/// An operation whose kernels never ask whether they should stop, for the half
+/// of the Cancel rule that is about a button nobody can press.
+const NOT_CANCELLABLE: Operation = Operation {
+    name: "Fake solve",
+    cancellable: false,
+};
+
+/// A session that has run nothing says so and says nothing else: one greyed
+/// line is a panel a reader can skip, where a blank one is a panel that looks
+/// broken.
+#[test]
+fn an_idle_panel_with_nothing_run_says_only_that() {
+    let (mut state, _) = adjustable();
+    assert_eq!(painted(&mut state), ["Nothing running"]);
+}
+
+/// Idle after an operation: the name, the node and the cost, with the phases
+/// behind a toggle that works as the Action Log's does.
+#[test]
+fn an_idle_panel_shows_the_last_operation_and_expands_its_phases() {
+    let (mut state, id) = adjustable();
+    running(&mut state, id, Operation::BUNDLE_ADJUST).open();
+    state.finish_background();
+
+    let collapsed = painted(&mut state);
+    assert!(collapsed.iter().any(|text| text == "Bundle adjust"));
+    assert!(collapsed.iter().any(|text| text == "run_a"));
+    assert!(collapsed.iter().any(|text| text == "+"), "{collapsed:?}");
+    assert!(
+        !collapsed.iter().any(|text| text == "solve"),
+        "a collapsed panel drew its phases: {collapsed:?}"
+    );
+    // What it cost, in the Action Log's spelling of a duration.
+    let took = ActionLog::format_took(state.last_background.as_ref().expect("it finished").took);
+    assert!(
+        collapsed.contains(&took),
+        "{took:?} is missing from {collapsed:?}"
+    );
+
+    state.background_detail_expanded = true;
+    let expanded = painted(&mut state);
+    assert!(expanded.iter().any(|text| text == "-"), "{expanded:?}");
+    assert!(expanded.iter().any(|text| text == "solve"), "{expanded:?}");
+    // Unfolded, as the running panel drew them: two runs, two rows.
+    assert_eq!(
+        expanded
+            .iter()
+            .filter(|text| text.starts_with("  round"))
+            .count(),
+        2,
+        "{expanded:?}"
+    );
+}
+
+/// And the toggle is what a click reaches, rather than a flag only a test can
+/// move.
+#[test]
+fn clicking_the_idle_toggle_opens_and_closes_the_phases() {
+    let (mut state, id) = adjustable();
+    running(&mut state, id, Operation::BUNDLE_ADJUST).open();
+    state.finish_background();
+
+    let ctx = egui::Context::default();
+    let first = painted_at(&ctx, &mut state, input());
+    let at = first
+        .iter()
+        .find(|(text, _)| text == "+")
+        .unwrap_or_else(|| panic!("no toggle: {first:?}"))
+        .1;
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at + egui::vec2(2.0, 4.0),
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut click = input();
+    click.events = vec![
+        egui::Event::PointerMoved(at + egui::vec2(2.0, 4.0)),
+        button(true),
+        button(false),
+    ];
+    painted_at(&ctx, &mut state, click);
+    assert!(
+        state.background_detail_expanded,
+        "the click did not open the phases"
+    );
+}
+
+/// The panel and the entry are two views of one collector, and the entry is
+/// the *summary* of what the panel showed: every run the panel drew is counted
+/// in the row the entry folds it into, and the costs add up. They present it
+/// differently on purpose (see
+/// `a_running_phase_table_keeps_every_run_and_every_note_apart`); what they
+/// must never do is disagree about what happened.
+#[test]
+fn the_entry_is_the_summary_of_what_the_running_panel_showed() {
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+
+    let live = state.background().expect("running").collector.live().rows;
+    let while_running = painted(&mut state);
+    assert!(
+        while_running.iter().any(|text| text == "Bundle adjust"),
+        "{while_running:?}"
+    );
+    assert!(while_running.iter().any(|text| text == "run_a"));
+    assert!(
+        while_running.iter().any(|text| text.ends_with(" elapsed")),
+        "the elapsed is missing from {while_running:?}"
+    );
+
+    gate.open();
+    state.finish_background();
+
+    let entry = newest(&state);
+    // Every phase the entry folded, against the runs of it the panel drew.
+    // `runs` is the count of them and `took` is their sum, which is the whole
+    // of what folding claims.
+    for (name, depth, runs) in crate::test_support::phase_rows(&entry.detail) {
+        let drawn: Vec<&Detail> = live
+            .iter()
+            .filter(|row| {
+                matches!(row, Detail::Phase { name: n, depth: d, .. } if *n == name && *d == depth)
+            })
+            .collect();
+        assert_eq!(
+            drawn.len() as u32,
+            runs,
+            "the entry folded {runs} runs of {name:?} and the panel drew {}",
+            drawn.len(),
+        );
+    }
+    // And every message the entry kept is a message the panel painted, since a
+    // message is never folded in either view.
+    for row in &entry.detail {
+        if let Detail::Message { text, .. } = row {
+            assert!(
+                while_running
+                    .iter()
+                    .any(|drawn| drawn.contains(text.as_str())),
+                "{text:?} is in the entry and was not painted: {while_running:?}",
+            );
+        }
+    }
+}
+
+/// What the panel shows is the operation happening, not a summary of it: each
+/// run of a stage is its own row with its own cost and its own note, and two
+/// runs that said different things say both, separately. The entry folds the
+/// same two runs into `round x2` with the ends of the note joined, which is the
+/// right answer to a different question.
+#[test]
+fn a_running_phase_table_keeps_every_run_and_every_note_apart() {
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+
+    let texts = painted(&mut state);
+    let rounds = texts
+        .iter()
+        .filter(|text| text.starts_with("  round"))
+        .count();
+    assert_eq!(rounds, 2, "the two rounds were not drawn apart: {texts:?}");
+    for note in ["  round  median 1.10 px", "  round  median 1.20 px"] {
+        assert!(
+            texts.iter().any(|text| text == note),
+            "{note:?} was not painted on its own row: {texts:?}",
+        );
+    }
+    assert!(
+        !texts.iter().any(|text| text.contains(" x2")),
+        "the panel folded a stage: {texts:?}",
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("...")),
+        "the panel joined two notes: {texts:?}",
+    );
+
+    gate.open();
+    state.finish_background();
+
+    // The entry, of the same two runs, folds them and joins the ends.
+    let drawn = ActionLog::drawn_detail(newest(&state));
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row.contains("round x2") && row.contains("...")),
+        "the entry did not fold the rounds: {drawn:?}",
+    );
+}
+
+/// A bar only where something underneath reported a number, and the open
+/// phase's name beside a spinner where nothing did. Nothing interpolates across
+/// a silent stage, because a bar moving at a rate nobody measured makes a
+/// promise about the finish.
+#[test]
+fn the_bar_is_drawn_only_where_a_count_was_reported() {
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+    let process = state.background().expect("running");
+    let live = process.collector.live();
+    assert_eq!(
+        super::panel::bar(&process.collector, &live),
+        super::panel::Bar::Measured {
+            fraction: 1.0,
+            count: Some("round 2/2".to_string()),
+        },
+    );
+    let texts = painted(&mut state);
+    assert!(texts.iter().any(|text| text == "round 2/2"), "{texts:?}");
+    gate.open();
+    state.finish_background();
+
+    let gate = running(&mut state, id, NOT_CANCELLABLE);
+    let process = state.background().expect("running");
+    let live = process.collector.live();
+    assert_eq!(
+        super::panel::bar(&process.collector, &live),
+        super::panel::Bar::Spinner {
+            phase: Some("gather arrays"),
+        },
+    );
+    let texts = painted(&mut state);
+    assert!(
+        texts.iter().any(|text| text == "gather arrays"),
+        "{texts:?}"
+    );
+    // The open phase is marked, so a reader can tell the stage that is running
+    // from the ones that are over.
+    assert!(
+        texts.iter().any(|text| text == super::panel::OPEN_MARK),
+        "the open phase is not marked: {texts:?}"
+    );
+    gate.open();
+    state.finish_background();
+}
+
+/// Cancel is there either way, and says why when it would do nothing. Hiding it
+/// leaves the reader wondering whether they missed it.
+#[test]
+fn cancel_is_live_for_one_operation_and_explained_for_the_other() {
+    for operation in [Operation::BUNDLE_ADJUST, NOT_CANCELLABLE] {
+        let (mut state, id) = adjustable();
+        let gate = running(&mut state, id, operation);
+        let refusal = state.cancel_refusal();
+        assert_eq!(refusal.is_some(), !operation.cancellable, "{refusal:?}");
+
+        let ctx = egui::Context::default();
+        // A tooltip waits out `tooltip_delay` before it shows, which a headless
+        // frame has no wall clock to pass; what is under test is which sentence
+        // the button carries, not how long egui makes a reader wait for it.
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.tooltip_grace_time = 0.0;
+        });
+        let first = painted_at(&ctx, &mut state, input());
+        let at = first
+            .iter()
+            .find(|(text, _)| text == "Cancel")
+            .unwrap_or_else(|| panic!("no Cancel button: {first:?}"))
+            .1;
+        // Into the middle of the glyphs rather than at their corner, which is
+        // the one point of the button's rect a rounding could put outside it.
+        let over = at + egui::vec2(8.0, 4.0);
+        let mut hovering = input();
+        hovering.events = vec![egui::Event::PointerMoved(over)];
+        painted_at(&ctx, &mut state, hovering);
+        // A second frame with the pointer where it was: egui wants it to have
+        // stopped moving before it puts a tooltip up, and the frame that
+        // carries the move is the frame it was still moving in.
+        let hovered: Vec<String> = painted_at(&ctx, &mut state, input())
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        // Which sentence comes up is also what says whether the button is live:
+        // egui shows a disabled hover text only for a disabled widget and an
+        // ordinary one only for an enabled widget, so reading the refusal off
+        // the tooltip is reading the disablement off it too.
+        let expected = refusal.unwrap_or_else(|| "Ask the operation to stop.".to_string());
+        assert!(
+            hovered.contains(&expected),
+            "{expected:?} was not the tooltip: {hovered:?}",
+        );
+
+        gate.open();
+        state.finish_background();
+    }
+}
+
+/// A job that opens more phases than a short panel can show, and waits at the
+/// gate with the last of them named.
+fn many_phases_job(gate: mpsc::Receiver<()>, said: mpsc::Sender<()>) -> Job {
+    Box::new(move |progress| {
+        for name in PHASES {
+            drop(progress.phase(name));
+        }
+        said.send(()).expect("the test is listening");
+        let _ = gate.recv();
+        Finished::Failed("the fake worker produced nothing".to_string())
+    })
+}
+
+/// Enough stages to overflow the panel, the last of which is what a reader
+/// watching a running operation needs to see.
+const PHASES: [&str; 12] = [
+    "gather arrays",
+    "residuals before",
+    "solve",
+    "round",
+    "linearise",
+    "normal equations",
+    "damping ladder",
+    "write back",
+    "row map",
+    "reindex",
+    "push version",
+    "settle",
+];
+
+/// The table follows its tail, because the stage that is running is the newest
+/// row and the stages that finished first are the ones that fit.
+///
+/// Found by watching a 102 second solve: the panel showed `gather arrays`,
+/// which cost 2 ms, for the whole of it, while the stage actually spending the
+/// time was a scroll below the fold.
+#[test]
+fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    state
+        .start_background(
+            Operation::BUNDLE_ADJUST,
+            id,
+            many_phases_job(gate.held(), said),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background();
+
+    // Short enough that the table cannot hold all twelve, which is the shape of
+    // the panel at the bottom of the left column.
+    let mut short = input();
+    short.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(260.0, 190.0),
+    ));
+    let ctx = egui::Context::default();
+    // The first frame lays the table out; the scroll offset it computes from
+    // that is applied to the next one.
+    crate::test_support::painted_texts(&ctx, short.clone(), |ui| {
+        super::panel::show(ui, &mut state)
+    });
+    let texts =
+        crate::test_support::painted_texts(&ctx, short, |ui| super::panel::show(ui, &mut state));
+    let last = PHASES.last().expect("a stage");
+    assert!(
+        texts.iter().any(|text| text == last),
+        "{last:?} was below the fold: {texts:?}",
+    );
+    assert!(
+        !texts.iter().any(|text| text == PHASES[0]),
+        "the table did not scroll at all: {texts:?}",
+    );
+
+    gate.open();
+    state.finish_background();
+}
+
+/// Where a painted string actually lies, left edge to right edge.
+///
+/// Not its position: a right-aligned galley reports its *anchor*, with the
+/// glyphs running back from it, so a cost pinned to the right edge of a 260px
+/// panel is drawn at `pos.x = 260`. The span is what says whether two things
+/// overlap, and overlapping is the failure this is for.
+fn painted_spans(state: &mut AppState, width: f32) -> Vec<(String, f32, f32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, f32, f32)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                text.pos.x + text.galley.rect.min.x,
+                text.pos.x + text.galley.rect.max.x,
+            )),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(width, 400.0),
+        )),
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| super::panel::show(ui, state));
+    output.textures_delta.clear();
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The cost survives a long label, because it is the column a reader came back
+/// to an idle panel for.
+///
+/// Found by looking at the panel with `dino_dog_toy-embedded` in it: the label
+/// claimed the whole row and ran under the number. The name is given what is
+/// left after the cost rather than allowed to take it, which is the rule the
+/// phase rows one function below already follow.
+#[test]
+fn an_idle_panel_keeps_the_cost_clear_of_a_long_label() {
+    let (mut state, id) = adjustable();
+    running(&mut state, id, Operation::BUNDLE_ADJUST).open();
+    state.finish_background();
+    let last = state.last_background.as_mut().expect("it finished");
+    last.label = "a_reconstruction_with_a_name_nobody_would_shorten".to_string();
+    let took = ActionLog::format_took(last.took);
+    let label = last.label.clone();
+
+    let width = 260.0;
+    let spans = painted_spans(&mut state, width);
+    let span = |needle: &str| {
+        spans
+            .iter()
+            .find(|(text, _, _)| text == needle)
+            .unwrap_or_else(|| panic!("{needle:?} was not painted: {spans:?}"))
+    };
+    let (_, cost_left, cost_right) = *span(&took);
+    let (_, _, label_right) = *span(&label);
+    assert!(
+        cost_right <= width,
+        "the cost ran to {cost_right} past the {width}px edge",
+    );
+    assert!(
+        label_right <= cost_left,
+        "the label ran to {label_right}, under a cost starting at {cost_left}",
+    );
 }

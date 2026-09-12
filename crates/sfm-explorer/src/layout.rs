@@ -167,12 +167,18 @@ pub(crate) enum Home {
     Edge { edge: Split, share: f32 },
 }
 
-/// The panels that share a node in the default layout, in default order.
+/// The panels that go home to one another, in default order.
 ///
 /// A panel opened from the menu goes home to whichever of its group-mates is
 /// still on screen (rule 2), which is what keeps the Point Track panel behind
 /// Image Detail rather than beside it.
-const GROUPS: [&[Tab]; 2] = [
+///
+/// Two of these are the multi-tab nodes of the default layout. The third is
+/// not: Scene and Background are a top-bottom split there, and are group-mates
+/// anyway, because a Background panel re-opened beside the tree is the thing
+/// asked for and a third left column would not be.
+const GROUPS: [&[Tab]; 3] = [
+    &[Tab::SceneGraph, Tab::Background],
     &[
         Tab::ImageDetail,
         Tab::PointTrackDetail,
@@ -183,8 +189,9 @@ const GROUPS: [&[Tab]; 2] = [
 
 impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
-    pub(crate) const ALL: [Tab; 8] = [
+    pub(crate) const ALL: [Tab; 9] = [
         Tab::SceneGraph,
+        Tab::Background,
         Tab::Viewer3D,
         Tab::ImageBrowser,
         Tab::ImageDetail,
@@ -199,6 +206,7 @@ impl Tab {
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Tab::SceneGraph => "scene",
+            Tab::Background => "background",
             Tab::Viewer3D => "viewer_3d",
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
@@ -228,7 +236,10 @@ impl Tab {
     pub(crate) fn home(self) -> Home {
         match self {
             Tab::Viewer3D => Home::Root,
-            Tab::SceneGraph => Home::Edge {
+            // The same edge and share as Scene, whose group-mate it is: with
+            // the tree gone too, the panel that replaces it belongs where the
+            // tree was.
+            Tab::SceneGraph | Tab::Background => Home::Edge {
                 edge: Split::Left,
                 share: 0.18,
             },
@@ -255,23 +266,33 @@ impl Tab {
 
 // ── The stock layout ─────────────────────────────────────────────────────
 
+/// The Scene tree's share of the left column, the Background panel taking the
+/// rest.
+///
+/// The tree is what the column is for and is the taller of the two by a long
+/// way; the panel under it holds a handful of lines and a phase table that is
+/// usually short, so it wants enough room to read without the tree having to
+/// scroll for it.
+const LEFT_COLUMN_SPLIT: f32 = 0.72;
+
 impl Default for Layout {
-    /// The stock eight-panel grid:
+    /// The stock nine-panel grid:
     ///
     /// ```text
     /// ┌────────┬──────────────────┬───────────────┐
-    /// │        │    3D Viewer     │ Image Detail  │
-    /// │ Scene  ├──────────────────┴───────────────┤
-    /// │        │ Image Browser │ Action Log │ Edit History │
+    /// │ Scene  │    3D Viewer     │ Image Detail  │
+    /// ├────────┼──────────────────┴───────────────┤
+    /// │Backgr. │ Image Browser │ Action Log │ Edit History │
     /// └────────┴──────────────────────────────────┘
     /// ```
     ///
-    /// The Scene tab takes a narrow left split of the root — narrow because the
-    /// tree is a list of short labels and everything else in the window wants
-    /// the width. Two nodes hold more than one tab, and in both the first is
-    /// the active one: the bottom node opens on the Image Browser with the
-    /// Action Log and the Edit History behind it, and the right-hand node on Image
-    /// Detail.
+    /// The left column takes a narrow left split of the root, narrow because
+    /// the tree is a list of short labels and everything else in the window
+    /// wants the width, and splits top to bottom, the tree keeping the larger
+    /// share and the Background panel taking the rest. Two nodes hold more than
+    /// one tab, and in both the first is the active one: the bottom node opens
+    /// on the Image Browser with the Action Log and the Edit History behind it,
+    /// and the right-hand node on Image Detail.
     ///
     /// `Layout::default().to_dock()` is what the viewer starts with, and what
     /// Panels ▸ Reset Layout restores.
@@ -280,7 +301,12 @@ impl Default for Layout {
             main: Some(LayoutNode::Split {
                 split: SplitDirection::LeftRight,
                 fraction: 0.18,
-                first: Box::new(LayoutNode::leaf(&[Tab::SceneGraph])),
+                first: Box::new(LayoutNode::Split {
+                    split: SplitDirection::TopBottom,
+                    fraction: LEFT_COLUMN_SPLIT,
+                    first: Box::new(LayoutNode::leaf(&[Tab::SceneGraph])),
+                    second: Box::new(LayoutNode::leaf(&[Tab::Background])),
+                }),
                 second: Box::new(LayoutNode::Split {
                     split: SplitDirection::TopBottom,
                     fraction: 0.8,

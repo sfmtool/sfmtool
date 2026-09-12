@@ -23,9 +23,9 @@ The reason a panel can be closed at all is that the window is increasingly
 shared. A human and an agent looking at the same viewer want different things
 from it at different moments — the agent wants the 3D viewport as large as
 possible before a screenshot, the human wants the Action Log in front to see
-what the agent just did — and a fixed eight-panel grid serves neither. What
+what the agent just did — and a fixed nine-panel grid serves neither. What
 makes closing safe to allow is that there is a way back: a panel with no way
-back is a trap. The **Panels** menu is that way back — it lists all eight,
+back is a trap. The **Panels** menu is that way back — it lists all nine,
 ticks the open ones, and re-opens a closed one with a click.
 
 ## What the user sees
@@ -73,7 +73,7 @@ Panels
     Load Layout...
 ```
 
-The eight entries are in default-layout order, each a checkbox reading the
+The nine entries are in default-layout order, each a checkbox reading the
 panel's open state. Clicking a **ticked** entry closes that panel, exactly as
 its tab's close button does. Clicking an **unticked** entry opens it, at its
 home position (§ "Home positions"), and makes it the active tab of its node so
@@ -81,7 +81,7 @@ the click has something to show for itself. There is no "raise" entry: a ticked
 panel is one the user can see the tab of.
 
 **Reset Layout** replaces the whole panel arrangement — main surface and any
-floating windows — with `Layout::default()`, the eight-panel grid
+floating windows — with `Layout::default()`, the nine-panel grid
 [multi-panel-image-browser.md](multi-panel-image-browser.md) § "Default
 Layout" describes. Panel state survives, as it does for a close. It leaves the
 *window* where the user put it: their window is theirs, and a panel reset is not
@@ -112,16 +112,19 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    `Go ▸ Go to Point`'s raise of the Point Track panel and, later, an MCP
    `show_panel`.)
 2. **A default group-mate is open:** push it into that node, behind the
-   current tabs, then make it active. The default layout has two multi-tab
-   groups — Image Detail / Point Track / Camera Intrinsics, and Image Browser /
-   Action Log / Edit History — and a panel from either goes home to whichever
-   of its group-mates is still there.
+   current tabs, then make it active. There are three groups. Two of them are
+   the multi-tab nodes of the default layout (Image Detail / Point Track /
+   Camera Intrinsics, and Image Browser / Action Log / Edit History), and a
+   panel from either goes home to whichever of its group-mates is still there.
+   The third, Scene / Background, is a top-bottom split rather than one node,
+   and is a group anyway: a Background panel re-opened belongs beside the tree,
+   where rule 3 would give it a second left column of its own.
 3. **Otherwise, split the main surface's root** along the panel's home edge,
    at its home fraction, and put the panel in the new node:
 
    | Panel | Home edge | New node's share |
    |-------|-----------|------------------|
-   | Scene | left | 0.18 |
+   | Scene, Background | left | 0.18 |
    | 3D Viewer | *(takes the root)* | — |
    | Image Browser, Action Log, Edit History | below | 0.20 |
    | Image Detail, Point Track, Camera Intrinsics | right | 0.33 |
@@ -185,8 +188,16 @@ observed a window (a headless `AppState`):
       "split": "left_right",
       "fraction": 0.18,
       "first": {
-        "tabs": ["scene"],
-        "active": "scene"
+        "split": "top_bottom",
+        "fraction": 0.72,
+        "first": {
+          "tabs": ["scene"],
+          "active": "scene"
+        },
+        "second": {
+          "tabs": ["background"],
+          "active": "background"
+        }
       },
       "second": {
         "split": "top_bottom",
@@ -355,7 +366,7 @@ cannot do.
 
 An object with `main` and `windows`, both optional: the split tree of the main
 surface and the floating windows. Or the string **`"default"`**, the stock
-eight-panel grid — a file that says `"layout": "default"` is a reset. The viewer
+nine-panel grid — a file that says `"layout": "default"` is a reset. The viewer
 never writes that form. The section may be absent or `null`, meaning the panels
 are left alone.
 
@@ -367,6 +378,7 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | Name | Tab | Title |
 |------|-----|-------|
 | `scene` | `SceneGraph` | Scene |
+| `background` | `Background` | Background |
 | `viewer_3d` | `Viewer3D` | 3D Viewer |
 | `image_browser` | `ImageBrowser` | Image Browser |
 | `image_detail` | `ImageDetail` | Image Detail |
@@ -434,8 +446,8 @@ each with its message:
 - `layout` is an object, `null`, or the string `"default"`; any other string is
   `layout: the only named layout is "default"`, and anything else `layout: must
   be an arrangement, null, or "default"`.
-- Inside `layout`: every panel name is one of the eight (`unknown panel
-  "viewer3d"; the panels are scene, viewer_3d, image_browser, image_detail,
+- Inside `layout`: every panel name is one of the nine (`unknown panel
+  "viewer3d"; the panels are scene, background, viewer_3d, image_browser, image_detail,
   point_track, camera_intrinsics, action_log, edit_history`); **every panel appears at most
   once** across `main` and every window (`panel "scene" appears more than once`),
   because a `Tab` is a singleton — one struct draws it — and two tabs with one
@@ -582,7 +594,7 @@ pub(crate) struct LayoutRect { pub x: f32, pub y: f32, pub width: f32, pub heigh
 
 pub(crate) const LAYOUT_VERSION: u64 = 2;
 
-/// The stock eight-panel grid. `Layout::default().to_dock()` is what the
+/// The stock nine-panel grid. `Layout::default().to_dock()` is what the
 /// viewer starts with, and what Reset Layout restores.
 impl Default for Layout { fn default() -> Self; }
 
@@ -625,7 +637,7 @@ impl Tab {
     pub(crate) const ALL: [Tab; 8];           // default-layout order, the menu's order
     pub(crate) fn wire_name(self) -> &'static str;
     pub(crate) fn from_wire_name(name: &str) -> Option<Tab>;
-    /// All eight, comma-joined, as the unknown-panel message lists them.
+    /// All nine, comma-joined, as the unknown-panel message lists them.
     pub(crate) fn all_wire_names() -> String;
     pub(crate) fn home(self) -> Home;
 }
@@ -876,7 +888,7 @@ until the window has been laid out, which is the case `LayoutWindow::rect` is
 **Writing the file.** `to_json` is a hand-written pretty-printer rather than
 `serde_json::to_string_pretty`, for two reasons: JSON objects have no key order
 a `Map` would preserve without `serde_json`'s `preserve_order` feature, and a
-leaf's `tabs` reads far better on one line than as eight. Each piece writes
+leaf's `tabs` reads far better on one line than as nine. Each piece writes
 itself at a depth its parent gives it, so the `layout` section indents inside
 the document exactly as it would at any other nesting, and the default's output
 is asserted verbatim against the document in § "The window layout file".
@@ -933,8 +945,9 @@ nothing to raise.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. |
-| Scene home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
+| `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. Unchanged by a new panel: the version tags the document's *shape*, and a panel is a new value in an existing enum rather than a new key or node kind. A file written before the Background panel existed still loads, and arrives with that panel closed, which is indistinguishable from a user having closed it. |
+| Scene / Background home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
+| `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background panel taking the rest. |
 | Image Browser / Action Log / Edit History home | below, `0.20` | Same. |
 | Image Detail / Point Track / Camera Intrinsics home | right, `0.33` | Same. |
 | `layout::DEFAULT_LAYOUT_FILE_NAME` | `.sfm-explorer-default-layout.json` | The file the viewer reads at startup, and the name the save dialog offers. |
@@ -955,7 +968,7 @@ default-layout test lives here too, beside the layout it checks.
   `"layout": "default"` round-trips too.
 - **Every panel appears exactly once in the default**, and `Tab::ALL` is in
   the menu's order.
-- **Wire names round-trip** for all eight, and `from_wire_name` refuses
+- **Wire names round-trip** for all nine, and `from_wire_name` refuses
   `"Scene"`, `"viewer3d"`, `""`.
 - **Home positions:** for each panel, close it from the default layout and
   `show_panel` it back — it lands in its group-mate's node when one exists
@@ -969,7 +982,7 @@ default-layout test lives here too, beside the layout it checks.
   zero size, a wrong-length pair, `focus: false`, a malformed `monitor`, a
   `monitor` with nothing to fit), `layout` as a string other than `"default"`,
   and every panel-tree rule under its `layout.` prefix — unknown panel name
-  (listing the eight), a panel in two leaves, a panel in `main` and in a window,
+  (listing the nine), a panel in two leaves, a panel in `main` and in a window,
   an empty leaf, `active` not in `tabs`, `fraction` of `0`, `1` and `1.5`, an
   unknown key inside a leaf and inside a split, and a node that is neither.
 - **A document with neither section is valid and `is_empty`**, as is one whose
@@ -1010,7 +1023,7 @@ default-layout test lives here too, beside the layout it checks.
 
 The menu itself is exercised through `test_support::painted_texts`, which is
 why `panels_menu` is a function taking a `Ui`: a headless frame draws the body
-and the test asserts it painted all eight panel titles and the three
+and the test asserts it painted all nine panel titles and the three
 layout-wide items, and that drawing it changed nothing. What the *click* does
 is `show_panel` / `hide_panel`, tested directly against `is_panel_open` and the
 resulting `Layout` — synthesizing a pointer press at a widget rect would test

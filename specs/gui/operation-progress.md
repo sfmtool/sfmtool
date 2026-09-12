@@ -465,7 +465,7 @@ The Action Log row gains a leading column one glyph wide, before the time:
 
 ```
   14:09:19  User      6.2 ms  Deleted point 29429 in guard (v2 → v3)
-+ 14:09:22  MCP       2.36 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
++ 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
   14:09:24  MCP      <1 ms    get_history guard
 ```
 
@@ -474,7 +474,7 @@ one that carries none. Clicking the toggle, or the row's time, expands it in
 place:
 
 ```
-- 14:09:22  MCP       2.36 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
+- 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
                       4.1 ms  undo
                       0.3 ms    history step
                       3.8 ms    selection follow
@@ -583,6 +583,9 @@ impl Collector {
     /// Time a phase of the viewer's own work.
     pub(crate) fn phase(&self, name: &'static str) -> Phase<'_>;
     pub(crate) fn take(&self) -> Vec<Detail>;
+    /// The same rows, copied rather than taken, for a panel drawing an
+    /// operation that is still reporting.
+    pub(crate) fn live(&self) -> Live;
     /// The newest of each, which no entry keeps (§ "Status is not a message").
     pub(crate) fn status(&self) -> Option<String>;
     pub(crate) fn count(&self) -> Option<Count>;
@@ -590,13 +593,34 @@ impl Collector {
 }
 ```
 
-The last three have no reader in the viewer as it stands, because the panel that
-would draw a live operation is
-[drafts/background-process-panel.md](../drafts/background-process-panel.md).
-They are collected anyway: a status that only reached a panel would have to be
-invented at the same time as the panel, and the rule that says an entry never
-keeps one (§ "Status is not a message") is a property of the collector rather
-than of anything that draws.
+`live` differs from `take` in two ways, and both are about watching rather than
+reading afterwards.
+
+**A phase that has not closed carries the time it has been open**, so a stage
+forty seconds into a run says forty seconds rather than nothing. The collector
+times the open run itself, because the guard that would report it is on the
+other side of the sink and has not returned. `Live` also names which rows are
+open, outermost first; the last of them is the stage the operation is actually
+in.
+
+**Nothing is folded.** The collector keeps the unfolded sequence beside the
+folded rows: one row per run of a phase and one per message, in the order they
+happened, each with the cost that run took and the note that run gave. The entry
+folds (§ "Repeated phases fold") because the question it answers afterwards is
+where the time went, and a transcript of five hundred and forty `linearise` rows
+is no answer to that. A reader watching is asking a different question, and a
+summary of something they can watch unfold tells them less than the thing
+itself. The two are one collector answering two questions, and the entry remains
+the summary of exactly what the panel showed: every run counted in the row it
+folds into, and the costs adding up.
+
+`status`, `count` and `fraction` are read by the Background panel
+([drafts/background-process-panel.md](../drafts/background-process-panel.md)),
+which is the reader they were collected for. They were collected before it
+existed: a status that only reached a panel would have had to be invented at the
+same time as the panel, and the rule that says an entry never keeps one
+(§ "Status is not a message") is a property of the collector rather than of
+anything that draws.
 
 **An operation's collector** is made when the operation starts and handed to the
 entry when it finishes. There is nothing to attribute: the collector *is* that
