@@ -732,9 +732,10 @@ impl AppState {
         options: &sfmtool_core::BundleAdjustOptions,
     ) -> Result<(), String> {
         let started = Instant::now();
-        // Detail off: the switch that turns it on is the Action Log toolbar's,
-        // and the overview phases are the ones this row is read for.
-        let collector = Collector::new(false);
+        // The level the Action Log toolbar's checkbox last left: read here, as
+        // the operation starts, so that a change to it takes effect on the
+        // next operation and re-times nothing already recorded.
+        let collector = Collector::new(self.action_log.detailed_timing());
         match self.bundle_adjust_inner(id, options, &collector) {
             Ok(message) => {
                 self.action_log

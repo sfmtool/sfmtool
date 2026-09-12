@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use jiff::tz::{Offset, TimeZone};
 use jiff::Timestamp;
 
+use sfmtool_core::progress::Level;
+
 use super::{show, ActionLog, Actor, Entry, Kind, Run, Work};
 use crate::progress::{Collector, Detail};
 
@@ -709,6 +711,15 @@ fn phase(name: &'static str, depth: u8, ms: u64, cpu_ms: Option<u64>) -> Detail 
     }
 }
 
+/// A message row, for the entries built by hand above.
+fn message(level: Level, depth: u8, text: &str) -> Detail {
+    Detail::Message {
+        level,
+        depth,
+        text: text.to_string(),
+    }
+}
+
 /// Every phase row of the newest entry, as `(name, depth, runs)`.
 fn detail_phases(log: &ActionLog) -> Vec<(&'static str, u8, u32)> {
     phase_rows(&log.entries().next_back().expect("an entry").detail)
@@ -995,4 +1006,432 @@ fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
         .expect("the kernel's rounds");
     assert_eq!(depth, 1, "the rounds did not nest under the solve");
     assert!(runs >= 1, "the rounds folded into nothing");
+}
+
+// -- The panel's expanded rows -------------------------------------------
+
+/// The newest entry's revision, which is what an expansion is keyed on.
+fn newest(log: &ActionLog) -> u64 {
+    log.entries().next_back().expect("an entry").revision
+}
+
+/// A duration in milliseconds, the unit every row below is written in.
+fn ms(millis: u64) -> Duration {
+    Duration::from_millis(millis)
+}
+
+/// A phase row carrying a note and a run count, the two columns [`phase`]
+/// above leaves out.
+fn folded(name: &'static str, depth: u8, millis: u64, note: Option<&str>, runs: u32) -> Detail {
+    Detail::Phase {
+        name,
+        depth,
+        took: ms(millis),
+        cpu: None,
+        note: note.map(str::to_string),
+        runs,
+    }
+}
+
+/// An entry whose cost is set outright rather than measured.
+///
+/// `settle` would time the row against the wall clock, and what an expanded
+/// entry reads has to be arithmetic over fixed numbers rather than a property
+/// of how long the test run took.
+fn record_settled(log: &mut ActionLog, text: &str, took: Duration, detail: Vec<Detail>) {
+    log.record_done(Kind::Edit, Instant::now(), text, detail);
+    log.entries.back_mut().expect("the entry just written").took = Some(took);
+}
+
+/// The input one headless frame of the panel is given.
+fn input() -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(600.0, 400.0),
+        )),
+        ..Default::default()
+    }
+}
+
+/// Every galley one frame painted, with the colour it carried and where it
+/// landed.
+///
+/// The strings alone answer neither of the two questions an expanded entry
+/// raises, which are how far a row is indented and which colour its marker is,
+/// so the shapes are walked here rather than through
+/// `test_support::painted_texts`. The context is the caller's, since a click
+/// has to arrive at a frame that already knows where the widgets are.
+fn painted_shapes(
+    ctx: &egui::Context,
+    log: &mut ActionLog,
+    input: egui::RawInput,
+) -> Vec<(String, egui::Color32, egui::Pos2)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Color32, egui::Pos2)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                out.push((text.galley.text().to_owned(), text.fallback_color, text.pos))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
+            _ => {}
+        }
+    }
+    let mut output = ctx.run_ui(input, |ui| show(ui, log));
+    output.textures_delta.clear();
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// Where `needle` was painted, and in what colour.
+fn painted_at(
+    shapes: &[(String, egui::Color32, egui::Pos2)],
+    needle: &str,
+) -> (egui::Color32, egui::Pos2) {
+    shapes
+        .iter()
+        .find(|(text, _, _)| text == needle)
+        .map(|(_, color, pos)| (*color, *pos))
+        .unwrap_or_else(|| {
+            let painted: Vec<&str> = shapes.iter().map(|(text, _, _)| text.as_str()).collect();
+            panic!("{needle:?} was not painted, only {painted:?}")
+        })
+}
+
+/// One frame carrying a primary click at `pos`.
+///
+/// The press and the release ride in one frame, which is a click as far as
+/// egui is concerned; what matters is that a frame has already run, so that
+/// the widget under `pos` is one the context knows about.
+fn click(ctx: &egui::Context, log: &mut ActionLog, pos: egui::Pos2) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut input = input();
+    input.events = vec![egui::Event::PointerMoved(pos), button(true), button(false)];
+    painted_shapes(ctx, log, input);
+}
+
+#[test]
+fn an_entry_with_detail_paints_a_toggle_and_one_without_paints_none() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::View, None, false, "Looked at run_a");
+    let bare = painted(&mut log);
+    assert!(
+        !bare.iter().any(|text| text == "+" || text == "-"),
+        "an entry with nothing to show offered a toggle: {bare:?}",
+    );
+
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![phase("solve", 0, 50, None)],
+    );
+    let revision = newest(&log);
+    let collapsed = painted(&mut log);
+    assert!(collapsed.iter().any(|text| text == "+"), "{collapsed:?}");
+    assert!(!collapsed.iter().any(|text| text == "-"), "{collapsed:?}");
+
+    log.toggle_expanded(revision);
+    let expanded = painted(&mut log);
+    assert!(expanded.iter().any(|text| text == "-"), "{expanded:?}");
+}
+
+/// Expansion inserts rows rather than making one row tall, which is what keeps
+/// the list virtualized on a uniform row height.
+#[test]
+fn expanding_adds_one_row_per_event_indented_and_in_order() {
+    let mut log = log();
+    // Left unsettled, so there is no `elsewhere` line and the count is exactly
+    // the events.
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        vec![
+            phase("materialise", 0, 30, None),
+            phase("solve", 0, 50, None),
+            phase("round", 1, 50, None),
+        ],
+    );
+    let revision = newest(&log);
+    let collapsed = super::panel::row_count(&log);
+
+    log.toggle_expanded(revision);
+    assert_eq!(
+        super::panel::row_count(&log),
+        collapsed + 3,
+        "expanding did not add one row per event",
+    );
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let index = |needle: &str| {
+        shapes
+            .iter()
+            .position(|(text, _, _)| text == needle)
+            .unwrap_or_else(|| panic!("{needle:?} was not painted"))
+    };
+    assert!(index("materialise") < index("solve"), "out of order");
+    assert!(index("solve") < index("round"), "out of order");
+    let (_, top) = painted_at(&shapes, "solve");
+    let (_, nested) = painted_at(&shapes, "round");
+    let (_, sibling) = painted_at(&shapes, "materialise");
+    assert!(nested.x > top.x, "a nested phase was not indented");
+    assert_eq!(sibling.x, top.x, "two phases at one depth did not line up");
+
+    log.toggle_expanded(revision);
+    assert_eq!(super::panel::row_count(&log), collapsed);
+    let again = painted(&mut log);
+    assert!(
+        !again.iter().any(|text| text == "materialise"),
+        "collapsing left the detail behind: {again:?}",
+    );
+}
+
+/// The column is not decoration: clicking it is what opens the row.
+#[test]
+fn clicking_the_toggle_expands_the_row_in_place() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![phase("solve", 0, 50, None)],
+    );
+    let revision = newest(&log);
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let (_, toggle) = painted_at(&shapes, "+");
+    click(&ctx, &mut log, toggle + egui::vec2(3.0, 5.0));
+
+    assert!(
+        log.is_expanded(revision),
+        "the click did not expand the row"
+    );
+}
+
+#[test]
+fn a_warn_message_paints_its_marker_in_the_error_colour() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![
+            message(Level::Warn, 0, "3 points left unsupported"),
+            message(Level::Info, 0, "85 images"),
+        ],
+    );
+    log.toggle_expanded(newest(&log));
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let error = egui::Visuals::default().error_fg_color;
+    assert_eq!(painted_at(&shapes, "!").0, error, "the warning's marker");
+    assert_ne!(
+        painted_at(&shapes, "\u{2022}").0,
+        error,
+        "an information marker wears the warning's colour",
+    );
+}
+
+/// Thread-summed CPU time gets a column of its own and stays out of the
+/// wall-clock arithmetic: eight seconds of CPU inside one second of wall is
+/// not eight seconds of anybody's wait.
+#[test]
+fn a_cpu_figure_paints_in_its_own_column_and_is_absent_from_elsewhere() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![phase("linearise", 0, 30, Some(900))],
+    );
+    assert_eq!(
+        ActionLog::elsewhere(log.entries().next_back().expect("an entry")),
+        Some(ms(70)),
+        "the CPU figure was folded into the wall-clock total",
+    );
+    log.toggle_expanded(newest(&log));
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let (_, cpu) = painted_at(&shapes, "cpu 900 ms");
+    let (_, wall) = painted_at(&shapes, "30 ms");
+    assert!(cpu.x < wall.x, "the CPU figure landed in the cost column");
+}
+
+#[test]
+fn a_folded_phase_paints_its_count_and_one_that_ran_once_paints_none() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![
+            folded("linearise", 1, 30, None, 180),
+            folded("thumbnails", 1, 0, Some("reused"), 1),
+        ],
+    );
+    log.toggle_expanded(newest(&log));
+
+    let texts = painted(&mut log);
+    assert!(
+        texts.iter().any(|text| text == "linearise x180"),
+        "{texts:?}",
+    );
+    assert!(
+        texts.iter().any(|text| text == "thumbnails  reused"),
+        "a phase that ran once carried a count, or lost its note: {texts:?}",
+    );
+    assert!(
+        texts.iter().any(|text| text == "--"),
+        "a phase that cost nothing worth printing did not say so: {texts:?}",
+    );
+}
+
+/// The line that makes the breakdown trustworthy: 30 and 50 at the top level,
+/// 20 elsewhere, and the entry's own column reading 100.
+#[test]
+fn the_elsewhere_line_is_last_and_reconciles_with_the_entrys_cost() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![
+            phase("materialise", 0, 30, None),
+            phase("solve", 0, 50, None),
+            // A nested phase's cost is already inside its parent's.
+            phase("round", 1, 50, None),
+        ],
+    );
+    log.toggle_expanded(newest(&log));
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let texts: Vec<&str> = shapes.iter().map(|(text, _, _)| text.as_str()).collect();
+    let index = |needle: &str| {
+        texts
+            .iter()
+            .position(|text| *text == needle)
+            .unwrap_or_else(|| panic!("{needle:?} was not painted, only {texts:?}"))
+    };
+    assert!(
+        index("round") < index("elsewhere"),
+        "elsewhere was not last"
+    );
+    assert!(
+        index("100 ms") < index("30 ms"),
+        "the entry's own cost is first",
+    );
+    assert!(
+        texts.contains(&"20 ms"),
+        "elsewhere did not reconcile: {texts:?}",
+    );
+    // Never nested, however deep the phases above it went.
+    let (_, top) = painted_at(&shapes, "materialise");
+    let (_, tail) = painted_at(&shapes, "elsewhere");
+    assert_eq!(tail.x, top.x);
+}
+
+#[test]
+fn copy_carries_an_expanded_entrys_detail_and_not_a_collapsed_ones() {
+    let mut log = log();
+    record_settled(
+        &mut log,
+        "Bundle adjusted run_a",
+        ms(100),
+        vec![
+            phase("materialise", 0, 30, None),
+            phase("round", 1, 50, None),
+        ],
+    );
+    let revision = newest(&log);
+    assert!(
+        !log.to_clipboard_text().contains("materialise"),
+        "a collapsed entry put its detail on the clipboard",
+    );
+
+    log.toggle_expanded(revision);
+    let copied = log.to_clipboard_text();
+    let lines: Vec<&str> = copied.lines().collect();
+    assert_eq!(lines.len(), 4, "{copied}");
+    assert!(lines[1].ends_with("  30 ms  materialise"), "{copied}");
+    assert!(lines[2].ends_with("  50 ms    round"), "{copied}");
+    // 100 less the one top-level phase: `round` is nested, so its cost is
+    // already inside `materialise`.
+    assert!(lines[3].ends_with("  70 ms  elsewhere"), "{copied}");
+}
+
+#[test]
+fn the_detailed_timing_checkbox_records_the_change_and_nothing_else() {
+    let mut log = log();
+    assert!(
+        !log.detailed_timing(),
+        "detail is off until it is asked for"
+    );
+
+    let ctx = egui::Context::default();
+    let shapes = painted_shapes(&ctx, &mut log, input());
+    let (_, checkbox) = painted_at(&shapes, "Detailed timing");
+    click(&ctx, &mut log, checkbox + egui::vec2(8.0, 6.0));
+
+    assert!(log.detailed_timing(), "the click did not reach the level");
+    assert_eq!(texts(&log), ["Detailed timing on"]);
+    assert_eq!(
+        log.entries().next_back().expect("an entry").kind,
+        Kind::Display,
+    );
+
+    // Handed the value it already has, it records nothing.
+    log.set_detailed_timing(true);
+    assert_eq!(texts(&log), ["Detailed timing on"]);
+}
+
+/// The row lookup is arithmetic over a table of expansions rather than a walk,
+/// so two open entries among several are what says the arithmetic is right:
+/// each one's detail has to land under it, and the entries after it have to
+/// stay themselves.
+#[test]
+fn two_expanded_entries_keep_every_row_after_them_in_place() {
+    let mut log = log();
+    for name in ["alpha", "beta", "gamma", "delta"] {
+        log.record_done(
+            Kind::Edit,
+            Instant::now(),
+            format!("Adjusted {name}"),
+            vec![phase("solve", 0, 50, None)],
+        );
+    }
+    let revisions: Vec<u64> = log.entries().map(|entry| entry.revision).collect();
+    log.toggle_expanded(revisions[1]);
+    log.toggle_expanded(revisions[3]);
+    assert_eq!(super::panel::row_count(&log), 6);
+
+    let painted = painted(&mut log);
+    let order: Vec<&str> = painted
+        .iter()
+        .map(String::as_str)
+        .filter(|text| text.starts_with("Adjusted ") || *text == "solve")
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "Adjusted alpha",
+            "Adjusted beta",
+            "solve",
+            "Adjusted gamma",
+            "Adjusted delta",
+            "solve",
+        ],
+    );
 }

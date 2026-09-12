@@ -297,6 +297,14 @@ pub(crate) struct ActionLog {
     /// entries dropping at [`ActionLog::CAPACITY`] and means nothing once its
     /// entry is gone.
     expanded: HashSet<u64>,
+    /// Whether the next operation records its detailed phases.
+    ///
+    /// Here beside the expansion set, for the same reason: it is
+    /// panel-adjacent state a headless test has to drive, and keeping it here
+    /// is what leaves [`show`] taking a `&mut ActionLog` and nothing else. It
+    /// is read when an operation builds its collector, so a change takes
+    /// effect on the next operation and nothing already recorded is re-timed.
+    detailed_timing: bool,
     /// The log's clock: one tick per write, whether the write appended an
     /// entry or folded into the newest one.
     ///
@@ -346,6 +354,7 @@ impl ActionLog {
             dropped: 0,
             pending: Vec::new(),
             expanded: HashSet::new(),
+            detailed_timing: false,
             revision: 0,
         }
     }
@@ -707,19 +716,60 @@ impl ActionLog {
     }
 
     /// Whether the panel is showing `revision`'s detail.
-    // The toggle column that calls this is the panel's, which is not drawn yet.
-    #[allow(dead_code)]
     pub(crate) fn is_expanded(&self, revision: u64) -> bool {
         self.expanded.contains(&revision)
     }
 
     /// Show `revision`'s detail, or stop showing it.
-    // As for `is_expanded` above.
-    #[allow(dead_code)]
     pub(crate) fn toggle_expanded(&mut self, revision: u64) {
         if !self.expanded.remove(&revision) {
             self.expanded.insert(revision);
         }
+    }
+
+    /// Every revision the panel is showing the detail of, in no order.
+    ///
+    /// Some of them may name entries that are no longer held, since an
+    /// expansion outlives its entry dropping at [`ActionLog::CAPACITY`], so a
+    /// reader puts them through [`ActionLog::index_of`] rather than trusting
+    /// the set.
+    pub(crate) fn expanded_revisions(&self) -> impl Iterator<Item = u64> + '_ {
+        self.expanded.iter().copied()
+    }
+
+    /// Where `revision` sits in the buffer, or `None` when it is no longer
+    /// held.
+    ///
+    /// A binary search, which is sound because revisions increase strictly
+    /// along the buffer, the same property [`ActionLog::since`] stops on.
+    pub(crate) fn index_of(&self, revision: u64) -> Option<usize> {
+        self.entries
+            .binary_search_by_key(&revision, |entry| entry.revision)
+            .ok()
+    }
+
+    /// Whether the next operation records its detailed phases.
+    pub(crate) fn detailed_timing(&self) -> bool {
+        self.detailed_timing
+    }
+
+    /// Turn detailed phases on or off for the operations to come, recording
+    /// the change.
+    ///
+    /// A `Display` entry like any other control's, so the log says when the
+    /// level changed and who changed it, and nothing at all when the value
+    /// handed over is the one already standing.
+    pub(crate) fn set_detailed_timing(&mut self, on: bool) {
+        if on == self.detailed_timing {
+            return;
+        }
+        self.detailed_timing = on;
+        let state = if on { "on" } else { "off" };
+        self.record_run(
+            Kind::Display,
+            "Detailed timing",
+            format!("Detailed timing {state}"),
+        );
     }
 
     /// `took` minus the entry's top-level wall-clock phases, or `None` when it
@@ -737,8 +787,6 @@ impl ActionLog {
     /// the phases and the settle read the clock at different points, and a
     /// folded row sums wall times that may have overlapped on different rayon
     /// threads.
-    // The last row of an expanded entry, which the panel does not draw yet.
-    #[allow(dead_code)]
     pub(crate) fn elsewhere(entry: &Entry) -> Option<Duration> {
         let took = entry.took?;
         let mut named = Duration::ZERO;
@@ -774,14 +822,39 @@ impl ActionLog {
         })
     }
 
-    /// The whole log as clipboard text, one line per entry.
+    /// The whole log as clipboard text, one line per entry, with the detail of
+    /// every expanded entry indented under it.
+    ///
+    /// A collapsed entry writes its own line and nothing else, so what Copy
+    /// puts on the clipboard is what the panel is showing.
     pub(crate) fn to_clipboard_text(&self) -> String {
         let mut out = String::new();
         for entry in self.entries() {
             out.push_str(&self.line(entry));
             out.push('\n');
+            if !self.is_expanded(entry.revision) {
+                continue;
+            }
+            for row in 0..panel::detail_rows(entry) {
+                out.push_str(&Self::detail_line(entry, row));
+                out.push('\n');
+            }
         }
         out
+    }
+
+    /// One row of an expanded entry's breakdown, in the columns
+    /// [`ActionLog::line`] lays out, so that a phase's cost lands under its
+    /// entry's on the clipboard as it does in the panel.
+    fn detail_line(entry: &Entry, row: usize) -> String {
+        let row = panel::detail_row(entry, row);
+        format!(
+            "{:19}  {:<6}  {:>7}  {}",
+            "",
+            "",
+            row.cost,
+            panel::detail_text(&row),
+        )
     }
 
     /// One entry as the clipboard and the `log::info!` mirror render it: the
