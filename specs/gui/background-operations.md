@@ -188,14 +188,24 @@ Earlier rows are above it, and none of them is a summary of another:
   The table is therefore a log rather than a table, and a long detailed
   operation writes a lot of it: a three-round, sixty-iteration adjustment with
   **Detailed timing** on opens `linearise` and its two siblings five hundred and
-  forty times, and every one of those is a row. It is virtualized on a uniform
-  row height, as the Action Log's list is, so only the rows in view are drawn.
-  The table **follows its tail**: the stage that is running is the
-  newest row, and this panel is narrow enough that the stages which finished
-  first fill it. Without that, a 102 second solve showed `gather arrays`, which
+  forty times, and every one of those is a row. **Nothing caps it.** The Action
+  Log entry is cut at `ActionLog::DETAIL_EVENTS` and so is the wire's reply
+  (§ "On the wire"); this is the one of the three views that keeps the whole
+  operation, because it is the one a reader goes to in order to watch the whole
+  operation. It is virtualized on a uniform row height, as the Action Log's list
+  is, so what keeping everything costs to draw is the rows in view rather than
+  the rows recorded. The table **follows its tail**: the stage that is running
+  is the newest row, and this panel is narrow enough that the stages which
+  finished first fill it. Without that, a 102 second solve showed `gather
+  arrays`, which
   cost 2 ms, for the whole of it, and the reader had to scroll to find out what
-  the viewer was doing. It holds still the moment the reader scrolls up, which
-  is the Action Log's rule for its own list.
+  the viewer was doing. It holds still the moment the reader scrolls up, and
+  follows again when they return to the bottom, which is the Action Log's rule
+  for its own list. On Windows a precision touchpad reaches it only because
+  DirectManipulation's pan is fed back in as a `Point`-unit wheel event
+  (`crate::platform`): DM claims the contacts for the whole window, so no
+  `ScrollArea` sees a wheel of its own. That path carries no behaviour, which is
+  why the tail rule reads the same under a touchpad as under a mouse.
 - **A row too wide for the column is truncated and says the whole of itself on
   hover**, as an Action Log detail row does. The panel is a fraction of the
   window's width, so that is the common case here rather than the rare one, and
@@ -330,9 +340,9 @@ Cancel is live ([operation-progress.md](operation-progress.md)).
 [`mod.rs`](../../crates/sfm-explorer/src/background/mod.rs) owns the process and
 the channel,
 [`panel.rs`](../../crates/sfm-explorer/src/background/panel.rs) the egui view,
-[`tests.rs`](../../crates/sfm-explorer/src/background/tests.rs) the tests. The process is a field
-of `AppState`, so the busy check is where every method that would need it
-already is.
+[`tests.rs`](../../crates/sfm-explorer/src/background/tests.rs) the tests. The
+process is a field of `AppState`, so the busy check is where every method that
+would need it already is.
 
 ```rust
 /// A long operation running off the GUI thread.
@@ -526,14 +536,16 @@ running it reports the last operation of the session, marked `finished`, so one
 call answers both "is it done" and "what did it cost". `elapsed_s` carries both
 halves of that: seconds so far while it runs, seconds in total once it is over.
 
-**The phase list is capped at the size an entry's is**,
-`ActionLog::DETAIL_EVENTS`, with a `"{n} earlier events dropped"` row. Not a
-size limit chosen for the wire: it is the number the Action Log already applies
-to these rows. It keeps the **last** of them rather than the first, which is the
-opposite of an entry's cap, because this list is the panel's transcript and
-nothing has collapsed the repetition in it: the first 128 rows of a long solve
-are its first few seconds. An entry's first 128 rows are its shape, because the
-fold got there first.
+**The phase list on the wire is capped** at the size an entry's is,
+`ActionLog::DETAIL_EVENTS`, with a `"{n} earlier events dropped"` row. The cap
+is this reply's rather than the operation's: the panel keeps every row of the
+log (§ "Running"), and what is cut here is how much of it one call carries.
+
+It keeps the **last** of them rather than the first, which is the opposite of an
+entry's cap, because this list is the panel's transcript and nothing has
+collapsed the repetition in it: the first 128 rows of a long solve are its first
+few seconds. An entry's first 128 rows are its shape, because the fold got there
+first.
 
 `get_scene` gains a `background` block beside `status_message`, so an agent that
 already polls `get_scene` learns that the viewer is busy without a second call,

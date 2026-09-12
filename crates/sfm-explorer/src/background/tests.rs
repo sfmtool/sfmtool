@@ -1112,3 +1112,188 @@ fn an_idle_panel_keeps_the_cost_clear_of_a_long_label() {
         "the label ran to {label_right}, under a cost starting at {cost_left}",
     );
 }
+
+/// A scroll wheel event over the phase table.
+///
+/// Positive `delta.y` moves the content down, which is what a reader does to
+/// look back at what has already happened. `phase` is what
+/// `platform::gesture_scroll_events` sends for a touchpad pan, and a mouse
+/// wheel is read the same way.
+fn wheel(unit: egui::MouseWheelUnit, amount: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, amount),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+/// One frame with the pointer inside the phase table, so a wheel event has
+/// somewhere to land.
+fn over_the_table(events: Vec<egui::Event>) -> egui::RawInput {
+    let mut input = input();
+    let mut all = vec![egui::Event::PointerMoved(egui::pos2(130.0, 320.0))];
+    all.extend(events);
+    input.events = all;
+    input
+}
+
+/// The whole log is kept, however long it runs: nothing in the panel caps the
+/// rows, and every stage a long operation reported is there to scroll back to.
+///
+/// The Action Log entry caps at `DETAIL_EVENTS` and so does the wire
+/// (`specs/gui/mcp-server.md`), and the panel is the one view of the three that
+/// does not, because it is where a reader goes to watch the whole thing.
+#[test]
+fn the_phase_table_keeps_every_row_of_a_long_operation() {
+    let (mut state, id) = adjustable();
+    let reported = ActionLog::DETAIL_EVENTS * 3 + 7;
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    state
+        .start_background(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                for i in 0..reported {
+                    progress.message(
+                        sfmtool_core::progress::Level::Info,
+                        format_args!("event {i}"),
+                    );
+                }
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background();
+
+    let live = state.background().expect("running").collector.live();
+    assert_eq!(
+        live.rows.len(),
+        reported,
+        "the panel's own rows were capped"
+    );
+
+    gate.open();
+    state.finish_background();
+
+    // And the idle form keeps them too, where the entry it wrote did not.
+    let last = state.last_background.as_ref().expect("it finished");
+    assert_eq!(
+        last.detail.len(),
+        reported,
+        "the idle panel's rows were capped"
+    );
+    assert_eq!(
+        newest(&state).detail.len(),
+        ActionLog::DETAIL_EVENTS + 1,
+        "the entry was not capped, so the two are not different views after all",
+    );
+}
+
+/// The table follows the tail while it is at the tail, and holds still the
+/// moment the reader scrolls up, so an early stage can be read while the
+/// operation keeps going.
+///
+/// Run for both wheel units. A Windows precision touchpad never reaches a
+/// `ScrollArea` as a wheel of its own: DirectManipulation claims the contacts
+/// for the whole window, so `platform::gesture_scroll_events` feeds the pan
+/// back in as a **`Point`**-unit `MouseWheel`, where a mouse sends `Line`. This
+/// panel has no gesture handling of its own and is scrolled entirely by that
+/// path, so the unit is the only difference and the behaviour must not depend
+/// on it.
+#[test]
+fn scrolling_up_holds_the_table_while_the_operation_keeps_reporting() {
+    for unit in [egui::MouseWheelUnit::Line, egui::MouseWheelUnit::Point] {
+        // A line is a row; a point is a pixel, so the same distance is roughly
+        // a row height more of them.
+        let up = match unit {
+            egui::MouseWheelUnit::Point => 240.0,
+            _ => 16.0,
+        };
+        let (mut state, id) = adjustable();
+        let mut gate = Gate::new();
+        let (said, heard) = mpsc::channel();
+        let held = gate.held();
+        let (more, report_more) = mpsc::channel::<usize>();
+        state
+            .start_background(
+                Operation::BUNDLE_ADJUST,
+                id,
+                Box::new(move |progress| {
+                    for i in 0..40usize {
+                        progress.message(
+                            sfmtool_core::progress::Level::Info,
+                            format_args!("event {i}"),
+                        );
+                    }
+                    said.send(()).expect("the test is listening");
+                    // More only when the test asks, so what the panel drew is
+                    // decided by the test rather than by the scheduler.
+                    if let Ok(n) = report_more.recv() {
+                        for i in 0..n {
+                            progress.message(
+                                sfmtool_core::progress::Level::Info,
+                                format_args!("later {i}"),
+                            );
+                        }
+                    }
+                    let _ = held.recv();
+                    Finished::Failed("the fake worker produced nothing".to_string())
+                }),
+            )
+            .expect("nothing else is running");
+        heard.recv().expect("the worker reported");
+        state.poll_background();
+
+        let ctx = egui::Context::default();
+        let frame = |state: &mut AppState, input: egui::RawInput| {
+            crate::test_support::painted_texts(&ctx, input, |ui| super::panel::show(ui, state))
+        };
+        let shows = |rows: &[String], needle: &str| rows.iter().any(|row| row.ends_with(needle));
+
+        // At the tail: the newest is on screen and the oldest is not.
+        frame(&mut state, input());
+        let tail = frame(&mut state, input());
+        assert!(shows(&tail, "event 39"), "{unit:?}: {tail:?}");
+        assert!(!shows(&tail, "event 0"), "{unit:?}: {tail:?}");
+
+        // Scrolled up. egui smooths a wheel over several frames, so the scroll
+        // is drawn out rather than read on the frame that carried it.
+        frame(&mut state, over_the_table(vec![wheel(unit, up)]));
+        for _ in 0..6 {
+            frame(&mut state, input());
+        }
+        let looking_back = frame(&mut state, input());
+        assert!(
+            !shows(&looking_back, "event 39"),
+            "{unit:?}: the wheel did not scroll the table: {looking_back:?}",
+        );
+        // Whatever it landed on is what must still be there afterwards.
+        let anchor = looking_back
+            .iter()
+            .find(|row| row.contains("event "))
+            .expect("some event is on screen")
+            .clone();
+
+        // Twenty more arrive, and the view does not move under the reader.
+        more.send(20).expect("the worker is waiting");
+        frame(&mut state, input());
+        let after = frame(&mut state, input());
+        assert!(
+            shows(&after, anchor.trim_start_matches("• ")),
+            "{unit:?}: the table jumped out from under the reader: {after:?}",
+        );
+        assert!(
+            !shows(&after, "later 19"),
+            "{unit:?}: the table followed the tail while the reader was scrolled up: {after:?}",
+        );
+
+        gate.open();
+        state.finish_background();
+    }
+}
