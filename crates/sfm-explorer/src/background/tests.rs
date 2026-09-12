@@ -24,6 +24,7 @@ use sfmtool_core::progress::Progress;
 use sfmtool_core::{BundleAdjustOptions, SfmrReconstruction};
 
 use crate::action_log::{ActionLog, Actor, Entry};
+use crate::progress::Detail;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
 
@@ -637,7 +638,9 @@ fn counted_job(gate: mpsc::Receiver<()>, said: mpsc::Sender<()>) -> Job {
         {
             let solve = progress.phase("solve");
             for round in 1..=2u64 {
-                drop(solve.phase("round"));
+                let mut phase = solve.phase("round");
+                phase.note(format_args!("median 1.{round}0 px"));
+                drop(phase);
                 solve.count(round, Some(2), "round");
             }
             solve.message(
@@ -713,8 +716,13 @@ fn an_idle_panel_shows_the_last_operation_and_expands_its_phases() {
     let expanded = painted(&mut state);
     assert!(expanded.iter().any(|text| text == "-"), "{expanded:?}");
     assert!(expanded.iter().any(|text| text == "solve"), "{expanded:?}");
-    assert!(
-        expanded.iter().any(|text| text == "  round x2"),
+    // Unfolded, as the running panel drew them: two runs, two rows.
+    assert_eq!(
+        expanded
+            .iter()
+            .filter(|text| text.starts_with("  round"))
+            .count(),
+        2,
         "{expanded:?}"
     );
 }
@@ -753,11 +761,14 @@ fn clicking_the_idle_toggle_opens_and_closes_the_phases() {
     );
 }
 
-/// The one worth asserting: the panel and the entry are two views of one
-/// collector, so what the table says while the operation runs is what the row
-/// says once it is over. If they can disagree, one of them is lying.
+/// The panel and the entry are two views of one collector, and the entry is
+/// the *summary* of what the panel showed: every run the panel drew is counted
+/// in the row the entry folds it into, and the costs add up. They present it
+/// differently on purpose (see
+/// `a_running_phase_table_keeps_every_run_and_every_note_apart`); what they
+/// must never do is disagree about what happened.
 #[test]
-fn the_running_phase_table_is_the_entry_the_operation_writes() {
+fn the_entry_is_the_summary_of_what_the_running_panel_showed() {
     let (mut state, id) = adjustable();
     let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
 
@@ -777,19 +788,79 @@ fn the_running_phase_table_is_the_entry_the_operation_writes() {
     state.finish_background();
 
     let entry = newest(&state);
-    assert_eq!(
-        crate::test_support::phase_rows(&live),
-        crate::test_support::phase_rows(&entry.detail),
-        "the panel and the entry disagree about what ran",
-    );
-    // And every row the entry draws is a row the panel drew, in the one
-    // spelling both of them build from.
-    for row in ActionLog::drawn_detail(entry) {
-        assert!(
-            while_running.contains(&row),
-            "{row:?} is in the entry and was not painted: {while_running:?}",
+    // Every phase the entry folded, against the runs of it the panel drew.
+    // `runs` is the count of them and `took` is their sum, which is the whole
+    // of what folding claims.
+    for (name, depth, runs) in crate::test_support::phase_rows(&entry.detail) {
+        let drawn: Vec<&Detail> = live
+            .iter()
+            .filter(|row| {
+                matches!(row, Detail::Phase { name: n, depth: d, .. } if *n == name && *d == depth)
+            })
+            .collect();
+        assert_eq!(
+            drawn.len() as u32,
+            runs,
+            "the entry folded {runs} runs of {name:?} and the panel drew {}",
+            drawn.len(),
         );
     }
+    // And every message the entry kept is a message the panel painted, since a
+    // message is never folded in either view.
+    for row in &entry.detail {
+        if let Detail::Message { text, .. } = row {
+            assert!(
+                while_running
+                    .iter()
+                    .any(|drawn| drawn.contains(text.as_str())),
+                "{text:?} is in the entry and was not painted: {while_running:?}",
+            );
+        }
+    }
+}
+
+/// What the panel shows is the operation happening, not a summary of it: each
+/// run of a stage is its own row with its own cost and its own note, and two
+/// runs that said different things say both, separately. The entry folds the
+/// same two runs into `round x2` with the ends of the note joined, which is the
+/// right answer to a different question.
+#[test]
+fn a_running_phase_table_keeps_every_run_and_every_note_apart() {
+    let (mut state, id) = adjustable();
+    let gate = running(&mut state, id, Operation::BUNDLE_ADJUST);
+
+    let texts = painted(&mut state);
+    let rounds = texts
+        .iter()
+        .filter(|text| text.starts_with("  round"))
+        .count();
+    assert_eq!(rounds, 2, "the two rounds were not drawn apart: {texts:?}");
+    for note in ["  round  median 1.10 px", "  round  median 1.20 px"] {
+        assert!(
+            texts.iter().any(|text| text == note),
+            "{note:?} was not painted on its own row: {texts:?}",
+        );
+    }
+    assert!(
+        !texts.iter().any(|text| text.contains(" x2")),
+        "the panel folded a stage: {texts:?}",
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("...")),
+        "the panel joined two notes: {texts:?}",
+    );
+
+    gate.open();
+    state.finish_background();
+
+    // The entry, of the same two runs, folds them and joins the ends.
+    let drawn = ActionLog::drawn_detail(newest(&state));
+    assert!(
+        drawn
+            .iter()
+            .any(|row| row.contains("round x2") && row.contains("...")),
+        "the entry did not fold the rounds: {drawn:?}",
+    );
 }
 
 /// A bar only where something underneath reported a number, and the open

@@ -260,10 +260,17 @@ fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
 
 // -- The phase table -------------------------------------------------------
 
-/// The breakdown, one row per stage, with `open` naming the runs that have not
-/// closed.
+/// The transcript, one row per run of a stage and one per message, with `open`
+/// naming the runs that have not closed.
+///
+/// Virtualized on a uniform row height, as the Action Log's list is, because
+/// nothing folds here: a three-round, sixty-iteration adjustment with detailed
+/// timing on opens `linearise` and its two siblings five hundred and forty
+/// times, and every one of those is a row. Drawing only the range in view is
+/// what keeps that affordable at ten frames a second.
 fn show_phases(ui: &mut egui::Ui, rows: &[Detail], open: &[usize]) {
     let breakdown = Breakdown::running(rows);
+    let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
     egui::ScrollArea::vertical()
         .id_salt("background_phases")
         .auto_shrink([false, false])
@@ -275,8 +282,9 @@ fn show_phases(ui: &mut egui::Ui, rows: &[Detail], open: &[usize]) {
         // reader scrolls up, so an early stage can be read while the operation
         // keeps going.
         .stick_to_bottom(true)
-        .show(ui, |ui| {
-            for index in 0..rows.len() {
+        .show_rows(ui, row_height, rows.len(), |ui, range| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for index in range {
                 show_phase_row(ui, &breakdown, index, open.contains(&index));
             }
         });

@@ -210,7 +210,11 @@ pub(crate) struct LastOperation {
     /// Not the entry's `took`, which the frame stamps on settling and which
     /// therefore also carries the upload that put the answer on screen.
     pub(crate) took: Duration,
-    /// What it reported, which is the breakdown its Action Log entry carries.
+    /// What it reported, unfolded, which is what the panel drew while it ran.
+    ///
+    /// Not the entry's breakdown, which folds repeated stages: the Background
+    /// panel does not fold, and an operation that collapsed into a summary the
+    /// moment it finished would be a panel that changed its mind.
     pub(crate) detail: Vec<Detail>,
     /// The Action Log sentence it wrote, or the refusal or cancellation that
     /// ended it.
@@ -486,13 +490,15 @@ impl AppState {
         // spent before deciding to; the frame that collected the answer is not
         // what either of them cost. What it reported before stopping is kept
         // too, since a refusal is a thing a reader wants the breakdown of.
+        // The transcript, taken before `take` clears it: the panel goes on
+        // showing this operation after the entry is written, and shows it the
+        // way it showed it while it ran. Folding it here instead would collapse
+        // the rounds a reader had just watched arrive, at the instant the
+        // operation finished. A transcript is a few hundred rows of names and
+        // durations, once per operation.
+        let kept = collector.live().rows;
         let detail = collector.take();
         let took = started.elapsed();
-        // Copied rather than moved, because the panel goes on showing this
-        // operation after the entry has been written and the two have to say
-        // the same thing about it. A breakdown is at most a few hundred rows of
-        // names and durations, once per operation.
-        let kept = detail.clone();
         match &outcome {
             Ok(text) => self
                 .action_log

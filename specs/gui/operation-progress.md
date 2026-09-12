@@ -593,15 +593,26 @@ impl Collector {
 }
 ```
 
-`live` is `take` without the taking, plus the one thing a running operation
-needs that a finished one does not: **a phase that has not closed carries the
-time it has been open**, so a stage forty seconds into a run says forty seconds
-rather than nothing. The collector times the open run itself, because the guard
-that would report it is on the other side of the sink and has not returned. A
-row reads the same way once that run closes, which is what lets the Background
-panel watch an operation and the Action Log read about it afterwards without
-the two ever disagreeing. `Live` also names which rows are open, outermost
-first; the last of them is the stage the operation is actually in.
+`live` differs from `take` in two ways, and both are about watching rather than
+reading afterwards.
+
+**A phase that has not closed carries the time it has been open**, so a stage
+forty seconds into a run says forty seconds rather than nothing. The collector
+times the open run itself, because the guard that would report it is on the
+other side of the sink and has not returned. `Live` also names which rows are
+open, outermost first; the last of them is the stage the operation is actually
+in.
+
+**Nothing is folded.** The collector keeps the unfolded sequence beside the
+folded rows: one row per run of a phase and one per message, in the order they
+happened, each with the cost that run took and the note that run gave. The entry
+folds (§ "Repeated phases fold") because the question it answers afterwards is
+where the time went, and a transcript of five hundred and forty `linearise` rows
+is no answer to that. A reader watching is asking a different question, and a
+summary of something they can watch unfold tells them less than the thing
+itself. The two are one collector answering two questions, and the entry remains
+the summary of exactly what the panel showed: every run counted in the row it
+folds into, and the costs adding up.
 
 `status`, `count` and `fraction` are read by the Background panel
 ([drafts/background-process-panel.md](../drafts/background-process-panel.md)),

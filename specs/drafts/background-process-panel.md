@@ -127,8 +127,11 @@ tree.
 
 The panel is not blank when nothing is running. It shows the last operation of
 the session, greyed: its name, its node, what it cost, and its phases, collapsed
-under a toggle that works as the Action Log's does. A session that has run
-nothing says `Nothing running` and no more.
+under a toggle that works as the Action Log's does. Those phases are the
+transcript the panel drew while it ran, not the entry's folded breakdown: an
+operation that collapsed into a summary at the instant it finished would be a
+panel that changed its mind about what the reader had just watched. A session
+that has run nothing says `Nothing running` and no more.
 
 ### Running
 
@@ -139,13 +142,28 @@ nothing says `Nothing running` and no more.
 │ ██████░░░░░░░░░░░  round 2/3 │
 │ 42.7 s elapsed       [Cancel]│
 │                              │
+│     damping ladder    2.0 s  │
+│     linearise         51 ms  │
+│     normal equations  46 ms  │
+│     damping ladder   ▶ 4.7 s │
+└──────────────────────────────┘
+```
+
+The table is scrolled to its end, because that is where the operation is.
+Earlier rows are above it, and none of them is a summary of another:
+
+```
 │ gather arrays          2 ms  │
+│ • 85 images, 21009 points, … │
 │ residuals before      10 ms  │
+│   • median 1.014 px over 39… │
 │ solve              ▶ 42.6 s  │
-│   round x2         ▶ 42.6 s  │
-│     linearise x71     2.9 s  │
-│     normal equations  1.9 s  │
-│     damping ladder   37.8 s  │
+│   • 3 rounds, trim 50/12/4 px│
+│   round            ▶ 21.4 s  │
+│     linearise         48 ms  │
+│     normal equations  44 ms  │
+│     damping ladder    1.8 s  │
+│     linearise         51 ms  │
 └──────────────────────────────┘
 ```
 
@@ -182,10 +200,24 @@ nothing says `Nothing running` and no more.
   running, so ticking **Detailed timing** before starting a long operation is how
   somebody watches a kernel's internals
   ([../gui/operation-progress.md](../gui/operation-progress.md) § "Two levels").
-  Repeated stages fold as they do in an entry, which is what makes the table a
-  table rather than a log: the sketch's `round x2` and `linearise x71` are two
-  rows rather than seventy-three, and their counts climb while the reader
-  watches. The table **follows its tail**: the stage that is running is the
+  **Nothing folds here, and no two things are ever combined into one row.**
+  Each run of a stage is its own row with the cost that run took and the note
+  that run gave, each message is its own row, and two runs that said different
+  things say both, separately. This is the opposite of what an Action Log entry
+  does with the same events, and deliberately so: an entry is read afterwards
+  and answers where the time went, for which `round x2` with the ends of its
+  note joined is the right summary. A reader watching is asking what the viewer
+  is doing now and what it has done so far, and a summary of something they can
+  watch unfold tells them less than the thing itself. The entry stays the
+  summary of exactly what the panel showed, with every run counted in the row it
+  folds into and the costs adding up.
+
+  The table is therefore a log rather than a table, and a long detailed
+  operation writes a lot of it: a three-round, sixty-iteration adjustment with
+  **Detailed timing** on opens `linearise` and its two siblings five hundred and
+  forty times, and every one of those is a row. It is virtualized on a uniform
+  row height, as the Action Log's list is, so only the rows in view are drawn.
+  The table **follows its tail**: the stage that is running is the
   newest row, and this panel is narrow enough that the stages which finished
   first fill it. Without that, a 102 second solve showed `gather arrays`, which
   cost 2 ms, for the whole of it, and the reader had to scroll to find out what
