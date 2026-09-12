@@ -111,6 +111,8 @@ pub enum ClusterMatchError {
     CorpusSmallerThanFloor { n: usize, d: usize },
     /// `image_starts` is not a valid CSR offset array over the corpus.
     BadOffsets { n: usize },
+    /// A neighbour index is neither a corpus row nor the padding sentinel.
+    BadNeighborIndex { index: u32, n: usize },
     /// The supplied neighbour table does not match the corpus and `d`.
     BadNeighborTable {
         expected_width: usize,
@@ -132,6 +134,9 @@ impl std::fmt::Display for ClusterMatchError {
                 f,
                 "image_starts must be non-decreasing, start at 0, and end at N ({n})"
             ),
+            Self::BadNeighborIndex { index, n } => {
+                write!(f, "neighbour index {index} is outside corpus of {n} rows")
+            }
             Self::BadNeighborTable {
                 expected_width,
                 width,
@@ -174,6 +179,7 @@ pub fn background_floor_clusters(
 ) -> Result<Clusters, ClusterMatchError> {
     let n = descriptors.nrows();
     let dim = descriptors.ncols();
+    validate_floor_corpus(n, image_starts, params)?;
     let k = params.d + 1;
     let corpus: Cow<'_, [u8]> = match descriptors.as_slice() {
         Some(s) => Cow::Borrowed(s),
@@ -215,6 +221,27 @@ pub fn background_floor_clusters(
     )
 }
 
+fn validate_floor_corpus(
+    n: usize,
+    image_starts: &[u32],
+    params: &BackgroundFloorParams,
+) -> Result<(), ClusterMatchError> {
+    if n == 0 {
+        return Err(ClusterMatchError::EmptyCorpus);
+    }
+    if n <= params.d {
+        return Err(ClusterMatchError::CorpusSmallerThanFloor { n, d: params.d });
+    }
+    let offsets_valid = image_starts.len() >= 2
+        && image_starts[0] == 0
+        && image_starts.windows(2).all(|w| w[0] <= w[1])
+        && *image_starts.last().unwrap() as usize == n;
+    if !offsets_valid {
+        return Err(ClusterMatchError::BadOffsets { n });
+    }
+    Ok(())
+}
+
 /// The k-NN table [`background_floor_clusters`] computes before clustering.
 ///
 /// Row `i` occupies `indexes[i * width .. (i + 1) * width]`, nearest first,
@@ -241,16 +268,11 @@ pub fn background_floor_clusters_from_neighbors(
     params: &BackgroundFloorParams,
     neighbors: &NeighborTable,
 ) -> Result<Clusters, ClusterMatchError> {
-    if n == 0 {
-        return Err(ClusterMatchError::EmptyCorpus);
-    }
-    if n <= params.d {
-        return Err(ClusterMatchError::CorpusSmallerThanFloor { n, d: params.d });
-    }
+    validate_floor_corpus(n, image_starts, params)?;
     let k = params.d + 1;
     if neighbors.width != k
-        || neighbors.indexes.len() != n * k
-        || neighbors.distances_sq.len() != n * k
+        || Some(neighbors.indexes.len()) != n.checked_mul(k)
+        || Some(neighbors.distances_sq.len()) != n.checked_mul(k)
     {
         return Err(ClusterMatchError::BadNeighborTable {
             expected_width: k,
@@ -259,15 +281,15 @@ pub fn background_floor_clusters_from_neighbors(
             indexes: neighbors.indexes.len(),
         });
     }
+    if let Some(&index) = neighbors
+        .indexes
+        .iter()
+        .find(|&&i| i != u32::MAX && i as usize >= n)
+    {
+        return Err(ClusterMatchError::BadNeighborIndex { index, n });
+    }
     let idx = &neighbors.indexes;
     let dist_sq = &neighbors.distances_sq;
-    let offsets_valid = image_starts.len() >= 2
-        && image_starts[0] == 0
-        && image_starts.windows(2).all(|w| w[0] <= w[1])
-        && *image_starts.last().unwrap() as usize == n;
-    if !offsets_valid {
-        return Err(ClusterMatchError::BadOffsets { n });
-    }
     let n_images = image_starts.len() - 1;
 
     // Row -> owning image.

@@ -7,10 +7,9 @@ vector table, targeting local seekable files, repeated queries, and corpora
 larger than the configured memory cache. It preserves the in-memory forest's
 search behavior in both layouts.
 
-Packing and cache values are configurable. The starting values below are chosen
-for plausibility rather than measurement; the benchmark plan that would settle
-them is in [Benchmark plan and provisional defaults](#benchmark-plan-and-provisional-defaults),
-and no benchmark results are claimed here.
+Packing and cache values are configurable. The interface lists provisional
+defaults; the measurements and their scope are documented in
+[Current access path and performance diagnosis](#current-access-path-and-performance-diagnosis).
 
 It extends [randomized kd-tree forests](randomized-kdtree-forest.md)
 and uses the [KDF format](../../formats/kdf-file-format.md).
@@ -287,9 +286,9 @@ buffers and decoder workspace; include these in reported peak memory rather
 than claiming the decoded cache limit is a process RSS limit. A loader never
 waits for admission while holding a different chunk pin, avoiding cache deadlock.
 
-Per-query dedup uses a sparse set of visited original IDs, so scratch grows with
-work performed rather than allocating the in-memory implementation's N-bit array
-per worker. Queue memory grows with explored branches. Batch output is O(M*k);
+Per-query dedup uses reusable bitsets for feature IDs and logical node IDs, with
+lists of touched words to clear between queries. Scratch includes bits proportional
+to corpus and tree size per Rayon job. Queue memory grows with explored branches. Batch output is O(M*k);
 metadata, scratch, output, compressed buffers and decoder workspace are additional
 to the cache. Checked arithmetic and configurable worker count constrain growth;
 this is bounded residency of file data, not constant total memory for arbitrary k.
@@ -302,64 +301,26 @@ is an explicit offline operation, never implicit at lazy open.
 
 ## Where this sits in the literature
 
-The search this executes is Best-Bin-First, and the budget that bounds it is not
-an invention here. Lowe's SIFT paper reaches for BBF for exactly the reason the
-in-memory forest does — "no algorithms are known that can identify the exact
-nearest neighbors of points in high dimensional spaces that are any more efficient
-than exhaustive search" — and bounds it the same way: "an approximate answer can be
-returned with low cost by cutting off further search after a specific number of the
-nearest bins have been explored. In our implementation, we cut off search after
-checking the first 200 nearest-neighbor candidates."
-([Lowe 2004](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf) § 7.2.) That cutoff is
-this module's `max_leaf_checks`, by way of Beis & Lowe's `Emax`
-([1997](https://www.cs.ubc.ca/~lowe/papers/cvpr97.pdf)), and the forest of several
-randomized trees searched through one shared queue is
-[Muja & Lowe 2009](https://www.cs.ubc.ca/~lowe/papers/09muja.pdf).
+[Beis & Lowe 1997](https://www.cs.ubc.ca/~lowe/papers/cvpr97.pdf) describes
+Best-Bin-First search with a bounded search effort.
+[Lowe 2004](https://www.cs.ubc.ca/~lowe/papers/ijcv04.pdf), ? 7.2, applies it to
+SIFT matching with a cutoff of 200 candidate checks.
+[Muja & Lowe 2009](https://www.cs.ubc.ca/~lowe/papers/09muja.pdf) describes
+randomized kd-trees searched through a shared priority queue. These are the
+algorithmic references for this implementation; they do not evaluate its
+compressed, file-backed access path.
 
-None of those three papers is about storage. Lowe 2004 does not mention disk,
-external memory, RAM or caching anywhere; Beis & Lowe mention memory three times
-and every one is about the index's footprint, never about reading it from anywhere.
-Both assume the index is resident.
+[Muja & Lowe 2014](https://www.cs.ubc.ca/~lowe/papers/14mujaPAMI.pdf), ? 5,
+considers disk-backed data among the options for corpora larger than memory and
+implements distributed nearest-neighbor search across machines. The benchmarks
+below evaluate a different configuration: one machine, a local file, and a bounded
+decoded cache. They do not compare against distributed FLANN or establish how
+storage hardware changes that comparison.
 
-The paper that does confront a corpus too large for memory is
-[Muja & Lowe 2014](https://www.cs.ubc.ca/~lowe/papers/14mujaPAMI.pdf) § 5, and it
-names this design as one of three options before discarding it:
-
-> When dealing with such large amounts of data, possible solutions include
-> performing some dimensionality reduction on the data, keeping the data on the disk
-> and loading only parts of it in the main memory or distributing the data on
-> several computers and using a distributed nearest neighbor search algorithm.
->
-> [...] Storing the data on the disk involves significant performance penalties due
-> to the performance gap between memory and disk access times. In FLANN we used the
-> approach of performing distributed nearest neighbor search across multiple
-> machines.
-
-"Keeping the data on the disk and loading only parts of it in the main memory" is
-precisely what this module does. FLANN went the other way, to MPI across a compute
-cluster, on a one-sentence argument about the memory-to-disk latency gap.
-
-That argument was sound for the storage of its time and is worth re-examining rather
-than inheriting, which is what the measurements below do. On a local NVMe device the
-gap it invokes is smaller by orders of magnitude than it was for a spinning disk, and
-the measured cost of not being resident is a 1.5-2 s cold batch of 1,000 queries
-against a 3.8 GB file, falling to 0.07 s once the working set is cached. The case for
-one machine reading a file it cannot hold is stronger now than when FLANN declined
-it; nothing here contradicts the 2014 reasoning on 2014 hardware.
-
-Two consequences for reading the numbers below. First, the distributed approach
-remains the better answer past the point where one machine's storage or bandwidth is
-the limit — this is not a replacement for it, and no measurement here speaks to a
-corpus spanning machines. Second, recall figures here are **not** comparable to
-Lowe's "less than a 5% loss in the number of correct matches" at 200 candidates, for
-two reasons: that is loss of correct matches *after the ratio test*, whereas recall@1
-below is raw, and it is measured on 100,000 keypoints against 9.7 million here. Lowe
-is explicit that the ratio test is what makes the raw figure the wrong one to look
-at — "there is no need to exactly solve the most difficult cases in which many
-neighbors are at very similar distances", because those are the cases the ratio test
-rejects anyway. A raw recall@1 of 0.65 at a 128-check budget is therefore consistent
-with a matcher that loses very few usable matches, and the two numbers should not be
-set against each other.
+The recall metrics also differ. Lowe reports loss of correct matches after the
+ratio test on a 100,000-keypoint database; the measurements below include raw
+recall@1 on larger corpora. Raw recall alone does not establish how many usable
+matches this pipeline loses. That requires measuring the downstream matcher.
 
 ## Benchmark method
 
@@ -412,6 +373,139 @@ Within one query the check set is deduplicated, so `checks x dim` is exactly the
 unique evaluated vector bytes the ratio divides into; across a batch it is not,
 because later queries re-evaluate descriptors already decoded. Batch numbers
 below therefore report decoded bytes and read counts directly.
+
+## Current access path and performance diagnosis
+
+[`persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
+borrows one tree chunk while following nodes within it. Tree-local leaf vectors
+are evaluated in place. Shared leaves copy unchecked IDs into reused scratch,
+release the tree pin, and borrow consecutive descriptors from each block. A query
+holds no pin while admitting another block. Descriptor encounter order, queue
+priorities and check counts are unchanged, including equal-distance ties.
+
+[`cache.rs`](../../../crates/sfmtool-kdf-format/src/cache.rs) maintains an indexed
+doubly linked LRU list per shard. Hits and victim removal take constant time;
+eviction walks only older pinned entries before an available victim. Recency slots
+are reused. Pins borrow the cache owner rather than modifying a global reference
+count; an `Arc` still pins each value and its bytes count against residency. A
+miss-only global gate enforces the total in-flight decode limit without reducing
+cache sharding. Shard count is capped by the largest validated item in the file,
+not the caller's permissive `max_chunk_bytes` ceiling. Tree IDs contribute low
+bits to shard selection, so different trees' root chunks can use different locks. Pin-release notifications synchronize with the admission mutex,
+and waiters register before checking capacity.
+
+Eager reload validates the reconstructed graph for cycles, duplicate/missing
+features and unreachable nodes before handing it to the unchecked in-memory
+traversal. Provenance includes the default check budget, which reload restores;
+older files without this field retain the balanced fallback.
+
+Batch queries write directly into preallocated result rows. Ordered batches and
+self-joins restore row order by cycling the permutation in place, avoiding a
+second `N * k` result table and one neighbor-vector allocation per query. The
+permutation requires O(N) IDs, and the clustering stage still has its own
+O(N * k) candidate arrays.
+
+There are two distinct sources of overhead relative to an eager forest:
+
+- With a resident working set, lazy traversal validates addresses, tracks visited
+  nodes, resolves storage rows and acquires pins. Eager traversal indexes resident
+  arrays directly. Disk speed cannot explain a run with zero reads.
+- Under cache pressure, misses require admission, reads, decompression and integrity
+  checking. Eviction can make the same block decode repeatedly. The old eviction
+  scan additionally cost CPU time proportional to resident entries per replacement.
+
+A release cache-only probe (`benchmark_cache_churn`, 10,000 replacements, no file
+or zstd work) on 2026-09-10 measured:
+
+| Resident entries in one shard | Previous ns/replacement | Indexed LRU ns/replacement |
+|---:|---:|---:|
+| 1,024 | 8,197 | 457 |
+| 16,384 | 136,177 | 346 |
+| 65,536 | 1,226,745 | 391 |
+
+These are diagnostic samples, not disk throughput. The existing 256-query synthetic
+resident benchmark measures tree-local at 6.31 ms before and 0.74 ms after, and
+shared at 8.68 ms before and 2.29 ms after. Both lazy runs use four workers. Eager
+with four workers measures 0.27 ms; the earlier benchmark used the machine-wide
+pool for eager, so its earlier eager number is not a worker-matched comparison.
+The current benchmark asserts indices and distances, prints traversal/I/O counters,
+and accepts `KDF_BENCH_WORKERS` for both paths. The batch performs 34,157 checks
+and no warm reads. Current cache-hit counts are 4,671 tree-local and 30,105 shared.
+Shared-access overhead remains even when file I/O is absent.
+
+The shared corpus uses explicit-offset reads: `read_at` on Unix and `seek_read`
+on Windows, with retries for interrupted/short reads and an error for premature
+EOF. The handle's cursor is never used to choose a descriptor frame. This removes
+the mutex around seek/read and uses one positioned read rather than two separate
+operations. Each executing thread reuses a zstd decompressor context; decoded
+output remains subject to the existing exact-size and hash checks. The context's
+workspace is additional to decoded-cache residency and lasts with that thread.
+
+On Windows, positioned reads on a single synchronous handle still serialize.
+The corpus therefore opens a bounded pool of independent handles, sized by
+`query_workers`, and assigns executing threads to stable slots. It uses
+[ReOpenFile](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile)
+on the existing handle, preserving the original file-system object if the path is
+atomically replaced. Duplicating a handle with `try_clone` would share synchronous
+I/O state. Unix uses `read_at` on the original snapshot without a handle pool.
+The Windows regression test checks both snapshot identity and independent cursors.
+
+A four-thread diagnostic on 2026-09-11 measured 7.02 microseconds per completed
+block with a shared synchronous handle and no cache, 3.52 microseconds with the
+corrected cache and independent handle pool, and 3.13 microseconds with private
+handles and no cache. These are OS-warm throughput measurements, not device
+latency or an end-to-end speedup.
+
+A separate one-thread diagnostic on a 547,651-descriptor file (32 rows per block,
+20,000 sampled frames, OS-warm reads) measures the stages independently:
+
+| Stage | Mean microseconds/block |
+|---|---:|
+| Seek, read and frame allocation | 4.04 |
+| Explicit-offset read and frame allocation | 1.12 |
+| New zstd context and decode | 4.08 |
+| Reused zstd context and decode | 3.76 |
+| Hash comparison and decoded-byte copy | 0.50 |
+
+These calls are timed separately and do not include cache admission, traversal or
+multiworker contention. The positioned-read measurement follows the ordinary read
+of the same frame, so it describes OS-warm access, not physical device latency.
+Run the ignored `profile_corpus_misses` release test with `KDF_PROFILE_PATH` set to
+a shared u8 file to reproduce the decomposition. The test checks both read methods
+and both decoder methods produce identical bytes.
+
+### End-to-end held-out images (2026-09-11)
+
+The shared-layout image-query benchmark indexes 547,651 descriptors from 82
+Dino images and queries three held-out images (23,238 descriptors total). It uses
+four workers for eager and lazy, four trees, 16-feature leaves, k = 11, check
+budget 128, 4 KiB descriptor blocks and 64 KiB tree chunks. Every lazy and reloaded
+eager result is checked against the in-memory indices and distances.
+
+| Decoded cache | Before: later image seconds | After: later image seconds |
+|---|---:|---:|
+| 16 MiB | 4.72?5.23 | 3.13?3.16 |
+| 64 MiB | 1.49?1.51 | 1.23?1.23 |
+| 256 MiB | 0.37?0.38 | 0.10?0.13 |
+
+Each endpoint is a run's median over the second and third images, across two
+runs per implementation. The baseline is the preserved pre-review installed
+release extension, not a fresh rebuild of the PR head. The final runs bracket
+one baseline run. OS page cache was not flushed. First-image lazy times after the
+fix are 2.48?2.54 s, 1.04?1.12 s and 0.25?0.26 s respectively; ?cold? refers only
+to the decoded cache. [Raw measurements and command](kdf-review-2026-09-11.json)
+include all per-image times and available I/O counters.
+
+Eager traversal still takes roughly 0.02 s per later image. At 16 MiB, the final
+image causes approximately 632,700 block reads: 1.99 GB of compressed input and
+2.54 GB of decoded output from a 73 MB file. Repeated eviction and decoding
+explain why a bounded lazy cache remains much slower. At 256 MiB the same image
+needs one read and no eviction; the remaining gap is traversal validation,
+address mapping and pin/cache bookkeeping. The fixes reduce those costs without
+changing candidate order, but do not make the two access paths equally cheap.
+
+The historical measurements below predate this access-path revision. They remain
+records of those runs, not predictions for the current implementation.
 
 ## What the measurements found
 
@@ -535,20 +629,10 @@ emitting each leaf's not-yet-placed members together — does beat the default o
 metric it targets, 74 blocks against 90 at 694k descriptors. The advantage nearly
 vanishes at 9.7M (111 against 114) and reverses on batch reads. It is not a win.
 
-The pattern across the three suggests the benefit is close to *conserved*: the
-default gives one tree almost perfect locality and the rest none; greedy spreads a
-middling amount across all trees; the projection gives none to anyone. A descriptor
-sits in T leaves with T different memberships, and a linear order can satisfy one of
-them. If that reading is right, better packing — true hypergraph partitioning, say —
-would also be bounded, and the way past it is bounded duplication rather than
-cleverer ordering: store the corpus once plus extra copies only of the descriptors
-whose leaf-mates are most scattered. That needs a format change, which the row map
-alone cannot express.
-
-Worth noting what none of this affects. A batch large enough to touch most of the
-corpus is a full scan whatever the order — at 694k descriptors and 4 KiB blocks,
-all three policies read ~22,200 blocks of the 21,698 that exist. Ordering matters to
-sparse and one-shot queries only.
+These measurements compare three orderings; they do not establish a limit on
+what other packing methods can achieve. At 694k descriptors all three policies
+read about 22,200 blocks from a corpus of 21,698 blocks. These runs do not show a
+useful batch-read reduction.
 
 **Shared block size trades cold query time against file size, and the balance
 sits far smaller than it first appeared.** Once descriptor blocks stopped being one
@@ -630,9 +714,8 @@ Interleaved arms, nine rounds of 20,000 queries against a fully resident
 | 1 shard | 4 | 72.6 us | 69.1-76.9 |
 | 16 shards | 4 | **46.8 us** | 45.8-49.1 |
 
-Sharding costs nothing at one worker, which is what makes it safe to apply
-unconditionally, and it is the only thing that makes a second worker worth having:
-unsharded, four workers match one; sharded, they are 1.55x faster. Removing the
+In these runs, one-worker timings overlap. Four workers are 1.55x faster with
+sharding than without it. This result describes this workload and configuration. Removing the
 contention also tightens the spread to about +/-3%, against +/-15% for the
 contended arms.
 
@@ -827,12 +910,11 @@ The twenty-tree case, where a shared corpus avoids nineteen copies rather than
 three and the size argument is strongest, is unmeasured. So is `float32`, which
 the format carries and the Python bindings do not expose.
 
-The shared layout still resolves descriptors one at a time, at roughly twice
-tree-local's cache-hit count for identical work; returning a borrow under the
-existing pin and grouping a leaf's reads by block would close the one cell where
-tree-local leads. That remains proposed in
-[drafts/kdf-shared-descriptor-reads.md](../../drafts/kdf-shared-descriptor-reads.md),
-now as the only outstanding half.
+The access path borrows descriptors and reuses a pin for consecutive requests to
+the same block. Grouping nonconsecutive requests by block remains an experiment
+in [drafts/kdf-shared-descriptor-reads.md](../../drafts/kdf-shared-descriptor-reads.md).
+It must preserve encounter-order ties and include sorting and replay costs in
+measurements; a smaller cache-hit count alone does not establish an improvement.
 
 ## Acceptance checks
 

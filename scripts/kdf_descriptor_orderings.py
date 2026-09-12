@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import statistics
 import time
 from pathlib import Path
@@ -89,7 +88,9 @@ def order_projection(
     _, _, vt = np.linalg.svd(centered, full_matrices=False)
     axes = vt[:dims].T.astype(np.float32)
 
-    projected = (descriptors.astype(np.float32) - descriptors.mean(axis=0, dtype=np.float32)) @ axes
+    projected = (
+        descriptors.astype(np.float32) - descriptors.mean(axis=0, dtype=np.float32)
+    ) @ axes
     # Rank per axis, scaled into `bits` bits: equal-population buckets, so no axis
     # dominates the interleave because it happens to have a wider range.
     scale = (1 << bits) - 1
@@ -102,7 +103,9 @@ def order_projection(
     keys = np.zeros(len(grid), dtype=np.uint64)
     for bit in range(bits - 1, -1, -1):
         for d in range(grid.shape[1]):
-            keys = (keys << np.uint64(1)) | ((grid[:, d] >> np.uint64(bit)) & np.uint64(1))
+            keys = (keys << np.uint64(1)) | (
+                (grid[:, d] >> np.uint64(bit)) & np.uint64(1)
+            )
     return np.argsort(keys, kind="stable").astype(np.uint32)
 
 
@@ -167,7 +170,9 @@ def chunk_reads(path: Path, query: np.ndarray, budget: int, n: int, dim: int) ->
     return lazy.io_stats()["read_calls"] - 1
 
 
-def measure(path: Path, queries: np.ndarray, budget: int, baseline_chunks: int) -> dict:
+def measure(
+    path: Path, queries: np.ndarray, budget: int, baseline_chunks: int, reference
+) -> dict:
     opts = dict(
         cache_bytes=4 * GIB,
         max_in_flight_bytes=4 * GIB,
@@ -186,8 +191,10 @@ def measure(path: Path, queries: np.ndarray, budget: int, baseline_chunks: int) 
     for _ in range(3):
         lazy = LazyKdForest(str(path), **opts)
         start = time.perf_counter()
-        lazy.query(queries, k=2, max_leaf_checks=budget)
+        got = lazy.query(queries, k=2, max_leaf_checks=budget)
         runs.append(time.perf_counter() - start)
+        for actual, expected in zip(got, reference, strict=True):
+            np.testing.assert_array_equal(actual, expected)
         batch = lazy.io_stats()
         del lazy
 
@@ -234,13 +241,20 @@ def main() -> None:
 
     descriptors = load_corpus(features)
     rng = np.random.default_rng(args.seed)
-    held = rng.choice(len(descriptors), size=min(args.queries, len(descriptors) // 4), replace=False)
+    held = rng.choice(
+        len(descriptors), size=min(args.queries, len(descriptors) // 4), replace=False
+    )
     mask = np.ones(len(descriptors), dtype=bool)
     mask[held] = False
     index, queries = descriptors[mask], descriptors[held]
-    print(f"corpus {len(descriptors):,} -> index {len(index):,}, queries {len(queries):,}")
+    print(
+        f"corpus {len(descriptors):,} -> index {len(index):,}, queries {len(queries):,}"
+    )
 
-    forest = KdForest(index, num_trees=args.trees, leaf_size=args.leaf_size, seed=args.seed)
+    forest = KdForest(
+        index, num_trees=args.trees, leaf_size=args.leaf_size, seed=args.seed
+    )
+    reference = forest.query(queries, k=2, max_leaf_checks=args.budget)
     out = Path(args.scratch)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -281,7 +295,7 @@ def main() -> None:
             descriptor_block_bytes=args.block_bytes,
             descriptor_order=order.tolist(),
         )
-        m = measure(path, queries, args.budget, baseline)
+        m = measure(path, queries, args.budget, baseline, reference)
         m.update(policy=name, order_seconds=build)
         rows.append(m)
         print(
@@ -296,7 +310,10 @@ def main() -> None:
         Path(args.out).write_text(
             json.dumps(
                 {
-                    "corpus": {"indexed": int(len(index)), "queries": int(len(queries))},
+                    "corpus": {
+                        "indexed": int(len(index)),
+                        "queries": int(len(queries)),
+                    },
                     "forest": {"trees": args.trees, "leaf_size": args.leaf_size},
                     "block_bytes": args.block_bytes,
                     "baseline_chunk_reads": baseline,

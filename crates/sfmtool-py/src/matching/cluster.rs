@@ -138,29 +138,41 @@ pub fn background_floor_clusters_kdf(
         forest: resolve_forest_params(None, "accurate", None, None, Some(max_leaf_checks), None)?,
     };
 
-    let clusters = py
-        .detach(|| -> Result<_, String> {
-            let lazy = LazyKdForestU8::open(&path, options).map_err(|e| e.to_string())?;
-            let n = lazy.len();
-            let (indexes, distances_sq) = lazy
-                .self_join_with_distances(d + 1, max_leaf_checks, None)
-                .map_err(|e| e.to_string())?;
-            // The corpus and the index are both gone from memory by here; only
-            // the neighbour table and the clustering scratch remain.
-            drop(lazy);
-            cluster_match::background_floor_clusters_from_neighbors(
-                n,
-                &starts,
-                &params,
-                &NeighborTable {
-                    indexes,
-                    distances_sq,
-                    width: d + 1,
-                },
-            )
-            .map_err(|e| e.to_string())
-        })
-        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let clusters = py.detach(|| -> PyResult<_> {
+        let lazy = LazyKdForestU8::open(&path, options).map_err(crate::spatial::kdf::to_py_err)?;
+        let n = lazy.len();
+        if n <= d {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "corpus must contain more than d descriptors",
+            ));
+        }
+        if starts.len() < 2
+            || starts[0] != 0
+            || starts.windows(2).any(|w| w[0] > w[1])
+            || starts.last().copied().map(|v| v as usize) != Some(n)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "image_starts must be CSR offsets from 0 to N",
+            ));
+        }
+        let (indexes, distances_sq) = lazy
+            .self_join_with_distances(d + 1, max_leaf_checks, None)
+            .map_err(crate::spatial::kdf::to_py_err)?;
+        // The corpus and the index are both gone from memory by here; only
+        // the neighbour table and the clustering scratch remain.
+        drop(lazy);
+        cluster_match::background_floor_clusters_from_neighbors(
+            n,
+            &starts,
+            &params,
+            &NeighborTable {
+                indexes,
+                distances_sq,
+                width: d + 1,
+            },
+        )
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    })?;
 
     let cluster_starts =
         numpy::PyArray1::from_vec(py, clusters.cluster_starts.into_raw_vec_and_offset().0);

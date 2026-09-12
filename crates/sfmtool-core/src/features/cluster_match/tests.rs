@@ -281,3 +281,20 @@ fn deterministic_across_runs() {
     assert_eq!(p1.match_feature_indexes, p2.match_feature_indexes);
     assert_eq!(p1.match_descriptor_distances, p2.match_descriptor_distances);
 }
+
+#[test]
+fn external_neighbor_indexes_are_validated() {
+    let params = BackgroundFloorParams {
+        d: 1,
+        ..Default::default()
+    };
+    let table = NeighborTable {
+        indexes: vec![0, 2, 1, 0],
+        distances_sq: vec![0.0; 4],
+        width: 2,
+    };
+    assert!(matches!(
+        background_floor_clusters_from_neighbors(2, &[0, 1, 2], &params, &table),
+        Err(ClusterMatchError::BadNeighborIndex { index: 2, n: 2 })
+    ));
+}

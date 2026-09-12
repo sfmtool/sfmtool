@@ -529,3 +529,33 @@ def test_a_malformed_descriptor_order_is_refused(tmp_path):
                 descriptor_block_bytes=_BLOCK_BYTES,
                 descriptor_order=order,
             )
+
+
+def test_kdf_matcher_validates_before_self_join(tmp_path):
+    from sfmtool._sfmtool.matching import background_floor_clusters_kdf
+
+    desc = _descriptors(n=16)
+    path = _export(tmp_path, _forest(desc), "shared", {"descriptor_block_bytes": 128})
+    for d, starts in [(2**64 - 1, [0, 16]), (2, [0, 17]), (2, [1, 16])]:
+        with pytest.raises(ValueError):
+            background_floor_clusters_kdf(
+                str(path), np.array(starts, dtype=np.uint32), d=d
+            )
+    with pytest.raises(FileNotFoundError):
+        background_floor_clusters_kdf(
+            str(tmp_path / "missing.kdf"), np.array([0, 16], dtype=np.uint32)
+        )
+
+
+def test_reloaded_forest_preserves_default_check_budget(tmp_path):
+    from sfmtool._sfmtool.spatial import read_kdf
+
+    desc = _descriptors()
+    forest = KdForest(desc, num_trees=4, max_leaf_checks=32)
+    path = _export(tmp_path, forest, "shared", {"descriptor_block_bytes": 128})
+    loaded = read_kdf(str(path))
+    assert loaded.max_leaf_checks == 32
+    for actual, expected in zip(
+        loaded.query(desc[:10]), forest.query(desc[:10]), strict=True
+    ):
+        np.testing.assert_array_equal(actual, expected)

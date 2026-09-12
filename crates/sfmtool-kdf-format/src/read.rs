@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek};
+use std::io::Read;
+#[cfg(test)]
+use std::io::Seek;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -12,6 +14,83 @@ use zip::ZipArchive;
 use crate::cache::{Cache, CacheKey, Cached};
 use crate::types::*;
 
+#[cfg(windows)]
+static NEXT_READER_SLOT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+thread_local! {
+    #[cfg(windows)]
+    static READER_SLOT: usize = NEXT_READER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Independent frames can reuse zstd's context. One context per executing
+    // thread avoids both per-miss allocation and a decoder mutex shared by workers.
+    static FRAME_DECODER: std::cell::RefCell<Option<zstd::bulk::Decompressor<'static>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn decode_frame(frame: &[u8], limit: usize) -> Result<Vec<u8>, std::io::Error> {
+    FRAME_DECODER.with(|decoder| {
+        let mut decoder = decoder.borrow_mut();
+        if decoder.is_none() {
+            *decoder = Some(zstd::bulk::Decompressor::new()?);
+        }
+        decoder
+            .as_mut()
+            .expect("initialized")
+            .decompress(frame, limit)
+    })
+}
+
+/// Reopen the same Windows file object with independent synchronous I/O state.
+/// `try_clone` duplicates the handle but shares that state; reopening by path
+/// could attach to a replacement file after an atomic rename.
+#[cfg(windows)]
+fn independent_read_handle(file: &std::fs::File) -> std::io::Result<std::fs::File> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        ReOpenFile, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    // SAFETY: file owns a live synchronous file handle throughout this call.
+    let handle = unsafe {
+        ReOpenFile(
+            file.as_raw_handle(),
+            FILE_GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: ReOpenFile returned a new valid owned handle, transferred exactly once.
+    Ok(unsafe { std::fs::File::from_raw_handle(handle) })
+}
+
+/// Read an exact byte range without sharing a seek/read critical section.
+/// Windows updates the handle cursor, but every call supplies its own offset;
+/// no operation on this handle relies on the cursor's previous position.
+fn read_at_exact(file: &std::fs::File, mut out: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    while !out.is_empty() {
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(file, out, offset);
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(file, out, offset);
+        #[cfg(not(any(windows, unix)))]
+        let read: std::io::Result<usize> = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "positional file reads unavailable",
+        ));
+        match read {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                offset += n as u64;
+                out = &mut out[n..];
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// Where the shared descriptor corpus lives, and how to address a block in it.
 ///
 /// The corpus is one ZIP entry holding one independent zstd frame per block, so
@@ -19,11 +98,27 @@ use crate::types::*;
 /// lookup. That needs a file handle that can seek freely, separate from the one
 /// the `ZipArchive` owns, and the frame boundaries, which are read at open.
 struct Corpus {
-    file: Mutex<std::fs::File>,
+    #[cfg(any(not(windows), test))]
+    file: std::fs::File,
+    #[cfg(windows)]
+    readers: Vec<std::fs::File>,
     /// Absolute offset of the container entry's stored bytes in the file.
     data_start: u64,
     /// `blocks + 1` frame boundaries; `offsets[b]..offsets[b + 1]` is block `b`.
     offsets: Vec<u64>,
+}
+
+impl Corpus {
+    fn reader(&self) -> &std::fs::File {
+        #[cfg(windows)]
+        {
+            READER_SLOT.with(|slot| &self.readers[*slot % self.readers.len()])
+        }
+        #[cfg(not(windows))]
+        {
+            &self.file
+        }
+    }
 }
 
 /// An open immutable `.kdf` snapshot with lazy, integrity-checked payload access.
@@ -61,7 +156,7 @@ impl<S: KdfScalar> KdfFile<S> {
             ));
         }
         let file = std::fs::File::open(path)?;
-        let mut archive = ZipArchive::new(file)?;
+        let mut archive = ZipArchive::new(file.try_clone()?)?;
         let mut entries = HashMap::new();
         let mut directory_bytes = 0usize;
         for i in 0..archive.len() {
@@ -124,7 +219,7 @@ impl<S: KdfScalar> KdfFile<S> {
         let hash_raw =
             read_bounded_json_raw(&mut archive, &entries, "content_hash.json.zst", remaining)?;
         let hashes: ContentHash = serde_json::from_slice(&hash_raw)?;
-        validate_metadata::<S>(&metadata, &hashes, &options)?;
+        let largest_item = validate_metadata::<S>(&metadata, &hashes, &options)?;
         if hash_string(xxh3_128(&metadata_raw)) != hashes.metadata_xxh128 {
             return Err(KdfError::Integrity("metadata hash mismatch".into()));
         }
@@ -237,8 +332,15 @@ impl<S: KdfScalar> KdfFile<S> {
                     offsets.last().expect("non-empty")
                 )));
             }
+            #[cfg(windows)]
+            let readers = (0..options.query_workers)
+                .map(|_| independent_read_handle(&file))
+                .collect::<std::io::Result<Vec<_>>>()?;
             Some(Corpus {
-                file: Mutex::new(std::fs::File::open(path)?),
+                #[cfg(any(not(windows), test))]
+                file,
+                #[cfg(windows)]
+                readers,
                 data_start,
                 offsets,
             })
@@ -254,7 +356,7 @@ impl<S: KdfScalar> KdfFile<S> {
             options.cache_bytes,
             options.max_in_flight_bytes,
             address_map_bytes,
-            options.max_chunk_bytes,
+            largest_item,
         );
         Ok(Self {
             archive: Mutex::new(archive),
@@ -380,6 +482,60 @@ impl<S: KdfScalar> KdfFile<S> {
     /// or a cold pass from a warm one, without reopening the file.
     pub fn reset_io_stats(&self) {
         self.cache.reset_counters();
+    }
+
+    /// Borrow one decoded tree chunk for an operation. The callback must not
+    /// request another cache entry: admission can wait for this pin to drop.
+    pub fn with_tree_chunk<R>(
+        &self,
+        tree: u32,
+        chunk: u32,
+        visit: impl FnOnce(&DecodedTreeChunk<S>) -> Result<R, KdfError>,
+    ) -> Result<R, KdfError> {
+        let pin = self.tree_chunk(tree, chunk)?;
+        let Cached::Tree(chunk) = &*pin else {
+            unreachable!()
+        };
+        visit(chunk)
+    }
+
+    /// Visit shared vectors in the supplied order, borrowing consecutive rows
+    /// from the same block under one pin. The callback must not access the cache.
+    /// Order is preserved because equal-distance search results use encounter order.
+    pub fn with_shared_vectors(
+        &self,
+        ids: &[u32],
+        mut visit: impl FnMut(u32, &[S]),
+    ) -> Result<(), KdfError> {
+        let rows = self
+            .storage_rows
+            .as_ref()
+            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
+        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let row_of = |id: u32| {
+            rows.get(id as usize)
+                .copied()
+                .map(|r| r as usize)
+                .ok_or_else(|| KdfError::InvalidQuery("feature ID out of range".into()))
+        };
+        let mut at = 0;
+        while at < ids.len() {
+            let block = row_of(ids[at])? / q;
+            let pin = self.descriptor_block(block as u32)?;
+            let Cached::Descriptor(vectors) = &*pin else {
+                unreachable!()
+            };
+            while at < ids.len() {
+                let row = row_of(ids[at])?;
+                if row / q != block {
+                    break;
+                }
+                let base = (row % q) * self.dim();
+                visit(ids[at], &vectors[base..base + self.dim()]);
+                at += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Read a single node, retaining no cache pin on return.
@@ -596,7 +752,7 @@ impl<S: KdfScalar> KdfFile<S> {
         &self.metadata
     }
 
-    fn tree_chunk(&self, tree: u32, chunk: u32) -> Result<crate::cache::CachePin<S>, KdfError> {
+    fn tree_chunk(&self, tree: u32, chunk: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
         let meta = self
             .metadata
             .trees
@@ -719,15 +875,11 @@ impl<S: KdfScalar> KdfFile<S> {
             )));
         }
         let mut frame = vec![0u8; length];
-        {
-            let mut file = corpus.file.lock().unwrap();
-            file.seek(std::io::SeekFrom::Start(corpus.data_start + from))?;
-            file.read_exact(&mut frame)?;
-        }
+        read_at_exact(corpus.reader(), &mut frame, corpus.data_start + from)?;
         // Bound the decode by what the caller declared: a frame that expands
         // beyond its block's row count is malformed, and refusing it here keeps
         // the cache's reservation honest.
-        let raw = zstd::bulk::decompress(&frame, declared)?;
+        let raw = decode_frame(&frame, declared)?;
         if raw.len() != declared {
             return Err(KdfError::ShapeMismatch(format!(
                 "descriptor block {block} decoded to {} bytes, expected {declared}",
@@ -737,7 +889,7 @@ impl<S: KdfScalar> KdfFile<S> {
         Ok((raw, length as u64))
     }
 
-    fn descriptor_block(&self, block: u32) -> Result<crate::cache::CachePin<S>, KdfError> {
+    fn descriptor_block(&self, block: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
         let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
         let start = block as usize * q;
         if start >= self.len() {
@@ -775,7 +927,7 @@ impl<S: KdfScalar> KdfFile<S> {
             })
     }
 
-    fn origin_block(&self, block: u32) -> Result<crate::cache::CachePin<S>, KdfError> {
+    fn origin_block(&self, block: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
         let q = self.metadata.origin_block_rows.expect("validated") as usize;
         let start = block as usize * q;
         if start >= self.len() {
@@ -840,7 +992,7 @@ fn validate_metadata<S: KdfScalar>(
     m: &Metadata,
     h: &ContentHash,
     o: &LazyKdForestOptions,
-) -> Result<(), KdfError> {
+) -> Result<usize, KdfError> {
     if m.format != "kdf" || m.version != KDF_FORMAT_VERSION || m.metric != "squared_l2" {
         return Err(KdfError::InvalidFormat(
             "unsupported format, version, or metric".into(),
@@ -904,6 +1056,25 @@ fn validate_metadata<S: KdfScalar>(
             if c.node_count == 0 {
                 return Err(KdfError::InvalidFormat("empty chunk".into()));
             }
+            let scalar = std::mem::size_of::<S>() as u64;
+            let node_bytes = c.node_count as u64 * (NODE_COLUMNS as u64 * 4 + scalar);
+            let feature_bytes = c.feature_count as u64 * 4;
+            let vector_bytes = if m.descriptor_storage == "tree_local" {
+                (c.feature_count as u64)
+                    .checked_mul(m.dimension as u64)
+                    .and_then(|v| v.checked_mul(scalar))
+            } else {
+                Some(0)
+            };
+            let expected = vector_bytes
+                .and_then(|v| v.checked_add(node_bytes))
+                .and_then(|v| v.checked_add(feature_bytes))
+                .ok_or_else(|| KdfError::ResourceLimit("decoded chunk shape overflow".into()))?;
+            if c.decoded_bytes != expected {
+                return Err(KdfError::InvalidFormat(
+                    "declared chunk bytes disagree with its shape".into(),
+                ));
+            }
             let decoded = usize::try_from(c.decoded_bytes)
                 .map_err(|_| KdfError::ResourceLimit("chunk size exceeds usize".into()))?;
             if decoded > o.max_chunk_bytes {
@@ -932,7 +1103,7 @@ fn validate_metadata<S: KdfScalar>(
         )));
     }
     validate_hash_shape(h, m)?;
-    Ok(())
+    Ok(largest)
 }
 
 fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
@@ -1283,4 +1454,203 @@ fn parse_hash(s: &str) -> Result<u128, KdfError> {
         ));
     }
     u128::from_str_radix(s, 16).map_err(|_| KdfError::InvalidFormat("invalid hash".into()))
+}
+
+#[cfg(test)]
+mod profiling {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn independent_handles_keep_the_open_snapshot_after_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("snapshot.bin");
+        std::fs::write(&path, b"old").unwrap();
+        let mut original = std::fs::File::open(&path).unwrap();
+        std::fs::rename(&path, dir.path().join("previous.bin")).unwrap();
+        std::fs::write(&path, b"new").unwrap();
+        let reopened = independent_read_handle(&original).unwrap();
+        let mut out = [0; 3];
+        read_at_exact(&reopened, &mut out, 0).unwrap();
+        assert_eq!(&out, b"old");
+        assert_eq!(
+            original.stream_position().unwrap(),
+            0,
+            "reopening must not share the cursor"
+        );
+    }
+
+    #[test]
+    fn chunk_shapes_cannot_understate_admission_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shape.kdf");
+        crate::write_kdf(
+            &path,
+            &KdfForestData {
+                vectors: &[0u8],
+                feature_count: 1,
+                dimension: 1,
+                trees: vec![KdfTree {
+                    nodes: vec![KdfNode::Leaf { start: 0, len: 1 }],
+                    feature_ids: vec![0],
+                }],
+                provenance: None,
+                descriptor_order: None,
+            },
+            None,
+            &KdfWriteOptions::shared(4),
+        )
+        .unwrap();
+        let file = KdfFile::<u8>::open(&path, LazyKdForestOptions::default()).unwrap();
+        let mut metadata: Metadata =
+            serde_json::from_value(serde_json::to_value(&file.metadata).unwrap()).unwrap();
+        metadata.trees[0].chunks[0].decoded_bytes -= 1;
+        let error =
+            validate_metadata::<u8>(&metadata, &file.hashes, &LazyKdForestOptions::default())
+                .unwrap_err();
+        assert!(
+            matches!(error, KdfError::InvalidFormat(ref message) if message.contains("disagree with its shape"))
+        );
+    }
+
+    #[test]
+    fn concurrent_positional_reads_and_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ranges.bin");
+        let data: Vec<u8> = (0..65536)
+            .map(|i| ((i * 17 + i / 257) % 251) as u8)
+            .collect();
+        std::fs::write(&path, &data).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let file = &file;
+                let data = &data;
+                scope.spawn(move || {
+                    for i in 0..1000 {
+                        let offset = (worker * 7919 + i * 2311) % (data.len() - 37);
+                        let mut out = [0u8; 37];
+                        read_at_exact(file, &mut out, offset as u64).unwrap();
+                        assert_eq!(&out, &data[offset..offset + 37]);
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            read_at_exact(&file, &mut [0; 2], 65535).unwrap_err().kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+        read_at_exact(&file, &mut [], 65536).unwrap();
+    }
+
+    /// Diagnostic decomposition, not a throughput test: time calls separately
+    /// on one thread, with an OS-warm file and no decoded-cache lookup.
+    #[test]
+    #[ignore = "set KDF_PROFILE_PATH to a shared u8 file; run in release mode"]
+    fn profile_corpus_misses() {
+        let path = std::env::var("KDF_PROFILE_PATH").expect("KDF_PROFILE_PATH");
+        let file = KdfFile::<u8>::open(Path::new(&path), LazyKdForestOptions::default()).unwrap();
+        let corpus = file.corpus.as_ref().expect("shared layout");
+        let (rows, blocks) = file.descriptor_block_shape().unwrap();
+        let mut totals = [std::time::Duration::ZERO; 5];
+        let samples = 20_000;
+        for i in 0..samples {
+            let b = (i * 7919) % blocks;
+            let from = corpus.offsets[b];
+            let length = (corpus.offsets[b + 1] - from) as usize;
+            let declared = rows.min(file.len() - b * rows) * file.dim();
+            let start = std::time::Instant::now();
+            let mut frame = vec![0u8; length];
+            {
+                let mut handle = &corpus.file;
+                handle
+                    .seek(std::io::SeekFrom::Start(corpus.data_start + from))
+                    .unwrap();
+                handle.read_exact(&mut frame).unwrap();
+            }
+            totals[0] += start.elapsed();
+            let start = std::time::Instant::now();
+            let mut positioned = vec![0u8; length];
+            read_at_exact(&corpus.file, &mut positioned, corpus.data_start + from).unwrap();
+            totals[4] += start.elapsed();
+            assert_eq!(positioned, frame);
+            let start = std::time::Instant::now();
+            let raw = zstd::bulk::decompress(&frame, declared).unwrap();
+            totals[1] += start.elapsed();
+            let start = std::time::Instant::now();
+            let reused = decode_frame(&frame, declared).unwrap();
+            totals[3] += start.elapsed();
+            assert_eq!(raw, reused);
+            let start = std::time::Instant::now();
+            let digest = hash_string(xxh3_128(&raw));
+            assert_eq!(
+                &digest,
+                &file.hashes.descriptor_blocks_xxh128.as_ref().unwrap()[b]
+            );
+            std::hint::black_box(bytes_to_pod::<u8>("profile", &raw, declared).unwrap());
+            totals[2] += start.elapsed();
+        }
+        for mode in [0, 1, 2] {
+            let reader = KdfFile::<u8>::open(
+                Path::new(&path),
+                LazyKdForestOptions {
+                    cache_bytes: 16 << 20,
+                    query_workers: if mode == 0 { 1 } else { 4 },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let start = std::time::Instant::now();
+            std::thread::scope(|scope| {
+                for worker in 0..4 {
+                    let reader = &reader;
+                    let path = &path;
+                    scope.spawn(move || {
+                        let private_handle = std::fs::File::open(path).unwrap();
+                        for i in (worker..samples).step_by(4) {
+                            let b = (i * 7919) % blocks;
+                            if mode == 1 {
+                                std::hint::black_box(reader.descriptor_block(b as u32).unwrap());
+                            } else {
+                                let declared = rows.min(reader.len() - b * rows) * reader.dim();
+                                let raw = if mode == 2 {
+                                    let corpus = reader.corpus.as_ref().unwrap();
+                                    let from = corpus.offsets[b];
+                                    let mut frame =
+                                        vec![0u8; (corpus.offsets[b + 1] - from) as usize];
+                                    read_at_exact(
+                                        &private_handle,
+                                        &mut frame,
+                                        corpus.data_start + from,
+                                    )
+                                    .unwrap();
+                                    decode_frame(&frame, declared).unwrap()
+                                } else {
+                                    reader.read_corpus_frame(b as u32, declared).unwrap().0
+                                };
+                                assert_eq!(
+                                    hash_string(xxh3_128(&raw)),
+                                    reader.hashes.descriptor_blocks_xxh128.as_ref().unwrap()[b]
+                                );
+                                std::hint::black_box(
+                                    bytes_to_pod::<u8>("profile", &raw, declared).unwrap(),
+                                );
+                            }
+                        }
+                    });
+                }
+            });
+            eprintln!(
+                "4 workers mode={mode} ns/completed-block={:.0} stats={:?}",
+                start.elapsed().as_nanos() as f64 / samples as f64,
+                reader.io_stats()
+            );
+        }
+        eprintln!("samples={samples} block_rows={rows} ns/block read+allocation={:.0} zstd={:.0} hash+copy={:.0} reused-zstd={:.0} positional-read={:.0}",
+            totals[0].as_nanos() as f64 / samples as f64,
+            totals[1].as_nanos() as f64 / samples as f64,
+            totals[2].as_nanos() as f64 / samples as f64,
+            totals[3].as_nanos() as f64 / samples as f64,
+            totals[4].as_nanos() as f64 / samples as f64);
+    }
 }

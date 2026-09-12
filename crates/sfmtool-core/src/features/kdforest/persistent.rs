@@ -98,6 +98,7 @@ where
                 "num_trees": self.params.num_trees,
                 "split_dim_candidates": self.params.split_dim_candidates,
                 "leaf_size": self.params.leaf_size,
+                "max_leaf_checks": self.params.max_leaf_checks,
                 "seed": self.params.seed,
                 "descriptor_order": if descriptor_order.is_some() {
                     "explicit"
@@ -127,6 +128,9 @@ fn build_params_from(provenance: Option<&serde_json::Value>) -> KdForestParams {
     }
     if let Some(v) = get("split_dim_candidates") {
         params.split_dim_candidates = v as usize;
+    }
+    if let Some(v) = get("max_leaf_checks") {
+        params.max_leaf_checks = v as usize;
     }
     if let Some(v) = get("seed") {
         params.seed = v;
@@ -166,6 +170,7 @@ where
 
         for ti in 0..file.tree_count() {
             let mut nodes = vec![Node::Leaf { start: 0, len: 0 }; file.tree_node_count(ti)];
+            let mut defined = vec![false; nodes.len()];
             let mut point_ids: Vec<u32> = Vec::with_capacity(n_points);
             for ci in 0..file.chunk_count(ti) {
                 let chunk = file.decoded_chunk(ti as u32, ci as u32)?;
@@ -188,6 +193,9 @@ where
                             "tree {ti} logical node {logical} is out of range"
                         ))
                     })?;
+                    if std::mem::replace(&mut defined[logical], true) {
+                        return Err(KdfError::InvalidFormat("duplicate logical node ID".into()));
+                    }
                     *slot = match *node {
                         DecodedNode::Internal {
                             split_dimension,
@@ -207,6 +215,12 @@ where
                     };
                 }
             }
+            if file.root(ti).is_some_and(|root| root.logical != 0) {
+                return Err(KdfError::InvalidFormat(
+                    "in-memory tree requires logical root 0".into(),
+                ));
+            }
+            validate_loaded_tree(&nodes, &point_ids, n_points)?;
             trees.push(Tree { nodes, point_ids });
         }
 
@@ -246,6 +260,59 @@ where
             trees,
         })
     }
+}
+
+/// The eager traversal omits the lazy reader's cycle checks. Validate the
+/// reconstructed graph before exposing it to that unchecked traversal.
+fn validate_loaded_tree<S: ForestScalar>(
+    nodes: &[Node<S>],
+    ids: &[u32],
+    n: usize,
+) -> Result<(), KdfError> {
+    let mut seen = vec![false; nodes.len()];
+    let mut features = vec![false; n];
+    let mut stack = Vec::new();
+    if !nodes.is_empty() {
+        stack.push(0usize);
+    }
+    while let Some(at) = stack.pop() {
+        let mark = seen
+            .get_mut(at)
+            .ok_or_else(|| KdfError::InvalidFormat("child node out of range".into()))?;
+        if std::mem::replace(mark, true) {
+            return Err(KdfError::InvalidFormat(
+                "tree repeats a node or contains a cycle".into(),
+            ));
+        }
+        match nodes[at] {
+            Node::Internal { left, right, .. } => {
+                stack.push(left as usize);
+                stack.push(right as usize);
+            }
+            Node::Leaf { start, len } => {
+                let end = (start as usize)
+                    .checked_add(len as usize)
+                    .ok_or_else(|| KdfError::InvalidFormat("leaf range overflow".into()))?;
+                let leaf = ids
+                    .get(start as usize..end)
+                    .ok_or_else(|| KdfError::InvalidFormat("leaf range out of bounds".into()))?;
+                for &id in leaf {
+                    let mark = features
+                        .get_mut(id as usize)
+                        .ok_or_else(|| KdfError::InvalidFormat("feature ID out of range".into()))?;
+                    if std::mem::replace(mark, true) {
+                        return Err(KdfError::InvalidFormat("tree repeats a feature".into()));
+                    }
+                }
+            }
+        }
+    }
+    if seen.iter().any(|v| !v) || features.iter().any(|v| !v) {
+        return Err(KdfError::InvalidFormat(
+            "tree has unreachable nodes or missing features".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A file-backed randomized kd-forest with a shared bounded decoded cache.
@@ -339,7 +406,7 @@ where
 
     /// A scratch buffer sized for this forest, to reuse across many queries.
     pub fn new_scratch(&self) -> LazySearchScratch<S> {
-        LazySearchScratch::new(self.len(), self.total_nodes, self.dim())
+        LazySearchScratch::new(self.len(), self.total_nodes)
     }
 
     /// One query, reusing `scratch`; results are left in it.
@@ -442,6 +509,15 @@ where
                 order.len()
             )));
         }
+        let mut seen = vec![false; n_queries];
+        for &row in order {
+            let entry = seen
+                .get_mut(row as usize)
+                .ok_or_else(|| KdfError::InvalidQuery("order is out of range".into()))?;
+            if std::mem::replace(entry, true) {
+                return Err(KdfError::InvalidQuery("order repeats a row".into()));
+            }
+        }
         let expected = n_queries
             .checked_mul(self.dim())
             .ok_or_else(|| KdfError::InvalidQuery("query shape overflow".into()))?;
@@ -457,30 +533,35 @@ where
         let mut indices = vec![u32::MAX; width];
         let mut distances = vec![f32::INFINITY; width];
 
+        if k == 0 {
+            for query in queries.chunks(self.dim()) {
+                validate_query(query, self.dim(), max_dist)?;
+            }
+            return Ok((indices, distances));
+        }
         let dim = self.dim();
-        let results: Vec<Result<(usize, Vec<Neighbor>), KdfError>> = self.workers.install(|| {
-            order
-                .par_iter()
-                .map_init(
+        self.workers.install(|| {
+            indices
+                .par_chunks_mut(k)
+                .zip(distances.par_chunks_mut(k))
+                .enumerate()
+                .try_for_each_init(
                     || self.new_scratch(),
-                    |scratch, &row| {
-                        let at = row as usize;
-                        let q = queries.get(at * dim..(at + 1) * dim).ok_or_else(|| {
-                            KdfError::InvalidQuery("order is out of range".into())
-                        })?;
-                        self.search_into(q, k, max_leaf_checks, max_dist, scratch)?;
-                        Ok((at, scratch.result.neighbors()))
+                    |scratch, (at, (out_idx, out_dist))| {
+                        let row = order[at] as usize;
+                        self.search_into(
+                            &queries[row * dim..(row + 1) * dim],
+                            k,
+                            max_leaf_checks,
+                            max_dist,
+                            scratch,
+                        )?;
+                        scratch.result.write_results(out_idx, out_dist);
+                        Ok::<_, KdfError>(())
                     },
                 )
-                .collect()
-        });
-        for row in results {
-            let (at, found) = row?;
-            for (c, neighbor) in found.into_iter().enumerate() {
-                indices[at * k + c] = neighbor.index;
-                distances[at * k + c] = neighbor.dist_sq;
-            }
-        }
+        })?;
+        scatter_result_rows(&mut indices, &mut distances, k, &mut order.to_vec());
         Ok((indices, distances))
     }
 
@@ -506,7 +587,7 @@ where
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
-        let order = self.file.storage_order().ok_or_else(|| {
+        let mut order = self.file.storage_order().ok_or_else(|| {
             KdfError::InvalidQuery(
                 "a self-join needs the shared descriptor layout; this file is tree-local".into(),
             )
@@ -518,29 +599,32 @@ where
         let mut indices = vec![u32::MAX; width];
         let mut distances = vec![f32::INFINITY; width];
 
-        let rows: Vec<Result<(usize, Vec<Neighbor>), KdfError>> = self.workers.install(|| {
-            order
-                .par_iter()
-                .map_init(
-                    || (self.new_scratch(), Vec::with_capacity(self.dim())),
-                    |(scratch, query), &id| {
-                        self.file.shared_vector_into(id, query)?;
-                        // `query` and `scratch.descriptor` are separate buffers:
-                        // the search reads candidates into the latter while the
-                        // former still holds the query it is comparing against.
-                        self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
-                        Ok((id as usize, scratch.result.neighbors()))
-                    },
-                )
-                .collect()
-        });
-        for row in rows {
-            let (at, found) = row?;
-            for (c, neighbor) in found.into_iter().enumerate() {
-                indices[at * k + c] = neighbor.index;
-                distances[at * k + c] = neighbor.dist_sq;
+        if let Some(v) = max_dist {
+            if v.is_nan() || v < 0.0 {
+                return Err(KdfError::InvalidQuery(
+                    "max_dist must be nonnegative and not NaN".into(),
+                ));
             }
         }
+        if k == 0 {
+            return Ok((indices, distances));
+        }
+        self.workers.install(|| {
+            indices
+                .par_chunks_mut(k)
+                .zip(distances.par_chunks_mut(k))
+                .enumerate()
+                .try_for_each_init(
+                    || (self.new_scratch(), Vec::with_capacity(self.dim())),
+                    |(scratch, query), (at, (out_idx, out_dist))| {
+                        self.file.shared_vector_into(order[at], query)?;
+                        self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
+                        scratch.result.write_results(out_idx, out_dist);
+                        Ok::<_, KdfError>(())
+                    },
+                )
+        })?;
+        scatter_result_rows(&mut indices, &mut distances, k, &mut order);
         Ok((indices, distances))
     }
 
@@ -568,40 +652,54 @@ where
                 ));
             }
         }
-        let rows: Vec<Result<(Vec<Neighbor>, LazyQueryStats), KdfError>> =
-            self.workers.install(|| {
-                queries
-                    .par_chunks(self.dim())
-                    .map_init(
-                        || self.new_scratch(),
-                        |scratch, q| {
-                            let stats =
-                                self.search_into(q, k, max_leaf_checks, max_dist, scratch)?;
-                            Ok((scratch.result.neighbors(), stats))
-                        },
-                    )
-                    .collect()
-            });
-        let mut indices =
-            vec![
-                u32::MAX;
-                n_queries
-                    .checked_mul(k)
-                    .ok_or_else(|| KdfError::ResourceLimit("batch output shape overflow".into()))?
-            ];
-        let mut distances = vec![f32::INFINITY; indices.len()];
-        let mut total = LazyQueryStats::default();
-        for (r, row) in rows.into_iter().enumerate() {
-            let (neighbors, stats) = row?;
-            total.checks += stats.checks;
-            total.pushes += stats.pushes;
-            total.pops += stats.pops;
-            for (c, neighbor) in neighbors.into_iter().enumerate() {
-                indices[r * k + c] = neighbor.index;
-                distances[r * k + c] = neighbor.dist_sq;
+        let width = n_queries
+            .checked_mul(k)
+            .ok_or_else(|| KdfError::ResourceLimit("batch output shape overflow".into()))?;
+        let mut indices = vec![u32::MAX; width];
+        let mut distances = vec![f32::INFINITY; width];
+        if k == 0 {
+            for query in queries.chunks(self.dim()) {
+                validate_query(query, self.dim(), max_dist)?;
             }
+            return Ok((indices, distances, LazyQueryStats::default()));
         }
+        let total = self.workers.install(|| {
+            indices
+                .par_chunks_mut(k)
+                .zip(distances.par_chunks_mut(k))
+                .zip(queries.par_chunks(self.dim()))
+                .map_init(
+                    || self.new_scratch(),
+                    |scratch, ((out_idx, out_dist), query)| {
+                        let stats =
+                            self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
+                        scratch.result.write_results(out_idx, out_dist);
+                        Ok::<_, KdfError>(stats)
+                    },
+                )
+                .try_reduce(LazyQueryStats::default, |mut sum, next| {
+                    sum.checks += next.checks;
+                    sum.pushes += next.pushes;
+                    sum.pops += next.pops;
+                    Ok(sum)
+                })
+        })?;
         Ok((indices, distances, total))
+    }
+}
+
+/// Rows were computed in locality order; permute them in place into feature or
+/// query order. This avoids an N*k temporary plus one allocation per query.
+fn scatter_result_rows(indices: &mut [u32], distances: &mut [f32], k: usize, order: &mut [u32]) {
+    for at in 0..order.len() {
+        while order[at] as usize != at {
+            let to = order[at] as usize;
+            for c in 0..k {
+                indices.swap(at * k + c, to * k + c);
+                distances.swap(at * k + c, to * k + c);
+            }
+            order.swap(at, to);
+        }
     }
 }
 
@@ -636,7 +734,7 @@ fn validate_query<S: KdfScalar>(
 /// The in-memory forest threads one of these through a batch so the priority
 /// queue, dedup sets and result buffer are allocated once per worker rather than
 /// once per query; this is the same idea for the lazy path, where it matters
-/// more because the descriptor buffer is reused too.
+/// more because the leaf-ID buffer is reused too.
 ///
 /// Both dedup sets are bitsets with a touched-word list rather than hash sets:
 /// they are reset per query, and an O(words touched) reset is what makes reuse
@@ -647,17 +745,17 @@ pub struct LazySearchScratch<S: ForestScalar> {
     checked: Checked,
     visited: Checked,
     result: ResultSet<S>,
-    descriptor: Vec<S>,
+    leaf_ids: Vec<u32>,
 }
 
 impl<S: ForestScalar> LazySearchScratch<S> {
-    fn new(features: usize, nodes: usize, dim: usize) -> Self {
+    fn new(features: usize, nodes: usize) -> Self {
         Self {
             queue: BinaryHeap::new(),
             checked: Checked::new(features),
             visited: Checked::new(nodes),
             result: ResultSet::new(0, S::MAX_DIST),
-            descriptor: Vec::with_capacity(dim),
+            leaf_ids: Vec::new(),
         }
     }
 
@@ -685,68 +783,97 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
         priority: S::Dist,
     ) -> Result<(), KdfError> {
         loop {
-            let flat = self.tree_node_offsets[tree as usize] + address.logical;
-            if !self.scratch.visited.insert(flat) {
-                return Err(KdfError::InvalidFormat(format!(
-                    "tree {tree} revisits logical node {}",
-                    address.logical
-                )));
-            }
-            match self.file.node(tree, address)? {
-                DecodedNode::Internal {
-                    split_dimension,
-                    split,
-                    left,
-                    right,
-                } => {
-                    let q = self.query[split_dimension as usize];
-                    let (near, far) =
-                        if ForestScalar::coord_cmp(q, split) == std::cmp::Ordering::Greater {
-                            (right, left)
-                        } else {
-                            (left, right)
-                        };
-                    let far_priority = priority + S::axis_dist_sq(q, split);
-                    if far_priority <= self.scratch.result.worst_dist() {
-                        self.scratch.queue.push((
-                            Reverse(far_priority),
-                            tree,
-                            far.logical,
-                            far.chunk,
-                            far.local,
+            let current_chunk = address.chunk;
+            // Keep one tree pin while following nodes within this chunk. Return
+            // before admitting another tree or descriptor block.
+            let leaf = self
+                .file
+                .with_tree_chunk(tree, current_chunk, |chunk| loop {
+                    let local = address.local as usize;
+                    if chunk.logical_node_ids.get(local) != Some(&address.logical) {
+                        return Err(KdfError::InvalidFormat(
+                            "child logical ID does not match addressed node".into(),
                         ));
-                        self.stats.pushes += 1;
                     }
-                    address = near;
-                }
-                DecodedNode::Leaf { .. } => {
-                    let leaf = self.file.leaf(tree, address)?;
-                    if let Some(vectors) = leaf.vectors {
-                        for (i, id) in leaf.feature_ids.into_iter().enumerate() {
-                            if self.scratch.checked.insert(id) {
-                                self.stats.checks += 1;
-                                let d = S::dist_sq(
-                                    self.query,
-                                    &vectors[i * self.file.dim()..(i + 1) * self.file.dim()],
-                                );
-                                self.scratch.result.consider(id, d);
+                    let flat = self.tree_node_offsets[tree as usize] + address.logical;
+                    if !self.scratch.visited.insert(flat) {
+                        return Err(KdfError::InvalidFormat(format!(
+                            "tree {tree} revisits logical node {}",
+                            address.logical
+                        )));
+                    }
+                    match chunk.nodes[local] {
+                        DecodedNode::Internal {
+                            split_dimension,
+                            split,
+                            left,
+                            right,
+                        } => {
+                            let q = self.query[split_dimension as usize];
+                            let (near, far) = if ForestScalar::coord_cmp(q, split)
+                                == std::cmp::Ordering::Greater
+                            {
+                                (right, left)
+                            } else {
+                                (left, right)
+                            };
+                            let far_priority = priority + S::axis_dist_sq(q, split);
+                            if far_priority <= self.scratch.result.worst_dist() {
+                                self.scratch.queue.push((
+                                    Reverse(far_priority),
+                                    tree,
+                                    far.logical,
+                                    far.chunk,
+                                    far.local,
+                                ));
+                                self.stats.pushes += 1;
+                            }
+                            address = near;
+                            if address.chunk != current_chunk {
+                                return Ok(false);
                             }
                         }
-                    } else {
-                        // `leaf` copied the IDs and released its tree pin before
-                        // descriptor-cache admission, preventing pin cycles.
-                        for id in leaf.feature_ids {
-                            if self.scratch.checked.insert(id) {
-                                self.stats.checks += 1;
-                                self.file
-                                    .shared_vector_into(id, &mut self.scratch.descriptor)?;
-                                let d = S::dist_sq(self.query, &self.scratch.descriptor);
-                                self.scratch.result.consider(id, d);
+                        DecodedNode::Leaf { start, len } => {
+                            if len as usize > self.file.options_max_leaf_features() {
+                                return Err(KdfError::ResourceLimit(
+                                    "leaf exceeds max_leaf_features".into(),
+                                ));
                             }
+                            self.scratch.leaf_ids.clear();
+                            for (i, &id) in chunk.feature_ids
+                                [start as usize..(start + len) as usize]
+                                .iter()
+                                .enumerate()
+                            {
+                                if !self.scratch.checked.insert(id) {
+                                    continue;
+                                }
+                                self.stats.checks += 1;
+                                if let Some(vectors) = &chunk.vectors {
+                                    let base = (start as usize + i) * self.file.dim();
+                                    let d = S::dist_sq(
+                                        self.query,
+                                        &vectors[base..base + self.file.dim()],
+                                    );
+                                    self.scratch.result.consider(id, d);
+                                } else {
+                                    self.scratch.leaf_ids.push(id);
+                                }
+                            }
+                            return Ok(true);
                         }
                     }
-                    return Ok(());
+                })?;
+            if leaf {
+                if !self.scratch.leaf_ids.is_empty() {
+                    self.file
+                        .with_shared_vectors(&self.scratch.leaf_ids, |id, vector| {
+                            self.scratch
+                                .result
+                                .consider(id, S::dist_sq(self.query, vector));
+                        })?;
                 }
+                return Ok(());
             }
         }
     }
@@ -788,6 +915,12 @@ impl<S: ForestScalar> ResultSet<S> {
         self.items.clear();
         self.items.reserve(k);
     }
+    fn write_results(&self, indices: &mut [u32], distances: &mut [f32]) {
+        for (at, &(id, distance)) in self.items.iter().enumerate() {
+            indices[at] = id;
+            distances[at] = S::dist_sq_to_f32(distance);
+        }
+    }
     fn neighbors(&self) -> Vec<Neighbor> {
         self.items
             .iter()
@@ -812,6 +945,63 @@ mod tests {
             max_metadata_bytes: 1 << 20,
             query_workers: 2,
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn eager_reassembly_rejects_cycles_and_missing_features() {
+        let cycle = [
+            Node::Internal {
+                split_dim: 0,
+                split_val: 1u8,
+                left: 0,
+                right: 1,
+            },
+            Node::Leaf { start: 0, len: 1 },
+        ];
+        assert!(validate_loaded_tree(&cycle, &[0], 1).is_err());
+        assert!(validate_loaded_tree::<u8>(&[Node::Leaf { start: 0, len: 1 }], &[0], 2).is_err());
+        assert!(
+            validate_loaded_tree::<u8>(&[Node::Leaf { start: 0, len: 2 }], &[0, 0], 2).is_err()
+        );
+    }
+
+    #[test]
+    fn shared_reads_preserve_ties_and_reject_invalid_schedules() {
+        let points = vec![7u8; 32 * 4];
+        let forest = KdForest::build(
+            &points,
+            32,
+            4,
+            KdForestParams {
+                num_trees: 4,
+                leaf_size: 8,
+                ..KdForestParams::balanced()
+            },
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ties.kdf");
+        let order: Vec<u32> = (0..32).rev().collect();
+        forest
+            .write_kdf_ordered(&path, None, &KdfWriteOptions::shared(16), Some(&order))
+            .unwrap();
+        let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).unwrap();
+        let queries = vec![7u8; 3 * 4];
+        let expected = forest.search_batch_with_distances(&queries, 3, 5, 128, None);
+        assert_eq!(
+            lazy.search_batch_with_distances(&queries, 3, 5, 128, None)
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            lazy.search_batch_with_distances_ordered(&queries, 3, 5, 128, None, &[2, 0, 1])
+                .unwrap(),
+            expected
+        );
+        for order in [&[0, 0, 2][..], &[0, 1, 3][..]] {
+            assert!(lazy
+                .search_batch_with_distances_ordered(&queries, 3, 5, 128, None, order)
+                .is_err());
         }
     }
 
@@ -884,6 +1074,25 @@ mod tests {
                 .search_batch_with_distances(&queries, 11, 3, 30, None)
                 .unwrap();
             assert_eq!(got, expected);
+            let order = [3, 0, 9, 2, 10, 1, 4, 8, 5, 7, 6];
+            assert_eq!(
+                lazy.search_batch_with_distances_ordered(&queries, 11, 3, 30, None, &order)
+                    .unwrap(),
+                expected
+            );
+            assert_eq!(
+                lazy.search_batch_with_distances(&queries, 11, 0, 30, None)
+                    .unwrap(),
+                (Vec::new(), Vec::new())
+            );
+            if matches!(storage, DescriptorStorage::Shared { .. }) {
+                for k in [0, 3, 80] {
+                    assert_eq!(
+                        lazy.self_join_with_distances(k, 30, None).unwrap(),
+                        forest.search_batch_with_distances(&points, n, k, 30, None)
+                    );
+                }
+            }
         }
     }
 

@@ -11,26 +11,6 @@ use zip::ZipWriter;
 
 use crate::types::*;
 
-/// Store bytes verbatim in a ZIP entry, with no zstd wrapper of its own.
-///
-/// Every other entry in this format is exactly one zstd frame. The descriptor
-/// corpus is a concatenation of many, so its frame boundaries are inside the
-/// entry rather than at it, and it must not be wrapped again. See
-/// `specs/formats/kdf-file-format.md`, "Where this format departs from the
-/// container conventions".
-fn write_stored_entry<W: Write + Seek>(
-    zip: &mut ZipWriter<W>,
-    name: &str,
-    data: &[u8],
-) -> Result<(), KdfError> {
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored)
-        .large_file(data.len() as u64 >= u32::MAX as u64);
-    zip.start_file(name, options)?;
-    zip.write_all(data)?;
-    Ok(())
-}
-
 struct PackedChunk<S: KdfScalar> {
     logical_nodes: Vec<u32>,
     nodes: Vec<DecodedNode<S>>,
@@ -607,7 +587,15 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         // record per block, which at small block sizes is most of the file's
         // entries and most of its open cost.
         let mut ds = Vec::new();
-        let mut container = Vec::new();
+        // Stream frames directly: buffering the container duplicates the entire
+        // compressed corpus in memory. ZIP64 permits a stream larger than 4 GiB.
+        zip.start_file(
+            corpus_entry_name::<S>(data.feature_count, data.dimension),
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .large_file(true),
+        )?;
+        let mut stored = 0u64;
         let mut offsets = vec![0u64];
         for ids in order.chunks(q) {
             let mut block = Vec::with_capacity(ids.len() * data.dimension);
@@ -616,17 +604,14 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 block.extend_from_slice(&data.vectors[base..base + data.dimension]);
             }
             let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
-            container.extend_from_slice(&zstd::encode_all(raw, options.compression_level)?);
-            offsets.push(container.len() as u64);
+            let frame = zstd::encode_all(raw, options.compression_level)?;
+            zip.write_all(&frame)?;
+            stored += frame.len() as u64;
+            offsets.push(stored);
             let d = xxh3_128(raw);
             ds.push(d);
             section_digests.push(d);
         }
-        write_stored_entry(
-            &mut zip,
-            &corpus_entry_name::<S>(data.feature_count, data.dimension),
-            &container,
-        )?;
         let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
         write_binary_entry(
             &mut zip,

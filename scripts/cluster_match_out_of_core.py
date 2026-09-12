@@ -239,6 +239,8 @@ def main() -> None:
         kdf_peak = sampler.peak
 
         same = all(np.array_equal(a, b) for a, b in zip(eager, lazy))
+        for expected, actual in zip(eager, lazy, strict=True):
+            np.testing.assert_array_equal(actual, expected)
         clusters = len(eager[0]) - 1
         rows.append(
             {

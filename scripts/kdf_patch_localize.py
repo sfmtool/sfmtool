@@ -125,7 +125,9 @@ def localize(
             if corpus_row == np.iinfo(np.uint32).max or not np.isfinite(distance):
                 continue
             image = int(image_of[corpus_row])
-            by_image.setdefault(image, []).append((feature, int(feature_of[corpus_row])))
+            by_image.setdefault(image, []).append(
+                (feature, int(feature_of[corpus_row]))
+            )
 
     results = []
     for image, pairs in by_image.items():
@@ -153,8 +155,12 @@ def main() -> None:
     p.add_argument("--scratch", required=True)
     p.add_argument("--limit", type=int)
     p.add_argument("--patches", type=int, default=8, help="patches to localize")
-    p.add_argument("--patch-size", type=float, default=400.0, help="rectangle edge, pixels")
-    p.add_argument("--k", type=int, default=32, help="neighbours per constellation feature")
+    p.add_argument(
+        "--patch-size", type=float, default=400.0, help="rectangle edge, pixels"
+    )
+    p.add_argument(
+        "--k", type=int, default=32, help="neighbours per constellation feature"
+    )
     p.add_argument("--budget", type=int, default=128)
     p.add_argument("--trees", type=int, default=4)
     p.add_argument("--leaf-size", type=int, default=16)
@@ -189,7 +195,9 @@ def main() -> None:
     corpus = np.vstack(descriptors)
     # Corpus row -> (image, feature index). The `.kdf` can answer this from its own
     # provenance; kept here too so the in-memory path can be compared against it.
-    image_of = np.concatenate([np.full(c, i, dtype=np.uint32) for i, c in enumerate(counts)])
+    image_of = np.concatenate(
+        [np.full(c, i, dtype=np.uint32) for i, c in enumerate(counts)]
+    )
     feature_of = np.concatenate([np.arange(c, dtype=np.uint32) for c in counts])
     print(f"capture {len(corpus):,} descriptors, {len(descriptors)} images")
 
@@ -214,7 +222,9 @@ def main() -> None:
         chunk_bytes=args.chunk_bytes,
         descriptor_block_bytes=args.block_bytes,
     )
-    print(f"index: build {build_seconds:.1f}s, file {path.stat().st_size / 1e6:.0f} MB\n")
+    print(
+        f"index: build {build_seconds:.1f}s, file {path.stat().st_size / 1e6:.0f} MB\n"
+    )
 
     # Pick patches from images spread through the capture, centred on a dense
     # cluster of features so the constellation is not mostly empty sky.
@@ -226,7 +236,8 @@ def main() -> None:
         centre = xy[rng.integers(len(xy))]
         half = args.patch_size / 2
         inside = np.flatnonzero(
-            (np.abs(xy[:, 0] - centre[0]) <= half) & (np.abs(xy[:, 1] - centre[1]) <= half)
+            (np.abs(xy[:, 0] - centre[0]) <= half)
+            & (np.abs(xy[:, 1] - centre[1]) <= half)
         )
         if len(inside) >= args.min_inliers:
             patches.append((image, inside))
@@ -253,13 +264,15 @@ def main() -> None:
         idx, dist = forest.query(patch, k=args.k, max_leaf_checks=args.budget)
         query_ms.append((time.perf_counter() - t) * 1e3)
         t = time.perf_counter()
-        found = localize(idx, dist, patch_xy, image_of, feature_of, positions, args, args.seed)
+        found = localize(
+            idx, dist, patch_xy, image_of, feature_of, positions, args, args.seed
+        )
         ransac_ms.append((time.perf_counter() - t) * 1e3)
-        reference.append({i for i, _, _ in found})
+        reference.append((idx, dist, {i for i, _, _ in found}))
     print(
         f"{'in memory':>18} {'-':>8} {statistics.median(query_ms):>9.1f}"
         f" {statistics.median(ransac_ms):>10.1f} {'-':>8} {'-':>11}"
-        f" {statistics.median(len(r) for r in reference):>6.0f} {'ref':>6}"
+        f" {statistics.median(len(r[2]) for r in reference):>6.0f} {'ref':>6}"
     )
     rows.append({"path": "memory", "query_ms": query_ms, "ransac_ms": ransac_ms})
 
@@ -284,14 +297,19 @@ def main() -> None:
             t = time.perf_counter()
             idx, dist = lazy.query(patch, k=args.k, max_leaf_checks=args.budget)
             q_ms.append((time.perf_counter() - t) * 1e3)
+            np.testing.assert_array_equal(idx, want[0])
+            np.testing.assert_array_equal(dist, want[1])
             io = lazy.io_stats()
             reads += io["read_calls"]
             decoded += io["decoded_bytes"]
             t = time.perf_counter()
-            found = localize(idx, dist, patch_xy, image_of, feature_of, positions, args, args.seed)
+            found = localize(
+                idx, dist, patch_xy, image_of, feature_of, positions, args, args.seed
+            )
             r_ms.append((time.perf_counter() - t) * 1e3)
             found_counts.append(len(found))
-            agree += int({i for i, _, _ in found} == want)
+            assert {i for i, _, _ in found} == want[2]
+            agree += 1
         print(
             f"{f'kdf {mib} MiB':>18} {open_ms:>8.0f} {statistics.median(q_ms):>9.1f}"
             f" {statistics.median(r_ms):>10.1f} {reads // len(patches):>8,}"

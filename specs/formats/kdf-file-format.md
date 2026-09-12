@@ -580,3 +580,11 @@ out to dominate.
 A flat array remains the better shape for a consumer that memory-maps the corpus and
 leaves caching to the operating system, which is a different design rather than a
 tuning of this one.
+
+### Writer and summary working memory
+
+The writer streams the shared corpus's compressed frames into its ZIP entry and
+retains the offsets and hashes; it does not buffer the complete compressed corpus.
+The summary derives array sizes from entry shapes, including the uint64 block
+offsets. JSON decompression is bounded by `max_metadata_bytes`; the ZIP STORE size
+alone does not bound the expanded JSON. Array-shape arithmetic checks overflow.

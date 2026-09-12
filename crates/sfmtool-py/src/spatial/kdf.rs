@@ -46,7 +46,7 @@ use super::kdforest::extract_u8_2d;
 /// source file is a `FileNotFoundError`. Collapsing all of them into one
 /// exception type would make a benchmark sweep unable to tell "this cache
 /// budget is too small" (retry smaller) from "this file is corrupt" (stop).
-fn to_py_err(err: KdfError) -> PyErr {
+pub(crate) fn to_py_err(err: KdfError) -> PyErr {
     let message = err.to_string();
     match err {
         KdfError::Io(e) => PyErr::from(e),

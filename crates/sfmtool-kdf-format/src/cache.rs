@@ -3,24 +3,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
 use crate::{DecodedTreeChunk, FeatureOrigin, KdfError, KdfIoStats, KdfScalar};
 
-/// Cache maps keyed by XXH3 rather than the standard library's SipHash-1-3.
-///
-/// SipHash is a keyed PRF chosen to resist hash flooding from attacker-supplied
-/// keys. These keys are neither attacker-chosen nor sparse — they are dense block
-/// and chunk indexes this crate generates while walking a file whose structure it
-/// has already validated — and at roughly 241 lookups per query, the tens of
-/// nanoseconds SipHash spends on an eight-byte key is a visible share of a query
-/// that should be dominated by distance arithmetic.
-///
-/// XXH3 rather than a hand-rolled multiply: the crate already hashes every stored
-/// section with it, so this introduces no new dependency and no new hash to
-/// justify, and its short-input path is built for keys this size.
+/// Dense internal keys use XXH3, already a dependency for section integrity.
+/// Callers cannot supply arbitrary cache keys.
 type KeyMap<V> = HashMap<CacheKey, V, Xxh3DefaultBuilder>;
 type KeySet = HashSet<CacheKey, Xxh3DefaultBuilder>;
 
@@ -50,9 +40,14 @@ impl<S: KdfScalar> Cached<S> {
 struct Entry<S: KdfScalar> {
     value: Arc<Cached<S>>,
     bytes: usize,
-    /// Recency stamp, from [`State::clock`]. Ordering these is what picks an
-    /// eviction victim; the absolute values mean nothing.
-    last_used: u64,
+    recency: usize,
+}
+
+/// Stable slots avoid hashing neighbouring keys when promoting an entry.
+struct Recency {
+    key: CacheKey,
+    prev: Option<usize>,
+    next: Option<usize>,
 }
 
 #[derive(Default)]
@@ -65,27 +60,24 @@ struct Counters {
     evictions: u64,
     waits: u64,
     peak_resident: usize,
-    peak_in_flight: usize,
 }
 
 struct State<S: KdfScalar> {
     entries: KeyMap<Entry<S>>,
-    /// Monotonic source of recency stamps. A `u64` at one tick per cache access
-    /// cannot wrap in any run this format will see.
-    clock: u64,
+    recency: Vec<Recency>,
+    free_recency: Vec<usize>,
+    oldest: Option<usize>,
+    newest: Option<usize>,
     loading: KeySet,
     reserved: usize,
     resident: usize,
-    in_flight: usize,
     counters: Counters,
 }
 
 /// One independently locked slice of the cache.
 ///
-/// Residency, eviction and admission are all per shard, so two workers touching
-/// different shards never meet. Each shard carries its own share of the byte
-/// budget rather than checking a global one, because a shared counter would put
-/// back the single contended word the sharding exists to remove.
+/// Residency and eviction are per shard. Cache hits touch no global counter;
+/// the separate global decode gate is used only when an entry must be loaded.
 struct Shard<S: KdfScalar> {
     state: Mutex<State<S>>,
     changed: Condvar,
@@ -99,7 +91,6 @@ struct Shard<S: KdfScalar> {
     /// release and finds the room it needed.
     waiters: AtomicUsize,
     capacity: usize,
-    in_flight_capacity: usize,
 }
 
 pub(crate) struct Cache<S: KdfScalar> {
@@ -109,23 +100,26 @@ pub(crate) struct Cache<S: KdfScalar> {
     capacity: usize,
     in_flight_capacity: usize,
     address_map_bytes: usize,
+    decode_bytes: Mutex<(usize, usize)>,
+    decode_changed: Condvar,
+    decode_waiters: AtomicUsize,
 }
 
 /// A cache pin. Dropping it releases the hold and, if an admission is waiting on
 /// capacity, wakes it — so pinned residency counts against the byte limit
 /// instead of being silently evicted from accounting.
-pub(crate) struct CachePin<S: KdfScalar> {
+pub(crate) struct CachePin<'a, S: KdfScalar> {
     /// `Option` so [`Drop`] can release the hold *before* checking for waiters.
     /// Field drop runs after the `drop` body, which would otherwise mean waking
     /// a waiter that still sees this entry pinned.
     value: Option<Arc<Cached<S>>>,
-    owner: Weak<Cache<S>>,
+    owner: &'a Cache<S>,
     /// Which shard to wake. Pins are taken and dropped far more often than any
     /// shard is contended, so this is carried rather than recomputed.
     shard: usize,
 }
 
-impl<S: KdfScalar> std::ops::Deref for CachePin<S> {
+impl<S: KdfScalar> std::ops::Deref for CachePin<'_, S> {
     type Target = Cached<S>;
     fn deref(&self) -> &Self::Target {
         self.value
@@ -134,16 +128,19 @@ impl<S: KdfScalar> std::ops::Deref for CachePin<S> {
     }
 }
 
-impl<S: KdfScalar> Drop for CachePin<S> {
+impl<S: KdfScalar> Drop for CachePin<'_, S> {
     fn drop(&mut self) {
         // A search takes and drops one pin per node and per descriptor it
         // examines, so this runs hundreds of times per query. Notifying
         // unconditionally made every one of those a condition-variable wake with
         // no waiter to receive it.
         drop(self.value.take());
-        if let Some(owner) = self.owner.upgrade() {
-            let shard = &owner.shards[self.shard];
+        {
+            let shard = &self.owner.shards[self.shard];
             if shard.waiters.load(Ordering::SeqCst) > 0 {
+                // Synchronize with the predicate check and atomic unlock in
+                // Condvar::wait; notification alone can precede the actual wait.
+                let _guard = shard.state.lock().unwrap();
                 shard.changed.notify_all();
             }
         }
@@ -152,8 +149,8 @@ impl<S: KdfScalar> Drop for CachePin<S> {
 
 /// Shards to split the cache into, at most this many.
 ///
-/// Past a handful the contention is already gone and each extra shard only
-/// fragments the byte budget further, so this is deliberately modest.
+/// This caps budget fragmentation; the largest validated item further limits
+/// the count so each shard can admit every item mapped to it.
 const MAX_SHARDS: usize = 16;
 
 impl<S: KdfScalar> Cache<S> {
@@ -180,23 +177,27 @@ impl<S: KdfScalar> Cache<S> {
                 .map(|_| Shard {
                     state: Mutex::new(State {
                         entries: KeyMap::default(),
-                        clock: 0,
+                        recency: Vec::new(),
+                        free_recency: Vec::new(),
+                        oldest: None,
+                        newest: None,
                         loading: KeySet::default(),
                         reserved: 0,
                         resident: 0,
-                        in_flight: 0,
                         counters: Counters::default(),
                     }),
                     changed: Condvar::new(),
                     waiters: AtomicUsize::new(0),
                     capacity: capacity / shards,
-                    in_flight_capacity: (in_flight_capacity / shards).max(largest_item.max(1)),
                 })
                 .collect(),
             shard_mask: shards - 1,
             capacity,
             in_flight_capacity,
             address_map_bytes,
+            decode_bytes: Mutex::new((0, 0)),
+            decode_changed: Condvar::new(),
+            decode_waiters: AtomicUsize::new(0),
         })
     }
 
@@ -209,57 +210,65 @@ impl<S: KdfScalar> Cache<S> {
     /// keys would land in a few shards.
     fn shard_index_of(&self, key: CacheKey) -> usize {
         let spread = match key {
-            CacheKey::Tree(tree, chunk) => (chunk as usize) ^ ((tree as usize) << 8),
+            CacheKey::Tree(tree, chunk) => (chunk as usize) ^ (tree as usize).wrapping_mul(0x9e37),
             CacheKey::Descriptor(block) => block as usize,
             CacheKey::Origin(block) => block as usize,
         };
         spread & self.shard_mask
     }
 
-    /// Mark an entry as most recently used, in constant time.
-    ///
-    /// This runs on **every cache hit**, so its cost is the cache's per-access
-    /// cost. An ordered recency list makes that O(resident entries) — promoting
-    /// an entry means finding it and removing it from the middle — which is
-    /// invisible on a small cache and dominant on a large one: a file holding
-    /// ~23,000 descriptor blocks measured 33.5 us per fully-cached access, three
-    /// orders of magnitude above the hash lookup it should have been.
-    ///
-    /// Stamping instead moves that work to eviction, which has to inspect the
-    /// same set anyway to skip pinned entries. The trade is sound because hits
-    /// vastly outnumber evictions: in a resident working set there are no
-    /// evictions at all, and even the most cache-starved configuration measured
-    /// ran three hits per eviction.
-    fn touch(state: &mut State<S>, key: CacheKey) {
-        state.clock += 1;
-        let stamp = state.clock;
-        if let Some(entry) = state.entries.get_mut(&key) {
-            entry.last_used = stamp;
+    fn unlink(state: &mut State<S>, slot: usize) {
+        let link = &state.recency[slot];
+        let (prev, next) = (link.prev, link.next);
+        if let Some(prev) = prev {
+            state.recency[prev].next = next;
+        } else {
+            state.oldest = next;
+        }
+        if let Some(next) = next {
+            state.recency[next].prev = prev;
+        } else {
+            state.newest = prev;
         }
     }
 
-    /// Evict least-recently-used unpinned entries until `needed` bytes fit.
-    ///
-    /// Each pass scans for the oldest stamp among unpinned entries. A pinned
-    /// entry is one a caller still holds a [`CachePin`] for, so it cannot be
-    /// dropped without invalidating a borrow; the loop stops when every
-    /// remaining entry is pinned, which is the caller's cue to wait for one to
-    /// be released rather than to spin.
+    fn append(state: &mut State<S>, slot: usize) {
+        state.recency[slot].prev = state.newest;
+        state.recency[slot].next = None;
+        if let Some(last) = state.newest {
+            state.recency[last].next = Some(slot);
+        } else {
+            state.oldest = Some(slot);
+        }
+        state.newest = Some(slot);
+    }
+
+    /// Hits and removal are O(1); eviction visits only older pinned entries
+    /// before its victim, rather than scanning every resident hash bucket.
+    fn touch(state: &mut State<S>, slot: usize) {
+        if state.newest != Some(slot) {
+            Self::unlink(state, slot);
+            Self::append(state, slot);
+        }
+    }
+
     fn evict_unpinned(shard: &Shard<S>, state: &mut State<S>, needed: usize) {
+        let mut candidate = state.oldest;
         while state
             .resident
             .saturating_add(state.reserved)
             .saturating_add(needed)
             > shard.capacity
         {
-            let victim = state
-                .entries
-                .iter()
-                .filter(|(_, e)| Arc::strong_count(&e.value) == 1)
-                .min_by_key(|(_, e)| e.last_used)
-                .map(|(key, _)| *key);
-            let Some(key) = victim else { break };
-            let entry = state.entries.remove(&key).expect("victim was just found");
+            let Some(slot) = candidate else { break };
+            candidate = state.recency[slot].next;
+            let key = state.recency[slot].key;
+            if Arc::strong_count(&state.entries[&key].value) != 1 {
+                continue;
+            }
+            let entry = state.entries.remove(&key).expect("recency entry exists");
+            Self::unlink(state, slot);
+            state.free_recency.push(slot);
             state.resident -= entry.bytes;
             state.counters.evictions += 1;
         }
@@ -270,7 +279,7 @@ impl<S: KdfScalar> Cache<S> {
         key: CacheKey,
         declared: usize,
         load: F,
-    ) -> Result<CachePin<S>, KdfError>
+    ) -> Result<CachePin<'_, S>, KdfError>
     where
         F: FnOnce() -> Result<(Cached<S>, u64), KdfError>,
     {
@@ -293,18 +302,14 @@ impl<S: KdfScalar> Cache<S> {
         let mut load = Some(load);
         loop {
             let mut state = shard.state.lock().unwrap();
-            // Fetch the value and stamp its recency in one lookup. Going through
-            // `touch` here would hash the key a second time, on the hottest path
-            // in the crate.
-            state.clock += 1;
-            let stamp = state.clock;
-            if let Some(entry) = state.entries.get_mut(&key) {
+            if let Some(entry) = state.entries.get(&key) {
                 let value = Arc::clone(&entry.value);
-                entry.last_used = stamp;
+                let slot = entry.recency;
+                Self::touch(&mut state, slot);
                 state.counters.hits += 1;
                 return Ok(CachePin {
                     value: Some(value),
-                    owner: Arc::downgrade(self),
+                    owner: self,
                     shard: shard_index,
                 });
             }
@@ -316,33 +321,50 @@ impl<S: KdfScalar> Cache<S> {
                 drop(woken.unwrap());
                 continue;
             }
+            shard.waiters.fetch_add(1, Ordering::SeqCst);
             Self::evict_unpinned(shard, &mut state, declared);
-            if state.resident + state.reserved + declared > shard.capacity
-                || state.in_flight + declared > shard.in_flight_capacity
-            {
-                shard.waiters.fetch_add(1, Ordering::SeqCst);
+            if state.resident + state.reserved + declared > shard.capacity {
                 let woken = shard.changed.wait(state);
                 shard.waiters.fetch_sub(1, Ordering::SeqCst);
                 drop(woken.unwrap());
                 continue;
             }
+            shard.waiters.fetch_sub(1, Ordering::SeqCst);
             state.loading.insert(key);
             state.reserved += declared;
-            state.in_flight += declared;
             state.counters.misses += 1;
-            state.counters.peak_in_flight = state.counters.peak_in_flight.max(state.in_flight);
             drop(state);
 
+            // Global decode admission is only a miss-path operation. Dividing
+            // this limit by shards either disables useful sharding or silently
+            // multiplies the promised limit when each share is rounded up.
+            let mut decoding = self.decode_bytes.lock().unwrap();
+            while decoding.0 + declared > self.in_flight_capacity {
+                self.decode_waiters.fetch_add(1, Ordering::Relaxed);
+                decoding = self.decode_changed.wait(decoding).unwrap();
+                self.decode_waiters.fetch_sub(1, Ordering::Relaxed);
+            }
+            decoding.0 += declared;
+            decoding.1 = decoding.1.max(decoding.0);
+            drop(decoding);
             let result = load.take().expect("loader runs once")();
             let mut state = shard.state.lock().unwrap();
             state.loading.remove(&key);
             state.reserved -= declared;
-            state.in_flight -= declared;
+            {
+                let mut decoding = self.decode_bytes.lock().unwrap();
+                decoding.0 -= declared;
+                if self.decode_waiters.load(Ordering::Relaxed) != 0 {
+                    self.decode_changed.notify_all();
+                }
+            }
             match result {
                 Ok((value, compressed_bytes)) => {
                     let actual = value.bytes();
                     if actual != declared {
-                        shard.changed.notify_all();
+                        if shard.waiters.load(Ordering::SeqCst) != 0 {
+                            shard.changed.notify_all();
+                        }
                         return Err(KdfError::ShapeMismatch(format!(
                             "decoded item declared {declared} bytes but produced {actual}"
                         )));
@@ -353,24 +375,40 @@ impl<S: KdfScalar> Cache<S> {
                     state.counters.compressed_bytes += compressed_bytes;
                     state.counters.decoded_bytes += actual as u64;
                     state.counters.peak_resident = state.counters.peak_resident.max(state.resident);
+                    let link = Recency {
+                        key,
+                        prev: None,
+                        next: None,
+                    };
+                    let slot = if let Some(slot) = state.free_recency.pop() {
+                        state.recency[slot] = link;
+                        slot
+                    } else {
+                        state.recency.push(link);
+                        state.recency.len() - 1
+                    };
+                    Self::append(&mut state, slot);
                     state.entries.insert(
                         key,
                         Entry {
                             value: Arc::clone(&value),
                             bytes: actual,
-                            last_used: 0,
+                            recency: slot,
                         },
                     );
-                    Self::touch(&mut state, key);
-                    shard.changed.notify_all();
+                    if shard.waiters.load(Ordering::SeqCst) != 0 {
+                        shard.changed.notify_all();
+                    }
                     return Ok(CachePin {
                         value: Some(value),
-                        owner: Arc::downgrade(self),
+                        owner: self,
                         shard: shard_index,
                     });
                 }
                 Err(e) => {
-                    shard.changed.notify_all();
+                    if shard.waiters.load(Ordering::SeqCst) != 0 {
+                        shard.changed.notify_all();
+                    }
                     return Err(e);
                 }
             }
@@ -385,12 +423,15 @@ impl<S: KdfScalar> Cache<S> {
     /// resident. A benchmark uses this to separate an open from the queries
     /// that follow it, or a cold pass from a warm one, without reopening.
     pub(crate) fn reset_counters(&self) {
+        {
+            let mut decoding = self.decode_bytes.lock().unwrap();
+            decoding.1 = decoding.0;
+        }
         for shard in &self.shards {
             let mut s = shard.state.lock().unwrap();
-            let (resident, in_flight) = (s.resident, s.in_flight);
+            let resident = s.resident;
             s.counters = Counters {
                 peak_resident: resident,
-                peak_in_flight: in_flight,
                 ..Counters::default()
             };
         }
@@ -428,9 +469,10 @@ impl<S: KdfScalar> Cache<S> {
             out.duplicate_load_waits += s.counters.waits;
             out.resident_bytes += s.resident;
             out.peak_resident_bytes += s.counters.peak_resident;
-            out.in_flight_bytes += s.in_flight;
-            out.peak_in_flight_bytes += s.counters.peak_in_flight;
         }
+        let decoding = self.decode_bytes.lock().unwrap();
+        out.in_flight_bytes = decoding.0;
+        out.peak_in_flight_bytes = decoding.1;
         out
     }
 }
@@ -444,15 +486,45 @@ mod tests {
         move || Ok((Cached::Descriptor(vec![0u8; bytes]), bytes as u64))
     }
 
-    fn get(cache: &Arc<Cache<u8>>, id: u32, bytes: usize) -> CachePin<u8> {
+    fn get(cache: &Arc<Cache<u8>>, id: u32, bytes: usize) -> CachePin<'_, u8> {
         cache
             .get_or_load(CacheKey::Descriptor(id), bytes, load(bytes))
             .expect("fits")
     }
 
+    /// Isolate cache CPU cost from file I/O and decompression.
+    #[test]
+    #[ignore = "manual release-mode performance measurement"]
+    fn benchmark_cache_churn() {
+        for count in [1024u32, 16384, 65536] {
+            let cache = Cache::<u8>::new(count as usize, count as usize, 0, count as usize);
+            for id in 0..count {
+                drop(get(&cache, id, 1));
+            }
+            let start = std::time::Instant::now();
+            for id in count..count + 10000 {
+                drop(get(&cache, id, 1));
+            }
+            eprintln!(
+                "churn resident={count} ns/miss={:.0}",
+                start.elapsed().as_nanos() as f64 / 10000.0
+            );
+            let start = std::time::Instant::now();
+            for _ in 0..100 {
+                for id in count + 9000..count + 10000 {
+                    drop(get(&cache, id, 1));
+                }
+            }
+            eprintln!(
+                "hit resident={count} ns/hit={:.0}",
+                start.elapsed().as_nanos() as f64 / 100000.0
+            );
+        }
+    }
+
     /// Eviction drops the least recently *used* entry, not the oldest loaded.
     ///
-    /// This is the property the recency stamp exists for: re-reading an entry
+    /// This is the property the recency list exists for: re-reading an entry
     /// has to protect it from the next eviction, or a hot entry loaded early is
     /// thrown away while a cold one loaded later survives.
     #[test]
@@ -505,6 +577,54 @@ mod tests {
         assert_eq!(state.resident, 20);
     }
 
+    #[test]
+    fn releasing_the_last_pin_wakes_admission() {
+        let cache = Cache::<u8>::new(10, 10, 0, 10);
+        let held = get(&cache, 0, 10);
+        let other = Arc::clone(&cache);
+        let (send, recv) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(get(&other, 1, 10));
+            send.send(()).unwrap();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while cache.shards[0].waiters.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        drop(held);
+        recv.recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn shards_respect_the_total_in_flight_limit() {
+        let cache = Cache::<u8>::new(1 << 20, 1024, 0, 1024);
+        assert_eq!(cache.shards.len(), MAX_SHARDS);
+        let active = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for id in 0..32 {
+                let cache = &cache;
+                let active = &active;
+                scope.spawn(move || {
+                    drop(
+                        cache
+                            .get_or_load(CacheKey::Descriptor(id), 1024, || {
+                                assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                                active.fetch_sub(1, Ordering::SeqCst);
+                                Ok((Cached::Descriptor(vec![0u8; 1024]), 1024))
+                            })
+                            .unwrap(),
+                    );
+                });
+            }
+        });
+        assert_eq!(cache.stats().peak_in_flight_bytes, 1024);
+        assert_eq!(cache.stats().in_flight_bytes, 0);
+    }
+
     /// Shards are sized so each can hold the largest item a caller may ask for.
     ///
     /// Admission is per shard, so a shard smaller than one item could never admit
@@ -526,6 +646,15 @@ mod tests {
         let single = Cache::<u8>::new(1 << 10, 1 << 20, 0, 1 << 10);
         assert_eq!(single.shards.len(), 1);
         assert_eq!(single.shards[0].capacity, 1 << 10);
+    }
+
+    #[test]
+    fn tree_roots_spread_across_shards() {
+        let cache = Cache::<u8>::new(64 << 10, 1 << 20, 0, 1 << 10);
+        let roots: std::collections::HashSet<_> = (0..4)
+            .map(|tree| cache.shard_index_of(CacheKey::Tree(tree, 0)))
+            .collect();
+        assert_eq!(roots.len(), 4);
     }
 
     /// Consecutive block indexes land on different shards.

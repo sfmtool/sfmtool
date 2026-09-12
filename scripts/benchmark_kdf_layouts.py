@@ -119,7 +119,12 @@ def load_corpus(features: Path) -> tuple[np.ndarray, list[str], np.ndarray, np.n
         at += n
         blocks[image_index] = None
 
-    return out, [p.name.removesuffix(".sift") for p in files], image_indexes, feature_indexes
+    return (
+        out,
+        [p.name.removesuffix(".sift") for p in files],
+        image_indexes,
+        feature_indexes,
+    )
 
 
 def split_queries(descriptors: np.ndarray, count: int, seed: int):
@@ -131,7 +136,9 @@ def split_queries(descriptors: np.ndarray, count: int, seed: int):
     question about the index rather than about an exclusion rule.
     """
     rng = np.random.default_rng(seed)
-    held = rng.choice(len(descriptors), size=min(count, len(descriptors) // 4), replace=False)
+    held = rng.choice(
+        len(descriptors), size=min(count, len(descriptors) // 4), replace=False
+    )
     mask = np.ones(len(descriptors), dtype=bool)
     mask[held] = False
     return descriptors[mask], descriptors[held], mask
@@ -177,7 +184,9 @@ def exact_nearest(
 # ── One measured cell ─────────────────────────────────────────────────────
 
 
-def export(forest, path: Path, layout: str, chunk_bytes: int, block_bytes: int | None, sources):
+def export(
+    forest, path: Path, layout: str, chunk_bytes: int, block_bytes: int | None, sources
+):
     extra = {} if layout == "tree_local" else {"descriptor_block_bytes": block_bytes}
     start = time.perf_counter()
     write_kdf(
@@ -223,9 +232,7 @@ def measure(
     )
     probe.reset_io_stats()
     probe_start = time.perf_counter()
-    _, _, probe_stats = probe.query_with_stats(
-        queries[:1], k=k, max_leaf_checks=budget
-    )
+    _, _, probe_stats = probe.query_with_stats(queries[:1], k=k, max_leaf_checks=budget)
     seed_seconds = time.perf_counter() - probe_start
     probe_io = probe.io_stats()
     seed_checks = probe_stats["checks"]
@@ -235,7 +242,9 @@ def measure(
         "seed_decoded_bytes": probe_io["decoded_bytes"],
         "seed_checks": seed_checks,
         "seed_amplification": (
-            probe_io["decoded_bytes"] / (seed_checks * probe.dim) if seed_checks else None
+            probe_io["decoded_bytes"] / (seed_checks * probe.dim)
+            if seed_checks
+            else None
         ),
     }
     del probe
@@ -286,6 +295,8 @@ def measure(
         return timings[min(len(timings) - 1, int(p * len(timings)))]
 
     ref_idx, ref_dist = reference
+    np.testing.assert_array_equal(cold_idx, ref_idx)
+    np.testing.assert_array_equal(cold_dist, ref_dist)
     dim = lazy.dim
     checks = cold_stats["checks"]
     summary = kdf_file_summary(str(path))
@@ -326,7 +337,9 @@ def measure(
         # fresh ones, i.e. the queries shared chunks. This is *not* the spec's
         # read amplification, whose denominator is unique evaluated bytes; that
         # one is `seed_amplification`, measured on a single cold query above.
-        "batch_decode_ratio": (cold_io["decoded_bytes"] / (checks * dim)) if checks else None,
+        "batch_decode_ratio": (cold_io["decoded_bytes"] / (checks * dim))
+        if checks
+        else None,
         "recall_at_1": float(np.mean(cold_idx[:, 0] == truth)),
         "matches_in_memory": bool(
             np.array_equal(cold_idx, ref_idx) and np.allclose(cold_dist, ref_dist)
@@ -570,9 +583,12 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--workspace", required=True, help="workspace or dataset root")
     p.add_argument(
-        "--features", help="sift-* directory holding the .sift files (overrides the default search)"
+        "--features",
+        help="sift-* directory holding the .sift files (overrides the default search)",
     )
-    p.add_argument("--scratch", required=True, help="directory for the exported .kdf files")
+    p.add_argument(
+        "--scratch", required=True, help="directory for the exported .kdf files"
+    )
     p.add_argument("--out", help="write the full results as JSON here")
     p.add_argument("--stage", default="all", choices=["1", "2", "3", "all"])
     p.add_argument("--trees", type=int, default=4)
@@ -585,7 +601,9 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cache-bytes", type=int, default=256 * MIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB, help="stages 2 and 3")
-    p.add_argument("--block-bytes", type=int, default=64 * KIB, help="stage 3 shared blocks")
+    p.add_argument(
+        "--block-bytes", type=int, default=64 * KIB, help="stage 3 shared blocks"
+    )
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--keep", action="store_true", help="keep the exported .kdf files")
     args = p.parse_args()

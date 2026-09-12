@@ -51,7 +51,9 @@ def load_corpus(features: Path) -> np.ndarray:
     return np.vstack(blocks)
 
 
-def exact_nearest(index: np.ndarray, queries: np.ndarray, db_block: int = 262_144) -> np.ndarray:
+def exact_nearest(
+    index: np.ndarray, queries: np.ndarray, db_block: int = 262_144
+) -> np.ndarray:
     """Exact top-1 index per query, blocked over both queries and database."""
     best_dist = np.full(len(queries), np.inf, dtype=np.float32)
     best_idx = np.zeros(len(queries), dtype=np.uint32)
@@ -69,7 +71,9 @@ def exact_nearest(index: np.ndarray, queries: np.ndarray, db_block: int = 262_14
     return best_idx
 
 
-def budget_for_recall(forest, queries, truth, target: float) -> tuple[int | None, float]:
+def budget_for_recall(
+    forest, queries, truth, target: float
+) -> tuple[int | None, float]:
     """Smallest budget in `BUDGETS` whose recall@1 reaches `target`."""
     for budget in BUDGETS:
         idx, _ = forest.query(queries, k=2, max_leaf_checks=budget)
@@ -108,11 +112,15 @@ def main() -> None:
 
     descriptors = load_corpus(features)
     rng = np.random.default_rng(args.seed)
-    held = rng.choice(len(descriptors), size=min(args.queries, len(descriptors) // 4), replace=False)
+    held = rng.choice(
+        len(descriptors), size=min(args.queries, len(descriptors) // 4), replace=False
+    )
     mask = np.ones(len(descriptors), dtype=bool)
     mask[held] = False
     index, queries = descriptors[mask], descriptors[held]
-    print(f"corpus {len(descriptors):,} -> index {len(index):,}, queries {len(queries):,}")
+    print(
+        f"corpus {len(descriptors):,} -> index {len(index):,}, queries {len(queries):,}"
+    )
     print("exact nearest neighbors ...", flush=True)
     truth = exact_nearest(index, queries)
 
@@ -169,9 +177,14 @@ def main() -> None:
             descriptor_block_bytes=args.block_bytes,
         )
         summary = kdf_file_summary(str(path))
-        chunk_mb = next(
-            s["compressed_bytes"] for s in summary["sections"] if s["section"] == "tree_chunks"
-        ) / 1e6
+        chunk_mb = (
+            next(
+                s["compressed_bytes"]
+                for s in summary["sections"]
+                if s["section"] == "tree_chunks"
+            )
+            / 1e6
+        )
 
         lazy = LazyKdForest(str(path), **opts)
         _, _, stats = lazy.query_with_stats(queries[:1], k=2, max_leaf_checks=budget)
@@ -179,12 +192,15 @@ def main() -> None:
         checks = stats["checks"]
         del lazy
 
+        reference = forest.query(queries, k=2, max_leaf_checks=budget)
         runs, batch = [], None
         for _ in range(3):
             lazy = LazyKdForest(str(path), **opts)
             start = time.perf_counter()
-            lazy.query(queries, k=2, max_leaf_checks=budget)
+            got = lazy.query(queries, k=2, max_leaf_checks=budget)
             runs.append(time.perf_counter() - start)
+            for actual, expected in zip(got, reference, strict=True):
+                np.testing.assert_array_equal(actual, expected)
             batch = lazy.io_stats()
             del lazy
 
@@ -214,7 +230,10 @@ def main() -> None:
         Path(args.out).write_text(
             json.dumps(
                 {
-                    "corpus": {"indexed": int(len(index)), "queries": int(len(queries))},
+                    "corpus": {
+                        "indexed": int(len(index)),
+                        "queries": int(len(queries)),
+                    },
                     "trees": args.trees,
                     "recall_target": args.recall,
                     "block_bytes": args.block_bytes,

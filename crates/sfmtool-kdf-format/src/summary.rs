@@ -90,6 +90,7 @@ fn scalar_width(name: &str) -> Option<u64> {
         "uint8" => Some(1),
         "float32" => Some(4),
         "uint32" => Some(4),
+        "uint64" => Some(8),
         "uint128" => Some(16),
         _ => None,
     }
@@ -113,7 +114,11 @@ fn decoded_bytes_from_name(name: &str) -> Option<u64> {
             return None;
         };
         let columns = NODE_COLUMNS as u64;
-        return Some(columns * nodes * 4 + nodes * width + features * 4);
+        return columns
+            .checked_mul(*nodes)?
+            .checked_mul(4)?
+            .checked_add(nodes.checked_mul(width)?)?
+            .checked_add(features.checked_mul(4)?);
     }
 
     // `corpus.{N}.{D}.{scalar}.frames` holds one zstd frame per descriptor
@@ -263,7 +268,7 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         }
         let mut frame = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut frame)?;
-        let decoded = zstd::decode_all(&frame[..])?.len() as u64;
+        let decoded = zstd::bulk::decompress(&frame, max_metadata_bytes)?.len() as u64;
         payload_decoded += decoded;
         if let Some(bucket) = buckets.get_mut(section_of(name)) {
             bucket.decoded_bytes += decoded;
@@ -282,7 +287,7 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         }
         let mut frame = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut frame)?;
-        serde_json::from_slice(&zstd::decode_all(&frame[..])?)?
+        serde_json::from_slice(&zstd::bulk::decompress(&frame, max_metadata_bytes)?)?
     };
 
     Ok(KdfSummary {
@@ -305,4 +310,39 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         payload_decoded_bytes: payload_decoded,
         sections: buckets.into_values().collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_shapes_are_sized_without_decoding() {
+        assert_eq!(
+            decoded_bytes_from_name("features/block_offsets.303001.uint64.zst"),
+            Some(303001 * 8)
+        );
+        assert_eq!(
+            decoded_bytes_from_name("trees/0/chunks/0/chunk.18446744073709551615.1.uint8.zst"),
+            None
+        );
+    }
+
+    #[test]
+    fn metadata_expansion_is_bounded() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.kdf");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        zip.start_file(
+            "metadata.json.zst",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(&zstd::bulk::compress(&vec![b' '; 1 << 20], 1).unwrap())
+            .unwrap();
+        zip.finish().unwrap();
+        assert!(kdf_summary(&path, 1024).is_err());
+    }
 }

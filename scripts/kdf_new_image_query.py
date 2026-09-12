@@ -42,7 +42,9 @@ KIB = 1 << 10
 MIB = 1 << 20
 
 
-def load_images(features: Path, limit: int | None) -> tuple[list[np.ndarray], list[str]]:
+def load_images(
+    features: Path, limit: int | None
+) -> tuple[list[np.ndarray], list[str]]:
     """Descriptors per image, in filename order."""
     blocks, names, total = [], [], 0
     for path in sorted(features.glob("*.sift")):
@@ -63,7 +65,9 @@ def main() -> None:
     p.add_argument("--features")
     p.add_argument("--scratch", required=True)
     p.add_argument("--limit", type=int, help="cap the corpus size (descriptors)")
-    p.add_argument("--holdout", type=int, default=10, help="images withheld from the index")
+    p.add_argument(
+        "--holdout", type=int, default=10, help="images withheld from the index"
+    )
     p.add_argument(
         "--contiguous",
         action="store_true",
@@ -76,7 +80,9 @@ def main() -> None:
     p.add_argument("--block-bytes", type=int, default=4 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB)
     p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--caches", default="64,256,1024", help="cache budgets in MiB to try")
+    p.add_argument(
+        "--caches", default="64,256,1024", help="cache budgets in MiB to try"
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--keep", action="store_true")
     p.add_argument("--out")
@@ -106,7 +112,12 @@ def main() -> None:
         held = list(range(start, start + args.holdout))
     else:
         step = len(images) / args.holdout
-        held = sorted({min(len(images) - 1, int(i * step + step / 2)) for i in range(args.holdout)})
+        held = sorted(
+            {
+                min(len(images) - 1, int(i * step + step / 2))
+                for i in range(args.holdout)
+            }
+        )
     held_set = set(held)
     index = np.vstack([d for i, d in enumerate(images) if i not in held_set])
     arrivals = [images[i] for i in held]
@@ -154,7 +165,9 @@ def main() -> None:
         f" before its first answer; opening the file pays the open below\n"
     )
 
-    reference = [forest.query(a, k=args.k, max_leaf_checks=args.budget) for a in arrivals]
+    reference = [
+        forest.query(a, k=args.k, max_leaf_checks=args.budget) for a in arrivals
+    ]
     eager = []
     for arrival in arrivals:
         t = time.perf_counter()
@@ -191,6 +204,8 @@ def main() -> None:
         t = time.perf_counter()
         got = loaded.query(arrival, k=args.k, max_leaf_checks=args.budget)
         loaded_per_image.append(time.perf_counter() - t)
+        for actual, expected in zip(got, reference[i], strict=True):
+            np.testing.assert_array_equal(actual, expected)
         agree = agree and np.array_equal(got[0], reference[i][0])
     print(
         f"{'kdf -> memory':>20} {load_seconds * 1e3:>8.0f} {loaded_per_image[0]:>10.2f}"
@@ -231,6 +246,8 @@ def main() -> None:
             per_image.append(time.perf_counter() - t)
             if i == 0:
                 reads_first = lazy.io_stats()["read_calls"]
+            for actual, expected in zip(got, reference[i], strict=True):
+                np.testing.assert_array_equal(actual, expected)
             same = same and np.array_equal(got[0], reference[i][0])
         io = lazy.io_stats()
 
@@ -248,6 +265,7 @@ def main() -> None:
                 "per_image_seconds": per_image,
                 "reads_first_image": reads_first,
                 "evictions_last_image": io["evictions"],
+                "io_last_image": io,
                 "identical": bool(same),
             }
         )

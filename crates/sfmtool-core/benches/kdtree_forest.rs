@@ -133,6 +133,14 @@ fn bench_persistent_layouts(c: &mut Criterion) {
             .unwrap();
         paths.push((name, path));
     }
+    let workers: usize = std::env::var("KDF_BENCH_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap();
     let mut group = c.benchmark_group("kdforest_persistent_query_256");
     for (name, path) in &paths {
         let lazy = LazyKdForestU8::open(
@@ -142,11 +150,26 @@ fn bench_persistent_layouts(c: &mut Criterion) {
                 max_in_flight_bytes: 4 << 20,
                 max_chunk_bytes: 4 << 20,
                 max_compressed_bytes: 4 << 20,
-                query_workers: 4,
+                query_workers: workers,
                 ..Default::default()
             },
         )
         .unwrap();
+        let expected =
+            pool.install(|| forest.search_batch_with_distances(&queries, 256, 2, 128, None));
+        assert_eq!(
+            lazy.search_batch_with_distances(&queries, 256, 2, 128, None)
+                .unwrap(),
+            expected
+        );
+        lazy.reset_io_stats();
+        let (_, _, traversal) = lazy
+            .search_batch_with_stats(&queries, 256, 2, 128, None)
+            .unwrap();
+        eprintln!(
+            "{name} workers={workers} traversal={traversal:?} io={:?}",
+            lazy.io_stats()
+        );
         group.bench_function(*name, |b| {
             b.iter(|| {
                 black_box(
@@ -157,7 +180,11 @@ fn bench_persistent_layouts(c: &mut Criterion) {
         });
     }
     group.bench_function("eager", |b| {
-        b.iter(|| black_box(forest.search_batch_with_distances(&queries, 256, 2, 128, None)))
+        b.iter(|| {
+            pool.install(|| {
+                black_box(forest.search_batch_with_distances(&queries, 256, 2, 128, None))
+            })
+        })
     });
     group.finish();
 }

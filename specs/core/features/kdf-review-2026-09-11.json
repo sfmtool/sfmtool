@@ -1,0 +1,485 @@
+{
+  "date": "2026-09-11",
+  "platform": "Windows",
+  "workers": 4,
+  "trees": 4,
+  "leaf_size": 16,
+  "chunk_bytes": 65536,
+  "descriptor_block_bytes": 4096,
+  "method": "Two runs per implementation. Later-image statistic is the median of image 2 and 3 within each run. OS page cache was not flushed. Baseline is the preserved installed release extension; it was not rebuilt from HEAD for this comparison.",
+  "command": "RAYON_NUM_THREADS=4 pixi run python scripts/kdf_new_image_query.py --workspace <workspace> --scratch <scratch> --holdout 3 --limit 700000 --caches 16,64,256 --chunk-bytes 65536 --out <output.json>",
+  "runs": [
+    {
+      "label": "before-large-repeat",
+      "implementation": "pre-review installed release extension",
+      "capture_descriptors": 547651,
+      "capture_images": 82,
+      "withheld": [
+        "dino_dog_toy_15.jpg",
+        "dino_dog_toy_43.jpg",
+        "dino_dog_toy_71.jpg"
+      ],
+      "contiguous": false,
+      "k": 11,
+      "budget": 128,
+      "file_bytes": 72977507,
+      "results": [
+        {
+          "path": "memory",
+          "read_seconds": 0.2242811000032816,
+          "build_seconds": 0.5400130999914836,
+          "per_image_seconds": [
+            0.018746099987765774,
+            0.023547799995867535,
+            0.023919799976283684
+          ]
+        },
+        {
+          "path": "kdf-loaded",
+          "load_seconds": 0.37880970002152026,
+          "per_image_seconds": [
+            0.01642940001329407,
+            0.0207749999826774,
+            0.0206359000003431
+          ],
+          "identical": true
+        },
+        {
+          "path": "kdf-16MiB",
+          "cache_bytes": 16777216,
+          "open_seconds": 0.05501680000452325,
+          "per_image_seconds": [
+            4.47460799998953,
+            5.500899900012882,
+            4.956067399994936
+          ],
+          "reads_first_image": 507258,
+          "evictions_last_image": 633001,
+          "io_last_image": {
+            "read_calls": 632996,
+            "compressed_bytes": 1992750515,
+            "decoded_bytes": 2537052741,
+            "cache_hits": 1592838,
+            "cache_misses": 632996,
+            "evictions": 633001,
+            "duplicate_load_waits": 119,
+            "resident_bytes": 16771925,
+            "peak_resident_bytes": 16776954,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 65536,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-64MiB",
+          "cache_bytes": 67108864,
+          "open_seconds": 0.05664319999050349,
+          "per_image_seconds": [
+            1.2481162999756634,
+            1.4846836000215262,
+            1.5334280999959446
+          ],
+          "reads_first_image": 140217,
+          "evictions_last_image": 159708,
+          "io_last_image": {
+            "read_calls": 159708,
+            "compressed_bytes": 445912913,
+            "decoded_bytes": 615269706,
+            "cache_hits": 2066126,
+            "cache_misses": 159708,
+            "evictions": 159708,
+            "duplicate_load_waits": 110,
+            "resident_bytes": 67079594,
+            "peak_resident_bytes": 67107336,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 231065,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-256MiB",
+          "cache_bytes": 268435456,
+          "open_seconds": 0.05974839997361414,
+          "per_image_seconds": [
+            0.4395829999994021,
+            0.3672693000116851,
+            0.3683884000056423
+          ],
+          "reads_first_image": 25301,
+          "evictions_last_image": 0,
+          "io_last_image": {
+            "read_calls": 1,
+            "compressed_bytes": 1458,
+            "decoded_bytes": 3241,
+            "cache_hits": 2225833,
+            "cache_misses": 1,
+            "evictions": 0,
+            "duplicate_load_waits": 0,
+            "resident_bytes": 97272548,
+            "peak_resident_bytes": 97272548,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 3241,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        }
+      ]
+    },
+    {
+      "label": "baseline-last",
+      "implementation": "pre-review installed release extension",
+      "capture_descriptors": 547651,
+      "capture_images": 82,
+      "withheld": [
+        "dino_dog_toy_15.jpg",
+        "dino_dog_toy_43.jpg",
+        "dino_dog_toy_71.jpg"
+      ],
+      "contiguous": false,
+      "k": 11,
+      "budget": 128,
+      "file_bytes": 72977507,
+      "results": [
+        {
+          "path": "memory",
+          "read_seconds": 0.2132156000006944,
+          "build_seconds": 0.6230961999972351,
+          "per_image_seconds": [
+            0.016787600005045533,
+            0.021348900016164407,
+            0.021035600017057732
+          ]
+        },
+        {
+          "path": "kdf-loaded",
+          "load_seconds": 0.38040100000216626,
+          "per_image_seconds": [
+            0.01660289999563247,
+            0.020421499997610226,
+            0.01991740000084974
+          ],
+          "identical": true
+        },
+        {
+          "path": "kdf-16MiB",
+          "cache_bytes": 16777216,
+          "open_seconds": 0.05533679999643937,
+          "per_image_seconds": [
+            3.92492210000637,
+            4.746473400009563,
+            4.687249200011138
+          ],
+          "reads_first_image": 509333,
+          "evictions_last_image": 632212,
+          "io_last_image": {
+            "read_calls": 632203,
+            "compressed_bytes": 1990096428,
+            "decoded_bytes": 2533807097,
+            "cache_hits": 1593631,
+            "cache_misses": 632203,
+            "evictions": 632212,
+            "duplicate_load_waits": 146,
+            "resident_bytes": 16768251,
+            "peak_resident_bytes": 16776992,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 65536,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-64MiB",
+          "cache_bytes": 67108864,
+          "open_seconds": 0.05904339998960495,
+          "per_image_seconds": [
+            1.168692299979739,
+            1.4574072000104934,
+            1.517007000016747
+          ],
+          "reads_first_image": 134302,
+          "evictions_last_image": 160668,
+          "io_last_image": {
+            "read_calls": 160679,
+            "compressed_bytes": 448820111,
+            "decoded_bytes": 619082792,
+            "cache_hits": 2065155,
+            "cache_misses": 160679,
+            "evictions": 160668,
+            "duplicate_load_waits": 86,
+            "resident_bytes": 67074039,
+            "peak_resident_bytes": 67107339,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 226279,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-256MiB",
+          "cache_bytes": 268435456,
+          "open_seconds": 0.057937300007324666,
+          "per_image_seconds": [
+            0.4432229000085499,
+            0.37973450002027676,
+            0.38272460000007413
+          ],
+          "reads_first_image": 25301,
+          "evictions_last_image": 0,
+          "io_last_image": {
+            "read_calls": 1,
+            "compressed_bytes": 1458,
+            "decoded_bytes": 3241,
+            "cache_hits": 2225833,
+            "cache_misses": 1,
+            "evictions": 0,
+            "duplicate_load_waits": 0,
+            "resident_bytes": 97272548,
+            "peak_resident_bytes": 97272548,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 3241,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        }
+      ]
+    },
+    {
+      "label": "pooled-large",
+      "implementation": "review fixes",
+      "capture_descriptors": 547651,
+      "capture_images": 82,
+      "withheld": [
+        "dino_dog_toy_15.jpg",
+        "dino_dog_toy_43.jpg",
+        "dino_dog_toy_71.jpg"
+      ],
+      "contiguous": false,
+      "k": 11,
+      "budget": 128,
+      "file_bytes": 72977562,
+      "results": [
+        {
+          "path": "memory",
+          "read_seconds": 0.23126010000123642,
+          "build_seconds": 0.6419635000056587,
+          "per_image_seconds": [
+            0.017034699994837865,
+            0.020540500001516193,
+            0.020709500007797033
+          ]
+        },
+        {
+          "path": "kdf-loaded",
+          "load_seconds": 0.3915331000171136,
+          "per_image_seconds": [
+            0.017491000005975366,
+            0.021135399991180748,
+            0.021235199994407594
+          ],
+          "identical": true
+        },
+        {
+          "path": "kdf-16MiB",
+          "cache_bytes": 16777216,
+          "open_seconds": 0.05797809999785386,
+          "per_image_seconds": [
+            2.4827709000092,
+            3.230158099991968,
+            3.03512679997948
+          ],
+          "reads_first_image": 508814,
+          "evictions_last_image": 632155,
+          "io_last_image": {
+            "read_calls": 632155,
+            "compressed_bytes": 1989918357,
+            "decoded_bytes": 2533572540,
+            "cache_hits": 407567,
+            "cache_misses": 632155,
+            "evictions": 632155,
+            "duplicate_load_waits": 126,
+            "resident_bytes": 16747901,
+            "peak_resident_bytes": 16776709,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 16384,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-64MiB",
+          "cache_bytes": 67108864,
+          "open_seconds": 0.058663200004957616,
+          "per_image_seconds": [
+            1.1185662999923807,
+            1.2231620000093244,
+            1.2308128000004217
+          ],
+          "reads_first_image": 140978,
+          "evictions_last_image": 160226,
+          "io_last_image": {
+            "read_calls": 160218,
+            "compressed_bytes": 447309377,
+            "decoded_bytes": 617239451,
+            "cache_hits": 879504,
+            "cache_misses": 160218,
+            "evictions": 160226,
+            "duplicate_load_waits": 80,
+            "resident_bytes": 67082604,
+            "peak_resident_bytes": 67108661,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 16384,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-256MiB",
+          "cache_bytes": 268435456,
+          "open_seconds": 0.05760810000356287,
+          "per_image_seconds": [
+            0.261394700006349,
+            0.13349139998899773,
+            0.12358059998950921
+          ],
+          "reads_first_image": 25301,
+          "evictions_last_image": 0,
+          "io_last_image": {
+            "read_calls": 1,
+            "compressed_bytes": 1458,
+            "decoded_bytes": 3241,
+            "cache_hits": 1039721,
+            "cache_misses": 1,
+            "evictions": 0,
+            "duplicate_load_waits": 0,
+            "resident_bytes": 97272548,
+            "peak_resident_bytes": 97272548,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 3241,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        }
+      ]
+    },
+    {
+      "label": "pooled-repeat",
+      "implementation": "review fixes",
+      "capture_descriptors": 547651,
+      "capture_images": 82,
+      "withheld": [
+        "dino_dog_toy_15.jpg",
+        "dino_dog_toy_43.jpg",
+        "dino_dog_toy_71.jpg"
+      ],
+      "contiguous": false,
+      "k": 11,
+      "budget": 128,
+      "file_bytes": 72977562,
+      "results": [
+        {
+          "path": "memory",
+          "read_seconds": 0.23027950001414865,
+          "build_seconds": 0.5363158000109252,
+          "per_image_seconds": [
+            0.017200499976752326,
+            0.020691400015493855,
+            0.022223400010261685
+          ]
+        },
+        {
+          "path": "kdf-loaded",
+          "load_seconds": 0.39876760001061484,
+          "per_image_seconds": [
+            0.02106240001739934,
+            0.027586900017922744,
+            0.02213949998258613
+          ],
+          "identical": true
+        },
+        {
+          "path": "kdf-16MiB",
+          "cache_bytes": 16777216,
+          "open_seconds": 0.05910519999451935,
+          "per_image_seconds": [
+            2.5390710000065155,
+            3.164066700002877,
+            3.1534400999953505
+          ],
+          "reads_first_image": 508986,
+          "evictions_last_image": 632710,
+          "io_last_image": {
+            "read_calls": 632714,
+            "compressed_bytes": 1991749108,
+            "decoded_bytes": 2535879375,
+            "cache_hits": 407008,
+            "cache_misses": 632714,
+            "evictions": 632710,
+            "duplicate_load_waits": 107,
+            "resident_bytes": 16736617,
+            "peak_resident_bytes": 16776702,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 16384,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-64MiB",
+          "cache_bytes": 67108864,
+          "open_seconds": 0.057981799996923655,
+          "per_image_seconds": [
+            1.042683500010753,
+            1.283231799985515,
+            1.1852518999949098
+          ],
+          "reads_first_image": 139867,
+          "evictions_last_image": 160661,
+          "io_last_image": {
+            "read_calls": 160661,
+            "compressed_bytes": 448809239,
+            "decoded_bytes": 619037810,
+            "cache_hits": 879061,
+            "cache_misses": 160661,
+            "evictions": 160661,
+            "duplicate_load_waits": 62,
+            "resident_bytes": 67073884,
+            "peak_resident_bytes": 67108718,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 16384,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        },
+        {
+          "path": "kdf-256MiB",
+          "cache_bytes": 268435456,
+          "open_seconds": 0.057967200002167374,
+          "per_image_seconds": [
+            0.2477022999955807,
+            0.10124799999175593,
+            0.10016919998452067
+          ],
+          "reads_first_image": 25301,
+          "evictions_last_image": 0,
+          "io_last_image": {
+            "read_calls": 1,
+            "compressed_bytes": 1458,
+            "decoded_bytes": 3241,
+            "cache_hits": 1039721,
+            "cache_misses": 1,
+            "evictions": 0,
+            "duplicate_load_waits": 0,
+            "resident_bytes": 97272548,
+            "peak_resident_bytes": 97272548,
+            "in_flight_bytes": 0,
+            "peak_in_flight_bytes": 3241,
+            "address_map_bytes": 2190604
+          },
+          "identical": true
+        }
+      ]
+    }
+  ]
+}
