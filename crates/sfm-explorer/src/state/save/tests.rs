@@ -10,6 +10,7 @@ use sfmtool_core::{LineageMap, SfmrReconstruction};
 
 use crate::scene::{PointRef, ReconId, SceneNode};
 use crate::state::AppState;
+use crate::test_support::{assert_timed_from_the_work, phase_note, phase_rows};
 
 /// A directory of this test's own under the system temp dir, emptied first so a
 /// rerun does not read a previous run's file.
@@ -303,6 +304,75 @@ fn a_save_writes_one_log_entry_naming_the_path_and_the_version() {
     assert!(
         saved[0].contains(&state.scene[0].history.current_version().serial.to_string()),
         "{saved:?}"
+    );
+}
+
+/// What a save is made of when there is an overlay: the fold, the lineage walk
+/// inside it, the version it pushes, and the write.
+#[test]
+fn a_save_names_the_fold_the_lineage_and_the_write() {
+    let dir = temp_dir("stages");
+    let (mut state, id, _) = state_from_file(&dir);
+    state
+        .delete_point(PointRef::new(id, 3))
+        .expect("a live point");
+
+    state.save_node(id).expect("a writable path");
+
+    let entry = state
+        .action_log
+        .entries()
+        .next_back()
+        .expect("the save's entry");
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [
+            ("save", 0, 1),
+            ("materialise", 1, 1),
+            ("lineage", 2, 1),
+            ("push version", 2, 1),
+            ("write", 1, 1),
+        ],
+        "{:?}",
+        entry.detail,
+    );
+    assert_eq!(
+        phase_note(&entry.detail, "materialise"),
+        Some("1 deleted, 0 added".to_string()),
+    );
+    let ancestors = state.scene[0].recon().metadata.lineage.len();
+    assert_eq!(
+        phase_note(&entry.detail, "lineage"),
+        Some(format!("{ancestors} ancestors")),
+        "the lineage walk did not say how many ancestors it composed",
+    );
+    assert_timed_from_the_work(&mut state.action_log);
+}
+
+/// A save of a value with no overlay skips the fold, and the note is what says
+/// so: without it a stage that did nothing and one that was merely fast read
+/// the same.
+#[test]
+fn a_save_with_nothing_to_fold_says_so_and_still_writes() {
+    let dir = temp_dir("nothing_to_fold");
+    let (mut state, id, _) = state_from_file(&dir);
+
+    state.save_node(id).expect("a writable path");
+
+    let entry = state
+        .action_log
+        .entries()
+        .next_back()
+        .expect("the save's entry");
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [("save", 0, 1), ("materialise", 1, 1), ("write", 1, 1)],
+        "{:?}",
+        entry.detail,
+    );
+    assert_eq!(
+        phase_note(&entry.detail, "materialise"),
+        Some("nothing to fold".to_string()),
     );
 }
 

@@ -11,8 +11,16 @@ use std::sync::Arc;
 
 use sfmtool_core::SfmrReconstruction;
 
+use crate::action_log::Entry;
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::AppState;
+use crate::test_support::{assert_timed_from_the_work, phase_rows};
+
+/// The newest Action Log entry, which is the one the operation just driven
+/// wrote.
+fn newest(state: &AppState) -> &Entry {
+    state.action_log.entries().next_back().expect("an entry")
+}
 
 /// A state holding one demo node, selected.
 fn state() -> AppState {
@@ -264,6 +272,72 @@ fn every_edit_undo_and_redo_writes_one_log_entry_naming_the_node_and_the_serials
         .action_log
         .entries()
         .all(|entry| entry.kind == crate::action_log::Kind::Edit));
+}
+
+/// What a cursor move is made of, under the name of the move itself.
+#[test]
+fn undo_and_redo_name_the_step_the_selection_and_the_caches() {
+    let mut state = state();
+    let id = node(&state);
+    state
+        .delete_point(PointRef::new(id, 5))
+        .expect("a live point");
+
+    state.undo(id).expect("one edit to undo");
+    assert_eq!(
+        phase_rows(&newest(&state).detail),
+        [
+            ("undo", 0, 1),
+            ("history step", 1, 1),
+            ("selection follow", 1, 1),
+            ("forget images", 1, 1),
+        ],
+        "{:?}",
+        newest(&state).detail,
+    );
+    assert_timed_from_the_work(&mut state.action_log);
+
+    state.redo(id).expect("a redo tail");
+    assert_eq!(
+        phase_rows(&newest(&state).detail),
+        [
+            ("redo", 0, 1),
+            ("history step", 1, 1),
+            ("selection follow", 1, 1),
+            ("forget images", 1, 1),
+        ],
+        "{:?}",
+        newest(&state).detail,
+    );
+}
+
+/// A jump is a run of steps, so each stage is one row saying how many times it
+/// ran rather than one row per version passed.
+#[test]
+fn a_jump_folds_one_row_per_stage_over_the_steps_it_walked() {
+    let mut state = state();
+    let id = node(&state);
+    for point in [1usize, 2, 3] {
+        state
+            .delete_point(PointRef::new(id, point))
+            .expect("a live point");
+    }
+    let first = serial_at(&state, 1);
+
+    state.jump_to_version(id, first).expect("a live version");
+
+    assert_eq!(
+        phase_rows(&newest(&state).detail),
+        [
+            ("go to", 0, 1),
+            ("history step", 1, 2),
+            ("selection follow", 1, 2),
+            ("forget images", 1, 1),
+        ],
+        "{:?}",
+        newest(&state).detail,
+    );
+    assert_timed_from_the_work(&mut state.action_log);
 }
 
 #[test]

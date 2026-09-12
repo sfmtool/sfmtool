@@ -3,6 +3,8 @@
 
 //! Helpers shared by the headless UI tests.
 
+use crate::action_log::ActionLog;
+use crate::progress::Detail;
 use crate::window::{MonitorInfo, WindowChange, WindowError, WindowHost, WindowInfo, WindowState};
 
 /// A [`WindowHost`] with no window behind it: it records the primitives it was
@@ -229,4 +231,60 @@ fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+// -- What an operation reported ------------------------------------------
+
+/// The phase rows of one Action Log entry's breakdown: each stage's name, the
+/// depth it sits at, and how many runs of it folded into the row.
+///
+/// Here rather than in one test module because three of them ask the same
+/// question of three different operations, and a second copy would be a second
+/// answer to keep in step.
+pub(crate) fn phase_rows(detail: &[Detail]) -> Vec<(&'static str, u8, u32)> {
+    detail
+        .iter()
+        .filter_map(|row| match row {
+            Detail::Phase {
+                name, depth, runs, ..
+            } => Some((*name, *depth, *runs)),
+            Detail::Message { .. } => None,
+        })
+        .collect()
+}
+
+/// What the stage called `name` said it did, or `None` when it said nothing or
+/// never ran.
+pub(crate) fn phase_note(detail: &[Detail], name: &str) -> Option<String> {
+    detail.iter().find_map(|row| match row {
+        Detail::Phase {
+            name: phase, note, ..
+        } if *phase == name => note.clone(),
+        _ => None,
+    })
+}
+
+/// Stamp the log as a frame would, then assert that the newest entry's cost
+/// holds the stages it named.
+///
+/// The inequality is what says the row was timed from the work rather than
+/// from the write: every phase ran inside the operation, so an entry whose
+/// clock started only once the operation was over could not contain them.
+pub(crate) fn assert_timed_from_the_work(log: &mut ActionLog) {
+    log.settle(std::time::Instant::now(), Vec::new());
+    let entry = log.entries().next_back().expect("an entry to settle");
+    let took = entry.took.expect("the settle to have stamped it");
+    let named: std::time::Duration = entry
+        .detail
+        .iter()
+        .filter_map(|row| match row {
+            Detail::Phase { depth: 0, took, .. } => Some(*took),
+            _ => None,
+        })
+        .sum();
+    assert!(
+        took >= named,
+        "the entry reports {took:?}, less than the {named:?} its own stages cost: \
+         it was timed from the write rather than from the work",
+    );
 }

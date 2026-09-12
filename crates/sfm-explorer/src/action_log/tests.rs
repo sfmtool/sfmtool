@@ -7,15 +7,21 @@
 //! whether two entries fold into one, are properties of the log rather than of
 //! the machine and the moment the tests happen to run on.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use jiff::tz::{Offset, TimeZone};
 use jiff::Timestamp;
 
 use sfmtool_core::progress::Level;
+use sfmtool_core::SfmrReconstruction;
+
+use crate::scene::{PointRef, ReconId};
+use crate::state::AppState;
 
 use super::{show, ActionLog, Actor, Entry, Kind, Run, Work};
 use crate::progress::{Collector, Detail};
+use crate::test_support::{assert_timed_from_the_work, phase_note, phase_rows};
 
 /// A log in a fixed zone, seven hours behind UTC, so a formatted row is the
 /// same string wherever the tests run.
@@ -726,19 +732,6 @@ fn detail_phases(log: &ActionLog) -> Vec<(&'static str, u8, u32)> {
     phase_rows(&log.entries().next_back().expect("an entry").detail)
 }
 
-/// The phase rows of one entry's detail.
-fn phase_rows(detail: &[Detail]) -> Vec<(&'static str, u8, u32)> {
-    detail
-        .iter()
-        .filter_map(|row| match row {
-            Detail::Phase {
-                name, depth, runs, ..
-            } => Some((*name, *depth, *runs)),
-            Detail::Message { .. } => None,
-        })
-        .collect()
-}
-
 #[test]
 fn an_operations_collector_becomes_that_entrys_detail_and_no_others() {
     let mut log = log();
@@ -1156,21 +1149,28 @@ fn expansion_toggles_survives_new_entries_and_goes_with_clear() {
 
 // -- End to end: one operation that really reports -----------------------
 
-/// The wiring test: a bundle adjustment names its own three stages, the kernel
-/// names its four underneath them, and the kernel's rounds fold into one row.
-#[test]
-fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
-    let mut state = crate::state::AppState::new();
+/// A state holding one node a bundle adjustment can run on, its geometry
+/// nudged so the solve has something to do and a point deleted so it has
+/// something to materialise.
+fn adjustable_scene() -> (AppState, ReconId) {
+    let mut state = AppState::new();
     state.append_node(crate::scene_graph::tests::resectable_node(
         "/runs/run_a.sfmr",
     ));
     let id = state.scene[0].id;
     state.scene[0].recon_mut().image_table.images[1].translation_xyz +=
         nalgebra::Vector3::new(0.02, -0.015, 0.01);
-    // An overlay, so that the adjustment has something to materialise.
     state
-        .delete_point(crate::scene::PointRef::new(id, 7))
+        .delete_point(PointRef::new(id, 7))
         .expect("a live point");
+    (state, id)
+}
+
+/// The wiring test: a bundle adjustment names its own three stages, the kernel
+/// names its four underneath them, and the kernel's rounds fold into one row.
+#[test]
+fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
+    let (mut state, id) = adjustable_scene();
 
     state
         .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
@@ -1208,6 +1208,156 @@ fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
         .expect("the kernel's rounds");
     assert_eq!(depth, 1, "the rounds did not nest under the solve");
     assert!(runs >= 1, "the rounds folded into nothing");
+}
+
+// -- Coverage: every operation names its stages --------------------------
+
+/// A directory of this test's own under the system temp dir, emptied first so
+/// a rerun does not read a previous run's file.
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("sfm_explorer_progress_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a writable temp dir");
+    dir
+}
+
+/// A `.sfmr` file in `dir`, and the workspace marker an open resolves against.
+///
+/// The marker is what makes the file openable at all: a load resolves the
+/// workspace directory by searching upward for one, and a temp dir holding a
+/// lone `.sfmr` refuses the read rather than guessing.
+fn openable_file(dir: &Path) -> PathBuf {
+    std::fs::write(dir.join(".sfm-workspace.json"), "{}").expect("a writable temp dir");
+    let path = dir.join("recon.sfmr");
+    SfmrReconstruction::demo(64)
+        .save(&path)
+        .expect("a writable temp dir");
+    path
+}
+
+/// A state holding one node opened from `dir`'s file, with a point deleted, so
+/// that it has a file to write over, an overlay to fold and a version to step
+/// away from.
+fn opened_and_edited(dir: &Path) -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    let id = state
+        .load_file(&openable_file(dir))
+        .expect("the fixture file");
+    state
+        .delete_point(PointRef::new(id, 3))
+        .expect("a live point");
+    (state, id)
+}
+
+/// Overview coverage is a requirement rather than a budget, and this is where
+/// it is held: every operation that can outlast a frame names its stages, so
+/// that the first question about a surprising row is never unanswerable.
+///
+/// A table rather than a test apiece, because adding a row here is how the
+/// next operation gets covered: one that forgets to name its stages fails
+/// this, instead of being found much later by somebody expanding its row and
+/// seeing nothing but `elsewhere`.
+#[test]
+fn every_operation_names_at_least_one_stage() {
+    /// Drive one operation once, in a directory of its own, and hand back the
+    /// state it left.
+    type Drive = fn(&Path) -> AppState;
+
+    let operations: [(&str, Drive); 7] = [
+        ("open", |dir| {
+            let mut state = AppState::new();
+            state
+                .load_file(&openable_file(dir))
+                .expect("the fixture file");
+            state
+        }),
+        ("save", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            state.save_node(id).expect("a writable path");
+            state
+        }),
+        ("save as", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            state
+                .save_node_as(id, &dir.join("other.sfmr"))
+                .expect("a writable path");
+            state
+        }),
+        ("undo", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            state.undo(id).expect("a version to step back to");
+            state
+        }),
+        ("redo", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            state.undo(id).expect("a version to step back to");
+            state.redo(id).expect("a version to step forward to");
+            state
+        }),
+        ("go to", |dir| {
+            let (mut state, id) = opened_and_edited(dir);
+            let first = state.scene[0].history.versions()[0].serial;
+            state
+                .jump_to_version(id, first)
+                .expect("a version that still holds its value");
+            state
+        }),
+        ("bundle adjust", |_| {
+            let (mut state, id) = adjustable_scene();
+            state
+                .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+                .expect("the fixture is well posed");
+            state
+        }),
+    ];
+
+    for (what, drive) in operations {
+        let state = drive(&temp_dir(&what.replace(' ', "_")));
+        let entry = state
+            .action_log
+            .entries()
+            .next_back()
+            .expect("the operation's entry");
+        assert!(!entry.failed, "{what} failed: {}", entry.text);
+        assert!(
+            !phase_rows(&entry.detail).is_empty(),
+            "{what} named no stage, so its row expands to nothing but elsewhere",
+        );
+    }
+}
+
+/// What an open is made of: the file becoming a reconstruction, and the
+/// reconstruction becoming a node.
+#[test]
+fn opening_a_file_names_the_read_and_the_append() {
+    let dir = temp_dir("open_stages");
+    let path = openable_file(&dir);
+    let mut state = AppState::new();
+    state.load_file(&path).expect("the fixture file");
+
+    let recon = state.scene[0].recon();
+    let read = format!(
+        "{} points, {} images",
+        recon.point_count(),
+        recon.image_count()
+    );
+    let entry = state
+        .action_log
+        .entries()
+        .next_back()
+        .expect("the open's entry");
+    assert_eq!(
+        phase_rows(&entry.detail),
+        [("open", 0, 1), ("read", 1, 1), ("append node", 1, 1)],
+        "{:?}",
+        entry.detail,
+    );
+    assert_eq!(
+        phase_note(&entry.detail, "read"),
+        Some(read),
+        "the read did not say what it read",
+    );
+    assert_timed_from_the_work(&mut state.action_log);
 }
 
 // -- The panel's expanded rows -------------------------------------------

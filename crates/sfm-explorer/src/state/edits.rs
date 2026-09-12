@@ -843,39 +843,78 @@ impl AppState {
     }
 
     /// Step `id`'s cursor back one version.
+    ///
+    /// The entry carries the three stages a cursor move has (the step itself,
+    /// the selection following it, and the image caches the version it left
+    /// behind was holding), and is recorded from the instant below, so the row
+    /// says what the move cost rather than what writing the row cost.
     pub fn undo(&mut self, id: ReconId) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
+        let step = collector.phase("undo");
         let node = &mut self.scene[index];
         let undone_label = node.history.current_version().label.clone();
-        let Some((undone, now)) = node.history.undo() else {
+        let stepped = {
+            let _phase = step.phase("history step");
+            node.history.undo()
+        };
+        let Some((undone, now)) = stepped else {
             return Err(format!("Nothing to undo in {}.", node.label));
         };
-        self.follow_selection_backward(id, undone);
-        self.forget_images_of(id);
-        self.action_log.record(
+        {
+            let _phase = step.phase("selection follow");
+            self.follow_selection_backward(id, undone);
+        }
+        {
+            let _phase = step.phase("forget images");
+            self.forget_images_of(id);
+        }
+        drop(step);
+        self.action_log.record_done(
             Kind::Edit,
+            started,
             format!("Undo: {undone_label} ({undone} → {now})"),
+            collector.take(),
         );
         Ok(())
     }
 
     /// Step `id`'s cursor forward one version.
+    ///
+    /// The same three stages [`AppState::undo`] reports, under `redo`.
     pub fn redo(&mut self, id: ReconId) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
+        let step = collector.phase("redo");
         let node = &mut self.scene[index];
-        let Some((from, redone)) = node.history.redo() else {
+        let stepped = {
+            let _phase = step.phase("history step");
+            node.history.redo()
+        };
+        let Some((from, redone)) = stepped else {
             return Err(format!("Nothing to redo in {}.", node.label));
         };
         let redone_label = node.history.current_version().label.clone();
-        self.follow_selection_forward(id);
-        self.forget_images_of(id);
-        self.action_log.record(
+        {
+            let _phase = step.phase("selection follow");
+            self.follow_selection_forward(id);
+        }
+        {
+            let _phase = step.phase("forget images");
+            self.forget_images_of(id);
+        }
+        drop(step);
+        self.action_log.record_done(
             Kind::Edit,
+            started,
             format!("Redo: {redone_label} ({from} → {redone})"),
+            collector.take(),
         );
         Ok(())
     }
@@ -890,7 +929,12 @@ impl AppState {
     /// Refused as a whole when any version it would pass through, the
     /// destination included, has had its value released by the budget: there is
     /// nothing there to show.
+    ///
+    /// It reports the stages [`AppState::undo`] does, and because the walk is a
+    /// loop each of them folds into one row carrying the number of steps.
     pub fn jump_to_version(&mut self, id: ReconId, serial: VersionSerial) -> Result<(), String> {
+        let started = Instant::now();
+        let collector = Collector::new(self.action_log.detailed_timing());
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
@@ -913,12 +957,18 @@ impl AppState {
                 node.label
             ));
         }
+        let step = collector.phase("go to");
         while self.scene[index].history.cursor() != target {
             let node = &mut self.scene[index];
             let stepping_back = target < node.history.cursor();
-            let Some((left, _)) = node.history.step_towards(target) else {
+            let stepped = {
+                let _phase = step.phase("history step");
+                node.history.step_towards(target)
+            };
+            let Some((left, _)) = stepped else {
                 break;
             };
+            let _phase = step.phase("selection follow");
             if stepping_back {
                 self.follow_selection_backward(id, left);
             } else {
@@ -928,9 +978,17 @@ impl AppState {
         let node = &self.scene[index];
         let label = node.history.current_version().label.clone();
         let to = node.history.current_version().serial;
-        self.forget_images_of(id);
-        self.action_log
-            .record(Kind::Edit, format!("Go to: {label} ({from} → {to})"));
+        {
+            let _phase = step.phase("forget images");
+            self.forget_images_of(id);
+        }
+        drop(step);
+        self.action_log.record_done(
+            Kind::Edit,
+            started,
+            format!("Go to: {label} ({from} → {to})"),
+            collector.take(),
+        );
         Ok(())
     }
 

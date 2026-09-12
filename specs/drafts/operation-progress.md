@@ -691,9 +691,9 @@ The operations:
 
 | Phase | Where | Seen at |
 |-------|-------|---------|
-| `open`, with `read`, `decode` and `derive` under it | `AppState::load_file` | 1.84 s for the dino set |
-| `save`, with `materialise`, `stamp` and `write` under it | `state::save` | |
-| `undo` / `redo` / `go to`, with `history step` and `selection follow` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
+| `open`, with `read` and `append node` under it | `AppState::load_file` | 1.84 s for the dino set |
+| `save`, with `materialise` over `lineage` and `push version`, then `write` | `state::save` | |
+| `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
 | the `sfmtool_core` call's own stages, which it reports itself | the kernel a bulk edit runs | 838 ms for a resection in place |
 | `row map` | `RowMap::by_scan` | |
@@ -714,6 +714,15 @@ under every entry in the log.
 A row of that table that expands to nothing but `elsewhere` is a gap in the
 coverage rather than a curiosity, and the way to find one is to read the log
 after using the viewer normally.
+
+`read` is one row over what a `.sfmr` load does in its entirety, rather than the
+three it divides into. The decode and the derived-index build are inside
+`SfmrReconstruction::load`, and `sfm-explorer` deliberately does not reach past
+`sfmtool-core` to `sfmr-format`: splitting them means threading a `Progress`
+through that call, which the read is a present-tense row for until somebody
+does. What a save stamps is four field assignments and not a stage; the work
+beside the fold is the lineage walk, which is why `lineage` sits under
+`materialise` where the code does it rather than beside it.
 
 Detail adds, under those: the stages inside each kernel, the per-buffer steps
 inside `uploads`, and the per-pass steps inside `scene render`.

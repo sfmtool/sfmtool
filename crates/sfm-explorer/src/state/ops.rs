@@ -18,10 +18,14 @@
 //! synchronously, by a menu item, a dialog or an MCP tool — and every one of
 //! them is the only place its own failure text is written.
 
+use std::time::Instant;
+
 use crate::action_log::Kind;
 use crate::align::{self, AlignOptions};
+use crate::progress::Collector;
 use crate::resect::{self, ResectFrom};
 use crate::scene::{ImageRef, ReconId, SceneNode};
+use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
 
 use super::AppState;
@@ -39,8 +43,37 @@ impl AppState {
     /// and one failure that logged itself as well would appear twice, in two
     /// vocabularies. Success is logged here, because there the text is the same
     /// whoever asked.
+    ///
+    /// The entry carries the two stages an open has: the file becoming a
+    /// reconstruction, and the reconstruction becoming a node. It is recorded
+    /// with [`crate::action_log::ActionLog::record_done`] from the instant
+    /// below, so the row says how long the open took rather than how long
+    /// writing the row took.
     pub fn load_file(&mut self, path: &std::path::Path) -> Result<ReconId, String> {
-        match SfmrReconstruction::load(path) {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
+        let open = collector.phase("open");
+        // One phase for the whole of `SfmrReconstruction::load`: reading the
+        // archive, decompressing its sections and building the derived indexes
+        // are three stages of that call and not of this one, and the boundaries
+        // between them are not reachable from here: the viewer goes through
+        // `sfmtool-core` and does not depend on `sfmr-format`.
+        let read = {
+            let mut phase = open.phase("read");
+            let read = SfmrReconstruction::load(path);
+            if let Ok(recon) = &read {
+                progress_note!(
+                    phase,
+                    "{} points, {} images",
+                    recon.point_count(),
+                    recon.image_count()
+                );
+            }
+            read
+        };
+        match read {
             Ok(recon) => {
                 log::info!(
                     "Loaded {} points, {} images from {}",
@@ -51,11 +84,17 @@ impl AppState {
                 // Recorded after the append, which is what deduplicates the
                 // label: the entry should name the node as the tree does
                 // (`global (2)`), not the file stem the node arrived with.
-                let id = self.append_node(SceneNode::from_path(path, recon));
+                let id = {
+                    let _phase = open.phase("append node");
+                    self.append_node(SceneNode::from_path(path, recon))
+                };
                 let label = self.label_of(id);
-                self.action_log.record(
+                drop(open);
+                self.action_log.record_done(
                     Kind::File,
+                    started,
                     format!("Opened {label} from {}", path.display()),
+                    collector.take(),
                 );
                 Ok(id)
             }

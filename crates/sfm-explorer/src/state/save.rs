@@ -28,13 +28,17 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
+use sfmtool_core::progress::Progress;
+use sfmtool_core::progress_note;
 use sfmtool_core::{
     EditedReconstruction, LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT,
 };
 
 use crate::action_log::Kind;
 use crate::document::{PointMap, VersionSerial};
+use crate::progress::Collector;
 use crate::scene::{ReconId, SceneNode};
 
 use super::AppState;
@@ -108,7 +112,33 @@ impl AppState {
 
     /// The body of both: materialise if there is an overlay, write, and mark the
     /// version that reached the disk.
+    ///
+    /// The entry carries what the save reported, recorded with
+    /// [`crate::action_log::ActionLog::record_done`] from the instant below so
+    /// that the row says how long writing the file took rather than how long
+    /// writing the row took. A refusal is returned rather than logged, because
+    /// the menu item and the MCP tool each phrase it their own way.
     fn write_node(&mut self, id: ReconId, path: &Path, repoint: bool) -> Result<(), String> {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
+        let message = self.write_node_inner(id, path, repoint, &collector)?;
+        self.action_log
+            .record_done(Kind::File, started, message, collector.take());
+        Ok(())
+    }
+
+    /// The save itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn write_node_inner(
+        &mut self,
+        id: ReconId,
+        path: &Path,
+        repoint: bool,
+        collector: &Collector,
+    ) -> Result<String, String> {
+        let save = collector.phase("save");
         let index = self
             .scene
             .iter()
@@ -126,14 +156,20 @@ impl AppState {
             ));
         }
 
-        self.materialize_for_save(index, path)?;
+        self.materialize_for_save(index, path, &save)?;
 
         let node = &self.scene[index];
         let value = node.history.current();
-        value
-            .base
-            .save(path)
-            .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+        {
+            // One phase for the whole write: serialising the columns,
+            // compressing them and hashing the sections are stages of
+            // `SfmrReconstruction::save` rather than of this call.
+            let _phase = save.phase("write");
+            value
+                .base
+                .save(path)
+                .map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+        }
 
         let serial = node.history.current_version().serial;
         let label = node.label.clone();
@@ -144,11 +180,9 @@ impl AppState {
             node.label = crate::scene::label_for_path(path);
         }
         let label = if repoint { node.label.clone() } else { label };
-        self.action_log.record(
-            Kind::File,
-            format!("Saved {label} at {serial} to {}", path.display()),
-        );
-        Ok(())
+        // `save` closes as this returns, which is before the caller empties the
+        // collector into the entry.
+        Ok(format!("Saved {label} at {serial} to {}", path.display()))
     }
 
     /// Fold `index`'s overlay into a base of its own and push it as a version,
@@ -157,18 +191,39 @@ impl AppState {
     /// The pushed value carries the provenance and the lineage the file will,
     /// so its hash -- which is what every id minted afterwards is built on -- is
     /// the hash of the file about to be written.
-    fn materialize_for_save(&mut self, index: usize, path: &Path) -> Result<(), String> {
+    ///
+    /// `save` is the phase the save's stages sit under. The `materialise` row
+    /// is recorded whichever branch is taken: a save with nothing to fold is a
+    /// save that skipped a stage, and its note is what says so.
+    fn materialize_for_save(
+        &mut self,
+        index: usize,
+        path: &Path,
+        save: &Progress<'_>,
+    ) -> Result<(), String> {
+        let mut phase = save.phase("materialise");
         let node = &self.scene[index];
         let edited = node.history.current();
-        if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+        let (deleted, added) = (edited.deleted_points.len(), edited.added.points.len());
+        if deleted == 0 && added == 0 {
+            progress_note!(phase, "nothing to fold");
             return Ok(());
         }
+        progress_note!(phase, "{deleted} deleted, {added} added");
 
         let (mut base, row_map) = edited.materialize();
         base.metadata.operation = SAVE_OPERATION.to_string();
         base.metadata.tool = SAVE_TOOL.to_string();
         base.metadata.tool_version = env!("CARGO_PKG_VERSION").to_string();
-        base.metadata.lineage = lineage_for(node, &row_map);
+        base.metadata.lineage = {
+            // The stamp itself is four assignments; the walk that builds the
+            // lineage is the stage worth a row, because it composes a map per
+            // ancestor over the rows of the value being written.
+            let mut lineage = phase.phase("lineage");
+            let entries = lineage_for(node, &row_map);
+            progress_note!(lineage, "{} ancestors", entries.len());
+            entries
+        };
 
         let label = format!(
             "Saved {} to {}",
@@ -177,14 +232,17 @@ impl AppState {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| path.display().to_string())
         );
-        let node = &mut self.scene[index];
-        node.history.push(
-            EditedReconstruction::new(Arc::new(base)),
-            PointMap::Rows(row_map),
-            label,
-        );
+        {
+            let _phase = phase.phase("push version");
+            let node = &mut self.scene[index];
+            node.history.push(
+                EditedReconstruction::new(Arc::new(base)),
+                PointMap::Rows(row_map),
+                label,
+            );
+        }
         // The materialisation renumbers, so whatever the selection named has
-        // moved with it.
+        // moved with it. One index through one map, which is not a stage.
         let id = self.scene[index].id;
         self.follow_selection_forward(id);
         Ok(())
