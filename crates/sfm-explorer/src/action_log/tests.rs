@@ -897,6 +897,30 @@ fn frame_events() -> Vec<Detail> {
 }
 
 /// The message rows of one entry's detail, in order.
+/// What [`frame_events`] reads as on an entry: its own row, a level above the
+/// stages it gathered.
+fn framed() -> Vec<(&'static str, u8, u32)> {
+    vec![
+        ("frame", 0, 1),
+        ("uploads", 1, 1),
+        ("points", 2, 1),
+        ("scene render", 1, 1),
+    ]
+}
+
+/// The note on an entry's `frame` row, which is where it says how many other
+/// entries were waiting for the same one.
+fn frame_note(detail: &[Detail]) -> Option<&str> {
+    detail.iter().find_map(|row| match row {
+        Detail::Phase {
+            name: "frame",
+            note,
+            ..
+        } => note.as_deref(),
+        _ => None,
+    })
+}
+
 fn message_texts(detail: &[Detail]) -> Vec<&str> {
     detail
         .iter()
@@ -917,7 +941,7 @@ fn settle_gives_the_frames_events_to_the_entry_it_stamps() {
     let entry = log.entries().next_back().expect("an entry");
     assert_eq!(
         phase_rows(&entry.detail),
-        [("uploads", 0, 1), ("points", 1, 1), ("scene render", 0, 1)],
+        framed(),
         "the upload and the draw that showed this entry are not on it",
     );
     assert_eq!(
@@ -958,12 +982,12 @@ fn one_frame_goes_to_the_entry_that_caused_it_and_not_to_the_ones_that_waited() 
     );
     assert_eq!(
         phase_rows(&entries[1].detail),
-        phase_rows(&frame_events()),
+        framed(),
         "the entry that caused the frame did not get it",
     );
     assert_eq!(
-        message_texts(&entries[1].detail),
-        ["frame also settled 1 earlier entry"],
+        frame_note(&entries[1].detail),
+        Some("also settled 1 earlier entry"),
     );
 }
 
@@ -1009,9 +1033,10 @@ fn an_entry_carries_its_own_detail_and_then_the_frames() {
         [
             ("materialise", 0, 1),
             ("push version", 0, 1),
-            ("uploads", 0, 1),
-            ("points", 1, 1),
-            ("scene render", 0, 1),
+            ("frame", 0, 1),
+            ("uploads", 1, 1),
+            ("points", 2, 1),
+            ("scene render", 1, 1),
         ],
     );
 }

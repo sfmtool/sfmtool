@@ -466,14 +466,15 @@ place:
                       4.1 ms  undo
                       0.3 ms    history step
                       3.8 ms    selection follow
-                   1874.2 ms  uploads
-                   1203.4 ms    points
-                      <1 ms    thumbnails  reused
-                    502.1 ms    patch atlas
-                      1.1 ms    deleted mask
-                    167.6 ms    track rays
-                    412.0 ms  scene render
-                     71.3 ms  egui pass
+                   2353.8 ms  frame
+                   1874.2 ms    uploads
+                   1203.4 ms      points
+                      <1 ms      thumbnails  reused
+                    502.1 ms      patch atlas
+                      1.1 ms      deleted mask
+                    167.6 ms      track rays
+                    412.0 ms    scene render
+                     67.6 ms    egui pass
                       2.1 ms  elsewhere
 ```
 
@@ -581,9 +582,20 @@ last thing recorded before they began. The earlier entries a frame settles did
 not cause its work, they waited through it, and copying the table onto them as
 well would make a log of a startup read as though the file had been opened three
 times, once per row that happened to be pending. Those rows keep an honest
-`took`, which is the wait they really had; the row that owns the frame says
-`frame also settled 2 earlier entries`, or `1 earlier entry`. A frame that
-stamps nothing has nobody to charge and discards its events.
+`took`, which is the wait they really had. A frame that stamps nothing has
+nobody to charge and discards its events.
+
+On the entry they reach, they sit **under one `frame` row** rather than beside
+the operation's own stages. An operation and the frame that showed it are two
+different costs: a file is read and decoded on the GUI thread, and the upload of
+what that produced happens in the next frame, because that is where uploads
+happen. Both are inside the wait, which is why one entry carries them; neither
+is the other, which is why the frame keeps its own row. That row costs what its
+own stages cost between them, so `elsewhere` is what it was before the
+gathering, and an expanded entry reads as two halves and a remainder. How many
+entries only waited for this frame is the row's note, `also settled 2 earlier
+entries` or `1 earlier entry`, since it is a fact about the frame and belongs
+beside it.
 
 One consequence is worth stating because it looks like a bug otherwise. An entry
 written during the egui pass, which is every click, key and menu item, does not

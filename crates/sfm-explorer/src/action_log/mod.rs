@@ -646,18 +646,72 @@ impl ActionLog {
             return;
         };
         let mut detail = std::mem::take(&mut entry.detail);
-        detail.extend(frame);
-        if waited > 0 {
-            let entries = if waited == 1 { "entry" } else { "entries" };
-            detail.push(Detail::Message {
-                level: Level::Info,
-                depth: 0,
-                text: format!("frame also settled {waited} earlier {entries}"),
-            });
-        }
+        detail.extend(Self::under_one_row(frame, waited));
         // Capped again rather than trusted: the write capped what the
         // operation reported, and the frame's events arrive after it.
         entry.detail = Self::capped(detail);
+    }
+
+    /// The frame's rows, gathered under one `frame` row a level above them.
+    ///
+    /// An operation and the frame that showed it are two different costs, and
+    /// drawn as siblings they read as one: a file is read and decoded on the
+    /// GUI thread, and the upload of what that produced happens in the next
+    /// frame because that is where uploads happen. Both are inside the wait,
+    /// which is why they are in one entry, and neither is the other, which is
+    /// why the frame keeps its own row. That row costs what its own stages cost
+    /// between them, so `elsewhere` is unchanged by the gathering.
+    ///
+    /// How many entries only waited for this frame is the row's note rather
+    /// than a line of its own: it is a fact about the frame, and it belongs
+    /// beside it.
+    fn under_one_row(frame: Vec<Detail>, waited: usize) -> Vec<Detail> {
+        let took = frame
+            .iter()
+            .filter_map(|row| match row {
+                Detail::Phase { depth: 0, took, .. } => Some(*took),
+                _ => None,
+            })
+            .sum();
+        let note = (waited > 0).then(|| {
+            let entries = if waited == 1 { "entry" } else { "entries" };
+            format!("also settled {waited} earlier {entries}")
+        });
+        let mut rows = Vec::with_capacity(frame.len() + 1);
+        rows.push(Detail::Phase {
+            name: "frame",
+            depth: 0,
+            took,
+            cpu: None,
+            note,
+            note_last: None,
+            runs: 1,
+        });
+        rows.extend(frame.into_iter().map(|row| match row {
+            Detail::Phase {
+                name,
+                depth,
+                took,
+                cpu,
+                note,
+                note_last,
+                runs,
+            } => Detail::Phase {
+                name,
+                depth: depth.saturating_add(1),
+                took,
+                cpu,
+                note,
+                note_last,
+                runs,
+            },
+            Detail::Message { level, depth, text } => Detail::Message {
+                level,
+                depth: depth.saturating_add(1),
+                text,
+            },
+        }));
+        rows
     }
 
     /// Whether `entry` should replace the newest entry rather than follow it.
