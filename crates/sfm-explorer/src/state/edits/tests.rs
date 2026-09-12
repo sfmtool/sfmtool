@@ -1150,8 +1150,9 @@ fn bundle_adjusting_pushes_a_version_with_a_new_base_and_keeps_the_images() {
     state.selected_point = Some(PointRef::new(id, 11));
 
     state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("the fixture is well posed");
+    state.finish_background();
 
     let node = &state.scene[0];
     assert_eq!(node.history.versions().len(), 2);
@@ -1179,8 +1180,9 @@ fn the_log_entry_carries_the_counts_and_the_residuals() {
     let entries = texts(&state).len();
 
     state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("well posed");
+    state.finish_background();
 
     let logged = texts(&state);
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
@@ -1218,7 +1220,8 @@ fn a_released_focal_is_named_in_the_label_and_the_entry() {
         ..sfmtool_core::BundleAdjustOptions::default()
     };
 
-    state.bundle_adjust(id, &options).expect("well posed");
+    state.start_bundle_adjust(id, &options).expect("well posed");
+    state.finish_background();
 
     assert_eq!(
         state.scene[0].history.current_version().label,
@@ -1240,8 +1243,9 @@ fn an_undo_puts_every_pose_back() {
         .collect();
 
     state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("well posed");
+    state.finish_background();
     state.undo(id).expect("one version to undo");
 
     let after: Vec<nalgebra::Point3<f64>> = state.scene[0]
@@ -1260,7 +1264,7 @@ fn a_node_with_no_inline_keypoints_is_refused_before_anything_is_solved() {
     let id = node(&state);
 
     let why = state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect_err("a sift_files demo carries no keypoints");
 
     assert!(why.contains("inline keypoints"), "{why}");
@@ -1282,7 +1286,7 @@ fn a_node_whose_images_disagree_about_the_lens_is_refused() {
     }
 
     let why = state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect_err("two lenses, one solve");
 
     assert!(why.contains("one shared camera"), "{why}");

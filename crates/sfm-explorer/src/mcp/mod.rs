@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps thirty-seven of the
-//!   thirty-eight tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps thirty-eight of the
+//!   thirty-nine tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -241,6 +241,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         release_focal: bool,
     },
+    /// Ask the running background operation to stop.
+    ///
+    /// Names no operation: one runs at a time, viewer-wide, so "the one that is
+    /// running" is unambiguous.
+    CancelBackground,
     /// A picture of the presented window, or of one panel's body cropped from
     /// it.
     ///
@@ -406,7 +411,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other thirty-seven answer with JSON, and squeezing an image through a JSON
+/// the other thirty-eight answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -423,7 +428,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the thirty-seven tools that speak only JSON.
+/// The answer of the thirty-eight tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -435,12 +440,11 @@ pub(crate) enum Outcome {
     Deferred(Deferred),
 }
 
-/// A command whose answer cannot exist until this frame has been rendered and
-/// presented.
+/// A command whose answer cannot exist yet.
 ///
-/// Exactly one tool is in here. `App` holds these until the readback phase and
-/// answers them there, where the `wgpu::Device` already is — which is what
-/// keeps [`apply_with_window`] free of a GPU handle.
+/// Two tools are in here, waiting on different things. `App` holds them until
+/// the readback phase and answers them there, where the `wgpu::Device` already
+/// is -- which is what keeps [`apply_with_window`] free of a GPU handle.
 pub(crate) enum Deferred {
     Screenshot {
         /// Which pixels to read once the frame has been presented.
@@ -451,7 +455,44 @@ pub(crate) enum Deferred {
         /// reach back into `AppState` to describe a picture it already took.
         caption: String,
     },
+    /// A background operation this call started, whose answer is either its
+    /// result or a handle, whichever the clock reaches first.
+    Background(BackgroundReply),
 }
+
+/// A tool call waiting on the operation it started.
+///
+/// The wait is not a wait: nothing blocks and no frame is held. Each frame asks
+/// [`edit::background_reply`] whether this can be answered yet, which it can as
+/// soon as the operation finishes or as soon as
+/// [`REPLY_DIRECTLY_WITHIN`] has passed, whichever comes first.
+pub(crate) struct BackgroundReply {
+    /// Which operation this call started, so a poll can still tell it from the
+    /// one that replaced it.
+    pub(crate) operation_id: u64,
+    /// What it is called, for the handle.
+    pub(crate) operation_name: &'static str,
+    /// The node it is running on.
+    pub(crate) node: ReconId,
+    /// That node's label, for the handle.
+    pub(crate) label: String,
+    /// When the call started it, which the window below is measured from.
+    pub(crate) started: std::time::Instant,
+}
+
+/// How long a tool that starts a background operation waits for it before
+/// answering with a handle instead of a result.
+///
+/// A threshold about **when a wait stops feeling immediate**, not about what
+/// any particular reconstruction costs. Below roughly a tenth of a second a
+/// response reads as instantaneous; up to about a second a caller stays in the
+/// flow of what it was doing and simply sees the system working; past that,
+/// attention wanders and the wait wants explaining. Two tenths sits just past
+/// instantaneous and well short of anything anyone would call slow, so a handle
+/// comes back only for an operation that genuinely is slow, and an operation
+/// that answers normally has answered inside the window where nobody had begun
+/// to wonder.
+pub(crate) const REPLY_DIRECTLY_WITHIN: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// Which pixels a deferred screenshot reads.
 ///
@@ -494,8 +535,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes thirty-seven of the
-/// thirty-eight tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes thirty-eight of the
+/// thirty-nine tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -694,11 +735,8 @@ pub(crate) fn apply_with_window(
         Command::BundleAdjust {
             reconstruction_label,
             release_focal,
-        } => done(edit::bundle_adjust(
-            state,
-            &reconstruction_label,
-            release_focal,
-        )),
+        } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
+        Command::CancelBackground => done(edit::cancel_background(state)),
         Command::Screenshot {
             panel,
             hud,
@@ -1193,6 +1231,7 @@ impl Command {
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
+            Command::CancelBackground => "cancel_background",
             Command::Screenshot { .. } => "screenshot",
         }
     }
@@ -1258,6 +1297,11 @@ impl Command {
     /// cached *about* the geometry describes a value the node no longer holds.
     /// It is here for that, which is the same drop the lock's own commit makes
     /// in the window.
+    ///
+    /// The bundle adjustment is **not** here, though it renumbers as hard as
+    /// anything does: it runs in the background, so the node it renumbers has
+    /// not been renumbered yet when this is read. The frame drops those caches
+    /// when the version actually lands, off `Polled::installed`.
     fn renumbers(&self) -> Option<&str> {
         match self {
             Command::DeleteCameraImage {
@@ -1269,10 +1313,6 @@ impl Command {
                 ..
             }
             | Command::ResectCameraImageInPlace {
-                reconstruction_label,
-                ..
-            }
-            | Command::BundleAdjust {
                 reconstruction_label,
                 ..
             }
@@ -1337,7 +1377,8 @@ impl Command {
             | Command::RemoveObservation { .. }
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
-            | Command::BundleAdjust { .. } => Kind::Edit,
+            | Command::BundleAdjust { .. }
+            | Command::CancelBackground => Kind::Edit,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }

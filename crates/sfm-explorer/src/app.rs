@@ -126,6 +126,26 @@ impl App {
         // remembers has to be current at the moment the window is maximized
         // (`AppState::observe_window`). An idle viewer renders no frames at all.
         self.state.observe_window(&window);
+        // Before the MCP drain, so a completed operation's version is on screen
+        // in the frame it landed and an agent's call in that same frame reads
+        // the new value rather than the one the worker was handed.
+        let polled = self.state.poll_background();
+        if let Some(id) = polled.installed {
+            // A bulk edit gives the node a whole new base, so what the panels
+            // cached about the geometry describes a value it no longer holds.
+            forget_selected(
+                Some(id),
+                &mut self.image_browser,
+                &mut self.image_detail,
+                &mut self.point_track_detail,
+                &mut self.intrinsics_detail,
+            );
+        }
+        if polled.changed {
+            // The operation is still going, or has just landed: either way the
+            // next frame has something new to draw.
+            self.egui_ctx.request_repaint();
+        }
         #[cfg(feature = "mcp")]
         self.drain_mcp(&window);
 
@@ -1129,23 +1149,17 @@ impl App {
             }
 
             // The Bundle Adjust dialog, and the adjustment it asks for. The
-            // solve runs here, synchronously, on the frame `Run` was pressed.
+            // solve starts here and runs on a worker; the version it produces
+            // is installed by the poll at the top of a later frame, which is
+            // also where the panel caches it invalidates are dropped.
             if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
                 let options = sfmtool_core::BundleAdjustOptions {
                     opt_f: answer.release_focal,
                     ..sfmtool_core::BundleAdjustOptions::default()
                 };
-                if app_state.bundle_adjust(answer.recon, &options).is_ok() {
-                    // Every pose and point moved, so what the panels cached
-                    // about the geometry describes one the node no longer holds.
-                    forget_selected(
-                        Some(answer.recon),
-                        image_browser,
-                        image_detail,
-                        point_track_detail,
-                        intrinsics_detail,
-                    );
-                }
+                // The refusal is already an Action Log row: the start writes it
+                // itself, in the words the menu's own gate uses.
+                let _ = app_state.start_bundle_adjust(answer.recon, &options);
             }
 
             // The close prompt, and the answer to whichever question it asked.
@@ -1171,7 +1185,11 @@ impl App {
                                 point_track_detail,
                                 intrinsics_detail,
                             );
-                            app_state.close_node(id);
+                            if let Err(message) = app_state.close_node(id) {
+                                app_state
+                                    .action_log
+                                    .fail(crate::action_log::Kind::File, message);
+                            }
                         }
                         crate::close_prompt::PendingClose::All => close_all_now = true,
                         crate::close_prompt::PendingClose::Quit => quit_requested = true,
@@ -1196,7 +1214,11 @@ impl App {
                     point_track_detail.forget_recon(id);
                     intrinsics_detail.forget_recon(id);
                 }
-                app_state.close_all();
+                if let Err(message) = app_state.close_all() {
+                    app_state
+                        .action_log
+                        .fail(crate::action_log::Kind::File, message);
+                }
             }
             if quit_from_menu && app_state.any_dirty() {
                 quit_requested = false;

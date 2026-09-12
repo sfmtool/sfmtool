@@ -557,7 +557,7 @@ fn a_lock_whose_node_is_closed_under_it_is_dropped_rather_than_left_held() {
     enter(&mut viewer, &mut state).expect("camera view of a posed image");
     viewer.camera.nodal_pan(50.0, 0.0);
 
-    state.close_node(id);
+    state.close_node(id).expect("nothing is running");
 
     // Nothing to commit the pose to, so the lock goes and the next `M` is free
     // to take another camera in hand.

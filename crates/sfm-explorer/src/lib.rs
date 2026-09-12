@@ -15,6 +15,7 @@
 mod action_log;
 mod align;
 mod app;
+mod background;
 mod bundle_adjust_prompt;
 mod camera_lock;
 mod cli;
@@ -80,6 +81,14 @@ const DM_UPDATE_INTERVAL: Duration = Duration::from_millis(16);
 #[derive(Debug)]
 pub(crate) enum UserEvent {
     AccessKit(egui_winit::accesskit_winit::Event),
+    /// A background operation has something to say, or has finished.
+    ///
+    /// Carries nothing, for the reason the MCP wake below carries nothing: what
+    /// was reported is in the collector both threads hold, and this is only the
+    /// wake that gets an idle event loop to read it. Unconditional rather than
+    /// behind the `mcp` feature, because running an operation off the GUI
+    /// thread is not an MCP feature.
+    Background,
     /// An MCP tool call is waiting on the command channel.
     ///
     /// Carries nothing: the request itself travels over the channel, and this
@@ -156,6 +165,16 @@ pub fn run() {
         .build()
         .expect("Failed to create event loop");
     let proxy = event_loop.create_proxy();
+
+    // How a background worker gets an idle event loop to look at what it has
+    // reported. A closure rather than the proxy, so that nothing reachable
+    // from `AppState` knows what a `winit` proxy is.
+    state.wake = Some({
+        let proxy = proxy.clone();
+        Arc::new(move || {
+            let _ = proxy.send_event(UserEvent::Background);
+        })
+    });
 
     // The MCP endpoint, if it was asked for. Started after the event loop
     // exists, because the server's only way to reach the viewer is the proxy
@@ -631,8 +650,10 @@ impl ApplicationHandler<UserEvent> for App {
                 egui_winit::accesskit_winit::WindowEvent::InitialTreeRequested => {}
                 egui_winit::accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
             },
-            // Nothing to do here: the redraw below is the whole handling. The
-            // request is drained and applied at the top of the frame it wakes.
+            // Nothing to do here for either of these: the redraw below is the
+            // whole handling. What was reported is drained and applied at the
+            // top of the frame the wake causes.
+            UserEvent::Background => {}
             #[cfg(feature = "mcp")]
             UserEvent::McpRequest => {}
         }

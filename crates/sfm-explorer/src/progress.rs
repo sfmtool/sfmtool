@@ -143,6 +143,26 @@ impl Collector {
         }
     }
 
+    /// The same, calling `notify` after every event it records.
+    ///
+    /// What a background operation needs and a synchronous one does not: the
+    /// thread reading this collector is not the thread writing it, so it has
+    /// to be told there is something new to read. The hook runs outside the
+    /// lock, and it is handed nothing -- what was reported is in here, and a
+    /// reader asks this rather than being sent a copy.
+    pub(crate) fn reporting(detail: bool, notify: Box<dyn Fn() + Send + Sync>) -> Self {
+        let state = Arc::new(Mutex::new(State::default()));
+        let written = Arc::clone(&state);
+        Collector {
+            state,
+            sink: Box::new(move |event| {
+                lock(&written).record(event);
+                notify();
+            }),
+            detail,
+        }
+    }
+
     /// What the operation reports through: a `Progress` at depth 0, over the
     /// whole `0..=1` range, at this collector's detail level.
     pub(crate) fn progress(&self) -> Progress<'_> {

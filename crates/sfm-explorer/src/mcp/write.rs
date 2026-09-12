@@ -58,12 +58,12 @@ pub(super) fn close_reconstruction(state: &mut AppState, target: CloseTarget) ->
     let closed: Vec<String> = match target {
         CloseTarget::All => {
             let labels: Vec<String> = state.scene.iter().map(|n| n.label.clone()).collect();
-            state.close_all();
+            state.close_all().map_err(ToolError::new)?;
             labels
         }
         CloseTarget::One(label) => {
             let id = resolve_reconstruction(state, Some(&label))?;
-            state.close_node(id);
+            state.close_node(id).map_err(ToolError::new)?;
             vec![label]
         }
     };

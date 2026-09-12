@@ -118,6 +118,9 @@ fn deferred_screenshot(
         Outcome::Deferred(super::Deferred::Screenshot {
             source, caption, ..
         }) => (source, caption),
+        Outcome::Deferred(super::Deferred::Background(_)) => {
+            panic!("expected a screenshot's deferral, got a background operation's")
+        }
         Outcome::Done(Ok(_)) => panic!("a screenshot must defer, not answer in the frame"),
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
     }
@@ -2366,10 +2369,9 @@ fn the_overhead_comes_last_on_the_wire_as_it_does_in_the_panel() {
 fn set_timing_detail_changes_what_the_next_operation_records() {
     let (mut state, mut viewer) = editable();
     perturb(&mut state, 0.02);
-    call(
+    adjusted(
         &mut state,
         &mut viewer,
-        "bundle_adjust",
         json!({ "reconstruction_label": "run_a" }),
     );
     let overview = ok(&mut state, &mut viewer, action_log_detail(0));
@@ -2392,10 +2394,9 @@ fn set_timing_detail_changes_what_the_next_operation_records() {
         )["timing_detail"]["enabled"],
         json!(true),
     );
-    call(
+    adjusted(
         &mut state,
         &mut viewer,
-        "bundle_adjust",
         json!({ "reconstruction_label": "run_a" }),
     );
     settle(&mut state);
@@ -3592,15 +3593,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Ten reads, twenty-six writes, the one that writes a file, and the one
+    // Ten reads, twenty-seven writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 38, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 39, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        26
+        27
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4192,21 +4193,173 @@ fn resecting_from_matches_without_a_chosen_file_is_refused_in_the_states_words()
     assert_eq!(failed[0].0, Actor::Mcp);
 }
 
+/// Start a `bundle_adjust` the way the frame does, let the operation finish,
+/// and answer it the way the readback phase does.
+///
+/// The tool defers rather than answering inside the call, so a test that wants
+/// the reply has to do what the frame does: start it, let the worker run, and
+/// ask [`super::edit::background_reply`] for the answer.
+#[track_caller]
+fn adjusted(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Value {
+    let map = arguments.as_object().cloned().expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    let pending = match agent(state, viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("bundle_adjust must defer"),
+    };
+    state.finish_background();
+    match super::edit::background_reply(state, &pending).expect("the operation finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    }
+}
+
 /// The adjustment runs on the node's value and reports its residuals.
 #[test]
 fn bundle_adjust_pushes_a_version_and_reports_its_residuals() {
     let (mut state, mut viewer) = editable();
     perturb(&mut state, 0.02);
-    let reply = call(
+    let reply = adjusted(
         &mut state,
         &mut viewer,
-        "bundle_adjust",
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(version_count(&state), 2);
     let report = reply["report"].as_str().expect("a report");
     assert!(report.contains("median residual"), "{report}");
     assert!(!report.contains("focal released"), "{report}");
+    // An operation that finished inside the window answers as it always did:
+    // no handle, and nothing for a reader to discriminate on.
+    assert_eq!(reply["running"], Value::Null, "{reply}");
+}
+
+/// An operation that outlives the window answers with a handle instead.
+#[test]
+fn a_slow_adjustment_answers_with_a_handle_naming_it() {
+    let (mut state, _viewer) = editable();
+    let id = state.scene[0].id;
+    // A worker held open, so the operation is still running when the reply is
+    // asked for; and a call that started long enough ago to be past the window,
+    // which is what the frame's clock would have reached.
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background(
+            crate::background::Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let process = state.background().expect("running");
+    let pending = super::BackgroundReply {
+        operation_id: process.id,
+        operation_name: process.operation.name,
+        node: id,
+        label: process.label.clone(),
+        started: std::time::Instant::now() - super::REPLY_DIRECTLY_WITHIN,
+    };
+
+    let reply = match super::edit::background_reply(&state, &pending).expect("past the window") {
+        Ok(ToolOutput::Json(value)) => value,
+        _ => panic!("a handle is JSON"),
+    };
+    assert_eq!(reply["running"], json!(true), "{reply}");
+    assert_eq!(reply["operation"], json!("Bundle adjust"), "{reply}");
+    assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
+    assert_eq!(
+        reply["operation_id"],
+        json!(pending.operation_id),
+        "{reply}"
+    );
+
+    // Inside the window and still running, there is no answer yet: the frame
+    // moves on and asks again.
+    let fresh = super::BackgroundReply {
+        started: std::time::Instant::now(),
+        ..pending
+    };
+    assert!(
+        super::edit::background_reply(&state, &fresh).is_none(),
+        "an operation inside the window answered early",
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+}
+
+/// The id in a handle goes on naming its operation after that operation has
+/// finished, which is what an agent comes back with.
+#[test]
+fn a_handle_s_id_still_names_the_operation_once_it_has_finished() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.02);
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        _ => panic!("bundle_adjust must defer"),
+    };
+    state.finish_background();
+    assert!(state.background().is_none());
+
+    let reply = match super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        other => panic!("expected the version, got {}", other.is_err()),
+    };
+    let cursor = state.scene[0].history.current_version().serial.to_string();
+    assert_eq!(reply["cursor"], json!(cursor), "{reply}");
+    assert!(reply["report"]
+        .as_str()
+        .expect("a report")
+        .contains("Bundle adjusted run_a"));
+
+    // An id that names no operation this session is never answered with
+    // somebody else's run: it is told the outcome is gone and where to look.
+    let stranger = super::BackgroundReply {
+        operation_id: pending.operation_id + 1,
+        ..pending
+    };
+    match super::edit::background_reply(&state, &stranger).expect("an answer, not a wait") {
+        Err(error) => assert!(error.0.contains("get_action_log"), "{error}"),
+        Ok(_) => panic!("a stale handle was answered with another operation's version"),
+    }
+}
+
+/// Cancelling is refused when there is nothing to cancel, and stops the
+/// operation when there is.
+#[test]
+fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(&mut state, &mut viewer, "cancel_background", json!({}));
+    assert!(error.0.contains("Nothing is running"), "{error}");
+
+    perturb(&mut state, 0.02);
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("bundle_adjust", Some(&map)).expect("a well-formed call");
+    match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(_)) => {}
+        _ => panic!("bundle_adjust must defer"),
+    }
+    let reply = call(&mut state, &mut viewer, "cancel_background", json!({}));
+    assert_eq!(reply["cancelling"], json!("Bundle adjust"), "{reply}");
+    assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
+
+    state.finish_background();
+    // Whether the solve reached a poll before finishing is a race, so what is
+    // asserted is the flag's effect on the state machine rather than which of
+    // the two rows landed: either way the operation is over and the node free.
+    assert!(state.background().is_none());
+    assert_eq!(state.busy_refusal(state.scene[0].id), None);
 }
 
 /// Undo, redo and the jump answer with the version now showing, and refuse at

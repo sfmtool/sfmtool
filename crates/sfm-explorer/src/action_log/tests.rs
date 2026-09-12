@@ -1174,8 +1174,9 @@ fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
     let (mut state, id) = adjustable_scene();
 
     state
-        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
         .expect("the fixture is well posed");
+    state.finish_background();
 
     let entry = state
         .action_log
@@ -1313,8 +1314,9 @@ fn every_operation_names_at_least_one_stage() {
         ("bundle adjust", |_| {
             let (mut state, id) = adjustable_scene();
             state
-                .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+                .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
                 .expect("the fixture is well posed");
+            state.finish_background();
             state
         }),
         ("delete image", |dir| {

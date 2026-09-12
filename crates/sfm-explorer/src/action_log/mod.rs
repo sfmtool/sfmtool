@@ -398,6 +398,61 @@ impl ActionLog {
         self.actor = standing;
     }
 
+    /// Record a failed action as `actor`, restoring the standing one
+    /// afterwards.
+    ///
+    /// A background operation's refusal, which lands frames or minutes after
+    /// the call that asked for it: whoever asked is the actor of the row,
+    /// whoever happens to be standing when it arrives is not.
+    /// A refusal an operation reached after doing the work, as `actor` and
+    /// timed from `started`.
+    ///
+    /// The failing counterpart of [`ActionLog::record_done_as`], and it exists
+    /// for the same reason: a solve cancelled seventeen seconds in spent those
+    /// seventeen seconds, and a row costing it at the two milliseconds of the
+    /// frame that gave up is the sort of number that discredits a whole column.
+    /// A refusal reached without doing any work is [`ActionLog::fail`].
+    pub(crate) fn fail_done_as(
+        &mut self,
+        actor: Actor,
+        kind: Kind,
+        started: Instant,
+        text: impl Into<String>,
+        detail: Vec<Detail>,
+    ) {
+        let standing = self.actor;
+        self.actor = actor;
+        self.write(
+            Timestamp::now(),
+            kind,
+            None,
+            true,
+            text,
+            Work { started, detail },
+        );
+        self.actor = standing;
+    }
+
+    /// [`ActionLog::record_done`] as `actor`, restoring the standing one
+    /// afterwards.
+    ///
+    /// The pair a background operation writes its outcome with: the cost is
+    /// the operation's, measured from `started`, and the actor is the one who
+    /// asked for it however long ago.
+    pub(crate) fn record_done_as(
+        &mut self,
+        actor: Actor,
+        kind: Kind,
+        started: Instant,
+        text: impl Into<String>,
+        detail: Vec<Detail>,
+    ) {
+        let standing = self.actor;
+        self.actor = actor;
+        self.record_done(kind, started, text, detail);
+        self.actor = standing;
+    }
+
     /// Record a read-only MCP tool call, coalescing per tool: the tool names
     /// both the kind and the run, so a poll is one row however often it asks.
     ///

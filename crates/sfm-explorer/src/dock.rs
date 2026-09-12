@@ -799,8 +799,10 @@ impl TabContext<'_> {
                     .close_prompt
                     .ask(crate::close_prompt::PendingClose::Node(id));
             } else {
-                self.state.close_node(id);
-                self.forget_recon(id);
+                match self.state.close_node(id) {
+                    Ok(()) => self.forget_recon(id),
+                    Err(message) => self.state.action_log.fail(Kind::File, message),
+                }
             }
         }
     }

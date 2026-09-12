@@ -35,6 +35,7 @@ use sfmtool_core::progress_note;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
+use crate::background::{Finished, Job, Operation};
 use crate::document::{CreatedPoints, PointMap, VersionSerial};
 use crate::progress::Collector;
 use crate::resect::ResectFrom;
@@ -91,6 +92,9 @@ impl AppState {
 
     /// Delete one point, named by ref.
     pub fn delete_point(&mut self, point: PointRef) -> Result<(), String> {
+        if let Some(why) = self.busy_refusal(point.recon) {
+            return Err(why);
+        }
         let index = self
             .scene
             .iter()
@@ -153,6 +157,9 @@ impl AppState {
         let collector = Collector::new(self.action_log.detailed_timing());
         if point.recon != image.recon {
             return Err("The point and the image belong to different reconstructions.".to_string());
+        }
+        if let Some(why) = self.busy_refusal(point.recon) {
+            return Err(why);
         }
         let index = self
             .scene
@@ -259,6 +266,9 @@ impl AppState {
         if point.recon != image.recon {
             return Err("The point and the image belong to different reconstructions.".to_string());
         }
+        if let Some(why) = self.busy_refusal(point.recon) {
+            return Err(why);
+        }
         let index = self
             .scene
             .iter()
@@ -332,6 +342,9 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(image.recon) {
+            return Err(why);
+        }
         let index = self
             .scene
             .iter()
@@ -447,6 +460,9 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(image.recon) {
+            return Err(why);
+        }
         let index = self
             .scene
             .iter()
@@ -577,6 +593,9 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(source) {
+            return Err(why);
+        }
         match self.resect_in_place_inner(source, image, from, &collector) {
             Ok(message) => {
                 self.action_log
@@ -720,6 +739,9 @@ impl AppState {
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(image.recon) {
+            return Err(why);
+        }
         match self.move_camera_inner(image, world_from_camera, &collector) {
             Ok(message) => {
                 self.action_log
@@ -824,8 +846,7 @@ impl AppState {
         Ok(format!("{text}{residual} ({parent} → {serial})"))
     }
 
-    /// Bundle-adjust `id`'s current value, and install the answer as its next
-    /// version.
+    /// Start a bundle adjustment of `id`'s current value on a worker thread.
     ///
     /// A bulk edit: every posed image's pose, every point's position and, when
     /// the options release it, the shared focal move together, so the next
@@ -834,133 +855,141 @@ impl AppState {
     /// the solve leaves unsupported is deleted, and the map is what carries a
     /// selection over that.
     ///
-    /// Runs **synchronously** on the GUI thread, as every other edit does. The
-    /// window is unresponsive while it solves.
+    /// Returns as soon as the worker is running, and **nothing is logged
+    /// here**: the entry is the outcome's, written by
+    /// [`AppState::poll_background`] on the frame the answer lands, from the
+    /// instant the operation started and in the name of whoever asked for it.
+    /// What this returns an `Err` for is a refusal to *begin*, which is logged
+    /// like the refusals the edit used to write itself.
     ///
     /// The image table does not move, so image indexes and the selections keyed
-    /// by them still mean what they meant. Records its own outcome as one Action
-    /// Log entry; the `Err` is for the caller to know the node's caches are
-    /// still good, not to be logged again.
-    ///
-    /// The entry carries what the solve reported: this call's own stages, and
-    /// underneath them the four the kernel names for itself. It is recorded
-    /// with [`crate::action_log::ActionLog::record_done`] from the instant
-    /// below, so the row says how long the adjustment took rather than how long
-    /// writing the row took.
-    pub fn bundle_adjust(
+    /// by them still mean what they meant.
+    pub fn start_bundle_adjust(
         &mut self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
     ) -> Result<(), String> {
-        let started = Instant::now();
-        // The level the Action Log toolbar's checkbox last left: read here, as
-        // the operation starts, so that a change to it takes effect on the
-        // next operation and re-times nothing already recorded.
-        let collector = Collector::new(self.action_log.detailed_timing());
-        match self.bundle_adjust_inner(id, options, &collector) {
-            Ok(message) => {
-                self.action_log
-                    .record_done(Kind::Edit, started, message, collector.take());
-                Ok(())
-            }
-            Err(message) => {
-                self.action_log.fail(Kind::Edit, message.clone());
-                Err(message)
-            }
+        let outcome = match self.bundle_adjust_job(id, options) {
+            Ok(job) => self.start_background(Operation::BUNDLE_ADJUST, id, job),
+            Err(message) => Err(message),
+        };
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Edit, message.clone());
         }
+        outcome
     }
 
-    /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
-    /// refusal's.
-    fn bundle_adjust_inner(
-        &mut self,
+    /// The adjustment itself, as a function of the
+    /// [`Progress`](sfmtool_core::progress::Progress) it reports through:
+    /// everything between the value at the cursor and the version the GUI
+    /// thread will push.
+    ///
+    /// The closure owns what it reads. The overlay fold, the solve and the row
+    /// map are all pure functions of the value at the cursor, so what crosses
+    /// to the worker is a clone of [`EditedReconstruction`] -- whose `base` is
+    /// the very `Arc` the node goes on drawing, not a copy of it -- and the
+    /// options. There is no reference into the scene here, and so nothing for
+    /// the GUI thread to be kept out of.
+    ///
+    /// Refuses before the worker exists, so a refusal is immediate and in the
+    /// same words the menu's own gate uses.
+    pub(crate) fn bundle_adjust_job(
+        &self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
-        collector: &Collector,
-    ) -> Result<String, String> {
-        let index = self
-            .scene
-            .iter()
-            .position(|n| n.id == id)
+    ) -> Result<Job, String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let node = self
+            .node(id)
             .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
-        let label = self.scene[index].label.clone();
-        let refuse = |why: String| format!("Bundle adjust of {label} refused: {why}");
+        let label = node.label.clone();
         // The gate is the menu entry's own, so the entry and the edit cannot
         // disagree about when the adjustment can run.
-        if let Some(why) = crate::bundle_adjust_prompt::refusal(self.scene[index].history.current())
-        {
-            return Err(refuse(why));
+        if let Some(why) = crate::bundle_adjust_prompt::refusal(node.history.current()) {
+            return Err(format!("Bundle adjust of {label} refused: {why}"));
         }
+        let edited = node.history.current().clone();
+        let options = options.clone();
+        Ok(Box::new(move |progress| {
+            let refuse = |why: String| format!("Bundle adjust of {label} refused: {why}");
 
-        // Materialise only when there is an overlay to fold in; an empty one
-        // materialises to its own base, which the solve can read directly.
-        let edited = self.scene[index].history.current();
-        let (materialised, mat_map) =
-            if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
-                (None, None)
-            } else {
-                let _phase = collector.phase("materialise");
-                let (value, map) = edited.materialize();
-                (Some(value), Some(PointMap::Rows(map)))
+            // Materialise only when there is an overlay to fold in; an empty
+            // one materialises to its own base, which the solve can read
+            // directly.
+            let (materialised, mat_map) =
+                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                    (None, None)
+                } else {
+                    let _phase = progress.phase("materialise");
+                    let (value, map) = edited.materialize();
+                    (Some(value), Some(PointMap::Rows(map)))
+                };
+            let source: &SfmrReconstruction = match materialised.as_ref() {
+                Some(value) => value,
+                None => &edited.base,
             };
-        let source: &SfmrReconstruction = match materialised.as_ref() {
-            Some(value) => value,
-            None => &self.scene[index].history.current().base,
-        };
 
-        // The kernel's own four stages nest directly under this call's, since
-        // the collector's `Progress` is at the top of the operation.
-        let (adjusted, report) =
-            sfmtool_core::bundle_adjust(source, options, &collector.progress())
-                .map_err(|e| refuse(e.to_string()))?;
-        // The solve drops the points it left unsupported and says how many, not
-        // which; the map is read off its input and its output. The image table
-        // is untouched, so no image map.
-        let scan = {
-            let _phase = collector.phase("row map");
-            RowMap::by_scan(source, &adjusted, None).map_err(|e| refuse(e.to_string()))?
-        };
-        let mut steps = Vec::new();
-        steps.extend(mat_map);
-        steps.push(PointMap::Rows(scan));
-        let map = PointMap::Chain(steps);
+            // The kernel's own four stages nest directly under the operation's,
+            // since this `Progress` is at the top of it.
+            let (adjusted, report) = match sfmtool_core::bundle_adjust(source, &options, progress) {
+                Ok(solved) => solved,
+                // The one error that is not a refusal: the operation was asked
+                // to stop and did, which the log words as a cancellation rather
+                // than as a failure of the solve.
+                Err(sfmtool_core::reconstruction::bundle_adjust::BundleAdjustError::Cancelled) => {
+                    return Finished::Cancelled
+                }
+                Err(e) => return Finished::Failed(refuse(e.to_string())),
+            };
+            // The solve drops the points it left unsupported and says how many,
+            // not which; the map is read off its input and its output. The image
+            // table is untouched, so no image map.
+            let scan = {
+                let _phase = progress.phase("row map");
+                match RowMap::by_scan(source, &adjusted, None) {
+                    Ok(scan) => scan,
+                    Err(e) => return Finished::Failed(refuse(e.to_string())),
+                }
+            };
+            let mut steps = Vec::new();
+            steps.extend(mat_map);
+            steps.push(PointMap::Rows(scan));
+            let map = PointMap::Chain(steps);
 
-        let mut text = format!("Bundle adjusted {label}");
-        if report.focal_released {
-            text.push_str(", focal released");
-        }
-        let node = &mut self.scene[index];
-        let serial = {
-            let _phase = collector.phase("push version");
-            node.history.push(
-                EditedReconstruction::new(Arc::new(adjusted)),
+            let mut version_label = format!("Bundle adjusted {label}");
+            if report.focal_released {
+                version_label.push_str(", focal released");
+            }
+            let focal = if report.focal_released {
+                format!(
+                    ", focal {:.1} → {:.1}",
+                    report.focal_before, report.focal_after
+                )
+            } else {
+                String::new()
+            };
+            let deleted = if report.points_deleted > 0 {
+                format!(", {} points deleted", report.points_deleted)
+            } else {
+                String::new()
+            };
+            let text = format!(
+                "{version_label}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{deleted}",
+                report.images,
+                report.points,
+                report.observations,
+                report.median_residual_before,
+                report.median_residual_after,
+            );
+            Finished::Produced {
+                value: adjusted,
                 map,
-                text.clone(),
-            )
-        };
-        let parent = version_before(node, serial);
-        self.follow_selection_forward(id);
-        let focal = if report.focal_released {
-            format!(
-                ", focal {:.1} → {:.1}",
-                report.focal_before, report.focal_after
-            )
-        } else {
-            String::new()
-        };
-        let deleted = if report.points_deleted > 0 {
-            format!(", {} points deleted", report.points_deleted)
-        } else {
-            String::new()
-        };
-        Ok(format!(
-            "{text}: {} images, {} points, {} observations, median residual {:.3} → {:.3} px{focal}{deleted} ({parent} → {serial})",
-            report.images,
-            report.points,
-            report.observations,
-            report.median_residual_before,
-            report.median_residual_after,
-        ))
+                version_label,
+                text,
+            }
+        }))
     }
 
     /// Step `id`'s cursor back one version.
@@ -972,6 +1001,9 @@ impl AppState {
     pub fn undo(&mut self, id: ReconId) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
@@ -1009,6 +1041,9 @@ impl AppState {
     pub fn redo(&mut self, id: ReconId) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
@@ -1056,6 +1091,9 @@ impl AppState {
     pub fn jump_to_version(&mut self, id: ReconId, serial: VersionSerial) -> Result<(), String> {
         let started = Instant::now();
         let collector = Collector::new(self.action_log.detailed_timing());
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
@@ -1126,7 +1164,7 @@ impl AppState {
     /// Follow the selected point through the step that produced the version now
     /// at `id`'s cursor: a surviving point keeps its place, a deleted one
     /// clears the selection.
-    pub(super) fn follow_selection_forward(&mut self, id: ReconId) {
+    pub(crate) fn follow_selection_forward(&mut self, id: ReconId) {
         let Some(point) = self.selected_point.filter(|p| p.recon == id) else {
             return;
         };
@@ -1283,7 +1321,7 @@ fn median_projected_radius(edited: &EditedReconstruction, image: Option<usize>) 
 }
 
 /// The serial of the version `serial` was made from, for the log entry.
-fn version_before(
+pub(crate) fn version_before(
     node: &crate::scene::SceneNode,
     serial: crate::document::VersionSerial,
 ) -> crate::document::VersionSerial {

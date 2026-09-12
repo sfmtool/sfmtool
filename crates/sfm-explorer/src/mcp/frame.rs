@@ -233,23 +233,48 @@ impl App {
         // the frame handed the renderer, and the only one the dock's rectangles
         // are in step with.
         let pixels_per_point = self.egui_ctx.pixels_per_point();
+        // What could not be answered this frame goes back, which is every
+        // frame's answer for an operation that is still running and has not yet
+        // outlived the window its caller waits inside.
+        let mut waiting = Vec::new();
         for (deferred, reply) in std::mem::take(&mut self.mcp_deferred) {
-            let Deferred::Screenshot {
-                source,
-                max_dimension,
-                caption,
-            } = deferred;
-            let image = match source {
-                ScreenshotSource::ViewportRender => self.viewport_render(device, queue),
-                ScreenshotSource::Window | ScreenshotSource::Panel(_) => {
-                    match window_image.as_ref() {
-                        None => Err(ToolError::new(UNREADABLE_SURFACE)),
-                        Some(Err(error)) => Err(error.clone()),
-                        Some(Ok(frame)) => self.crop(frame, source, pixels_per_point),
+            match deferred {
+                Deferred::Screenshot {
+                    source,
+                    max_dimension,
+                    caption,
+                } => {
+                    let image = match source {
+                        ScreenshotSource::ViewportRender => self.viewport_render(device, queue),
+                        ScreenshotSource::Window | ScreenshotSource::Panel(_) => {
+                            match window_image.as_ref() {
+                                None => Err(ToolError::new(UNREADABLE_SURFACE)),
+                                Some(Err(error)) => Err(error.clone()),
+                                Some(Ok(frame)) => self.crop(frame, source, pixels_per_point),
+                            }
+                        }
+                    };
+                    let _ =
+                        reply.send(image.and_then(|image| encode(image, max_dimension, caption)));
+                }
+                Deferred::Background(pending) => {
+                    match super::edit::background_reply(&self.state, &pending) {
+                        Some(answer) => {
+                            let _ = reply.send(answer);
+                        }
+                        None => waiting.push((Deferred::Background(pending), reply)),
                     }
                 }
-            };
-            let _ = reply.send(image.and_then(|image| encode(image, max_dimension, caption)));
+            }
+        }
+        let still_waiting = !waiting.is_empty();
+        self.mcp_deferred = waiting;
+        // A call waiting on an operation that reports nothing would otherwise
+        // wait for whatever wakes the loop next, which on an idle viewer is
+        // nothing at all. The deadline is a clock, so the frames have to keep
+        // coming until it is reached.
+        if still_waiting {
+            self.egui_ctx.request_repaint();
         }
     }
 
@@ -326,8 +351,10 @@ impl App {
 
 /// Whether a deferred screenshot needs the presented surface.
 fn reads_the_surface((deferred, _): &(Deferred, tokio::sync::oneshot::Sender<Reply>)) -> bool {
-    let Deferred::Screenshot { source, .. } = deferred;
-    !matches!(source, ScreenshotSource::ViewportRender)
+    match deferred {
+        Deferred::Screenshot { source, .. } => !matches!(source, ScreenshotSource::ViewportRender),
+        Deferred::Background(_) => false,
+    }
 }
 
 impl SurfaceCopy {

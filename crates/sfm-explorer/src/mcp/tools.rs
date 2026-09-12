@@ -811,11 +811,14 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         ToolSpec {
             name: "bundle_adjust",
             description: "Refine every pose and every point of one reconstruction against its \
-                          observations, as one version. A bulk edit, and it runs synchronously on \
-                          the viewer's own thread: the window is unresponsive while it solves, \
-                          and a large reconstruction can take longer than a tool call is allowed \
-                          to wait. The reply's report carries the counts and the median residual \
-                          before and after. Needs inline keypoints and one shared lens.",
+                          observations, as one version. A bulk edit, and it runs on a worker \
+                          thread, so the window stays live while it solves. An adjustment that \
+                          finishes quickly replies with the version it pushed and a report \
+                          carrying the counts and the median residual before and after; one that \
+                          is still going after 200 ms replies instead with running: true and an \
+                          operation_id, and the outcome is then read out of get_action_log or \
+                          stopped with cancel_background. Needs inline keypoints and one shared \
+                          lens.",
             kind: Write,
             schema: object(
                 &[(
@@ -827,6 +830,16 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                 )],
                 &[("reconstruction_label", edited_label_schema())],
             ),
+        },
+        ToolSpec {
+            name: "cancel_background",
+            description: "Ask the background operation that is running to stop. One runs at a \
+                          time, viewer-wide, so this names none. The operation stops at its next \
+                          safe point, pushes no version, and writes a cancelled row to the Action \
+                          Log. Refused when nothing is running, and when the operation never asks \
+                          whether it should stop.",
+            kind: Write,
+            schema: object(&[], &[]),
         },
         ToolSpec {
             name: "screenshot",
@@ -1498,6 +1511,10 @@ pub(crate) fn parse(
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             }
+        }
+        "cancel_background" => {
+            args.reject_unknown(&[])?;
+            Command::CancelBackground
         }
         "screenshot" => {
             args.reject_unknown(&["panel_name", "hud", "max_dimension"])?;

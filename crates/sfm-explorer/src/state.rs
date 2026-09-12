@@ -623,6 +623,39 @@ pub struct AppState {
     /// can drive the layout headlessly. `DockState<Tab>` is plain data, with no
     /// GPU or window behind it. See [`crate::layout`].
     pub(crate) dock: DockState<Tab>,
+
+    /// The one long operation running off the GUI thread, or `None`.
+    ///
+    /// A field of the state rather than of `App`, so that the busy check is
+    /// where every method that would need it already is: an edit, a cursor
+    /// move, a save and a close all ask [`AppState::busy_refusal`] first. One
+    /// at a time, viewer-wide. See [`crate::background`].
+    pub(crate) background: Option<crate::background::BackgroundProcess>,
+
+    /// What became of the operation that ran most recently, and which one it
+    /// was.
+    ///
+    /// Kept after the process itself is gone because the answer to "is it
+    /// done, and what did it say" outlives the operation: a tool call that was
+    /// handed a handle comes back for it. One operation, not a history, since
+    /// only one can run at a time and the Action Log holds the rest.
+    pub(crate) last_background: Option<crate::background::LastOperation>,
+
+    /// The id the next background operation takes.
+    ///
+    /// Monotonic and never reused, so a handle names *which* operation rather
+    /// than merely that one was running: a poll arriving after the operation
+    /// has finished and been replaced can still tell the two apart.
+    pub(crate) next_operation_id: u64,
+
+    /// How a worker tells the event loop there is something to look at.
+    ///
+    /// A closure rather than the `winit` proxy itself, for the reason
+    /// [`crate::mcp`]'s wake is one: the state, and everything reachable from
+    /// it, then depends on no windowing type and a headless test can watch the
+    /// wakes by installing its own. `None` where there is no event loop, which
+    /// is every test.
+    pub(crate) wake: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// What the viewer says about a live MCP endpoint.
@@ -712,6 +745,10 @@ impl AppState {
             window: None,
             window_normal_rect: None,
             dock: Layout::default().to_dock(),
+            background: None,
+            last_background: None,
+            next_operation_id: 1,
+            wake: None,
         }
     }
 
@@ -752,9 +789,16 @@ impl AppState {
     /// The renderer releases its bundle separately, from `retain_nodes` on the
     /// next frame; the camera view is dropped by the same frame's check in
     /// `app.rs`, which covers *every* way a node can leave the scene.
-    pub fn close_node(&mut self, id: ReconId) {
+    ///
+    /// Refused while a background operation is running on the node: its answer
+    /// would have nowhere to land, and the refusal says so rather than leaving
+    /// a worker computing a version for a node that is gone.
+    pub fn close_node(&mut self, id: ReconId) -> Result<(), String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
         let Some(label) = self.node(id).map(|node| node.label.clone()) else {
-            return;
+            return Ok(());
         };
         self.scene.retain(|n| n.id != id);
         self.forget_recon(id);
@@ -772,13 +816,22 @@ impl AppState {
         self.resect_matches.remove(&id);
         self.action_log
             .record(Kind::File, format!("Closed {label}"));
+        Ok(())
     }
 
     /// Clear the whole scene.
     ///
     /// One entry, not one per node: `Close All` is a single action, and a
     /// twelve-node scene should not push twelve lines through the log for it.
-    pub fn close_all(&mut self) {
+    ///
+    /// Refused as a whole while a background operation is running, since the
+    /// node it is running on is one of the ones this would close.
+    pub fn close_all(&mut self) -> Result<(), String> {
+        if let Some(process) = self.background.as_ref() {
+            if let Some(why) = self.busy_refusal(process.node) {
+                return Err(why);
+            }
+        }
         let closed = self.scene.len();
         self.scene.clear();
         self.selected_recon = None;
@@ -796,6 +849,7 @@ impl AppState {
             self.action_log
                 .record(Kind::File, format!("Closed all ({closed})"));
         }
+        Ok(())
     }
 
     /// Drop every cache entry and every selection/hover ref belonging to `id`.

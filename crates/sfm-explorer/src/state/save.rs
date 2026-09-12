@@ -119,6 +119,13 @@ impl AppState {
     /// writing the row took. A refusal is returned rather than logged, because
     /// the menu item and the MCP tool each phrase it their own way.
     fn write_node(&mut self, id: ReconId, path: &Path, repoint: bool) -> Result<(), String> {
+        // A save of a busy node would write the version before the one the
+        // operation is about to install, and mark that as what reached the
+        // disk. Refused with the same sentence every other change to the node
+        // is refused with.
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
         let started = Instant::now();
         // The level the Action Log toolbar's checkbox last left, read as the
         // operation starts so that a change to it takes effect on the next one.

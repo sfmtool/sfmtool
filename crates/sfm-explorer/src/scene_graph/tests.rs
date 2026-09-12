@@ -1364,7 +1364,7 @@ fn closing_the_soloed_node_ends_the_solo() {
     let second = state.scene[1].id;
     state.toggle_solo(second);
 
-    state.close_node(second);
+    state.close_node(second).expect("nothing is running");
 
     // A solo naming a node that is gone would hide the whole scene, with
     // nothing left on screen to explain why.
@@ -1378,10 +1378,10 @@ fn closing_another_node_leaves_the_solo_alone() {
     let (first, second) = (state.scene[0].id, state.scene[1].id);
     state.toggle_solo(second);
 
-    state.close_node(first);
+    state.close_node(first).expect("nothing is running");
     assert_eq!(state.solo, Some(second));
 
-    state.close_all();
+    state.close_all().expect("nothing is running");
     assert_eq!(state.solo, None);
 }
 
@@ -1619,7 +1619,7 @@ fn closing_a_node_purges_its_caches_and_selection() {
     state.select_image(Some(ImageRef::new(first, 3)));
     state.hovered_point = Some(PointRef::new(first, 1));
 
-    state.close_node(first);
+    state.close_node(first).expect("nothing is running");
 
     assert_eq!(state.scene.len(), 1);
     assert!(
@@ -1642,15 +1642,15 @@ fn closing_the_selected_node_falls_back_to_the_first_remaining() {
     let ids: Vec<_> = state.scene.iter().map(|n| n.id).collect();
     state.select_recon(ids[1]);
 
-    state.close_node(ids[1]);
+    state.close_node(ids[1]).expect("nothing is running");
     assert_eq!(state.selected_recon, Some(ids[0]));
 
     // Closing an unselected node leaves the selection alone.
-    state.close_node(ids[2]);
+    state.close_node(ids[2]).expect("nothing is running");
     assert_eq!(state.selected_recon, Some(ids[0]));
 
     // An empty scene means no selection at all.
-    state.close_node(ids[0]);
+    state.close_node(ids[0]).expect("nothing is running");
     assert_eq!(state.selected_recon, None);
     assert!(state.scene.is_empty());
 }
@@ -1662,7 +1662,7 @@ fn close_all_empties_the_scene_and_every_shared_cache() {
     state.full_res_cache.insert(ImageRef::new(id, 0), None);
     state.select_image(Some(ImageRef::new(id, 0)));
 
-    state.close_all();
+    state.close_all().expect("nothing is running");
     assert!(state.scene.is_empty());
     assert_eq!(state.selected_recon, None);
     assert_eq!(state.selected_image, None);
@@ -2401,14 +2401,14 @@ fn closing_the_owning_node_clears_both_selections() {
     state.append_node(two_camera_node("/runs/rig_b.sfmr"));
 
     state.select_image(Some(ImageRef::new(first, 5)));
-    state.close_node(first);
+    state.close_node(first).expect("nothing is running");
     assert_eq!(state.selected_image, None);
     assert_eq!(state.selected_camera, None);
 
     // And the whole-scene path.
     let second = state.scene[0].id;
     state.select_camera(Some(CameraRef::new(second, 1)));
-    state.close_all();
+    state.close_all().expect("nothing is running");
     assert_eq!(state.selected_camera, None);
 }
 
@@ -2752,7 +2752,7 @@ fn closing_a_node_forgets_the_matches_file_chosen_for_it() {
     state
         .resect_matches
         .insert(source, std::path::PathBuf::from("/runs/run_a.matches"));
-    state.close_node(source);
+    state.close_node(source).expect("nothing is running");
     assert!(state.resect_matches.is_empty());
 }
 
