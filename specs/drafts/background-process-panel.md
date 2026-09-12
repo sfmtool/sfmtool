@@ -20,16 +20,25 @@ damping ladder was 87 of those 95 seconds.
 
 ## The problem
 
-Some of the viewer's operations legitimately take a long time. A bundle
-adjustment of a real reconstruction is minutes of solving; a resection in place
-is a second; opening a large file with embedded patches is several. Every one of
-them runs on the GUI thread, inside the frame that asked for it, so for its
-whole duration the window does not redraw, does not orbit, does not answer a
-keystroke, and does not answer an agent's call. The person at the window cannot
-tell a solve that is working from one that has hung, cannot see how far along it
-is, and cannot do anything else with the scene while they wait. An agent that
-calls the tool gets a timeout, with no way to find out whether the work is still
-running or was abandoned.
+One operation dominates, and the estimate this draft opened with was about
+right: a bundle adjustment of `dino_dog_toy-embedded` (85 images, 21 009 points,
+392 489 observations) holds the GUI thread for **95 seconds**, and that is a
+small real reconstruction. A resection in place is 838 ms. Every one of them
+runs inside the frame that asked for it, so for its whole duration the window
+does not redraw, does not orbit, does not answer a keystroke, and does not
+answer an agent's call. The person at the window cannot tell a solve that is
+working from one that has hung.
+
+An agent fares worse than "no answer". Every call made during those 95 seconds
+fails on the 10 second apply timeout
+([../gui/mcp-server.md](../gui/mcp-server.md)), which this solve exceeds by a
+factor of nine, with
+
+> The viewer did not answer within 10 seconds. It may be showing a modal dialog,
+> or be mid-drag.
+
+which names two things that are not what happened. The agent cannot distinguish
+a solve in progress from a hung window, and neither can the human.
 
 This proposes running those operations on a worker thread, and a **Background**
 panel under the Scene tree that says what is running, on which node, how far
@@ -38,6 +47,11 @@ table live while the operation runs, and that same table is what the Action Log
 entry carries once it is done, so watching a long operation and reading about it
 afterwards are the same view of the same data
 ([../gui/operation-progress.md](../gui/operation-progress.md)).
+
+What that table already says about the 95 seconds, read back over MCP after the
+window unfroze: 87 of them are the damping ladder, 4.4 are linearisation and 2.9
+are the normal equations. So the panel has something worth drawing from the
+first commit, and the operation it draws has somewhere useful to point.
 
 ## Why this is safe here
 
@@ -66,8 +80,22 @@ The same argument says what is **not** safe: the GPU upload that follows a new
 base. Uploads run against the device and the queue on the GUI thread, and moving
 them is a different problem with a different answer. So this proposal shortens
 the freeze to the upload, and makes what remains of it legible rather than
-invisible. The undo that costs 2.4 s today is mostly upload, and it will still
-cost most of that; what changes is that the panel and the log can say so.
+invisible.
+
+How much remains is now measured rather than assumed, and for the first adopter
+it is almost nothing. The frame that installed the 95 second dino adjustment
+spent **6 ms** on uploads: the point positions moved, so their buffer was
+rewritten, while the patch atlas and the thumbnails were reused untouched. So
+backgrounding that solve turns a ninety-five second freeze into a few
+milliseconds of one, and the earlier claim here that what remains is mostly
+upload was true of an undo or an open and not of this.
+
+An undo across a bulk edit is the case where the upload dominates, because it
+installs a different base and the atlas has to be repacked. That is still worth
+shortening and is still not this proposal's to shorten; what has changed is that
+the Action Log can now say which of the two any given row was
+([../gui/operation-progress.md](../gui/operation-progress.md)), so the question
+is answerable before anybody writes code for it.
 
 ## What the user sees
 
@@ -102,15 +130,17 @@ nothing says `Nothing running` and no more.
 ```
 ┌ Background ──────────────────┐
 │ Bundle adjust                │
-│ perf-eval-embedded-guard     │
-│ ████████████░░░░░░  iter 7/20│
-│ normal equations, block 214  │
-│ 12.4 s elapsed       [Cancel]│
+│ dino_dog_toy-embedded        │
+│ ██████░░░░░░░░░░░  round 2/3 │
+│ 42.7 s elapsed       [Cancel]│
 │                              │
-│ materialise          412 ms  │
-│ solve              ▸ 11.9 s  │
-│   linearise           4.1 s  │
-│   normal equations    6.8 s  │
+│ gather arrays          2 ms  │
+│ residuals before      10 ms  │
+│ solve              ▸ 42.6 s  │
+│   round x2         ▸ 42.6 s  │
+│     linearise x71     2.9 s  │
+│     normal equations  1.9 s  │
+│     damping ladder   37.8 s  │
 └──────────────────────────────┘
 ```
 
@@ -131,7 +161,9 @@ nothing says `Nothing running` and no more.
   entry, because once the entry exists the answer is "finished"
   ([../gui/operation-progress.md](../gui/operation-progress.md) § "Status is not a message").
   It sits under the bar, because it is the words for the same thing the numbers
-  beside the bar count.
+  beside the bar count. The collector already keeps one and nothing draws it;
+  the sketch above has no status row because the bundle adjustment sets none,
+  and the row is absent rather than blank when an operation says nothing.
 - **Elapsed** counts up from the instant the operation started, which is the
   number the person is actually watching.
 - **Cancel** is present always and enabled only when the operation can be
@@ -144,6 +176,10 @@ nothing says `Nothing running` and no more.
   running, so ticking **Detailed timing** before starting a long operation is how
   somebody watches a kernel's internals
   ([../gui/operation-progress.md](../gui/operation-progress.md) § "Two levels").
+  Repeated stages fold as they do in an entry, which is what makes the table a
+  table rather than a log: the sketch's `round x2` and `linearise x71` are two
+  rows rather than seventy-three, and their counts climb while the reader
+  watches.
 
 ### What the rest of the viewer does meanwhile
 
@@ -210,11 +246,20 @@ neither today, in exchange for nothing. So:
   that freezes the window for minutes and the one the wire already warns about.
   Resect in place and delete image follow, once the first has settled.
 
-Two further adopters are obvious and are not in the first commit: **opening a
-file**, which is seconds of decode and is the other thing that freezes a fresh
-session, and the **materialisation** an edit performs before calling a kernel.
-Both are pure functions over values that nothing else holds, so both fit the
-same mechanism without extending it.
+**Opening a file is not a candidate**, though an earlier version of this draft
+assumed it was the other thing that froze a fresh session. Measured, an open of
+the 45 MB dino set is 1.45 s of which the read and the derived-index build are
+**141 ms**: the rest is 434 ms of GPU upload, which cannot move
+(§ "Non-goals"), and 868 ms of the renderer starting, which happens once.
+Backgrounding it would move a seventh of the wait off the thread and complicate
+the load path for it.
+
+The **materialisation** an edit performs before calling a kernel is the one
+plausible further adopter: it is a pure function over a value nothing else
+holds, so it fits the mechanism without extending it. Whether it is worth
+anything is unmeasured, and now measurable: it has a `materialise` phase, and a
+reader can settle the question from the Action Log before anybody writes the
+code.
 
 ## Reporting progress
 
@@ -228,16 +273,19 @@ channel carries only the fact that something changed, and at the end the value.
 
 **How much a given kernel reports is its own business**, and a kernel that
 reports nothing still works: it is one phase, named by the caller, with a
-spinner under it. `bundle_adjust` starts that way, so the first version of this
-panel names `materialise`, `solve` and `row map` and spins through the solve,
-which is already the difference between a frozen window and a window that says
-what it is doing. Threading `Progress` into the solve's own iteration loop then
-turns the spinner into a bar and the disabled Cancel into a live one, without
-touching this panel, because the panel draws whatever it is told.
+spinner under it. The panel is finished when it can draw phases, messages, a
+count and a spinner; each kernel then decides how much of that it fills in.
 
-That is the shape of every later adopter too. The panel is finished when it can
-draw phases, messages, a count and a spinner; each kernel then decides how much
-of that it fills in.
+An earlier version of this draft staged the first adopter that way, with
+`bundle_adjust` spinning and a disabled Cancel until somebody threaded a
+`Progress` into its iteration loop. That has happened
+([../gui/operation-progress.md](../gui/operation-progress.md)), so the first
+version of this panel starts further along than it planned to:
+`bundle_adjust` already counts its rounds against the schedule and its LM
+iterations against the budget, so the bar is live rather than a spinner, and it
+already polls the cancel flag between rounds and between iterations, so Cancel
+is enabled rather than explained away. The first `Operation` to declare
+`cancellable: true` is the first one built.
 
 ## Rust API
 
@@ -347,16 +395,25 @@ not when it finishes:
 ```
 
 The agent then polls, or reads the outcome out of the log. This is a break with
-what `bundle_adjust` does today, and it is the right break: the alternative is a
-call that reliably exceeds the 10 s apply timeout on any reconstruction worth
-adjusting, so the agent gets an error for a solve that is going fine and has no
-way to tell that from one that failed. Returning immediately makes the two
-distinguishable, and the wire already has the vocabulary to follow up.
+what `bundle_adjust` does today, and it is the right break: the alternative is
+the call that exists, which times out on any reconstruction worth adjusting
+(§ "The problem"), so the agent gets an error for a solve that is going fine and
+has no way to tell that from one that failed. Returning immediately makes the
+two distinguishable, and the wire already has the vocabulary to follow up.
+
+**The timeout's own message needs the same correction.** It reads "It may be
+showing a modal dialog, or be mid-drag", which names two things that are not
+what happened and omits the one that did. Once an operation can be in the
+background, a call that times out while one is running should say so and point
+at `get_background_process`, and a call that times out with nothing running
+keeps the message it has, which is then true.
 
 A new read tool, **`get_background_process`**, reports what is running:
 the operation, the label, the seconds elapsed, the progress as `done`, `total`
 and `unit` when there is one, the open phase, and the completed phases in the
-shape [../gui/operation-progress.md](../gui/operation-progress.md) gives them. With
+shape `get_action_log { "detail": true }` already returns them in
+([../gui/mcp-server.md](../gui/mcp-server.md) § "get_action_log"), so an agent
+that reads a finished operation and a running one parses one shape. With
 nothing running it reports the last operation of the session, marked `finished`,
 so one call answers both "is it done" and "what did it cost".
 
@@ -424,9 +481,10 @@ Background's home position is the left edge with Scene as its group-mate.
 - **Backgrounding point edits.** They cost microseconds, and a frame of latency
   is a worse deal than the freeze it avoids.
 - **Moving GPU uploads off the frame.** They run against the device and the
-  queue on the GUI thread. What remains of the freeze after this proposal is
-  mostly upload, and shortening it is a separate piece of work with a different
-  mechanism.
+  queue on the GUI thread, and shortening them is a separate piece of work with
+  a different mechanism. What remains of the freeze after this proposal is
+  whatever the upload costs, which is 6 ms for a bundle adjustment and the
+  larger part of an undo across one.
 - **Editing a node while an operation runs on it.** The operation is a function
   of the value it was handed, and an edit underneath it would produce a version
   whose parent is not the version it was computed from.
