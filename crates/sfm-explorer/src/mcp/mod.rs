@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps thirty-eight of the
-//!   thirty-nine tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps thirty-nine of the
+//!   forty tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -241,6 +241,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         release_focal: bool,
     },
+    /// What the background operation is doing, or what the last one did.
+    ///
+    /// Names no operation, for the reason [`Command::CancelBackground`] does
+    /// not: one runs at a time, viewer-wide.
+    GetBackgroundProcess,
     /// Ask the running background operation to stop.
     ///
     /// Names no operation: one runs at a time, viewer-wide, so "the one that is
@@ -411,7 +416,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other thirty-eight answer with JSON, and squeezing an image through a JSON
+/// the other thirty-nine answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -428,7 +433,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the thirty-eight tools that speak only JSON.
+/// The answer of the thirty-nine tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -535,8 +540,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes thirty-eight of the
-/// thirty-nine tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes thirty-nine of the
+/// forty tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -736,6 +741,7 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
         } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
+        Command::GetBackgroundProcess => done(read::get_background_process(state)),
         Command::CancelBackground => done(edit::cancel_background(state)),
         Command::Screenshot {
             panel,
@@ -1231,6 +1237,7 @@ impl Command {
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
+            Command::GetBackgroundProcess => "get_background_process",
             Command::CancelBackground => "cancel_background",
             Command::Screenshot { .. } => "screenshot",
         }
@@ -1361,6 +1368,7 @@ impl Command {
             | Command::GetImageDetailDisplay
             | Command::GetTimingDetail
             | Command::GetHistory { .. }
+            | Command::GetBackgroundProcess
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. }
             | Command::CloseReconstruction { .. }
@@ -1455,6 +1463,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             format!("get_action_log since {since_revision}")
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
+        Command::GetBackgroundProcess => "get_background_process".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetHistory {

@@ -36,7 +36,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sfmtool_core::progress::Progress;
@@ -221,6 +221,41 @@ pub(crate) struct LastOperation {
     pub(crate) outcome: Result<String, String>,
 }
 
+/// What is running, for a reader that cannot reach [`AppState`].
+///
+/// The MCP server answers a timed-out call on its own thread, where the GUI
+/// thread is by definition not answering, so the one fact that message needs is
+/// the one fact it cannot ask for. Two fields written twice per operation and
+/// read once per timeout, which is why a `Mutex` is the whole of the
+/// machinery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Busy {
+    /// What the operation is called, as the panel and the refusals call it.
+    pub(crate) operation: &'static str,
+    /// The node it is running on.
+    pub(crate) label: String,
+}
+
+/// Where [`Busy`] is kept: shared with whoever has to read it off the GUI
+/// thread, and `None` whenever nothing is running.
+pub(crate) type BusyNotice = Arc<Mutex<Option<Busy>>>;
+
+/// What is running, or `None`. Poisoned or not, because a stale sentence in an
+/// error message is a smaller failure than a panic inside one.
+pub(crate) fn busy(notice: &BusyNotice) -> Option<Busy> {
+    notice
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// Say what is running, or that nothing is.
+fn set_busy(notice: &BusyNotice, running: Option<Busy>) {
+    *notice
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = running;
+}
+
 /// What one poll did, for the frame that called it.
 ///
 /// Two answers rather than the one the draft's `bool` gives, because the frame
@@ -334,6 +369,16 @@ impl AppState {
 
         let operation_id = self.next_operation_id;
         self.next_operation_id += 1;
+        // Said here and unsaid in `finish`, which are the two instants the
+        // answer changes at. Anything reading it is off the GUI thread and
+        // cannot ask the state.
+        set_busy(
+            &self.busy_notice,
+            Some(Busy {
+                operation: operation.name,
+                label: label.clone(),
+            }),
+        );
         self.background = Some(BackgroundProcess {
             id: operation_id,
             operation,
@@ -409,6 +454,7 @@ impl AppState {
         }
         if let Some(finished) = done {
             let process = self.background.take().expect("just borrowed");
+            set_busy(&self.busy_notice, None);
             polled.installed = self.finish(process, finished);
         }
         polled
