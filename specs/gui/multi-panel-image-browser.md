@@ -39,7 +39,7 @@ root, and everything below describes the arrangement to its right.
   reconstructions.
 - **Background**: under the tree, the rest of the left column. What a long
   operation running off the GUI thread is doing, and what the last one cost
-  ([background-process-panel.md](../drafts/background-process-panel.md)).
+  ([background-operations.md](background-operations.md)).
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
   frustums, navigation.
 - **Image Detail**: top-right, ~1/3 width, sharing a tab group with Point Track

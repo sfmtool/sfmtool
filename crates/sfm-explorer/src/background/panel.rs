@@ -4,7 +4,7 @@
 //! The Background panel: what is running, on which node, and what it has spent
 //! its time on so far.
 //!
-//! See `specs/drafts/background-process-panel.md`, "What the user sees". The
+//! See `specs/gui/background-operations.md`, "What the user sees". The
 //! panel decides nothing: it reads [`AppState::background`] and the collector
 //! that process shares with its worker, and the one button it has calls
 //! [`AppState::cancel_background`].

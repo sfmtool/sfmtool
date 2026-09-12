@@ -1,67 +1,42 @@
-# The Background panel: an operation that outlives a frame
+# Background operations: work that outlives a frame
 
-**Status:** Draft
+A long operation runs on a worker thread rather than inside the frame that asked
+for it, and a **Background** panel under the Scene tree says what is running, on
+which node, how far along it is, and what it has spent its time on so far. The
+window keeps drawing, the scene keeps answering, and an agent's call is answered
+while the work goes on. A tool that starts one gets its result directly if the
+work is quick and a handle to poll if it is not, and `get_background_process`
+answers about the operation from either side of that line.
 
-Amends [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md) § "Non-goals",
-[gui/document-model.md](../gui/document-model.md) § "Two kinds of edit",
-[gui/panel-layout.md](../gui/panel-layout.md) § "Home positions",
-[gui/action-log.md](../gui/action-log.md),
-[gui/mcp-server.md](../gui/mcp-server.md) and
-[gui/operation-progress.md](../gui/operation-progress.md), whose collector's
-status, count and fraction this panel is the first reader of, and which gained
-`Collector::live` for it.
+This covers the worker and what makes it safe, the panel, what the rest of the
+viewer may do meanwhile, what is written when an operation ends, and the wire.
+The phases it draws come from the one `Progress` parameter every long
+`sfmtool-core` function takes ([operation-progress.md](operation-progress.md)).
 
-The worker and the panel are built. What is left is the read surface an agent
-sees: `get_background_process`, the `background` block in `get_scene`, and any
-operation other than the bundle adjustment.
+## Why the work moves off the frame
 
-Its case is measured. A bundle adjustment of `dino_dog_toy-embedded` (85 images,
-21 009 points, 392 489 observations) holds the GUI thread for 95 seconds: the
-window is frozen for all of it, and every MCP call in that window fails on the
-10 second apply timeout with "The viewer did not answer within 10 seconds. It
-may be showing a modal dialog, or be mid-drag", which is the wrong reason. The
-breakdown the frozen operation recorded is readable afterwards and says the
-damping ladder was 87 of those 95 seconds.
+One operation dominates. A bundle adjustment of `dino_dog_toy-embedded` (85
+images, 21 009 points, 392 489 observations) is **95 seconds** of solving, and
+that is a small real reconstruction; a resection in place is 838 ms. Run inside
+the frame that asks for it, an operation of that length means a window that for
+its whole duration does not redraw, does not orbit, does not answer a keystroke
+and does not answer an agent's call. The person at the window cannot tell a
+solve that is working from one that has hung.
 
-## The problem
+An agent fares worse than "no answer". A call made during a solve that long
+exceeds the 10 second apply timeout
+([mcp-server.md](mcp-server.md)) by a factor of nine, and the timeout is not a
+result: it says the call failed, about a solve that is going fine.
 
-One operation dominates, and the estimate this draft opened with was about
-right: a bundle adjustment of `dino_dog_toy-embedded` (85 images, 21 009 points,
-392 489 observations) holds the GUI thread for **95 seconds**, and that is a
-small real reconstruction. A resection in place is 838 ms. Every one of them
-runs inside the frame that asked for it, so for its whole duration the window
-does not redraw, does not orbit, does not answer a keystroke, and does not
-answer an agent's call. The person at the window cannot tell a solve that is
-working from one that has hung.
-
-An agent fares worse than "no answer". Every call made during those 95 seconds
-fails on the 10 second apply timeout
-([../gui/mcp-server.md](../gui/mcp-server.md)), which this solve exceeds by a
-factor of nine, with
-
-> The viewer did not answer within 10 seconds. It may be showing a modal dialog,
-> or be mid-drag.
-
-which names two things that are not what happened. The agent cannot distinguish
-a solve in progress from a hung window, and neither can the human.
-
-This proposes running those operations on a worker thread, and a **Background**
-panel under the Scene tree that says what is running, on which node, how far
-along it is, and what it has spent its time on so far. The panel shows the phase
-table live while the operation runs, and that same table is what the Action Log
-entry carries once it is done, so watching a long operation and reading about it
-afterwards are the same view of the same data
-([../gui/operation-progress.md](../gui/operation-progress.md)).
-
-What that table already says about the 95 seconds, read back over MCP after the
-window unfroze: 87 of them are the damping ladder, 4.4 are linearisation and 2.9
-are the normal equations. So the panel has something worth drawing from the
-first commit, and the operation it draws has somewhere useful to point.
+What the Action Log's breakdown says about those 95 seconds, read back over MCP:
+87 of them are the damping ladder, 4.4 are linearisation and 2.9 are the normal
+equations. So the panel has something worth drawing, and the operation it draws
+has somewhere useful to point.
 
 ## Why this is safe here
 
 The document model is value semantics
-([gui/document-model.md](../gui/document-model.md)). A version is an immutable
+([document-model.md](document-model.md)). A version is an immutable
 reconstruction behind an `Arc` plus an overlay that only that version owns; the
 base is never written through, `Arc::make_mut` appears nowhere, and there is no
 interior mutability in the document. A bulk edit is already a **pure function
@@ -70,10 +45,9 @@ from the value at the cursor to the next value**.
 That is exactly the precondition for moving one off the GUI thread. The worker
 takes a clone of the `Arc` and reads it; the GUI thread keeps drawing the same
 allocation and cannot disturb it; and **the document itself needs no lock,
-because no part of it is shared mutably**. No part of this proposal wraps
-`AppState` in a lock or hands a worker a reference into the scene, and the
-reason it does not have to is that the value model was built to make this
-possible.
+because no part of it is shared mutably**. Nothing here wraps `AppState` in a
+lock or hands a worker a reference into the scene, and the reason it does not
+have to is that the value model was built to make this possible.
 
 Two small things are shared mutably, deliberately and under a lock, and neither
 is the document: the collector the worker reports into and the panel reads
@@ -83,9 +57,8 @@ thing from sharing a reconstruction.
 
 The same argument says what is **not** safe: the GPU upload that follows a new
 base. Uploads run against the device and the queue on the GUI thread, and moving
-them is a different problem with a different answer. So this proposal shortens
-the freeze to the upload, and makes what remains of it legible rather than
-invisible.
+them is a different problem with a different answer. So the freeze shortens to
+the upload, and what remains of it is legible rather than invisible.
 
 How much remains is now measured rather than assumed, and for the first adopter
 it is almost nothing. The frame that installed the 95 second dino adjustment
@@ -97,9 +70,8 @@ upload was true of an undo or an open and not of this.
 
 An undo across a bulk edit is the case where the upload dominates, because it
 installs a different base and the atlas has to be repacked. That is still worth
-shortening and is still not this proposal's to shorten; what has changed is that
-the Action Log can now say which of the two any given row was
-([../gui/operation-progress.md](../gui/operation-progress.md)), so the question
+shortening and is not shortened here. The Action Log says which of the two any
+given row was ([operation-progress.md](operation-progress.md)), so the question
 is answerable before anybody writes code for it.
 
 ## What the user sees
@@ -121,7 +93,7 @@ The left column splits top to bottom. Scene keeps the top of it and a ninth tab,
 It is a panel like any other: draggable, closeable, ticked in **Panels ▸
 Background**, and given a home position of the left edge at 0.18 with Scene as
 its default group-mate, so re-opening it from the menu puts it back beside the
-tree.
+tree ([panel-layout.md](panel-layout.md) § "Home positions").
 
 ### Idle
 
@@ -174,7 +146,8 @@ Earlier rows are above it, and none of them is a summary of another:
   does. The bar is a statement about how much of the work is behind you, never a
   prediction of when it will end: it moves only where a stage reports a count,
   and a stage that reports none moves it not at all. The step at a boundary is
-  the next stage's range beginning rather than anything the panel adds ([../gui/operation-progress.md](../gui/operation-progress.md) § "Nesting").
+  the next stage's range beginning rather than anything the panel adds
+  ([operation-progress.md](operation-progress.md) § "Nesting").
   Nothing interpolates across a silent stage, and there is never a synthesised
   percentage, because a bar moving at a rate nobody measured makes a promise
   about the finish.
@@ -182,7 +155,7 @@ Earlier rows are above it, and none of them is a summary of another:
   replaced as often as it likes: a file name inside a loop over images, the
   member being refined. It is live state and is never kept in the Action Log
   entry, because once the entry exists the answer is "finished"
-  ([../gui/operation-progress.md](../gui/operation-progress.md) § "Status is not a message").
+  ([operation-progress.md](operation-progress.md) § "Status is not a message").
   It sits under the bar, because it is the words for the same thing the numbers
   beside the bar count. The collector already keeps one and nothing draws it;
   the sketch above has no status row because the bundle adjustment sets none,
@@ -197,9 +170,9 @@ Earlier rows are above it, and none of them is a summary of another:
   Completed phases show their cost, the open one is marked and shows the time it
   has been open so far, and phases that have not started are not shown, because
   the panel does not know they are coming. It shows whichever level of timing is
-  running, so ticking **Detailed timing** before starting a long operation is how
-  somebody watches a kernel's internals
-  ([../gui/operation-progress.md](../gui/operation-progress.md) § "Two levels").
+  running, so ticking **Detailed timing** before starting a long operation is
+  how somebody watches a kernel's internals
+  ([operation-progress.md](operation-progress.md) § "Two levels").
   **Nothing folds here, and no two things are ever combined into one row.**
   Each run of a stage is its own row with the cost that run took and the note
   that run gave, each message is its own row, and two runs that said different
@@ -279,7 +252,7 @@ minutes later it lands.
 Its **cost covers the whole operation**, not the frame that pushed it, and its
 detail is what the worker reported. Both arrive through one call,
 `ActionLog::record_done(kind, started, text, detail)`
-([../gui/operation-progress.md](../gui/operation-progress.md), "The Action Log's side"): the
+([operation-progress.md](operation-progress.md), "The Action Log's side"): the
 entry is written now, its cost is measured from an instant already past, and it
 settles on the frame that draws the result as every other entry does. Without
 the start instant a two-minute solve would report the six milliseconds of the
@@ -301,7 +274,7 @@ solve informative rather than merely abandoned, since it shows the round it
 reached and the median it had got to by then.
 
 Nothing is logged when an operation *starts*. The log records outcomes, not
-intentions ([gui/action-log.md](../gui/action-log.md)), and what is running is
+intentions ([action-log.md](action-log.md)), and what is running is
 what the panel is for.
 
 ## Which operations go to the background
@@ -312,17 +285,17 @@ neither today, in exchange for nothing. So:
 
 - **Point edits stay synchronous.** Delete point, add observation, remove
   observation, create point, move camera.
-- **Bulk edits go to the background.** Bundle adjust first, since it is the one
-  that freezes the window for minutes and the one the wire already warns about.
-  Resect in place and delete image follow, once the first has settled.
+- **Bulk edits go to the background.** The bundle adjustment is the one that
+  takes it, being the operation that froze the window for minutes. Resect in
+  place, at 838 ms, is the other bulk edit over the threshold that matters; it
+  runs on the GUI thread, and the mechanism here is what it would use.
 
-**Opening a file is not a candidate**, though an earlier version of this draft
-assumed it was the other thing that froze a fresh session. Measured, an open of
-the 45 MB dino set is 1.45 s of which the read and the derived-index build are
-**141 ms**: the rest is 434 ms of GPU upload, which cannot move
-(§ "Non-goals"), and 868 ms of the renderer starting, which happens once.
-Backgrounding it would move a seventh of the wait off the thread and complicate
-the load path for it.
+**Opening a file is not a candidate**, though it looks like the other thing that
+freezes a fresh session. Measured, an open of the 45 MB dino set is 1.45 s of
+which the read and the derived-index build are **141 ms**: the rest is 434 ms of
+GPU upload, which cannot move (§ "Non-goals"), and 868 ms of the renderer
+starting, which happens once. Backgrounding it would move a seventh of the wait
+off the thread and complicate the load path for it.
 
 The **materialisation** an edit performs before calling a kernel is the one
 plausible further adopter: it is a pure function over a value nothing else
@@ -334,7 +307,7 @@ code.
 ## Reporting progress
 
 The channel from a worker to this panel is
-[../gui/operation-progress.md](../gui/operation-progress.md)'s `Progress`: one parameter the
+[operation-progress.md](operation-progress.md)'s `Progress`: one parameter the
 kernel takes, carrying phases, messages, progress counts and the cancel flag.
 The worker builds it over a collector the GUI thread shares, so the panel reads
 what has been reported by locking that collector each frame rather than by
@@ -346,21 +319,18 @@ reports nothing still works: it is one phase, named by the caller, with a
 spinner under it. The panel is finished when it can draw phases, messages, a
 count and a spinner; each kernel then decides how much of that it fills in.
 
-An earlier version of this draft staged the first adopter that way, with
-`bundle_adjust` spinning and a disabled Cancel until somebody threaded a
-`Progress` into its iteration loop. That has happened
-([../gui/operation-progress.md](../gui/operation-progress.md)), so the first
-version of this panel starts further along than it planned to:
-`bundle_adjust` already counts its rounds against the schedule and its LM
-iterations against the budget, so the bar is live rather than a spinner, and it
-already polls the cancel flag between rounds and between iterations, so Cancel
-is enabled rather than explained away. The first `Operation` to declare
-`cancellable: true` is the first one built.
+`bundle_adjust` fills in most of it. It counts its rounds against the schedule
+and its LM iterations against the budget, so the bar is measured rather than a
+spinner, and it polls the cancel flag between rounds and between iterations, so
+Cancel is live ([operation-progress.md](operation-progress.md)).
 
 ## Rust API
 
-`crates/sfm-explorer/src/background/`: `mod.rs` owns the process and the
-channel, `panel.rs` the egui view, `tests.rs` the tests. The process is a field
+[`crates/sfm-explorer/src/background/`](../../crates/sfm-explorer/src/background):
+[`mod.rs`](../../crates/sfm-explorer/src/background/mod.rs) owns the process and
+the channel,
+[`panel.rs`](../../crates/sfm-explorer/src/background/panel.rs) the egui view,
+[`tests.rs`](../../crates/sfm-explorer/src/background/tests.rs) the tests. The process is a field
 of `AppState`, so the busy check is where every method that would need it
 already is.
 
@@ -382,7 +352,7 @@ pub(crate) struct BackgroundProcess {
     pub id: u64,
     /// Where the worker reports, and where the panel reads. Shared, taken by
     /// `&`, never borrowed mutably
-    /// ([../gui/operation-progress.md](../gui/operation-progress.md) § "In the viewer").
+    /// ([operation-progress.md](operation-progress.md) § "In the viewer").
     pub collector: Arc<progress::Collector>,
     /// Set to ask the operation to stop. The kernel polls it through the
     /// `Progress` built over `collector`; one that never polls is not
@@ -524,7 +494,7 @@ costs, since a constant argued from a fixture ages the moment the fixture does.
 **Nothing blocks to reach it.** Waiting out the threshold on the GUI thread
 would trade one long freeze for a short freeze on every call. The tool starts
 the operation and defers its reply through the path screenshots already use
-([../gui/mcp-server.md](../gui/mcp-server.md) § "screenshot"), and each frame
+([mcp-server.md](mcp-server.md) § "screenshot"), and each frame
 the resolver sends the result if the operation has finished or the handle if the
 threshold has passed, whichever is true first. A deferred reply also has to
 request a repaint, or an idle viewer never reaches the clock that would answer
@@ -546,11 +516,12 @@ operation, the label, the seconds elapsed, `fraction` of the whole where
 anything reported one, whether it can be cancelled, the progress as `done`,
 `total` and `unit` where there is one, the status, the open phase, and the
 stages so far in the shape `get_action_log { "detail": true }` returns them in
-([../gui/mcp-server.md](../gui/mcp-server.md) § "get_action_log"), so an agent
+([mcp-server.md](mcp-server.md) § "get_action_log"), so an agent
 that reads a finished operation and a running one parses one shape. The rows are
 the panel's transcript rather than the entry's folded summary, for the reason
 the panel does not fold (§ "Running"): this tool answers about an operation
-being watched. `get_action_log { "detail": true }` is where the summary is. With nothing
+being watched. `get_action_log { "detail": true }` is where the summary is.
+With nothing
 running it reports the last operation of the session, marked `finished`, so one
 call answers both "is it done" and "what did it cost". `elapsed_s` carries both
 halves of that: seconds so far while it runs, seconds in total once it is over.
@@ -648,7 +619,7 @@ Background's home position is the left edge with Scene as its group-mate.
 | Background home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
 | `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
 | repaint tick while running | `100 ms` | The elapsed counts up between reports, and a worker deep in a silent stage sends none for a frame to ride on |
-| seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([../gui/action-log.md](../gui/action-log.md)) |
+| seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([action-log.md](action-log.md)) |
 
 ## Non-goals
 
@@ -658,9 +629,9 @@ Background's home position is the left edge with Scene as its group-mate.
   is a worse deal than the freeze it avoids.
 - **Moving GPU uploads off the frame.** They run against the device and the
   queue on the GUI thread, and shortening them is a separate piece of work with
-  a different mechanism. What remains of the freeze after this proposal is
-  whatever the upload costs, which is 6 ms for a bundle adjustment and the
-  larger part of an undo across one.
+  a different mechanism. What remains of the freeze is whatever the upload
+  costs, which is 6 ms for a bundle adjustment and the larger part of an undo
+  across one.
 - **Editing a node while an operation runs on it.** The operation is a function
   of the value it was handed, and an edit underneath it would produce a version
   whose parent is not the version it was computed from.
@@ -668,16 +639,10 @@ Background's home position is the left edge with Scene as its group-mate.
 - **Progress from a kernel that does not report it.** The panel shows a spinner
   and the open phase's name, and says nothing it cannot measure.
 
-## Open questions
-
-- Whether an operation should be allowed per node rather than one viewer-wide.
-  Per node is the natural generalisation and costs little in the state; it is
-  held back because nothing has asked, and because two solves at once is a
-  slower way to do one thing.
-- Whether the idle panel should keep more than the last operation. A short
-  history of what was run and what it cost is the Action Log's job, and the
-  panel would be duplicating it; but the panel is where a reader looks for cost,
-  and three rows there may save a scroll.
-- Whether a background operation should be allowed to start while a modal dialog
-  is open. Today the dialog is what starts it, so the question is only about the
-  file dialogs, which stop the GUI thread anyway.
+- **One operation per viewer rather than per node.** Per node is the natural
+  generalisation and would cost little in the state. It is not done because two
+  solves at once is a slower way to do one thing, for the reason a queue is a
+  non-goal.
+- **A history in the idle panel.** It keeps the last operation and no more. What
+  was run and what it cost is the Action Log's job, and a second short list of
+  it in the panel would be a second thing to keep in step.

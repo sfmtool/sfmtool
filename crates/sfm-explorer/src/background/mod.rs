@@ -3,7 +3,7 @@
 
 //! One long operation, running off the GUI thread.
 //!
-//! See `specs/drafts/background-process-panel.md`. A bulk edit is already a
+//! See `specs/gui/background-operations.md`. A bulk edit is already a
 //! pure function from the value at a node's cursor to the next value, so a
 //! worker can be handed a clone of the `Arc` that value is behind and read it
 //! while the GUI thread keeps drawing the same allocation. Nothing here wraps

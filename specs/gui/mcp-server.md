@@ -1000,7 +1000,7 @@ row, and asks again with `detail` set and `since_revision` just below that row.
 ### `get_background_process`
 
 What the viewer is busy with. One operation runs at a time, viewer-wide
-([../drafts/background-process-panel.md](../drafts/background-process-panel.md)),
+([background-operations.md](background-operations.md)),
 so this names none and takes no arguments.
 
 ```jsonc
@@ -1833,7 +1833,7 @@ one shared lens, and says which is missing when it refuses.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
-([../drafts/background-process-panel.md](../drafts/background-process-panel.md)).
+([background-operations.md](background-operations.md)).
 An adjustment that finishes within 200 ms replies as any edit does, with the
 cursor, the serial and the report, so a small reconstruction sees no difference.
 One still running at 200 ms replies with a handle instead:
