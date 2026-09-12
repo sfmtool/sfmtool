@@ -901,7 +901,7 @@ fn frame_events() -> Vec<Detail> {
 /// stages it gathered.
 fn framed() -> Vec<(&'static str, u8, u32)> {
     vec![
-        ("frame", 0, 1),
+        (ActionLog::OVERHEAD, 0, 1),
         ("uploads", 1, 1),
         ("points", 2, 1),
         ("scene render", 1, 1),
@@ -913,7 +913,7 @@ fn framed() -> Vec<(&'static str, u8, u32)> {
 fn frame_note(detail: &[Detail]) -> Option<&str> {
     detail.iter().find_map(|row| match row {
         Detail::Phase {
-            name: "frame",
+            name: ActionLog::OVERHEAD,
             note,
             ..
         } => note.as_deref(),
@@ -1033,7 +1033,7 @@ fn an_entry_carries_its_own_detail_and_then_the_frames() {
         [
             ("materialise", 0, 1),
             ("push version", 0, 1),
-            ("frame", 0, 1),
+            (ActionLog::OVERHEAD, 0, 1),
             ("uploads", 1, 1),
             ("points", 2, 1),
             ("scene render", 1, 1),
@@ -1663,5 +1663,51 @@ fn a_folded_note_paints_both_ends_when_the_runs_disagreed() {
             .iter()
             .any(|text| text == "round x3  trim 50 px ... trim 4 px"),
         "{texts:?}",
+    );
+}
+
+/// Uploading a reconstruction to the GPU is not part of reading it off the
+/// disk, so the overhead comes last, under a rule, after `elsewhere` has closed
+/// the operation's own account. A reader who takes the upload for the load
+/// draws the wrong conclusion about where a slow action went.
+#[test]
+fn the_overhead_comes_after_the_operation_and_its_elsewhere() {
+    let mut log = log();
+    let collector = Collector::new(false);
+    drop(collector.phase("materialise"));
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        collector.take(),
+    );
+    log.settle(Instant::now(), frame_events());
+
+    let entry = log.entries().next_back().expect("an entry");
+    let drawn: Vec<String> = (0..super::panel::detail_rows(entry))
+        .map(|row| super::panel::detail_row(entry, row).text)
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            "materialise",
+            "elsewhere",
+            ActionLog::OVERHEAD,
+            "uploads",
+            "points",
+            "scene render",
+        ],
+        "the overhead did not come last, or elsewhere did not close the account",
+    );
+    assert!(
+        super::panel::detail_row(entry, 2).rules_above,
+        "no rule divides the operation from the overhead",
+    );
+    assert!(
+        (0..super::panel::detail_rows(entry))
+            .filter(|row| super::panel::detail_row(entry, *row).rules_above)
+            .count()
+            == 1,
+        "more than one rule was drawn",
     );
 }

@@ -339,41 +339,54 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
 fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: f32, space: f32) {
     let row = detail_row(entry, within);
     let weak = ui.visuals().weak_text_color();
+    // The rule is painted along the top of the overhead row's own rect rather
+    // than given a row of its own, so the list keeps the uniform row height its
+    // virtualization depends on.
+    let rule = row.rules_above;
     let marker_color = if row.warn {
         ui.visuals().error_fg_color
     } else {
         ui.visuals().text_color()
     };
-    ui.horizontal(|ui| {
-        ui.set_height(row_height);
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.add_space(TOGGLE_WIDTH);
-        monospace_right(ui, TIME_WIDTH + ACTOR_WIDTH, &row.cpu, weak);
-        monospace_right(ui, TOOK_WIDTH, &row.cost, weak);
-        // The indent and the marker share one cell, so a phase name and a
-        // message text at the same depth start at the same place and the
-        // marker sits in the column before them, as it reads in a transcript.
-        let (lead, glyphs) = if row.marker.is_empty() {
-            (String::new(), row.indent)
-        } else {
-            (
-                format!("{}{}", " ".repeat(row.indent), row.marker),
-                row.indent + 2,
-            )
-        };
-        monospace(ui, glyphs as f32 * space, &lead, marker_color);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(&row.text)
-                    .monospace()
-                    .color(ui.visuals().text_color()),
-            )
-            .truncate()
-            .selectable(false),
+    let drawn = ui
+        .horizontal(|ui| {
+            ui.set_height(row_height);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(TOGGLE_WIDTH);
+            monospace_right(ui, TIME_WIDTH + ACTOR_WIDTH, &row.cpu, weak);
+            monospace_right(ui, TOOK_WIDTH, &row.cost, weak);
+            // The indent and the marker share one cell, so a phase name and a
+            // message text at the same depth start at the same place and the
+            // marker sits in the column before them, as it reads in a transcript.
+            let (lead, glyphs) = if row.marker.is_empty() {
+                (String::new(), row.indent)
+            } else {
+                (
+                    format!("{}{}", " ".repeat(row.indent), row.marker),
+                    row.indent + 2,
+                )
+            };
+            monospace(ui, glyphs as f32 * space, &lead, marker_color);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&row.text)
+                        .monospace()
+                        .color(ui.visuals().text_color()),
+                )
+                .truncate()
+                .selectable(false),
+            );
+        })
+        .response
+        .on_hover_text(&row.text);
+    if rule {
+        let rect = drawn.rect;
+        ui.painter().hline(
+            rect.x_range(),
+            rect.top(),
+            ui.visuals().widgets.noninteractive.bg_stroke,
         );
-    })
-    .response
-    .on_hover_text(&row.text);
+    }
 }
 
 /// What one row of an expanded entry says.
@@ -392,18 +405,54 @@ pub(super) struct DetailRow {
     pub marker: &'static str,
     /// Whether the marker is a warning's, and so wants the error colour.
     pub warn: bool,
+    /// Whether a rule is drawn above this row, which divides what the
+    /// operation accounted for from the overhead of showing its result.
+    pub rules_above: bool,
     /// The row's text, with neither the indent nor the marker in it.
     pub text: String,
 }
 
-/// The row `within` of `entry`'s breakdown, one past its events being the
-/// `elsewhere` line.
+/// Where an entry's own account ends and the frame's overhead begins, as an
+/// index into its detail.
 ///
-/// `elsewhere` is last and never nested, because it is what makes the
-/// breakdown reconcile with the number in the entry's own cost column: work
-/// nobody has named shows up as a gap rather than as silence.
+/// The overhead row and everything under it are appended when the frame is
+/// charged, so they are a suffix, and the operation's own account is what comes
+/// before them.
+fn overhead_at(entry: &Entry) -> usize {
+    entry
+        .detail
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                Detail::Phase {
+                    name: ActionLog::OVERHEAD,
+                    ..
+                }
+            )
+        })
+        .unwrap_or(entry.detail.len())
+}
+
+/// The row `within` of `entry`'s breakdown.
+///
+/// `elsewhere` closes the operation's own account rather than the whole entry:
+/// it is what makes the breakdown reconcile with the number in the entry's cost
+/// column, so work nobody has named shows up as a gap rather than as silence,
+/// and the work that put the result on the screen is not the operation's to
+/// answer for. So the order is the operation's stages, then `elsewhere`, then
+/// the overhead under a rule.
 pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
-    match entry.detail.get(within) {
+    let split = overhead_at(entry);
+    let elsewhere = ActionLog::elsewhere(entry).is_some();
+    let index = if within < split {
+        Some(within)
+    } else if within == split && elsewhere {
+        None
+    } else {
+        Some(within - usize::from(elsewhere))
+    };
+    match index.and_then(|index| entry.detail.get(index)) {
         Some(Detail::Phase {
             name,
             depth,
@@ -420,6 +469,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
             indent: 2 * usize::from(*depth),
             marker: "",
             warn: false,
+            rules_above: *name == ActionLog::OVERHEAD,
             text: format!(
                 "{name}{}{}",
                 // A stage that ran once is drawn as it would have been anyway.
@@ -448,6 +498,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
                 Level::Warn => "!",
             },
             warn: matches!(level, Level::Warn),
+            rules_above: false,
             text: text.clone(),
         },
         None => DetailRow {
@@ -456,6 +507,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
             indent: 0,
             marker: "",
             warn: false,
+            rules_above: false,
             text: "elsewhere".to_string(),
         },
     }

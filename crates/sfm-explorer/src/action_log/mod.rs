@@ -338,6 +338,16 @@ impl ActionLog {
     /// rest of the operation out of its own entry.
     pub(crate) const DETAIL_EVENTS: usize = 128;
 
+    /// The row an entry gathers the frame's own stages under.
+    ///
+    /// Named for what it is from the operation's point of view. Putting a
+    /// reconstruction on the screen is not part of reading it off the disk,
+    /// and a reader who takes the upload for the load draws the wrong
+    /// conclusion about where a slow action went. It is the last thing an
+    /// expanded entry shows, under a rule, after everything the operation
+    /// itself accounted for.
+    pub(crate) const OVERHEAD: &'static str = "overhead: uploading and drawing";
+
     /// A log formatting in the system's local time zone.
     pub(crate) fn new() -> Self {
         Self::with_zone(TimeZone::system())
@@ -652,15 +662,19 @@ impl ActionLog {
         entry.detail = Self::capped(detail);
     }
 
-    /// The frame's rows, gathered under one `frame` row a level above them.
+    /// The frame's rows, gathered under one [`Self::OVERHEAD`] row a level above
+    /// them.
     ///
-    /// An operation and the frame that showed it are two different costs, and
-    /// drawn as siblings they read as one: a file is read and decoded on the
-    /// GUI thread, and the upload of what that produced happens in the next
-    /// frame because that is where uploads happen. Both are inside the wait,
-    /// which is why they are in one entry, and neither is the other, which is
-    /// why the frame keeps its own row. That row costs what its own stages cost
-    /// between them, so `elsewhere` is unchanged by the gathering.
+    /// Uploading a reconstruction to the GPU is not part of reading it off the
+    /// disk. It happens because the document changed and it happens in the next
+    /// frame, since that is where uploads happen, and it is inside the wait the
+    /// entry reports, which is why one entry carries both. It is still not the
+    /// operation, so it is named as the overhead it is and the panel rules a
+    /// line above it.
+    ///
+    /// That row costs what its own stages cost between them, so `elsewhere` is
+    /// unchanged by the gathering and the entry still reconciles with its own
+    /// headline.
     ///
     /// How many entries only waited for this frame is the row's note rather
     /// than a line of its own: it is a fact about the frame, and it belongs
@@ -679,7 +693,7 @@ impl ActionLog {
         });
         let mut rows = Vec::with_capacity(frame.len() + 1);
         rows.push(Detail::Phase {
-            name: "frame",
+            name: Self::OVERHEAD,
             depth: 0,
             took,
             cpu: None,
@@ -961,8 +975,16 @@ impl ActionLog {
     /// entry's on the clipboard as it does in the panel.
     fn detail_line(entry: &Entry, row: usize) -> String {
         let row = panel::detail_row(entry, row);
+        // The rule the panel paints above the overhead, in the one spelling a
+        // text buffer has for it. Without it a pasted breakdown reads as though
+        // the operation did the uploading.
+        let rule = if row.rules_above {
+            format!("{:19}  {:<6}  {:>7}  ---\n", "", "", "")
+        } else {
+            String::new()
+        };
         format!(
-            "{:19}  {:<6}  {:>7}  {}",
+            "{rule}{:19}  {:<6}  {:>7}  {}",
             "",
             "",
             row.cost,
