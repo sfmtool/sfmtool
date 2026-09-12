@@ -25,7 +25,7 @@ use crate::camera::distortion::bspline::{
 use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::progress::Progress;
-use crate::progress_note;
+use crate::progress_info;
 use crate::reconstruction::point_estimation::{
     estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet,
     PointDistance, PointRules,
@@ -2072,6 +2072,25 @@ fn bundle_adjust_staged(
     // A share of the range per round. Even shares, because the rounds run the
     // same solve over a tightening trim and none of them is predictably the
     // expensive one; an estimate, like every other set of weights.
+    // The schedule belongs to the solve rather than to any one round: the
+    // rounds fold into a single row for a reader, and a trim that is true of
+    // only the round that happened to run last is worse than no trim at all.
+    //
+    // Not said at all for an empty schedule, which is how a caller asks for the
+    // residuals at the state it handed over: no round runs, so there is no
+    // schedule to report and "0 rounds" is noise in front of the answer.
+    if !schedule.is_empty() {
+        progress_info!(
+            progress,
+            "{} rounds, trim {} px",
+            schedule.len(),
+            schedule
+                .iter()
+                .map(|stage| format!("{}", stage.trim_px))
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+    }
     let rounds = progress.split_evenly(schedule.len());
     for ((rnd, stage), p_round) in schedule.iter().enumerate().zip(rounds) {
         // Between rounds the poses and the points hold what the last round
@@ -2079,13 +2098,7 @@ fn bundle_adjust_staged(
         if progress.is_cancelled() {
             break;
         }
-        let mut round = p_round.phase("round");
-        progress_note!(
-            round,
-            "trim {} px, loss scale {}",
-            stage.trim_px,
-            stage.loss_scale
-        );
+        let round = p_round.phase("round");
         let cam_now = if opt_bspline {
             cam.with_focal_bspline(f, &bspline)
         } else {

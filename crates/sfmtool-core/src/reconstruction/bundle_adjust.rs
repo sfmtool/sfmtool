@@ -419,6 +419,11 @@ pub fn bundle_adjust(
         options.min_obs,
         &residuals,
     );
+    let (median_before, measured) = median_finite(&before.residual_norms);
+    progress_info!(
+        residuals,
+        "median {median_before:.3} px over {measured} observations"
+    );
     drop(residuals);
 
     let solve = p_solve.phase("solve");
@@ -443,6 +448,11 @@ pub fn bundle_adjust(
         options.min_track,
         options.min_obs,
         &solve,
+    );
+    let (median_after, measured) = median_finite(&solved.residual_norms);
+    progress_info!(
+        solve,
+        "median {median_after:.3} px over {measured} observations"
     );
     drop(solve);
     // A stopped solve broke off between rounds, so what it holds is the state
@@ -638,6 +648,28 @@ fn median_residual(residuals: &[f64], obs_pt: &[u32], keep: &[bool]) -> f64 {
         return f64::NAN;
     }
     median_in_place(&mut kept)
+}
+
+/// The median of the residuals that projected, and how many did.
+///
+/// Deliberately not [`median_residual`], which is the report's figure and is
+/// restricted to the points the solve kept: that population is not known until
+/// the solve has finished, so a "before" measured over it could not be reported
+/// while the stage that measured it was still open. This is over everything
+/// that projected, which is what makes the before and after lines an operation
+/// reports comparable with each other. Both say what they counted, so a reader
+/// can see when they and the report are answering over different populations.
+fn median_finite(residuals: &[f64]) -> (f64, usize) {
+    let mut finite: Vec<f64> = residuals
+        .iter()
+        .copied()
+        .filter(|r| r.is_finite())
+        .collect();
+    let measured = finite.len();
+    if finite.is_empty() {
+        return (f64::NAN, 0);
+    }
+    (median_in_place(&mut finite), measured)
 }
 
 #[cfg(test)]

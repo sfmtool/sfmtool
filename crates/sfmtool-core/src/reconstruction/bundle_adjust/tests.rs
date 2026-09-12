@@ -807,8 +807,7 @@ fn a_recorded_run_names_its_stages() {
         ]
     );
 
-    // The kernel's rounds sit under the solve, one per schedule round, each
-    // saying what it trimmed at.
+    // The kernel's rounds sit under the solve, one per schedule round.
     let rounds: Vec<_> = collector
         .left()
         .into_iter()
@@ -816,10 +815,18 @@ fn a_recorded_run_names_its_stages() {
         .collect();
     assert_eq!(rounds.len(), DEFAULT_SCHEDULE.len());
     assert!(rounds.iter().all(|(_, depth, _)| *depth == 1), "{rounds:?}");
-    assert_eq!(
-        rounds[0].2.as_deref(),
-        Some("trim 50 px, loss scale 5"),
-        "{rounds:?}"
+
+    // The schedule is the solve's, not any one round's: the rounds fold into a
+    // single row for a reader, and a trim true only of whichever ran last would
+    // be worse than no trim at all.
+    let trims = format!(
+        "{} rounds, trim {} px",
+        DEFAULT_SCHEDULE.len(),
+        DEFAULT_SCHEDULE
+            .iter()
+            .map(|stage| format!("{}", stage.trim_px))
+            .collect::<Vec<_>>()
+            .join("/")
     );
 
     // Detail is off, so the stages inside an LM iteration are not recorded.
@@ -831,18 +838,34 @@ fn a_recorded_run_names_its_stages() {
         "detail was off"
     );
 
-    // And the size of the problem is stated once, beside the stages rather
-    // than inside one of them.
+    // The size of the problem is stated once, beside the stages rather than
+    // inside one of them; the schedule under the solve that runs it and not
+    // under the empty-schedule call that runs no round; and a median under
+    // each of the two stages that measured one, so the pair reads as a before
+    // and an after over the same population.
+    let obs = source.point_set.tracks.len();
+    let said = collector.messages();
     assert_eq!(
-        collector.messages(),
-        [(
-            Level::Info,
-            0,
-            format!(
-                "{IMAGES} images, {POINTS} points, {} observations",
-                source.point_set.tracks.len()
-            )
-        )]
+        said.iter().map(|(_, depth, _)| *depth).collect::<Vec<_>>(),
+        [0, 1, 1, 1],
+        "{said:?}"
+    );
+    assert_eq!(
+        said[0].2,
+        format!("{IMAGES} images, {POINTS} points, {obs} observations")
+    );
+    assert_eq!(said[2].2, trims);
+    let median = |said: &str| {
+        said.strip_prefix("median ")
+            .and_then(|rest| rest.strip_suffix(&format!(" px over {obs} observations")))
+            .unwrap_or_else(|| panic!("not a median line: {said:?}"))
+            .parse::<f64>()
+            .expect("a median in px")
+    };
+    let (before, after) = (median(&said[1].2), median(&said[3].2));
+    assert!(
+        before > after,
+        "the adjustment reported no improvement: {before} then {after}"
     );
 }
 

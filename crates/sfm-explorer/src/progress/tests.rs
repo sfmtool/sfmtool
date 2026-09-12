@@ -246,7 +246,7 @@ fn a_message_between_two_foldable_phases_keeps_its_place() {
 /// A note survives a trip through the loop that says nothing, so a `reused` is
 /// not erased by the next run.
 #[test]
-fn a_folded_row_keeps_the_newest_note_anything_said() {
+fn a_silent_run_leaves_an_earlier_note_standing() {
     let collector = collector();
     let progress = collector.progress();
     {
@@ -256,11 +256,75 @@ fn a_folded_row_keeps_the_newest_note_anything_said() {
     drop(progress.phase("patch atlas"));
 
     let detail = collector.take();
-    let [Detail::Phase { note, runs, .. }] = &detail[..] else {
+    let [Detail::Phase {
+        note,
+        note_last,
+        runs,
+        ..
+    }] = &detail[..]
+    else {
         panic!("expected one row, got {:?}", rows(&detail));
     };
     assert_eq!(note.as_deref(), Some("reused"));
+    assert_eq!(*note_last, None, "silence was read as a disagreement");
     assert_eq!(*runs, 2);
+}
+
+/// One run's words are not true of a row that folded three of them, so the row
+/// keeps both ends instead of asserting whichever ran last.
+#[test]
+fn runs_that_said_different_things_leave_both_ends_on_the_row() {
+    let collector = collector();
+    let progress = collector.progress();
+    for trim in ["trim 50 px", "trim 20 px", "trim 4 px"] {
+        let mut round = progress.phase("round");
+        round.note(format_args!("{trim}"));
+    }
+
+    let detail = collector.take();
+    let [Detail::Phase {
+        note,
+        note_last,
+        runs,
+        ..
+    }] = &detail[..]
+    else {
+        panic!("expected one row, got {:?}", rows(&detail));
+    };
+    assert_eq!(
+        note.as_deref(),
+        Some("trim 50 px"),
+        "the first end was lost"
+    );
+    assert_eq!(
+        note_last.as_deref(),
+        Some("trim 4 px"),
+        "the last end was lost"
+    );
+    assert_eq!(*runs, 3);
+}
+
+/// A row whose runs came back to what the first one said carries one note,
+/// since both ends agree and `first ... last` would read as a span that is not
+/// there.
+#[test]
+fn runs_that_came_back_to_the_first_note_carry_one() {
+    let collector = collector();
+    let progress = collector.progress();
+    for note in ["reused", "17 images", "reused"] {
+        let mut thumbnails = progress.phase("thumbnails");
+        thumbnails.note(format_args!("{note}"));
+    }
+
+    let detail = collector.take();
+    let [Detail::Phase {
+        note, note_last, ..
+    }] = &detail[..]
+    else {
+        panic!("expected one row, got {:?}", rows(&detail));
+    };
+    assert_eq!(note.as_deref(), Some("reused"));
+    assert_eq!(*note_last, None);
 }
 
 // -- The mirror ---------------------------------------------------------

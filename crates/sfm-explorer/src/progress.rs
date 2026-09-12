@@ -75,8 +75,12 @@ pub(crate) enum Detail {
         /// wall is not eight seconds of anybody's wait.
         cpu: Option<Duration>,
         /// What the stage said it did, for the column beside its time, from
-        /// the most recent run that said anything.
+        /// the first run that said anything.
         note: Option<String>,
+        /// What the last run said, where it differed from the first. A folded
+        /// row shows both ends rather than asserting one run's words of all of
+        /// them, and rather than saying nothing and losing them both.
+        note_last: Option<String>,
         /// How many times the stage ran under this parent. 1 for a stage that
         /// ran once, which is drawn with no count at all.
         runs: u32,
@@ -299,6 +303,7 @@ impl State {
                 took: Duration::ZERO,
                 cpu: None,
                 note: None,
+                note_last: None,
                 runs: 0,
             });
             rows.len() - 1
@@ -321,7 +326,8 @@ impl State {
         let Some(Detail::Phase {
             name: folded,
             took: total,
-            note: kept,
+            note: first,
+            note_last: last,
             runs,
             ..
         }) = self.rows.get_mut(row)
@@ -331,10 +337,17 @@ impl State {
         debug_assert_eq!(*folded, name, "a phase closed under another's row");
         *total += took;
         *runs += 1;
-        // A run that says nothing leaves standing what an earlier run said, so
-        // a `reused` is not erased by the next trip through the loop.
+        // A note is a claim about what the stage did, and one run's words are
+        // not true of a folded row unless every run said them. So the row keeps
+        // both ends: the first thing any run said, and the last, where the two
+        // differ. A run that says nothing is not a disagreement, so a `reused`
+        // survives the next silent trip through the loop.
         if let Some(note) = note {
-            *kept = Some(note.to_string());
+            match first.as_deref() {
+                None => *first = Some(note.to_string()),
+                Some(said) if said == note => *last = None,
+                Some(_) => *last = Some(note.to_string()),
+            }
         }
     }
 

@@ -707,6 +707,7 @@ fn phase(name: &'static str, depth: u8, ms: u64, cpu_ms: Option<u64>) -> Detail 
         took: Duration::from_millis(ms),
         cpu: cpu_ms.map(Duration::from_millis),
         note: None,
+        note_last: None,
         runs: 1,
     }
 }
@@ -1029,6 +1030,7 @@ fn folded(name: &'static str, depth: u8, millis: u64, note: Option<&str>, runs: 
         took: ms(millis),
         cpu: None,
         note: note.map(str::to_string),
+        note_last: None,
         runs,
     }
 }
@@ -1292,9 +1294,15 @@ fn a_folded_phase_paints_its_count_and_one_that_ran_once_paints_none() {
         texts.iter().any(|text| text == "thumbnails  reused"),
         "a phase that ran once carried a count, or lost its note: {texts:?}",
     );
+    // A sub-millisecond stage reads the same here as in the entry column it
+    // breaks down, rather than in a spelling of its own.
     assert!(
-        texts.iter().any(|text| text == "--"),
-        "a phase that cost nothing worth printing did not say so: {texts:?}",
+        texts.iter().any(|text| text == "<1 ms"),
+        "a stage under a millisecond was spelled differently to its entry: {texts:?}",
+    );
+    assert!(
+        !texts.iter().any(|text| text == "--"),
+        "a stage still renders a dash of its own: {texts:?}",
     );
 }
 
@@ -1433,5 +1441,26 @@ fn two_expanded_entries_keep_every_row_after_them_in_place() {
             "Adjusted delta",
             "solve",
         ],
+    );
+}
+
+/// A folded row whose runs said different things paints both ends. One end on
+/// its own would be a claim about the row that only one of its runs supports.
+#[test]
+fn a_folded_note_paints_both_ends_when_the_runs_disagreed() {
+    let mut log = log();
+    let mut rounds = folded("round", 1, 40, Some("trim 50 px"), 3);
+    if let Detail::Phase { note_last, .. } = &mut rounds {
+        *note_last = Some("trim 4 px".to_string());
+    }
+    record_settled(&mut log, "Bundle adjusted run_a", ms(100), vec![rounds]);
+    log.toggle_expanded(newest(&log));
+
+    let texts = painted(&mut log);
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "round x3  trim 50 px ... trim 4 px"),
+        "{texts:?}",
     );
 }

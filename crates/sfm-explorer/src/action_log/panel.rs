@@ -410,9 +410,10 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
             took,
             cpu,
             note,
+            note_last,
             runs,
         }) => DetailRow {
-            cost: format_phase_took(*took),
+            cost: ActionLog::format_took(*took),
             cpu: cpu
                 .map(|cpu| format!("cpu {}", ActionLog::format_took(cpu)))
                 .unwrap_or_default(),
@@ -428,10 +429,14 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
                     String::new()
                 },
                 // `reused` is the useful one: it is how a reader tells a stage
-                // that was skipped from one that was merely fast.
-                note.as_deref()
-                    .map(|note| format!("  {note}"))
-                    .unwrap_or_default(),
+                // that was skipped from one that was merely fast. A folded row
+                // whose runs said different things shows both ends, since
+                // neither end on its own is true of the row.
+                match (note.as_deref(), note_last.as_deref()) {
+                    (Some(first), Some(last)) => format!("  {first} ... {last}"),
+                    (Some(only), None) => format!("  {only}"),
+                    (None, _) => String::new(),
+                },
             ),
         },
         Some(Detail::Message { level, depth, text }) => DetailRow {
@@ -446,7 +451,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
             text: text.clone(),
         },
         None => DetailRow {
-            cost: format_phase_took(ActionLog::elsewhere(entry).unwrap_or_default()),
+            cost: ActionLog::format_took(ActionLog::elsewhere(entry).unwrap_or_default()),
             cpu: String::new(),
             indent: 0,
             marker: "",
@@ -471,20 +476,6 @@ pub(super) fn detail_text(row: &DetailRow) -> String {
         format!("  {}", row.cpu)
     };
     format!("{}{marker}{}{cpu}", " ".repeat(row.indent), row.text)
-}
-
-/// A stage's cost for the column beside its name.
-///
-/// `--` below a millisecond rather than the entry column's `<1 ms`: a stage
-/// that cost nothing worth printing is usually one that did not really run,
-/// and its note is what says which, `reused` for the skipped one against
-/// nothing at all for the one that was merely fast.
-fn format_phase_took(took: std::time::Duration) -> String {
-    if took < std::time::Duration::from_millis(1) {
-        "--".to_string()
-    } else {
-        ActionLog::format_took(took)
-    }
 }
 
 // ── Cells ───────────────────────────────────────────────────────────────
