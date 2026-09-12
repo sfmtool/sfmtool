@@ -466,7 +466,9 @@ place:
                       4.1 ms  undo
                       0.3 ms    history step
                       3.8 ms    selection follow
-                   2353.8 ms  frame
+                      2.1 ms  elsewhere
+                              ------------------------------------------------
+                   2353.8 ms  overhead: uploading and drawing
                    1874.2 ms    uploads
                    1203.4 ms      points
                       <1 ms      thumbnails  reused
@@ -475,7 +477,6 @@ place:
                     167.6 ms      track rays
                     412.0 ms    scene render
                      67.6 ms    egui pass
-                      2.1 ms  elsewhere
 ```
 
 and with detail on, a bundle adjustment reads as a transcript:
@@ -525,12 +526,16 @@ them, and nothing for collapsed ones.
 ### The line that makes it add up
 
 `elsewhere` is the entry's `took` minus the sum of its top-level wall-clock
-phases. It is always last, never nested, and it is the reason the breakdown can
-be trusted: an expanded entry reconciles with the number in its own cost column
-by construction, so a phase nobody has instrumented shows up as a gap rather
-than as silence. When `elsewhere` dominates, the interesting work has no name
-yet, and the panel says so instead of implying the named phases are the whole
-story.
+phases. It is never nested, and it is the reason the breakdown can be trusted:
+an expanded entry reconciles with the number in its own cost column by
+construction, so a phase nobody has instrumented shows up as a gap rather than
+as silence. When `elsewhere` dominates, the interesting work has no name yet,
+and the panel says so instead of implying the named phases are the whole story.
+
+It closes the **operation's** account rather than the entry's, so it sits above
+the rule and the overhead sits below it. Unnamed time is work the operation did
+and nobody has instrumented, which is a gap somebody can close; the overhead is
+not the operation's to answer for at all.
 
 `cpu` columns are excluded from that arithmetic. A kernel that reports
 thread-summed CPU time alongside its wall time can show eight seconds of CPU
@@ -585,17 +590,24 @@ times, once per row that happened to be pending. Those rows keep an honest
 `took`, which is the wait they really had. A frame that stamps nothing has
 nobody to charge and discards its events.
 
-On the entry they reach, they sit **under one `frame` row** rather than beside
-the operation's own stages. An operation and the frame that showed it are two
-different costs: a file is read and decoded on the GUI thread, and the upload of
-what that produced happens in the next frame, because that is where uploads
-happen. Both are inside the wait, which is why one entry carries them; neither
-is the other, which is why the frame keeps its own row. That row costs what its
-own stages cost between them, so `elsewhere` is what it was before the
-gathering, and an expanded entry reads as two halves and a remainder. How many
-entries only waited for this frame is the row's note, `also settled 2 earlier
-entries` or `1 earlier entry`, since it is a fact about the frame and belongs
-beside it.
+On the entry they reach they sit **under one `overhead: uploading and drawing`
+row**, last, with a rule above it. Uploading a reconstruction to the GPU is not
+part of reading it off the disk: it happens because the document changed, it
+happens in the next frame because that is where uploads happen, and it is inside
+the wait, which is why one entry carries both. It is still not the operation,
+and an entry that does not say so lets a reader take the upload for the load and
+draw the wrong conclusion about where a slow action went.
+
+So an expanded entry reads in three parts: what the operation did, then
+`elsewhere` closing its account, then a rule, then the overhead. That row costs
+what its own stages cost between them, so `elsewhere` is what it was before the
+gathering and the entry still reconciles with its headline. How many entries
+only waited for this frame is the row's note, `also settled 2 earlier entries`
+or `1 earlier entry`, since it is a fact about the frame and belongs beside it.
+
+The rule is painted along the top of the overhead row's own rect rather than
+given a row of its own, so the list keeps the uniform row height its
+virtualization depends on. The clipboard spells it `---`.
 
 One consequence is worth stating because it looks like a bug otherwise. An entry
 written during the egui pass, which is every click, key and menu item, does not
