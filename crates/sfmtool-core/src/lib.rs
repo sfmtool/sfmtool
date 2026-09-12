@@ -18,6 +18,8 @@
 //! - [`patch`] — patch clouds and patch-normal refinement
 //! - [`spatial`] — generic KD-tree point-cloud utility used across groups, and
 //!   the per-image keypoint reach enumeration in the pixel domain
+//! - [`progress`] — the parameter a long-running call reports its phases,
+//!   messages and counts through, and is told to stop by
 //!
 //! File-format I/O is provided by the sibling crates `sift-format`,
 //! `sfmr-format`, `matches-format`, and `camrig-format`.
@@ -28,6 +30,7 @@ pub mod features;
 pub mod geometry;
 pub mod numeric;
 pub mod patch;
+pub mod progress;
 pub mod reconstruction;
 pub mod spatial;
 pub mod spherical;
@@ -37,6 +40,7 @@ pub mod spherical;
 // `geometry::{RigidTransform, RotQuaternion, Se3Transform}`, etc.).
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
+pub use progress::Progress;
 pub use reconstruction::{
     add_observation, create_point, move_camera, remove_observation, AddObservationError,
     AddObservationOptions, AddObservationReport, CreatePointError, CreatePointOptions,
