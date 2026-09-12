@@ -575,10 +575,10 @@ impl ActionLog {
     /// keystroke -- has not, and waits for the next frame.
     ///
     /// `frame` is what the frame itself reported: the uploads, the two draws
-    /// and the present, which are nobody's operation. They are appended to
-    /// every entry this stamps, because one upload and one draw showed all of
-    /// them, and each such entry says how many others it shared the frame
-    /// with. A frame that stamps nothing has nobody to charge and drops them.
+    /// and the present. They go to the newest entry this stamps, which is the
+    /// action whose effect the frame was uploading, and that entry says how
+    /// many others waited alongside it. A frame that stamps nothing has nobody
+    /// to charge and drops them.
     ///
     /// Called once per frame from the viewer's frame loop, at the end.
     ///
@@ -617,43 +617,47 @@ impl ActionLog {
         self.share_frame(&stamped, frame);
     }
 
-    /// Give every entry `stamped` the frame's own events, and tell it how many
-    /// others got the same ones.
+    /// Give the frame's own events to the one entry they belong to.
     ///
-    /// The sharing line is worth the row: a phase table that is the whole of
-    /// three entries at once is not the breakdown of any one of them, and
-    /// without the line a reader would take one frame's uploads to be the cost
-    /// of the one action they are looking at.
+    /// That is the newest entry the frame stamped, because the uploads reflect
+    /// the state as of the last action recorded before they began: the earlier
+    /// entries a frame settles did not cause its work, they waited through it.
+    /// Copying the table onto all of them instead would make a log of a
+    /// startup read as though the file had been opened three times, once per
+    /// row that happened to be pending. Those rows keep an honest `took`, which
+    /// is the wait they really had, and say nothing about work that was not
+    /// theirs; this one says how many waited with it.
     fn share_frame(&mut self, stamped: &[u64], frame: Vec<Detail>) {
-        if frame.is_empty() || stamped.is_empty() {
+        let Some(&newest) = stamped.iter().max() else {
+            return;
+        };
+        if frame.is_empty() {
             return;
         }
-        let others = stamped.len() - 1;
-        // From the back, and no further than the last one found: what a frame
-        // stamps was written in it, so they are the newest entries there are.
-        let mut left = stamped.len();
-        for entry in self.entries.iter_mut().rev() {
-            if left == 0 {
-                break;
-            }
-            if !stamped.contains(&entry.revision) {
-                continue;
-            }
-            left -= 1;
-            let mut detail = std::mem::take(&mut entry.detail);
-            detail.extend(frame.iter().cloned());
-            if others > 0 {
-                let entries = if others == 1 { "entry" } else { "entries" };
-                detail.push(Detail::Message {
-                    level: Level::Info,
-                    depth: 0,
-                    text: format!("frame shared with {others} other {entries}"),
-                });
-            }
-            // Capped again rather than trusted: the write capped what the
-            // operation reported, and the frame's events arrive after it.
-            entry.detail = Self::capped(detail);
+        let waited = stamped.len() - 1;
+        // From the back: what a frame stamps was written in it, so the entry
+        // it belongs to is among the newest there are.
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .rev()
+            .find(|entry| entry.revision == newest)
+        else {
+            return;
+        };
+        let mut detail = std::mem::take(&mut entry.detail);
+        detail.extend(frame);
+        if waited > 0 {
+            let entries = if waited == 1 { "entry" } else { "entries" };
+            detail.push(Detail::Message {
+                level: Level::Info,
+                depth: 0,
+                text: format!("frame also settled {waited} earlier {entries}"),
+            });
         }
+        // Capped again rather than trusted: the write capped what the
+        // operation reported, and the frame's events arrive after it.
+        entry.detail = Self::capped(detail);
     }
 
     /// Whether `entry` should replace the newest entry rather than follow it.

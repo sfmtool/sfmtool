@@ -927,27 +927,44 @@ fn settle_gives_the_frames_events_to_the_entry_it_stamps() {
     );
 }
 
+/// The frame belongs to the action whose effect it uploaded, which is the last
+/// one recorded before the uploads began. An earlier entry that merely waited
+/// through the same frame is not a second copy of that work: a log of a startup
+/// where three rows were pending would otherwise read as though the file had
+/// been opened three times.
 #[test]
-fn two_entries_settled_by_one_frame_carry_it_and_say_they_shared_it() {
+fn one_frame_goes_to_the_entry_that_caused_it_and_not_to_the_ones_that_waited() {
     let mut log = log();
-    log.record_at(at(0.0), Kind::Edit, None, false, "Deleted point 7");
-    log.record_at(at(0.1), Kind::Edit, None, false, "Deleted point 8");
+    log.record_at(at(0.0), Kind::Session, None, false, "SfM Explorer started");
+    log.record_at(
+        at(0.1),
+        Kind::File,
+        None,
+        false,
+        "Opened dino_dog_toy-embedded",
+    );
 
     log.settle(Instant::now(), frame_events());
 
     let entries: Vec<&Entry> = log.entries().collect();
-    assert_eq!(
-        phase_rows(&entries[0].detail),
-        phase_rows(&entries[1].detail)
+    assert!(
+        entries[0].detail.is_empty(),
+        "an entry that only waited claimed the frame's work: {:?}",
+        entries[0].detail,
     );
-    for entry in entries {
-        assert_eq!(
-            message_texts(&entry.detail),
-            ["frame shared with 1 other entry"],
-            "one upload and one draw showed both, and {} does not say so",
-            entry.text,
-        );
-    }
+    assert!(
+        entries[0].took.is_some(),
+        "the entry that waited lost its own cost",
+    );
+    assert_eq!(
+        phase_rows(&entries[1].detail),
+        phase_rows(&frame_events()),
+        "the entry that caused the frame did not get it",
+    );
+    assert_eq!(
+        message_texts(&entries[1].detail),
+        ["frame also settled 1 earlier entry"],
+    );
 }
 
 #[test]

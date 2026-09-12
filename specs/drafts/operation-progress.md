@@ -570,13 +570,20 @@ entry when it finishes. There is nothing to attribute: the collector *is* that
 entry's detail. This is the whole of the attribution story for an operation's
 own work, and it is why the parameter is worth its virality.
 
-**The frame's collector** lives on `App` and holds what is not any operation's:
-`uploads`, `scene render`, `egui pass`, `present`. Those genuinely belong to
-whatever entries the frame settles, because one upload and one draw showed all
-of them, so `ActionLog::settle` appends the frame's events to every entry it
-stamps and says `frame shared with 2 other entries`, or `1 other entry`, when
-there was more than
-one. A frame that stamps nothing discards its events.
+**The frame's collector** lives on `App` and holds `uploads`, `scene render`,
+`egui pass` and `present`, which no operation runs but which are the second half
+of what an operation costs: a file opens on the GUI thread and reaches the
+screen an upload later, and both halves are inside the wait `took` measures.
+
+They go to **one** entry, the newest the frame stamps. That is the action whose
+effect the frame was uploading, because the uploads reflect the state as of the
+last thing recorded before they began. The earlier entries a frame settles did
+not cause its work, they waited through it, and copying the table onto them as
+well would make a log of a startup read as though the file had been opened three
+times, once per row that happened to be pending. Those rows keep an honest
+`took`, which is the wait they really had; the row that owns the frame says
+`frame also settled 2 earlier entries`, or `1 earlier entry`. A frame that
+stamps nothing has nobody to charge and discards its events.
 
 One consequence is worth stating because it looks like a bug otherwise. An entry
 written during the egui pass, which is every click, key and menu item, does not
