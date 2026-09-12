@@ -34,6 +34,7 @@ mod metrics;
 mod platform;
 mod point_ids;
 mod point_track_detail;
+mod progress;
 mod resect;
 mod scene;
 mod scene_graph;

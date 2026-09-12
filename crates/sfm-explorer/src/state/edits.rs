@@ -25,6 +25,7 @@
 //!   `RowMap::by_scan` reads off that call's input and output.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::CameraIntrinsics;
@@ -34,6 +35,7 @@ use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
 use crate::document::{CreatedPoints, PointMap, VersionSerial};
+use crate::progress::Collector;
 use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
@@ -718,14 +720,25 @@ impl AppState {
     /// by them still mean what they meant. Records its own outcome as one Action
     /// Log entry; the `Err` is for the caller to know the node's caches are
     /// still good, not to be logged again.
+    ///
+    /// The entry carries what the solve reported: this call's own stages, and
+    /// underneath them the four the kernel names for itself. It is recorded
+    /// with [`crate::action_log::ActionLog::record_done`] from the instant
+    /// below, so the row says how long the adjustment took rather than how long
+    /// writing the row took.
     pub fn bundle_adjust(
         &mut self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
     ) -> Result<(), String> {
-        match self.bundle_adjust_inner(id, options) {
+        let started = Instant::now();
+        // Detail off: the switch that turns it on is the Action Log toolbar's,
+        // and the overview phases are the ones this row is read for.
+        let collector = Collector::new(false);
+        match self.bundle_adjust_inner(id, options, &collector) {
             Ok(message) => {
-                self.action_log.record(Kind::Edit, message);
+                self.action_log
+                    .record_done(Kind::Edit, started, message, collector.take());
                 Ok(())
             }
             Err(message) => {
@@ -741,6 +754,7 @@ impl AppState {
         &mut self,
         id: ReconId,
         options: &sfmtool_core::BundleAdjustOptions,
+        collector: &Collector,
     ) -> Result<String, String> {
         let index = self
             .scene
@@ -763,6 +777,7 @@ impl AppState {
             if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
                 (None, None)
             } else {
+                let _phase = collector.phase("materialise");
                 let (value, map) = edited.materialize();
                 (Some(value), Some(PointMap::Rows(map)))
             };
@@ -771,13 +786,18 @@ impl AppState {
             None => &self.scene[index].history.current().base,
         };
 
+        // The kernel's own four stages nest directly under this call's, since
+        // the collector's `Progress` is at the top of the operation.
         let (adjusted, report) =
-            sfmtool_core::bundle_adjust(source, options, &sfmtool_core::Progress::none())
+            sfmtool_core::bundle_adjust(source, options, &collector.progress())
                 .map_err(|e| refuse(e.to_string()))?;
         // The solve drops the points it left unsupported and says how many, not
         // which; the map is read off its input and its output. The image table
         // is untouched, so no image map.
-        let scan = RowMap::by_scan(source, &adjusted, None).map_err(|e| refuse(e.to_string()))?;
+        let scan = {
+            let _phase = collector.phase("row map");
+            RowMap::by_scan(source, &adjusted, None).map_err(|e| refuse(e.to_string()))?
+        };
         let mut steps = Vec::new();
         steps.extend(mat_map);
         steps.push(PointMap::Rows(scan));
@@ -788,11 +808,14 @@ impl AppState {
             text.push_str(", focal released");
         }
         let node = &mut self.scene[index];
-        let serial = node.history.push(
-            EditedReconstruction::new(Arc::new(adjusted)),
-            map,
-            text.clone(),
-        );
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(
+                EditedReconstruction::new(Arc::new(adjusted)),
+                map,
+                text.clone(),
+            )
+        };
         let parent = version_before(node, serial);
         self.follow_selection_forward(id);
         let focal = if report.focal_released {

@@ -7,10 +7,13 @@
 //! whether two entries fold into one, are properties of the log rather than of
 //! the machine and the moment the tests happen to run on.
 
+use std::time::{Duration, Instant};
+
 use jiff::tz::{Offset, TimeZone};
 use jiff::Timestamp;
 
-use super::{show, ActionLog, Actor, Kind, Run};
+use super::{show, ActionLog, Actor, Entry, Kind, Run, Work};
+use crate::progress::{Collector, Detail};
 
 /// A log in a fixed zone, seven hours behind UTC, so a formatted row is the
 /// same string wherever the tests run.
@@ -673,4 +676,323 @@ fn a_settled_row_paints_what_it_cost_and_an_unsettled_one_paints_nothing() {
         texts.iter().any(|text| text == "Deleted point 8"),
         "{texts:?}"
     );
+}
+
+// -- The detail an operation reports -------------------------------------
+
+/// An entry built by hand, for the arithmetic [`ActionLog::elsewhere`] does.
+/// The clock is not involved, so what the sum comes to is a property of the
+/// function rather than of the machine.
+fn entry_with(took: Duration, detail: Vec<Detail>) -> Entry {
+    Entry {
+        revision: 1,
+        at: at(0.0),
+        actor: Actor::User,
+        kind: Kind::Edit,
+        run: None,
+        failed: false,
+        text: "Bundle adjusted run_a".to_string(),
+        took: Some(took),
+        detail,
+    }
+}
+
+/// A phase row, for the entries built by hand above.
+fn phase(name: &'static str, depth: u8, ms: u64, cpu_ms: Option<u64>) -> Detail {
+    Detail::Phase {
+        name,
+        depth,
+        took: Duration::from_millis(ms),
+        cpu: cpu_ms.map(Duration::from_millis),
+        note: None,
+        runs: 1,
+    }
+}
+
+/// Every phase row of the newest entry, as `(name, depth, runs)`.
+fn detail_phases(log: &ActionLog) -> Vec<(&'static str, u8, u32)> {
+    phase_rows(&log.entries().next_back().expect("an entry").detail)
+}
+
+/// The phase rows of one entry's detail.
+fn phase_rows(detail: &[Detail]) -> Vec<(&'static str, u8, u32)> {
+    detail
+        .iter()
+        .filter_map(|row| match row {
+            Detail::Phase {
+                name, depth, runs, ..
+            } => Some((*name, *depth, *runs)),
+            Detail::Message { .. } => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_operations_collector_becomes_that_entrys_detail_and_no_others() {
+    let mut log = log();
+    let collector = Collector::new(false);
+    drop(collector.phase("materialise"));
+    drop(collector.phase("push version"));
+
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        collector.take(),
+    );
+    log.record_at(at(1.0), Kind::Edit, None, false, "Deleted point 7");
+
+    let entries: Vec<&Entry> = log.entries().collect();
+    assert_eq!(
+        phase_rows(&entries[0].detail),
+        [("materialise", 0, 1), ("push version", 0, 1)],
+    );
+    assert!(
+        entries[1].detail.is_empty(),
+        "the next entry inherited the operation's detail: {:?}",
+        entries[1].detail,
+    );
+}
+
+/// `started` is when the work began, not when the row was written, so a long
+/// operation reports what it cost rather than what installing its row cost.
+#[test]
+fn record_done_times_from_when_the_work_began() {
+    let mut log = log();
+    let started = Instant::now()
+        .checked_sub(Duration::from_millis(120))
+        .expect("a clock with 120 ms behind it");
+    log.record_done(Kind::Edit, started, "Bundle adjusted run_a", Vec::new());
+    log.settle(Instant::now());
+
+    let took = log.entries().next_back().expect("an entry").took;
+    assert!(
+        took.is_some_and(|took| took >= Duration::from_millis(120)),
+        "the row was timed from the write rather than from the work: {took:?}",
+    );
+}
+
+/// Folding is the collector's and happens as the events arrive, so the cap
+/// counts rows kept rather than phases opened.
+#[test]
+fn folding_happens_before_the_cap() {
+    let mut log = log();
+    let collector = Collector::new(false);
+    {
+        let solve = collector.phase("solve");
+        for _ in 0..600 {
+            drop(solve.phase("linearise"));
+        }
+    }
+
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        collector.take(),
+    );
+
+    assert_eq!(
+        detail_phases(&log),
+        [("solve", 0, 1), ("linearise", 1, 600)],
+        "a phase in a long loop truncated the entry instead of folding",
+    );
+}
+
+#[test]
+fn past_the_cap_the_entry_keeps_the_first_events_and_says_how_many_went() {
+    let mut log = log();
+    let collector = Collector::new(false);
+    let progress = collector.progress();
+    for i in 0..ActionLog::DETAIL_EVENTS + 17 {
+        // Messages, since two phases of one name under one parent would fold.
+        sfmtool_core::progress_info!(progress, "line {i}");
+    }
+
+    log.record_done(
+        Kind::Edit,
+        Instant::now(),
+        "Bundle adjusted run_a",
+        collector.take(),
+    );
+
+    let detail = &log.entries().next_back().expect("an entry").detail;
+    assert_eq!(
+        detail.len(),
+        ActionLog::DETAIL_EVENTS + 1,
+        "the cap, plus the line that says what went",
+    );
+    let Detail::Message { text, .. } = &detail[0] else {
+        panic!("the first row is not a message");
+    };
+    assert_eq!(
+        text, "line 0",
+        "the entry kept the tail rather than the head"
+    );
+    let Detail::Message { text, .. } = detail.last().expect("a last row") else {
+        panic!("the tally is not a message");
+    };
+    assert_eq!(text, "17 more events dropped");
+}
+
+/// A folded row is the newest value of the run, so it carries what that value
+/// reported and not what the value it replaced did.
+#[test]
+fn a_fold_takes_the_new_values_detail_and_drops_the_replaced_ones() {
+    let mut log = log();
+    let now = Instant::now();
+    log.write(
+        at(0.0),
+        Kind::Display,
+        POINT_SIZE,
+        false,
+        "Point size 3",
+        Work {
+            started: now,
+            detail: vec![phase("first", 0, 1, None)],
+        },
+    );
+    log.write(
+        at(0.5),
+        Kind::Display,
+        POINT_SIZE,
+        false,
+        "Point size 4",
+        Work {
+            started: now,
+            detail: vec![phase("second", 0, 1, None)],
+        },
+    );
+
+    assert_eq!(texts(&log), ["Point size 4"]);
+    assert_eq!(detail_phases(&log), [("second", 0, 1)]);
+}
+
+// -- `elsewhere`, the line that makes the breakdown add up ----------------
+
+#[test]
+fn elsewhere_is_took_minus_the_top_level_phases_and_ignores_cpu() {
+    let entry = entry_with(
+        Duration::from_millis(100),
+        vec![
+            phase("materialise", 0, 30, Some(900)),
+            phase("solve", 0, 50, None),
+            // A nested phase's cost is already inside its parent's.
+            phase("round", 1, 50, None),
+        ],
+    );
+    assert_eq!(
+        ActionLog::elsewhere(&entry),
+        Some(Duration::from_millis(20)),
+    );
+}
+
+#[test]
+fn elsewhere_is_none_before_the_entry_settles_and_with_no_phases() {
+    let mut unsettled = entry_with(Duration::ZERO, vec![phase("solve", 0, 50, None)]);
+    unsettled.took = None;
+    assert_eq!(ActionLog::elsewhere(&unsettled), None);
+
+    let unnamed = entry_with(Duration::from_millis(100), Vec::new());
+    assert_eq!(ActionLog::elsewhere(&unnamed), None);
+}
+
+/// The phases and the settle read the clock at different points, and a folded
+/// row sums wall times that may have overlapped, so the sum can exceed `took`.
+/// Zero is a reading; a negative duration would be a panic.
+#[test]
+fn elsewhere_reports_zero_rather_than_a_negative() {
+    let entry = entry_with(
+        Duration::from_millis(10),
+        vec![phase("solve", 0, 400, None)],
+    );
+    assert_eq!(ActionLog::elsewhere(&entry), Some(Duration::ZERO));
+}
+
+// -- The expansion set ---------------------------------------------------
+
+#[test]
+fn expansion_toggles_survives_new_entries_and_goes_with_clear() {
+    let mut log = log();
+    log.record_at(at(0.0), Kind::Edit, None, false, "Bundle adjusted run_a");
+    let revision = log.entries().next_back().expect("an entry").revision;
+
+    assert!(!log.is_expanded(revision), "an entry starts collapsed");
+    log.toggle_expanded(revision);
+    assert!(log.is_expanded(revision));
+
+    log.record_at(at(1.0), Kind::Edit, None, false, "Deleted point 7");
+    assert!(
+        log.is_expanded(revision),
+        "a new entry collapsed the one that was open",
+    );
+
+    log.toggle_expanded(revision);
+    assert!(
+        !log.is_expanded(revision),
+        "toggling twice did not collapse"
+    );
+
+    log.toggle_expanded(revision);
+    log.clear();
+    assert!(
+        !log.is_expanded(revision),
+        "Clear left an expansion whose entry is gone",
+    );
+}
+
+// -- End to end: one operation that really reports -----------------------
+
+/// The wiring test: a bundle adjustment names its own three stages, the kernel
+/// names its four underneath them, and the kernel's rounds fold into one row.
+#[test]
+fn a_headless_bundle_adjustment_records_its_stages_and_the_kernels() {
+    let mut state = crate::state::AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    state.scene[0].recon_mut().image_table.images[1].translation_xyz +=
+        nalgebra::Vector3::new(0.02, -0.015, 0.01);
+    // An overlay, so that the adjustment has something to materialise.
+    state
+        .delete_point(crate::scene::PointRef::new(id, 7))
+        .expect("a live point");
+
+    state
+        .bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("the fixture is well posed");
+
+    let entry = state
+        .action_log
+        .entries()
+        .next_back()
+        .expect("the adjustment's entry");
+    assert!(!entry.failed, "{}", entry.text);
+    let names: Vec<&'static str> = phase_rows(&entry.detail)
+        .into_iter()
+        .map(|(name, _, _)| name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "materialise",
+            "gather arrays",
+            "residuals before",
+            "solve",
+            "round",
+            "write back",
+            "row map",
+            "push version",
+        ],
+        "{:?}",
+        entry.detail,
+    );
+    let (depth, runs) = phase_rows(&entry.detail)
+        .into_iter()
+        .find(|(name, _, _)| *name == "round")
+        .map(|(_, depth, runs)| (depth, runs))
+        .expect("the kernel's rounds");
+    assert_eq!(depth, 1, "the rounds did not nest under the solve");
+    assert!(runs >= 1, "the rounds folded into nothing");
 }

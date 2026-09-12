@@ -32,12 +32,15 @@
 // loose end here.
 #![cfg_attr(not(feature = "mcp"), allow(dead_code))]
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
+use sfmtool_core::progress::Level;
+
+use crate::progress::Detail;
 
 mod panel;
 
@@ -190,6 +193,29 @@ impl Kind {
 /// log compares them, never composes them.
 pub(crate) type Run = Option<&'static str>;
 
+/// What a write is recording, past the fields every entry carries.
+///
+/// The two halves of "this already happened": when it began, and what it
+/// reported while it ran. An action the viewer performs as it records it has
+/// nothing to report and began just now, which is [`Work::just_now`].
+struct Work {
+    /// When the work being recorded began, which is what the entry's cost is
+    /// measured from.
+    started: Instant,
+    /// What it reported, before the cap at [`ActionLog::DETAIL_EVENTS`].
+    detail: Vec<Detail>,
+}
+
+impl Work {
+    /// An action with no breakdown, happening as it is recorded.
+    fn just_now() -> Self {
+        Work {
+            started: Instant::now(),
+            detail: Vec::new(),
+        }
+    }
+}
+
 /// One line of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
@@ -230,7 +256,15 @@ pub(crate) struct Entry {
     /// `None` also for an entry whose run folded before a frame could settle
     /// it: the fold gives the row a new revision, and the timing follows the
     /// row that survived.
-    pub took: Option<std::time::Duration>,
+    pub took: Option<Duration>,
+    /// What the operation reported, in the order it reported it.
+    ///
+    /// Empty for the great majority of entries, which are a state change too
+    /// small to have stages. An operation that took long enough to be worth
+    /// breaking down hands over the [`crate::progress::Collector`] it reported
+    /// into, and these are its rows, already folded and capped at
+    /// [`ActionLog::DETAIL_EVENTS`].
+    pub detail: Vec<Detail>,
 }
 
 /// The buffer, the recording rules, and the local zone the panel formats in.
@@ -255,6 +289,14 @@ pub(crate) struct ActionLog {
     /// `--no-default-features` build with no window, would otherwise grow it
     /// without limit.
     pending: Vec<(u64, Instant)>,
+    /// The revisions whose detail the panel is showing.
+    ///
+    /// Here rather than in egui's memory because it is the one piece of panel
+    /// state a headless test needs to drive, and the panel already takes a
+    /// `&mut ActionLog`. Keyed on the revision, so an expansion survives
+    /// entries dropping at [`ActionLog::CAPACITY`] and means nothing once its
+    /// entry is gone.
+    expanded: HashSet<u64>,
     /// The log's clock: one tick per write, whether the write appended an
     /// entry or folded into the newest one.
     ///
@@ -279,6 +321,15 @@ impl ActionLog {
     /// Largest gap between two like entries for the newer to replace the older.
     pub(crate) const COALESCE_WINDOW: SignedDuration = SignedDuration::from_secs(1);
 
+    /// Detail rows kept per entry. Past this the remainder is dropped and a
+    /// final line says how many.
+    ///
+    /// Applied after the collector has folded, so it bounds the rows an entry
+    /// carries rather than the phases the operation opened: a kernel that
+    /// opens one guard six hundred times leaves one row and cannot push the
+    /// rest of the operation out of its own entry.
+    pub(crate) const DETAIL_EVENTS: usize = 128;
+
     /// A log formatting in the system's local time zone.
     pub(crate) fn new() -> Self {
         Self::with_zone(TimeZone::system())
@@ -294,6 +345,7 @@ impl ActionLog {
             zone,
             dropped: 0,
             pending: Vec::new(),
+            expanded: HashSet::new(),
             revision: 0,
         }
     }
@@ -377,6 +429,47 @@ impl ActionLog {
         failed: bool,
         text: impl Into<String>,
     ) {
+        self.write(at, kind, run, failed, text, Work::just_now());
+    }
+
+    /// Record an entry for work that has already happened: `started` is when
+    /// that work began, `detail` what it reported.
+    ///
+    /// The one call a long operation uses. `started` is what makes a two-minute
+    /// solve report two minutes rather than the six milliseconds of the frame
+    /// that installed it; the entry still settles on the frame that draws the
+    /// result, like every other.
+    ///
+    /// A discrete act, like [`ActionLog::record`]: an operation big enough to
+    /// have a breakdown is not a value of a run.
+    pub(crate) fn record_done(
+        &mut self,
+        kind: Kind,
+        started: Instant,
+        text: impl Into<String>,
+        detail: Vec<Detail>,
+    ) {
+        self.write(
+            Timestamp::now(),
+            kind,
+            None,
+            false,
+            text,
+            Work { started, detail },
+        );
+    }
+
+    /// The one write. Every recording method above arrives here.
+    fn write(
+        &mut self,
+        at: Timestamp,
+        kind: Kind,
+        run: Run,
+        failed: bool,
+        text: impl Into<String>,
+        work: Work,
+    ) {
+        let Work { started, detail } = work;
         if self.mute > 0 {
             return;
         }
@@ -392,17 +485,21 @@ impl ActionLog {
             failed,
             text: text.into(),
             took: None,
+            detail: Self::capped(detail),
         };
         // The mirror is unconditional and precedes coalescing: a `RUST_LOG`
         // capture is the stream of what happened, and folding a run away is a
         // property of the panel's readability, not of the session.
         log::info!(target: "sfm_explorer::action_log", "{}", self.line(&entry));
         if self.coalesce(&entry) {
+            // The whole entry is replaced, detail included: a folded row is the
+            // newest value of the run, so it carries what that value reported
+            // and not what the value it replaced did.
             *self
                 .entries
                 .back_mut()
                 .expect("coalesce found a last entry") = entry;
-            self.await_timing();
+            self.await_timing(started);
             return;
         }
         if self.entries.len() >= Self::CAPACITY {
@@ -410,19 +507,46 @@ impl ActionLog {
             self.dropped += 1;
         }
         self.entries.push_back(entry);
-        self.await_timing();
+        self.await_timing(started);
     }
 
-    /// Put the entry just written in the queue waiting to be timed.
+    /// At most [`ActionLog::DETAIL_EVENTS`] rows, plus a line saying how many
+    /// were dropped.
     ///
-    /// After the write in both branches of `record_at`, coalescing included: a
+    /// The first rows rather than the last: an operation's shape is in the
+    /// order it did things, and a breakdown truncated at the front would say
+    /// nothing about where it started.
+    fn capped(mut detail: Vec<Detail>) -> Vec<Detail> {
+        if detail.len() <= Self::DETAIL_EVENTS {
+            return detail;
+        }
+        let dropped = detail.len() - Self::DETAIL_EVENTS;
+        detail.truncate(Self::DETAIL_EVENTS);
+        detail.push(Detail::Message {
+            level: Level::Info,
+            depth: 0,
+            text: format!("{dropped} more events dropped"),
+        });
+        detail
+    }
+
+    /// Put the entry just written in the queue waiting to be timed, from
+    /// `started`.
+    ///
+    /// `started` is the write itself for an action the viewer performs as it
+    /// records it, and the moment the work began for one recorded with
+    /// [`ActionLog::record_done`] after the fact. Either way what is stamped is
+    /// the wait, from the first thing that happened to the frame that showed
+    /// the result.
+    ///
+    /// After the write in both branches of `write`, coalescing included: a
     /// fold mints a new revision, so the folded row is the one that gets timed
     /// and the value it replaced drops out of the queue unstamped.
-    fn await_timing(&mut self) {
+    fn await_timing(&mut self, started: Instant) {
         if self.pending.len() >= Self::PENDING_CAPACITY {
             self.pending.remove(0);
         }
-        self.pending.push((self.revision, Instant::now()));
+        self.pending.push((self.revision, started));
     }
 
     /// How many writes are waiting to be timed. For the test that holds the
@@ -578,6 +702,54 @@ impl ActionLog {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.dropped = 0;
+        // The entries those expansions were holding open are gone.
+        self.expanded.clear();
+    }
+
+    /// Whether the panel is showing `revision`'s detail.
+    // The toggle column that calls this is the panel's, which is not drawn yet.
+    #[allow(dead_code)]
+    pub(crate) fn is_expanded(&self, revision: u64) -> bool {
+        self.expanded.contains(&revision)
+    }
+
+    /// Show `revision`'s detail, or stop showing it.
+    // As for `is_expanded` above.
+    #[allow(dead_code)]
+    pub(crate) fn toggle_expanded(&mut self, revision: u64) {
+        if !self.expanded.remove(&revision) {
+            self.expanded.insert(revision);
+        }
+    }
+
+    /// `took` minus the entry's top-level wall-clock phases, or `None` when it
+    /// has no cost yet or no phases.
+    ///
+    /// The line that makes an expanded entry add up: work nobody has named
+    /// shows as a gap rather than as silence, so the breakdown reconciles with
+    /// the number in the entry's own cost column by construction.
+    ///
+    /// Only depth 0 is subtracted, because a nested phase's cost is already
+    /// inside its parent's. A `cpu` figure is not subtracted at all: eight
+    /// seconds of thread-summed CPU inside one second of wall is not eight
+    /// seconds of anybody's wait, and folding it in would be lying about the
+    /// sum. The result is clamped at zero rather than allowed to go negative:
+    /// the phases and the settle read the clock at different points, and a
+    /// folded row sums wall times that may have overlapped on different rayon
+    /// threads.
+    // The last row of an expanded entry, which the panel does not draw yet.
+    #[allow(dead_code)]
+    pub(crate) fn elsewhere(entry: &Entry) -> Option<Duration> {
+        let took = entry.took?;
+        let mut named = Duration::ZERO;
+        let mut any = false;
+        for detail in &entry.detail {
+            if let Detail::Phase { depth: 0, took, .. } = detail {
+                named += *took;
+                any = true;
+            }
+        }
+        any.then(|| took.saturating_sub(named))
     }
 
     /// The most recent entry that is not a successful query, as the viewport

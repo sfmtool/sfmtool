@@ -481,15 +481,19 @@ and with detail on, a bundle adjustment reads as a transcript:
 
 ```
 - 14:12:03  User      41.7 s  Bundle adjusted guard: 85 images, 44 912 points, …
-                              materialise           412.0 ms
-                              solve                  40.9 s
-                                • 85 images, 44 912 points, 198 331 observations
-                                linearise              12.1 s   cpu 94.4 s
-                                normal equations       26.4 s   cpu 201.7 s
-                                ! 3 points left unsupported and were dropped
-                              row map                 71.3 ms
-                              push version           302.1 ms
-                              elsewhere                8.4 ms
+                              materialise             412.0 ms
+                              gather arrays           208.4 ms
+                              • 85 images, 44 912 points, 198 331 observations
+                              residuals before        301.7 ms
+                              solve                    40.3 s
+                                round x3               40.2 s
+                                  linearise x180       12.1 s   cpu 94.4 s
+                                  normal equations x180  26.4 s   cpu 201.7 s
+                                  damping ladder x180    1.7 s
+                              ! 3 points left unsupported and were dropped
+                              write back               71.3 ms
+                              push version            302.1 ms
+                              elsewhere                 8.4 ms
 ```
 
 A detail line is a **row of the same height as any other**, indented two spaces
@@ -577,8 +581,42 @@ once; a collector reached through `&mut AppState` would conflict with every
 panel closure that already holds one. Taking it by `&` also makes the worker
 case free: the GUI thread and the worker hold the same `Arc<Collector>`, the
 panel reads it each frame under the lock, and no events cross a channel. A
-`Mutex<Vec<Detail>>` is ample, since events are a handful per operation and
-contention arises only while a worker runs.
+`Mutex<Vec<Detail>>` is ample: a phase costs a lock and a comparison, contention
+arises only while a worker runs, and the folding below keeps what is kept small.
+
+### Repeated phases fold
+
+A guard goes where the code already has a boundary, and for a loop body that
+means once per trip. A bundle adjustment of three rounds at sixty iterations
+opens `linearise`, `normal equations` and the damping ladder five hundred and
+forty times between them. Drawn one row each, that is not a breakdown of where
+the time went, it is a transcript of the solve, and it would exhaust
+`DETAIL_EVENTS` before the first round finished.
+
+So the collector folds them. **Within one enclosing phase, every child phase
+sharing a name is one row**, whose time is the sum and which says how many times
+it ran:
+
+```
+solve                      40.9 s
+  round x3                 40.8 s
+    linearise x180         12.1 s
+    normal equations x180  26.4 s
+```
+
+Ordering is by first appearance. A phase that ran once is drawn as it would have
+been anyway, with no count, and a message keeps its own place.
+
+Folding happens as the events arrive, so `DETAIL_EVENTS` counts rows kept rather
+than phases opened, and a kernel in a long loop cannot push the rest of the
+operation out of its own entry.
+
+Two consequences are worth stating. A folded row's time is a sum of wall times,
+so for phases that ran on different rayon threads at once it exceeds the span
+they actually covered, exactly as a `cpu` figure does; `elsewhere` is clamped at
+zero for the reason it always was. And a phase name is now a key rather than a
+label, so two unrelated stages under one parent must not share one, which is
+what anybody reading the expanded entry would have assumed regardless.
 
 ## What carries phases
 
@@ -609,7 +647,7 @@ The operations:
 | `save`, with `materialise`, `stamp` and `write` under it | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step` and `selection follow` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
-| `solve` | the `sfmtool_core` call a bulk edit wraps | 838 ms for a resection in place |
+| the `sfmtool_core` call's own stages, which it reports itself | the kernel a bulk edit runs | 838 ms for a resection in place |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
 | `localize` and `refine` | `add_observation`'s two kernel calls | |
@@ -661,7 +699,7 @@ about the worker rather than about the parameter.
 ```rust
 pub(crate) enum Detail {
     Phase { name: &'static str, depth: u8, took: Duration, cpu: Option<Duration>,
-            note: Option<String> },
+            note: Option<String>, runs: u32 },
     Message { level: Level, depth: u8, text: String },
 }
 
@@ -718,7 +756,7 @@ folded row is the newest value of the run.
 | `detail` | boolean | `false` | Include each row's phases and messages |
 
 With it set, a row carries `detail`, an array of `{ "kind": "phase", "name",
-"depth", "ms" }` with `"cpu_ms"` and `"note"` when they apply, and
+"depth", "ms" }` with `"cpu_ms"`, `"note"` and `"runs"` when they apply, and
 `{ "kind": "message", "level", "depth", "text" }`, in the order the panel draws
 them, plus `"elsewhere_ms"` beside `took_ms`. Off by default, because the detail
 is several times the size of the row it hangs off and an agent reading the log
@@ -789,6 +827,12 @@ pair exists for.
   stamped by one frame carry the same frame events and both say the frame was
   shared; a frame that stamps nothing discards them.
 - A fold carries the new value's detail and drops the replaced value's.
+- **Folding.** Child phases sharing a name under one parent become one row
+  carrying the summed time and the count, ordered by first appearance, while the
+  same name under two different parents stays two rows. A phase that ran once
+  carries no count. A message between two foldable phases keeps its place.
+- Folding happens before the cap: an operation opening one phase six hundred
+  times leaves one row, not a truncated entry.
 - Past `DETAIL_EVENTS` the entry keeps the first `DETAIL_EVENTS` and reports the
   number dropped.
 - `elsewhere` is `took` minus the top-level wall-clock phases, ignores `cpu`,
