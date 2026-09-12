@@ -185,8 +185,8 @@ pub fn verify_sift_sources(
             return Err(KdfError::MissingSource(sift_path));
         }
         let (_, metadata, hashes) = sift_format::read_sift_metadata(&sift_path)?;
-        let tool = parse_hash_le(&hashes.feature_tool_xxh128)?;
-        let content = parse_hash_le(&hashes.content_xxh128)?;
+        let tool = parse_hash_bytes(&hashes.feature_tool_xxh128)?;
+        let content = parse_hash_bytes(&hashes.content_xxh128)?;
         if tool != table.feature_tool_hashes[image_index as usize]
             || content != table.sift_content_hashes[image_index as usize]
         {
@@ -256,10 +256,13 @@ fn resolve_workspace(
     Err(KdfError::MissingSource(parent.to_path_buf()))
 }
 
-fn parse_hash_le(s: &str) -> Result<[u8; 16], KdfError> {
+fn parse_hash_bytes(s: &str) -> Result<[u8; 16], KdfError> {
     let v = u128::from_str_radix(s, 16)
         .map_err(|_| KdfError::InvalidFormat("invalid SIFT hash encoding".into()))?;
-    Ok(v.to_le_bytes())
+    // Hash arrays use the same byte order as Python's `bytes.fromhex` and the
+    // other archive formats: the first two hex digits are the first stored
+    // byte. The u128 is only a convenient strict parser here.
+    Ok(v.to_be_bytes())
 }
 
 impl From<sift_format::SiftError> for KdfError {

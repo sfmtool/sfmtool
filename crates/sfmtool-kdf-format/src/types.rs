@@ -113,7 +113,7 @@ pub struct KdfWriteOptions {
 }
 
 impl KdfWriteOptions {
-    /// Provisional tree-local settings from the design specification.
+    /// Tree-local settings retained for callers whose working set is resident.
     pub fn tree_local() -> Self {
         Self {
             descriptor_storage: DescriptorStorage::TreeLocal,
@@ -122,7 +122,7 @@ impl KdfWriteOptions {
             origin_block_rows: 131_072,
         }
     }
-    /// Provisional shared settings with an explicit independent block target.
+    /// Shared settings with an explicit independent descriptor-block target.
     pub fn shared(target_descriptor_block_bytes: usize) -> Self {
         Self {
             descriptor_storage: DescriptorStorage::Shared {

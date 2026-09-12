@@ -728,6 +728,43 @@ fn verify_kdf<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Py<PyDict>> {
             )
         })
         .map_err(to_py_err)?;
+    verification_dict(py, verified)
+}
+
+/// Verify the `.sift` files named by a KDF provenance table.
+///
+/// This is deliberately separate from [`verify_kdf`]: ordinary queries and KDF
+/// verification are self-contained and keep working after their source files
+/// move or disappear. Call this only when auditing provenance against a live
+/// workspace. It checks each referenced SIFT identity, feature bound, and
+/// descriptor byte row.
+///
+/// Args:
+///     path: A `.kdf` carrying SIFT source provenance.
+///
+/// Returns:
+///     The same verification-count dict as `verify_kdf`.
+///
+/// Raises:
+///     FileNotFoundError: A referenced workspace or `.sift` file is absent.
+///     OSError: A source identity, feature bound, or descriptor does not match.
+#[pyfunction]
+fn verify_sift_sources<'py>(py: Python<'py>, path: PathBuf) -> PyResult<Py<PyDict>> {
+    let verified = py
+        .detach(|| {
+            sfmtool_core::features::kdforest::verify_sift_sources(
+                &path,
+                LazyKdForestOptions::default(),
+            )
+        })
+        .map_err(to_py_err)?;
+    verification_dict(py, verified)
+}
+
+fn verification_dict<'py>(
+    py: Python<'py>,
+    verified: sfmtool_core::features::kdforest::Verification,
+) -> PyResult<Py<PyDict>> {
     let d = PyDict::new(py);
     d.set_item("features", verified.features)?;
     d.set_item("trees", verified.trees)?;
@@ -745,5 +782,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_kdf, m)?)?;
     m.add_function(wrap_pyfunction!(kdf_file_summary, m)?)?;
     m.add_function(wrap_pyfunction!(verify_kdf, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_sift_sources, m)?)?;
     Ok(())
 }

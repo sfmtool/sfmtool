@@ -1,9 +1,9 @@
 # The KDF file format
 
 Version 1 supports immutable, self-contained forests with either tree-local
-vector copies or one shared vector table. Both layouts are implemented for
-measurement; callers choose one explicitly because no shipping default is
-established without benchmark results.
+vector copies or one shared vector table. The shared layout is the measured
+general recommendation; callers still choose explicitly because a fully resident
+working set retains a real reason to use tree-local storage.
 
 A `.kdf` file stores a set of fixed-width vectors and several binary spatial
 partition trees over that set. It supports approximate nearest-neighbor lookup
@@ -294,7 +294,10 @@ checks exact sizes, local field constraints and its digest. Full verification
 also checks reachability, ID permutations, cross-tree vector equality and split
 constraints; it necessarily reads the whole file. Lazy access does not certify
 unread chunks. All size arithmetic is checked before allocation, and readers
-may reject files exceeding explicit resource limits.
+may reject files exceeding explicit resource limits. The ZIP dependency indexes
+the central directory by filename, so opening separately counts its raw file
+records and rejects a count greater than the unique-name index; otherwise a
+duplicate name would be collapsed before entry-set validation could see it.
 
 ## Where this format departs from the container conventions
 

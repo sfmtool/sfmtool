@@ -112,6 +112,16 @@ assert_eq!(neighbors[0].index, 0);
 Storage-level indexed read/write/full-verify interfaces belong to `sfmtool-kdf-format`;
 they accept neutral trees/chunks and expose no ANN algorithm. Those APIs stay
 storage-specific rather than forming a general plugin surface.
+
+```rust
+pub fn verify_kdf<S: KdfScalar>(path: &Path, options: LazyKdForestOptions)
+    -> Result<Verification, KdfError>;
+pub fn verify_sift_sources(path: &Path, options: LazyKdForestOptions)
+    -> Result<Verification, KdfError>;
+```
+
+`verify_kdf` checks the self-contained archive. `verify_sift_sources` is the
+explicit, separate audit against the live workspace recorded in its provenance.
 Writing uses a sibling temporary file and publishes only a completed archive;
 it fails if the destination exists. Streaming construction from an out-of-memory
 input corpus is out of scope: export requires an already-built forest.
@@ -1131,11 +1141,24 @@ one that pins the laziness contract: a damaged shared descriptor block leaves
 `open` succeeding and reading nothing, makes the direct access fail, and makes
 full verification fail.
 
-The negative surface these do not reach — malformed node references, cycles,
-non-contiguous leaf ranges, invalid permutations, wrong entry sets, unsupported
-versions, truncated frames, and `verify_sift_sources` against real `.sift` files
-— is proposed in
-[drafts/kdf-validation-tests.md](../../drafts/kdf-validation-tests.md).
+[`sfmtool-kdf-format/src/validation_tests.rs`](../../../crates/sfmtool-kdf-format/src/validation_tests.rs)
+builds the negative surface around a hash-aware archive mutator. It changes a
+decoded entry, recomputes the affected section and whole-file digests independently
+of the writer, and rewrites the archive. That makes malformed child references,
+cycles and shared children, bad leaf ranges, reserved fields, invalid tree and
+storage permutations, cross-tree vector differences, split violations, nonfinite
+`f32` values, unsupported metadata, wrong entry sets, duplicate ZIP names and
+truncated frames reach the validator each test names instead of stopping at an
+unrelated integrity mismatch. It also asserts that an unvisited chunk stays unread
+and a warm resident access performs no read or decode.
+
+The Python binding test extracts SIFT once from the included 270x480 Seoul Bull
+image and reuses that file for every `verify_sift_sources` case: matching and
+relocated workspaces, a missing source, a changed identity, an out-of-range source
+feature and a mismatched descriptor. The same missing-source case confirms ordinary
+queries and embedded origin lookup remain available. Synthetic origin mutation in
+the Rust suite covers out-of-range image IDs and duplicate source pairs without
+another extraction.
 
 ## The Python surface
 
@@ -1147,7 +1170,8 @@ in-memory `KdForest` it is measured against.
 
 ```python
 from sfmtool._sfmtool.spatial import (
-    KdForest, LazyKdForest, write_kdf, kdf_file_summary, verify_kdf,
+    KdForest, LazyKdForest, write_kdf, kdf_file_summary,
+    verify_kdf, verify_sift_sources,
 )
 
 forest = KdForest(descriptors, num_trees=4, leaf_size=16, seed=7)
@@ -1162,10 +1186,11 @@ amplification = io["decoded_bytes"] / (stats["checks"] * lazy.dim)
 Three things about that surface follow from what it is for rather than from
 the Rust API it wraps.
 
-`layout` has no default. Which layout to ship is the open question, so a
-caller states one, and `descriptor_block_bytes` is *rejected* for the
-tree-local layout rather than ignored — an argument silently dropped would
-make two cells of a sweep run identically under different labels.
+`layout` has no default even though the measurements recommend shared storage.
+A caller whose complete working set is resident can still benefit from tree-local,
+so the caller states the trade explicitly. `descriptor_block_bytes` is *rejected*
+for the tree-local layout rather than ignored — an argument silently dropped
+would make two calls run identically under different labels.
 
 `reset_io_stats` exists because the alternative for separating an open from
 the queries after it, or a cold pass from a warm one, is reopening the file,
@@ -1193,7 +1218,8 @@ descriptor dependencies. Existing in-memory query callers keep their current
 API. The Python bindings cover `uint8` only.
 
 The format and this query path both cover `u8` and `f32`, matching the scalar
-types the in-memory forest already supports. The open questions that remain are
-measurements, not design: whether T-fold vector duplication is worth its cost
-against a shared corpus, and where the chunk-size and cache-budget defaults
-land. Both are settled by the benchmark plan above without a format change.
+types the in-memory forest already supports. Measurements recommend the shared
+layout, 4–8 KiB descriptor blocks and a 1 MiB tree-chunk target for sparse queries;
+the API retains an explicit layout choice because the resident warm case remains
+a legitimate tree-local workload. The unmeasured twenty-tree and `f32` cases, and
+the grouped shared-descriptor experiment above, do not require a format change.

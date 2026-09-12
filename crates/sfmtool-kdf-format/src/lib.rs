@@ -22,3 +22,5 @@ pub use write::write_kdf;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod validation_tests;

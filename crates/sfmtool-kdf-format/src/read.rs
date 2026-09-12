@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
-#[cfg(test)]
-use std::io::Seek;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -157,6 +155,19 @@ impl<S: KdfScalar> KdfFile<S> {
         }
         let file = std::fs::File::open(path)?;
         let mut archive = ZipArchive::new(file.try_clone()?)?;
+        // `zip` indexes central-directory records by name and silently keeps
+        // only one record when a malformed archive repeats a filename. Its
+        // `len()` and `by_index()` therefore cannot expose duplicates to the
+        // loop below. Count the raw records before trusting that unique index.
+        // This also keeps duplicate rejection independent of which occurrence
+        // the dependency happens to retain.
+        let directory_records =
+            central_directory_entry_count(file.try_clone()?, archive.central_directory_start())?;
+        if directory_records != archive.len() {
+            return Err(KdfError::InvalidFormat(
+                "duplicate ZIP entry in central directory".into(),
+            ));
+        }
         let mut entries = HashMap::new();
         let mut directory_bytes = 0usize;
         for i in 0..archive.len() {
@@ -986,6 +997,35 @@ impl<S: KdfScalar> KdfFile<S> {
                 Ok((Cached::Origin(origins), a + f))
             })
     }
+}
+
+/// Count file records in the raw central directory.
+///
+/// ZIP's central file header is 46 bytes including its signature, followed by
+/// variable name, extra-field and comment bytes. ZIP64 changes values inside
+/// the extra field but not this framing, so no multi-gigabyte fixture is needed
+/// to keep duplicate-name detection working for either form.
+fn central_directory_entry_count(mut file: std::fs::File, start: u64) -> Result<usize, KdfError> {
+    const CENTRAL_FILE_HEADER: u32 = 0x0201_4b50;
+    file.seek(SeekFrom::Start(start))?;
+    let mut count = 0usize;
+    loop {
+        let mut signature = [0u8; 4];
+        file.read_exact(&mut signature)?;
+        if u32::from_le_bytes(signature) != CENTRAL_FILE_HEADER {
+            break;
+        }
+        let mut fixed = [0u8; 42];
+        file.read_exact(&mut fixed)?;
+        let name = u16::from_le_bytes([fixed[24], fixed[25]]) as i64;
+        let extra = u16::from_le_bytes([fixed[26], fixed[27]]) as i64;
+        let comment = u16::from_le_bytes([fixed[28], fixed[29]]) as i64;
+        file.seek(SeekFrom::Current(name + extra + comment))?;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| KdfError::ResourceLimit("ZIP entry count overflow".into()))?;
+    }
+    Ok(count)
 }
 
 fn validate_metadata<S: KdfScalar>(

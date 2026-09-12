@@ -16,6 +16,7 @@ _EXPECTED_FUNCTIONS = (
     "write_kdf",
     "kdf_file_summary",
     "verify_kdf",
+    "verify_sift_sources",
 )
 
 

@@ -11,17 +11,22 @@ the in-memory ones, and read back counters that mean what they say.
 """
 
 import json
+import shutil
 
 import numpy as np
 import pytest
+from click.testing import CliRunner
 
 from sfmtool._sfmtool.spatial import (
     KdForest,
     LazyKdForest,
     kdf_file_summary,
     verify_kdf,
+    verify_sift_sources,
     write_kdf,
 )
+from sfmtool.cli import main
+from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 
 # Small enough to stay fast, wide enough that a few-hundred-byte chunk target
 # still splits each tree into many chunks — a traversal that never crosses a
@@ -365,6 +370,113 @@ def test_origins_cost_shows_up_in_the_summary(tmp_path):
     )
     names = {s["section"] for s in with_sources["sections"]}
     assert {"origins", "images"} <= names
+
+
+def test_source_verifier_uses_the_extracted_seoul_bull_sift(
+    isolated_seoul_bull_image, tmp_path
+):
+    """One real extraction covers success, relocation, and every source failure.
+
+    The included 270x480 Seoul Bull image keeps this integration check small.
+    All KDF variants below reuse its one generated `.sift` file, so adding the
+    source-verification surface does not multiply extraction cost.
+    """
+    workspace = isolated_seoul_bull_image.parent
+    runner = CliRunner()
+    result = runner.invoke(
+        main, ["ws", "init", "--feature-tool", "sfmtool", str(workspace)]
+    )
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(main, ["sift", "--extract", str(isolated_seoul_bull_image)])
+    assert result.exit_code == 0, result.output
+
+    config = json.loads((workspace / ".sfm-workspace.json").read_text())
+    sift_path = get_sift_path_for_image(isolated_seoul_bull_image)
+    sift = SiftReader(sift_path)
+    all_descriptors = sift.read_descriptors()
+    feature_count = min(64, len(all_descriptors))
+    assert feature_count > 1
+    descriptors = np.array(all_descriptors[:feature_count], copy=True)
+
+    sources = {
+        "workspace": {
+            "absolute_path": str(workspace),
+            "relative_path": ".",
+            "contents": {
+                "feature_tool": config["feature_tool"],
+                "feature_type": config["feature_type"],
+                "feature_options": json.dumps(config["feature_options"]),
+                "feature_prefix_dir": config["feature_prefix_dir"],
+            },
+        },
+        "image_names": [isolated_seoul_bull_image.name],
+        "feature_tool_hashes": [
+            bytes.fromhex(sift.content_hash["feature_tool_xxh128"])
+        ],
+        "sift_content_hashes": [bytes.fromhex(sift.content_hash["content_xxh128"])],
+        "image_indexes": [0] * feature_count,
+        "image_feature_indexes": list(range(feature_count)),
+    }
+
+    def export(name, values, provenance):
+        return _export(
+            workspace,
+            _forest(values, num_trees=2),
+            "shared",
+            {"descriptor_block_bytes": 4096},
+            name=name,
+            sources=provenance,
+            origin_block_rows=32,
+        )
+
+    valid = export("valid.kdf", descriptors, sources)
+
+    wrong_hash_sources = dict(sources)
+    wrong_hash_sources["sift_content_hashes"] = [bytes(16)]
+    wrong_hash = export("wrong-hash.kdf", descriptors, wrong_hash_sources)
+
+    out_of_bounds_sources = dict(sources)
+    out_of_bounds_sources["image_feature_indexes"] = list(range(feature_count))
+    out_of_bounds_sources["image_feature_indexes"][-1] = len(all_descriptors)
+    out_of_bounds = export("out-of-bounds.kdf", descriptors, out_of_bounds_sources)
+
+    changed = descriptors.copy()
+    changed[0, 0] ^= 1
+    descriptor_mismatch = export("descriptor-mismatch.kdf", changed, sources)
+
+    # Move the whole workspace after export. The relative location beside each
+    # KDF must win over the now-stale recorded absolute path.
+    relocated = tmp_path / "relocated-workspace"
+    workspace.rename(relocated)
+    valid = relocated / valid.name
+    wrong_hash = relocated / wrong_hash.name
+    out_of_bounds = relocated / out_of_bounds.name
+    descriptor_mismatch = relocated / descriptor_mismatch.name
+    sift_path = relocated / sift_path.relative_to(workspace)
+
+    report = verify_sift_sources(str(valid))
+    assert report["features"] == feature_count
+
+    with pytest.raises(OSError, match="SIFT identity mismatch"):
+        verify_sift_sources(str(wrong_hash))
+    with pytest.raises(OSError, match="image_feature_index out of range"):
+        verify_sift_sources(str(out_of_bounds))
+    with pytest.raises(OSError, match="source descriptor differs"):
+        verify_sift_sources(str(descriptor_mismatch))
+
+    missing = sift_path.with_suffix(sift_path.suffix + ".missing")
+    shutil.move(sift_path, missing)
+    with pytest.raises(FileNotFoundError, match="SIFT source is missing"):
+        verify_sift_sources(str(valid))
+
+    # Provenance is optional audit data: embedded descriptors and origins stay
+    # usable even while their source archive is absent.
+    lazy = LazyKdForest(str(valid))
+    images, features = lazy.resolve_origins([0])
+    assert list(images) == [0]
+    assert list(features) == [0]
+    indexes, distances = lazy.query(descriptors[:1], k=1, max_leaf_checks=64)
+    assert indexes.shape == distances.shape == (1, 1)
 
 
 # ── Argument handling ─────────────────────────────────────────────────────
