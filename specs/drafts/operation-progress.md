@@ -829,11 +829,21 @@ is several times the size of the row it hangs off and an agent reading the log
 to find out what happened does not want it. An agent that has found a slow row
 asks again with `detail` set and `since_revision` just below it.
 
+Three details of that, each of which an implementation has to get right and none
+of which the sentence above says. `"note"` is what a reader sees, so a folded
+row whose runs disagreed carries the joined `first ... last` rather than one end
+of it. `elsewhere` is a field and not a row, so it is absent from the array even
+though the panel draws it, and absent altogether on an entry with no cost yet.
+And `detail` is present whenever the call asked for it, empty where the entry
+recorded nothing, so a reader has no absence to special-case.
+
 That argument asks for what was *recorded*. The level, which decides what gets
 recorded, has its own pair, in the shape of the existing display pair:
 **`get_timing_detail`** reports it and **`set_timing_detail { enabled }`** sets
 it, recording the same `Display` entry the checkbox does, so a human at the
-window can see that an agent raised the level. An agent investigating a slow
+window can see that an agent raised the level. Both answer
+`{ "timing_detail": { "enabled": false } }`, the shape the display pair's
+document already uses. An agent investigating a slow
 operation turns detail on, runs the operation, reads the log with `detail`, and
 turns it off, with no restart and no environment variable. That is the case the
 pair exists for.

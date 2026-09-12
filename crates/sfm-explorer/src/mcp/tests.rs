@@ -21,13 +21,15 @@
 //!   tool by tool, so a tool added later is covered by construction.
 
 use serde_json::{json, Map, Value};
+use sfmtool_core::progress::Level;
 use sfmtool_core::SfmrReconstruction;
 
 use super::tools::{self, ToolKind};
 use super::{apply, apply_as_agent, Command, Outcome, ToolError, ToolOutput};
-use crate::action_log::{Actor, Kind};
+use crate::action_log::{ActionLog, Actor, Kind};
 use crate::dock::Tab;
 use crate::layout::WindowLayout;
+use crate::progress::{Collector, Detail};
 use crate::scene::{PointRef, SceneNode};
 use crate::state::AppState;
 use crate::test_support::{FakeWindow, NoWindow};
@@ -1582,6 +1584,7 @@ fn each_mutating_command_records_one_entry_as_the_agent() {
                 ..Default::default()
             },
         },
+        Command::SetTimingDetail { enabled: true },
         Command::SetView {
             view: super::ViewCommand::Fit {
                 reconstruction_label: None,
@@ -1636,6 +1639,7 @@ fn each_read_only_command_records_a_query_the_status_line_ignores() {
             point: crate::goto_point::PointQuery::Index(1),
         },
         Command::GetImageDetailDisplay,
+        Command::GetTimingDetail,
     ];
     for command in commands {
         let (mut state, mut viewer) = quiet_scene();
@@ -1760,6 +1764,7 @@ fn action_log_read(since_revision: u64, actors: &[Actor]) -> Command {
         since_revision,
         limit: super::read::ACTION_LOG_DEFAULT_LIMIT,
         actors: actors.to_vec(),
+        detail: false,
     }
 }
 
@@ -1890,6 +1895,7 @@ fn the_read_truncates_at_its_limit_and_continues_from_the_last_revision() {
             since_revision: 0,
             limit: 2,
             actors: Actor::ALL.to_vec(),
+            detail: false,
         },
     );
     assert_eq!(log_texts(&first), ["Opened 0", "Opened 1"]);
@@ -1935,6 +1941,7 @@ fn a_limit_above_the_cap_is_capped() {
             since_revision: 0,
             limit: 100_000,
             actors: Actor::ALL.to_vec(),
+            detail: false,
         },
     );
     assert_eq!(
@@ -1973,6 +1980,513 @@ fn get_scene_carries_the_action_log_revision() {
         scene["status_message"].is_string(),
         "the status line is a different thing from the log and stays: {scene}"
     );
+}
+
+// ── The breakdown on the wire ───────────────────────────────────────────
+//
+// What these are really about is one property: the breakdown an agent reads is
+// the breakdown the human is looking at. The Action Log panel is where a
+// reader meets an expanded entry, and a wire that ordered its events
+// differently, folded them differently or dropped what a row says would be
+// telling the two of them different stories about the same operation. So the
+// assertion most of these end on is [`assert_the_panel_agrees`], which rebuilds
+// the panel's rows out of the JSON and compares them with the rows the panel
+// would draw.
+
+/// A `get_action_log` that asks for each row's breakdown as well.
+fn action_log_detail(since_revision: u64) -> Command {
+    Command::GetActionLog {
+        since_revision,
+        limit: super::read::ACTION_LOG_DEFAULT_LIMIT,
+        actors: Actor::ALL.to_vec(),
+        detail: true,
+    }
+}
+
+/// The reply's row whose text begins `prefix`: the operation a test drove,
+/// picked out of the query rows the reads themselves leave.
+#[track_caller]
+fn row_starting(reply: &Value, prefix: &str) -> Value {
+    reply["entries"]
+        .as_array()
+        .expect("entries is an array")
+        .iter()
+        .find(|row| {
+            row["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with(prefix))
+        })
+        .unwrap_or_else(|| panic!("no row starting {prefix:?} in {reply}"))
+        .clone()
+}
+
+/// A phase row that ran once and said nothing, for the entries these build by
+/// hand.
+fn phase(name: &'static str, depth: u8, ms: u64) -> Detail {
+    folded(name, depth, ms, 1, None, None)
+}
+
+/// A phase row as the collector leaves one that ran more than once, with
+/// whatever its runs said at either end.
+fn folded(
+    name: &'static str,
+    depth: u8,
+    ms: u64,
+    runs: u32,
+    note: Option<&str>,
+    note_last: Option<&str>,
+) -> Detail {
+    Detail::Phase {
+        name,
+        depth,
+        took: std::time::Duration::from_millis(ms),
+        cpu: None,
+        note: note.map(str::to_string),
+        note_last: note_last.map(str::to_string),
+        runs,
+    }
+}
+
+/// A message row, for the entries these build by hand.
+fn message(level: Level, depth: u8, text: &str) -> Detail {
+    Detail::Message {
+        level,
+        depth,
+        text: text.to_string(),
+    }
+}
+
+/// One wire row's breakdown, each event spelled the way the panel draws its
+/// row: the indent, the marker, and the name with its count and its note.
+///
+/// Rebuilt from the JSON rather than read off the panel, which is the whole
+/// point of it: everything the panel puts in a row has to be on the wire for
+/// this to come out equal to what the panel drew.
+fn wire_detail_lines(row: &Value) -> Vec<String> {
+    row["detail"]
+        .as_array()
+        .expect("the row carries a detail array")
+        .iter()
+        .map(|event| {
+            let indent = " ".repeat(2 * event["depth"].as_u64().expect("a depth") as usize);
+            match event["kind"].as_str().expect("a kind") {
+                "phase" => {
+                    let runs = match event["runs"].as_u64() {
+                        Some(runs) => format!(" x{runs}"),
+                        None => String::new(),
+                    };
+                    let note = match event["note"].as_str() {
+                        Some(note) => format!("  {note}"),
+                        None => String::new(),
+                    };
+                    format!(
+                        "{indent}{}{runs}{note}",
+                        event["name"].as_str().expect("a name")
+                    )
+                }
+                "message" => format!(
+                    "{indent}{} {}",
+                    match event["level"].as_str().expect("a level") {
+                        "info" => "\u{2022}",
+                        "warn" => "!",
+                        other => panic!("unknown message level {other:?}"),
+                    },
+                    event["text"].as_str().expect("a text")
+                ),
+                other => panic!("unknown detail kind {other:?}"),
+            }
+        })
+        .collect()
+}
+
+/// The wire's breakdown is the panel's, row for row.
+///
+/// `elsewhere` is the one row of the panel's that is not an event: the wire
+/// carries it as a field beside `took_ms`, so it is lifted out of the drawn
+/// rows here and its presence checked on both sides.
+#[track_caller]
+fn assert_the_panel_agrees(state: &AppState, row: &Value) {
+    let revision = row["revision"].as_u64().expect("a revision");
+    let entry = state
+        .action_log
+        .entries()
+        .find(|entry| entry.revision == revision)
+        .expect("the row is an entry the log still holds");
+    let mut drawn = ActionLog::drawn_detail(entry);
+    match (
+        drawn.iter().position(|line| line == "elsewhere"),
+        row.get("elsewhere_ms"),
+    ) {
+        (Some(at), Some(_)) => {
+            drawn.remove(at);
+        }
+        (None, None) => {}
+        (drawn_at, wire) => {
+            panic!("the panel draws elsewhere at {drawn_at:?} and the wire carries {wire:?}: {row}")
+        }
+    }
+    assert_eq!(wire_detail_lines(row), drawn, "{row}");
+}
+
+/// A frame's own events, as the viewer's frame collector leaves them.
+fn frame_events() -> Vec<Detail> {
+    let frame = Collector::new(false);
+    {
+        let uploads = frame.phase("uploads");
+        drop(uploads.phase("points"));
+    }
+    drop(frame.phase("scene render"));
+    frame.take()
+}
+
+/// Stamp what is waiting, so the entries have a cost and an account to close.
+fn settle(state: &mut AppState) {
+    state
+        .action_log
+        .settle(std::time::Instant::now(), frame_events());
+}
+
+/// An `undo`, which is an operation that names its stages: the step, the
+/// selection following it and the caches the version it left was holding.
+fn undo_something(state: &mut AppState, viewer: &mut Viewer3D) {
+    call(
+        state,
+        viewer,
+        "delete_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+    call(
+        state,
+        viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+}
+
+/// The breakdown is several times the size of the row it hangs off, so an
+/// agent reading the log to find out what happened is not handed it.
+#[test]
+fn the_breakdown_is_omitted_until_it_is_asked_for() {
+    let (mut state, mut viewer) = editable();
+    undo_something(&mut state, &mut viewer);
+    settle(&mut state);
+
+    let plain = ok(&mut state, &mut viewer, action_log_read(0, &Actor::ALL));
+    let row = row_starting(&plain, "Undo:");
+    assert!(row["detail"].is_null(), "{row}");
+    assert!(row["elsewhere_ms"].is_null(), "{row}");
+    assert!(
+        row["took_ms"].is_number(),
+        "the cost is not the detail: {row}"
+    );
+
+    let asked = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&asked, "Undo:");
+    assert!(row["detail"].is_array(), "{row}");
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// The stages an operation named, at the depths it named them, in the order a
+/// reader sees them.
+#[test]
+fn the_breakdown_carries_the_stages_at_their_depths() {
+    let (mut state, mut viewer) = editable();
+    undo_something(&mut state, &mut viewer);
+
+    let reply = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&reply, "Undo:");
+    let stages: Vec<(&str, u64)> = row["detail"]
+        .as_array()
+        .expect("a detail array")
+        .iter()
+        .map(|event| {
+            assert_eq!(event["kind"], "phase", "{event}");
+            (
+                event["name"].as_str().expect("a name"),
+                event["depth"].as_u64().expect("a depth"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        stages,
+        [
+            ("undo", 0),
+            ("history step", 1),
+            ("selection follow", 1),
+            ("forget images", 1),
+        ],
+        "{row}",
+    );
+    // Every stage ran once, so none of them claims a count.
+    assert!(
+        row["detail"]
+            .as_array()
+            .expect("a detail array")
+            .iter()
+            .all(|event| event["runs"].is_null()),
+        "{row}",
+    );
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// `elsewhere` is what makes the breakdown add up, so it arrives with the cost
+/// it closes the account of and not before.
+#[test]
+fn elsewhere_sits_beside_took_and_waits_for_the_frame() {
+    let (mut state, mut viewer) = editable();
+    undo_something(&mut state, &mut viewer);
+
+    let before = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&before, "Undo:");
+    assert!(row["took_ms"].is_null(), "{row}");
+    assert!(
+        row["elsewhere_ms"].is_null(),
+        "an entry with no cost yet has no account to close: {row}",
+    );
+    assert_the_panel_agrees(&state, &row);
+
+    settle(&mut state);
+    let after = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&after, "Undo:");
+    let took = row["took_ms"].as_f64().expect("a cost");
+    let elsewhere = row["elsewhere_ms"].as_f64().expect("an elsewhere");
+    let named: f64 = row["detail"]
+        .as_array()
+        .expect("a detail array")
+        .iter()
+        .filter(|event| event["depth"] == 0)
+        .map(|event| event["ms"].as_f64().expect("a cost"))
+        .sum();
+    assert!(
+        (took - named - elsewhere).abs() < 1e-6,
+        "the breakdown does not reconcile with the headline: {row}",
+    );
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// A row the collector folded says how many runs it is, and one that ran once
+/// says nothing, and a note that has two ends reaches the agent with both,
+/// because one end alone is a claim about the row only one run supports.
+#[test]
+fn a_folded_row_carries_its_runs_and_both_ends_of_its_note() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.action_log.record_done(
+        Kind::Edit,
+        std::time::Instant::now(),
+        "Bundle adjusted alpha",
+        vec![
+            phase("materialise", 0, 30),
+            folded("round", 1, 50, 3, Some("trim 50 px"), Some("trim 4 px")),
+            folded("linearise", 2, 12, 180, Some("reused"), None),
+        ],
+    );
+
+    let reply = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&reply, "Bundle adjusted alpha");
+    let events = row["detail"].as_array().expect("a detail array");
+    assert!(events[0]["runs"].is_null(), "{row}");
+    assert!(events[0]["note"].is_null(), "{row}");
+    assert_eq!(events[1]["runs"], json!(3), "{row}");
+    assert_eq!(events[1]["note"], "trim 50 px ... trim 4 px", "{row}");
+    assert_eq!(events[2]["runs"], json!(180), "{row}");
+    // Runs that came back to what the first one said leave one note, not a
+    // span that is not there.
+    assert_eq!(events[2]["note"], "reused", "{row}");
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// What the operation said, marked the way the panel marks it and nested under
+/// the stage it was said inside.
+#[test]
+fn a_message_carries_its_level_and_its_depth() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.action_log.record_done(
+        Kind::Edit,
+        std::time::Instant::now(),
+        "Bundle adjusted alpha",
+        vec![
+            phase("solve", 0, 30),
+            message(Level::Info, 1, "3 rounds, trim 50/12/4 px"),
+            message(Level::Warn, 1, "3 points left unsupported and were dropped"),
+        ],
+    );
+
+    let reply = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&reply, "Bundle adjusted alpha");
+    let events = row["detail"].as_array().expect("a detail array");
+    assert_eq!(events[1]["kind"], "message", "{row}");
+    assert_eq!(events[1]["level"], "info", "{row}");
+    assert_eq!(events[1]["depth"], json!(1), "{row}");
+    assert_eq!(events[1]["text"], "3 rounds, trim 50/12/4 px", "{row}");
+    assert_eq!(events[2]["level"], "warn", "{row}");
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// The order is the panel's, which is not the order the events were recorded
+/// in: the operation's own stages, then the frame's overhead under the rule,
+/// with `elsewhere` between them as a field rather than a row.
+#[test]
+fn the_overhead_comes_last_on_the_wire_as_it_does_in_the_panel() {
+    let (mut state, mut viewer) = quiet_scene();
+    state.action_log.record_done(
+        Kind::Edit,
+        std::time::Instant::now(),
+        "Opened alpha",
+        vec![phase("open", 0, 30), phase("read", 1, 20)],
+    );
+    settle(&mut state);
+
+    let reply = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&reply, "Opened alpha");
+    let names: Vec<&str> = row["detail"]
+        .as_array()
+        .expect("a detail array")
+        .iter()
+        .map(|event| event["name"].as_str().expect("a name"))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "open",
+            "read",
+            ActionLog::OVERHEAD,
+            "uploads",
+            "points",
+            "scene render",
+        ],
+        "{row}",
+    );
+    assert!(row["elsewhere_ms"].is_number(), "{row}");
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// The level decides what is *recorded*, so it changes the next operation and
+/// nothing already in the log.
+#[test]
+fn set_timing_detail_changes_what_the_next_operation_records() {
+    let (mut state, mut viewer) = editable();
+    perturb(&mut state, 0.02);
+    call(
+        &mut state,
+        &mut viewer,
+        "bundle_adjust",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let overview = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&overview, "Bundle adjusted run_a");
+    assert!(
+        !wire_detail_lines(&row)
+            .iter()
+            .any(|line| line.trim_start().starts_with("linearise")),
+        "the kernel's detailed stages were recorded with detail off: {row}",
+    );
+    assert_the_panel_agrees(&state, &row);
+
+    let revision = state.action_log.revision();
+    assert_eq!(
+        call(
+            &mut state,
+            &mut viewer,
+            "set_timing_detail",
+            json!({ "enabled": true })
+        )["timing_detail"]["enabled"],
+        json!(true),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "bundle_adjust",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    settle(&mut state);
+
+    let detailed = ok(&mut state, &mut viewer, action_log_detail(revision));
+    let row = row_starting(&detailed, "Bundle adjusted run_a");
+    assert!(
+        wire_detail_lines(&row)
+            .iter()
+            .any(|line| line.trim_start().starts_with("linearise")),
+        "detail was on and the kernel's stages did not reach the entry: {row}",
+    );
+    // The strongest thing here: whatever a real solve reported, the agent's
+    // breakdown and the human's expanded row are the same rows in the same
+    // order.
+    assert_the_panel_agrees(&state, &row);
+
+    // And the entry recorded before the change keeps the detail it was
+    // recorded with: nothing is re-timed.
+    let unchanged = ok(&mut state, &mut viewer, action_log_detail(0));
+    let row = row_starting(&unchanged, "Bundle adjusted run_a");
+    assert!(
+        !wire_detail_lines(&row)
+            .iter()
+            .any(|line| line.trim_start().starts_with("linearise")),
+        "an entry was re-timed by the level changing under it: {row}",
+    );
+}
+
+/// The pair reads back what it set, through the log the checkbox writes to, so
+/// an agent and the window cannot hold two different levels.
+#[test]
+fn get_timing_detail_reads_back_what_set_timing_detail_wrote() {
+    let (mut state, mut viewer) = quiet_scene();
+    assert_eq!(
+        call(&mut state, &mut viewer, "get_timing_detail", json!({}))["timing_detail"]["enabled"],
+        json!(false),
+        "detail is off until it is asked for",
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_timing_detail",
+        json!({ "enabled": true }),
+    );
+    assert!(state.action_log.detailed_timing(), "the level did not move");
+    assert_eq!(
+        call(&mut state, &mut viewer, "get_timing_detail", json!({}))["timing_detail"]["enabled"],
+        json!(true),
+    );
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_timing_detail",
+        json!({ "enabled": false }),
+    );
+    assert!(!state.action_log.detailed_timing());
+}
+
+/// The same property the checkbox holds, because it is the same call: one
+/// `Display` entry when the value changes, and none when it does not.
+#[test]
+fn set_timing_detail_records_the_change_and_nothing_else() {
+    let (mut state, mut viewer) = quiet_scene();
+    call(
+        &mut state,
+        &mut viewer,
+        "set_timing_detail",
+        json!({ "enabled": true }),
+    );
+    let entries: Vec<_> = state.action_log.entries().collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0].kind, Kind::Display);
+    assert_eq!(entries[0].actor, Actor::Mcp);
+    assert_eq!(entries[0].text, "Detailed timing on");
+
+    // Handed the value it already has, it records nothing.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_timing_detail",
+        json!({ "enabled": true }),
+    );
+    assert_eq!(state.action_log.entries().count(), 1);
+
+    // `enabled` is what the tool is for, so a call without it is a call that
+    // asked for nothing.
+    let error = refused_call(&mut state, &mut viewer, "set_timing_detail", json!({}));
+    assert!(error.0.contains("enabled"), "{error}");
 }
 
 // ── Screenshots of the window and of a panel ────────────────────────────
@@ -3071,21 +3585,22 @@ fn only_the_reads_are_annotated_read_only() {
             "get_camera_intrinsics",
             "get_point",
             "get_action_log",
+            "get_timing_detail",
             "get_window_layout",
             "get_image_detail_display",
             "get_history",
             "screenshot",
         ]
     );
-    // Nine reads, twenty-five writes, the one that writes a file, and the one
+    // Ten reads, twenty-six writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 36, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 38, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        25
+        26
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.

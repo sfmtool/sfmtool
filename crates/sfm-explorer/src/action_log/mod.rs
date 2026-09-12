@@ -927,6 +927,50 @@ impl ActionLog {
         any.then(|| took.saturating_sub(named))
     }
 
+    /// An entry's breakdown in the order the panel draws it, which is not the
+    /// order it was recorded in.
+    ///
+    /// [`ActionLog::elsewhere`] closes the operation's own account before the
+    /// overhead the frame charged, so `panel::detail_row` reorders, and a
+    /// reader that carries the breakdown without drawing it has to reorder the
+    /// same way. Reading the order off the panel rather than restating it is
+    /// what keeps the window and the wire from ever disagreeing about what an
+    /// operation did. `elsewhere` itself is not in here: it is a row of the
+    /// breakdown rather than an event of it, and the wire carries it as a
+    /// field of its own.
+    pub(crate) fn detail_in_draw_order(entry: &Entry) -> impl Iterator<Item = &Detail> + '_ {
+        (0..panel::detail_rows(entry))
+            .filter_map(|row| panel::detail_at(entry, row))
+            .filter_map(|index| entry.detail.get(index))
+    }
+
+    /// Every row of an entry's breakdown as the panel draws it, indent and
+    /// marker included, `elsewhere` among them.
+    ///
+    /// For the tests that hold the MCP surface to what the window shows: the
+    /// wire carries the same events in the same order, and the two disagreeing
+    /// would mean one of them is lying to somebody.
+    #[cfg(test)]
+    pub(crate) fn drawn_detail(entry: &Entry) -> Vec<String> {
+        (0..panel::detail_rows(entry))
+            .map(|row| panel::detail_text(&panel::detail_row(entry, row)))
+            .collect()
+    }
+
+    /// What a phase's note reads as: what it said, or both ends where a folded
+    /// row's runs disagreed, `first ... last`.
+    ///
+    /// One spelling, because the panel draws it and the MCP surface carries
+    /// it: a reader comparing the two should not find two different claims
+    /// about what a stage did.
+    pub(crate) fn note_text(note: Option<&str>, note_last: Option<&str>) -> Option<String> {
+        match (note, note_last) {
+            (Some(first), Some(last)) => Some(format!("{first} ... {last}")),
+            (Some(only), None) => Some(only.to_string()),
+            (None, _) => None,
+        }
+    }
+
     /// The most recent entry that is not a successful query, as the viewport
     /// status line shows it: prefixed `MCP: ` when its actor is [`Actor::Mcp`].
     ///

@@ -434,25 +434,36 @@ fn overhead_at(entry: &Entry) -> usize {
         .unwrap_or(entry.detail.len())
 }
 
-/// The row `within` of `entry`'s breakdown.
+/// Which of `entry`'s events the row `within` draws, or `None` for the
+/// `elsewhere` line, which is a row of the breakdown without being an event of
+/// it.
 ///
 /// `elsewhere` closes the operation's own account rather than the whole entry:
 /// it is what makes the breakdown reconcile with the number in the entry's cost
 /// column, so work nobody has named shows up as a gap rather than as silence,
 /// and the work that put the result on the screen is not the operation's to
 /// answer for. So the order is the operation's stages, then `elsewhere`, then
-/// the overhead under a rule.
-pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
+/// the overhead under a rule, which is not the order the events are stored in.
+///
+/// Separate from [`detail_row`] because the MCP surface carries the same
+/// breakdown in the same order without drawing any of it
+/// ([`ActionLog::detail_in_draw_order`]), and a second statement of the order
+/// is a second thing to keep in step.
+pub(super) fn detail_at(entry: &Entry, within: usize) -> Option<usize> {
     let split = overhead_at(entry);
     let elsewhere = ActionLog::elsewhere(entry).is_some();
-    let index = if within < split {
+    if within < split {
         Some(within)
     } else if within == split && elsewhere {
         None
     } else {
         Some(within - usize::from(elsewhere))
-    };
-    match index.and_then(|index| entry.detail.get(index)) {
+    }
+}
+
+/// The row `within` of `entry`'s breakdown, in the order [`detail_at`] gives.
+pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
+    match detail_at(entry, within).and_then(|index| entry.detail.get(index)) {
         Some(Detail::Phase {
             name,
             depth,
@@ -482,10 +493,9 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
                 // that was skipped from one that was merely fast. A folded row
                 // whose runs said different things shows both ends, since
                 // neither end on its own is true of the row.
-                match (note.as_deref(), note_last.as_deref()) {
-                    (Some(first), Some(last)) => format!("  {first} ... {last}"),
-                    (Some(only), None) => format!("  {only}"),
-                    (None, _) => String::new(),
+                match ActionLog::note_text(note.as_deref(), note_last.as_deref()) {
+                    Some(note) => format!("  {note}"),
+                    None => String::new(),
                 },
             ),
         },

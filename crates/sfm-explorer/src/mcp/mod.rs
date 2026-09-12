@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps thirty-five of the
-//!   thirty-six tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps thirty-seven of the
+//!   thirty-eight tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -99,6 +99,12 @@ pub(crate) enum Command {
         since_revision: u64,
         limit: usize,
         actors: Vec<crate::action_log::Actor>,
+        /// Whether each row carries the breakdown of where its time went.
+        ///
+        /// What *was* recorded, which is a different question from the level
+        /// [`Command::SetTimingDetail`] sets: an entry keeps the detail it was
+        /// recorded with, so asking for it here re-times nothing.
+        detail: bool,
     },
     OpenReconstruction {
         path: PathBuf,
@@ -138,6 +144,17 @@ pub(crate) enum Command {
     /// which is what makes a refusal atomic without a rollback.
     SetImageDetailDisplay {
         change: ImageDetailDisplayChange,
+    },
+    /// Whether the operations to come record their finer stages.
+    GetTimingDetail,
+    /// The same switch the Action Log toolbar's **Detailed timing** checkbox
+    /// throws, and through the same call, so the level cannot be raised
+    /// without the window saying who raised it.
+    ///
+    /// This decides what gets *recorded*; `GetActionLog`'s `detail` asks for
+    /// what was.
+    SetTimingDetail {
+        enabled: bool,
     },
     SetView {
         view: ViewCommand,
@@ -389,7 +406,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other thirty-five answer with JSON, and squeezing an image through a JSON
+/// the other thirty-seven answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -406,7 +423,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the thirty-five tools that speak only JSON.
+/// The answer of the thirty-seven tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -477,8 +494,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes thirty-five of the
-/// thirty-six tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes thirty-seven of the
+/// thirty-eight tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -523,7 +540,14 @@ pub(crate) fn apply_with_window(
             since_revision,
             limit,
             actors,
-        } => done(read::get_action_log(state, since_revision, limit, &actors)),
+            detail,
+        } => done(read::get_action_log(
+            state,
+            since_revision,
+            limit,
+            &actors,
+            detail,
+        )),
         Command::OpenReconstruction { path } => done(write::open_reconstruction(state, &path)),
         Command::CloseReconstruction { target } => done(write::close_reconstruction(state, target)),
         Command::SelectReconstruction {
@@ -560,6 +584,8 @@ pub(crate) fn apply_with_window(
         } => done(write::set_solo(state, reconstruction_label.as_deref())),
         Command::GetImageDetailDisplay => done(display::get(state)),
         Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
+        Command::GetTimingDetail => done(display::get_timing_detail(state)),
+        Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),
         Command::GetWindowLayout => done(layout::get_window_layout(state, host)),
         Command::SetWindowLayout { document } => {
@@ -1147,6 +1173,8 @@ impl Command {
             Command::SetSolo { .. } => "set_solo",
             Command::GetImageDetailDisplay => "get_image_detail_display",
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
+            Command::GetTimingDetail => "get_timing_detail",
+            Command::SetTimingDetail { .. } => "set_timing_detail",
             Command::SetView { .. } => "set_view",
             Command::GetWindowLayout => "get_window_layout",
             Command::SetWindowLayout { .. } => "set_window_layout",
@@ -1291,6 +1319,7 @@ impl Command {
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
             | Command::GetImageDetailDisplay
+            | Command::GetTimingDetail
             | Command::GetHistory { .. }
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. }
@@ -1316,8 +1345,11 @@ impl Command {
             | Command::ClearSelection { .. } => Kind::Selection,
             Command::SetReconstructionDisplay { .. } | Command::SetSolo { .. } => Kind::Scene,
             // The kind the HUD's own controls record under: the Image Detail
-            // toolbar is the same sort of thing on a different panel.
-            Command::SetImageDetailDisplay { .. } => Kind::Display,
+            // toolbar is the same sort of thing on a different panel, and the
+            // Action Log toolbar's timing checkbox on a third.
+            Command::SetImageDetailDisplay { .. } | Command::SetTimingDetail { .. } => {
+                Kind::Display
+            }
             Command::SetView { .. } => Kind::View,
             Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
             // One call, two portions, and a refusal has to be filed somewhere:
@@ -1383,6 +1415,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
+        Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetHistory {
             reconstruction_label,
         } => format!("get_history {reconstruction_label}"),

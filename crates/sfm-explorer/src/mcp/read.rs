@@ -15,13 +15,17 @@
 //! reported here the same number the Point Track panel shows, rather than a
 //! second implementation of it.
 
+use std::time::Duration;
+
 use serde_json::{json, Value};
+use sfmtool_core::progress::Level;
 
 use super::{
     render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, CameraImageSel,
     JsonReply, ToolError,
 };
 use crate::action_log::{ActionLog, Actor};
+use crate::progress::Detail;
 use crate::scene::{point_id, ImageRef};
 use crate::state::{ensure_sift_cached, AppState};
 
@@ -57,6 +61,7 @@ pub(super) fn get_action_log(
     since_revision: u64,
     limit: usize,
     actors: &[Actor],
+    detail: bool,
 ) -> JsonReply {
     let log = &state.action_log;
     let limit = limit.min(ACTION_LOG_MAX_LIMIT);
@@ -66,7 +71,7 @@ pub(super) fn get_action_log(
     let entries: Vec<Value> = matching
         .by_ref()
         .take(limit)
-        .map(|e| entry(log, e))
+        .map(|e| entry(log, e, detail))
         .collect();
     Ok(json!({
         "revision": log.revision(),
@@ -83,7 +88,11 @@ pub(super) fn get_action_log(
 ///
 /// `tool` rides beside `kind` on a query row rather than inside it, so that
 /// `kind` stays a closed vocabulary while the tool table grows.
-fn entry(log: &ActionLog, entry: &crate::action_log::Entry) -> Value {
+///
+/// `detail` is what the call asked for: the breakdown is several times the
+/// size of the row it hangs off, and an agent reading the log to find out what
+/// happened does not want it.
+fn entry(log: &ActionLog, entry: &crate::action_log::Entry, detail: bool) -> Value {
     let mut row = json!({
         "revision": entry.revision,
         "at": log.format_rfc3339(entry.at),
@@ -92,21 +101,87 @@ fn entry(log: &ActionLog, entry: &crate::action_log::Entry) -> Value {
         "failed": entry.failed,
         "text": entry.text,
     });
+    let fields = row.as_object_mut().expect("a log row is an object");
     // Absent rather than null while an action has not been drawn yet, and
     // absent forever on a row whose run folded under it. A reader that wants
     // the number can ask again; one that does not is not handed a null to
     // special-case.
     if let Some(took) = entry.took {
-        row.as_object_mut()
-            .expect("a log row is an object")
-            .insert("took_ms".into(), json!(took.as_secs_f64() * 1000.0));
+        fields.insert("took_ms".into(), json!(milliseconds(took)));
+    }
+    if detail {
+        // Beside `took_ms` and absent for the same reason it is: an entry with
+        // no cost yet has no account to close. It is what makes the breakdown
+        // reconcile with the headline, so the stage nobody has named reads as
+        // a gap rather than as silence.
+        if let Some(elsewhere) = ActionLog::elsewhere(entry) {
+            fields.insert("elsewhere_ms".into(), json!(milliseconds(elsewhere)));
+        }
+        let rows: Vec<Value> = ActionLog::detail_in_draw_order(entry)
+            .map(detail_row)
+            .collect();
+        fields.insert("detail".into(), json!(rows));
     }
     if let crate::action_log::Kind::Query(tool) = entry.kind {
-        row.as_object_mut()
-            .expect("a log row is an object")
-            .insert("tool".into(), json!(tool));
+        fields.insert("tool".into(), json!(tool));
     }
     row
+}
+
+/// One row of an entry's breakdown: a stage and what it cost, or something the
+/// operation said.
+///
+/// `cpu_ms`, `note` and `runs` are carried only where they apply, which is the
+/// same thing the panel does with the columns it draws them in: a stage that
+/// ran once carries no count, and one that reported no thread-summed time
+/// carries no CPU figure rather than a zero.
+fn detail_row(detail: &Detail) -> Value {
+    match detail {
+        Detail::Phase {
+            name,
+            depth,
+            took,
+            cpu,
+            note,
+            note_last,
+            runs,
+        } => {
+            let mut row = json!({
+                "kind": "phase",
+                "name": name,
+                "depth": depth,
+                "ms": milliseconds(*took),
+            });
+            let fields = row.as_object_mut().expect("a detail row is an object");
+            if let Some(cpu) = cpu {
+                fields.insert("cpu_ms".into(), json!(milliseconds(*cpu)));
+            }
+            // Both ends where a folded row's runs disagreed, through the
+            // panel's own spelling of it: one end on its own is a claim about
+            // the row that only one of its runs supports.
+            if let Some(note) = ActionLog::note_text(note.as_deref(), note_last.as_deref()) {
+                fields.insert("note".into(), json!(note));
+            }
+            if *runs > 1 {
+                fields.insert("runs".into(), json!(runs));
+            }
+            row
+        }
+        Detail::Message { level, depth, text } => json!({
+            "kind": "message",
+            "level": match level {
+                Level::Info => "info",
+                Level::Warn => "warn",
+            },
+            "depth": depth,
+            "text": text,
+        }),
+    }
+}
+
+/// A duration as the wire spells one: milliseconds, fractional.
+fn milliseconds(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
 }
 
 pub(super) fn list_camera_images(

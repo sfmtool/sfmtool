@@ -1,8 +1,12 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The Image Detail panel's controls, as one document an agent reads and
-//! writes.
+//! The panel controls an agent reads and writes as documents, which are the
+//! ones the Action Log files under [`crate::action_log::Kind::Display`]: what
+//! the Image Detail panel draws over its photograph, and whether the Action
+//! Log records detailed timing.
+//!
+//! ## The Image Detail panel's overlays
 //!
 //! Everything the panel's toolbar decides — the seven feature overlay modes,
 //! the three filters on the features, and the intrinsics layer with its own
@@ -25,6 +29,14 @@
 //!   [`crate::state::record_image_detail_changes`], the one differ the panel's
 //!   own frame goes through as well, which is what keeps the human's row and
 //!   the agent's row for one control identical.
+//!
+//! ## Detailed timing
+//!
+//! The Action Log toolbar's **Detailed timing** checkbox, by the same rule:
+//! [`set_timing_detail`] calls
+//! [`ActionLog::set_detailed_timing`](crate::action_log::ActionLog::set_detailed_timing),
+//! which is the call the checkbox itself makes, so the entry an agent leaves
+//! is the entry a human leaves and neither can record one the other would not.
 
 use serde_json::{json, Value};
 
@@ -311,6 +323,40 @@ fn ladder<T: std::fmt::Display>(values: &[T]) -> String {
         .map(|value| value.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// ── Detailed timing ─────────────────────────────────────────────────────
+
+/// `get_timing_detail`: the level the next operation will be recorded at, no
+/// arguments.
+pub(super) fn get_timing_detail(state: &AppState) -> JsonReply {
+    Ok(timing_detail(state))
+}
+
+/// `set_timing_detail`: raise or lower the level for the operations to come,
+/// and answer with it.
+///
+/// Through `ActionLog::set_detailed_timing` rather than by assigning the
+/// field, because that call is where the checkbox's own rule lives: one
+/// `Display` entry when the value changes and none when it is handed the value
+/// it already has. An agent raising the level therefore leaves the row a human
+/// raising it leaves, which is how the human at the window finds out.
+///
+/// It takes effect on the next operation. Nothing already recorded is
+/// re-timed, and an entry keeps the detail it was recorded with.
+pub(super) fn set_timing_detail(state: &mut AppState, enabled: bool) -> JsonReply {
+    state.action_log.set_detailed_timing(enabled);
+    Ok(timing_detail(state))
+}
+
+/// The document both tools answer with, read back off the log rather than
+/// echoed from the call.
+fn timing_detail(state: &AppState) -> Value {
+    json!({
+        "timing_detail": {
+            "enabled": state.action_log.detailed_timing(),
+        }
+    })
 }
 
 // ── Schema fragments ────────────────────────────────────────────────────

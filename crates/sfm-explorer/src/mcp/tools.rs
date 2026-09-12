@@ -153,7 +153,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           oldest_revision says how far back the log still goes: a since_revision \
                           below it means entries were missed. actors filters by who did it, and \
                           actors: [\"user\"] is the read that answers \"what did the human do while \
-                          I was working\".",
+                          I was working\". An entry carries took_ms once the viewer has drawn the \
+                          frame that showed its result, and detail: true adds the stage-by-stage \
+                          breakdown of where that time went.",
             kind: Read,
             schema: object(
                 &[
@@ -193,9 +195,31 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                                  array is refused, since it can return nothing by construction.",
                         }),
                     ),
+                    (
+                        "detail",
+                        flag(
+                            "Carry each entry's breakdown: the stages it spent its time in and \
+                             what it said, in the order the Action Log panel draws them, with \
+                             elsewhere_ms beside took_ms for the time no stage claimed. Off by \
+                             default, since a breakdown is several times the size of the row it \
+                             hangs off. The read this is for: find a slow row, then ask again \
+                             with detail set and since_revision just below that row's revision. \
+                             It reports what was recorded, which is what set_timing_detail \
+                             decided at the time.",
+                        ),
+                    ),
                 ],
                 &[],
             ),
+        },
+        ToolSpec {
+            name: "get_timing_detail",
+            description: "Whether the viewer is recording the finer stages inside each \
+                          operation: the Action Log toolbar's Detailed timing checkbox, wherever \
+                          it was last left. Off by default, and it lives only as long as the \
+                          session.",
+            kind: Read,
+            schema: object(&[], &[]),
         },
         ToolSpec {
             name: "get_window_layout",
@@ -460,6 +484,27 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                     ("intrinsics", super::display::intrinsics_schema()),
                 ],
                 &[],
+            ),
+        },
+        ToolSpec {
+            name: "set_timing_detail",
+            description: "Record the finer stages inside each operation, or stop recording them. \
+                          This is the level the next operation is timed at; get_action_log's \
+                          detail argument asks for what was already recorded. The case it exists \
+                          for: an agent that has found a slow row turns detail on, runs the \
+                          operation again, reads the log back with detail set, and turns it off. \
+                          It takes effect on the next operation, so nothing already recorded is \
+                          re-timed and an entry keeps the detail it was recorded with. It is the \
+                          Action Log toolbar's Detailed timing checkbox, and setting it writes \
+                          the same Action Log entry ticking that checkbox does, so the human at \
+                          the window can see that an agent raised the level.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[(
+                    "enabled",
+                    flag("True to record the detailed stages, false to record only the overview."),
+                )],
             ),
         },
         ToolSpec {
@@ -1164,13 +1209,14 @@ pub(crate) fn parse(
             }
         }
         "get_action_log" => {
-            args.reject_unknown(&["since_revision", "limit", "actors"])?;
+            args.reject_unknown(&["since_revision", "limit", "actors", "detail"])?;
             Command::GetActionLog {
                 since_revision: args.optional_u64("since_revision")?.unwrap_or(0),
                 limit: args
                     .optional_usize("limit")?
                     .unwrap_or(super::read::ACTION_LOG_DEFAULT_LIMIT),
                 actors: args.actors("actors")?,
+                detail: args.optional_bool("detail")?.unwrap_or(false),
             }
         }
         "open_reconstruction" => {
@@ -1295,6 +1341,19 @@ pub(crate) fn parse(
         "set_image_detail_display" => Command::SetImageDetailDisplay {
             change: super::display::parse_change(&args)?,
         },
+        "get_timing_detail" => {
+            args.reject_unknown(&[])?;
+            Command::GetTimingDetail
+        }
+        // Required rather than a toggle, for the reason `set_solo` takes the
+        // state it wants: an agent issuing a toggle cannot know the outcome
+        // without reading first, and a retried call would undo itself.
+        "set_timing_detail" => {
+            args.reject_unknown(&["enabled"])?;
+            Command::SetTimingDetail {
+                enabled: args.required_bool("enabled")?,
+            }
+        }
         "set_view" => parse_set_view(&args)?,
         "get_window_layout" => {
             args.reject_unknown(&[])?;
@@ -1738,6 +1797,11 @@ impl Args<'_> {
             Some(Value::Bool(b)) => Ok(Some(*b)),
             Some(other) => Err(self.wrong_type(key, "true or false", other)),
         }
+    }
+
+    fn required_bool(&self, key: &str) -> Result<bool, ToolError> {
+        self.optional_bool(key)?
+            .ok_or_else(|| self.error(format!("needs {key}.")))
     }
 
     pub(super) fn optional_usize(&self, key: &str) -> Result<Option<usize>, ToolError> {

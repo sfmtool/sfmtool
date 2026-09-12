@@ -21,13 +21,10 @@ use std::sync::Arc;
 use image::{ImageEncoder, ImageFormat};
 use winit::window::Window;
 
-use sfmtool_core::progress_note;
-
 use super::{
     apply_as_agent, panel_crop, Deferred, Outcome, Reply, Request, ScreenshotSource, ToolError,
     ToolOutput,
 };
-use crate::progress::Collector;
 use crate::App;
 
 /// Why a `screenshot` of the window is refused where the platform will not let
@@ -81,11 +78,7 @@ impl App {
     /// state. Everything a reply reports was read here, at one instant, with
     /// exclusive access — which is why a `get_scene` can never straddle a load.
     ///
-    /// `frame` arrives as an argument rather than being read off `self`: the
-    /// phase guard has to stand around the state this mutates, which a guard
-    /// borrowing a field of `self` could not do. The caller has already cloned
-    /// it out for the same reason.
-    pub(crate) fn drain_mcp(&mut self, window: &Arc<Window>, frame: &Collector) {
+    pub(crate) fn drain_mcp(&mut self, window: &Arc<Window>) {
         if self.mcp_rx.is_none() {
             return;
         }
@@ -102,13 +95,22 @@ impl App {
         if requests.is_empty() {
             return;
         }
-        // Opened only now, past the early return above: a frame with nothing
-        // waiting for it drained nothing, and that is the great majority of
-        // frames.
-        let mut phase = frame.phase("mcp drain");
-        if requests.len() > 1 {
-            progress_note!(phase, "{} commands", requests.len());
-        }
+        // Deliberately not timed as a phase of the frame.
+        //
+        // A command is applied here, in phase 0, which is before the upload
+        // phase the Action Log settles against, so an entry an agent's command
+        // writes is stamped by this very frame. A guard around this loop would
+        // therefore put the whole of that operation inside the frame's
+        // overhead, and the entry would carry its own cost twice: once as its
+        // own stages and again as the drain that ran them. A ninety-five second
+        // adjustment read as a ninety-five second overhead in a ninety-five
+        // second entry, with `elsewhere` saturated at zero.
+        //
+        // What is left once the commands are subtracted is a `try_recv` loop
+        // and a deserialization, and every command worth timing records an
+        // entry of its own. The egui pass has no such problem: an entry written
+        // there is written after the upload phase, so it waits for the next
+        // frame and never lands inside the pass that ran it.
         // Split so the application phase can be a plain function over
         // `(&mut AppState, &mut Viewer3D)` — which is what puts the whole of
         // it, the Action Log's actor switch included, under headless test.

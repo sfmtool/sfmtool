@@ -127,7 +127,7 @@ impl App {
         // (`AppState::observe_window`). An idle viewer renders no frames at all.
         self.state.observe_window(&window);
         #[cfg(feature = "mcp")]
-        self.drain_mcp(&window, &frame);
+        self.drain_mcp(&window);
 
         // Keep the window title in step with the loaded file. Compared against
         // the last applied title rather than set unconditionally: `set_title`
