@@ -643,10 +643,7 @@ fn the_cost_column_reads_in_the_unit_the_question_is_asked_in() {
     assert_eq!(ActionLog::format_took(Duration::from_micros(400)), "<1 ms");
     assert_eq!(ActionLog::format_took(Duration::from_millis(4)), "4 ms");
     assert_eq!(ActionLog::format_took(Duration::from_millis(990)), "990 ms");
-    assert_eq!(
-        ActionLog::format_took(Duration::from_millis(1240)),
-        "1.24 s"
-    );
+    assert_eq!(ActionLog::format_took(Duration::from_millis(1240)), "1.2 s");
 }
 
 #[test]
@@ -1894,8 +1891,9 @@ fn the_overhead_comes_after_the_operation_and_its_elsewhere() {
     log.settle(Instant::now(), frame_events());
 
     let entry = log.entries().next_back().expect("an entry");
-    let drawn: Vec<String> = (0..super::panel::detail_rows(entry))
-        .map(|row| super::panel::detail_row(entry, row).text)
+    let breakdown = super::panel::Breakdown::of(entry);
+    let drawn: Vec<String> = (0..super::panel::detail_rows(&breakdown))
+        .map(|row| super::panel::detail_row(&breakdown, row).text)
         .collect();
     assert_eq!(
         drawn,
@@ -1910,12 +1908,12 @@ fn the_overhead_comes_after_the_operation_and_its_elsewhere() {
         "the overhead did not come last, or elsewhere did not close the account",
     );
     assert!(
-        super::panel::detail_row(entry, 2).rules_above,
+        super::panel::detail_row(&breakdown, 2).rules_above,
         "no rule divides the operation from the overhead",
     );
     assert!(
-        (0..super::panel::detail_rows(entry))
-            .filter(|row| super::panel::detail_row(entry, *row).rules_above)
+        (0..super::panel::detail_rows(&breakdown))
+            .filter(|row| super::panel::detail_row(&breakdown, *row).rules_above)
             .count()
             == 1,
         "more than one rule was drawn",

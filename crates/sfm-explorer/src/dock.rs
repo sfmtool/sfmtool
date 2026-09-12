@@ -3,8 +3,8 @@
 
 //! Dock tab identity and tab rendering.
 //!
-//! Names the eight panels (Scene, 3D Viewer, Image Browser, Image Detail,
-//! Point Track Detail, Camera Intrinsics, Action Log, Edit History) and holds the `TabViewer`
+//! Names the nine panels (Scene, Background, 3D Viewer, Image Browser, Image
+//! Detail, Point Track Detail, Camera Intrinsics, Action Log, Edit History) and holds the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -38,6 +38,9 @@ enum Landing {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     SceneGraph,
+    /// The long operation running off the GUI thread, and what the last one
+    /// cost. See [`crate::background::panel`].
+    Background,
     Viewer3D,
     ImageBrowser,
     ImageDetail,
@@ -51,6 +54,7 @@ impl Tab {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Tab::SceneGraph => "Scene",
+            Tab::Background => "Background",
             Tab::Viewer3D => "3D Viewer",
             Tab::ImageBrowser => "Image Browser",
             Tab::ImageDetail => "Image Detail",
@@ -110,13 +114,16 @@ impl TabViewer for TabContext<'_> {
                 let response = self.scene_graph.show(ui, self.state);
                 self.apply_scene_graph_response(ui, response);
             }
+            // The other one: a session that has run nothing in the background
+            // is a thing this panel says out loud rather than showing blank.
+            Tab::Background => crate::background::panel::show(ui, self.state),
             Tab::Viewer3D => self.show_viewer_3d(ui),
             Tab::ImageBrowser => self.show_image_browser(ui),
             Tab::ImageDetail => self.show_image_detail(ui),
             Tab::PointTrackDetail => self.show_point_track_detail(ui),
             Tab::IntrinsicsDetail => self.show_intrinsics_detail(ui),
-            // The one tab with no empty state: an empty scene still has a
-            // session, and the log is exactly what says so.
+            // One of the two tabs with no empty state: an empty scene still has
+            // a session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
             Tab::EditHistory => self.show_edit_history(ui),
         }

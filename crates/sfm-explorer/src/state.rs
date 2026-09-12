@@ -641,6 +641,15 @@ pub struct AppState {
     /// only one can run at a time and the Action Log holds the rest.
     pub(crate) last_background: Option<crate::background::LastOperation>,
 
+    /// Whether the Background panel's idle form has its phases showing.
+    ///
+    /// Here rather than in the panel because the panel is drawn only while its
+    /// tab is open, and a toggle that forgot itself whenever the tab was
+    /// hidden, or whenever an operation ran, would be a toggle nobody could
+    /// leave open. It survives an operation for the same reason the Action
+    /// Log's expansion set does: it is what the reader asked to see.
+    pub(crate) background_detail_expanded: bool,
+
     /// The id the next background operation takes.
     ///
     /// Monotonic and never reused, so a handle names *which* operation rather
@@ -747,6 +756,7 @@ impl AppState {
             dock: Layout::default().to_dock(),
             background: None,
             last_background: None,
+            background_detail_expanded: false,
             next_operation_id: 1,
             wake: None,
         }

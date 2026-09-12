@@ -22,6 +22,8 @@
 //! a handful at most, so the table is cheaper to build than the layout it
 //! avoids.
 
+use std::time::Duration;
+
 use sfmtool_core::progress::Level;
 
 use super::{ActionLog, Actor, Entry, Kind};
@@ -209,13 +211,18 @@ fn rows(log: &ActionLog) -> Rows {
     let mut indexes: Vec<usize> = log
         .expanded_revisions()
         .filter_map(|revision| log.index_of(revision))
-        .filter(|index| log.get(*index).is_some_and(|entry| detail_rows(entry) > 0))
+        .filter(|index| {
+            log.get(*index)
+                .is_some_and(|entry| detail_rows(&Breakdown::of(entry)) > 0)
+        })
         .collect();
     indexes.sort_unstable();
     let mut table = Vec::with_capacity(indexes.len());
     let mut before = 0;
     for index in indexes {
-        let extra = log.get(index).map_or(0, detail_rows);
+        let extra = log
+            .get(index)
+            .map_or(0, |entry| detail_rows(&Breakdown::of(entry)));
         table.push(Expansion {
             index,
             start: index + before,
@@ -230,10 +237,49 @@ fn rows(log: &ActionLog) -> Rows {
     }
 }
 
-/// How many rows an entry's detail draws: its events, and the `elsewhere` line
-/// that makes them add up.
-pub(super) fn detail_rows(entry: &Entry) -> usize {
-    entry.detail.len() + usize::from(ActionLog::elsewhere(entry).is_some())
+/// One breakdown, as the rows that draw it read it.
+///
+/// A view rather than an [`Entry`], because two panels draw the same rows out
+/// of the same collector: the Action Log draws what an operation reported once
+/// it is over, and the Background panel draws it while it is still reporting.
+/// Two spellings of a row would be two things to keep in step, and a reader
+/// comparing the window before and after an operation finished would be
+/// comparing two claims rather than one.
+pub(crate) struct Breakdown<'a> {
+    /// What the operation reported, in the order it recorded it.
+    pub(crate) detail: &'a [Detail],
+    /// The gap between what the whole cost and what its own top-level stages
+    /// named, or `None` for a breakdown with nothing to reconcile against yet.
+    ///
+    /// A running operation has no total: it is not over, so there is no number
+    /// for the named stages to fall short of, and the row is left out rather
+    /// than guessed at.
+    pub(crate) elsewhere: Option<Duration>,
+}
+
+impl<'a> Breakdown<'a> {
+    /// One finished entry's breakdown, `elsewhere` and all.
+    pub(crate) fn of(entry: &'a Entry) -> Self {
+        Breakdown {
+            detail: &entry.detail,
+            elsewhere: ActionLog::elsewhere(entry),
+        }
+    }
+
+    /// What an operation has reported so far, which is every row it will carry
+    /// except the ones the frame that lands its result adds.
+    pub(crate) fn running(detail: &'a [Detail]) -> Self {
+        Breakdown {
+            detail,
+            elsewhere: None,
+        }
+    }
+}
+
+/// How many rows a breakdown draws: its events, and the `elsewhere` line that
+/// makes them add up.
+pub(crate) fn detail_rows(breakdown: &Breakdown<'_>) -> usize {
+    breakdown.detail.len() + usize::from(breakdown.elsewhere.is_some())
 }
 
 /// How many rows the list has, entries and expanded detail together. For the
@@ -337,7 +383,7 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
 /// list would pay for a figure that only a kernel reporting thread-summed time
 /// ever fills.
 fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: f32, space: f32) {
-    let row = detail_row(entry, within);
+    let row = detail_row(&Breakdown::of(entry), within);
     let weak = ui.visuals().weak_text_color();
     // The rule is painted along the top of the overhead row's own rect rather
     // than given a row of its own, so the list keeps the uniform row height its
@@ -393,7 +439,7 @@ fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: 
 ///
 /// Built here rather than at each of the two places that draw it, so that the
 /// panel and the clipboard export cannot disagree about what a row reads.
-pub(super) struct DetailRow {
+pub(crate) struct DetailRow {
     /// The cost column: `412 ms`, or `--` for a stage that cost nothing worth
     /// printing.
     pub cost: String,
@@ -418,8 +464,8 @@ pub(super) struct DetailRow {
 /// The overhead row and everything under it are appended when the frame is
 /// charged, so they are a suffix, and the operation's own account is what comes
 /// before them.
-fn overhead_at(entry: &Entry) -> usize {
-    entry
+fn overhead_at(breakdown: &Breakdown<'_>) -> usize {
+    breakdown
         .detail
         .iter()
         .position(|row| {
@@ -431,7 +477,7 @@ fn overhead_at(entry: &Entry) -> usize {
                 }
             )
         })
-        .unwrap_or(entry.detail.len())
+        .unwrap_or(breakdown.detail.len())
 }
 
 /// Which of `entry`'s events the row `within` draws, or `None` for the
@@ -449,9 +495,9 @@ fn overhead_at(entry: &Entry) -> usize {
 /// breakdown in the same order without drawing any of it
 /// ([`ActionLog::detail_in_draw_order`]), and a second statement of the order
 /// is a second thing to keep in step.
-pub(super) fn detail_at(entry: &Entry, within: usize) -> Option<usize> {
-    let split = overhead_at(entry);
-    let elsewhere = ActionLog::elsewhere(entry).is_some();
+pub(crate) fn detail_at(breakdown: &Breakdown<'_>, within: usize) -> Option<usize> {
+    let split = overhead_at(breakdown);
+    let elsewhere = breakdown.elsewhere.is_some();
     if within < split {
         Some(within)
     } else if within == split && elsewhere {
@@ -461,9 +507,9 @@ pub(super) fn detail_at(entry: &Entry, within: usize) -> Option<usize> {
     }
 }
 
-/// The row `within` of `entry`'s breakdown, in the order [`detail_at`] gives.
-pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
-    match detail_at(entry, within).and_then(|index| entry.detail.get(index)) {
+/// The row `within` of a breakdown, in the order [`detail_at`] gives.
+pub(crate) fn detail_row(breakdown: &Breakdown<'_>, within: usize) -> DetailRow {
+    match detail_at(breakdown, within).and_then(|index| breakdown.detail.get(index)) {
         Some(Detail::Phase {
             name,
             depth,
@@ -512,7 +558,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
             text: text.clone(),
         },
         None => DetailRow {
-            cost: ActionLog::format_took(ActionLog::elsewhere(entry).unwrap_or_default()),
+            cost: ActionLog::format_took(breakdown.elsewhere.unwrap_or_default()),
             cpu: String::new(),
             indent: 0,
             marker: "",
@@ -526,7 +572,7 @@ pub(super) fn detail_row(entry: &Entry, within: usize) -> DetailRow {
 /// The clipboard spelling of one detail row's text: its indent, its marker and
 /// what follows, with the CPU figure after it since the clipboard has no
 /// columns to give it.
-pub(super) fn detail_text(row: &DetailRow) -> String {
+pub(crate) fn detail_text(row: &DetailRow) -> String {
     let marker = if row.marker.is_empty() {
         String::new()
     } else {

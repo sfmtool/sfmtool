@@ -37,16 +37,18 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
 use crate::action_log::{Actor, Kind};
 use crate::document::PointMap;
-use crate::progress::Collector;
+use crate::progress::{Collector, Detail};
 use crate::scene::ReconId;
 use crate::state::AppState;
+
+pub(crate) mod panel;
 
 #[cfg(test)]
 mod tests;
@@ -84,8 +86,8 @@ impl Operation {
     /// A list rather than a set of constants used one at a time, so the test
     /// that holds each `cancellable: true` to its claim has something to walk:
     /// a declaration nothing checks is a declaration that rots.
-    // Read by that test, and by the Background panel when it is built.
-    #[allow(dead_code)]
+    // Read by that test alone, which is what it is for.
+    #[cfg(test)]
     pub(crate) const ALL: [Operation; 1] = [Operation::BUNDLE_ADJUST];
 }
 
@@ -191,10 +193,29 @@ pub(crate) enum Finished {
 ///
 /// Kept after the process is gone because the question outlives it: a tool call
 /// that was handed a handle while the operation was running comes back for the
-/// answer, and by then there is no process to ask.
+/// answer, and by then there is no process to ask. The Background panel asks
+/// the same question with nothing running, which is why what it cost and what
+/// it spent the time on are here rather than only in the Action Log: the panel
+/// would otherwise have to find its own entry in a buffer that drops and
+/// clears.
 pub(crate) struct LastOperation {
     /// Which operation this is about.
     pub(crate) id: u64,
+    /// What it was, by the name the panel and the refusals call it.
+    pub(crate) operation: Operation,
+    /// The label of the node it ran on, as it read when the operation started.
+    pub(crate) label: String,
+    /// What the whole operation cost, measured from the instant it started.
+    ///
+    /// Not the entry's `took`, which the frame stamps on settling and which
+    /// therefore also carries the upload that put the answer on screen.
+    pub(crate) took: Duration,
+    /// What it reported, unfolded, which is what the panel drew while it ran.
+    ///
+    /// Not the entry's breakdown, which folds repeated stages: the Background
+    /// panel does not fold, and an operation that collapsed into a summary the
+    /// moment it finished would be a panel that changed its mind.
+    pub(crate) detail: Vec<Detail>,
     /// The Action Log sentence it wrote, or the refusal or cancellation that
     /// ended it.
     pub(crate) outcome: Result<String, String>,
@@ -469,7 +490,15 @@ impl AppState {
         // spent before deciding to; the frame that collected the answer is not
         // what either of them cost. What it reported before stopping is kept
         // too, since a refusal is a thing a reader wants the breakdown of.
+        // The transcript, taken before `take` clears it: the panel goes on
+        // showing this operation after the entry is written, and shows it the
+        // way it showed it while it ran. Folding it here instead would collapse
+        // the rounds a reader had just watched arrive, at the instant the
+        // operation finished. A transcript is a few hundred rows of names and
+        // durations, once per operation.
+        let kept = collector.live().rows;
         let detail = collector.take();
+        let took = started.elapsed();
         match &outcome {
             Ok(text) => self
                 .action_log
@@ -479,7 +508,14 @@ impl AppState {
                     .fail_done_as(actor, Kind::Edit, started, message.clone(), detail)
             }
         }
-        self.last_background = Some(LastOperation { id, outcome });
+        self.last_background = Some(LastOperation {
+            id,
+            operation,
+            label,
+            took,
+            detail: kept,
+            outcome,
+        });
         installed
     }
 

@@ -28,14 +28,18 @@ root, and everything below describes the arrangement to its right.
 │       │                          │    Image     │
 │ Scene │        3D Viewer         │    Detail    │
 │       │                          │              │
-│       │                          │              │
-│       ├──────────────────────────┴──────────────┤
+├───────┤                          │              │
+│Backgr.├──────────────────────────┴──────────────┤
 │       │[Image Browser][Action Log][Edit History]│
 │       │ ◀ [img01] [img02] [img03] [img04] ... ▶ │
 └───────┴─────────────────────────────────────────┘
 ```
 
-- **Scene**: left, ~18% width. The tree of loaded reconstructions.
+- **Scene**: left, ~18% width, upper ~72% of that column. The tree of loaded
+  reconstructions.
+- **Background**: under the tree, the rest of the left column. What a long
+  operation running off the GUI thread is doing, and what the last one cost
+  ([background-process-panel.md](../drafts/background-process-panel.md)).
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,
   frustums, navigation.
 - **Image Detail**: top-right, ~1/3 width, sharing a tab group with Point Track
