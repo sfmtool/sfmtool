@@ -650,6 +650,16 @@ pub struct AppState {
     /// Log's expansion set does: it is what the reader asked to see.
     pub(crate) background_detail_expanded: bool,
 
+    /// The same "what is running" the field above answers, in a form a thread
+    /// that is not this one can read.
+    ///
+    /// The MCP server composes its own timeout message, on its own thread, at
+    /// the moment the GUI thread has failed to answer, so the one fact that
+    /// message needs is the one fact it cannot ask [`AppState`] for. Written
+    /// where `background` is written and nowhere else, so the two cannot
+    /// disagree. See [`crate::background::Busy`].
+    pub(crate) busy_notice: crate::background::BusyNotice,
+
     /// The id the next background operation takes.
     ///
     /// Monotonic and never reused, so a handle names *which* operation rather
@@ -757,6 +767,7 @@ impl AppState {
             background: None,
             last_background: None,
             background_detail_expanded: false,
+            busy_notice: Default::default(),
             next_operation_id: 1,
             wake: None,
         }

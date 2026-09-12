@@ -24,8 +24,8 @@ use super::{
     render, resolve_camera_image, resolve_camera_intrinsics, resolve_point, CameraImageSel,
     JsonReply, ToolError,
 };
-use crate::action_log::{ActionLog, Actor};
-use crate::progress::Detail;
+use crate::action_log::{ActionLog, Actor, Breakdown};
+use crate::progress::{Count, Detail};
 use crate::scene::{point_id, ImageRef};
 use crate::state::{ensure_sift_cached, AppState};
 
@@ -117,15 +117,25 @@ fn entry(log: &ActionLog, entry: &crate::action_log::Entry, detail: bool) -> Val
         if let Some(elsewhere) = ActionLog::elsewhere(entry) {
             fields.insert("elsewhere_ms".into(), json!(milliseconds(elsewhere)));
         }
-        let rows: Vec<Value> = ActionLog::detail_in_draw_order(entry)
-            .map(detail_row)
-            .collect();
-        fields.insert("detail".into(), json!(rows));
+        fields.insert("detail".into(), breakdown(&Breakdown::of(entry)));
     }
     if let crate::action_log::Kind::Query(tool) = entry.kind {
         fields.insert("tool".into(), json!(tool));
     }
     row
+}
+
+/// One breakdown as an array of rows, in the order the panel draws them.
+///
+/// The one spelling both readers of a breakdown use: an Action Log entry's,
+/// and a background operation's while it is still reporting. Two spellings
+/// would be two things that can drift, and a reader comparing a solve it
+/// watched against the row it left would be comparing two claims.
+fn breakdown(breakdown: &Breakdown<'_>) -> Value {
+    let rows: Vec<Value> = ActionLog::detail_in_draw_order(breakdown)
+        .map(detail_row)
+        .collect();
+    json!(rows)
 }
 
 /// One row of an entry's breakdown: a stage and what it cost, or something the
@@ -182,6 +192,132 @@ fn detail_row(detail: &Detail) -> Value {
 /// A duration as the wire spells one: milliseconds, fractional.
 fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+/// `get_background_process`: what the viewer is busy with, or what it was busy
+/// with last.
+///
+/// One shape for both, discriminated by `running`, because the question an
+/// agent brings here is a single one asked at an unknown moment: "the solve I
+/// started -- is it still going, and what has it cost?" A tool that answered
+/// only about a live operation would have to be paired with a second one for
+/// the answer, and the agent would have to know which to call before knowing
+/// whether it had finished.
+pub(super) fn get_background_process(state: &AppState) -> JsonReply {
+    let Some(process) = state.background() else {
+        return Ok(finished_operation(state));
+    };
+    let live = process.collector.live();
+    let mut reply = background_summary(state).expect("something is running");
+    let fields = reply.as_object_mut().expect("the block is an object");
+    fields.insert("cancellable".into(), json!(process.operation.cancellable));
+    // Absent rather than null, as every optional field on this surface is: a
+    // kernel that reports no count has not reported a count of nothing.
+    if let Some(count) = process.collector.count() {
+        fields.insert("progress".into(), progress(count));
+    }
+    if let Some(status) = process.collector.status() {
+        fields.insert("status".into(), json!(status));
+    }
+    // The innermost stage that has been entered and not left, which is what
+    // the panel's spinner names. A message row is not a phase, so a `live.open`
+    // index landing on one leaves this out rather than reporting its text as a
+    // stage.
+    if let Some(Detail::Phase { name, .. }) = live.open.last().and_then(|&row| live.rows.get(row)) {
+        fields.insert("phase".into(), json!(name));
+    }
+    fields.insert(
+        "phases".into(),
+        breakdown(&Breakdown::running(&ActionLog::capped_recent(live.rows))),
+    );
+    Ok(reply)
+}
+
+/// The same reply, for a session with nothing running.
+///
+/// The last operation rather than nothing at all, for the reason the Background
+/// panel's idle form shows it: the agent that took a handle comes back for the
+/// answer after the operation is gone, and "what did it cost" is the question
+/// it brings.
+fn finished_operation(state: &AppState) -> Value {
+    let Some(last) = state.last_background.as_ref() else {
+        // Both discriminators present, so a reader never has to tell a missing
+        // key from a false one: this session has run nothing at all.
+        return json!({ "running": false, "finished": false });
+    };
+    let (failed, text) = match &last.outcome {
+        Ok(text) => (false, text),
+        Err(message) => (true, message),
+    };
+    json!({
+        "running": false,
+        "finished": true,
+        "operation": last.operation.name,
+        "reconstruction_label": last.label,
+        "operation_id": last.id,
+        // The same field as a running operation's, which is what makes one
+        // shape out of two: seconds so far while it runs, seconds in total
+        // once it is over.
+        "elapsed_s": last.took.as_secs_f64(),
+        // The Action Log's own two fields for how a row ended, in its words,
+        // so the sentence here and the sentence there are one sentence.
+        "failed": failed,
+        "text": text,
+        "phases": breakdown(&Breakdown::running(&ActionLog::capped_recent(last.detail.clone()))),
+    })
+}
+
+/// The `background` block `get_scene` carries, or `None` with nothing running.
+///
+/// **Deliberately not the whole of `get_background_process`.** `get_scene` is
+/// the most-polled tool on this surface, and the reason this block is here at
+/// all is that an agent polling it should learn the viewer is busy without a
+/// second call. That question is answered by a handful of scalars whose size
+/// does not depend on the operation. The phase table does depend on it -- a
+/// three-round, sixty-iteration adjustment reports hundreds of rows -- so it
+/// belongs to the tool an agent asks when it wants it, and the open phase and
+/// the status line go with it because they are narrative rather than something
+/// a caller acts on.
+///
+/// `None` rather than the last operation, for the same reason: a block that
+/// went on describing a solve that ended half an hour ago would be carried by
+/// every poll for the rest of the session, and `background != null` would stop
+/// meaning "the viewer is busy", which is the one thing this block is read for.
+pub(super) fn background_summary(state: &AppState) -> Option<Value> {
+    let process = state.background()?;
+    let mut block = json!({
+        // The discriminator `bundle_adjust`'s handle uses, so the two replies
+        // an agent sees about one operation are read the same way.
+        "running": true,
+        "operation": process.operation.name,
+        "reconstruction_label": process.label,
+        "operation_id": process.id,
+        "elapsed_s": process.started.elapsed().as_secs_f64(),
+    });
+    // One number for "how far along", rather than the kernel's own count,
+    // which needs three fields and a unit only that kernel defines. It is the
+    // mapped sum of what the stages reported and is therefore measured: a
+    // silent stage does not move it, and nothing here interpolates across one.
+    if let Some(fraction) = process.collector.fraction() {
+        block
+            .as_object_mut()
+            .expect("the block is an object")
+            .insert("fraction".into(), json!(fraction));
+    }
+    Some(block)
+}
+
+/// A kernel's own count of what it is through: `{ done, total, unit }`, with
+/// `total` absent where the operation does not know how many there are.
+fn progress(count: Count) -> Value {
+    let mut block = json!({ "done": count.done, "unit": count.unit });
+    if let Some(total) = count.total {
+        block
+            .as_object_mut()
+            .expect("the block is an object")
+            .insert("total".into(), json!(total));
+    }
+    block
 }
 
 pub(super) fn list_camera_images(

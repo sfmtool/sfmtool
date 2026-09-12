@@ -262,7 +262,8 @@ fn start_mcp(
     // closure rather than the proxy itself, so `mcp::server` depends on no
     // winit type and can be driven by a test with no event loop at all.
     let proxy = proxy.clone();
-    match mcp::serve(port, tx, move || {
+    let busy = std::sync::Arc::clone(&state.busy_notice);
+    match mcp::serve(port, tx, busy, move || {
         let _ = proxy.send_event(UserEvent::McpRequest);
     }) {
         Ok(address) => {

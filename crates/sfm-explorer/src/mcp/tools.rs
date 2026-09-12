@@ -832,6 +832,19 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "get_background_process",
+            description: "What the viewer is busy with: the operation, the reconstruction it is \
+                          running on, how long it has been going, how far along it is, the stage \
+                          it is in, and the stages it has finished, in the shape get_action_log's \
+                          detail returns them in. One operation runs at a time, viewer-wide, so \
+                          this names none. With nothing running it reports the last operation of \
+                          the session instead, with running: false and finished: true, so one \
+                          call answers both whether the solve is done and what it cost. Test \
+                          running to tell the two apart.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
             name: "cancel_background",
             description: "Ask the background operation that is running to stop. One runs at a \
                           time, viewer-wide, so this names none. The operation stops at its next \
@@ -1511,6 +1524,10 @@ pub(crate) fn parse(
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             }
+        }
+        "get_background_process" => {
+            args.reject_unknown(&[])?;
+            Command::GetBackgroundProcess
         }
         "cancel_background" => {
             args.reject_unknown(&[])?;

@@ -593,18 +593,48 @@ impl ActionLog {
     /// The first rows rather than the last: an operation's shape is in the
     /// order it did things, and a breakdown truncated at the front would say
     /// nothing about where it started.
+    ///
+    /// This holds for a *folded* breakdown, where the first rows are the
+    /// operation's own stages and the fold has already collapsed the repetition
+    /// underneath them. A transcript is capped the other way round
+    /// ([`ActionLog::capped_recent`]).
     fn capped(mut detail: Vec<Detail>) -> Vec<Detail> {
         if detail.len() <= Self::DETAIL_EVENTS {
             return detail;
         }
         let dropped = detail.len() - Self::DETAIL_EVENTS;
         detail.truncate(Self::DETAIL_EVENTS);
-        detail.push(Detail::Message {
+        detail.push(Self::dropped_row(dropped, "more"));
+        detail
+    }
+
+    /// The same cap, keeping the **last** rows rather than the first.
+    ///
+    /// For an unfolded transcript, which is what the Background panel draws and
+    /// what `get_background_process` reports
+    /// (`specs/gui/operation-progress.md`). Nothing has collapsed the
+    /// repetition there, so the first hundred and twenty-eight rows of a long
+    /// solve are the first few seconds of it and say nothing about where it has
+    /// got to. The panel has the same problem and answers it the same way, by
+    /// following its tail.
+    pub(crate) fn capped_recent(detail: Vec<Detail>) -> Vec<Detail> {
+        if detail.len() <= Self::DETAIL_EVENTS {
+            return detail;
+        }
+        let dropped = detail.len() - Self::DETAIL_EVENTS;
+        let mut kept = vec![Self::dropped_row(dropped, "earlier")];
+        kept.extend(detail.into_iter().skip(dropped));
+        kept
+    }
+
+    /// The row that stands for what a cap left out, in the one spelling both
+    /// caps use.
+    fn dropped_row(dropped: usize, which: &str) -> Detail {
+        Detail::Message {
             level: Level::Info,
             depth: 0,
-            text: format!("{dropped} more events dropped"),
-        });
-        detail
+            text: format!("{dropped} {which} events dropped"),
+        }
     }
 
     /// Put the entry just written in the queue waiting to be timed, from
@@ -985,8 +1015,13 @@ impl ActionLog {
         any.then(|| took.saturating_sub(named))
     }
 
-    /// An entry's breakdown in the order the panel draws it, which is not the
-    /// order it was recorded in.
+    /// A breakdown in the order the panel draws it, which is not the order it
+    /// was recorded in.
+    ///
+    /// A [`panel::Breakdown`] rather than an [`Entry`], because the wire
+    /// carries a running operation's rows as well as a finished entry's
+    /// (`specs/gui/mcp-server.md` § "get_background_process") and there is one
+    /// order for both.
     ///
     /// [`ActionLog::elsewhere`] closes the operation's own account before the
     /// overhead the frame charged, so `panel::detail_row` reorders, and a
@@ -996,13 +1031,15 @@ impl ActionLog {
     /// operation did. `elsewhere` itself is not in here: it is a row of the
     /// breakdown rather than an event of it, and the wire carries it as a
     /// field of its own.
-    pub(crate) fn detail_in_draw_order(entry: &Entry) -> impl Iterator<Item = &Detail> + '_ {
-        let breakdown = panel::Breakdown::of(entry);
-        (0..panel::detail_rows(&breakdown))
-            .filter_map(|row| panel::detail_at(&breakdown, row))
+    pub(crate) fn detail_in_draw_order<'a>(
+        breakdown: &panel::Breakdown<'a>,
+    ) -> impl Iterator<Item = &'a Detail> {
+        let detail = breakdown.detail;
+        (0..panel::detail_rows(breakdown))
+            .filter_map(|row| panel::detail_at(breakdown, row))
             .collect::<Vec<_>>()
             .into_iter()
-            .filter_map(|index| entry.detail.get(index))
+            .filter_map(move |index| detail.get(index))
     }
 
     /// Every row of an entry's breakdown as the panel draws it, indent and

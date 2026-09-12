@@ -3596,12 +3596,13 @@ fn only_the_reads_are_annotated_read_only() {
             "get_window_layout",
             "get_image_detail_display",
             "get_history",
+            "get_background_process",
             "screenshot",
         ]
     );
-    // Ten reads, twenty-seven writes, the one that writes a file, and the one
-    // that hands back a picture.
-    assert_eq!(catalog.len(), 39, "the catalog has grown or shrunk");
+    // Eleven reads, twenty-seven writes, the one that writes a file, and the
+    // one that hands back a picture.
+    assert_eq!(catalog.len(), 40, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
@@ -3664,7 +3665,8 @@ struct RunningServer {
 
 fn running_server() -> RunningServer {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::Request>();
-    let address = super::serve(0, tx, || {}).expect("an ephemeral port is bindable");
+    let address =
+        super::serve(0, tx, Default::default(), || {}).expect("an ephemeral port is bindable");
 
     // The stand-in for `App::drain_mcp`: one owner of the state, applying one
     // command at a time. Exactly the discipline the real frame keeps, which is
@@ -4366,6 +4368,318 @@ fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
     // the two rows landed: either way the operation is over and the node free.
     assert!(state.background().is_none());
     assert_eq!(state.busy_refusal(state.scene[0].id), None);
+}
+
+// ── What an agent reads about a background operation ────────────────────
+//
+// The seam under these is `background::tests`, which drives a real worker over
+// the real channel. What is asserted here is only what reaches the wire: one
+// shape for a running operation and a finished one, a `get_scene` block that
+// does not grow with the solve, and a breakdown that is the entry's.
+
+/// Start a fake operation on `run_a` that reports through `work` and then waits,
+/// so a test can read a running operation at an instant it chose rather than
+/// one the scheduler did.
+///
+/// Returns the sender that lets the job finish. A fake rather than a real
+/// adjustment because what is under test is the reply: a solve fast enough to
+/// be deterministic reports nothing worth reading, and one slow enough to read
+/// is a test that takes a minute.
+fn running_operation(
+    state: &mut AppState,
+    work: impl FnOnce(&sfmtool_core::progress::Progress<'_>) + Send + 'static,
+) -> std::sync::mpsc::Sender<()> {
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    let (said, heard) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background(
+            crate::background::Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                work(progress);
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                crate::background::Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background();
+    open
+}
+
+/// A job that reports the shape a solve reports: a stage that closed, a stage
+/// with a folded child and a count, and a stage still open when it is read.
+fn reporting_job(progress: &sfmtool_core::progress::Progress<'_>) {
+    drop(progress.phase("gather arrays"));
+    {
+        let solve = progress.phase("solve");
+        for round in 1..=2u64 {
+            drop(solve.phase("round"));
+            solve.count(round, Some(3), "round");
+        }
+    }
+    // Left open on purpose: the open stage is what `phase` names, and a reply
+    // that only ever saw closed ones would not exercise it.
+    std::mem::forget(progress.phase("damping ladder"));
+}
+
+/// The keys of a JSON object, sorted, for asserting a block's whole shape
+/// rather than the fields a test happened to think of.
+#[track_caller]
+fn keys(value: &Value) -> Vec<String> {
+    let mut keys: Vec<String> = value
+        .as_object()
+        .unwrap_or_else(|| panic!("expected an object, got {value}"))
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    keys
+}
+
+/// One call answers both "is it still going" and "what did it cost", and the
+/// two answers are the same shape with `running` telling them apart.
+#[test]
+fn get_background_process_reads_one_shape_running_and_finished() {
+    let (mut state, mut viewer) = editable();
+
+    // Nothing has run: both discriminators are there and both are false, so a
+    // reader never has to tell a missing key from a false one.
+    let idle = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    assert_eq!(keys(&idle), ["finished", "running"], "{idle}");
+    assert_eq!(idle["running"], json!(false), "{idle}");
+    assert_eq!(idle["finished"], json!(false), "{idle}");
+
+    let open = running_operation(&mut state, reporting_job);
+    let operation_id = state.background().expect("running").id;
+    let live = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    assert_eq!(live["running"], json!(true), "{live}");
+    assert_eq!(live.get("finished"), None, "{live}");
+    assert_eq!(live["operation"], json!("Bundle adjust"), "{live}");
+    assert_eq!(live["reconstruction_label"], json!("run_a"), "{live}");
+    assert_eq!(live["operation_id"], json!(operation_id), "{live}");
+    assert_eq!(live["cancellable"], json!(true), "{live}");
+    assert!(
+        live["elapsed_s"].as_f64().expect("a duration") >= 0.0,
+        "{live}"
+    );
+    // The kernel's own count, unit and all, and the stage it is inside.
+    assert_eq!(
+        live["progress"],
+        json!({ "done": 2, "total": 3, "unit": "round" }),
+        "{live}"
+    );
+    assert_eq!(live["phase"], json!("damping ladder"), "{live}");
+    // The stages it has reported so far, in the Background panel's own order
+    // and spelling, which is unfolded: the two rounds are two rows, because
+    // this tool answers about an operation being watched rather than one read
+    // about afterwards.
+    assert_eq!(
+        wire_detail_lines(&json!({ "detail": live["phases"] })),
+        [
+            "gather arrays",
+            "solve",
+            "  round",
+            "  round",
+            "damping ladder"
+        ],
+        "{live}"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+
+    let over = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    assert_eq!(over["running"], json!(false), "{over}");
+    assert_eq!(over["finished"], json!(true), "{over}");
+    // The same operation, under the same names: an agent parses one shape.
+    for field in ["operation", "reconstruction_label", "operation_id"] {
+        assert_eq!(over[field], live[field], "{field} moved: {over}");
+    }
+    assert!(
+        over["elapsed_s"].as_f64().expect("a cost") >= live["elapsed_s"].as_f64().expect("so far"),
+        "the finished cost is shorter than the elapsed it was read at: {over}"
+    );
+    // How it ended, in the Action Log's own two fields and its own words.
+    assert_eq!(over["failed"], json!(true), "{over}");
+    assert_eq!(
+        over["text"],
+        json!("the fake worker produced nothing"),
+        "{over}"
+    );
+}
+
+/// The breakdown this tool reports is the transcript, and the Action Log entry
+/// is the summary of that transcript: every run the wire reported is counted in
+/// the row the entry folds it into.
+///
+/// The two present one operation differently on purpose, for the reason the
+/// Background panel and the Action Log panel differ
+/// (`specs/gui/operation-progress.md`). What they must never do is disagree
+/// about what happened.
+#[test]
+fn the_entry_is_the_summary_of_the_breakdown_the_wire_reported() {
+    let (mut state, mut viewer) = editable();
+    let open = running_operation(&mut state, reporting_job);
+    let since = state.action_log.revision();
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+
+    let reply = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let log = ok(&mut state, &mut viewer, action_log_detail(since));
+    let row = row_starting(&log, "the fake worker produced nothing");
+    let wire = reply["phases"].as_array().expect("an array");
+    for folded in row["detail"].as_array().expect("an array") {
+        if folded["kind"] != json!("phase") {
+            continue;
+        }
+        // Absent means one, which is how this surface spells a stage that ran
+        // once.
+        let runs = folded["runs"].as_u64().unwrap_or(1);
+        let reported = wire
+            .iter()
+            .filter(|run| {
+                run["kind"] == folded["kind"]
+                    && run["name"] == folded["name"]
+                    && run["depth"] == folded["depth"]
+            })
+            .count();
+        assert_eq!(
+            reported as u64, runs,
+            "the entry folded {runs} runs of {} and the wire reported {reported}",
+            folded["name"],
+        );
+    }
+    assert_the_panel_agrees(&state, &row);
+}
+
+/// A breakdown on the wire is capped at the same size an entry's is, and says
+/// how many it dropped. The **last** rows rather than the first, because this
+/// is a transcript and nothing has collapsed the repetition in it: the first
+/// hundred and twenty-eight rows of a long solve are its first few seconds and
+/// say nothing about where it has got to.
+#[test]
+fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
+    let (mut state, mut viewer) = editable();
+    let reported = ActionLog::DETAIL_EVENTS + 40;
+    let open = running_operation(&mut state, move |progress| {
+        for i in 0..reported {
+            progress.message(Level::Info, format_args!("event {i}"));
+        }
+    });
+
+    let live = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let rows = live["phases"].as_array().expect("an array").clone();
+    assert_eq!(rows.len(), ActionLog::DETAIL_EVENTS + 1, "{live}");
+    // What it left out is said first, and what it kept is the recent end.
+    assert_eq!(
+        rows[0]["text"],
+        json!("40 earlier events dropped"),
+        "{live}"
+    );
+    assert_eq!(rows[1]["text"], json!("event 40"), "{live}");
+    assert_eq!(
+        rows[ActionLog::DETAIL_EVENTS]["text"],
+        json!(format!("event {}", reported - 1)),
+        "{live}"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+    let over = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    assert_eq!(over["phases"], live["phases"], "{over}");
+}
+
+/// `get_scene` says the viewer is busy and stops there.
+///
+/// The most-polled tool on the surface carries a block whose size does not
+/// depend on the operation: no phase table, no open phase, no status line, and
+/// nothing at all once the operation is over.
+#[test]
+fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
+    let (mut state, mut viewer) = editable();
+    let idle = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(idle["background"], Value::Null, "{}", idle["background"]);
+
+    let open = running_operation(&mut state, |progress| {
+        reporting_job(progress);
+        progress.set_status_message(format_args!("refining images/IMG_0007.jpg"));
+    });
+    let scene = ok(&mut state, &mut viewer, Command::GetScene);
+    let block = &scene["background"];
+    assert_eq!(
+        keys(block),
+        [
+            "elapsed_s",
+            "fraction",
+            "operation",
+            "operation_id",
+            "reconstruction_label",
+            "running",
+        ],
+        "the get_scene block has grown: {block}"
+    );
+    assert_eq!(block["running"], json!(true), "{block}");
+    assert_eq!(block["operation"], json!("Bundle adjust"), "{block}");
+    assert_eq!(block["reconstruction_label"], json!("run_a"), "{block}");
+    // The one field a caller polls for movement, and the whole of what
+    // `get_background_process` would add is absent here.
+    assert!(block["fraction"].is_number(), "{block}");
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+    // Null again, rather than the operation that just ended: `background` is
+    // read as "may I edit", and a block that outlived the operation would be
+    // carried by every poll for the rest of the session.
+    let after = ok(&mut state, &mut viewer, Command::GetScene);
+    assert_eq!(after["background"], Value::Null, "{after}");
+}
+
+/// The apply timeout names what is running, and keeps its old guesses when
+/// nothing is.
+#[test]
+fn the_timeout_message_names_an_operation_only_while_one_is_running() {
+    let idle = super::server::timeout_message(None);
+    assert!(idle.contains("did not answer within 10 seconds"), "{idle}");
+    assert!(idle.contains("modal dialog"), "{idle}");
+    assert!(!idle.contains("get_background_process"), "{idle}");
+
+    let busy = super::server::timeout_message(Some(crate::background::Busy {
+        operation: "Bundle adjust",
+        label: "dino_dog_toy-embedded".to_string(),
+    }));
+    assert!(busy.contains("did not answer within 10 seconds"), "{busy}");
+    assert!(
+        busy.contains("Bundle adjust is running in the background on dino_dog_toy-embedded"),
+        "{busy}"
+    );
+    assert!(busy.contains("get_background_process"), "{busy}");
+    // The two guesses are gone: they name things that did not happen.
+    assert!(!busy.contains("modal dialog"), "{busy}");
+    assert!(!busy.contains("mid-drag"), "{busy}");
+}
+
+/// The notice the message reads is written where the process is written, so the
+/// two cannot disagree about whether anything is running.
+#[test]
+fn the_busy_notice_tracks_the_operation() {
+    let (mut state, _viewer) = editable();
+    assert_eq!(crate::background::busy(&state.busy_notice), None);
+
+    let open = running_operation(&mut state, |_| {});
+    assert_eq!(
+        crate::background::busy(&state.busy_notice),
+        Some(crate::background::Busy {
+            operation: "Bundle adjust",
+            label: "run_a".to_string(),
+        })
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background();
+    assert_eq!(crate::background::busy(&state.busy_notice), None);
 }
 
 /// Undo, redo and the jump answer with the version now showing, and refuse at

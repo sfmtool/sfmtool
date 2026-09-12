@@ -530,33 +530,56 @@ threshold has passed, whichever is true first. A deferred reply also has to
 request a repaint, or an idle viewer never reaches the clock that would answer
 it.
 
-**The timeout's own message needs the same correction.** It reads "It may be
-showing a modal dialog, or be mid-drag", which names two things that are not
-what happened and omits the one that did. Once an operation can be in the
-background, a call that times out while one is running should say so and point
-at `get_background_process`, and a call that times out with nothing running
-keeps the message it has, which is then true.
+**The timeout's own message follows what is running.** It used to read "It may
+be showing a modal dialog, or be mid-drag", which names two things that are not
+what happened and omits the one that did. A call that times out while an
+operation is running now names the operation and the node it is on and points at
+`get_background_process`; a call that times out with nothing running keeps the
+message it had, which is then true. The thread composing that sentence is the
+one thread that cannot ask `AppState`, since it is composing it precisely
+because the GUI thread did not answer, so it reads a small shared notice,
+`background::BusyNotice`, written where `AppState::background` is written and
+nowhere else.
 
-A new read tool, **`get_background_process`**, reports what is running:
-the operation, the label, the seconds elapsed, the progress as `done`, `total`
-and `unit` when there is one, the open phase, and the completed phases in the
-shape `get_action_log { "detail": true }` already returns them in
+A read tool, **`get_background_process`**, reports what is running: the
+operation, the label, the seconds elapsed, `fraction` of the whole where
+anything reported one, whether it can be cancelled, the progress as `done`,
+`total` and `unit` where there is one, the status, the open phase, and the
+stages so far in the shape `get_action_log { "detail": true }` returns them in
 ([../gui/mcp-server.md](../gui/mcp-server.md) § "get_action_log"), so an agent
-that reads a finished operation and a running one parses one shape. With
-nothing running it reports the last operation of the session, marked `finished`,
-so one call answers both "is it done" and "what did it cost".
+that reads a finished operation and a running one parses one shape. The rows are
+the panel's transcript rather than the entry's folded summary, for the reason
+the panel does not fold (§ "Running"): this tool answers about an operation
+being watched. `get_action_log { "detail": true }` is where the summary is. With nothing
+running it reports the last operation of the session, marked `finished`, so one
+call answers both "is it done" and "what did it cost". `elapsed_s` carries both
+halves of that: seconds so far while it runs, seconds in total once it is over.
 
-`get_scene` gains a `background` block of the same shape, beside
-`status_message`, so an agent that already polls `get_scene` learns that the
-viewer is busy without a second call, and knows not to send an edit that would
-be refused.
+**The phase list is capped at the size an entry's is**,
+`ActionLog::DETAIL_EVENTS`, with a `"{n} earlier events dropped"` row. Not a
+size limit chosen for the wire: it is the number the Action Log already applies
+to these rows. It keeps the **last** of them rather than the first, which is the
+opposite of an entry's cap, because this list is the panel's transcript and
+nothing has collapsed the repetition in it: the first 128 rows of a long solve
+are its first few seconds. An entry's first 128 rows are its shape, because the
+fold got there first.
+
+`get_scene` gains a `background` block beside `status_message`, so an agent that
+already polls `get_scene` learns that the viewer is busy without a second call,
+and knows not to send an edit that would be refused. It is the same shape with
+everything unbounded left out: `running`, `operation`, `reconstruction_label`,
+`operation_id`, `elapsed_s` and `fraction`, and `null` with nothing running.
+The phase table belongs to the tool an agent asks when it wants it, because
+`get_scene` is the most-polled call on the surface and a block that grew with
+the solve would be paid for on every poll; the open phase and the status line go
+with it, being narrative rather than something a caller acts on. `null` rather
+than the last operation for a second reason as well: a block that outlived its
+operation would make `background != null` stop meaning "the viewer is busy",
+which is the one thing it is read for.
 
 A **`cancel_background`** tool cancels what is running, and refuses when the
 operation cannot be cancelled, with the same sentence the button's tooltip
 carries.
-
-The MCP spec's warning that a long `bundle_adjust` will time out while the solve
-goes on is deleted, because the behaviour it describes is gone.
 
 ## Testing
 
@@ -588,6 +611,27 @@ Panel, through `test_support::run_frame_headless`:
 - **Every `Operation` that declares `cancellable` really is**: cancelling each
   one stops it and writes the cancelled entry. A declaration nothing checks is a
   declaration that rots.
+
+`crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
+editing fixture's node, so the wire is read at an instant the test chose:
+
+- `get_background_process` answers one shape running and finished: the same
+  `operation`, `reconstruction_label` and `operation_id` either way, a cost no
+  shorter than the elapsed it was read at, and `running` telling the two apart.
+  A session that has run nothing answers `running: false, finished: false` and
+  no more.
+- **Its `phases` is the transcript and the entry is the summary of it**: every
+  run the wire reported is counted in the row the entry folds it into, and the
+  entry is then held to the panel's own rows through the agreement assertion
+  every other breakdown test ends on.
+- A breakdown longer than `DETAIL_EVENTS` is the dropped line and the last 128
+  rows, and reads the same after the operation ends as it did during it.
+- **`get_scene`'s `background` block does not grow with the solve**: its whole
+  key set is asserted, so a field added to the most-polled reply on the surface
+  is a deliberate act. It is `null` before an operation and again after it.
+- The apply timeout's message names the operation only while one is running, and
+  the notice it reads is empty before the operation, set during it, and empty
+  again afterwards.
 
 `crates/sfm-explorer/tests/ui_basic.rs`: the Background panel is in the
 accessibility tree, and **Panels ▸ Background** ticks it.
