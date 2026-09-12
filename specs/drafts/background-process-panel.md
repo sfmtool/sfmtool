@@ -5,8 +5,18 @@
 Amends [gui/edits/bundle-adjust.md](../gui/edits/bundle-adjust.md) § "Non-goals",
 [gui/document-model.md](../gui/document-model.md) § "Two kinds of edit",
 [gui/panel-layout.md](../gui/panel-layout.md) § "Home positions",
-[gui/action-log.md](../gui/action-log.md) and
-[gui/mcp-server.md](../gui/mcp-server.md).
+[gui/action-log.md](../gui/action-log.md),
+[gui/mcp-server.md](../gui/mcp-server.md) and
+[gui/operation-progress.md](../gui/operation-progress.md), whose collector keeps
+a status, a count and a fraction that nothing draws until this is built.
+
+Its case is measured. A bundle adjustment of `dino_dog_toy-embedded` (85 images,
+21 009 points, 392 489 observations) holds the GUI thread for 95 seconds: the
+window is frozen for all of it, and every MCP call in that window fails on the
+10 second apply timeout with "The viewer did not answer within 10 seconds. It
+may be showing a modal dialog, or be mid-drag", which is the wrong reason. The
+breakdown the frozen operation recorded is readable afterwards and says the
+damping ladder was 87 of those 95 seconds.
 
 ## The problem
 
@@ -27,7 +37,7 @@ along it is, and what it has spent its time on so far. The panel shows the phase
 table live while the operation runs, and that same table is what the Action Log
 entry carries once it is done, so watching a long operation and reading about it
 afterwards are the same view of the same data
-([operation-progress.md](operation-progress.md)).
+([../gui/operation-progress.md](../gui/operation-progress.md)).
 
 ## Why this is safe here
 
@@ -111,7 +121,7 @@ nothing says `Nothing running` and no more.
   does. The bar is a statement about how much of the work is behind you, never a
   prediction of when it will end: it steps at every phase boundary, because
   something did finish, and moves smoothly only across the stages that actually
-  report counts ([operation-progress.md](operation-progress.md) § "Nesting").
+  report counts ([../gui/operation-progress.md](../gui/operation-progress.md) § "Nesting").
   Nothing interpolates across a silent stage, and there is never a synthesised
   percentage, because a bar moving at a rate nobody measured makes a promise
   about the finish.
@@ -119,7 +129,7 @@ nothing says `Nothing running` and no more.
   replaced as often as it likes: a file name inside a loop over images, the
   member being refined. It is live state and is never kept in the Action Log
   entry, because once the entry exists the answer is "finished"
-  ([operation-progress.md](operation-progress.md) § "Status is not a message").
+  ([../gui/operation-progress.md](../gui/operation-progress.md) § "Status is not a message").
   It sits under the bar, because it is the words for the same thing the numbers
   beside the bar count.
 - **Elapsed** counts up from the instant the operation started, which is the
@@ -133,7 +143,7 @@ nothing says `Nothing running` and no more.
   the panel does not know they are coming. It shows whichever level of timing is
   running, so ticking **Detailed timing** before starting a long operation is how
   somebody watches a kernel's internals
-  ([operation-progress.md](operation-progress.md) § "Two levels").
+  ([../gui/operation-progress.md](../gui/operation-progress.md) § "Two levels").
 
 ### What the rest of the viewer does meanwhile
 
@@ -173,7 +183,7 @@ minutes later it lands.
 Its **cost covers the whole operation**, not the frame that pushed it, and its
 detail is what the worker reported. Both arrive through one call,
 `ActionLog::record_done(kind, started, text, detail)`
-([operation-progress.md](operation-progress.md), "The Action Log's side"): the
+([../gui/operation-progress.md](../gui/operation-progress.md), "The Action Log's side"): the
 entry is written now, its cost is measured from an instant already past, and it
 settles on the frame that draws the result as every other entry does. Without
 the start instant a two-minute solve would report the six milliseconds of the
@@ -209,7 +219,7 @@ same mechanism without extending it.
 ## Reporting progress
 
 The channel from a worker to this panel is
-[operation-progress.md](operation-progress.md)'s `Progress`: one parameter the
+[../gui/operation-progress.md](../gui/operation-progress.md)'s `Progress`: one parameter the
 kernel takes, carrying phases, messages, progress counts and the cancel flag.
 The worker builds it over a collector the GUI thread shares, so the panel reads
 what has been reported by locking that collector each frame rather than by
@@ -248,7 +258,7 @@ pub(crate) struct BackgroundProcess {
     pub started: std::time::Instant,
     /// Where the worker reports, and where the panel reads. Shared, taken by
     /// `&`, never borrowed mutably
-    /// ([operation-progress.md](operation-progress.md) § "In the viewer").
+    /// ([../gui/operation-progress.md](../gui/operation-progress.md) § "In the viewer").
     pub collector: Arc<progress::Collector>,
     /// Set to ask the operation to stop. The kernel polls it through the
     /// `Progress` built over `collector`; one that never polls is not
@@ -346,7 +356,7 @@ distinguishable, and the wire already has the vocabulary to follow up.
 A new read tool, **`get_background_process`**, reports what is running:
 the operation, the label, the seconds elapsed, the progress as `done`, `total`
 and `unit` when there is one, the open phase, and the completed phases in the
-shape [operation-progress.md](operation-progress.md) gives them. With
+shape [../gui/operation-progress.md](../gui/operation-progress.md) gives them. With
 nothing running it reports the last operation of the session, marked `finished`,
 so one call answers both "is it done" and "what did it cost".
 

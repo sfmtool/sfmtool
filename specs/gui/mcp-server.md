@@ -110,7 +110,9 @@ one that closes the loop by handing back a picture.
 | `get_camera_image` | read | One camera image: pose, intrinsics, observation stats |
 | `get_camera_intrinsics` | read | One intrinsics record and the camera images that use it |
 | `get_point` | read | One 3D point: position, colour, error, full track |
-| `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it |
+| `get_action_log` | read | What has happened in the viewer, from a revision onward, filtered by who did it, optionally with each row's stages |
+| `get_timing_detail` | read | Whether the detailed stages of an operation are being recorded |
+| `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
@@ -876,6 +878,7 @@ transcript.
 { "since_revision": 512 }                       // entries recorded or changed after revision 512
 { "since_revision": 0, "limit": 50 }            // from the start, at most 50
 { "since_revision": 512, "actors": ["user"] }   // what the human did since 512
+{ "since_revision": 528, "detail": true }       // with each row's stages and messages
 {}                                              // everything kept, every actor
 ```
 
@@ -946,6 +949,37 @@ and one that does not is handed nothing to special-case.
 transcript. `limit` defaults to `200` and is capped at `1000`
 (`read::ACTION_LOG_DEFAULT_LIMIT`, `read::ACTION_LOG_MAX_LIMIT`); past it,
 `truncated: true` and the agent continues from the last entry's `revision`.
+
+**`detail` adds the account of `took_ms`**, and is off by default because the
+breakdown is several times the size of the row it hangs off and an agent reading
+the log to find out what happened does not want it. With it set a row carries
+`elsewhere_ms` beside `took_ms` and a `detail` array of
+`{ "kind": "phase", "name", "depth", "ms" }`, with `"cpu_ms"`, `"note"` and
+`"runs"` where they apply, and `{ "kind": "message", "level", "depth", "text" }`,
+in the order the panel draws them. `detail` is present but empty on a row that
+recorded nothing, and `elsewhere_ms` is absent on a row the viewer has not drawn
+yet. What a stage is, what folds and what `elsewhere` means are
+[operation-progress.md](operation-progress.md).
+
+The case it exists for is the second call: an agent reads the log, finds a slow
+row, and asks again with `detail` set and `since_revision` just below that row.
+
+### `get_timing_detail`, `set_timing_detail`
+
+`detail` above asks for what was *recorded*. This pair decides what gets
+recorded: `set_timing_detail { "enabled": true }` turns on the stages too fine
+to carry always, and `get_timing_detail` reads the level back. Both answer
+`{ "timing_detail": { "enabled": false } }`.
+
+Setting it records the same `Display` entry the panel's **Detailed timing**
+checkbox does, so a human at the window can see that an agent raised the level,
+and one entry only when the value changes. It takes effect on the next
+operation: nothing already recorded is re-timed, and turning it off strips
+nothing from a row that has it.
+
+Together they are how an agent investigates a slow operation without a restart
+and without an environment variable: turn detail on, run the operation, read the
+log with `detail`, turn it off.
 
 **`actors` filters by who did it.** A set of the Action Log's three actors
 (`Actor::wire_name`: `user`, `mcp`, `viewer`), and an entry is returned when its

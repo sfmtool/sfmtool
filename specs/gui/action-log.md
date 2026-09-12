@@ -389,10 +389,12 @@ so a slow row stands out of a column of fast ones without the numbers being
 read, and weak, because it is the one column that is about the viewer rather
 than about the action.
 
-The entry carries that one number and no account of it. A `Progress` parameter
-that long operations report their phases, messages and progress counts to, an
-expander under the row that shows them, and a wire form for both are proposed in
-[../drafts/operation-progress.md](../drafts/operation-progress.md).
+An entry also carries an account of that number. A row whose operation reported
+stages gains a toggle before its time, and expanding it lists them with their
+costs in this same column, an `elsewhere` line that makes them reconcile with
+it, and the overhead of putting the result on screen under a rule below. What
+reports, what a stage is named after and how it reaches the wire are
+[operation-progress.md](operation-progress.md).
 
 ## Rust API
 

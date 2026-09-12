@@ -53,6 +53,7 @@ pub fn add_observation(
     pixel: [f32; 2],
     views: &[ProjectedImage<'_>],
     options: &AddObservationOptions,
+    progress: &Progress<'_>,
 ) -> Result<(EditedReconstruction, AddObservationReport), AddObservationError>;
 
 pub struct AddObservationOptions {
@@ -90,6 +91,16 @@ pub enum AddObservationError {
     Edit(EditError),
 }
 ```
+
+`progress` is where this call names its two kernel stages, `localize` and
+`refine`, so a caller can see which of them a slow registration spent its time
+in. The kernels themselves take no `Progress`: each call registers one patch
+over a handful of views with no stage inside it worth a row, and every other
+caller runs them once per point inside a rayon loop, where a phase per call
+would be per-item timing. `&Progress::none()` reports nothing, and the
+registration it performs is identical either way
+([../../gui/operation-progress.md](../../gui/operation-progress.md)).
+
 
 ### Why it is shaped this way
 

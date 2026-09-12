@@ -1,33 +1,38 @@
 # Operation progress: what a long computation tells its caller
 
-**Status:** Draft
+A long-running function in `sfmtool-core` takes a `Progress`, the one parameter
+that carries what it has to say and how it is told to stop: which stage it is
+in and what each stage cost, a remark worth keeping, what it is doing at this
+instant, how far along it is, and, in the other direction, stop. The viewer
+collects what comes back, and an Action Log row expands to show it.
 
-Amends [gui/action-log.md](../gui/action-log.md) § "What an action cost" and
-[gui/mcp-server.md](../gui/mcp-server.md) § "get_action_log" in the viewer, and
-in `sfmtool-core` adds one parameter to the long-running functions specified by
-[core/geometry/bundle-adjustment.md](../core/geometry/bundle-adjustment.md),
-[core/reconstruction/add-observation.md](../core/reconstruction/add-observation.md)
-and the other kernels under [core/patch/](../core/patch/) that a viewer
-operation reaches.
+The parameter is [`crates/sfmtool-core/src/progress.rs`](../../crates/sfmtool-core/src/progress.rs).
+The viewer's collector is
+[`crates/sfm-explorer/src/progress.rs`](../../crates/sfm-explorer/src/progress.rs),
+the panel is
+[`crates/sfm-explorer/src/action_log/panel.rs`](../../crates/sfm-explorer/src/action_log/panel.rs),
+and what an entry keeps is in
+[`crates/sfm-explorer/src/action_log/mod.rs`](../../crates/sfm-explorer/src/action_log/mod.rs).
+[action-log.md](action-log.md) is the log this hangs off and
+[mcp-server.md](mcp-server.md) the endpoint that reads it back.
 
-## What a long computation cannot say
+## What one number cannot say
 
-A reconstruction kernel runs for somewhere between a millisecond and several
-minutes, and for that whole time it says nothing. It cannot report which stage
-it is in, cannot say how far along it is, cannot pass on a remark worth reading
-("three views dropped below the ZNCC floor"), and cannot be told to stop. When
-it returns, the Action Log gets one number for the whole thing: `took`, the wall
-time between the action being recorded and the frame that showed its result.
-
-That number is the wait the person at the window actually sat through, and it is
+`took` is the wall time between an action being recorded and the frame that
+showed its result: the wait the person at the window actually sat through. It is
 enough to notice that deleting a point costs six milliseconds while undoing back
 across a bulk edit costs two and a half seconds. It is not enough to say *where*
 those two and a half seconds went, which is the next question every time the
-number is surprising. Answering it today means a stopwatch outside the process,
-a guess about which of half a dozen candidate costs dominates, and no way to
-check the guess against what the viewer did.
+number is surprising, and answering it from outside the process means a
+stopwatch and a guess about which of half a dozen candidate costs dominates.
 
-Five things are missing, and they are one problem:
+A guess is worse than it sounds. Opening a 45 MB reconstruction costs 1.45 s, of
+which reading the file is 141 ms and the GPU upload 434 ms; the remaining 868 ms
+is the renderer coming up once at startup, charged to the first entry that
+settles after it. The guess this displaced, written into the design before any
+of it was measured, was that the unnamed time was the file being read.
+
+So a kernel says five things, and they are one problem:
 
 | | |
 |---|---|
@@ -37,12 +42,12 @@ Five things are missing, and they are one problem:
 | how far along it is | **counts** |
 | and, in the other direction: stop | **cancellation** |
 
-All five are a channel between a long computation and whoever asked for it. This
-proposes one parameter carrying all five, a `Progress` that every long function
-in `sfmtool-core` accepts, and then what the viewer does with what comes back:
-the Action Log entry grows an expandable breakdown, and the Background panel
-shows the same thing live
-([background-process-panel.md](background-process-panel.md)).
+All five are a channel between a long computation and whoever asked for it, and
+one parameter carries all five: a `Progress` that every long function in
+`sfmtool-core` accepts. The viewer collects what comes back and an Action Log
+entry expands to show it. Running an operation off the GUI thread, so that a
+panel can draw the same thing while it is still going, is
+[drafts/background-process-panel.md](../drafts/background-process-panel.md).
 
 ## The parameter
 
@@ -341,11 +346,11 @@ a loop over 105 000 clusters reports `count(i, Some(n))` from inside the loop.
 Splitting per item would mean a range per item and a report per item, which is
 the wrong shape and the wrong cost.
 
-**Fraction reports coalesce.** These loops run to the order of 10^8 objective
-evaluations, and the bar has a few hundred pixels. The collector drops a
-`Fraction` that arrives within `FRACTION_INTERVAL` of the last one it kept.
-Phase boundaries and messages are never dropped, since those are events rather
-than samples.
+**A fraction is a sample, not an event.** These loops run to the order of 10^8
+objective evaluations, and the bar has a few hundred pixels, so the collector
+keeps only the newest fraction a call reported and nothing accumulates: there is
+no backlog to coalesce and no rate to limit. Phases and messages are events and
+are all kept, up to `DETAIL_EVENTS`.
 
 ## Two levels
 
@@ -542,6 +547,11 @@ thread-summed CPU time alongside its wall time can show eight seconds of CPU
 inside one second of wall, and folding that into a wall-clock total would be
 lying about the sum.
 
+No kernel reports one yet: the column is drawn, the wire carries it and
+`elsewhere` excludes it, and every figure is absent until a stage measures
+thread-summed time and says so. It is here because the exclusion rule has to be
+settled before the first stage does, not after.
+
 ### Turning on detail
 
 A **Detailed timing** checkbox in the Action Log toolbar, beside **Latest**,
@@ -566,10 +576,20 @@ impl Collector {
     /// Time a phase of the viewer's own work.
     pub(crate) fn phase(&self, name: &'static str) -> Phase<'_>;
     pub(crate) fn take(&self) -> Vec<Detail>;
-    /// What the Background panel draws: the open phase and what is done so far.
-    pub(crate) fn live(&self) -> Live<'_>;
+    /// The newest of each, which no entry keeps (§ "Status is not a message").
+    pub(crate) fn status(&self) -> Option<String>;
+    pub(crate) fn count(&self) -> Option<Count>;
+    pub(crate) fn fraction(&self) -> Option<f32>;
 }
 ```
+
+The last three have no reader in the viewer as it stands, because the panel that
+would draw a live operation is
+[drafts/background-process-panel.md](../drafts/background-process-panel.md).
+They are collected anyway: a status that only reached a panel would have to be
+invented at the same time as the panel, and the rule that says an entry never
+keeps one (§ "Status is not a message") is a property of the collector rather
+than of anything that draws.
 
 **An operation's collector** is made when the operation starts and handed to the
 entry when it finishes. There is nothing to attribute: the collector *is* that
@@ -909,8 +929,6 @@ pair exists for.
   leave the global fraction non-decreasing.
 - `count(done, Some(total))` emits both the words and a mapped fraction;
   `count(done, None)` emits the words and moves nothing.
-- `Fraction` reports closer together than `FRACTION_INTERVAL` are dropped, while
-  a phase boundary or a message between them is kept.
 - `is_cancelled` is observed by a kernel inside a rayon loop, which stops and
   returns what it had. **The point of this test is the parallel case**, since a
   thread-local collector is what this design exists to avoid.
@@ -971,7 +989,6 @@ it when asked, with the depths and order the panel draws;
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | detail level | off | Whether `detail_phase` records. Viewer state, set by the toolbar checkbox or `set_timing_detail`; not read from the environment |
-| `FRACTION_INTERVAL` | `30 ms` | Minimum gap between kept `Fraction` reports, in `sfm-explorer`'s `progress::Collector`; phases and messages are never dropped |
 | `ActionLog::DETAIL_EVENTS` | `128` | Events kept per entry; the rest are dropped and counted |
 | detail indent | 2 spaces per level | Panel and clipboard alike |
 
@@ -1001,28 +1018,19 @@ it when asked, with the depths and order the panel draws;
   rayon region is a different problem, and nothing has asked for it.
 - **Persisting the detail or the level.** Both live as long as the session.
 
-## Open questions
+## Decided along the way
 
-- **Whether the message levels and the detail switch are one dial.** frantic has
-  one, running `LOG_NONE` to `LOG_DEBUG`, where we have two message levels plus
-  a separate switch for detailed phases: two dials for what may be one question.
-  Folding them would make `Level::Debug` messages and `detail_phase` obey the
-  same rule, and would turn the **Detailed timing** checkbox into something
-  closer to a log level. It removes a concept, and it changes a user-facing
-  control into a more technical one, which is why it is here rather than above.
-- Whether `Progress` should be a trait rather than a struct with a `dyn Fn`
-  sink. A trait would let a caller avoid the indirect call; the struct keeps one
-  type in every signature, which is what makes `Progress::none()` a drop-in. The
-  struct, until a profile says the indirect call matters.
-- Whether the level should persist in the layout file, so somebody debugging
-  across restarts does not re-tick it. Against: a viewer that quietly starts up
-  profiling is slower than the last person left it, for a reason nobody
-  remembers.
-- Whether an entry should expand on a click anywhere in the row rather than only
-  on the toggle and the time. A row click does nothing today, so there is no
-  conflict, but a row that expands on any click is a row a reader cannot select
-  text from.
-- Whether a kernel should be able to report a `count` whose `total` it revises
-  downward mid-run. The bundle adjustment knows its iteration budget but may
-  converge early, so its bar would jump to full rather than creep. Allowed, and
-  the panel draws whatever it was last told.
+Two shapes were considered and are not what this is, and the reasons are worth
+keeping because both would look like simplifications from outside.
+
+**One dial rather than two.** `frantic` has a single level running `LOG_NONE` to
+`LOG_DEBUG`, where this has two message levels plus a separate switch for
+detailed phases. Folding them would remove a concept, and it would turn a
+user-facing control into a log level: the checkbox is read by somebody who wants
+to know where an operation's time went, not by somebody choosing a verbosity.
+
+**A struct with a `dyn Fn` sink rather than a trait.** A trait would let a
+caller avoid the indirect call. The struct keeps one type in every signature,
+which is what makes `Progress::none()` a drop-in at several hundred call sites
+and what keeps a kernel's signature readable. The indirect call has not shown up
+in a profile.

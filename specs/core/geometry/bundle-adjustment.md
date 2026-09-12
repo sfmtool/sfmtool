@@ -72,9 +72,22 @@ pub fn bundle_adjust(
     max_iters: usize,                    // LM iterations per round
     min_track: usize,                    // trim survivors per point (2)
     min_obs: usize,                      // degenerate-exit floor (12)
+    progress: &Progress<'_>,             // phases, counts and the cancel flag
 ) -> BundleAdjustment;                   // { focal, k1, bspline, residual_norms,
                                          //   point_at_infinity }
 ```
+
+`progress` is where the rounds and the LM iterations inside them are reported: a
+phase per schedule round with an iteration count under it, so a caller knows
+which round a long solve is in. It is also how the solve is asked to stop, which
+it is between rounds and between iterations, those being the points where the
+state is a whole answer rather than a half-written candidate. A stopped solve
+returns the state it had reached rather than an error, since it has no `Result`
+to put one in, and the caller asks `Progress::is_cancelled` again to find out.
+`&Progress::none()` reports nothing and never stops: every method on it is a
+branch on a null sink, and the solve runs exactly as it did before the parameter
+existed, which is asserted bit for bit
+([../../gui/operation-progress.md](../../gui/operation-progress.md)).
 
 Per schedule round, mirroring the experiment scripts exactly:
 
