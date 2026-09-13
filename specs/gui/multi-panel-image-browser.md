@@ -37,7 +37,7 @@ root, and everything below describes the arrangement to its right.
 
 - **Scene**: left, ~18% width, upper ~72% of that column. The tree of loaded
   reconstructions.
-- **Background**: under the tree, the rest of the left column. What a long
+- **Background Task**: under the tree, the rest of the left column. What a long
   operation running off the GUI thread is doing, and what the last one cost
   ([background-operations.md](background-operations.md)).
 - **3D Viewer**: top-left of the rest, ~2/3 of its width. Point cloud,

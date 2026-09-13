@@ -2749,7 +2749,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
         active,
         [
             "scene",
-            "background",
+            "background_task",
             "viewer_3d",
             "image_browser",
             "image_detail"

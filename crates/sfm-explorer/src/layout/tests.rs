@@ -32,8 +32,8 @@ const DEFAULT_JSON: &str = r#"{
           "active": "scene"
         },
         "second": {
-          "tabs": ["background"],
-          "active": "background"
+          "tabs": ["background_task"],
+          "active": "background_task"
         }
       },
       "second": {
@@ -173,7 +173,7 @@ fn the_left_column_splits_the_tree_over_the_background_panel() {
         "the tree's share is {fraction}, not 0.72"
     );
     assert_eq!(*top, LayoutNode::leaf(&[Tab::SceneGraph]));
-    assert_eq!(*bottom, LayoutNode::leaf(&[Tab::Background]));
+    assert_eq!(*bottom, LayoutNode::leaf(&[Tab::BackgroundTask]));
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn tab_all_is_in_the_menus_order() {
         Tab::ALL,
         [
             Tab::SceneGraph,
-            Tab::Background,
+            Tab::BackgroundTask,
             Tab::Viewer3D,
             Tab::ImageBrowser,
             Tab::ImageDetail,
@@ -347,8 +347,8 @@ fn a_panel_goes_home_to_a_group_mate() {
         (Tab::ImageBrowser, Tab::ActionLog),
         // Not a multi-tab node of the default layout, and a group-mate anyway:
         // re-opening the Background panel puts it back beside the tree.
-        (Tab::Background, Tab::SceneGraph),
-        (Tab::SceneGraph, Tab::Background),
+        (Tab::BackgroundTask, Tab::SceneGraph),
+        (Tab::SceneGraph, Tab::BackgroundTask),
     ] {
         let mut state = state();
         state.hide_panel(tab);
@@ -373,7 +373,7 @@ fn a_panel_goes_home_to_a_group_mate() {
 fn a_panel_with_no_group_mate_splits_the_root() {
     for (tab, split, fraction, first_is_new) in [
         (Tab::SceneGraph, SplitDirection::LeftRight, 0.18, true),
-        (Tab::Background, SplitDirection::LeftRight, 0.18, true),
+        (Tab::BackgroundTask, SplitDirection::LeftRight, 0.18, true),
         (Tab::ImageBrowser, SplitDirection::TopBottom, 0.80, false),
         (Tab::ImageDetail, SplitDirection::LeftRight, 0.67, false),
     ] {
@@ -523,7 +523,7 @@ fn an_unknown_panel_name_lists_them_all() {
     let message = layout_refusal(r#"{"main": {"tabs": ["viewer3d"], "active": "viewer3d"}}"#);
     assert_eq!(
         message,
-        "layout.main: unknown panel \"viewer3d\"; the panels are scene, background, viewer_3d, \
+        "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_task, viewer_3d, \
          image_browser, image_detail, point_track, camera_intrinsics, action_log, edit_history"
     );
 }

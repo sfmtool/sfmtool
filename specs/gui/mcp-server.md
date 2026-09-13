@@ -1059,7 +1059,7 @@ ones, so a reader never has to tell a missing key from a false one.
 the same order (§ "get_action_log"), built by the same function from the same
 collector, so one parser reads both. What it carries is the **transcript**: one
 row per run of a stage and one per message, unfolded, which is what the
-Background panel draws. The entry the operation leaves behind is the folded
+Background Task panel draws. The entry the operation leaves behind is the folded
 summary of that transcript, so the two are one account of one solve presented
 for two questions, and every run reported here is counted in the row the entry
 folds it into. A reader that wants the shape of a finished operation rather than
@@ -1075,7 +1075,7 @@ is the number the Action Log already applies to these rows.
 
 It keeps the **last** rows rather than the first, which is the opposite of what
 an entry's cap does, because these are not an entry's rows. `phases` is the
-transcript the Background panel draws, unfolded, so nothing has collapsed the
+transcript the Background Task panel draws, unfolded, so nothing has collapsed the
 repetition in it: the first 128 rows of a long solve are its first few seconds
 and say nothing about where it has got to. An entry's first 128 rows are its
 shape, because folding has already collapsed the repetition underneath them. The

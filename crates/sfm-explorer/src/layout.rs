@@ -178,7 +178,7 @@ pub(crate) enum Home {
 /// anyway, because a Background panel re-opened beside the tree is the thing
 /// asked for and a third left column would not be.
 const GROUPS: [&[Tab]; 3] = [
-    &[Tab::SceneGraph, Tab::Background],
+    &[Tab::SceneGraph, Tab::BackgroundTask],
     &[
         Tab::ImageDetail,
         Tab::PointTrackDetail,
@@ -191,7 +191,7 @@ impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
     pub(crate) const ALL: [Tab; 9] = [
         Tab::SceneGraph,
-        Tab::Background,
+        Tab::BackgroundTask,
         Tab::Viewer3D,
         Tab::ImageBrowser,
         Tab::ImageDetail,
@@ -206,7 +206,7 @@ impl Tab {
     pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Tab::SceneGraph => "scene",
-            Tab::Background => "background",
+            Tab::BackgroundTask => "background_task",
             Tab::Viewer3D => "viewer_3d",
             Tab::ImageBrowser => "image_browser",
             Tab::ImageDetail => "image_detail",
@@ -239,7 +239,7 @@ impl Tab {
             // The same edge and share as Scene, whose group-mate it is: with
             // the tree gone too, the panel that replaces it belongs where the
             // tree was.
-            Tab::SceneGraph | Tab::Background => Home::Edge {
+            Tab::SceneGraph | Tab::BackgroundTask => Home::Edge {
                 edge: Split::Left,
                 share: 0.18,
             },
@@ -305,7 +305,7 @@ impl Default for Layout {
                     split: SplitDirection::TopBottom,
                     fraction: LEFT_COLUMN_SPLIT,
                     first: Box::new(LayoutNode::leaf(&[Tab::SceneGraph])),
-                    second: Box::new(LayoutNode::leaf(&[Tab::Background])),
+                    second: Box::new(LayoutNode::leaf(&[Tab::BackgroundTask])),
                 }),
                 second: Box::new(LayoutNode::Split {
                     split: SplitDirection::TopBottom,

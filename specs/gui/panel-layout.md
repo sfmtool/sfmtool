@@ -116,15 +116,16 @@ as nearly as the current arrangement allows. Three rules, tried in order:
    the multi-tab nodes of the default layout (Image Detail / Point Track /
    Camera Intrinsics, and Image Browser / Action Log / Edit History), and a
    panel from either goes home to whichever of its group-mates is still there.
-   The third, Scene / Background, is a top-bottom split rather than one node,
-   and is a group anyway: a Background panel re-opened belongs beside the tree,
+   The third, Scene / Background Task, is a top-bottom split rather than one
+   node, and is a group anyway: a Background Task panel re-opened belongs beside
+   the tree,
    where rule 3 would give it a second left column of its own.
 3. **Otherwise, split the main surface's root** along the panel's home edge,
    at its home fraction, and put the panel in the new node:
 
    | Panel | Home edge | New node's share |
    |-------|-----------|------------------|
-   | Scene, Background | left | 0.18 |
+   | Scene, Background Task | left | 0.18 |
    | 3D Viewer | *(takes the root)* | — |
    | Image Browser, Action Log, Edit History | below | 0.20 |
    | Image Detail, Point Track, Camera Intrinsics | right | 0.33 |
@@ -195,8 +196,8 @@ observed a window (a headless `AppState`):
           "active": "scene"
         },
         "second": {
-          "tabs": ["background"],
-          "active": "background"
+          "tabs": ["background_task"],
+          "active": "background_task"
         }
       },
       "second": {
@@ -378,7 +379,7 @@ which makes them greppable against the `Tab` enum and readable in a diff:
 | Name | Tab | Title |
 |------|-----|-------|
 | `scene` | `SceneGraph` | Scene |
-| `background` | `Background` | Background |
+| `background_task` | `BackgroundTask` | Background Task |
 | `viewer_3d` | `Viewer3D` | 3D Viewer |
 | `image_browser` | `ImageBrowser` | Image Browser |
 | `image_detail` | `ImageDetail` | Image Detail |
@@ -945,9 +946,9 @@ nothing to raise.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. Unchanged by a new panel: the version tags the document's *shape*, and a panel is a new value in an existing enum rather than a new key or node kind. A file written before the Background panel existed still loads, and arrives with that panel closed, which is indistinguishable from a user having closed it. |
-| Scene / Background home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
-| `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background panel taking the rest. |
+| `layout::LAYOUT_VERSION` | `2` | The `sfm_explorer_layout` value written and the only one read. Unchanged by a new panel: the version tags the document's *shape*, and a panel is a new value in an existing enum rather than a new key or node kind. A file written before a panel existed still loads, and arrives with that panel closed, which is indistinguishable from a user having closed it. **Renaming** one is the case this does not cover: a file naming a panel by a name no longer in the table is refused whole, by § "Validation", and Reset Layout is the way back. |
+| Scene / Background Task home | left, `0.18` | § "Home positions" rule 3 (`Tab::home`). |
+| `layout::LEFT_COLUMN_SPLIT` | `0.72` | The Scene tree's share of the left column, the Background Task panel taking the rest. |
 | Image Browser / Action Log / Edit History home | below, `0.20` | Same. |
 | Image Detail / Point Track / Camera Intrinsics home | right, `0.33` | Same. |
 | `layout::DEFAULT_LAYOUT_FILE_NAME` | `.sfm-explorer-default-layout.json` | The file the viewer reads at startup, and the name the save dialog offers. |

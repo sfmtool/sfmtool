@@ -689,76 +689,48 @@ fn an_idle_panel_with_nothing_run_says_only_that() {
     assert_eq!(painted(&mut state), ["Nothing running"]);
 }
 
-/// Idle after an operation: the name, the node and the cost, with the phases
-/// behind a toggle that works as the Action Log's does.
+/// Idle after an operation: the name, the node, the cost and the phases, all
+/// of it showing at once.
+///
+/// No toggle. The Action Log hides a breakdown behind one because it has a row
+/// per action and expanding them all would bury the list; this panel holds one
+/// operation, and the breakdown is the only thing it has to say.
 #[test]
-fn an_idle_panel_shows_the_last_operation_and_expands_its_phases() {
+fn an_idle_panel_shows_the_last_operation_and_its_phases_at_once() {
     let (mut state, id) = adjustable();
     running(&mut state, id, Operation::BUNDLE_ADJUST).open();
     state.finish_background();
 
-    let collapsed = painted(&mut state);
-    assert!(collapsed.iter().any(|text| text == "Bundle adjust"));
-    assert!(collapsed.iter().any(|text| text == "run_a"));
-    assert!(collapsed.iter().any(|text| text == "+"), "{collapsed:?}");
+    let drawn = painted(&mut state);
     assert!(
-        !collapsed.iter().any(|text| text == "solve"),
-        "a collapsed panel drew its phases: {collapsed:?}"
+        drawn.iter().any(|text| text == "Bundle adjust"),
+        "{drawn:?}"
     );
+    assert!(drawn.iter().any(|text| text == "run_a"), "{drawn:?}");
     // What it cost, in the Action Log's spelling of a duration.
     let took = ActionLog::format_took(state.last_background.as_ref().expect("it finished").took);
-    assert!(
-        collapsed.contains(&took),
-        "{took:?} is missing from {collapsed:?}"
-    );
+    assert!(drawn.contains(&took), "{took:?} is missing from {drawn:?}");
 
-    state.background_detail_expanded = true;
-    let expanded = painted(&mut state);
-    assert!(expanded.iter().any(|text| text == "-"), "{expanded:?}");
-    assert!(expanded.iter().any(|text| text == "solve"), "{expanded:?}");
+    // The phases, with nothing asked for first.
+    assert!(drawn.iter().any(|text| text == "solve"), "{drawn:?}");
     // Unfolded, as the running panel drew them: two runs, two rows.
     assert_eq!(
-        expanded
+        drawn
             .iter()
             .filter(|text| text.starts_with("  round"))
             .count(),
         2,
-        "{expanded:?}"
+        "{drawn:?}"
     );
-}
 
-/// And the toggle is what a click reaches, rather than a flag only a test can
-/// move.
-#[test]
-fn clicking_the_idle_toggle_opens_and_closes_the_phases() {
-    let (mut state, id) = adjustable();
-    running(&mut state, id, Operation::BUNDLE_ADJUST).open();
-    state.finish_background();
-
-    let ctx = egui::Context::default();
-    let first = painted_at(&ctx, &mut state, input());
-    let at = first
-        .iter()
-        .find(|(text, _)| text == "+")
-        .unwrap_or_else(|| panic!("no toggle: {first:?}"))
-        .1;
-    let button = |pressed| egui::Event::PointerButton {
-        pos: at + egui::vec2(2.0, 4.0),
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
-    let mut click = input();
-    click.events = vec![
-        egui::Event::PointerMoved(at + egui::vec2(2.0, 4.0)),
-        button(true),
-        button(false),
-    ];
-    painted_at(&ctx, &mut state, click);
-    assert!(
-        state.background_detail_expanded,
-        "the click did not open the phases"
-    );
+    // And nothing to click: a toggle would be a click between a reader and the
+    // thing they opened the panel for.
+    for glyph in ["+", "-"] {
+        assert!(
+            !drawn.iter().any(|text| text == glyph),
+            "{glyph:?} is still drawn: {drawn:?}",
+        );
+    }
 }
 
 /// The panel and the entry are two views of one collector, and the entry is

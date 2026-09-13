@@ -220,34 +220,23 @@ fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
 // -- Idle ------------------------------------------------------------------
 
 /// The idle form: the last operation of the session, greyed, with its phases
-/// under a toggle.
-fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
+/// below it.
+///
+/// The phases are always showing. The Action Log hides a breakdown behind a
+/// toggle because it has a row for every action of the session and expanding
+/// them all would bury the list; this panel has one operation in it, and the
+/// breakdown is the only thing it has to say. A toggle there would be a click
+/// between a reader and the thing they opened the panel for.
+fn show_idle(ui: &mut egui::Ui, state: &AppState) {
     let Some(last) = state.last_background.as_ref() else {
         ui.label(egui::RichText::new("Nothing running").weak());
         return;
     };
-    let expandable = !last.detail.is_empty();
-    let expanded = state.background_detail_expanded && expandable;
     let name = last.operation.name;
     let label = last.label.clone();
     let took = ActionLog::format_took(last.took);
 
-    let mut toggled = false;
-    // What the toggle occupies, so the node below lines up with the operation
-    // above it rather than with the button.
-    let mut indent = 0.0;
     ui.horizontal(|ui| {
-        // The Action Log's glyphs and the Action Log's meaning: `+` opens, `-`
-        // closes, and nothing at all where there is nothing to open.
-        if expandable {
-            let toggle = if expanded { "-" } else { "+" };
-            let response =
-                ui.add(egui::Button::new(egui::RichText::new(toggle).monospace()).frame(false));
-            indent = response.rect.width() + ui.spacing().item_spacing.x;
-            if response.clicked() {
-                toggled = true;
-            }
-        }
         // The cost is reserved before the name is drawn: a long one would
         // otherwise push the number off the panel, and the number is what a
         // reader came back to this panel to find.
@@ -270,7 +259,6 @@ fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
     // `202\u{2026}ed`. A line of its own is the width of the panel, and the
     // same two lines a reader was watching a minute ago.
     ui.horizontal(|ui| {
-        ui.add_space(indent);
         ui.add(
             egui::Label::new(egui::RichText::new(elide_to_fit(ui, &label)).weak())
                 .truncate()
@@ -278,14 +266,11 @@ fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
         )
         .on_hover_text(label);
     });
-    if expanded {
+    if !last.detail.is_empty() {
         ui.separator();
         // Nothing is open: the operation is over, so every row is a run that
         // closed.
         show_phases(ui, &last.detail, &[]);
-    }
-    if toggled {
-        state.background_detail_expanded = !state.background_detail_expanded;
     }
 }
 

@@ -1,7 +1,8 @@
 # Background operations: work that outlives a frame
 
 A long operation runs on a worker thread rather than inside the frame that asked
-for it, and a **Background** panel under the Scene tree says what is running, on
+for it, and a **Background Task** panel under the Scene tree says what is
+running, on
 which node, how far along it is, and what it has spent its time on so far. The
 window keeps drawing, the scene keeps answering, and an agent's call is answered
 while the work goes on. A tool that starts one gets its result directly if the
@@ -79,7 +80,8 @@ is answerable before anybody writes code for it.
 ### Placement
 
 The left column splits top to bottom. Scene keeps the top of it and a ninth tab,
-`Tab::Background`, titled **Background**, takes the bottom at a default share of
+`Tab::BackgroundTask`, titled **Background Task**, takes the bottom at a
+default share of
 0.28:
 
 ```
@@ -91,7 +93,8 @@ The left column splits top to bottom. Scene keeps the top of it and a ninth tab,
 ```
 
 It is a panel like any other: draggable, closeable, ticked in **Panels ▸
-Background**, and given a home position of the left edge at 0.18 with Scene as
+Background Task**, and given a home position of the left edge at 0.18 with
+Scene as
 its default group-mate, so re-opening it from the menu puts it back beside the
 tree ([panel-layout.md](panel-layout.md) § "Home positions").
 
@@ -99,9 +102,13 @@ tree ([panel-layout.md](panel-layout.md) § "Home positions").
 
 The panel is not blank when nothing is running. It shows the last operation of
 the session, greyed: its name and what it cost on one line, its node on the
-next as it is while the operation runs, and its phases collapsed under a toggle
-that works as the Action Log's does. Those phases are the
-transcript the panel drew while it ran, not the entry's folded breakdown: an
+next as it is while the operation runs, and its phases below that. They are
+**always showing**: the Action Log hides a breakdown behind a toggle because it
+has a row for every action of the session and expanding them all would bury the
+list, where this panel holds one operation and the breakdown is the only thing
+it has to say. A toggle here would be a click between a reader and the thing
+they opened the panel for. Those phases are the transcript the panel drew while
+it ran, not the entry's folded breakdown: an
 operation that collapsed into a summary at the instant it finished would be a
 panel that changed its mind about what the reader had just watched. A session
 that has run nothing says `Nothing running` and no more.
@@ -109,7 +116,7 @@ that has run nothing says `Nothing running` and no more.
 ### Running
 
 ```
-┌ Background ──────────────────┐
+┌ Background Task ─────────────┐
 │ Bundle adjust                │
 │ dino_dog_toy-embedded        │
 │ ██████░░░░░░░░░░░  round 2/3 │
@@ -617,19 +624,19 @@ editing fixture's node, so the wire is read at an instant the test chose:
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.
 
-`crates/sfm-explorer/tests/ui_basic.rs`: the Background panel is in the
-accessibility tree, and **Panels ▸ Background** ticks it.
+`crates/sfm-explorer/tests/ui_basic.rs`: the Background Task panel is in the
+accessibility tree, and **Panels ▸ Background Task** ticks it.
 
 `crates/sfm-explorer/src/layout/tests.rs` and `dock/tests.rs`: the default
-layout's left column is a top-bottom split of Scene over Background at 0.28, and
-Background's home position is the left edge with Scene as its group-mate.
+layout's left column is a top-bottom split of Scene over Background Task at
+0.28, and its home position is the left edge with Scene as its group-mate.
 
 ## Parameters
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background takes the rest |
-| Background home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
+| left column split (`Layout::default`) | `0.72` | Scene's share of the left column; Background Task takes the rest |
+| Background Task home edge / share | left / `0.18` | Same edge and share as Scene, whose group-mate it is |
 | `REPLY_DIRECTLY_WITHIN` | `200 ms` | How long a tool waits before answering with a handle instead of a result (§ "On the wire") |
 | repaint tick while running | `100 ms` | The elapsed counts up between reports, and a worker deep in a silent stage sends none for a frame to ride on |
 | seconds shown to | one decimal | The cost column is read here while it moves, and at ten frames a second a hundredths digit only spins ([action-log.md](action-log.md)) |
