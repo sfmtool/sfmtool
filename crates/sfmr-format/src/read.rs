@@ -98,6 +98,9 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     // points3d section. Versions 1 and 2 carry the legacy normals name and no
     // patch frame.
     let is_pre_v3 = metadata.version < 3;
+    // Version 10 moved the derived depth statistics out of `images/` into their
+    // own section.
+    let is_pre_v10 = metadata.version < 10;
 
     // Cameras
     let cameras: Vec<SfmrCamera> = read_json_entry(&mut archive, entries::cameras_metadata())?;
@@ -231,14 +234,15 @@ pub fn read_sfmr(path: &Path) -> Result<SfmrData, SfmrError> {
     )
     .map_err(|e| SfmrError::ShapeMismatch(format!("thumbnails reshape: {e}")))?;
 
-    // Depth statistics
+    // Depth statistics, under `images/` before version 10 and `derived/` from
+    // version 10 on.
     let depth_statistics: DepthStatistics =
-        read_json_entry(&mut archive, entries::images_depth_statistics())?;
+        read_json_entry(&mut archive, entries::depth_statistics(is_pre_v10))?;
     let num_buckets = depth_statistics.num_histogram_buckets as usize;
 
     let histogram_vec: Vec<u32> = read_binary_array(
         &mut archive,
-        &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
+        &entries::observed_depth_histogram_counts(is_pre_v10, image_count, num_buckets),
         image_count * num_buckets,
     )?;
     let observed_depth_histogram_counts =

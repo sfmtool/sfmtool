@@ -162,6 +162,19 @@ const MISSING_NORMAL_NORM_SQ: f32 = 1e-6;
 /// (zero) rows from the recompute. Falls back to the recomputed set wholesale if
 /// the stored array's shape doesn't match (e.g. a dict-built `SfmrData` that
 /// never carried normals). Returns a borrow when no copy is needed.
+/// Whether any row of `normals` is the zero vector, the value that stands for
+/// a normal nothing has set.
+///
+/// Short-circuits, so the common answer on a value read from a file -- that
+/// every normal is present, because the write that produced it filled them --
+/// costs one row.
+fn has_missing_normal(normals: &ndarray::Array2<f32>) -> bool {
+    normals
+        .rows()
+        .into_iter()
+        .any(|row| row.iter().all(|&c| c == 0.0))
+}
+
 fn merge_preserving_normals<'a>(
     stored: &'a ndarray::Array2<f32>,
     recomputed: &'a ndarray::Array2<f32>,
@@ -286,24 +299,41 @@ fn write_sfmr_into<S: EntrySink>(
         .filter(|&i| data.positions_xyzw[[i, 3]] == 0.0)
         .count() as u32;
 
-    // Recompute depth statistics unless explicitly skipped
-    let recomputed: Option<DepthStatsResult>;
-    let (depth_statistics, normals_xyz, observed_depth_histogram_counts) =
-        if options.skip_recompute_depth_stats {
-            (
-                &data.depth_statistics,
-                data.normals_xyz.as_ref().map(Cow::Borrowed),
-                Cow::Borrowed(&data.observed_depth_histogram_counts),
-            )
+    // The depth-statistics pass serves two masters, and they are asked for
+    // separately because a caller can want one without the other.
+    //
+    // It produces the statistics a write stores, and it produces the mean
+    // viewing normals that fill in the *missing* normals below. Recomputing is
+    // the default for the first (statistics a reader trusts should describe the
+    // geometry beside them), and `skip_recompute_depth_stats` turns it off. The
+    // second is not a preference: a value with a normal missing would be
+    // written with that normal still missing, which is a different file.
+    //
+    // So a skipping caller still pays the pass when any normal is absent, and
+    // pays nothing when none is -- which is every value that came from a file,
+    // since the write that produced it filled them. That is what makes
+    // `content_xxh128` cheap on a loaded reconstruction (see
+    // [`content_hash_of`]).
+    let fills_normals = data.normals_xyz.as_ref().is_some_and(has_missing_normal);
+    let recomputed: Option<DepthStatsResult> =
+        if options.skip_recompute_depth_stats && !fills_normals {
+            None
         } else {
-            recomputed = Some(compute_depth_statistics(
+            Some(compute_depth_statistics(
                 &data.quaternions_wxyz,
                 &data.translations_xyz,
                 &data.positions_xyzw,
                 &data.image_indexes,
                 &data.point_indexes,
-            )?);
-            let r = recomputed.as_ref().unwrap();
+            )?)
+        };
+    let (depth_statistics, normals_xyz, observed_depth_histogram_counts) = match &recomputed {
+        None => (
+            &data.depth_statistics,
+            data.normals_xyz.as_ref().map(Cow::Borrowed),
+            Cow::Borrowed(&data.observed_depth_histogram_counts),
+        ),
+        Some(r) => {
             // Depth statistics and histograms always come from the recompute so
             // they track the current geometry (e.g. after a bundle adjust). The
             // estimated normals, however, are *preserved* from the input — only
@@ -319,12 +349,23 @@ fn write_sfmr_into<S: EntrySink>(
                 .normals_xyz
                 .as_ref()
                 .map(|n| merge_preserving_normals(n, &r.mean_viewing_normals_xyz));
-            (
-                &r.depth_statistics,
-                normals,
-                Cow::Borrowed(&r.observed_depth_histogram_counts),
-            )
-        };
+            // A caller that asked to keep its statistics keeps them: the pass
+            // ran only to fill the normals.
+            if options.skip_recompute_depth_stats {
+                (
+                    &data.depth_statistics,
+                    normals,
+                    Cow::Borrowed(&data.observed_depth_histogram_counts),
+                )
+            } else {
+                (
+                    &r.depth_statistics,
+                    normals,
+                    Cow::Borrowed(&r.observed_depth_histogram_counts),
+                )
+            }
+        }
+    };
 
     let image_count = data.metadata.image_count as usize;
     let point_count = data.metadata.point_count as usize;
@@ -452,6 +493,34 @@ fn write_sfmr_into<S: EntrySink>(
     }
 
     // === Images (hashed in lexicographic path order) ===
+    // === Derived (hashed, but outside `content_xxh128`) ===
+    //
+    // Computed from the poses, the positions and the tracks, every one of which
+    // is hashed elsewhere in this file, so these bytes add nothing to what the
+    // reconstruction *is*. Two files whose sections agree everywhere else hold
+    // the same reconstruction whatever these say, and an improvement to how a
+    // statistic is computed should not rename every file it touches.
+    //
+    // Hashed all the same, into a section digest of its own, so a corrupted
+    // entry is still caught by `verify_sfmr`. The digest is simply not folded
+    // into the whole-file one below.
+    let mut derived_hasher = Xxh3::new();
+
+    // derived/depth_statistics.json
+    let bytes = sink.write_json(entries::depth_statistics(false), depth_statistics)?;
+    derived_hasher.update(&bytes);
+
+    // derived/observed_depth_histogram_counts
+    binary_hashed(
+        &mut sink,
+        &entries::observed_depth_histogram_counts(false, image_count, num_buckets),
+        bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
+        &mut derived_hasher,
+    )?;
+
+    let derived_hash = derived_hasher.digest128();
+
+    // === Images ===
     let mut images_hasher = Xxh3::new();
 
     // images/camera_indexes
@@ -461,10 +530,6 @@ fn write_sfmr_into<S: EntrySink>(
         bytemuck::cast_slice(data.camera_indexes.as_slice().unwrap()),
         &mut images_hasher,
     )?;
-
-    // images/depth_statistics.json
-    let bytes = sink.write_json(entries::images_depth_statistics(), depth_statistics)?;
-    images_hasher.update(&bytes);
 
     // images/feature_tool_hashes (sift_files) or images/image_file_hashes
     // (embedded_patches). Files are emitted in lexicographic path order (see
@@ -508,14 +573,6 @@ fn write_sfmr_into<S: EntrySink>(
     // images/names.json
     let bytes = sink.write_json(entries::images_names(), &data.image_names)?;
     images_hasher.update(&bytes);
-
-    // images/observed_depth_histogram_counts
-    binary_hashed(
-        &mut sink,
-        &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
-        bytemuck::cast_slice(observed_depth_histogram_counts.as_slice().unwrap()),
-        &mut images_hasher,
-    )?;
 
     // images/quaternions_wxyz
     binary_hashed(
@@ -795,6 +852,7 @@ fn write_sfmr_into<S: EntrySink>(
         images_xxh128: format_hash(images_hash),
         points3d_xxh128: format_hash(points3d_hash),
         tracks_xxh128: format_hash(tracks_hash),
+        derived_xxh128: Some(format_hash(derived_hash)),
         content_xxh128: format_hash(content_hash_value),
     };
     sink.write_json(entries::content_hash(), &content_hash)?;

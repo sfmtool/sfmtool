@@ -196,8 +196,9 @@ reconstruction.sfmr (ZIP archive)
 │   ├── sift_content_hashes.{N}.uint128.zst    # (sift_files only) feature file content verification
 │   ├── image_file_hashes.{N}.uint128.zst      # (embedded_patches only) source image identity (version 4+)
 │   ├── thumbnails_y_x_rgb.{N}.128.128.3.uint8.zst # 128x128 image thumbnails (RGB)
-│   ├── metadata.json.zst                      # Image metadata
-│   ├── depth_statistics.json.zst                       # Per-image depth stats
+│   └── metadata.json.zst                      # Image metadata
+├── derived/                                   # Recomputable from the sections above (v10+)
+│   ├── depth_statistics.json.zst              # Per-image depth stats
 │   └── observed_depth_histogram_counts.{N}.128.uint32.zst  # Observed depth histograms
 ├── points3d/
 │   ├── positions_xyzw.{N}.4.float64.zst       # Homogeneous 3D point coordinates (w=0 = point at infinity)
@@ -509,15 +510,40 @@ a section digest is taken and how the digests combine into `content_xxh128`.
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`
 - `rigs_xxh128`: (Optional) The `rigs/` section hash. Present only when the `rigs/` section exists.
 - `frames_xxh128`: (Optional) The `frames/` section hash. Present only when the `frames/` section exists.
-- `images_xxh128`: The `images/` section hash (includes depth statistics and histogram files). The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
+- `images_xxh128`: The `images/` section hash. Before version 10 it also covered the depth statistics and histogram files, which are now the `derived/` section. The mode-dependent per-image hash files are included as present: `feature_tool_hashes` + `sift_content_hashes` for a `sift_files` file, or `image_file_hashes` for an `embedded_patches` file.
 - `points3d_xxh128`: The `points3d/` section hash. Includes the optional per-point arrays — `normals_xyz`, `normal_confidence`, the constraint triple `point_constraints` / `constraint_distances` / `constraint_reference_images` (in their lexicographic slots: `constraint_distances` and `constraint_reference_images` after `colors_rgb` and before `metadata.json`, `point_constraints` after the patch-frame files and before `positions_xyzw`), and the patch-frame files `patch_u_halfvec_xyz`, `patch_v_halfvec_xyz`, `patch_bitmaps_y_x_rgba` — only when they are present.
 - `tracks_xxh128`: The `tracks/` section hash. `feature_indexes` is present for a `sift_files` file and absent for an `embedded_patches` one. `keypoints_xy` participates whenever it is present — always in an `embedded_patches` file, and in a `sift_files` file when it carries the optional inline copy — in its lexicographic slot (after `image_indexes`, before `metadata.json`). The optional `observation_confidence` column participates when present, in its lexicographic slot (after `metadata.json`, before `observation_counts`).
-- `content_xxh128`: The whole-file digest over all present section hashes, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks.
+- `derived_xxh128`: (Version 10+) The `derived/` section hash, over `depth_statistics.json.zst` then `observed_depth_histogram_counts`. Verified like every other section hash, and **not** part of `content_xxh128`.
+- `content_xxh128`: The whole-file digest over the section hashes that say what the reconstruction *is*, in the order metadata, cameras, rigs (if present), frames (if present), images, points3d, tracks. The `derived/` section is excluded (see "Derived data is verified but not identifying"). Before version 10 the depth statistics reached this digest through `images_xxh128`.
 
 **Note**: The two top-level entries `content_hash.json.zst` and, from
 version 8, `written.json.zst` are outside every section hash and so outside
 `content_xxh128`. One of them is the digest itself and the other records the
 act of writing; neither is content the digest describes.
+
+#### Derived data is verified but not identifying
+
+From version 10 the `derived/` section is hashed into `derived_xxh128` and left
+out of `content_xxh128`. The two are different questions and the format answers
+both:
+
+- **Is this file intact?** Every byte of every section, `derived/` included, is
+  covered by a stored section hash that `verify_sfmr` recomputes and compares.
+  A corrupted statistic fails verification exactly as a corrupted pose does.
+- **Which reconstruction is this?** `content_xxh128`, over the sections that
+  carry the reconstruction itself.
+
+`derived/` holds values computed from the poses, the positions and the tracks,
+all of which are hashed elsewhere in the file. They therefore add nothing to the
+first question's answer and would distort the second: two files whose other
+sections agree hold the same reconstruction whatever their statistics say, and
+while the statistics were part of the identity, improving how one of them is
+computed renamed every file it touched. Since a point id is
+`pt3d_<content hash>_<index>`, that renamed every point id with it.
+
+This also makes the identity cheap to compute for a value in memory, because it
+no longer requires redoing the derivation: see
+[core/reconstruction](../core/reconstruction/README.md) for what a caller pays.
 
 **Note**: Per-section metadata files (`images/metadata.json.zst`, `points3d/metadata.json.zst`, `tracks/metadata.json.zst`) are included in their respective section hashes.
 
@@ -948,9 +974,11 @@ distance along the camera's viewing direction — **`−z` in camera space**
 [Coordinate System Conventions](#coordinate-system-conventions)) — which is
 positive for points in front of the camera.
 
-#### `images/depth_statistics.json.zst`
+#### `derived/depth_statistics.json.zst`
 
-Per-image depth statistics and histogram parameters for observed points only:
+Under `images/` before version 10. Per-image depth statistics and histogram
+parameters for observed points only, computed from the poses, the positions and
+the tracks:
 
 ```json
 {
@@ -990,14 +1018,14 @@ Per-image depth statistics and histogram parameters for observed points only:
 bucket_edges = np.linspace(histogram_min_z, histogram_max_z, num_histogram_buckets + 1)
 ```
 
-#### `images/observed_depth_histogram_counts.{N}.128.uint32.zst`
+#### `derived/observed_depth_histogram_counts.{N}.128.uint32.zst`
 
 Histogram counts for observed points (points with track observations):
 
 - **Shape**: `(N, 128)` where N = image_count
 - **Data type**: `uint32` (little-endian)
 - **Format**: Row `i` contains 128 bucket counts for image `i`
-- **Bucket edges**: Defined by `histogram_min_z` and `histogram_max_z` in `depth_statistics.json.zst`
+- **Bucket edges**: Defined by `histogram_min_z` and `histogram_max_z` in `derived/depth_statistics.json.zst`
 
 ### 8. Points3D
 
@@ -2047,9 +2075,29 @@ All extensions should:
 
 ## Versioning and Migration
 
-The format spans nine versions (`1` to `9`), all valid; each extends the previous,
-and how an older file maps to the current model is given below. Version 9 is the
+The format spans ten versions (`1` to `10`), all valid; each extends the previous,
+and how an older file maps to the current model is given below. Version 10 is the
 current format version: a reader accepts any version up to it.
+
+### Version 9 → Version 10
+
+| Change | Detail |
+|---|---|
+| `derived/` section | `depth_statistics.json.zst` and `observed_depth_histogram_counts` move out of `images/` into a section of their own. |
+| `derived_xxh128` | New **optional** content-hash field: the `derived/` section's digest, verified like every other one. |
+| `content_xxh128` | No longer covers those two entries. `images_xxh128` no longer covers them either; the derived digest replaces their contribution and is excluded from the whole-file digest. See [Derived data is verified but not identifying](#derived-data-is-verified-but-not-identifying). |
+
+No byte of any array changes and nothing is recomputed: the same statistics are
+stored, under a different path, hashed into a different digest. A reader gates on
+the version to know where to look, as it already does for `positions_xyz` and
+`points3d_indexes`.
+
+Migration is mechanical, and lossless in both directions on the data. It is
+**not** hash-preserving, and deliberately so: a version 9 file and the version 10
+file holding the same reconstruction have different `content_xxh128` values,
+because the version 9 digest included statistics the version 10 one does not.
+That is a one-time renaming, the same as any version bump, and it is the last
+time a change to how a statistic is computed can rename anything.
 
 ### Version 8 → Version 9
 

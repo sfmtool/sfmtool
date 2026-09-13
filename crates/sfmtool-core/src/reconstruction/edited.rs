@@ -787,13 +787,37 @@ impl EditedReconstruction {
 
     // ── Hashes ───────────────────────────────────────────────────────
 
-    /// The base's content hashes, computed once and kept.
+    /// The base's content hashes: the ones it arrived with, or the ones a write
+    /// of it would store.
     ///
-    /// Computed from the base value rather than from a file, so a base that was
-    /// never written has the hash a write of it would store.
+    /// **A base that came from a file is taken at its word.** The file carries
+    /// its own hashes and `read` keeps them, so recomputing them would spend a
+    /// serialisation of the whole value to arrive at a number already in hand.
+    /// On a large reconstruction that is seconds, and it is seconds spent to
+    /// learn nothing: the hashes name the file this value was read out of,
+    /// which is exactly what a caller asking for a base's identity means.
+    ///
+    /// Re-deriving them would also answer a subtly different question. It says
+    /// what a *save of this value* would store, which is not the same thing
+    /// after a convention upgrade, and it is the file on disk that a point id
+    /// or a lineage entry has to name.
+    ///
+    /// Checking the stored hashes against the bytes is verification, and
+    /// verification is [`sfmr_format::verify_sfmr`]'s job, asked for
+    /// deliberately. It is not something a value does to itself every time it
+    /// is asked who it is.
+    ///
+    /// **A base with no stored hash is computed and kept.** That is a value
+    /// materialised from an edit, which `EditedReconstruction::materialise`
+    /// clears the hashes on precisely because they would name a file whose
+    /// content it no longer is.
     pub fn base_content_hash(&self) -> Result<&ContentHash, SfmrError> {
         if let Some(h) = self.base_hash.get() {
             return Ok(h);
+        }
+        if !self.base.content_hash.content_xxh128.is_empty() {
+            let _ = self.base_hash.set(self.base.content_hash.clone());
+            return Ok(self.base_hash.get().expect("just set"));
         }
         let hash = self.base.content_xxh128()?;
         // A racing computation produces the same bytes, so whichever lands

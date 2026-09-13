@@ -790,7 +790,15 @@ fn rewrite_sfmr_version(src: &Path, dst: &Path, version: u32) {
             .unwrap()
             .read_to_end(&mut compressed)
             .unwrap();
-        zip_out.start_file(name, stored).unwrap();
+        // Before version 10 the derived depth statistics lived under `images/`,
+        // so a file stamped with an older version has to carry them where a
+        // reader of that version looks. The bytes are untouched: no hash is
+        // taken over an entry's name.
+        let placed = match name.strip_prefix("derived/") {
+            Some(rest) if version < 10 => format!("images/{rest}"),
+            _ => name.clone(),
+        };
+        zip_out.start_file(&placed, stored).unwrap();
         if name == "metadata.json.zst" {
             let mut json: serde_json::Value =
                 serde_json::from_slice(&zstd::stream::decode_all(&compressed[..]).unwrap())

@@ -124,7 +124,11 @@ Three rules hold across all five formats:
 3. **The whole-file digest is XXH128 over the concatenated section digests, each
    written as 16 bytes big-endian**, in the order the format lists, skipping
    absent optional sections. This one field is called `content_xxh128` in all five
-   formats.
+   formats. A format may also declare a present section **derived** and leave it
+   out of this digest: its bytes are still covered by their own section hash and
+   still verified, but they are recomputable from sections that are in the digest
+   and so say nothing about which value the file holds. `.sfmr` does this with
+   its `derived/` section from version 10; no other format has one.
 
 Note the two byte orders, which are deliberately different and easy to confuse:
 numeric *data* is little-endian, while a 128-bit *digest* being folded into

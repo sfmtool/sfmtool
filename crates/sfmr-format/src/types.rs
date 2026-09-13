@@ -569,7 +569,7 @@ pub(crate) fn validate_point_constraints(
 /// in `sfmtool-core` (`SfmrReconstruction::load`), which owns the `S`/`W`
 /// convention math (`geometry::convention`) that this lower-level crate
 /// cannot depend on.
-pub const SFMR_FORMAT_VERSION: u32 = 9;
+pub const SFMR_FORMAT_VERSION: u32 = 10;
 
 /// The first `.sfmr` version that stores its write timestamp in `written.json`
 /// rather than in `metadata.json`.
@@ -627,6 +627,14 @@ pub struct ContentHash {
     /// present.
     pub points3d_xxh128: String,
     pub tracks_xxh128: String,
+    /// Hash of the `derived/` section, present from version 10.
+    ///
+    /// Verified like every other section hash, and deliberately **not** folded
+    /// into `content_xxh128`: the section holds values computed from content
+    /// hashed elsewhere in the file, so two reconstructions that differ only
+    /// there are the same reconstruction. See the `.sfmr` spec, "Derived".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derived_xxh128: Option<String>,
     pub content_xxh128: String,
 }
 

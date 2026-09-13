@@ -22,7 +22,9 @@ use crate::state::AppState;
 ///
 /// `SfmrReconstruction::demo` leaves the hash empty, which is the case the
 /// `00000000` display fallback exists for — so a test that cares about hashes
-/// has to set one.
+/// has to set one, and it has to be the length a real one is: a value is taken
+/// at its word about its own hash, and a string that is not 32 hex digits is
+/// not a content hash.
 fn node(path: &str, points: usize, hash: &str) -> SceneNode {
     let mut recon = SfmrReconstruction::demo(points);
     recon.content_hash.content_xxh128 = hash.to_string();
@@ -33,8 +35,8 @@ fn node(path: &str, points: usize, hash: &str) -> SceneNode {
 /// Returns the state plus the two ids in load order.
 fn two_nodes() -> (AppState, ReconId, ReconId) {
     let mut state = AppState::new();
-    let a = state.append_node(node("/runs/a.sfmr", 40, "aaaa1111bbbb2222"));
-    let b = state.append_node(node("/runs/b.sfmr", 60, "cccc3333dddd4444"));
+    let a = state.append_node(node("/runs/a.sfmr", 40, "aaaa1111bbbb2222aaaa1111bbbb2222"));
+    let b = state.append_node(node("/runs/b.sfmr", 60, "cccc3333dddd4444cccc3333dddd4444"));
     state.select_recon(a);
     (state, a, b)
 }
@@ -249,9 +251,10 @@ fn a_hash_that_matches_no_node_is_not_answered_by_the_selected_one() {
 
 #[test]
 fn the_selected_points_id_is_what_the_dialog_prefills_with() {
-    // Minted against the value's own hash rather than against whatever hash the
-    // file happened to store, and carrying nothing about which node it came
-    // from: the point is that content's row 17 wherever that content is loaded.
+    // Minted against the hash the value carries, which is the file's own, and
+    // carrying nothing about which node it came from: the point is that
+    // content's row 17 wherever that content is loaded. Minting and lookup read
+    // the same hash, so an id the dialog prefills is one it can resolve.
     let (mut state, _a, b) = two_nodes();
     state.select_point(PointRef::new(b, 17));
     let node = crate::scene::node_by_id(&state.scene, b).expect("the node");

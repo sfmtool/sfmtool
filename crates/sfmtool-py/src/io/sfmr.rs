@@ -420,6 +420,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
             images_xxh128: String::new(),
             points3d_xxh128: String::new(),
             tracks_xxh128: String::new(),
+            derived_xxh128: None,
             content_xxh128: String::new(),
         },
         cameras,

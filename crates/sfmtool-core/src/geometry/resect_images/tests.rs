@@ -256,6 +256,7 @@ fn build(
         workspace_dir: PathBuf::new(),
         metadata,
         content_hash: ContentHash {
+            derived_xxh128: None,
             metadata_xxh128: String::new(),
             cameras_xxh128: String::new(),
             rigs_xxh128: None,

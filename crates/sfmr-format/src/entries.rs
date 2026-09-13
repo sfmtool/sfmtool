@@ -24,15 +24,17 @@
 //!
 //! ## Version-dependent names
 //!
-//! Three entries were renamed across format versions, and both the reader and
-//! the verifier have to accept either spelling. Those functions take the
-//! version predicate rather than making each caller re-derive the mapping:
+//! Five entries were renamed or relocated across format versions, and both the
+//! reader and the verifier have to accept either spelling. Those functions take
+//! the version predicate rather than making each caller re-derive the mapping:
 //!
 //! | Function | `true` (legacy) | `false` (current) |
 //! |---|---|---|
 //! | [`points3d_positions`] | `positions_xyz` (v1, Euclidean) | `positions_xyzw` (v2+, homogeneous) |
 //! | [`points3d_normals`] | `estimated_normals_xyz` (pre-v3) | `normals_xyz` (v3+) |
 //! | [`tracks_point_indexes`] | `points3d_indexes` (v1) | `point_indexes` (v2+) |
+//! | [`depth_statistics`] | under `images/` (pre-v10) | under `derived/` (v10+) |
+//! | [`observed_depth_histogram_counts`] | under `images/` (pre-v10) | under `derived/` (v10+) |
 //!
 //! The writer only ever emits the current spelling, so it passes `false`.
 //!
@@ -126,11 +128,6 @@ pub(crate) fn images_names() -> &'static str {
     "images/names.json.zst"
 }
 
-/// `images/depth_statistics.json.zst` — per-image observed-depth summary.
-pub(crate) fn images_depth_statistics() -> &'static str {
-    "images/depth_statistics.json.zst"
-}
-
 /// `images/camera_indexes` — camera index per image.
 pub(crate) fn images_camera_indexes(image_count: impl std::fmt::Display) -> String {
     format!("images/camera_indexes.{image_count}.uint32.zst")
@@ -168,12 +165,29 @@ pub(crate) fn images_thumbnails_y_x_rgb(image_count: impl std::fmt::Display) -> 
     format!("images/thumbnails_y_x_rgb.{image_count}.{edge}.{edge}.3.uint8.zst")
 }
 
-/// `images/observed_depth_histogram_counts` — per-image depth histogram.
-pub(crate) fn images_observed_depth_histogram_counts(
+/// `derived/depth_statistics.json.zst` — per-image observed-depth summary.
+///
+/// Under `images/` before version 10, and its own section from version 10 on:
+/// it is computed from the poses, the positions and the tracks, so it is not
+/// content the file's identity is over. See [`crate::write`].
+pub(crate) fn depth_statistics(pre_v10: bool) -> &'static str {
+    if pre_v10 {
+        "images/depth_statistics.json.zst"
+    } else {
+        "derived/depth_statistics.json.zst"
+    }
+}
+
+/// `derived/observed_depth_histogram_counts` — per-image depth histogram.
+///
+/// Moved with [`depth_statistics`] in version 10, and derived the same way.
+pub(crate) fn observed_depth_histogram_counts(
+    pre_v10: bool,
     image_count: impl std::fmt::Display,
     num_buckets: impl std::fmt::Display,
 ) -> String {
-    format!("images/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst")
+    let section = if pre_v10 { "images" } else { "derived" };
+    format!("{section}/observed_depth_histogram_counts.{image_count}.{num_buckets}.uint32.zst")
 }
 
 /// `points3d/metadata.json.zst` — point-section metadata.

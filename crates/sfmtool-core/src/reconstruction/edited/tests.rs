@@ -680,3 +680,48 @@ fn a_scan_refuses_an_image_map_of_the_wrong_length() {
         }
     );
 }
+
+// ── The base's identity ─────────────────────────────────────────────────
+
+/// A base that arrived with hashes is taken at its word, and never re-derives
+/// them.
+///
+/// Asserted the only way it can be observed from outside: the value's content
+/// is changed underneath the stored hash, and the hash does not move. That is
+/// the contract rather than an accident of caching -- a file hands over its own
+/// hashes, and re-deriving them would spend a serialisation of the whole value
+/// to answer a question already answered. Checking them against the bytes is
+/// `verify_sfmr`'s job, asked for on purpose.
+#[test]
+fn a_base_that_came_with_a_hash_is_taken_at_its_word() {
+    let mut recon = fixture(6);
+    recon.content_hash.content_xxh128 = "0".repeat(32);
+    // Something a re-derivation could not possibly agree with.
+    recon.point_set.points[0].position.x += 1234.5;
+
+    let edited = EditedReconstruction::new(Arc::new(recon));
+
+    assert_eq!(
+        edited
+            .base_content_hash()
+            .expect("a stored hash")
+            .content_xxh128,
+        "0".repeat(32),
+        "the stored hash was recomputed rather than believed",
+    );
+}
+
+/// A base with no stored hash is a value materialised from an edit, and it gets
+/// the hash a write of it would store.
+#[test]
+fn a_base_with_no_stored_hash_is_computed() {
+    let mut recon = fixture(6);
+    recon.content_hash = sfmr_format::ContentHash::default();
+    let expected = recon.content_xxh128().expect("hashable").content_xxh128;
+
+    let edited = EditedReconstruction::new(Arc::new(recon));
+
+    let got = &edited.base_content_hash().expect("hashable").content_xxh128;
+    assert_eq!(*got, expected);
+    assert_eq!(got.len(), 32, "a real hash, not the empty placeholder");
+}

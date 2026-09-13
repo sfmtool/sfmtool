@@ -183,11 +183,24 @@ impl SfmrReconstruction {
     /// first, then hash. The write timestamp is not such a value: the writer
     /// stamps it, and it lives outside every section digest.
     ///
-    /// The cost is one serialisation and compression of the whole value, which
-    /// the patch bitmaps dominate.
+    /// The cost is one serialisation of the whole value, and the hashing of the
+    /// bytes it produces. Nothing is compressed: the hash is over the
+    /// uncompressed bytes, so the hash-only sink drops every entry it is handed
+    /// rather than deflating it.
+    ///
+    /// The depth statistics are **not** recomputed, which is what keeps this
+    /// affordable: they cost a pass over every observation, and from format
+    /// version 10 they are a derived section that `content_xxh128` is not taken
+    /// over. Skipping them cannot change the answer. The one thing a write
+    /// still does here is fill in missing normals, which are hashed, and the
+    /// writer pays for that pass only when a normal is actually absent.
     pub fn content_xxh128(&self) -> Result<sfmr_format::ContentHash, SfmrError> {
         let mut data = self.to_sfmr_data();
-        sfmr_format::content_hash_of(&mut data, &sfmr_format::WriteOptions::default())
+        let options = sfmr_format::WriteOptions {
+            skip_recompute_depth_stats: true,
+            ..Default::default()
+        };
+        sfmr_format::content_hash_of(&mut data, &options)
     }
 
     /// Convert from the raw columnar I/O representation.

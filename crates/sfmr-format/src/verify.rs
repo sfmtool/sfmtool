@@ -168,20 +168,49 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         section_digests.push(frames_hash);
     }
 
-    // === Images hash (lexicographic path order) ===
-    let mut images_hasher = Xxh3::new();
+    // === Derived hash (version 10+), or part of the images hash before that ===
+    //
+    // The bytes are checked either way; what the version decides is which
+    // section digest covers them, and whether that digest reaches
+    // `content_xxh128` (it does not, from version 10 -- see the writer).
+    let is_pre_v10 = metadata.version < 10;
 
     // Read depth_statistics first to get num_buckets
-    let depth_stats_raw = read_zst_entry(&mut archive, entries::images_depth_statistics())?;
+    let depth_stats_raw = read_zst_entry(&mut archive, entries::depth_statistics(is_pre_v10))?;
     let depth_stats: DepthStatistics = serde_json::from_slice(&depth_stats_raw)?;
     let num_buckets = depth_stats.num_histogram_buckets;
+    let histogram_raw = read_zst_entry(
+        &mut archive,
+        &entries::observed_depth_histogram_counts(is_pre_v10, image_count, num_buckets),
+    )?;
+
+    if !is_pre_v10 {
+        let mut derived_hasher = Xxh3::new();
+        derived_hasher.update(&depth_stats_raw);
+        derived_hasher.update(&histogram_raw);
+        let derived_hash = format_hash(derived_hasher.digest128());
+        match &stored.derived_xxh128 {
+            Some(stored_derived) if *stored_derived == derived_hash => {}
+            Some(stored_derived) => errors.push(format!(
+                "Derived section hash mismatch: computed {derived_hash}, stored {stored_derived}"
+            )),
+            None => errors.push(
+                "Derived section hash missing: a version 10+ file stores derived_xxh128".into(),
+            ),
+        }
+    }
+
+    // === Images hash (lexicographic path order) ===
+    let mut images_hasher = Xxh3::new();
 
     // images/camera_indexes (captured for the keypoint bounds check below)
     let camera_indexes_raw =
         read_zst_entry(&mut archive, &entries::images_camera_indexes(image_count))?;
     images_hasher.update(&camera_indexes_raw);
-    // images/depth_statistics.json
-    images_hasher.update(&depth_stats_raw);
+    // images/depth_statistics.json (pre-version-10 files only)
+    if is_pre_v10 {
+        images_hasher.update(&depth_stats_raw);
+    }
     // images/feature_tool_hashes (sift_files) or image_file_hashes
     // (embedded_patches) — same lexicographic slot, mirrors the writer.
     if is_embedded {
@@ -199,11 +228,10 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     images_hasher.update(&read_zst_entry(&mut archive, entries::images_metadata())?);
     // images/names.json
     images_hasher.update(&read_zst_entry(&mut archive, entries::images_names())?);
-    // images/observed_depth_histogram_counts
-    images_hasher.update(&read_zst_entry(
-        &mut archive,
-        &entries::images_observed_depth_histogram_counts(image_count, num_buckets),
-    )?);
+    // images/observed_depth_histogram_counts (pre-version-10 files only)
+    if is_pre_v10 {
+        images_hasher.update(&histogram_raw);
+    }
     // images/quaternions_wxyz
     images_hasher.update(&read_zst_entry(
         &mut archive,

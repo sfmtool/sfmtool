@@ -52,6 +52,7 @@ fn make_test_data() -> SfmrData {
             lineage: Vec::new(),
         },
         content_hash: ContentHash {
+            derived_xxh128: None,
             metadata_xxh128: String::new(),
             cameras_xxh128: String::new(),
             rigs_xxh128: None,
@@ -711,6 +712,46 @@ fn test_unsupported_future_version_rejected() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The `images/` section digest a pre-version-10 file would carry, taken from
+/// a current archive.
+///
+/// Spelled out here from the rule the format states -- XXH128 over the
+/// uncompressed bytes of the section's entries in lexicographic path order --
+/// rather than borrowed from the writer, so a legacy fixture is hashed by the
+/// specification and not by the code it is there to hold still. Before version
+/// 10 the two derived entries lived under `images/`, so they take part under
+/// the names they had then.
+fn pre_v10_images_digest(current: &std::path::Path) -> u128 {
+    use std::io::Read;
+
+    let file = std::fs::File::open(current).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut named: Vec<(String, String)> = archive
+        .file_names()
+        .filter_map(|name| {
+            let then = match name.strip_prefix("derived/") {
+                Some(rest) => format!("images/{rest}"),
+                None if name.starts_with("images/") => name.to_string(),
+                None => return None,
+            };
+            Some((then, name.to_string()))
+        })
+        .collect();
+    named.sort();
+
+    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
+    for (_, now) in &named {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(now)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        hasher.update(&zstd::stream::decode_all(&compressed[..]).unwrap());
+    }
+    hasher.digest128()
+}
+
 /// Rewrite a version-2 `.sfmr` file into the version-1 on-disk layout, so
 /// the version-1 compatibility path in `read_sfmr` can be exercised.
 /// Version 1 stored Euclidean `positions_xyz` `(P, 3)`, named the track
@@ -774,6 +815,12 @@ fn rewrite_v2_as_v1(v2_path: &std::path::Path, v1_path: &std::path::Path) {
             // Identical bytes under the version-1 name.
             let v1_name = name.replace("point_indexes", "points3d_indexes");
             zip.start_file(&v1_name, stored).unwrap();
+            zip.write_all(&compressed).unwrap();
+        } else if let Some(rest) = name.strip_prefix("derived/") {
+            // Version 10 moved these two out of `images/`; a version-1 file
+            // has them where version 1 had them. The bytes are untouched,
+            // which is the whole of the relocation: no hash is over a name.
+            zip.start_file(format!("images/{rest}"), stored).unwrap();
             zip.write_all(&compressed).unwrap();
         } else if name.starts_with("points3d/normals_xyz.") {
             // Identical bytes under the version-1/2 normals name.
@@ -903,6 +950,7 @@ fn test_empty_reconstruction() {
             lineage: Vec::new(),
         },
         content_hash: ContentHash {
+            derived_xxh128: None,
             metadata_xxh128: String::new(),
             cameras_xxh128: String::new(),
             rigs_xxh128: None,
@@ -2528,7 +2576,11 @@ fn entry_names_are_pinned() {
     assert_eq!(e::images_metadata(), "images/metadata.json.zst");
     assert_eq!(e::images_names(), "images/names.json.zst");
     assert_eq!(
-        e::images_depth_statistics(),
+        e::depth_statistics(false),
+        "derived/depth_statistics.json.zst"
+    );
+    assert_eq!(
+        e::depth_statistics(true),
         "images/depth_statistics.json.zst"
     );
     assert_eq!(e::points3d_metadata(), "points3d/metadata.json.zst");
@@ -2591,7 +2643,11 @@ fn entry_names_are_pinned() {
         "images/thumbnails_y_x_rgb.11.128.128.3.uint8.zst"
     );
     assert_eq!(
-        e::images_observed_depth_histogram_counts(11, 29),
+        e::observed_depth_histogram_counts(false, 11, 29),
+        "derived/observed_depth_histogram_counts.11.29.uint32.zst"
+    );
+    assert_eq!(
+        e::observed_depth_histogram_counts(true, 11, 29),
         "images/observed_depth_histogram_counts.11.29.uint32.zst"
     );
 
@@ -2720,12 +2776,12 @@ fn archive_entry_names_pin_call_sites() {
     let expected = [
         "cameras/metadata.json.zst",
         "content_hash.json.zst",
+        "derived/depth_statistics.json.zst",
+        "derived/observed_depth_histogram_counts.3.128.uint32.zst",
         "images/camera_indexes.3.uint32.zst",
-        "images/depth_statistics.json.zst",
         "images/feature_tool_hashes.3.uint128.zst",
         "images/metadata.json.zst",
         "images/names.json.zst",
-        "images/observed_depth_histogram_counts.3.128.uint32.zst",
         "images/quaternions_wxyz.3.4.float64.zst",
         "images/sift_content_hashes.3.uint128.zst",
         "images/thumbnails_y_x_rgb.3.128.128.3.uint8.zst",
@@ -2777,6 +2833,124 @@ fn data_with_every_optional_column() -> SfmrData {
         }));
     with_point_constraints(&mut data);
     data
+}
+
+/// Two values that differ only in their stored depth statistics are the same
+/// reconstruction, and from version 10 they hash the same.
+///
+/// This is the whole point of the derived section. The statistics are computed
+/// from poses, positions and tracks, every one of which is hashed, so they add
+/// nothing to what the file *is* -- and while they were part of the identity,
+/// improving how one of them is computed would have renamed every file it
+/// touched, taking every `pt3d_<hash>_<index>` id with it.
+#[test]
+fn depth_statistics_do_not_reach_the_content_hash() {
+    let mut plain = data_with_every_optional_column();
+    let options = WriteOptions {
+        skip_recompute_depth_stats: true,
+        ..Default::default()
+    };
+    let untouched = content_hash_of(&mut plain, &options).unwrap();
+
+    // The same value, with a statistic nobody would recompute to.
+    let mut doctored = data_with_every_optional_column();
+    doctored.depth_statistics.images[0].observed.median_z = Some(-123.5);
+    doctored.observed_depth_histogram_counts[[0, 0]] += 7;
+    let changed = content_hash_of(&mut doctored, &options).unwrap();
+
+    assert_eq!(
+        untouched.content_xxh128, changed.content_xxh128,
+        "a derived statistic moved the file's identity",
+    );
+    assert_ne!(
+        untouched.derived_xxh128, changed.derived_xxh128,
+        "the derived section hash has to notice, or nothing would",
+    );
+    // And every section that *is* the reconstruction agrees.
+    assert_eq!(untouched.images_xxh128, changed.images_xxh128);
+    assert_eq!(untouched.points3d_xxh128, changed.points3d_xxh128);
+    assert_eq!(untouched.tracks_xxh128, changed.tracks_xxh128);
+}
+
+/// A corrupted derived entry is still caught. Excluding the section from the
+/// identity is not the same as leaving it unchecked, and `verify_sfmr` is where
+/// that distinction has to hold.
+#[test]
+fn a_corrupted_derived_entry_still_fails_verification() {
+    use std::io::{Read, Write};
+
+    let dir = std::env::temp_dir().join("sfmr_test_derived_corrupt");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("good.sfmr");
+    let bad = dir.join("bad.sfmr");
+
+    let mut data = data_with_every_optional_column();
+    write_sfmr(&good, &mut data).unwrap();
+    assert!(verify_sfmr(&good).unwrap().0);
+
+    // Rewrite the histogram with different numbers, leaving every other entry
+    // and every stored hash alone.
+    let source = std::fs::File::open(&good).unwrap();
+    let mut archive = zip::ZipArchive::new(source).unwrap();
+    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let out = std::fs::File::create(&bad).unwrap();
+    let mut zip = zip::ZipWriter::new(out);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for name in &names {
+        let mut compressed = Vec::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_end(&mut compressed)
+            .unwrap();
+        zip.start_file(name, stored).unwrap();
+        if name.starts_with("derived/observed_depth_histogram_counts") {
+            let mut raw = zstd::stream::decode_all(&compressed[..]).unwrap();
+            raw[0] ^= 0xff;
+            zip.write_all(&zstd::bulk::compress(&raw, 3).unwrap())
+                .unwrap();
+        } else {
+            zip.write_all(&compressed).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+
+    let (ok, errors) = verify_sfmr(&bad).unwrap();
+    assert!(!ok, "a corrupted derived entry passed verification");
+    assert!(
+        errors.iter().any(|e| e.contains("Derived section hash")),
+        "the failure should name the derived section: {errors:?}",
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A version-10 file says what its derived section hashes to, and a reader of
+/// an older one finds the statistics where that version kept them.
+#[test]
+fn a_version_10_file_carries_a_derived_hash() {
+    let dir = std::env::temp_dir().join("sfmr_test_derived_present");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("v10.sfmr");
+
+    let mut data = data_with_every_optional_column();
+    write_sfmr(&path, &mut data).unwrap();
+    assert_eq!(read_sfmr_metadata(&path).unwrap().version, 10);
+
+    let stored = read_sfmr_content_hash(&path).unwrap();
+    assert!(
+        stored.derived_xxh128.is_some(),
+        "a version 10 file stores its derived section hash",
+    );
+    // And it is the hash the hash-only path reports for the same value.
+    let computed = content_hash_of(&mut data, &WriteOptions::default()).unwrap();
+    assert_eq!(stored.derived_xxh128, computed.derived_xxh128);
+    assert_eq!(stored.content_xxh128, computed.content_xxh128);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -2879,16 +3053,23 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
         }
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-        zip.start_file(&name, options).unwrap();
+        // Version 7 predates the version-10 split, so the derived entries sit
+        // under `images/` and take part in that section's digest.
+        let then = match name.strip_prefix("derived/") {
+            Some(rest) => format!("images/{rest}"),
+            None => name.clone(),
+        };
+        zip.start_file(&then, options).unwrap();
         std::io::Write::write_all(&mut zip, &bytes).unwrap();
     }
     zip.start_file("metadata.json.zst", options).unwrap();
     std::io::Write::write_all(&mut zip, &zstd_compress(&metadata_bytes, 3).unwrap()).unwrap();
 
+    let legacy_images_hash = pre_v10_images_digest(&current);
     let digests: Vec<u128> = [
         legacy_metadata_hash,
         u128::from_str_radix(&stored.cameras_xxh128, 16).unwrap(),
-        u128::from_str_radix(&stored.images_xxh128, 16).unwrap(),
+        legacy_images_hash,
         u128::from_str_radix(&stored.points3d_xxh128, 16).unwrap(),
         u128::from_str_radix(&stored.tracks_xxh128, 16).unwrap(),
     ]
@@ -2896,6 +3077,10 @@ fn a_file_written_before_the_split_keeps_its_timestamp_and_its_hashes() {
     let all: Vec<u8> = digests.iter().flat_map(|d| d.to_be_bytes()).collect();
     let legacy_hash = ContentHash {
         metadata_xxh128: format!("{legacy_metadata_hash:032x}"),
+        images_xxh128: format!("{legacy_images_hash:032x}"),
+        // A version-7 file has no derived section: the statistics are part of
+        // the images digest above.
+        derived_xxh128: None,
         content_xxh128: format!("{:032x}", xxhash_rust::xxh3::xxh3_128(&all)),
         ..stored
     };
