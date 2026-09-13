@@ -25,6 +25,9 @@ use sfmtool_core::progress::{Phase, Progress};
 use sfmtool_core::progress_note;
 
 use crate::dock::{self, Tab, TabContext};
+
+#[cfg(test)]
+mod tests;
 use crate::goto_point;
 use crate::platform;
 use crate::progress::Collector;
@@ -559,12 +562,14 @@ impl App {
             self.prev_hidden_image = hidden_image;
         }
 
-        // Upload/clear track ray geometry when the selected point changes, or
-        // when a transform moved the node the selection lives in. Track rays are
-        // a singleton serving the single selection, built from the node that
+        // Upload/clear track ray geometry when what it was built from changes,
+        // or when a transform moved the node the selection lives in. Track rays
+        // are a singleton serving the single selection, built from the node that
         // owns the selected point — and, having no per-recon `model` matrix of
         // their own, they are built through that node's transform on the CPU.
-        if point_selection_changed || transform_changed {
+        let ray_source = track_ray_source(&self.state);
+        if ray_source != self.prev_ray_source || transform_changed {
+            self.prev_ray_source = ray_source;
             // The rays are built through the node's transform on the CPU rather
             // than by a model matrix on the GPU, so this phase is the build as
             // much as the upload.
@@ -1628,4 +1633,36 @@ fn note_upload(phase: &mut Phase<'_>, did: Uploaded, unit: &str, units: &str) {
 fn point_is_live(state: &crate::state::AppState, point: crate::scene::PointRef) -> bool {
     crate::scene::node_by_id(&state.scene, point.recon)
         .is_some_and(|node| !node.is_point_deleted(point.point))
+}
+
+/// What the track rays are built from: the selected point, and the identity of
+/// the value its positions and keypoints were read out of.
+///
+/// The point alone is not enough, and that was the bug. A bundle adjustment
+/// that renumbers nothing leaves the selection exactly where it was and
+/// replaces every position under it; an undo of one does the same in reverse.
+/// Same point, different geometry, rays still drawn from the version before.
+/// A `VersionSerial` is minted once and never reused, so holding it against the
+/// last frame's asks the question this needs asked: are these rays built from
+/// the value on screen?
+///
+/// `None` where there is nothing to draw: no selection, a node that has gone,
+/// a point this version does not have, or a node that is not on screen. The
+/// gate treats that as a change like any other, so the rays are cleared rather
+/// than left where they do not belong.
+///
+/// Visibility is in here because the rays are a singleton with no node of their
+/// own in the draw loop: `render_track_rays` draws whatever the buffer holds,
+/// so nothing else would stop a hidden node's rays from hanging in the air over
+/// the node that is still shown.
+fn track_ray_source(
+    state: &crate::state::AppState,
+) -> Option<(crate::scene::PointRef, crate::document::VersionSerial)> {
+    let point = state.selected_point?;
+    let node = crate::scene::node_by_id(&state.scene, point.recon)?;
+    if !crate::scene::is_visible(node, state.solo) {
+        return None;
+    }
+    node.edited().point(point.point)?;
+    Some((point, node.history.current_version().serial))
 }

@@ -222,6 +222,7 @@ pub fn run() {
         prev_selected_image: None,
         prev_selected_camera: None,
         prev_selected_point: None,
+        prev_ray_source: None,
         prev_hidden_image: None,
         quit_requested: false,
         applied_title: String::new(),
@@ -340,6 +341,10 @@ pub(crate) struct App {
     /// exactly as an image or point selection moves the other two.
     pub(crate) prev_selected_camera: Option<CameraRef>,
     pub(crate) prev_selected_point: Option<PointRef>,
+    /// What the track rays on screen were built from, so a frame can tell
+    /// whether they still describe the value under them. See
+    /// `app::track_ray_source`.
+    pub(crate) prev_ray_source: Option<(PointRef, crate::document::VersionSerial)>,
     pub(crate) prev_hidden_image: Option<ImageRef>,
     /// Set by File > Quit and read by the event loop right after the frame it
     /// was clicked in, which then exits.

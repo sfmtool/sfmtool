@@ -1125,7 +1125,7 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
 /// local refinement whose first round trims what disagrees by more than 50 px,
 /// so a camera perturbed past that is one whose observations leave the solve
 /// rather than one it pulls back.
-fn adjustable_state() -> (AppState, ReconId) {
+pub(crate) fn adjustable_state() -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(crate::scene_graph::tests::resectable_node(
         "/runs/run_a.sfmr",
