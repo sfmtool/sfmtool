@@ -391,7 +391,7 @@ addressable. No arguments.
     "looking_through": null               // a camera image, in camera-view mode
   },
   "status_message": null,
-  "background": null,                     // or the block below; see § "get_background_process"
+  "background_task": null,                // or the block below; see § "get_background_process"
   "action_log_revision": 530,             // the Action Log's clock — see § "get_action_log"
   "window_title": "SfM Explorer - seoul_bull.sfmr [MCP :8787]",
   "window": { "state": "normal", … }      // see § "The window block"
@@ -412,12 +412,12 @@ a screenshot is worth taking at all, and a second call for it every time is a
 call too many. It is `null` only before the window exists, which no tool call
 can be answered ahead of.
 
-**`background` says whether the viewer is busy, and stops there.** It is `null`
-whenever nothing is running, and otherwise the first six fields of
+**`background_task` says whether the viewer is busy, and stops there.** It is
+`null` whenever nothing is running, and otherwise the first six fields of
 `get_background_process`'s running reply and no more:
 
 ```jsonc
-"background": {
+"background_task": {
   "running": true,
   "operation": "Bundle adjust",
   "reconstruction_label": "dino_dog_toy-embedded",
@@ -2653,7 +2653,7 @@ where a test hands no host over.
   assertion every other breakdown test ends on. A breakdown longer than
   `DETAIL_EVENTS` keeps the last 128 rows after the dropped line, and reads the
   same after the operation ends as during it.
-- **`get_scene` says the viewer is busy and stops there**: `background` is
+- **`get_scene` says the viewer is busy and stops there**: `background_task` is
   `null` before an operation and again after it, and while one runs it carries
   exactly `running`, `operation`, `reconstruction_label`, `operation_id`,
   `elapsed_s` and `fraction`. The whole key set is asserted, so a field added to

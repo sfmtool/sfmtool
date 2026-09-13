@@ -555,11 +555,12 @@ collapsed the repetition in it: the first 128 rows of a long solve are its first
 few seconds. An entry's first 128 rows are its shape, because the fold got there
 first.
 
-`get_scene` gains a `background` block beside `status_message`, so an agent that
-already polls `get_scene` learns that the viewer is busy without a second call,
-and knows not to send an edit that would be refused. It is the same shape with
-everything unbounded left out: `running`, `operation`, `reconstruction_label`,
-`operation_id`, `elapsed_s` and `fraction`, and `null` with nothing running.
+`get_scene` gains a `background_task` block beside `status_message`, so an
+agent that already polls `get_scene` learns that the viewer is busy without a
+second call, and knows not to send an edit that would be refused. It is the
+same shape with everything unbounded left out: `running`, `operation`,
+`reconstruction_label`, `operation_id`, `elapsed_s` and `fraction`, and `null`
+with nothing running.
 The phase table belongs to the tool an agent asks when it wants it, because
 `get_scene` is the most-polled call on the surface and a block that grew with
 the solve would be paid for on every poll; the open phase and the status line go
@@ -617,9 +618,10 @@ editing fixture's node, so the wire is read at an instant the test chose:
   every other breakdown test ends on.
 - A breakdown longer than `DETAIL_EVENTS` is the dropped line and the last 128
   rows, and reads the same after the operation ends as it did during it.
-- **`get_scene`'s `background` block does not grow with the solve**: its whole
-  key set is asserted, so a field added to the most-polled reply on the surface
-  is a deliberate act. It is `null` before an operation and again after it.
+- **`get_scene`'s `background_task` block does not grow with the solve**: its
+  whole key set is asserted, so a field added to the most-polled reply on the
+  surface is a deliberate act. It is `null` before an operation and again
+  after it.
 - The apply timeout's message names the operation only while one is running, and
   the notice it reads is empty before the operation, set during it, and empty
   again afterwards.

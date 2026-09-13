@@ -4601,14 +4601,19 @@ fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
 fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     let (mut state, mut viewer) = editable();
     let idle = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(idle["background"], Value::Null, "{}", idle["background"]);
+    assert_eq!(
+        idle["background_task"],
+        Value::Null,
+        "{}",
+        idle["background_task"]
+    );
 
     let open = running_operation(&mut state, |progress| {
         reporting_job(progress);
         progress.set_status_message(format_args!("refining images/IMG_0007.jpg"));
     });
     let scene = ok(&mut state, &mut viewer, Command::GetScene);
-    let block = &scene["background"];
+    let block = &scene["background_task"];
     assert_eq!(
         keys(block),
         [
@@ -4634,7 +4639,7 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     // read as "may I edit", and a block that outlived the operation would be
     // carried by every poll for the rest of the session.
     let after = ok(&mut state, &mut viewer, Command::GetScene);
-    assert_eq!(after["background"], Value::Null, "{after}");
+    assert_eq!(after["background_task"], Value::Null, "{after}");
 }
 
 /// The apply timeout names what is running, and keeps its old guesses when
