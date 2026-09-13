@@ -54,7 +54,7 @@ deleting the lines.
 
 ## Structure at a glance
 
-- `src/sfmtool/` — Python package (~93 modules). Entry point is `cli.py`
+- `src/sfmtool/` — the Python package. Entry point is `cli.py`
   (Click + `_cli_group.CategoryGroup` for categorized `--help`). Subpackages:
   - `_commands/` — one module per top-level CLI subcommand
   - `align/` — alignment of multiple reconstructions (pairwise, by-cameras, by-points, multi-way)
@@ -81,7 +81,7 @@ deleting the lines.
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
     "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded
   - `sfmtool-py` — PyO3 bindings, compiled as `sfmtool._sfmtool`
-- `tests/` — pytest, ~114 modules (top-level + `tests/camrig/`, `tests/matching/`,
+- `tests/` — pytest (top-level modules + `tests/camrig/`, `tests/matching/`,
   `tests/patch/`, `tests/rig/`, `tests/rust_bindings/`, `tests/sift/` and
   `tests/xform/`). Fixtures in
   `conftest.py` — notably `isolated_seoul_bull_image` and
@@ -132,6 +132,9 @@ deleting the lines.
 - `docs/` — Zensical site, deployed to GitHub Pages.
 - `reports/` — dated snapshots from the audit skills (`audit-hygiene`,
   `audit-specs`, `suggest-next-steps`). See "Quality reports" below.
+- `skills/` — the four project skills (`audit-hygiene`, `audit-specs`,
+  `implement-random-idea`, `suggest-next-steps`), checked in here and symlinked
+  into `.claude/skills/`.
 - `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
   Windows and macOS run the same suites without instrumentation; the windowed
   `ui_basic` suite gets a job per platform — `ui-test-windows`,
