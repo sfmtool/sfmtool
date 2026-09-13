@@ -4,10 +4,10 @@
 //! The Background panel: what is running, on which node, and what it has spent
 //! its time on so far.
 //!
-//! See `specs/gui/background-operations.md`, "What the user sees". The
-//! panel decides nothing: it reads [`AppState::background`] and the collector
-//! that process shares with its worker, and the one button it has calls
-//! [`AppState::cancel_background`].
+//! See `specs/gui/background-tasks.md`, "What the user sees". The
+//! panel decides nothing: it reads [`AppState::background_task`] and the collector
+//! that task shares with its worker, and the one button it has calls
+//! [`AppState::cancel_background_task`].
 //!
 //! ## Two forms, and neither of them is blank
 //!
@@ -50,12 +50,12 @@ const COST_WIDTH: f32 = 56.0;
 /// for the frame to ride on, so an idle event loop would leave the number
 /// frozen: a viewer that looks stopped is the thing this whole panel exists to
 /// prevent. Ten frames a second is enough for a reader watching seconds, and it
-/// is asked for only where there is a live process.
+/// is asked for only where there is a live task.
 const TICK: Duration = Duration::from_millis(100);
 
 /// The panel body.
 pub(crate) fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    if state.background().is_some() {
+    if state.background_task().is_some() {
         show_running(ui, state);
     } else {
         show_idle(ui, state);
@@ -128,16 +128,16 @@ fn phase_name(live: &Live, row: usize) -> Option<&'static str> {
 /// The running form: the operation, the node, the progress, the elapsed, the
 /// Cancel button and the live phase table.
 fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
-    // Everything is read off the process first: the Cancel below needs
+    // Everything is read off the task first: the Cancel below needs
     // `&mut AppState`, and these reads borrow it.
     let refusal = state.cancel_refusal();
-    let process = state.background().expect("just checked");
-    let name = process.operation.name;
-    let label = process.label.clone();
-    let elapsed = process.started.elapsed();
-    let live = process.collector.live();
-    let status = process.collector.status();
-    let bar = bar(&process.collector, &live);
+    let task = state.background_task().expect("just checked");
+    let name = task.operation.name;
+    let label = task.label.clone();
+    let elapsed = task.started.elapsed();
+    let live = task.collector.live();
+    let status = task.collector.status();
+    let bar = bar(&task.collector, &live);
 
     ui.label(egui::RichText::new(name).strong());
     ui.label(egui::RichText::new(label).weak());
@@ -173,7 +173,7 @@ fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
     ui.ctx().request_repaint_after(TICK);
 
     if cancel {
-        state.cancel_background();
+        state.cancel_background_task();
     }
 }
 
@@ -228,7 +228,7 @@ fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
 /// breakdown is the only thing it has to say. A toggle there would be a click
 /// between a reader and the thing they opened the panel for.
 fn show_idle(ui: &mut egui::Ui, state: &AppState) {
-    let Some(last) = state.last_background.as_ref() else {
+    let Some(last) = state.last_background_task.as_ref() else {
         ui.label(egui::RichText::new("Nothing running").weak());
         return;
     };

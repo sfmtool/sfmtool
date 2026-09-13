@@ -116,7 +116,7 @@ that closes the loop by handing back a picture.
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
-| `get_background_process` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
+| `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
 | `close_reconstruction` | write | Close one reconstruction, or all of them |
 | `select_reconstruction` | write | Make one the reconstruction the file- and sequence-shaped panels follow |
@@ -391,7 +391,7 @@ addressable. No arguments.
     "looking_through": null               // a camera image, in camera-view mode
   },
   "status_message": null,
-  "background_task": null,                // or the block below; see § "get_background_process"
+  "background_task": null,                // or the block below; see § "get_background_task"
   "action_log_revision": 530,             // the Action Log's clock — see § "get_action_log"
   "window_title": "SfM Explorer - seoul_bull.sfmr [MCP :8787]",
   "window": { "state": "normal", … }      // see § "The window block"
@@ -414,7 +414,7 @@ can be answered ahead of.
 
 **`background_task` says whether the viewer is busy, and stops there.** It is
 `null` whenever nothing is running, and otherwise the first six fields of
-`get_background_process`'s running reply and no more:
+`get_background_task`'s running reply and no more:
 
 ```jsonc
 "background_task": {
@@ -431,7 +431,7 @@ An agent that already polls `get_scene` learns from this that an edit of that
 label would be refused, without a second call. What it does **not** carry is
 anything whose size depends on the operation: the phase table, which a
 three-round, sixty-iteration adjustment reports hundreds of rows of, is
-`get_background_process`'s, and the open phase and the status line go with it
+`get_background_task`'s, and the open phase and the status line go with it
 because they are narrative rather than something a caller acts on. This is the
 most-polled tool on the surface, and a block that grew with the solve would be
 paid for on every poll by every agent.
@@ -440,7 +440,7 @@ It is `null` rather than the last operation for the same reason, and for a
 second one: a block that went on describing a solve that ended half an hour ago
 would make `background != null` stop meaning "the viewer is busy", which is the
 one thing it is read for. What the last operation cost is
-`get_background_process`'s answer and the Action Log's.
+`get_background_task`'s answer and the Action Log's.
 
 **`display` reports `visible` and `drawn` both.** `visible` is the node's own
 master eye; `drawn` is the composition `visible && (no solo, or the solo is me)`
@@ -997,10 +997,10 @@ yet. What a stage is, what folds and what `elsewhere` means are
 The case it exists for is the second call: an agent reads the log, finds a slow
 row, and asks again with `detail` set and `since_revision` just below that row.
 
-### `get_background_process`
+### `get_background_task`
 
 What the viewer is busy with. One operation runs at a time, viewer-wide
-([background-operations.md](background-operations.md)),
+([background-tasks.md](background-tasks.md)),
 so this names none and takes no arguments.
 
 ```jsonc
@@ -1833,7 +1833,7 @@ one shared lens, and says which is missing when it refuses.
 
 **`bundle_adjust` runs on a worker thread**, so the window stays usable while it
 solves and this call answers one of two ways
-([background-operations.md](background-operations.md)).
+([background-tasks.md](background-tasks.md)).
 An adjustment that finishes within 200 ms replies as any edit does, with the
 cursor, the serial and the report, so a small reconstruction sees no difference.
 One still running at 200 ms replies with a handle instead:
@@ -1853,8 +1853,8 @@ reconstruction costs: under roughly 100 ms a reply reads as instantaneous, and a
 second is where a caller starts wondering, so 200 ms answers normally inside the
 window where nobody had begun to.
 
-An agent that took a handle asks `get_background_process` how the run is going
-and, once it is over, what it cost (§ "get_background_process"); the same answer
+An agent that took a handle asks `get_background_task` how the run is going
+and, once it is over, what it cost (§ "get_background_task"); the same answer
 reaches the Action Log, with the whole operation's cost and the stages it
 reported ([operation-progress.md](operation-progress.md)), whichever way the
 call answered. `cancel_background` stops it;
@@ -2011,14 +2011,14 @@ rather than a hung connection.
 **The message says what is running when something is.** A timeout's second
 sentence is a guess at the cause, and a guess that names something measurable
 beats one that lists possibilities: with an operation on a worker the viewer
-names it and the node it is on, and points at `get_background_process`; with
+names it and the node it is on, and points at `get_background_task`; with
 nothing running the two guesses above are all there is, and they are then the
 right ones. The fact is read off a small shared notice
 (`background::BusyNotice`) written where `AppState::background` is written,
 because the thread composing this message is the one thread that cannot ask the
 state, being the one composing it precisely because the GUI thread did not
 answer. The
-message does not promise that `get_background_process` will answer either: every
+message does not promise that `get_background_task` will answer either: every
 tool on this surface goes through the same GUI thread.
 
 **Every applied command records an Action Log entry as actor `MCP`**, and the
@@ -2640,7 +2640,7 @@ where a test hands no host over.
   optional ones default to what the schemas say.
 - **A window portion through plain `apply`** — no host — is refused with "no
   window", so a caller that forgets the host fails loudly.
-- **`get_background_process` reads one shape running and finished**: a session
+- **`get_background_task` reads one shape running and finished**: a session
   that has run nothing answers `running: false, finished: false` and nothing
   else; a held fake operation answers with the operation, the label, the id, the
   elapsed, `cancellable`, the kernel's count, the open phase and the stages so
@@ -2661,7 +2661,7 @@ where a test hands no host over.
   the surface.
 - **The apply timeout's message follows what is running**: with nothing running
   it is the sentence it always was, and with an operation running it names the
-  operation and the node and points at `get_background_process` instead of
+  operation and the node and points at `get_background_task` instead of
   guessing at a dialog. The notice it reads is written where the process is
   written, so it is empty before an operation, says what is running during it,
   and is empty again afterwards.
@@ -2840,7 +2840,7 @@ Other candidates, in rough order of value:
 | `screenshot` `max_dimension` | none — the native size of whatever was photographed | Longest side of the returned PNG. |
 | `get_action_log` `limit` | `200` (`read::ACTION_LOG_DEFAULT_LIMIT`) | Entries per call. |
 | `get_action_log` `limit` cap | `1000` (`read::ACTION_LOG_MAX_LIMIT`) | The most one call will return, whatever it asked for. |
-| Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_process`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
+| Breakdown rows per operation | `128` (`ActionLog::DETAIL_EVENTS`) | Rows `detail` and `get_background_task`'s `phases` carry, plus a line saying how many were dropped: the first of them for `detail`, which is folded, and the last for `phases`, which is a transcript. |
 | Apply timeout | `10 s` (`server::APPLY_TIMEOUT`) | How long a tool call waits for the GUI thread. |
 | `set_view` `fov_short_axis_deg` | `5`–`160` degrees (`view::MIN_FOV_DEG`, `view::MAX_FOV_DEG`) | Accepted range, matching what interactive FOV zoom clamps to. |
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |

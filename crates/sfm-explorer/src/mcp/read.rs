@@ -194,7 +194,7 @@ fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-/// `get_background_process`: what the viewer is busy with, or what it was busy
+/// `get_background_task`: what the viewer is busy with, or what it was busy
 /// with last.
 ///
 /// One shape for both, discriminated by `running`, because the question an
@@ -203,20 +203,20 @@ fn milliseconds(duration: Duration) -> f64 {
 /// only about a live operation would have to be paired with a second one for
 /// the answer, and the agent would have to know which to call before knowing
 /// whether it had finished.
-pub(super) fn get_background_process(state: &AppState) -> JsonReply {
-    let Some(process) = state.background() else {
+pub(super) fn get_background_task(state: &AppState) -> JsonReply {
+    let Some(task) = state.background_task() else {
         return Ok(finished_operation(state));
     };
-    let live = process.collector.live();
+    let live = task.collector.live();
     let mut reply = background_summary(state).expect("something is running");
     let fields = reply.as_object_mut().expect("the block is an object");
-    fields.insert("cancellable".into(), json!(process.operation.cancellable));
+    fields.insert("cancellable".into(), json!(task.operation.cancellable));
     // Absent rather than null, as every optional field on this surface is: a
     // kernel that reports no count has not reported a count of nothing.
-    if let Some(count) = process.collector.count() {
+    if let Some(count) = task.collector.count() {
         fields.insert("progress".into(), progress(count));
     }
-    if let Some(status) = process.collector.status() {
+    if let Some(status) = task.collector.status() {
         fields.insert("status".into(), json!(status));
     }
     // The innermost stage that has been entered and not left, which is what
@@ -240,7 +240,7 @@ pub(super) fn get_background_process(state: &AppState) -> JsonReply {
 /// answer after the operation is gone, and "what did it cost" is the question
 /// it brings.
 fn finished_operation(state: &AppState) -> Value {
-    let Some(last) = state.last_background.as_ref() else {
+    let Some(last) = state.last_background_task.as_ref() else {
         // Both discriminators present, so a reader never has to tell a missing
         // key from a false one: this session has run nothing at all.
         return json!({ "running": false, "finished": false });
@@ -269,7 +269,7 @@ fn finished_operation(state: &AppState) -> Value {
 
 /// The `background` block `get_scene` carries, or `None` with nothing running.
 ///
-/// **Deliberately not the whole of `get_background_process`.** `get_scene` is
+/// **Deliberately not the whole of `get_background_task`.** `get_scene` is
 /// the most-polled tool on this surface, and the reason this block is here at
 /// all is that an agent polling it should learn the viewer is busy without a
 /// second call. That question is answered by a handful of scalars whose size
@@ -284,21 +284,21 @@ fn finished_operation(state: &AppState) -> Value {
 /// every poll for the rest of the session, and `background != null` would stop
 /// meaning "the viewer is busy", which is the one thing this block is read for.
 pub(super) fn background_summary(state: &AppState) -> Option<Value> {
-    let process = state.background()?;
+    let task = state.background_task()?;
     let mut block = json!({
         // The discriminator `bundle_adjust`'s handle uses, so the two replies
         // an agent sees about one operation are read the same way.
         "running": true,
-        "operation": process.operation.name,
-        "reconstruction_label": process.label,
-        "operation_id": process.id,
-        "elapsed_s": process.started.elapsed().as_secs_f64(),
+        "operation": task.operation.name,
+        "reconstruction_label": task.label,
+        "operation_id": task.id,
+        "elapsed_s": task.started.elapsed().as_secs_f64(),
     });
     // One number for "how far along", rather than the kernel's own count,
     // which needs three fields and a unit only that kernel defines. It is the
     // mapped sum of what the stages reported and is therefore measured: a
     // silent stage does not move it, and nothing here interpolates across one.
-    if let Some(fraction) = process.collector.fraction() {
+    if let Some(fraction) = task.collector.fraction() {
         block
             .as_object_mut()
             .expect("the block is an object")

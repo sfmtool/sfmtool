@@ -47,7 +47,7 @@ one parameter carries all five: a `Progress` that every long function in
 `sfmtool-core` accepts. The viewer collects what comes back and an Action Log
 entry expands to show it. Running an operation off the GUI thread, so that a
 panel can draw the same thing while it is still going, is
-[background-operations.md](background-operations.md).
+[background-tasks.md](background-tasks.md).
 
 ## The parameter
 
@@ -191,7 +191,7 @@ with this codebase:
   `add_observation` cost. A parameter is per call by construction, and the
   question the Action Log asks is always about one call.
 - **Worker threads.** Long operations move off the GUI thread
-  ([background-operations.md](background-operations.md)). An ambient
+  ([background-tasks.md](background-tasks.md)). An ambient
   collector would leave the worker's phases in the worker's thread-local, to be
   drained and shipped back over a channel. A shared sink is written to directly,
   and there is nothing to ship.
@@ -325,7 +325,7 @@ call owns. `count(done, None)` reports a number and moves nothing.
 They are constants, chosen by whoever wrote the call, and they are an estimate
 of how the time divides. That is in tension with the rule that the viewer never
 shows a synthesised percentage
-([background-operations.md](background-operations.md)), so the bar is held
+([background-tasks.md](background-tasks.md)), so the bar is held
 to what it can honestly claim:
 
 - **A stage that reports nothing still advances the bar when it ends.** The bar
@@ -427,10 +427,10 @@ entry does.
 A **synchronous** operation therefore has nowhere to put a status, which costs
 nothing: it holds the GUI thread, so nothing could have drawn one anyway. The
 bundle adjustment no longer holds it
-([background-operations.md](background-operations.md)),
+([background-tasks.md](background-tasks.md)),
 so a status it set could be drawn today, and it sets none; the panel that would
 draw one is the part of that draft still unbuilt. Status is worth setting in the
-kernels a background operation reaches, and harmless everywhere else.
+kernels a background task reaches, and harmless everywhere else.
 
 It is also not the viewport status line, which stays what it is, the newest
 Action Log entry ([action-log.md](action-log.md)).
@@ -615,7 +615,7 @@ the summary of exactly what the panel showed: every run counted in the row it
 folds into, and the costs adding up.
 
 `status`, `count` and `fraction` are read by the Background panel
-([background-operations.md](background-operations.md)),
+([background-tasks.md](background-tasks.md)),
 which is the reader they were collected for. They were collected before it
 existed: a status that only reached a panel would have had to be invented at the
 same time as the panel, and the rule that says an entry never keeps one
@@ -830,7 +830,7 @@ Rayon has no cancellation of its own, so a parallel loop that wants to stop uses
 A kernel that never asks is simply not cancellable, and says so by never
 touching the flag. Which operations are cancellable, what the button does, and
 what a cancelled operation writes to the log are
-[background-operations.md](background-operations.md)'s, since they are
+[background-tasks.md](background-tasks.md)'s, since they are
 about the worker rather than about the parameter.
 
 ## The Action Log's side

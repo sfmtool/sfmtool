@@ -1,16 +1,19 @@
-# Background operations: work that outlives a frame
+# Background tasks: work that outlives a frame
 
-A long operation runs on a worker thread rather than inside the frame that asked
-for it, and a **Background Task** panel under the Scene tree says what is
-running, on
-which node, how far along it is, and what it has spent its time on so far. The
-window keeps drawing, the scene keeps answering, and an agent's call is answered
-while the work goes on. A tool that starts one gets its result directly if the
-work is quick and a handle to poll if it is not, and `get_background_process`
-answers about the operation from either side of that line.
+A long operation runs on a worker thread as a **background task**, rather than
+inside the frame that asked for it, and a **Background Task** panel under the
+Scene tree says what is running, on which node, how far along it is, and what it
+has spent its time on so far. The window keeps drawing, the scene keeps
+answering, and an agent's call is answered while the work goes on. A tool that
+starts one gets its result directly if the work is quick and a handle to poll if
+it is not, and `get_background_task` answers about the task from either side of
+that line.
+
+An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
+one, on one node, with an id of its own. One task runs at a time.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
-viewer may do meanwhile, what is written when an operation ends, and the wire.
+viewer may do meanwhile, what is written when a task ends, and the wire.
 The phases it draws come from the one `Progress` parameter every long
 `sfmtool-core` function takes ([operation-progress.md](operation-progress.md)).
 
@@ -354,7 +357,7 @@ would need it already is.
 
 ```rust
 /// A long operation running off the GUI thread.
-pub(crate) struct BackgroundProcess {
+pub(crate) struct BackgroundTask {
     /// What it is, for the panel and the refusals, and what it claims about
     /// itself.
     pub operation: Operation,
@@ -378,7 +381,7 @@ pub(crate) struct BackgroundProcess {
     pub cancel: Arc<AtomicBool>,
 }
 
-/// One kind of background operation: what to run, and what it claims about
+/// One kind of background task: what to run, and what it claims about
 /// itself.
 ///
 /// `cancellable` is a **declaration**, not something discovered: a kernel that
@@ -425,7 +428,7 @@ and on `AppState`:
 
 ```rust
 impl AppState {
-    pub fn background(&self) -> Option<&BackgroundProcess>;
+    pub fn background_task(&self) -> Option<&BackgroundTask>;
 
     /// Why an edit of `id` is refused right now, or `None`.
     ///
@@ -434,7 +437,7 @@ impl AppState {
     pub fn busy_refusal(&self, id: ReconId) -> Option<String>;
 
     /// Start `operation` on `id`. Refuses when anything is already running.
-    pub fn start_background(&mut self, operation: Operation, id: ReconId)
+    pub fn start_background_task(&mut self, operation: Operation, id: ReconId)
         -> Result<(), String>;
 
     /// Apply every report the worker has sent.
@@ -445,10 +448,10 @@ impl AppState {
     /// keep about a table that has just been renumbered. Answering with one
     /// bool would flush every texture on every report, which during a long
     /// solve is a thousand flushes for one renumbering.
-    pub fn poll_background(&mut self) -> Polled;
+    pub fn poll_background_task(&mut self) -> Polled;
 
     /// Ask the operation to stop.
-    pub fn cancel_background(&mut self);
+    pub fn cancel_background_task(&mut self);
 
     /// Why a cancel is refused right now, or `None`.
     ///
@@ -458,7 +461,7 @@ impl AppState {
 }
 ```
 
-`poll_background` runs **in phase 0, before the MCP drain**. A completed
+`poll_background_task` runs **in phase 0, before the MCP drain**. A completed
 operation's version is then on screen in the frame it landed, and an agent's
 call in that same frame reads the new value rather than the old one. The worker
 wakes an idle event loop the way the MCP server does, with
@@ -474,7 +477,7 @@ thousand repaints, and no event is ever in two places.
 
 ## On the wire
 
-A tool that starts a background operation answers **one of two ways, decided by
+A tool that starts a background task answers **one of two ways, decided by
 how long the operation takes**, not by which tool it is.
 
 An operation that finishes within `REPLY_DIRECTLY_WITHIN` replies exactly as it
@@ -522,14 +525,14 @@ it.
 be showing a modal dialog, or be mid-drag", which names two things that are not
 what happened and omits the one that did. A call that times out while an
 operation is running now names the operation and the node it is on and points at
-`get_background_process`; a call that times out with nothing running keeps the
+`get_background_task`; a call that times out with nothing running keeps the
 message it had, which is then true. The thread composing that sentence is the
 one thread that cannot ask `AppState`, since it is composing it precisely
 because the GUI thread did not answer, so it reads a small shared notice,
 `background::BusyNotice`, written where `AppState::background` is written and
 nowhere else.
 
-A read tool, **`get_background_process`**, reports what is running: the
+A read tool, **`get_background_task`**, reports what is running: the
 operation, the label, the seconds elapsed, `fraction` of the whole where
 anything reported one, whether it can be cancelled, the progress as `done`,
 `total` and `unit` where there is one, the status, the open phase, and the
@@ -569,8 +572,8 @@ than the last operation for a second reason as well: a block that outlived its
 operation would make `background != null` stop meaning "the viewer is busy",
 which is the one thing it is read for.
 
-A **`cancel_background`** tool cancels what is running, and refuses when the
-operation cannot be cancelled, with the same sentence the button's tooltip
+A **`cancel_background_task`** tool cancels what is running, and refuses when
+the operation cannot be cancelled, with the same sentence the button's tooltip
 carries.
 
 ## Testing
@@ -607,7 +610,7 @@ Panel, through `test_support::run_frame_headless`:
 `crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
 editing fixture's node, so the wire is read at an instant the test chose:
 
-- `get_background_process` answers one shape running and finished: the same
+- `get_background_task` answers one shape running and finished: the same
   `operation`, `reconstruction_label` and `operation_id` either way, a cost no
   shorter than the elapsed it was read at, and `running` telling the two apart.
   A session that has run nothing answers `running: false, finished: false` and

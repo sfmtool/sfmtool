@@ -93,7 +93,7 @@ the lens the value already carries, so this edit reads nothing off disk.
 
 It runs **on a worker thread**, so the window stays usable while it solves and
 the node it is running on refuses every edit until it lands
-([../background-operations.md](../background-operations.md)). The frame that
+([../background-tasks.md](../background-tasks.md)). The frame that
 started it goes on drawing the value at the cursor, which is the value the
 worker was handed and which nothing is mutating.
 
@@ -178,7 +178,7 @@ button exists, and that is what the menu test already does.
 - Editing the node while the adjustment runs. An adjustment that could be
   undone or edited over while it ran would be a second document model rather
   than a longer one, so the busy node refuses every edit until it lands
-  ([../background-operations.md](../background-operations.md)).
+  ([../background-tasks.md](../background-tasks.md)).
 - Releasing the distortion parameters. The dialog offers the focal and nothing
   else; a caller staging a distortion release runs the kernel offline.
 - Adjusting a selection -- one image's pose, one region's points. The edit is the

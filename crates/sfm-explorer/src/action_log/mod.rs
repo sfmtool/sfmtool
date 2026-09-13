@@ -611,7 +611,7 @@ impl ActionLog {
     /// The same cap, keeping the **last** rows rather than the first.
     ///
     /// For an unfolded transcript, which is what the Background panel draws and
-    /// what `get_background_process` reports
+    /// what `get_background_task` reports
     /// (`specs/gui/operation-progress.md`). Nothing has collapsed the
     /// repetition there, so the first hundred and twenty-eight rows of a long
     /// solve are the first few seconds of it and say nothing about where it has
@@ -1020,7 +1020,7 @@ impl ActionLog {
     ///
     /// A [`panel::Breakdown`] rather than an [`Entry`], because the wire
     /// carries a running operation's rows as well as a finished entry's
-    /// (`specs/gui/mcp-server.md` § "get_background_process") and there is one
+    /// (`specs/gui/mcp-server.md` § "get_background_task") and there is one
     /// order for both.
     ///
     /// [`ActionLog::elsewhere`] closes the operation's own account before the

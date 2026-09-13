@@ -3596,7 +3596,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_window_layout",
             "get_image_detail_display",
             "get_history",
-            "get_background_process",
+            "get_background_task",
             "screenshot",
         ]
     );
@@ -3659,7 +3659,7 @@ fn set_window_layout_advertises_the_document() {
 struct RunningServer {
     address: std::net::SocketAddr,
     /// Kept for the life of the test. The stand-in GUI loop ends when the
-    /// server's sender is dropped, which happens when the process does.
+    /// server's sender is dropped, which happens when the task does.
     _gui: std::thread::JoinHandle<()>,
 }
 
@@ -3932,7 +3932,7 @@ fn the_tool_list_carries_the_cache_hints_a_current_client_requires() {
     assert!(!result["tools"].as_array().expect("tools").is_empty());
 }
 
-/// The catalog is not advertised as cacheable. It is fixed within one process
+/// The catalog is not advertised as cacheable. It is fixed within one task
 /// but changes across a rebuild, and the viewer exists to be rebuilt — a client
 /// holding a cached list across a relaunch would call tools the new binary no
 /// longer has.
@@ -4216,7 +4216,7 @@ fn adjusted(state: &mut AppState, viewer: &mut Viewer3D, arguments: Value) -> Va
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
         _ => panic!("bundle_adjust must defer"),
     };
-    state.finish_background();
+    state.finish_background_task();
     match super::edit::background_reply(state, &pending).expect("the operation finished") {
         Ok(ToolOutput::Json(value)) => value,
         Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
@@ -4253,7 +4253,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     // which is what the frame's clock would have reached.
     let (open, held) = std::sync::mpsc::channel::<()>();
     state
-        .start_background(
+        .start_background_task(
             crate::background::Operation::BUNDLE_ADJUST,
             id,
             Box::new(move |_progress| {
@@ -4262,12 +4262,12 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
             }),
         )
         .expect("nothing else is running");
-    let process = state.background().expect("running");
+    let task = state.background_task().expect("running");
     let pending = super::BackgroundReply {
-        operation_id: process.id,
-        operation_name: process.operation.name,
+        operation_id: task.id,
+        operation_name: task.operation.name,
         node: id,
-        label: process.label.clone(),
+        label: task.label.clone(),
         started: std::time::Instant::now() - super::REPLY_DIRECTLY_WITHIN,
     };
 
@@ -4296,7 +4296,7 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
+    state.finish_background_task();
 }
 
 /// The id in a handle goes on naming its operation after that operation has
@@ -4314,8 +4314,8 @@ fn a_handle_s_id_still_names_the_operation_once_it_has_finished() {
         Outcome::Deferred(super::Deferred::Background(pending)) => pending,
         _ => panic!("bundle_adjust must defer"),
     };
-    state.finish_background();
-    assert!(state.background().is_none());
+    state.finish_background_task();
+    assert!(state.background_task().is_none());
 
     let reply = match super::edit::background_reply(&state, &pending).expect("it finished") {
         Ok(ToolOutput::Json(value)) => value,
@@ -4345,7 +4345,7 @@ fn a_handle_s_id_still_names_the_operation_once_it_has_finished() {
 #[test]
 fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
     let (mut state, mut viewer) = editable();
-    let error = refused_call(&mut state, &mut viewer, "cancel_background", json!({}));
+    let error = refused_call(&mut state, &mut viewer, "cancel_background_task", json!({}));
     assert!(error.0.contains("Nothing is running"), "{error}");
 
     perturb(&mut state, 0.02);
@@ -4358,15 +4358,15 @@ fn cancel_background_stops_what_is_running_and_refuses_when_nothing_is() {
         Outcome::Deferred(super::Deferred::Background(_)) => {}
         _ => panic!("bundle_adjust must defer"),
     }
-    let reply = call(&mut state, &mut viewer, "cancel_background", json!({}));
+    let reply = call(&mut state, &mut viewer, "cancel_background_task", json!({}));
     assert_eq!(reply["cancelling"], json!("Bundle adjust"), "{reply}");
     assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
 
-    state.finish_background();
+    state.finish_background_task();
     // Whether the solve reached a poll before finishing is a race, so what is
     // asserted is the flag's effect on the state machine rather than which of
     // the two rows landed: either way the operation is over and the node free.
-    assert!(state.background().is_none());
+    assert!(state.background_task().is_none());
     assert_eq!(state.busy_refusal(state.scene[0].id), None);
 }
 
@@ -4393,7 +4393,7 @@ fn running_operation(
     let (open, held) = std::sync::mpsc::channel::<()>();
     let (said, heard) = std::sync::mpsc::channel::<()>();
     state
-        .start_background(
+        .start_background_task(
             crate::background::Operation::BUNDLE_ADJUST,
             id,
             Box::new(move |progress| {
@@ -4405,7 +4405,7 @@ fn running_operation(
         )
         .expect("nothing else is running");
     heard.recv().expect("the worker reported");
-    state.poll_background();
+    state.poll_background_task();
     open
 }
 
@@ -4442,19 +4442,19 @@ fn keys(value: &Value) -> Vec<String> {
 /// One call answers both "is it still going" and "what did it cost", and the
 /// two answers are the same shape with `running` telling them apart.
 #[test]
-fn get_background_process_reads_one_shape_running_and_finished() {
+fn get_background_task_reads_one_shape_running_and_finished() {
     let (mut state, mut viewer) = editable();
 
     // Nothing has run: both discriminators are there and both are false, so a
     // reader never has to tell a missing key from a false one.
-    let idle = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let idle = call(&mut state, &mut viewer, "get_background_task", json!({}));
     assert_eq!(keys(&idle), ["finished", "running"], "{idle}");
     assert_eq!(idle["running"], json!(false), "{idle}");
     assert_eq!(idle["finished"], json!(false), "{idle}");
 
     let open = running_operation(&mut state, reporting_job);
-    let operation_id = state.background().expect("running").id;
-    let live = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let operation_id = state.background_task().expect("running").id;
+    let live = call(&mut state, &mut viewer, "get_background_task", json!({}));
     assert_eq!(live["running"], json!(true), "{live}");
     assert_eq!(live.get("finished"), None, "{live}");
     assert_eq!(live["operation"], json!("Bundle adjust"), "{live}");
@@ -4489,9 +4489,9 @@ fn get_background_process_reads_one_shape_running_and_finished() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
+    state.finish_background_task();
 
-    let over = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
     assert_eq!(over["running"], json!(false), "{over}");
     assert_eq!(over["finished"], json!(true), "{over}");
     // The same operation, under the same names: an agent parses one shape.
@@ -4525,9 +4525,9 @@ fn the_entry_is_the_summary_of_the_breakdown_the_wire_reported() {
     let open = running_operation(&mut state, reporting_job);
     let since = state.action_log.revision();
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
+    state.finish_background_task();
 
-    let reply = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let reply = call(&mut state, &mut viewer, "get_background_task", json!({}));
     let log = ok(&mut state, &mut viewer, action_log_detail(since));
     let row = row_starting(&log, "the fake worker produced nothing");
     let wire = reply["phases"].as_array().expect("an array");
@@ -4570,7 +4570,7 @@ fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
         }
     });
 
-    let live = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    let live = call(&mut state, &mut viewer, "get_background_task", json!({}));
     let rows = live["phases"].as_array().expect("an array").clone();
     assert_eq!(rows.len(), ActionLog::DETAIL_EVENTS + 1, "{live}");
     // What it left out is said first, and what it kept is the recent end.
@@ -4587,8 +4587,8 @@ fn a_long_breakdown_is_capped_and_says_how_many_it_dropped() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
-    let over = call(&mut state, &mut viewer, "get_background_process", json!({}));
+    state.finish_background_task();
+    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
     assert_eq!(over["phases"], live["phases"], "{over}");
 }
 
@@ -4630,11 +4630,11 @@ fn get_scene_says_the_viewer_is_busy_without_carrying_the_solve() {
     assert_eq!(block["operation"], json!("Bundle adjust"), "{block}");
     assert_eq!(block["reconstruction_label"], json!("run_a"), "{block}");
     // The one field a caller polls for movement, and the whole of what
-    // `get_background_process` would add is absent here.
+    // `get_background_task` would add is absent here.
     assert!(block["fraction"].is_number(), "{block}");
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
+    state.finish_background_task();
     // Null again, rather than the operation that just ended: `background` is
     // read as "may I edit", and a block that outlived the operation would be
     // carried by every poll for the rest of the session.
@@ -4649,7 +4649,7 @@ fn the_timeout_message_names_an_operation_only_while_one_is_running() {
     let idle = super::server::timeout_message(None);
     assert!(idle.contains("did not answer within 10 seconds"), "{idle}");
     assert!(idle.contains("modal dialog"), "{idle}");
-    assert!(!idle.contains("get_background_process"), "{idle}");
+    assert!(!idle.contains("get_background_task"), "{idle}");
 
     let busy = super::server::timeout_message(Some(crate::background::Busy {
         operation: "Bundle adjust",
@@ -4660,13 +4660,13 @@ fn the_timeout_message_names_an_operation_only_while_one_is_running() {
         busy.contains("Bundle adjust is running in the background on dino_dog_toy-embedded"),
         "{busy}"
     );
-    assert!(busy.contains("get_background_process"), "{busy}");
+    assert!(busy.contains("get_background_task"), "{busy}");
     // The two guesses are gone: they name things that did not happen.
     assert!(!busy.contains("modal dialog"), "{busy}");
     assert!(!busy.contains("mid-drag"), "{busy}");
 }
 
-/// The notice the message reads is written where the process is written, so the
+/// The notice the message reads is written where the task is written, so the
 /// two cannot disagree about whether anything is running.
 #[test]
 fn the_busy_notice_tracks_the_operation() {
@@ -4683,7 +4683,7 @@ fn the_busy_notice_tracks_the_operation() {
     );
 
     open.send(()).expect("the worker is waiting");
-    state.finish_background();
+    state.finish_background_task();
     assert_eq!(crate::background::busy(&state.busy_notice), None);
 }
 

@@ -384,7 +384,7 @@ one of them is greyed.
 - Running a *point* edit off the GUI thread. One costs microseconds, so a thread
   hop and a frame of latency would buy nothing. The bulk edits do run off it,
   under a panel that reports what they are doing
-  ([background-operations.md](background-operations.md)), and the value
+  ([background-tasks.md](background-tasks.md)), and the value
   semantics above are what make that safe.
 - Undo of display state -- the eyes, the tint, the node transform, the panel
   layout. Those are not versions of the reconstruction.

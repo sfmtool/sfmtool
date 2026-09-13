@@ -243,14 +243,14 @@ pub(crate) enum Command {
     },
     /// What the background operation is doing, or what the last one did.
     ///
-    /// Names no operation, for the reason [`Command::CancelBackground`] does
+    /// Names no operation, for the reason [`Command::CancelBackgroundTask`] does
     /// not: one runs at a time, viewer-wide.
-    GetBackgroundProcess,
+    GetBackgroundTask,
     /// Ask the running background operation to stop.
     ///
     /// Names no operation: one runs at a time, viewer-wide, so "the one that is
     /// running" is unambiguous.
-    CancelBackground,
+    CancelBackgroundTask,
     /// A picture of the presented window, or of one panel's body cropped from
     /// it.
     ///
@@ -741,8 +741,8 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
         } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
-        Command::GetBackgroundProcess => done(read::get_background_process(state)),
-        Command::CancelBackground => done(edit::cancel_background(state)),
+        Command::GetBackgroundTask => done(read::get_background_task(state)),
+        Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {
             panel,
             hud,
@@ -1237,8 +1237,8 @@ impl Command {
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
-            Command::GetBackgroundProcess => "get_background_process",
-            Command::CancelBackground => "cancel_background",
+            Command::GetBackgroundTask => "get_background_task",
+            Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
         }
     }
@@ -1368,7 +1368,7 @@ impl Command {
             | Command::GetImageDetailDisplay
             | Command::GetTimingDetail
             | Command::GetHistory { .. }
-            | Command::GetBackgroundProcess
+            | Command::GetBackgroundTask
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. }
             | Command::CloseReconstruction { .. }
@@ -1386,7 +1386,7 @@ impl Command {
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
             | Command::BundleAdjust { .. }
-            | Command::CancelBackground => Kind::Edit,
+            | Command::CancelBackgroundTask => Kind::Edit,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }
@@ -1463,7 +1463,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
             format!("get_action_log since {since_revision}")
         }
         Command::GetWindowLayout => "get_window_layout".to_string(),
-        Command::GetBackgroundProcess => "get_background_process".to_string(),
+        Command::GetBackgroundTask => "get_background_task".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetHistory {

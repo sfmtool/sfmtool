@@ -68,7 +68,7 @@ const APPLY_TIMEOUT: Duration = Duration::from_secs(10);
 /// with nothing running the original guesses are all there is, and they are
 /// then the right ones.
 ///
-/// It does not promise that `get_background_process` will answer, because it
+/// It does not promise that `get_background_task` will answer, because it
 /// cannot: every tool on this surface goes through the same GUI thread, and a
 /// thread that missed this call may miss that one too.
 pub(super) fn timeout_message(busy: Option<crate::background::Busy>) -> String {
@@ -76,7 +76,7 @@ pub(super) fn timeout_message(busy: Option<crate::background::Busy>) -> String {
     match busy {
         Some(busy) => format!(
             "The viewer did not answer within {seconds} seconds. {} is running in the background \
-             on {}; get_background_process says how far along it has got.",
+             on {}; get_background_task says how far along it has got.",
             busy.operation, busy.label
         ),
         None => format!(

@@ -38,7 +38,7 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
         // the reason the revision is: an agent already polling this should not
         // need a second call to learn that an edit it is about to send would be
         // refused. Deliberately the short form -- the phase table is
-        // `get_background_process`'s (§ "get_background_process").
+        // `get_background_task`'s (§ "get_background_task").
         "background_task": super::read::background_summary(state),
         // The Action Log's clock, so an agent that already reads `get_scene`
         // knows whether anything has happened since its last `get_action_log`

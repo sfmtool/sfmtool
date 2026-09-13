@@ -387,7 +387,7 @@ The reader's units are milliseconds up to a second and seconds past it, and
 rounded zero reads like a measurement that failed. Seconds carry **one**
 decimal, because this is the spelling a running operation is read in as well:
 the Background panel
-([background-operations.md](background-operations.md))
+([background-tasks.md](background-tasks.md))
 redraws ten times a second, and a hundredths digit there is a digit that only
 ever spins. The column is right-aligned
 so a slow row stands out of a column of fast ones without the numbers being

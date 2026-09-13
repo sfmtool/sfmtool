@@ -857,7 +857,7 @@ impl AppState {
     ///
     /// Returns as soon as the worker is running, and **nothing is logged
     /// here**: the entry is the outcome's, written by
-    /// [`AppState::poll_background`] on the frame the answer lands, from the
+    /// [`AppState::poll_background_task`] on the frame the answer lands, from the
     /// instant the operation started and in the name of whoever asked for it.
     /// What this returns an `Err` for is a refusal to *begin*, which is logged
     /// like the refusals the edit used to write itself.
@@ -870,7 +870,7 @@ impl AppState {
         options: &sfmtool_core::BundleAdjustOptions,
     ) -> Result<(), String> {
         let outcome = match self.bundle_adjust_job(id, options) {
-            Ok(job) => self.start_background(Operation::BUNDLE_ADJUST, id, job),
+            Ok(job) => self.start_background_task(Operation::BUNDLE_ADJUST, id, job),
             Err(message) => Err(message),
         };
         if let Err(message) = &outcome {

@@ -3,7 +3,7 @@
 
 //! One long operation, running off the GUI thread.
 //!
-//! See `specs/gui/background-operations.md`. A bulk edit is already a
+//! See `specs/gui/background-tasks.md`. A bulk edit is already a
 //! pure function from the value at a node's cursor to the next value, so a
 //! worker can be handed a clone of the `Arc` that value is behind and read it
 //! while the GUI thread keeps drawing the same allocation. Nothing here wraps
@@ -21,14 +21,14 @@
 //! - [`Operation`] is what a background operation is and what it claims about
 //!   itself; [`Job`] is the work, as a function of the [`Progress`] it reports
 //!   through.
-//! - [`BackgroundProcess`] is the one that is running: a field of [`AppState`],
+//! - [`BackgroundTask`] is the one that is running: a field of [`AppState`],
 //!   so the busy check is where every method that needs it already is.
 //! - [`Report`] is what crosses the channel, and carries no progress: phases,
 //!   messages and counts are in the collector both threads hold.
 //!
 //! ## What the GUI thread does with it
 //!
-//! [`AppState::poll_background`] runs in phase 0 of the frame, before the MCP
+//! [`AppState::poll_background_task`] runs in phase 0 of the frame, before the MCP
 //! drain, so a completed operation's version is on screen in the frame it
 //! landed and an agent's call in that same frame reads the new value. What
 //! remains of the freeze is the upload the next phase does, which for an
@@ -102,13 +102,13 @@ impl Operation {
 pub(crate) type Job = Box<dyn for<'a> FnOnce(&Progress<'a>) -> Finished + Send>;
 
 /// A long operation running off the GUI thread.
-pub(crate) struct BackgroundProcess {
+pub(crate) struct BackgroundTask {
     /// Which operation this is, monotonic across the session and never reused.
     ///
     /// A caller that was handed this id while the operation was running comes
-    /// back for the answer after it has finished, by which time the process is
+    /// back for the answer after it has finished, by which time the task is
     /// gone and another may have taken its place: the id is what says whether
-    /// [`AppState::last_background`] is about the operation being asked after
+    /// [`AppState::last_background_task`] is about the operation being asked after
     /// or about a later one.
     pub(crate) id: u64,
     /// What it is, for the refusals, and what it claims about itself.
@@ -134,7 +134,7 @@ pub(crate) struct BackgroundProcess {
     /// `Progress` built over `collector`; one that never polls is not
     /// cancellable, and [`Operation::cancellable`] says so.
     pub(crate) cancel: Arc<AtomicBool>,
-    /// What the worker sends, drained by [`AppState::poll_background`].
+    /// What the worker sends, drained by [`AppState::poll_background_task`].
     reports: Receiver<Report>,
     /// Whether a [`Report::Progressed`] the GUI thread has not drained yet is
     /// already in the queue.
@@ -191,14 +191,14 @@ pub(crate) enum Finished {
 
 /// What became of the operation that ran most recently.
 ///
-/// Kept after the process is gone because the question outlives it: a tool call
+/// Kept after the task is gone because the question outlives it: a tool call
 /// that was handed a handle while the operation was running comes back for the
-/// answer, and by then there is no process to ask. The Background panel asks
+/// answer, and by then there is no task to ask. The Background panel asks
 /// the same question with nothing running, which is why what it cost and what
 /// it spent the time on are here rather than only in the Action Log: the panel
 /// would otherwise have to find its own entry in a buffer that drops and
 /// clears.
-pub(crate) struct LastOperation {
+pub(crate) struct FinishedTask {
     /// Which operation this is about.
     pub(crate) id: u64,
     /// What it was, by the name the panel and the refusals call it.
@@ -275,8 +275,8 @@ pub(crate) struct Polled {
 
 impl AppState {
     /// The operation running off the GUI thread, if there is one.
-    pub(crate) fn background(&self) -> Option<&BackgroundProcess> {
-        self.background.as_ref()
+    pub(crate) fn background_task(&self) -> Option<&BackgroundTask> {
+        self.background_task.as_ref()
     }
 
     /// Why an edit of `id` is refused right now, or `None`.
@@ -288,11 +288,11 @@ impl AppState {
     /// value it was handed, and an edit underneath it would produce a version
     /// whose parent is not the version it was computed from.
     pub(crate) fn busy_refusal(&self, id: ReconId) -> Option<String> {
-        let process = self.background.as_ref()?;
-        (process.node == id).then(|| {
+        let task = self.background_task.as_ref()?;
+        (task.node == id).then(|| {
             format!(
                 "{} is busy: {} is still running.",
-                process.label, process.operation.name
+                task.label, task.operation.name
             )
         })
     }
@@ -303,11 +303,11 @@ impl AppState {
     /// are the same sentence, for the same reason every other refusal here has
     /// one spelling.
     pub(crate) fn cancel_refusal(&self) -> Option<String> {
-        match self.background.as_ref() {
+        match self.background_task.as_ref() {
             None => Some("Nothing is running in the background.".to_string()),
-            Some(process) if !process.operation.cancellable => Some(format!(
+            Some(task) if !task.operation.cancellable => Some(format!(
                 "{} cannot be cancelled: it never asks whether it should stop.",
-                process.operation.name
+                task.operation.name
             )),
             Some(_) => None,
         }
@@ -321,14 +321,14 @@ impl AppState {
     ///
     /// **Nothing is logged here.** The log records outcomes, not intentions
     /// (`specs/gui/action-log.md`), so the entry is written when the operation
-    /// ends, by [`AppState::poll_background`].
-    pub(crate) fn start_background(
+    /// ends, by [`AppState::poll_background_task`].
+    pub(crate) fn start_background_task(
         &mut self,
         operation: Operation,
         id: ReconId,
         job: Job,
     ) -> Result<(), String> {
-        if let Some(running) = self.background.as_ref() {
+        if let Some(running) = self.background_task.as_ref() {
             return Err(format!(
                 "{} is still running on {}.",
                 running.operation.name, running.label
@@ -379,7 +379,7 @@ impl AppState {
                 label: label.clone(),
             }),
         );
-        self.background = Some(BackgroundProcess {
+        self.background_task = Some(BackgroundTask {
             id: operation_id,
             operation,
             node: id,
@@ -400,7 +400,7 @@ impl AppState {
     /// operation's version is then on screen in the frame it landed, and an
     /// agent's call in that same frame reads the new value rather than the old
     /// one.
-    pub(crate) fn poll_background(&mut self) -> Polled {
+    pub(crate) fn poll_background_task(&mut self) -> Polled {
         self.apply_reports(None)
     }
 
@@ -412,22 +412,22 @@ impl AppState {
     /// nothing acted on.
     fn apply_reports(&mut self, first: Option<Report>) -> Polled {
         let mut polled = Polled::default();
-        let Some(process) = self.background.as_ref() else {
+        let Some(task) = self.background_task.as_ref() else {
             return polled;
         };
         // Cleared before the drain rather than after it, so a report made
         // between the two is sent rather than swallowed by a latch the GUI
         // thread was about to clear.
-        process.queued.store(false, Ordering::Release);
+        task.queued.store(false, Ordering::Release);
         let mut done = None;
         let mut next = first;
         loop {
             let report = match next.take() {
                 Some(report) => report,
-                None => match process.reports.try_recv() {
+                None => match task.reports.try_recv() {
                     Ok(report) => report,
                     Err(TryRecvError::Empty) => break,
-                    // Not reachable while the viewer holds the process: the
+                    // Not reachable while the viewer holds the task: the
                     // collector it shares with the worker owns a sender of its
                     // own, and a job that panics is caught and reported
                     // ([`Worker::run`]). Kept because the alternative to
@@ -437,7 +437,7 @@ impl AppState {
                         polled.changed = true;
                         done = Some(Finished::Failed(format!(
                             "{} of {} stopped without an answer.",
-                            process.operation.name, process.label
+                            task.operation.name, task.label
                         )));
                         break;
                     }
@@ -453,19 +453,19 @@ impl AppState {
             }
         }
         if let Some(finished) = done {
-            let process = self.background.take().expect("just borrowed");
+            let task = self.background_task.take().expect("just borrowed");
             set_busy(&self.busy_notice, None);
-            polled.installed = self.finish(process, finished);
+            polled.installed = self.finish(task, finished);
         }
         polled
     }
 
     /// Ask the operation to stop. Silently does nothing when it cannot, which
     /// is what [`AppState::cancel_refusal`] is for saying out loud.
-    pub(crate) fn cancel_background(&mut self) {
-        if let Some(process) = self.background.as_ref() {
-            if process.operation.cancellable {
-                process.cancel.store(true, Ordering::Relaxed);
+    pub(crate) fn cancel_background_task(&mut self) {
+        if let Some(task) = self.background_task.as_ref() {
+            if task.operation.cancellable {
+                task.cancel.store(true, Ordering::Relaxed);
             }
         }
     }
@@ -479,8 +479,8 @@ impl AppState {
     /// operation started rather than from the frame that installed it. Without
     /// that instant a ninety-five second solve would report the six
     /// milliseconds of the frame that pushed its version.
-    fn finish(&mut self, process: BackgroundProcess, finished: Finished) -> Option<ReconId> {
-        let BackgroundProcess {
+    fn finish(&mut self, task: BackgroundTask, finished: Finished) -> Option<ReconId> {
+        let BackgroundTask {
             id,
             operation,
             node,
@@ -489,7 +489,7 @@ impl AppState {
             actor,
             collector,
             ..
-        } = process;
+        } = task;
         let mut installed = None;
         let outcome = match finished {
             Finished::Produced {
@@ -554,7 +554,7 @@ impl AppState {
                     .fail_done_as(actor, Kind::Edit, started, message.clone(), detail)
             }
         }
-        self.last_background = Some(LastOperation {
+        self.last_background_task = Some(FinishedTask {
             id,
             operation,
             label,
@@ -568,11 +568,11 @@ impl AppState {
     /// Drive the running operation to its end, applying what it reports.
     ///
     /// The test seam, and the only blocking read of the channel: a frame never
-    /// waits, so the production drain is [`AppState::poll_background`]'s
+    /// waits, so the production drain is [`AppState::poll_background_task`]'s
     /// `try_recv`. Waiting on the worker's own messages is what makes a test
     /// deterministic without a sleep or a poll loop.
     #[cfg(test)]
-    pub(crate) fn finish_background(&mut self) -> Polled {
+    pub(crate) fn finish_background_task(&mut self) -> Polled {
         use std::time::Duration;
 
         /// Long enough that a loaded machine does not fail a passing test,
@@ -580,10 +580,10 @@ impl AppState {
         const PATIENCE: Duration = Duration::from_secs(120);
 
         let mut polled = Polled::default();
-        while self.background.is_some() {
+        while self.background_task.is_some() {
             let waited = {
-                let process = self.background.as_ref().expect("just checked");
-                process.reports.recv_timeout(PATIENCE)
+                let task = self.background_task.as_ref().expect("just checked");
+                task.reports.recv_timeout(PATIENCE)
             };
             let first = match waited {
                 Ok(report) => Some(report),
@@ -634,7 +634,7 @@ impl Worker {
         // A job that panics still has to say something. The GUI thread cannot
         // notice the thread going on its own -- the collector it shares holds
         // the other end of this channel, so nothing here is ever dropped while
-        // the viewer holds the process -- and a node locked by an operation
+        // the viewer holds the task -- and a node locked by an operation
         // that will never answer is the worst outcome available.
         let finished = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             job(&progress)

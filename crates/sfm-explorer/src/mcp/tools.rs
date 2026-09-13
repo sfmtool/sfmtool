@@ -817,7 +817,7 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           carrying the counts and the median residual before and after; one that \
                           is still going after 200 ms replies instead with running: true and an \
                           operation_id, and the outcome is then read out of get_action_log or \
-                          stopped with cancel_background. Needs inline keypoints and one shared \
+                          stopped with cancel_background_task. Needs inline keypoints and one shared \
                           lens.",
             kind: Write,
             schema: object(
@@ -832,7 +832,7 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "get_background_process",
+            name: "get_background_task",
             description: "What the viewer is busy with: the operation, the reconstruction it is \
                           running on, how long it has been going, how far along it is, the stage \
                           it is in, and the stages it has finished, in the shape get_action_log's \
@@ -845,7 +845,7 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[]),
         },
         ToolSpec {
-            name: "cancel_background",
+            name: "cancel_background_task",
             description: "Ask the background operation that is running to stop. One runs at a \
                           time, viewer-wide, so this names none. The operation stops at its next \
                           safe point, pushes no version, and writes a cancelled row to the Action \
@@ -1525,13 +1525,13 @@ pub(crate) fn parse(
                 release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             }
         }
-        "get_background_process" => {
+        "get_background_task" => {
             args.reject_unknown(&[])?;
-            Command::GetBackgroundProcess
+            Command::GetBackgroundTask
         }
-        "cancel_background" => {
+        "cancel_background_task" => {
             args.reject_unknown(&[])?;
-            Command::CancelBackground
+            Command::CancelBackgroundTask
         }
         "screenshot" => {
             args.reject_unknown(&["panel_name", "hud", "max_dimension"])?;
