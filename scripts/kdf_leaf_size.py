@@ -163,7 +163,6 @@ def main() -> None:
         write_kdf(
             forest,
             str(solo),
-            layout="shared",
             chunk_bytes=args.chunk_bytes,
             descriptor_block_bytes=len(index) * index.shape[1],
         )
@@ -180,7 +179,6 @@ def main() -> None:
         write_kdf(
             forest,
             str(path),
-            layout="shared",
             chunk_bytes=args.chunk_bytes,
             descriptor_block_bytes=args.block_bytes,
         )

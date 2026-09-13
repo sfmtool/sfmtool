@@ -1,25 +1,22 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare the two `.kdf` descriptor layouts on a real SIFT corpus.
+"""Sweep version-2 `.kdf` blocking and cache settings on a real SIFT corpus.
 
-Runs the staged sweep from `specs/core/features/lazy-kdforest-query.md`
-("Benchmark plan and provisional defaults") against a workspace's `.sift`
-files. The question it exists to answer is whether one shared descriptor corpus
-beats T tree-local copies, and at what chunk and block sizes.
+Runs a staged sweep from `specs/core/features/lazy-kdforest-query.md` against a
+workspace's `.sift` files. Version 2 has one descriptor corpus; this measures
+tree-chunk size, descriptor/geometry block size, cache budget and worker count.
 
-The stages are deliberately not a Cartesian product: stage 1 screens chunk sizes
-with the layouts held against each other, stage 2 sweeps shared block sizes at
-the chunk size stage 1 liked, and stage 3 stresses the survivors across cache
+The stages are deliberately not a Cartesian product: stage 1 screens tree-chunk
+sizes, stage 2 sweeps descriptor/geometry block sizes, and stage 3 tests cache
 budgets and worker counts. Each stage narrows what the next one has to try.
 
-Every cell holds the corpus, the forest topology, the query set, k and the check
-budget fixed, so the only thing varying is storage. The forest is built once per
-run and exported repeatedly; two cells that differed in their forest would not
-be comparing layouts at all.
+Every cell holds the corpus, forest topology, query set, k and check budget
+fixed. The forest is built once per run and exported repeatedly.
 
 Run:
-    pixi run python scripts/benchmark_kdf_layouts.py --workspace WS --out results.json
+    pixi run python scripts/benchmark_kdf_layouts.py --workspace WS \
+        --scratch TMP --out results.json
 
 A reopened file is not evidence of cold physical storage. The OS page cache is
 uncontrolled here, so "cold" below means a fresh `LazyKdForest` with an empty
@@ -80,50 +77,62 @@ def find_features(workspace: Path, explicit: str | None) -> Path:
     )
 
 
-def load_corpus(features: Path) -> tuple[np.ndarray, list[str], np.ndarray, np.ndarray]:
+def load_corpus(features: Path):
     """Pool every `.sift` descriptor in a feature directory, in image order.
 
     Returns the descriptors alongside the origin columns that map each corpus
-    row back to `(image_index, image_feature_index)` — the same provenance a
-    real export would carry, so its cost lands in the measurement instead of
-    being assumed away.
+    row back to `(image_index, image_feature_index)`, plus keypoint positions
+    and affine shapes. Their cost lands in the measurement instead of being
+    assumed away.
 
     A `.sift` file has no descriptor count in its header, so the total is only
     known after every file has been read and the blocks cannot be streamed into
     a preallocated array in one pass. Each block is instead released as it is
     copied, so the peak declines through the copy rather than holding both the
-    blocks and the finished array to the end. Each reader is closed as soon as
-    its descriptors are in hand, which frees that file's positions, affine
-    shapes and thumbnail immediately — only the descriptors are wanted here.
+    blocks and the finished arrays to the end. Each reader is closed once all
+    three arrays are in hand.
     """
     files = sorted(features.glob("*.sift"))
     if not files:
         raise SystemExit(f"no .sift files in {features}")
 
     blocks = []
+    position_blocks = []
+    affine_blocks = []
     for path in files:
         reader = SiftReader(path)
         blocks.append(reader.read_descriptors())
+        positions, affines = reader.read_positions_and_shapes()
+        position_blocks.append(positions)
+        affine_blocks.append(affines)
         reader.close()
 
     total = sum(len(b) for b in blocks)
     out = np.empty((total, blocks[0].shape[1]), dtype=np.uint8)
+    positions = np.empty((total, 2), dtype=np.float32)
+    affines = np.empty((total, 2, 2), dtype=np.float32)
     image_indexes = np.empty(total, dtype=np.uint32)
     feature_indexes = np.empty(total, dtype=np.uint32)
     at = 0
     for image_index, block in enumerate(blocks):
         n = len(block)
         out[at : at + n] = block
+        positions[at : at + n] = position_blocks[image_index]
+        affines[at : at + n] = affine_blocks[image_index]
         image_indexes[at : at + n] = image_index
         feature_indexes[at : at + n] = np.arange(n, dtype=np.uint32)
         at += n
         blocks[image_index] = None
+        position_blocks[image_index] = None
+        affine_blocks[image_index] = None
 
     return (
         out,
         [p.name.removesuffix(".sift") for p in files],
         image_indexes,
         feature_indexes,
+        positions,
+        affines,
     )
 
 
@@ -131,7 +140,7 @@ def split_queries(descriptors: np.ndarray, count: int, seed: int):
     """Hold out `count` rows as queries and index the rest.
 
     Held-out queries rather than a self-query: a descriptor that is in the index
-    is its own nearest neighbor at distance zero, which every layout finds and
+    is its own nearest neighbor at distance zero, which every storage setting finds and
     which therefore measures nothing. Holding them out also makes recall a
     question about the index rather than about an exclusion rule.
     """
@@ -153,7 +162,7 @@ def exact_nearest(
     """Exact top-1 index for each query, by squared-L2 scan blocked both ways.
 
     Computed once per run and reused by every cell: it depends on the corpus and
-    the query set, neither of which a storage layout can change.
+    the query set, neither of which a blocking choice can change.
 
     Blocking over the database as well as the queries is what makes this usable
     at corpus scale. A 9.7M-row index is 5 GB as float32 and the full distance
@@ -184,18 +193,14 @@ def exact_nearest(
 # ── One measured cell ─────────────────────────────────────────────────────
 
 
-def export(
-    forest, path: Path, layout: str, chunk_bytes: int, block_bytes: int | None, sources
-):
-    extra = {} if layout == "tree_local" else {"descriptor_block_bytes": block_bytes}
+def export(forest, path: Path, chunk_bytes: int, block_bytes: int, sources):
     start = time.perf_counter()
     write_kdf(
         forest,
         str(path),
-        layout=layout,
         chunk_bytes=chunk_bytes,
+        descriptor_block_bytes=block_bytes,
         sources=sources,
-        **extra,
     )
     return time.perf_counter() - start
 
@@ -355,7 +360,9 @@ def run(args) -> dict:
     workspace = Path(args.workspace)
     features = find_features(workspace, args.features)
     print(f"features: {features}")
-    descriptors, image_names, image_indexes, feature_indexes = load_corpus(features)
+    descriptors, image_names, image_indexes, feature_indexes, positions, affines = (
+        load_corpus(features)
+    )
     index, queries, mask = split_queries(descriptors, args.queries, args.seed)
     print(
         f"corpus {len(descriptors):,} descriptors x {descriptors.shape[1]}D"
@@ -380,6 +387,8 @@ def run(args) -> dict:
         "sift_content_hashes": [bytes(16)] * len(image_names),
         "image_indexes": image_indexes[mask].tolist(),
         "image_feature_indexes": feature_indexes[mask].tolist(),
+        "positions": positions[mask],
+        "affine_shapes": affines[mask],
     }
 
     print(f"building forest: {args.trees} trees, leaf {args.leaf_size} ...", flush=True)
@@ -401,15 +410,14 @@ def run(args) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     results = []
 
-    def cell(label, layout, chunk_bytes, block_bytes, cache_bytes, workers, stage):
+    def cell(label, chunk_bytes, block_bytes, cache_bytes, workers, stage):
         path = out / f"{stage}-{label}.kdf"
         if path.exists():
             path.unlink()
-        export_seconds = export(forest, path, layout, chunk_bytes, block_bytes, sources)
+        export_seconds = export(forest, path, chunk_bytes, block_bytes, sources)
         row = {
             "stage": stage,
             "label": label,
-            "layout": layout,
             "chunk_bytes": chunk_bytes,
             "block_bytes": block_bytes,
             "cache_bytes": cache_bytes,
@@ -453,7 +461,7 @@ def run(args) -> dict:
             row[f"{field}_min"] = min(values)
             row[f"{field}_max"] = max(values)
         # `checks` is a property of the traversal, so it is deterministic
-        # regardless of worker count: results are identical across layouts and
+        # regardless of worker count: results are identical across settings and
         # runs, which is what the parity column asserts. Any variation there
         # would be a bug.
         for field in ("checks", "seed_decoded_bytes", "seed_read_calls"):
@@ -494,33 +502,22 @@ def run(args) -> dict:
         return row
 
     if args.stage in ("1", "all"):
-        print("\nstage 1: chunk-size screen, both layouts")
+        print("\nstage 1: tree-chunk-size screen")
         for chunk in CHUNK_SIZES:
             cell(
-                f"tree_local-chunk{chunk // KIB}k",
-                "tree_local",
+                f"chunk{chunk // KIB}k",
                 chunk,
-                None,
-                args.cache_bytes,
-                args.workers,
-                "1",
-            )
-            cell(
-                f"shared-chunk{chunk // KIB}k",
-                "shared",
-                chunk,
-                64 * KIB,
+                args.block_bytes,
                 args.cache_bytes,
                 args.workers,
                 "1",
             )
 
     if args.stage in ("2", "all"):
-        print("\nstage 2: shared descriptor block sizes")
+        print("\nstage 2: descriptor/geometry block sizes")
         for block in BLOCK_SIZES:
             cell(
-                f"shared-block{block // KIB}k",
-                "shared",
+                f"block{block // KIB}k",
                 args.chunk_bytes,
                 block,
                 args.cache_bytes,
@@ -530,27 +527,24 @@ def run(args) -> dict:
 
     if args.stage in ("3", "all"):
         print("\nstage 3: cache budgets and worker counts")
-        for layout, block in (("tree_local", None), ("shared", args.block_bytes)):
-            for cache in CACHE_BUDGETS:
-                cell(
-                    f"{layout}-cache{cache // MIB}m",
-                    layout,
-                    args.chunk_bytes,
-                    block,
-                    cache,
-                    args.workers,
-                    "3",
-                )
-            for workers in WORKER_COUNTS:
-                cell(
-                    f"{layout}-workers{workers}",
-                    layout,
-                    args.chunk_bytes,
-                    block,
-                    args.cache_bytes,
-                    workers,
-                    "3",
-                )
+        for cache in CACHE_BUDGETS:
+            cell(
+                f"cache{cache // MIB}m",
+                args.chunk_bytes,
+                args.block_bytes,
+                cache,
+                args.workers,
+                "3",
+            )
+        for workers in WORKER_COUNTS:
+            cell(
+                f"workers{workers}",
+                args.chunk_bytes,
+                args.block_bytes,
+                args.cache_bytes,
+                workers,
+                "3",
+            )
 
     return {
         "dataset": workspace.name,
@@ -601,9 +595,7 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cache-bytes", type=int, default=256 * MIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB, help="stages 2 and 3")
-    p.add_argument(
-        "--block-bytes", type=int, default=64 * KIB, help="stage 3 shared blocks"
-    )
+    p.add_argument("--block-bytes", type=int, default=64 * KIB, help="stages 1 and 3")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--keep", action="store_true", help="keep the exported .kdf files")
     args = p.parse_args()

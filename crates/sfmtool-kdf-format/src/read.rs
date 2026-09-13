@@ -89,7 +89,7 @@ fn read_at_exact(file: &std::fs::File, mut out: &mut [u8], mut offset: u64) -> s
     Ok(())
 }
 
-/// Where the shared descriptor corpus lives, and how to address a block in it.
+/// Where one framed corpus lives, and how to address a block in it.
 ///
 /// The corpus is one ZIP entry holding one independent zstd frame per block, so
 /// reading a block is a seek to a recorded offset rather than a directory
@@ -119,20 +119,80 @@ impl Corpus {
     }
 }
 
+fn locate_corpus(
+    file: &std::fs::File,
+    archive: &mut ZipArchive<std::fs::File>,
+    entries: &HashMap<String, u64>,
+    container: &str,
+    offsets_name: &str,
+    blocks: usize,
+    options: &LazyKdForestOptions,
+) -> Result<Corpus, KdfError> {
+    let label = if container.starts_with("features/geometry.") {
+        "geometry"
+    } else {
+        "descriptor"
+    };
+    let raw = read_exact_raw(
+        archive,
+        entries,
+        offsets_name,
+        (blocks + 1) * 8,
+        options.max_compressed_bytes,
+    )?;
+    let offsets: Vec<u64> = bytes_to_pod(offsets_name, &raw, blocks + 1)?;
+    let stored = *entries
+        .get(container)
+        .ok_or_else(|| KdfError::InvalidFormat(format!("{container} is missing")))?;
+    let data_start = archive
+        .by_name(container)?
+        .data_start()
+        .ok_or_else(|| KdfError::InvalidFormat(format!("{container} has no data offset")))?;
+    if offsets[0] != 0 {
+        return Err(KdfError::InvalidFormat(format!(
+            "{label} block offsets do not start at zero"
+        )));
+    }
+    if offsets.windows(2).any(|w| w[1] < w[0]) {
+        return Err(KdfError::InvalidFormat(format!(
+            "{label} block offsets are not monotonic"
+        )));
+    }
+    if *offsets.last().expect("non-empty") != stored {
+        return Err(KdfError::InvalidFormat(format!(
+            "{label} block offsets end at {} but {container} stores {stored} bytes",
+            offsets.last().expect("non-empty")
+        )));
+    }
+    #[cfg(windows)]
+    let readers = (0..options.query_workers)
+        .map(|_| independent_read_handle(file))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    Ok(Corpus {
+        #[cfg(any(not(windows), test))]
+        file: file.try_clone()?,
+        #[cfg(windows)]
+        readers,
+        data_start,
+        offsets,
+    })
+}
+
 /// An open immutable `.kdf` snapshot with lazy, integrity-checked payload access.
 pub struct KdfFile<S: KdfScalar> {
     archive: Mutex<ZipArchive<std::fs::File>>,
     entries: HashMap<String, u64>,
     metadata: Metadata,
     hashes: ContentHash,
-    storage_rows: Option<Vec<u32>>,
+    storage_rows: Vec<u32>,
     image_table: OnceLock<KdfImageTable>,
     cache: Arc<Cache<S>>,
     max_metadata_bytes: usize,
     max_compressed_bytes: usize,
     max_leaf_features: usize,
     image_count: Option<usize>,
-    corpus: Option<Corpus>,
+    corpus: Corpus,
+    geometry_corpus: Option<Corpus>,
 }
 
 impl<S: KdfScalar> KdfFile<S> {
@@ -256,111 +316,72 @@ impl<S: KdfScalar> KdfFile<S> {
             )));
         }
 
-        let storage_rows = if metadata.descriptor_storage == "shared" {
-            let bytes = (metadata.feature_count as usize)
-                .checked_mul(4)
-                .ok_or_else(|| KdfError::ResourceLimit("address map size overflow".into()))?;
-            let validation_scratch = metadata.feature_count as usize;
-            if bytes
-                .checked_add(validation_scratch)
-                .is_none_or(|v| v > options.max_address_map_bytes)
-            {
-                return Err(KdfError::ResourceLimit(format!(
-                    "shared row map and validation scratch require more than {} bytes",
-                    options.max_address_map_bytes
-                )));
-            }
-            let name = format!(
-                "features/storage_rows.{}.uint32.zst",
-                metadata.feature_count
-            );
-            let raw = read_exact_raw(
+        let bytes = (metadata.feature_count as usize)
+            .checked_mul(4)
+            .ok_or_else(|| KdfError::ResourceLimit("address map size overflow".into()))?;
+        let validation_scratch = metadata.feature_count as usize;
+        if bytes
+            .checked_add(validation_scratch)
+            .is_none_or(|v| v > options.max_address_map_bytes)
+        {
+            return Err(KdfError::ResourceLimit(format!(
+                "storage row map and validation scratch require more than {} bytes",
+                options.max_address_map_bytes
+            )));
+        }
+        let name = format!(
+            "features/storage_rows.{}.uint32.zst",
+            metadata.feature_count
+        );
+        let raw = read_exact_raw(
+            &mut archive,
+            &entries,
+            &name,
+            bytes,
+            options.max_compressed_bytes,
+        )?;
+        if hash_string(xxh3_128(&raw)) != hashes.storage_rows_xxh128 {
+            return Err(KdfError::Integrity("storage-row hash mismatch".into()));
+        }
+        let storage_rows: Vec<u32> = bytes_to_pod(&name, &raw, metadata.feature_count as usize)?;
+        validate_permutation(
+            &storage_rows,
+            metadata.feature_count as usize,
+            "storage row map",
+        )?;
+
+        // Descriptor and geometry frame tables are metadata: opening locates
+        // them, but no frame is read until its block is requested.
+        let blocks =
+            (metadata.feature_count as usize).div_ceil(metadata.descriptor_block_rows as usize);
+        let descriptor_container =
+            corpus_entry_name::<S>(metadata.feature_count as usize, metadata.dimension as usize);
+        let descriptor_offsets = block_offsets_entry_name(blocks + 1);
+        let corpus = locate_corpus(
+            &file,
+            &mut archive,
+            &entries,
+            &descriptor_container,
+            &descriptor_offsets,
+            blocks,
+            &options,
+        )?;
+        let geometry_corpus = if metadata.feature_source == "sift_files" {
+            let geometry_container = geometry_entry_name(metadata.feature_count as usize);
+            let geometry_offsets = geometry_block_offsets_entry_name(blocks + 1);
+            Some(locate_corpus(
+                &file,
                 &mut archive,
                 &entries,
-                &name,
-                bytes,
-                options.max_compressed_bytes,
-            )?;
-            let expected_hash = hashes
-                .storage_rows_xxh128
-                .as_deref()
-                .ok_or_else(|| KdfError::InvalidFormat("missing storage_rows_xxh128".into()))?;
-            if hash_string(xxh3_128(&raw)) != expected_hash {
-                return Err(KdfError::Integrity(
-                    "shared storage-row hash mismatch".into(),
-                ));
-            }
-            let rows: Vec<u32> = bytes_to_pod(&name, &raw, metadata.feature_count as usize)?;
-            validate_permutation(&rows, metadata.feature_count as usize, "storage row map")?;
-            Some(rows)
+                &geometry_container,
+                &geometry_offsets,
+                blocks,
+                &options,
+            )?)
         } else {
             None
         };
-
-        // Locate the descriptor container and read its frame boundaries. Both
-        // are cheap and both are needed before any block can be addressed, so
-        // they belong to open rather than to the first block read.
-        let corpus = if metadata.descriptor_storage == "shared" {
-            let blocks = (metadata.feature_count as usize)
-                .div_ceil(metadata.descriptor_block_rows.expect("validated") as usize);
-            let name = block_offsets_entry_name(blocks + 1);
-            let raw = read_exact_raw(
-                &mut archive,
-                &entries,
-                &name,
-                (blocks + 1) * 8,
-                options.max_compressed_bytes,
-            )?;
-            let offsets: Vec<u64> = bytes_to_pod(&name, &raw, blocks + 1)?;
-
-            let container = corpus_entry_name::<S>(
-                metadata.feature_count as usize,
-                metadata.dimension as usize,
-            );
-            let stored = *entries
-                .get(&container)
-                .ok_or_else(|| KdfError::InvalidFormat(format!("{container} is missing")))?;
-            let data_start = archive.by_name(&container)?.data_start().ok_or_else(|| {
-                KdfError::InvalidFormat(format!("{container} has no data offset"))
-            })?;
-            // Frames must tile the container exactly: start at zero, never go
-            // backwards, and end at its last byte. Without this a truncated or
-            // reordered offsets array would be discovered only as a confusing
-            // zstd error on whichever block happened to be read first.
-            if offsets[0] != 0 {
-                return Err(KdfError::InvalidFormat(
-                    "descriptor block offsets do not start at zero".into(),
-                ));
-            }
-            if offsets.windows(2).any(|w| w[1] < w[0]) {
-                return Err(KdfError::InvalidFormat(
-                    "descriptor block offsets are not monotonic".into(),
-                ));
-            }
-            if *offsets.last().expect("non-empty") != stored {
-                return Err(KdfError::InvalidFormat(format!(
-                    "descriptor block offsets end at {} but {container} stores {stored} bytes",
-                    offsets.last().expect("non-empty")
-                )));
-            }
-            #[cfg(windows)]
-            let readers = (0..options.query_workers)
-                .map(|_| independent_read_handle(&file))
-                .collect::<std::io::Result<Vec<_>>>()?;
-            Some(Corpus {
-                #[cfg(any(not(windows), test))]
-                file,
-                #[cfg(windows)]
-                readers,
-                data_start,
-                offsets,
-            })
-        } else {
-            None
-        };
-        let address_map_bytes = storage_rows
-            .as_ref()
-            .map_or(0, |v| std::mem::size_of_val(v.as_slice()));
+        let address_map_bytes = std::mem::size_of_val(storage_rows.as_slice());
         // The largest item a caller may ask for bounds the shard count: admission
         // is per shard, so a shard too small for one chunk could never admit it.
         let cache = Cache::new(
@@ -382,6 +403,7 @@ impl<S: KdfScalar> KdfFile<S> {
             max_leaf_features: options.max_leaf_features,
             image_count,
             corpus,
+            geometry_corpus,
         })
     }
 
@@ -400,8 +422,8 @@ impl<S: KdfScalar> KdfFile<S> {
     pub fn scalar_type(&self) -> &str {
         &self.metadata.scalar_type
     }
-    pub fn is_shared(&self) -> bool {
-        self.storage_rows.is_some()
+    pub fn has_feature_geometry(&self) -> bool {
+        self.geometry_corpus.is_some()
     }
     pub fn options_max_leaf_features(&self) -> usize {
         self.max_leaf_features
@@ -418,14 +440,14 @@ impl<S: KdfScalar> KdfFile<S> {
     /// The inverse of the stored row map, and the order a self-join should visit
     /// its queries in — consecutive rows share a descriptor block, so reading
     /// them in this order is what lets a bounded cache serve a corpus it cannot
-    /// hold. `None` in tree-local layout, which has no shared corpus.
-    pub fn storage_order(&self) -> Option<Vec<u32>> {
-        let rows = self.storage_rows.as_ref()?;
+    /// hold.
+    pub fn storage_order(&self) -> Vec<u32> {
+        let rows = &self.storage_rows;
         let mut order = vec![0u32; rows.len()];
         for (id, &row) in rows.iter().enumerate() {
             order[row as usize] = id as u32;
         }
-        Some(order)
+        order
     }
 
     /// The writer's recorded build settings, if it left any.
@@ -438,18 +460,18 @@ impl<S: KdfScalar> KdfFile<S> {
         self.metadata.provenance.as_ref()
     }
 
-    /// Descriptor rows per shared block, and how many blocks there are.
+    /// Descriptor rows per block, and how many blocks there are.
     ///
     /// Together with [`storage_order`](Self::storage_order) these let a caller
     /// read the corpus a block at a time instead of a descriptor at a time.
-    pub fn descriptor_block_shape(&self) -> Option<(usize, usize)> {
-        let rows = self.metadata.descriptor_block_rows? as usize;
-        Some((rows, self.len().div_ceil(rows)))
+    pub fn descriptor_block_shape(&self) -> (usize, usize) {
+        let rows = self.metadata.descriptor_block_rows as usize;
+        (rows, self.len().div_ceil(rows))
     }
 
-    /// Every vector in one shared descriptor block, row-major.
+    /// Every vector in one descriptor block, row-major.
     ///
-    /// Bulk counterpart to [`shared_vector`](Self::shared_vector). Reading a
+    /// Bulk counterpart to [`vector`](Self::vector). Reading a
     /// corpus through the single-vector accessor costs a cache lookup, an `Arc`
     /// clone and a lock acquisition *per descriptor*, which on a nine-million
     /// descriptor corpus is slower than rebuilding the index from scratch. This
@@ -460,6 +482,26 @@ impl<S: KdfScalar> KdfFile<S> {
             unreachable!("descriptor key yields descriptors")
         };
         Ok(vectors.clone())
+    }
+
+    /// Every SIFT geometry row corresponding to one descriptor block.
+    ///
+    /// Row `r` is `[[x, y], [a11, a12], [a21, a22]]`. Descriptor and geometry
+    /// blocks share storage order and row boundaries, so the vectors returned by
+    /// [`descriptor_block_vectors`](Self::descriptor_block_vectors) correlate
+    /// positionally with these rows. Generic-vector files return `None`.
+    pub fn feature_geometry_block(
+        &self,
+        block: u32,
+    ) -> Result<Option<Vec<FeatureGeometry>>, KdfError> {
+        if self.geometry_corpus.is_none() {
+            return Ok(None);
+        }
+        let pin = self.geometry_block(block)?;
+        let Cached::Geometry(rows) = &*pin else {
+            unreachable!("geometry key yields geometry")
+        };
+        Ok(Some(rows.clone()))
     }
 
     /// Chunks in one tree.
@@ -510,19 +552,16 @@ impl<S: KdfScalar> KdfFile<S> {
         visit(chunk)
     }
 
-    /// Visit shared vectors in the supplied order, borrowing consecutive rows
+    /// Visit vectors in the supplied order, borrowing consecutive rows
     /// from the same block under one pin. The callback must not access the cache.
     /// Order is preserved because equal-distance search results use encounter order.
-    pub fn with_shared_vectors(
+    pub fn with_vectors(
         &self,
         ids: &[u32],
         mut visit: impl FnMut(u32, &[S]),
     ) -> Result<(), KdfError> {
-        let rows = self
-            .storage_rows
-            .as_ref()
-            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
-        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let rows = &self.storage_rows;
+        let q = self.metadata.descriptor_block_rows as usize;
         let row_of = |id: u32| {
             rows.get(id as usize)
                 .copied()
@@ -572,8 +611,8 @@ impl<S: KdfScalar> KdfFile<S> {
         Ok(node)
     }
 
-    /// Copy a leaf's ordered members and local vectors, releasing its chunk pin.
-    pub fn leaf(&self, tree: u32, address: NodeAddress) -> Result<DecodedLeaf<S>, KdfError> {
+    /// Copy a leaf's ordered members, releasing its chunk pin.
+    pub fn leaf(&self, tree: u32, address: NodeAddress) -> Result<DecodedLeaf, KdfError> {
         let pin = self.tree_chunk(tree, address.chunk)?;
         let Cached::Tree(chunk) = &*pin else {
             unreachable!()
@@ -592,14 +631,8 @@ impl<S: KdfScalar> KdfFile<S> {
             )));
         }
         let range = start as usize..(start + len) as usize;
-        let ids = chunk.feature_ids[range.clone()].to_vec();
-        let vectors = chunk.vectors.as_ref().map(|v| {
-            let d = self.dim();
-            v[range.start * d..range.end * d].to_vec()
-        });
         Ok(DecodedLeaf {
-            feature_ids: ids,
-            vectors,
+            feature_ids: chunk.feature_ids[range].to_vec(),
         })
     }
 
@@ -615,22 +648,19 @@ impl<S: KdfScalar> KdfFile<S> {
             .sum()
     }
 
-    /// [`shared_vector`](Self::shared_vector) into a caller-owned buffer.
+    /// [`vector`](Self::vector) into a caller-owned buffer.
     ///
     /// The allocating form returns a fresh `Vec` per descriptor, which a search
     /// calls once per checked candidate — so a batch of queries spends much of
     /// its time in the allocator rather than in distance work. This reuses one
     /// buffer across a whole query.
-    pub fn shared_vector_into(&self, feature_id: u32, out: &mut Vec<S>) -> Result<(), KdfError> {
-        let rows = self
-            .storage_rows
-            .as_ref()
-            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
+    pub fn vector_into(&self, feature_id: u32, out: &mut Vec<S>) -> Result<(), KdfError> {
+        let rows = &self.storage_rows;
         let row = *rows
             .get(feature_id as usize)
             .ok_or_else(|| KdfError::InvalidQuery("feature ID out of range".into()))?
             as usize;
-        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let q = self.metadata.descriptor_block_rows as usize;
         let pin = self.descriptor_block((row / q) as u32)?;
         let Cached::Descriptor(vectors) = &*pin else {
             unreachable!()
@@ -641,17 +671,14 @@ impl<S: KdfScalar> KdfFile<S> {
         Ok(())
     }
 
-    /// Copy one vector from the shared corpus. Tree-local callers use `leaf`.
-    pub fn shared_vector(&self, feature_id: u32) -> Result<Vec<S>, KdfError> {
-        let rows = self
-            .storage_rows
-            .as_ref()
-            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
+    /// Copy one vector from the corpus.
+    pub fn vector(&self, feature_id: u32) -> Result<Vec<S>, KdfError> {
+        let rows = &self.storage_rows;
         let row = *rows
             .get(feature_id as usize)
             .ok_or_else(|| KdfError::InvalidQuery("feature ID out of range".into()))?
             as usize;
-        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let q = self.metadata.descriptor_block_rows as usize;
         let block = row / q;
         let within = row % q;
         let pin = self.descriptor_block(block as u32)?;
@@ -660,6 +687,39 @@ impl<S: KdfScalar> KdfFile<S> {
         };
         let base = within * self.dim();
         Ok(vectors[base..base + self.dim()].to_vec())
+    }
+
+    /// Copy one feature's image-space center and affine footprint.
+    pub fn feature_geometry(&self, feature_id: u32) -> Result<Option<FeatureGeometry>, KdfError> {
+        if self.geometry_corpus.is_none() {
+            return Ok(None);
+        }
+        let row = *self
+            .storage_rows
+            .get(feature_id as usize)
+            .ok_or_else(|| KdfError::InvalidQuery("feature ID out of range".into()))?
+            as usize;
+        let q = self.metadata.descriptor_block_rows as usize;
+        let pin = self.geometry_block((row / q) as u32)?;
+        let Cached::Geometry(rows) = &*pin else {
+            unreachable!()
+        };
+        Ok(Some(rows[row % q]))
+    }
+
+    /// Resolve feature geometry in request order, including repeated IDs.
+    pub fn resolve_feature_geometry(
+        &self,
+        feature_ids: &[u32],
+    ) -> Result<Option<Vec<FeatureGeometry>>, KdfError> {
+        if self.geometry_corpus.is_none() {
+            return Ok(None);
+        }
+        feature_ids
+            .iter()
+            .map(|&id| Ok(self.feature_geometry(id)?.expect("geometry corpus exists")))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
     }
 
     /// Resolve mappings in request order, including repeated feature IDs.
@@ -786,7 +846,6 @@ impl<S: KdfScalar> KdfFile<S> {
     ) -> Result<(Cached<S>, u64), KdfError> {
         let m = meta.node_count as usize;
         let p = meta.feature_count as usize;
-        let tree_local = self.metadata.descriptor_storage == "tree_local";
         let name = chunk_entry_name::<S>(tree as usize, chunk as usize, m, p);
         let spans = chunk_spans::<S>(m, p);
         let mut archive = self.archive.lock().unwrap();
@@ -797,28 +856,9 @@ impl<S: KdfScalar> KdfFile<S> {
             spans.total,
             self.max_compressed_bytes,
         )?;
-        let (vectors_raw, vector_bytes) = if tree_local {
-            let vname = chunk_vectors_entry_name::<S>(tree as usize, chunk as usize, p, self.dim());
-            let (v, z) = read_exact_counted(
-                &mut archive,
-                &self.entries,
-                &vname,
-                p * self.dim() * std::mem::size_of::<S>(),
-                self.max_compressed_bytes,
-            )?;
-            (Some((vname, v)), z)
-        } else {
-            (None, 0)
-        };
         drop(archive);
-        // The digest covers the topology bytes then the vectors, in that order.
-        let mut h = Xxh3::new();
-        h.update(&raw);
-        if let Some((_, v)) = &vectors_raw {
-            h.update(v);
-        }
         let expected = &self.hashes.chunks_xxh128[tree as usize][chunk as usize];
-        if hash_string(h.digest128()) != *expected {
+        if hash_string(xxh3_128(&raw)) != *expected {
             return Err(KdfError::Integrity(format!(
                 "tree {tree} chunk {chunk} hash mismatch"
             )));
@@ -826,10 +866,6 @@ impl<S: KdfScalar> KdfFile<S> {
         let columns: Vec<u32> = bytes_to_pod(&name, &raw[..spans.nodes_end], NODE_COLUMNS * m)?;
         let splits: Vec<S> = bytes_to_pod(&name, &raw[spans.nodes_end..spans.splits_end], m)?;
         let feature_ids: Vec<u32> = bytes_to_pod(&name, &raw[spans.splits_end..spans.total], p)?;
-        let vectors: Option<Vec<S>> = vectors_raw
-            .map(|(n, v)| bytes_to_pod(&n, &v, p * self.dim()))
-            .transpose()?;
-        let compressed = topology_bytes + vector_bytes;
         let nodes = decode_nodes(&self.metadata, tree as usize, &columns, &splits, m, p)?;
         if feature_ids
             .iter()
@@ -837,52 +873,45 @@ impl<S: KdfScalar> KdfFile<S> {
         {
             return Err(KdfError::InvalidFormat("feature ID out of range".into()));
         }
-        if vectors
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|&x| !x.is_finite()))
-        {
-            return Err(KdfError::InvalidFormat(
-                "tree chunk contains non-finite vector".into(),
-            ));
-        }
         let logical_node_ids = (0..m).map(|i| columns[m + i]).collect();
         Ok((
             Cached::Tree(DecodedTreeChunk {
                 logical_node_ids,
                 nodes,
                 feature_ids,
-                vectors,
                 decoded_bytes: meta.decoded_bytes as usize,
             }),
-            compressed,
+            topology_bytes,
         ))
     }
 
-    /// Decode one frame out of the shared descriptor container.
+    /// Decode one frame out of a corpus container.
     ///
     /// A seek to a recorded offset, not a directory lookup: the container is a
     /// single ZIP entry whose stored bytes are the blocks' frames back to back.
     /// Returns the decoded bytes and the compressed length actually read, so the
     /// cache's byte accounting is unchanged from when each block was its own
     /// entry.
-    fn read_corpus_frame(&self, block: u32, declared: usize) -> Result<(Vec<u8>, u64), KdfError> {
-        let corpus = self
-            .corpus
-            .as_ref()
-            .ok_or_else(|| KdfError::InvalidFormat("forest is tree-local".into()))?;
+    fn read_corpus_frame(
+        &self,
+        corpus: &Corpus,
+        label: &str,
+        block: u32,
+        declared: usize,
+    ) -> Result<(Vec<u8>, u64), KdfError> {
         let b = block as usize;
         let (from, to) = match (corpus.offsets.get(b), corpus.offsets.get(b + 1)) {
             (Some(&from), Some(&to)) => (from, to),
             _ => {
                 return Err(KdfError::InvalidFormat(format!(
-                    "descriptor block {block} is outside the corpus"
+                    "{label} block {block} is outside the corpus"
                 )))
             }
         };
         let length = (to - from) as usize;
         if length > self.max_compressed_bytes {
             return Err(KdfError::ResourceLimit(format!(
-                "descriptor block {block} frame is {length} bytes, over the limit"
+                "{label} block {block} frame is {length} bytes, over the limit"
             )));
         }
         let mut frame = vec![0u8; length];
@@ -893,7 +922,7 @@ impl<S: KdfScalar> KdfFile<S> {
         let raw = decode_frame(&frame, declared)?;
         if raw.len() != declared {
             return Err(KdfError::ShapeMismatch(format!(
-                "descriptor block {block} decoded to {} bytes, expected {declared}",
+                "{label} block {block} decoded to {} bytes, expected {declared}",
                 raw.len()
             )));
         }
@@ -901,7 +930,7 @@ impl<S: KdfScalar> KdfFile<S> {
     }
 
     fn descriptor_block(&self, block: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
-        let q = self.metadata.descriptor_block_rows.expect("validated") as usize;
+        let q = self.metadata.descriptor_block_rows as usize;
         let start = block as usize * q;
         if start >= self.len() {
             return Err(KdfError::InvalidFormat(
@@ -912,13 +941,10 @@ impl<S: KdfScalar> KdfFile<S> {
         let declared = r * self.dim() * std::mem::size_of::<S>();
         self.cache
             .get_or_load(CacheKey::Descriptor(block), declared, || {
-                let (raw, compressed) = self.read_corpus_frame(block, declared)?;
+                let (raw, compressed) =
+                    self.read_corpus_frame(&self.corpus, "descriptor", block, declared)?;
                 if hash_string(xxh3_128(&raw))
-                    != self
-                        .hashes
-                        .descriptor_blocks_xxh128
-                        .as_ref()
-                        .expect("validated")[block as usize]
+                    != self.hashes.descriptor_blocks_xxh128[block as usize]
                 {
                     return Err(KdfError::Integrity(format!(
                         "descriptor block {block} hash mismatch"
@@ -935,6 +961,44 @@ impl<S: KdfScalar> KdfFile<S> {
                     ));
                 }
                 Ok((Cached::Descriptor(values), compressed))
+            })
+    }
+
+    fn geometry_block(&self, block: u32) -> Result<crate::cache::CachePin<'_, S>, KdfError> {
+        let corpus = self
+            .geometry_corpus
+            .as_ref()
+            .ok_or_else(|| KdfError::InvalidFormat("forest has no feature geometry".into()))?;
+        let q = self.metadata.descriptor_block_rows as usize;
+        let start = block as usize * q;
+        if start >= self.len() {
+            return Err(KdfError::InvalidQuery("geometry block out of range".into()));
+        }
+        let rows = q.min(self.len() - start);
+        let declared = rows * std::mem::size_of::<FeatureGeometry>();
+        self.cache
+            .get_or_load(CacheKey::Geometry(block), declared, || {
+                let (raw, compressed) =
+                    self.read_corpus_frame(corpus, "geometry", block, declared)?;
+                if hash_string(xxh3_128(&raw))
+                    != self
+                        .hashes
+                        .geometry_blocks_xxh128
+                        .as_ref()
+                        .expect("validated")[block as usize]
+                {
+                    return Err(KdfError::Integrity(format!(
+                        "geometry block {block} hash mismatch"
+                    )));
+                }
+                let values: Vec<FeatureGeometry> =
+                    bytes_to_pod(&geometry_entry_name(self.len()), &raw, rows)?;
+                if values.iter().flatten().flatten().any(|v| !v.is_finite()) {
+                    return Err(KdfError::InvalidFormat(
+                        "geometry block contains non-finite value".into(),
+                    ));
+                }
+                Ok((Cached::Geometry(values), compressed))
             })
     }
 
@@ -1049,18 +1113,17 @@ fn validate_metadata<S: KdfScalar>(
             "invalid dimension, tree count, or node legend".into(),
         ));
     }
-    if !matches!(m.descriptor_storage.as_str(), "tree_local" | "shared")
-        || !matches!(m.feature_source.as_str(), "none" | "sift_files")
-    {
+    if !matches!(m.feature_source.as_str(), "none" | "sift_files") {
+        return Err(KdfError::InvalidFormat("unsupported feature source".into()));
+    }
+    if m.feature_source == "sift_files" && (S::TYPE_NAME != "uint8" || m.dimension != 128) {
         return Err(KdfError::InvalidFormat(
-            "unsupported storage or feature source".into(),
+            "SIFT references require unchanged 128-D uint8 descriptors".into(),
         ));
     }
-    if (m.descriptor_storage == "shared") != m.descriptor_block_rows.is_some()
-        || m.descriptor_block_rows == Some(0)
-    {
+    if m.descriptor_block_rows == 0 {
         return Err(KdfError::InvalidFormat(
-            "invalid descriptor_block_rows presence/value".into(),
+            "descriptor_block_rows must be positive".into(),
         ));
     }
     if (m.feature_source == "sift_files")
@@ -1099,16 +1162,8 @@ fn validate_metadata<S: KdfScalar>(
             let scalar = std::mem::size_of::<S>() as u64;
             let node_bytes = c.node_count as u64 * (NODE_COLUMNS as u64 * 4 + scalar);
             let feature_bytes = c.feature_count as u64 * 4;
-            let vector_bytes = if m.descriptor_storage == "tree_local" {
-                (c.feature_count as u64)
-                    .checked_mul(m.dimension as u64)
-                    .and_then(|v| v.checked_mul(scalar))
-            } else {
-                Some(0)
-            };
-            let expected = vector_bytes
-                .and_then(|v| v.checked_add(node_bytes))
-                .and_then(|v| v.checked_add(feature_bytes))
+            let expected = node_bytes
+                .checked_add(feature_bytes)
                 .ok_or_else(|| KdfError::ResourceLimit("decoded chunk shape overflow".into()))?;
             if c.decoded_bytes != expected {
                 return Err(KdfError::InvalidFormat(
@@ -1126,8 +1181,10 @@ fn validate_metadata<S: KdfScalar>(
         }
     }
     let row_bytes = m.dimension as usize * std::mem::size_of::<S>();
-    if let Some(q) = m.descriptor_block_rows {
-        largest = largest.max((q as usize).min(m.feature_count as usize) * row_bytes);
+    let descriptor_rows = (m.descriptor_block_rows as usize).min(m.feature_count as usize);
+    largest = largest.max(descriptor_rows * row_bytes);
+    if m.feature_source == "sift_files" {
+        largest = largest.max(descriptor_rows * std::mem::size_of::<FeatureGeometry>());
     }
     if let Some(q) = m.origin_block_rows {
         largest = largest.max((q as usize).min(m.feature_count as usize) * 8);
@@ -1153,22 +1210,18 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
     {
         parse_hash(s)?;
     }
-    let shared = m.descriptor_storage == "shared";
-    if shared != (h.storage_rows_xxh128.is_some() && h.descriptor_blocks_xxh128.is_some()) {
-        return Err(KdfError::InvalidFormat(
-            "shared hash fields mismatch layout".into(),
-        ));
-    }
-    let descriptor_blocks = m
-        .descriptor_block_rows
-        .map_or(0, |q| (m.feature_count as usize).div_ceil(q as usize));
-    if h.descriptor_blocks_xxh128.as_ref().map_or(0, Vec::len) != descriptor_blocks {
+    let descriptor_blocks = (m.feature_count as usize).div_ceil(m.descriptor_block_rows as usize);
+    if h.descriptor_blocks_xxh128.len() != descriptor_blocks {
         return Err(KdfError::InvalidFormat(
             "descriptor block hash count mismatch".into(),
         ));
     }
     let sift = m.feature_source == "sift_files";
-    if sift != (h.images_xxh128.is_some() && h.origins_xxh128.is_some()) {
+    if sift
+        != (h.images_xxh128.is_some()
+            && h.origins_xxh128.is_some()
+            && h.geometry_blocks_xxh128.is_some())
+    {
         return Err(KdfError::InvalidFormat(
             "source hash fields mismatch feature source".into(),
         ));
@@ -1181,11 +1234,17 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
             "origin block hash count mismatch".into(),
         ));
     }
-    for s in h
-        .storage_rows_xxh128
-        .iter()
+    if h.geometry_blocks_xxh128.as_ref().map_or(0, Vec::len)
+        != if sift { descriptor_blocks } else { 0 }
+    {
+        return Err(KdfError::InvalidFormat(
+            "geometry block hash count mismatch".into(),
+        ));
+    }
+    for s in std::iter::once(&h.storage_rows_xxh128)
         .chain(h.images_xxh128.iter())
-        .chain(h.descriptor_blocks_xxh128.iter().flatten())
+        .chain(h.descriptor_blocks_xxh128.iter())
+        .chain(h.geometry_blocks_xxh128.iter().flatten())
         .chain(h.origins_xxh128.iter().flatten())
     {
         parse_hash(s)?;
@@ -1199,10 +1258,11 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
             sections.push(parse_hash(v)?);
         }
     }
-    if let Some(v) = &h.storage_rows_xxh128 {
+    sections.push(parse_hash(&h.storage_rows_xxh128)?);
+    for v in &h.descriptor_blocks_xxh128 {
         sections.push(parse_hash(v)?);
     }
-    if let Some(values) = &h.descriptor_blocks_xxh128 {
+    if let Some(values) = &h.geometry_blocks_xxh128 {
         for v in values {
             sections.push(parse_hash(v)?);
         }
@@ -1243,20 +1303,20 @@ fn expected_entries<S: KdfScalar>(
             owned.insert(format!("origins/{b}/image_indexes.{r}.uint32.zst"));
             owned.insert(format!("origins/{b}/image_feature_indexes.{r}.uint32.zst"));
         }
+        let blocks = (m.feature_count as usize).div_ceil(m.descriptor_block_rows as usize);
+        owned.insert(geometry_entry_name(m.feature_count as usize));
+        owned.insert(geometry_block_offsets_entry_name(blocks + 1));
     }
-    if m.descriptor_storage == "shared" {
-        owned.insert(format!(
-            "features/storage_rows.{}.uint32.zst",
-            m.feature_count
-        ));
-        let q = m.descriptor_block_rows.expect("validated") as usize;
-        let blocks = (m.feature_count as usize).div_ceil(q);
-        owned.insert(corpus_entry_name::<S>(
-            m.feature_count as usize,
-            m.dimension as usize,
-        ));
-        owned.insert(block_offsets_entry_name(blocks + 1));
-    }
+    owned.insert(format!(
+        "features/storage_rows.{}.uint32.zst",
+        m.feature_count
+    ));
+    let blocks = (m.feature_count as usize).div_ceil(m.descriptor_block_rows as usize);
+    owned.insert(corpus_entry_name::<S>(
+        m.feature_count as usize,
+        m.dimension as usize,
+    ));
+    owned.insert(block_offsets_entry_name(blocks + 1));
     for (ti, tree) in m.trees.iter().enumerate() {
         for (ci, chunk) in tree.chunks.iter().enumerate() {
             owned.insert(chunk_entry_name::<S>(
@@ -1265,14 +1325,6 @@ fn expected_entries<S: KdfScalar>(
                 chunk.node_count as usize,
                 chunk.feature_count as usize,
             ));
-            if m.descriptor_storage == "tree_local" {
-                owned.insert(chunk_vectors_entry_name::<S>(
-                    ti,
-                    ci,
-                    chunk.feature_count as usize,
-                    m.dimension as usize,
-                ));
-            }
         }
     }
     Ok(owned)
@@ -1538,7 +1590,10 @@ mod profiling {
                 descriptor_order: None,
             },
             None,
-            &KdfWriteOptions::shared(4),
+            &KdfWriteOptions {
+                target_descriptor_block_bytes: 4,
+                ..Default::default()
+            },
         )
         .unwrap();
         let file = KdfFile::<u8>::open(&path, LazyKdForestOptions::default()).unwrap();
@@ -1586,12 +1641,12 @@ mod profiling {
     /// Diagnostic decomposition, not a throughput test: time calls separately
     /// on one thread, with an OS-warm file and no decoded-cache lookup.
     #[test]
-    #[ignore = "set KDF_PROFILE_PATH to a shared u8 file; run in release mode"]
+    #[ignore = "set KDF_PROFILE_PATH to a u8 file; run in release mode"]
     fn profile_corpus_misses() {
         let path = std::env::var("KDF_PROFILE_PATH").expect("KDF_PROFILE_PATH");
         let file = KdfFile::<u8>::open(Path::new(&path), LazyKdForestOptions::default()).unwrap();
-        let corpus = file.corpus.as_ref().expect("shared layout");
-        let (rows, blocks) = file.descriptor_block_shape().unwrap();
+        let corpus = &file.corpus;
+        let (rows, blocks) = file.descriptor_block_shape();
         let mut totals = [std::time::Duration::ZERO; 5];
         let samples = 20_000;
         for i in 0..samples {
@@ -1623,10 +1678,7 @@ mod profiling {
             assert_eq!(raw, reused);
             let start = std::time::Instant::now();
             let digest = hash_string(xxh3_128(&raw));
-            assert_eq!(
-                &digest,
-                &file.hashes.descriptor_blocks_xxh128.as_ref().unwrap()[b]
-            );
+            assert_eq!(&digest, &file.hashes.descriptor_blocks_xxh128[b]);
             std::hint::black_box(bytes_to_pod::<u8>("profile", &raw, declared).unwrap());
             totals[2] += start.elapsed();
         }
@@ -1654,7 +1706,7 @@ mod profiling {
                             } else {
                                 let declared = rows.min(reader.len() - b * rows) * reader.dim();
                                 let raw = if mode == 2 {
-                                    let corpus = reader.corpus.as_ref().unwrap();
+                                    let corpus = &reader.corpus;
                                     let from = corpus.offsets[b];
                                     let mut frame =
                                         vec![0u8; (corpus.offsets[b + 1] - from) as usize];
@@ -1666,11 +1718,19 @@ mod profiling {
                                     .unwrap();
                                     decode_frame(&frame, declared).unwrap()
                                 } else {
-                                    reader.read_corpus_frame(b as u32, declared).unwrap().0
+                                    reader
+                                        .read_corpus_frame(
+                                            &reader.corpus,
+                                            "descriptor",
+                                            b as u32,
+                                            declared,
+                                        )
+                                        .unwrap()
+                                        .0
                                 };
                                 assert_eq!(
                                     hash_string(xxh3_128(&raw)),
-                                    reader.hashes.descriptor_blocks_xxh128.as_ref().unwrap()[b]
+                                    reader.hashes.descriptor_blocks_xxh128[b]
                                 );
                                 std::hint::black_box(
                                     bytes_to_pod::<u8>("profile", &raw, declared).unwrap(),

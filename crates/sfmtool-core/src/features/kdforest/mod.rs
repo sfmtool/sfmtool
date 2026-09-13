@@ -51,7 +51,7 @@ pub use distance::{ForestScalar, OrdF32};
 pub use persistent::{LazyKdForest, LazyKdForestF32, LazyKdForestU8, LazyQueryStats};
 pub use search::Neighbor;
 pub use sfmtool_kdf_format::{
-    kdf_summary, verify_kdf, verify_sift_sources, DescriptorStorage, FeatureOrigin, KdfError,
+    kdf_summary, verify_kdf, verify_sift_sources, FeatureGeometry, FeatureOrigin, KdfError,
     KdfImageTable, KdfIoStats, KdfSection, KdfSiftSources, KdfSummary, KdfWorkspaceContents,
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, Verification,
 };

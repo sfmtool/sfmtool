@@ -15,7 +15,6 @@ struct PackedChunk<S: KdfScalar> {
     logical_nodes: Vec<u32>,
     nodes: Vec<DecodedNode<S>>,
     feature_ids: Vec<u32>,
-    vectors: Option<Vec<S>>,
 }
 
 impl<S: KdfScalar> PackedChunk<S> {
@@ -23,10 +22,6 @@ impl<S: KdfScalar> PackedChunk<S> {
         NODE_COLUMNS * 4 * self.nodes.len()
             + std::mem::size_of::<S>() * self.nodes.len()
             + 4 * self.feature_ids.len()
-            + self
-                .vectors
-                .as_ref()
-                .map_or(0, |v| std::mem::size_of_val(v.as_slice()))
     }
 }
 
@@ -47,7 +42,7 @@ pub fn write_kdf<S: KdfScalar>(
     let packed: Vec<Vec<PackedChunk<S>>> = data
         .trees
         .iter()
-        .map(|t| pack_tree(data, t, options))
+        .map(|t| pack_tree(t, options))
         .collect::<Result<_, _>>()?;
     sfmtool_archive_io::write_atomically(path, |file| {
         write_into(file, data, sources, options, &packed)
@@ -99,21 +94,16 @@ fn validate_input<S: KdfScalar>(
             "origin_block_rows exceeds uint32".into(),
         ));
     }
-    if let DescriptorStorage::Shared {
-        target_descriptor_block_bytes,
-    } = options.descriptor_storage
-    {
-        if target_descriptor_block_bytes == 0 {
-            return Err(KdfError::InvalidFormat(
-                "descriptor block target must be positive".into(),
-            ));
-        }
-        let row_bytes = data.dimension * std::mem::size_of::<S>();
-        if (target_descriptor_block_bytes / row_bytes).max(1) > u32::MAX as usize {
-            return Err(KdfError::InvalidFormat(
-                "descriptor block row count exceeds uint32".into(),
-            ));
-        }
+    if options.target_descriptor_block_bytes == 0 {
+        return Err(KdfError::InvalidFormat(
+            "descriptor block target must be positive".into(),
+        ));
+    }
+    let row_bytes = data.dimension * std::mem::size_of::<S>();
+    if (options.target_descriptor_block_bytes / row_bytes).max(1) > u32::MAX as usize {
+        return Err(KdfError::InvalidFormat(
+            "descriptor block row count exceeds uint32".into(),
+        ));
     }
     for (ti, tree) in data.trees.iter().enumerate() {
         validate_tree(tree, data.feature_count, data.dimension, ti)?;
@@ -127,6 +117,22 @@ fn validate_input<S: KdfScalar>(
         if src.origins.len() != data.feature_count {
             return Err(KdfError::ShapeMismatch(
                 "origins length must equal feature_count".into(),
+            ));
+        }
+        if src.geometry.len() != data.feature_count {
+            return Err(KdfError::ShapeMismatch(
+                "geometry length must equal feature_count".into(),
+            ));
+        }
+        if src
+            .geometry
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|v| !v.is_finite())
+        {
+            return Err(KdfError::InvalidFormat(
+                "feature geometry contains non-finite values".into(),
             ));
         }
         if src.image_names.len() != src.feature_tool_hashes.len()
@@ -263,7 +269,6 @@ fn validate_tree<S: KdfScalar>(
 fn subtree_weight<S: KdfScalar>(
     tree: &KdfTree<S>,
     node: u32,
-    dim: usize,
     memo: &mut [usize],
 ) -> Result<usize, KdfError> {
     if memo[node as usize] != 0 {
@@ -272,14 +277,14 @@ fn subtree_weight<S: KdfScalar>(
     let base = NODE_COLUMNS * 4 + std::mem::size_of::<S>();
     let w = match tree.nodes[node as usize] {
         KdfNode::Internal { left, right, .. } => {
-            let left_weight = subtree_weight(tree, left, dim, memo)?;
-            let right_weight = subtree_weight(tree, right, dim, memo)?;
+            let left_weight = subtree_weight(tree, left, memo)?;
+            let right_weight = subtree_weight(tree, right, memo)?;
             base.checked_add(left_weight)
                 .and_then(|v| v.checked_add(right_weight))
         }
         KdfNode::Leaf { len, .. } => base.checked_add(
             (len as usize)
-                .checked_mul(4 + dim * std::mem::size_of::<S>())
+                .checked_mul(4)
                 .ok_or_else(|| KdfError::ResourceLimit("subtree size overflow".into()))?,
         ),
     }
@@ -289,7 +294,6 @@ fn subtree_weight<S: KdfScalar>(
 }
 
 fn pack_tree<S: KdfScalar>(
-    data: &KdfForestData<'_, S>,
     tree: &KdfTree<S>,
     options: &KdfWriteOptions,
 ) -> Result<Vec<PackedChunk<S>>, KdfError> {
@@ -297,7 +301,7 @@ fn pack_tree<S: KdfScalar>(
         return Ok(Vec::new());
     }
     let mut memo = vec![0; tree.nodes.len()];
-    subtree_weight(tree, 0, data.dimension, &mut memo)?;
+    subtree_weight(tree, 0, &mut memo)?;
     let mut subtree_roots = Vec::new();
     let mut routing = Vec::new();
     let mut queue = std::collections::VecDeque::from([0u32]);
@@ -331,12 +335,10 @@ fn pack_tree<S: KdfScalar>(
             addresses[logical as usize] = (ci as u32, li as u32);
         }
     }
-    let local = matches!(options.descriptor_storage, DescriptorStorage::TreeLocal);
     let mut out = Vec::with_capacity(chunk_nodes.len());
     for nodes_in_chunk in chunk_nodes {
         let mut decoded_nodes = Vec::with_capacity(nodes_in_chunk.len());
         let mut feature_ids = Vec::new();
-        let mut vectors = local.then(Vec::new);
         for &logical in &nodes_in_chunk {
             match tree.nodes[logical as usize] {
                 KdfNode::Internal {
@@ -366,12 +368,6 @@ fn pack_tree<S: KdfScalar>(
                     let local_start = feature_ids.len() as u32;
                     let ids = &tree.feature_ids[start as usize..(start + len) as usize];
                     feature_ids.extend_from_slice(ids);
-                    if let Some(v) = &mut vectors {
-                        for &id in ids {
-                            let b = id as usize * data.dimension;
-                            v.extend_from_slice(&data.vectors[b..b + data.dimension]);
-                        }
-                    }
                     decoded_nodes.push(DecodedNode::Leaf {
                         start: local_start,
                         len,
@@ -383,7 +379,6 @@ fn pack_tree<S: KdfScalar>(
             logical_nodes: nodes_in_chunk,
             nodes: decoded_nodes,
             feature_ids,
-            vectors,
         });
     }
     Ok(out)
@@ -408,12 +403,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         .dimension
         .checked_mul(std::mem::size_of::<S>())
         .ok_or_else(|| KdfError::ResourceLimit("row byte size overflow".into()))?;
-    let descriptor_rows = match options.descriptor_storage {
-        DescriptorStorage::TreeLocal => None,
-        DescriptorStorage::Shared {
-            target_descriptor_block_bytes,
-        } => Some((target_descriptor_block_bytes / row_bytes).max(1)),
-    };
+    let descriptor_rows = (options.target_descriptor_block_bytes / row_bytes).max(1);
     let metadata = Metadata {
         format: "kdf".into(),
         version: KDF_FORMAT_VERSION,
@@ -443,13 +433,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             "none"
         }
         .into(),
-        descriptor_storage: if descriptor_rows.is_some() {
-            "shared"
-        } else {
-            "tree_local"
-        }
-        .into(),
-        descriptor_block_rows: descriptor_rows.map(|v| v as u32),
+        descriptor_block_rows: descriptor_rows as u32,
         origin_block_rows: sources.map(|_| options.origin_block_rows as u32),
         workspace: sources.map(|s| s.workspace.clone()),
         provenance: data.provenance.clone(),
@@ -541,7 +525,8 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         (None, None)
     };
 
-    let (storage_digest, descriptor_digests) = if let Some(q) = descriptor_rows {
+    let (storage_digest, descriptor_digests, geometry_digests) = {
+        let q = descriptor_rows;
         let tree_zero = &data.trees[0].feature_ids;
         let order: &[u32] = match data.descriptor_order {
             Some(explicit) => {
@@ -619,9 +604,40 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             offsets_raw,
             options.compression_level,
         )?;
-        (Some(sd), Some(ds))
-    } else {
-        (None, None)
+        let geometry_digests = if let Some(src) = sources {
+            zip.start_file(
+                geometry_entry_name(data.feature_count),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)
+                    .large_file(true),
+            )?;
+            let mut gs = Vec::new();
+            let mut stored = 0u64;
+            let mut offsets = vec![0u64];
+            for ids in order.chunks(q) {
+                let block: Vec<FeatureGeometry> =
+                    ids.iter().map(|&id| src.geometry[id as usize]).collect();
+                let raw: &[u8] = bytemuck::cast_slice(block.as_slice());
+                let frame = zstd::encode_all(raw, options.compression_level)?;
+                zip.write_all(&frame)?;
+                stored += frame.len() as u64;
+                offsets.push(stored);
+                let digest = xxh3_128(raw);
+                gs.push(digest);
+                section_digests.push(digest);
+            }
+            let offsets_raw: &[u8] = bytemuck::cast_slice(offsets.as_slice());
+            write_binary_entry(
+                &mut zip,
+                &geometry_block_offsets_entry_name(offsets.len()),
+                offsets_raw,
+                options.compression_level,
+            )?;
+            Some(gs)
+        } else {
+            None
+        };
+        (sd, ds, geometry_digests)
     };
 
     let mut chunk_digests = Vec::new();
@@ -674,20 +690,7 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
                 &payload,
                 options.compression_level,
             )?;
-            // The digest keeps its defined order: topology, then vectors.
-            let mut h = Xxh3::new();
-            h.update(&payload);
-            if let Some(v) = &chunk.vectors {
-                let vb: &[u8] = bytemuck::cast_slice(v.as_slice());
-                write_binary_entry(
-                    &mut zip,
-                    &chunk_vectors_entry_name::<S>(ti, ci, chunk.feature_ids.len(), data.dimension),
-                    vb,
-                    options.compression_level,
-                )?;
-                h.update(vb);
-            }
-            let d = h.digest128();
+            let d = xxh3_128(&payload);
             td.push(d);
             section_digests.push(d);
         }
@@ -704,9 +707,9 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             .map(|v| v.iter().map(|&d| format_hash(d)).collect())
             .collect(),
         content_xxh128: format_hash(xxh3_128(&whole)),
-        storage_rows_xxh128: storage_digest.map(format_hash),
-        descriptor_blocks_xxh128: descriptor_digests
-            .map(|v| v.into_iter().map(format_hash).collect()),
+        storage_rows_xxh128: format_hash(storage_digest),
+        descriptor_blocks_xxh128: descriptor_digests.into_iter().map(format_hash).collect(),
+        geometry_blocks_xxh128: geometry_digests.map(|v| v.into_iter().map(format_hash).collect()),
         images_xxh128: images_digest.map(format_hash),
         origins_xxh128: origin_digests.map(|v| v.into_iter().map(format_hash).collect()),
     };

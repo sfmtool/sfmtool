@@ -3,11 +3,10 @@
 
 """Tests for the persistent `.kdf` forest bindings.
 
-These bindings exist so the descriptor-layout comparison in
-`specs/core/features/lazy-kdforest-query.md` can be run from Python, so the
-tests are written around what a benchmark actually asks the surface to do:
-export the same forest both ways, confirm the file-backed answers still match
-the in-memory ones, and read back counters that mean what they say.
+These bindings expose the persistent format to Python. The tests confirm that
+file-backed answers match the in-memory forest, that the single descriptor
+corpus remains lazy, and that its counters and SIFT provenance mean what they
+say.
 """
 
 import json
@@ -36,9 +35,8 @@ _DIM = 32
 _CHUNK_BYTES = 4096
 _BLOCK_BYTES = 1024
 
-_LAYOUTS = [
-    pytest.param("tree_local", {}, id="tree_local"),
-    pytest.param("shared", {"descriptor_block_bytes": _BLOCK_BYTES}, id="shared"),
+_BLOCK_CASES = [
+    pytest.param("corpus", {"descriptor_block_bytes": _BLOCK_BYTES}, id="corpus")
 ]
 
 
@@ -51,11 +49,9 @@ def _forest(descriptors, num_trees=4, leaf_size=8, seed=7):
     return KdForest(descriptors, num_trees=num_trees, leaf_size=leaf_size, seed=seed)
 
 
-def _export(tmp_path, forest, layout, extra, name=None, **kwargs):
-    path = tmp_path / (name or f"{layout}.kdf")
-    write_kdf(
-        forest, str(path), layout=layout, chunk_bytes=_CHUNK_BYTES, **extra, **kwargs
-    )
+def _export(tmp_path, forest, label, extra, name=None, **kwargs):
+    path = tmp_path / (name or f"{label}.kdf")
+    write_kdf(forest, str(path), chunk_bytes=_CHUNK_BYTES, **extra, **kwargs)
     return path
 
 
@@ -79,18 +75,20 @@ def _sources(descriptors, images=5):
         "sift_content_hashes": [bytes([200 + i]) * 16 for i in range(images)],
         "image_indexes": [i // per_image for i in range(n)],
         "image_feature_indexes": [i % per_image for i in range(n)],
+        "positions": np.arange(n * 2, dtype=np.float32).reshape(n, 2),
+        "affine_shapes": np.broadcast_to(np.eye(2, dtype=np.float32), (n, 2, 2)).copy(),
     }
 
 
 # ── Parity: the whole point of a second storage path ──────────────────────
 
 
-@pytest.mark.parametrize("layout,extra", _LAYOUTS)
-def test_file_backed_query_matches_the_in_memory_forest(tmp_path, layout, extra):
-    """Both layouts answer exactly what the forest they came from answers."""
+@pytest.mark.parametrize("label,extra", _BLOCK_CASES)
+def test_file_backed_query_matches_the_in_memory_forest(tmp_path, label, extra):
+    """The persistent forest answers exactly what its source forest answers."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    path = _export(tmp_path, forest, layout, extra)
+    path = _export(tmp_path, forest, label, extra)
 
     lazy = LazyKdForest(str(path))
     queries = descriptors[:32]
@@ -101,15 +99,15 @@ def test_file_backed_query_matches_the_in_memory_forest(tmp_path, layout, extra)
         assert np.allclose(got_dist, want_dist), f"distances differ at budget {budget}"
 
 
-@pytest.mark.parametrize("layout,extra", _LAYOUTS)
-def test_the_two_layouts_answer_identically(tmp_path, layout, extra):
-    """Layout is a storage decision, so it may not change a single answer."""
+@pytest.mark.parametrize("label,extra", _BLOCK_CASES)
+def test_descriptor_block_size_changes_no_answer(tmp_path, label, extra):
+    """Descriptor blocking is a storage decision, not a query decision."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
     baseline = LazyKdForest(
-        str(_export(tmp_path, forest, "tree_local", {}, name="base.kdf"))
+        str(_export(tmp_path, forest, "corpus", {}, name="base.kdf"))
     )
-    other = LazyKdForest(str(_export(tmp_path, forest, layout, extra)))
+    other = LazyKdForest(str(_export(tmp_path, forest, label, extra)))
     queries = descriptors[:32]
     a = baseline.query(queries, k=4, max_leaf_checks=64)
     b = other.query(queries, k=4, max_leaf_checks=64)
@@ -121,7 +119,7 @@ def test_distances_are_euclidean_like_the_eager_binding(tmp_path):
     """A self-query finds itself at distance zero, not zero-squared-and-unlabelled."""
     descriptors = _descriptors(n=64)
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     idx, dist = lazy.query(descriptors[:8], k=1, max_leaf_checks=256)
     assert np.array_equal(idx[:, 0], np.arange(8, dtype=np.uint32))
     assert np.allclose(dist[:, 0], 0.0)
@@ -130,15 +128,15 @@ def test_distances_are_euclidean_like_the_eager_binding(tmp_path):
 # ── Laziness and counters: what a benchmark measures with ─────────────────
 
 
-@pytest.mark.parametrize("layout,extra", _LAYOUTS)
-def test_opening_reads_no_chunk_payload(tmp_path, layout, extra):
-    """Open validates structure but decodes nothing, in both layouts.
+@pytest.mark.parametrize("label,extra", _BLOCK_CASES)
+def test_opening_reads_no_chunk_payload(tmp_path, label, extra):
+    """Open validates structure but decodes no tree or corpus frame.
 
-    The shared layout reads its row map at open, which is metadata rather than
-    a chunk; neither layout may touch a tree chunk or a descriptor block.
+    The row map is addressing metadata rather than a cache payload; open may not
+    touch a tree chunk, descriptor block, or geometry block.
     """
     forest = _forest(_descriptors())
-    lazy = LazyKdForest(str(_export(tmp_path, forest, layout, extra)))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, label, extra)))
     assert lazy.io_stats()["read_calls"] == 0
 
 
@@ -146,7 +144,7 @@ def test_counters_accumulate_and_reset_without_dropping_the_cache(tmp_path):
     """`reset_io_stats` separates measurement phases without reopening."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
 
     lazy.query(descriptors[:16], k=2, max_leaf_checks=64)
     warmed = lazy.io_stats()
@@ -168,7 +166,7 @@ def test_a_repeated_query_is_served_from_cache(tmp_path):
     """A warm hit costs cache hits, not reads."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     queries = descriptors[:8]
 
     lazy.query(queries, k=2, max_leaf_checks=64)
@@ -184,7 +182,7 @@ def test_query_with_stats_reports_the_checks_read_amplification_needs(tmp_path):
     """The counters are per batch and consistent with the plain query."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     queries = descriptors[:16]
 
     plain = lazy.query(queries, k=3, max_leaf_checks=64)
@@ -203,7 +201,7 @@ def test_a_budget_of_zero_still_answers_and_checks_nothing_beyond_one_leaf(tmp_p
     """The leaf budget is soft at zero, matching the in-memory forest."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     idx, _, stats = lazy.query_with_stats(descriptors[:4], k=2, max_leaf_checks=0)
     want, _ = forest.query(descriptors[:4], k=2, max_leaf_checks=0)
     assert np.array_equal(idx, want)
@@ -213,15 +211,15 @@ def test_a_budget_of_zero_still_answers_and_checks_nothing_beyond_one_leaf(tmp_p
 # ── File accounting: the other half of the comparison ─────────────────────
 
 
-@pytest.mark.parametrize("layout,extra", _LAYOUTS)
-def test_summary_describes_the_file_it_was_given(tmp_path, layout, extra):
+@pytest.mark.parametrize("label,extra", _BLOCK_CASES)
+def test_summary_describes_the_file_it_was_given(tmp_path, label, extra):
     forest = _forest(_descriptors())
-    summary = kdf_file_summary(str(_export(tmp_path, forest, layout, extra)))
+    summary = kdf_file_summary(str(_export(tmp_path, forest, label, extra)))
     assert summary["feature_count"] == _N
     assert summary["dimension"] == _DIM
     assert summary["scalar_type"] == "uint8"
     assert summary["tree_count"] == 4
-    assert summary["descriptor_storage"] == layout
+    assert summary["descriptor_block_rows"] == _BLOCK_BYTES // _DIM
     assert summary["target_chunk_bytes"] == _CHUNK_BYTES
     assert len(summary["chunks_per_tree"]) == 4
     assert all(c > 0 for c in summary["chunks_per_tree"])
@@ -232,49 +230,24 @@ def test_summary_describes_the_file_it_was_given(tmp_path, layout, extra):
     assert summary["file_bytes"] > summary["payload_compressed_bytes"]
 
 
-def test_the_layouts_differ_in_exactly_the_sections_they_should(tmp_path):
-    """This is the measurement the bindings exist for.
-
-    Tree-local keeps one vector copy per tree; shared keeps one corpus plus a row
-    map. A chunk's integer arrays share one entry but its vectors do not, which is
-    what keeps this comparison honest: `tree_chunks` must be byte-identical across
-    the layouts, so any size difference between the files is descriptors and
-    nothing else.
-    """
-    trees = 4
+def test_descriptors_are_stored_once_outside_the_trees(tmp_path):
     descriptors = _descriptors()
-    forest = _forest(descriptors, num_trees=trees)
-    local = kdf_file_summary(str(_export(tmp_path, forest, "tree_local", {})))
-    shared = kdf_file_summary(
+    forest = _forest(descriptors, num_trees=4)
+    summary = kdf_file_summary(
         str(
             _export(
-                tmp_path, forest, "shared", {"descriptor_block_bytes": _BLOCK_BYTES}
+                tmp_path, forest, "corpus", {"descriptor_block_bytes": _BLOCK_BYTES}
             )
         )
     )
 
-    def section(summary, name):
+    def section(name):
         return next((s for s in summary["sections"] if s["section"] == name), None)
 
-    # Same forest, same partition. If these differed, a size comparison would be
-    # measuring two different trees rather than two ways of storing one.
-    assert local["chunks_per_tree"] == shared["chunks_per_tree"]
-    assert local["nodes_per_tree"] == shared["nodes_per_tree"]
-
-    assert section(local, "shared_vectors") is None
-    assert section(local, "shared_row_map") is None
-    assert section(shared, "shared_vectors") is not None
-    assert section(shared, "shared_row_map") is not None
-    assert section(shared, "shared_block_offsets") is not None
-
-    # Identical topology bytes: the only thing that moved is the descriptors.
-    assert section(local, "tree_chunks") == section(shared, "tree_chunks")
-
-    # Tree-local holds T copies; the shared corpus holds one.
-    corpus = section(shared, "shared_vectors")["decoded_bytes"]
-    assert corpus == _N * _DIM
-    assert section(local, "tree_vectors")["decoded_bytes"] == trees * corpus
-    assert section(shared, "tree_vectors") is None
+    assert section("descriptors")["decoded_bytes"] == _N * _DIM
+    assert section("storage_row_map")["decoded_bytes"] == _N * 4
+    assert section("descriptor_block_offsets") is not None
+    assert section("tree_vectors") is None
 
 
 def test_summary_reports_real_decoded_sizes_not_the_stored_frame(tmp_path):
@@ -290,11 +263,10 @@ def test_summary_reports_real_decoded_sizes_not_the_stored_frame(tmp_path):
     descriptors = np.zeros((_N, _DIM), dtype=np.uint8)
     descriptors[:, 0] = np.arange(_N, dtype=np.uint8)  # keep the tree splittable
     forest = _forest(descriptors)
-    summary = kdf_file_summary(str(_export(tmp_path, forest, "tree_local", {})))
+    summary = kdf_file_summary(str(_export(tmp_path, forest, "corpus", {})))
 
-    vectors = next(s for s in summary["sections"] if s["section"] == "tree_vectors")
-    # Four trees, each holding one uint8 vector row per feature.
-    assert vectors["decoded_bytes"] == 4 * _N * _DIM
+    vectors = next(s for s in summary["sections"] if s["section"] == "descriptors")
+    assert vectors["decoded_bytes"] == _N * _DIM
     assert vectors["compressed_bytes"] < vectors["decoded_bytes"] // 10
 
     # And the whole payload compresses, rather than reporting a 1.0 ratio.
@@ -310,7 +282,7 @@ def test_verify_reads_the_whole_file_and_reports_what_it_saw(tmp_path):
     report = verify_kdf(
         str(
             _export(
-                tmp_path, forest, "shared", {"descriptor_block_bytes": _BLOCK_BYTES}
+                tmp_path, forest, "corpus", {"descriptor_block_bytes": _BLOCK_BYTES}
             )
         )
     )
@@ -329,7 +301,7 @@ def test_origins_round_trip_in_the_order_requested(tmp_path):
     forest = _forest(descriptors)
     sources = _sources(descriptors)
     path = _export(
-        tmp_path, forest, "tree_local", {}, sources=sources, origin_block_rows=64
+        tmp_path, forest, "corpus", {}, sources=sources, origin_block_rows=64
     )
 
     lazy = LazyKdForest(str(path))
@@ -337,17 +309,24 @@ def test_origins_round_trip_in_the_order_requested(tmp_path):
     images, features = lazy.resolve_origins(wanted)
     assert list(images) == [sources["image_indexes"][i] for i in wanted]
     assert list(features) == [sources["image_feature_indexes"][i] for i in wanted]
+    geometry = lazy.resolve_feature_geometry(wanted)
+    expected = np.concatenate(
+        [sources["positions"][:, None, :], sources["affine_shapes"]], axis=1
+    )
+    np.testing.assert_array_equal(geometry, expected[wanted])
 
     table = lazy.image_table()
     assert table["names"] == sources["image_names"]
     assert table["sift_content_hashes"] == sources["sift_content_hashes"]
     assert kdf_file_summary(str(path))["has_sources"]
+    assert kdf_file_summary(str(path))["has_feature_geometry"]
 
 
 def test_a_file_without_sources_resolves_to_none(tmp_path):
     forest = _forest(_descriptors())
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     assert lazy.resolve_origins([0, 1]) is None
+    assert lazy.resolve_feature_geometry([0, 1]) is None
     assert lazy.image_table() is None
 
 
@@ -360,7 +339,7 @@ def test_origins_cost_shows_up_in_the_summary(tmp_path):
             _export(
                 tmp_path,
                 forest,
-                "tree_local",
+                "corpus",
                 {},
                 name="src.kdf",
                 sources=_sources(descriptors),
@@ -369,7 +348,12 @@ def test_origins_cost_shows_up_in_the_summary(tmp_path):
         )
     )
     names = {s["section"] for s in with_sources["sections"]}
-    assert {"origins", "images"} <= names
+    assert {
+        "origins",
+        "images",
+        "feature_geometry",
+        "geometry_block_offsets",
+    } <= names
 
 
 def test_source_verifier_uses_the_extracted_seoul_bull_sift(
@@ -378,7 +362,7 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
     """One real extraction covers success, relocation, and every source failure.
 
     The included 270x480 Seoul Bull image keeps this integration check small.
-    All KDF variants below reuse its one generated `.sift` file, so adding the
+    All KDF cases below reuse its one generated `.sift` file, so adding the
     source-verification surface does not multiply extraction cost.
     """
     workspace = isolated_seoul_bull_image.parent
@@ -394,6 +378,21 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
     sift_path = get_sift_path_for_image(isolated_seoul_bull_image)
     sift = SiftReader(sift_path)
     all_descriptors = sift.read_descriptors()
+    all_positions, all_affine_shapes = sift.read_positions_and_shapes()
+    from scripts.benchmark_kdf_layouts import load_corpus
+
+    (
+        benchmark_descriptors,
+        benchmark_names,
+        _,
+        _,
+        benchmark_positions,
+        benchmark_shapes,
+    ) = load_corpus(sift_path.parent)
+    assert benchmark_names == [isolated_seoul_bull_image.name]
+    np.testing.assert_array_equal(benchmark_descriptors, all_descriptors)
+    np.testing.assert_array_equal(benchmark_positions, all_positions)
+    np.testing.assert_array_equal(benchmark_shapes, all_affine_shapes)
     feature_count = min(64, len(all_descriptors))
     assert feature_count > 1
     descriptors = np.array(all_descriptors[:feature_count], copy=True)
@@ -416,13 +415,15 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
         "sift_content_hashes": [bytes.fromhex(sift.content_hash["content_xxh128"])],
         "image_indexes": [0] * feature_count,
         "image_feature_indexes": list(range(feature_count)),
+        "positions": np.array(all_positions[:feature_count], copy=True),
+        "affine_shapes": np.array(all_affine_shapes[:feature_count], copy=True),
     }
 
     def export(name, values, provenance):
         return _export(
             workspace,
             _forest(values, num_trees=2),
-            "shared",
+            "corpus",
             {"descriptor_block_bytes": 4096},
             name=name,
             sources=provenance,
@@ -444,6 +445,13 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
     changed[0, 0] ^= 1
     descriptor_mismatch = export("descriptor-mismatch.kdf", changed, sources)
 
+    geometry_mismatch_sources = dict(sources)
+    geometry_mismatch_sources["positions"] = sources["positions"].copy()
+    geometry_mismatch_sources["positions"][0, 0] += 1.0
+    geometry_mismatch = export(
+        "geometry-mismatch.kdf", descriptors, geometry_mismatch_sources
+    )
+
     # Move the whole workspace after export. The relative location beside each
     # KDF must win over the now-stale recorded absolute path.
     relocated = tmp_path / "relocated-workspace"
@@ -452,10 +460,14 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
     wrong_hash = relocated / wrong_hash.name
     out_of_bounds = relocated / out_of_bounds.name
     descriptor_mismatch = relocated / descriptor_mismatch.name
+    geometry_mismatch = relocated / geometry_mismatch.name
     sift_path = relocated / sift_path.relative_to(workspace)
 
     report = verify_sift_sources(str(valid))
     assert report["features"] == feature_count
+    geometry = LazyKdForest(str(valid)).resolve_feature_geometry([3, 0, 3])
+    np.testing.assert_array_equal(geometry[:, 0], sources["positions"][[3, 0, 3]])
+    np.testing.assert_array_equal(geometry[:, 1:], sources["affine_shapes"][[3, 0, 3]])
 
     with pytest.raises(OSError, match="SIFT identity mismatch"):
         verify_sift_sources(str(wrong_hash))
@@ -463,6 +475,8 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
         verify_sift_sources(str(out_of_bounds))
     with pytest.raises(OSError, match="source descriptor differs"):
         verify_sift_sources(str(descriptor_mismatch))
+    with pytest.raises(OSError, match="source feature geometry differs"):
+        verify_sift_sources(str(geometry_mismatch))
 
     missing = sift_path.with_suffix(sift_path.suffix + ".missing")
     shutil.move(sift_path, missing)
@@ -482,41 +496,39 @@ def test_source_verifier_uses_the_extracted_seoul_bull_sift(
 # ── Argument handling ─────────────────────────────────────────────────────
 
 
-def test_an_unknown_layout_is_refused(tmp_path):
+def test_the_removed_layout_keyword_is_refused(tmp_path):
     forest = _forest(_descriptors())
-    with pytest.raises(ValueError, match="unknown layout"):
+    with pytest.raises(TypeError, match="layout"):
         write_kdf(forest, str(tmp_path / "x.kdf"), layout="magic")
 
 
-def test_block_size_is_refused_for_the_layout_that_ignores_it(tmp_path):
-    """A silently-ignored argument would label two identical sweep runs apart."""
+def test_descriptor_block_size_must_be_positive(tmp_path):
     forest = _forest(_descriptors())
-    with pytest.raises(ValueError, match="layout='shared' only"):
+    with pytest.raises(ValueError, match="must be positive"):
         write_kdf(
             forest,
             str(tmp_path / "x.kdf"),
-            layout="tree_local",
-            descriptor_block_bytes=4096,
+            descriptor_block_bytes=0,
         )
 
 
 def test_writing_over_an_existing_file_is_refused(tmp_path):
     forest = _forest(_descriptors())
-    path = _export(tmp_path, forest, "tree_local", {})
+    path = _export(tmp_path, forest, "corpus", {})
     with pytest.raises(FileExistsError):
-        write_kdf(forest, str(path), layout="tree_local")
+        write_kdf(forest, str(path))
 
 
 def test_a_query_of_the_wrong_width_is_refused(tmp_path):
     forest = _forest(_descriptors())
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     with pytest.raises(ValueError, match="does not match file dim"):
         lazy.query(np.zeros((2, _DIM + 1), dtype=np.uint8))
 
 
 def test_a_query_of_the_wrong_dtype_is_refused(tmp_path):
     forest = _forest(_descriptors())
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     with pytest.raises(TypeError, match="must be a uint8 array"):
         lazy.query(np.zeros((2, _DIM), dtype=np.float32))
 
@@ -525,7 +537,7 @@ def test_a_fortran_ordered_query_is_not_silently_transposed(tmp_path):
     """F-contiguous input must give the same answers as its C-ordered twin."""
     descriptors = _descriptors()
     forest = _forest(descriptors)
-    lazy = LazyKdForest(str(_export(tmp_path, forest, "tree_local", {})))
+    lazy = LazyKdForest(str(_export(tmp_path, forest, "corpus", {})))
     queries = descriptors[:16]
     c_idx, c_dist = lazy.query(queries, k=2, max_leaf_checks=64)
     f_idx, f_dist = lazy.query(np.asfortranarray(queries), k=2, max_leaf_checks=64)
@@ -540,7 +552,7 @@ def test_a_cache_budget_too_small_for_a_chunk_is_a_memory_error(tmp_path):
     file is broken, stop", so the two raise different exceptions.
     """
     forest = _forest(_descriptors())
-    path = _export(tmp_path, forest, "tree_local", {})
+    path = _export(tmp_path, forest, "corpus", {})
     with pytest.raises(MemoryError):
         LazyKdForest(str(path), cache_bytes=0)
     with pytest.raises(MemoryError):
@@ -604,7 +616,7 @@ def test_an_explicit_descriptor_order_changes_no_answer(tmp_path):
     default = LazyKdForest(
         str(
             _export(
-                tmp_path, forest, "shared", {"descriptor_block_bytes": _BLOCK_BYTES}
+                tmp_path, forest, "corpus", {"descriptor_block_bytes": _BLOCK_BYTES}
             )
         )
     )
@@ -616,7 +628,6 @@ def test_an_explicit_descriptor_order_changes_no_answer(tmp_path):
     write_kdf(
         forest,
         str(path),
-        layout="shared",
         chunk_bytes=_CHUNK_BYTES,
         descriptor_block_bytes=_BLOCK_BYTES,
         descriptor_order=shuffled,
@@ -637,7 +648,6 @@ def test_a_malformed_descriptor_order_is_refused(tmp_path):
             write_kdf(
                 forest,
                 str(tmp_path / f"bad{len(order)}{order[0]}.kdf"),
-                layout="shared",
                 descriptor_block_bytes=_BLOCK_BYTES,
                 descriptor_order=order,
             )
@@ -647,7 +657,7 @@ def test_kdf_matcher_validates_before_self_join(tmp_path):
     from sfmtool._sfmtool.matching import background_floor_clusters_kdf
 
     desc = _descriptors(n=16)
-    path = _export(tmp_path, _forest(desc), "shared", {"descriptor_block_bytes": 128})
+    path = _export(tmp_path, _forest(desc), "corpus", {"descriptor_block_bytes": 128})
     for d, starts in [(2**64 - 1, [0, 16]), (2, [0, 17]), (2, [1, 16])]:
         with pytest.raises(ValueError):
             background_floor_clusters_kdf(
@@ -664,7 +674,7 @@ def test_reloaded_forest_preserves_default_check_budget(tmp_path):
 
     desc = _descriptors()
     forest = KdForest(desc, num_trees=4, max_leaf_checks=32)
-    path = _export(tmp_path, forest, "shared", {"descriptor_block_bytes": 128})
+    path = _export(tmp_path, forest, "corpus", {"descriptor_block_bytes": 128})
     loaded = read_kdf(str(path))
     assert loaded.max_leaf_checks == 32
     for actual, expected in zip(

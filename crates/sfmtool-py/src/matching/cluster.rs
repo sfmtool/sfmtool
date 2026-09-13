@@ -60,8 +60,8 @@ fn extract_corpus<'py>(
 
 /// Background-floor track-cluster matcher over a persistent `.kdf` forest.
 ///
-/// The out-of-core twin of `background_floor_clusters`: it opens a shared-layout
-/// `.kdf`, runs the same self-join against it, and clusters the result. Neither
+/// The out-of-core twin of `background_floor_clusters`: it opens a `.kdf`, runs
+/// the same self-join against it, and clusters the result. Neither
 /// the corpus nor the forest is held in memory — each query descriptor is read
 /// from the file, used and dropped, and the index stays on disk behind a bounded
 /// cache. What remains resident is that cache plus the `N x (d + 1)` neighbour
@@ -71,7 +71,7 @@ fn extract_corpus<'py>(
 /// the file stores that forest's exact topology and leaf order.
 ///
 /// Args:
-///     path: A shared-layout `.kdf` written from the forest to match against.
+///     path: A `.kdf` written from the forest to match against.
 ///     image_starts: (n_images + 1,) uint32 CSR offsets over the corpus, in the
 ///         same feature-ID order the `.kdf` was written from.
 ///     d: Background rank; the k-NN query width is d + 1 (default 10).
@@ -87,8 +87,7 @@ fn extract_corpus<'py>(
 ///     `background_floor_clusters`.
 ///
 /// Raises:
-///     ValueError: The file is tree-local, so it has no corpus to draw queries
-///         from, or the inputs disagree with each other.
+///     ValueError: The inputs disagree with each other.
 ///     OSError: The file is malformed or damaged.
 #[pyfunction]
 #[pyo3(signature = (path, image_starts, d=10, alpha=0.8, min_size=2,

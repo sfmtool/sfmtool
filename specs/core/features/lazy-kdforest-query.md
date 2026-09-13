@@ -2,10 +2,10 @@
 
 A persistent kd-tree forest lets a process search a large set of descriptors
 while keeping only the portions it visits in memory. The file-backed query path
-in core does this over chunked trees with either leaf-local vectors or a shared
-vector table, targeting local seekable files, repeated queries, and corpora
-larger than the configured memory cache. It preserves the in-memory forest's
-search behavior in both layouts.
+in core does this over chunked trees and one blocked descriptor corpus, targeting
+local seekable files, repeated queries, and corpora larger than the configured
+memory cache. It preserves the in-memory forest's search behavior while storing
+each vector once.
 
 Packing and cache values are configurable. The interface lists provisional
 defaults; the measurements and their scope are documented in
@@ -29,13 +29,13 @@ and re-exported by the kdforest module:
 
 ```rust
 pub struct KdfWriteOptions {
-    pub descriptor_storage: DescriptorStorage, // explicit choice; no default yet
+    pub target_descriptor_block_bytes: usize, // default: 64 KiB
     pub target_chunk_bytes: usize, // provisional: 1 MiB
     pub compression_level: i32,    // provisional: 3
     pub origin_block_rows: usize,  // provisional: 131072 (two u32 columns = 1 MiB)
 }
 pub struct LazyKdForestOptions {
-    pub max_address_map_bytes: usize, // provisional: 256 MiB, shared layout only
+    pub max_address_map_bytes: usize, // provisional: 256 MiB
     pub max_leaf_features: usize,     // provisional: 1,048,576
     pub cache_bytes: usize,        // provisional: 256 MiB decoded cache
     pub max_in_flight_bytes: usize,// provisional: 64 MiB decode reservations
@@ -45,10 +45,6 @@ pub struct LazyKdForestOptions {
     pub query_workers: usize,     // provisional: 1; caller can raise
 }
 pub struct LazyKdForest<S: ForestScalar + KdfScalar> { /* file handle, cache, workers */ }
-pub enum DescriptorStorage {
-    TreeLocal,
-    Shared { target_descriptor_block_bytes: usize },
-}
 pub type LazyKdForestU8 = LazyKdForest<u8>;
 pub type LazyKdForestF32 = LazyKdForest<f32>;
 
@@ -72,6 +68,8 @@ impl<S: KdfScalar> LazyKdForest<S> {
     pub fn is_empty(&self) -> bool;
     pub fn resolve_origins(&self, feature_ids: &[u32])
         -> Result<Option<Vec<FeatureOrigin>>, KdfError>;
+    pub fn resolve_feature_geometry(&self, feature_ids: &[u32])
+        -> Result<Option<Vec<FeatureGeometry>>, KdfError>;
     pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError>;
     pub fn io_stats(&self) -> KdfIoStats;
 }
@@ -102,7 +100,7 @@ use sfmtool_core::features::kdforest::{
 };
 let features = vec![0u8, 0, 10, 10, 1, 1];
 let forest = KdForestU8::build(&features, 3, 2, KdForestParams::balanced());
-let options = KdfWriteOptions::tree_local();
+let options = KdfWriteOptions::default();
 forest.write_kdf("example.kdf".as_ref(), None, &options)?;
 let lazy = LazyKdForestU8::open("example.kdf".as_ref(), Default::default())?;
 let neighbors = lazy.search(&[0, 0], 2, 128, None)?;
@@ -129,72 +127,67 @@ input corpus is out of scope: export requires an already-built forest.
 ### Source references
 
 `KdfSiftSources` contains the format's workspace configuration, image names and
-both per-image hashes, plus parallel image/image-feature index arrays of length N in
-original input order. Writers validate complete coverage and pair uniqueness.
+both per-image hashes, parallel image/image-feature index arrays, and N rows of
+keypoint/affine geometry in original input order. Writers validate complete
+coverage, finite geometry, and pair uniqueness.
 `FeatureOrigin` contains `image_index: u32` and `image_feature_index: u32`; an image
 table accessor exposes the names and hashes without opening source files.
 `resolve_origins` returns mappings in requested ID order, including repeated
 requests, returns `None` for a generic corpus, and rejects out-of-range IDs.
+`resolve_feature_geometry` follows the same contract and returns rows shaped as
+`[[x, y], [a11, a12], [a21, a22]]`.
 
-Origin blocks are cached on demand under the same byte budget as tree chunks;
+Origin and geometry blocks are cached on demand under the same byte budget as tree chunks;
 only blocks covering requested result IDs are read. Image metadata/hashes load
 on first source-table access, within the metadata budget. Normal ANN reads
-neither origins nor image tables. Offline KDF verification checks origin ranges
-and uniqueness; a separate explicit source verifier checks referenced SIFT hashes,
-feature bounds and vector equality, reporting missing files distinctly.
+neither origins, geometry, nor image tables. Offline KDF verification checks
+origin ranges, uniqueness, and every geometry block; a separate explicit source
+verifier checks referenced SIFT hashes, feature bounds, vector equality, and
+keypoint/affine equality, reporting missing files distinctly.
 Repacking preserves this mapping. Exporting a descriptor subset retains its
 original SIFT feature indices even though input row IDs are newly dense.
 
-## Two storage layouts, one search implementation
+## One corpus, one search implementation
 
-Implement both layouts in the first delivery. `KdfWriteOptions::tree_local()`
-and `KdfWriteOptions::shared(target_descriptor_block_bytes)` set the existing
-provisional compression, origin and tree-chunk defaults. Require callers to
-choose a layout until benchmarks establish a default. Open detects the layout
-from metadata; query signatures and results are identical for both.
+Version 2 has one storage layout. `KdfWriteOptions::default()` selects the
+descriptor, tree-chunk, origin, and compression defaults; callers may tune block
+sizes but cannot duplicate vectors per tree. Version-1 files are rejected.
 
 Keep one best-bin-first traversal, result set, dedup set and scalar distance
 implementation. Storage access supplies node data, ordered leaf feature IDs and
-vector rows. In tree-local mode, a vector row is in the leaf's chunk; in shared
-mode, its feature ID indexes the resident storage-row map, which locates a shared
-descriptor block. This adds a storage access strategy, not a second ANN algorithm.
-Use the same original forest for both exports rather than rebuilding it twice.
+vector rows. A feature ID indexes the resident storage-row map, which locates a
+descriptor block. This keeps storage addressing out of the ANN algorithm.
 
-Shared export orders descriptors by tree 0's leaf permutation, writes its inverse
+Export orders descriptors by tree 0's leaf permutation, writes its inverse
 as storage_rows, and partitions vectors into Q complete rows per block, where
 `Q = max(1, floor(target_descriptor_block_bytes / bytes_per_vector))`. Reject zero
 targets. Targets smaller than a row produce one-row blocks. This block target is
 independent of the tree-chunk target and does not change topology or leaf size.
 
-Open loads and validates the shared row map within `max_address_map_bytes`,
+Open loads and validates the row map within `max_address_map_bytes`,
 checking permutation validity with bounded temporary memory. Reject excess
 rather than silently paging it. Report resident map and validation-scratch bytes;
-the map is separate from the decoded chunk cache and metadata limit. Tree-local
-mode allocates no map.
+the map is separate from the decoded chunk cache and metadata limit.
 
-Shared descriptor blocks, tree chunks and origin blocks use the same byte-weighted
+Descriptor, optional geometry, tree, and origin blocks use the same byte-weighted
 cache with distinct key kinds, integrity checks and single-load coordination.
-Before requesting shared descriptors, copy the ordered leaf IDs into query scratch
+Before requesting descriptors, copy the ordered leaf IDs into query scratch
 and release the tree chunk pin. Process rows in leaf order, deduplicating IDs before
 fetching vectors; release a descriptor block pin before requesting another block.
 This prevents waiting for cache admission while retaining a different cache pin.
 Leaf scratch is additional memory bounded by `max_leaf_features`; reject oversized
 leaves. Prefetching or grouping reads must not reorder evaluations or result ties.
 
-The extra implementation work is the shared writer/address map, vector-block
-reader, cache key variant, layout-specific validation/hashing, and cross-layout
-tests. No second ANN algorithm or source mapping is needed. Keep the storage
-interface private initially rather than designing general-purpose plugins.
+The geometry corpus uses the same storage permutation and row boundaries as
+descriptors, so block b in each corpus correlates positionally. Its cache key,
+compressed frame offsets, and hashes are independent. A constellation consumer
+can therefore fetch the geometry for result IDs without opening `.sift` files.
 
 ## Packing policy
 
-The format permits arbitrary chunk boundaries. The baseline exporter computes
-subtree packing weights including nodes, split values, IDs and vector copies.
-Use these same weights in both layouts so identical options produce identical
-tree partitions for a controlled comparison. In shared mode vector bytes are
-virtual packing weight only: stored decoded_bytes records the smaller actual
-tree arrays. Shared vector blocks use their separate target. A future policy
-may pack shared trees more tightly without changing format semantics.
+The format permits arbitrary chunk boundaries. The exporter computes subtree
+packing weights from the node, split, and feature-ID arrays actually stored in
+tree chunks. Descriptor and geometry blocks use their separate row target.
 Starting at the root, every maximal complete subtree that fits the target
 becomes a chunk. An oversized leaf forms a chunk of its own. The internal nodes
 above those subtrees form routing chunks, packed in deterministic breadth-first
@@ -215,14 +208,10 @@ report actual size distributions instead of labeling every chunk “1 MiB”.
 Never pack by compressed size: compression depends on data and would make
 allocation sizes and benchmark comparisons misleading.
 
-The per-tree vector copies are intentional. A shared vector table in original
-ID order can scatter one 16-feature leaf over 16 descriptor chunks. Reordering a
-shared table by tree 0 improves that tree, but gives no corresponding guarantee
-for the other randomized trees — measured, that is 89% block reuse at one tree
-falling to 31% at four, in
-[What the measurements found](#what-the-measurements-found). Duplication trades disk
-capacity and write time for predictable leaf access. It is the main review decision,
-not a free gain.
+The corpus defaults to tree-0 leaf order. Other trees may scatter one leaf across
+several descriptor blocks; the measured cost is outweighed by removing `T-1`
+descriptor copies. Callers may provide another explicit corpus permutation
+without changing feature identity or query results.
 
 ## Search behavior and parity
 
@@ -271,8 +260,9 @@ decode trees or descriptors. ZIP metadata/index memory is O(number of entries),
 not constant; enforce the metadata budget on both decoded JSON and index
 allocations, rejecting excess directory entries before unbounded allocation.
 
-On a miss, read only that chunk's three tree-entry ranges, plus its vector entry
-in tree-local layout, and verify/decode them.
+On a tree miss, read and verify only that chunk's grouped topology/feature-ID
+entry. Descriptor and geometry misses read one independent frame from their
+respective corpora; an origin miss reads its two compressed columns.
 When entries are adjacent, a reader may coalesce their ranges, including intervening
 ZIP headers. A chunk is a logical cache unit, not necessarily one system call.
 Cache the offset/length index for the handle's lifetime; never reopen or reparse
@@ -281,8 +271,8 @@ shared seek cursor race. A lock around seek/read is an acceptable first fallback
 decompression happens outside it. Do not use the existing eager `DecodedEntries`
 path to load the whole archive.
 
-Use a shared byte-weighted LRU of decoded chunks, keyed by file handle identity,
-tree and chunk. In-flight requests for the same chunk share one load. Keep no
+Use a per-file byte-weighted LRU of decoded chunks and blocks, keyed by payload
+kind and block/chunk ID. In-flight requests for the same key share one load. Keep no
 unbounded pinned “upper tree”: frequent routing chunks stay hot through reuse.
 Each descent holds at most its current decoded chunk and releases it before
 requesting another. Queue entries hold addresses, not chunk references.
@@ -290,7 +280,7 @@ requesting another. Queue entries hold addresses, not chunk references.
 The cache budget includes pinned resident chunk arrays; admission reserves space
 and waits for readers to release chunks if necessary. Require cache and in-flight
 limits each to admit the largest declared chunk, and reject declared chunks over
-`max_chunk_bytes`. Apply the same limits to origin blocks. Reserve decode memory
+`max_chunk_bytes`. Apply the same limits to descriptor, geometry, and origin blocks. Reserve decode memory
 before I/O. Separately bound compressed
 buffers and decoder workspace; include these in reported peak memory rather
 than claiming the decoded cache limit is a process RSS limit. A loader never
@@ -333,6 +323,10 @@ recall@1 on larger corpora. Raw recall alone does not establish how many usable
 matches this pipeline loses. That requires measuring the downstream matcher.
 
 ## Benchmark method
+
+The layout comparisons below are retained as the version-1 evidence that selects
+version 2's single corpus representation. Tree-local measurements describe the
+removed alternative, not a mode accepted by the current API.
 
 One MiB is 1,048,576 decoded bytes. Start with a configurable 1 MiB target,
 then compare 256 KiB, 1, 4, 8 and 16 MiB; these are experiment settings, not
@@ -387,11 +381,11 @@ below therefore report decoded bytes and read counts directly.
 ## Current access path and performance diagnosis
 
 [`persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
-borrows one tree chunk while following nodes within it. Tree-local leaf vectors
-are evaluated in place. Shared leaves copy unchecked IDs into reused scratch,
-release the tree pin, and borrow consecutive descriptors from each block. A query
-holds no pin while admitting another block. Descriptor encounter order, queue
-priorities and check counts are unchanged, including equal-distance ties.
+borrows one tree chunk while following nodes within it. At a leaf it copies
+unchecked feature IDs into reused scratch, releases the tree pin, and borrows
+consecutive descriptors from each corpus block. A query holds no pin while
+admitting another block. Descriptor encounter order, queue priorities and check
+counts are unchanged, including equal-distance ties.
 
 [`cache.rs`](../../../crates/sfmtool-kdf-format/src/cache.rs) maintains an indexed
 doubly linked LRU list per shard. Hits and victim removal take constant time;
@@ -433,17 +427,17 @@ or zstd work) on 2026-09-10 measured:
 | 16,384 | 136,177 | 346 |
 | 65,536 | 1,226,745 | 391 |
 
-These are diagnostic samples, not disk throughput. The existing 256-query synthetic
-resident benchmark measures tree-local at 6.31 ms before and 0.74 ms after, and
-shared at 8.68 ms before and 2.29 ms after. Both lazy runs use four workers. Eager
+These are diagnostic samples, not disk throughput. The version-1 256-query
+synthetic resident benchmark measured tree-local at 6.31 ms before and 0.74 ms
+after, and the corpus layout at 8.68 ms before and 2.29 ms after. Both lazy runs used four workers. Eager
 with four workers measures 0.27 ms; the earlier benchmark used the machine-wide
 pool for eager, so its earlier eager number is not a worker-matched comparison.
 The current benchmark asserts indices and distances, prints traversal/I/O counters,
-and accepts `KDF_BENCH_WORKERS` for both paths. The batch performs 34,157 checks
-and no warm reads. Current cache-hit counts are 4,671 tree-local and 30,105 shared.
-Shared-access overhead remains even when file I/O is absent.
+and accepts `KDF_BENCH_WORKERS` for both paths. The batch performed 34,157 checks
+and no warm reads. Cache-hit counts were 4,671 tree-local and 30,105 for the corpus.
+Corpus-addressing overhead remains even when file I/O is absent.
 
-The shared corpus uses explicit-offset reads: `read_at` on Unix and `seek_read`
+The descriptor and geometry corpora use explicit-offset reads: `read_at` on Unix and `seek_read`
 on Windows, with retries for interrupted/short reads and an error for premature
 EOF. The handle's cursor is never used to choose a descriptor frame. This removes
 the mutex around seek/read and uses one positioned read rather than two separate
@@ -481,7 +475,7 @@ These calls are timed separately and do not include cache admission, traversal o
 multiworker contention. The positioned-read measurement follows the ordinary read
 of the same frame, so it describes OS-warm access, not physical device latency.
 Run the ignored `profile_corpus_misses` release test with `KDF_PROFILE_PATH` set to
-a shared u8 file to reproduce the decomposition. The test checks both read methods
+a u8 file to reproduce the decomposition. The test checks both read methods
 and both decoder methods produce identical bytes.
 
 ### End-to-end held-out images (2026-09-11)
@@ -914,16 +908,17 @@ Chunk size does not help this pattern, which is worth stating because it looks l
 it should: a sparse query descends through tree chunks, so smaller chunks ought to
 pull less. Measured from 128 KiB to 4 MiB, decoded bytes move from 19.7 to 21.7 MB
 and query time not at all beyond noise. The reason is already in
-[Packing policy](#packing-policy): shared-layout chunks are packed with weights that
-include vector bytes the layout does not store, so a chunk underfills its target by
-roughly 17x and the target is close to decorative there. What drives decoded volume
-is how many distinct blocks scattered queries reach, not how big each one is.
+[Packing policy](#packing-policy): the version-1 corpus prototype packed tree
+chunks with weights that included descriptor bytes the chunks did not store, so
+they underfilled their target by roughly 17x. Version 2 counts only stored tree
+arrays. For this access pattern, decoded volume is still driven primarily by how
+many distinct blocks scattered queries reach.
 
 ### What this suggests as defaults
 
-On this evidence the shared layout is the better default: 3.3x smaller, faster or
-equal in every regime, insensitive to a chunk-size choice that swings tree-local
-by 43x, and at full speed on a budget a third the size.
+On this evidence version 2 keeps only the corpus layout: it measured 3.3x smaller,
+faster or equal in every regime, insensitive to a chunk-size choice that swung
+tree-local by 43x, and at full speed on a budget a third the size.
 
 Leaf size **16** remains the general forest default and the measured choice when a
 256 MiB cache is substantially smaller than the index. For a shared persistent
@@ -944,10 +939,10 @@ scaled with its size, then one ZIP directory record per descriptor block. The
 figure to distrust in future is any block-size guidance that has not been
 re-derived since the last change to how a block is addressed.
 
-The API keeps requiring an explicit choice regardless. Tree-local's resident warm
-case is genuinely faster, the margin is a property of the corpus and the budget
-rather than a constant, and a caller who knows their working set fits in memory
-has a real reason to pick it.
+The API no longer exposes this choice. Tree-local's version-1 resident warm case
+was genuinely faster, but retaining a second wire representation for that narrow
+case would carry permanent reader, verifier and test complexity. A caller whose
+working set fits in memory can instead reload the file into the eager forest.
 
 ### What this does not settle
 
@@ -1119,7 +1114,7 @@ crosses a chunk boundary, and a realistic target would put the whole fixture in
 one chunk and test nothing.
 
 [`persistent.rs`](../../../crates/sfmtool-core/src/features/kdforest/persistent.rs)
-holds three cases. The `u8` case exports a four-tree forest in both layouts and
+holds three cases. The `u8` case exports a four-tree forest and
 compares eleven queries at leaf budgets of 0, 1, 7, 31 and 1000, plus a batch
 call. It asserts equal leaf-check counts as well as equal neighbors, because
 matching neighbor IDs alone would not catch a file-backed traversal that visits
@@ -1128,16 +1123,16 @@ far-child queue order, and with it the logical-ID tie-break. The `f32` case
 covers signed-zero routing at a split plane, an infinite cutoff, and the two
 rejected queries (NaN coordinate, negative `max_dist`). The concurrency case
 gives eight threads one identical query against a cache smaller than the file,
-so every load races, evicts and is deduplicated; it asserts that opening a
-shared-layout file reads no descriptor block at all.
+so every load races, evicts and is deduplicated; it asserts that opening a file
+reads no descriptor block at all.
 
 [`sfmtool-kdf-format/src/tests.rs`](../../../crates/sfmtool-kdf-format/src/tests.rs)
-covers the format in isolation: a round trip in both layouts down to node
+covers the format in isolation: a round trip down to node
 addresses and logical IDs, a full `verify_kdf` pass, SIFT origins resolved
 lazily and in the caller's requested order including repeats, the writer's
 refusal to overwrite an existing destination, and a `ResourceLimit` when the
-address-map budget cannot hold the shared row map. The corruption case is the
-one that pins the laziness contract: a damaged shared descriptor block leaves
+address-map budget cannot hold the row map. The corruption case is the
+one that pins the laziness contract: a damaged descriptor block leaves
 `open` succeeding and reading nothing, makes the direct access fail, and makes
 full verification fail.
 
@@ -1146,7 +1141,7 @@ builds the negative surface around a hash-aware archive mutator. It changes a
 decoded entry, recomputes the affected section and whole-file digests independently
 of the writer, and rewrites the archive. That makes malformed child references,
 cycles and shared children, bad leaf ranges, reserved fields, invalid tree and
-storage permutations, cross-tree vector differences, split violations, nonfinite
+storage permutations, split violations, nonfinite descriptor and geometry
 `f32` values, unsupported metadata, wrong entry sets, duplicate ZIP names and
 truncated frames reach the validator each test names instead of stopping at an
 unrelated integrity mismatch. It also asserts that an unvisited chunk stays unread
@@ -1155,14 +1150,14 @@ and a warm resident access performs no read or decode.
 The Python binding test extracts SIFT once from the included 270x480 Seoul Bull
 image and reuses that file for every `verify_sift_sources` case: matching and
 relocated workspaces, a missing source, a changed identity, an out-of-range source
-feature and a mismatched descriptor. The same missing-source case confirms ordinary
+feature, a mismatched descriptor, and mismatched keypoint geometry. The same missing-source case confirms ordinary
 queries and embedded origin lookup remain available. Synthetic origin mutation in
 the Rust suite covers out-of-range image IDs and duplicate source pairs without
 another extraction.
 
 ## The Python surface
 
-The benchmark plan above is a Python job — a sweep over corpora, layouts, chunk
+The benchmark plan above is a Python job — a sweep over corpora, block sizes, chunk
 sizes and cache budgets, reporting latency percentiles and recall — so the
 `uint8` path is bound on the `sfmtool.spatial` submodule, in
 [`spatial/kdf.rs`](../../../crates/sfmtool-py/src/spatial/kdf.rs), beside the
@@ -1175,22 +1170,21 @@ from sfmtool._sfmtool.spatial import (
 )
 
 forest = KdForest(descriptors, num_trees=4, leaf_size=16, seed=7)
-write_kdf(forest, "corpus.kdf", layout="shared", descriptor_block_bytes=64 << 10)
+write_kdf(forest, "corpus.kdf", descriptor_block_bytes=64 << 10, sources=sources)
 
 lazy = LazyKdForest("corpus.kdf", cache_bytes=256 << 20, query_workers=4)
 indices, distances, stats = lazy.query_with_stats(queries, k=2, max_leaf_checks=128)
 io = lazy.io_stats()
 amplification = io["decoded_bytes"] / (stats["checks"] * lazy.dim)
+geometry = lazy.resolve_feature_geometry(indices.ravel())
 ```
 
 Three things about that surface follow from what it is for rather than from
 the Rust API it wraps.
 
-`layout` has no default even though the measurements recommend shared storage.
-A caller whose complete working set is resident can still benefit from tree-local,
-so the caller states the trade explicitly. `descriptor_block_bytes` is *rejected*
-for the tree-local layout rather than ignored — an argument silently dropped
-would make two calls run identically under different labels.
+There is no `layout` argument in version 2. `descriptor_block_bytes` tunes the
+only corpus representation, and SIFT `sources` includes `(N,2)` positions plus
+`(N,2,2)` affine shapes.
 
 `reset_io_stats` exists because the alternative for separating an open from
 the queries after it, or a cold pass from a warm one, is reopening the file,
@@ -1199,12 +1193,9 @@ does not.
 
 `kdf_file_summary` splits a file per role rather than reporting one total,
 reading only the ZIP central directory and the metadata entry, so it costs the
-same on a 5 GB file as on a 5 KB one. `tree_vectors` is what the shared layout
-removes T-1 copies of; `shared_vectors`, `shared_row_map` and
-`shared_block_offsets` are what it adds back; `tree_chunks` — a chunk's node,
-split and feature-ID arrays, which share one entry — is byte-identical either way,
-which is how a reader can tell a size comparison is comparing one forest stored
-twice rather than two different forests.
+same on a 5 GB file as on a 5 KB one. It attributes `descriptors`,
+`feature_geometry`, their offset tables, the `storage_row_map`, `origins`, and
+`tree_chunks` separately.
 
 Errors are split by what a sweep must do about them: a budget that cannot hold
 what was asked for raises `MemoryError` (try another cell), a malformed or
@@ -1218,8 +1209,7 @@ descriptor dependencies. Existing in-memory query callers keep their current
 API. The Python bindings cover `uint8` only.
 
 The format and this query path both cover `u8` and `f32`, matching the scalar
-types the in-memory forest already supports. Measurements recommend the shared
-layout, 4–8 KiB descriptor blocks and a 1 MiB tree-chunk target for sparse queries;
-the API retains an explicit layout choice because the resident warm case remains
-a legitimate tree-local workload. The unmeasured twenty-tree and `f32` cases, and
-the grouped shared-descriptor experiment above, do not require a format change.
+types the in-memory forest already supports. Measurements select the one-corpus
+layout and recommend 4–8 KiB descriptor blocks and a 1 MiB tree-chunk target for
+sparse queries. The unmeasured twenty-tree and `f32` cases do not require a
+format change.

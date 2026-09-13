@@ -7,7 +7,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use xxhash_rust::xxh3::Xxh3DefaultBuilder;
 
-use crate::{DecodedTreeChunk, FeatureOrigin, KdfError, KdfIoStats, KdfScalar};
+use crate::{DecodedTreeChunk, FeatureGeometry, FeatureOrigin, KdfError, KdfIoStats, KdfScalar};
 
 /// Dense internal keys use XXH3, already a dependency for section integrity.
 /// Callers cannot supply arbitrary cache keys.
@@ -18,12 +18,14 @@ type KeySet = HashSet<CacheKey, Xxh3DefaultBuilder>;
 pub(crate) enum CacheKey {
     Tree(u32, u32),
     Descriptor(u32),
+    Geometry(u32),
     Origin(u32),
 }
 
 pub(crate) enum Cached<S: KdfScalar> {
     Tree(DecodedTreeChunk<S>),
     Descriptor(Vec<S>),
+    Geometry(Vec<FeatureGeometry>),
     Origin(Vec<FeatureOrigin>),
 }
 
@@ -32,6 +34,7 @@ impl<S: KdfScalar> Cached<S> {
         match self {
             Self::Tree(v) => v.decoded_bytes,
             Self::Descriptor(v) => std::mem::size_of_val(v.as_slice()),
+            Self::Geometry(v) => std::mem::size_of_val(v.as_slice()),
             Self::Origin(v) => std::mem::size_of_val(v.as_slice()),
         }
     }
@@ -212,6 +215,7 @@ impl<S: KdfScalar> Cache<S> {
         let spread = match key {
             CacheKey::Tree(tree, chunk) => (chunk as usize) ^ (tree as usize).wrapping_mul(0x9e37),
             CacheKey::Descriptor(block) => block as usize,
+            CacheKey::Geometry(block) => (block as usize).wrapping_mul(0x85eb_ca6b),
             CacheKey::Origin(block) => block as usize,
         };
         spread & self.shard_mask

@@ -4,8 +4,8 @@
 //! Persistent, independently compressed randomized kd-forest storage.
 //!
 //! A `.kdf` is a ZIP directory of zstd frames. Opening reads only its directory,
-//! metadata, integrity directory, and (for shared descriptors) the bounded row
-//! map. Tree chunks, descriptor blocks, and feature-origin blocks remain lazy.
+//! metadata, integrity directory, and the bounded corpus row map. Tree chunks,
+//! descriptor blocks, optional SIFT geometry blocks, and origins remain lazy.
 
 mod cache;
 mod read;

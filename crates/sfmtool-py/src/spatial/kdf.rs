@@ -3,10 +3,9 @@
 
 //! Python bindings for persistent `.kdf` forests and their file-backed queries.
 //!
-//! These exist to make the layout comparison in
-//! `specs/core/features/lazy-kdforest-query.md` runnable from Python: export a
-//! forest each way, then measure. That shapes the surface more than a general
-//! wrapper would.
+//! These make the version-2 format and the file-backed query path available to
+//! Python. A caller can export one descriptor corpus, inspect its size, and
+//! compare its queries against the eager forest.
 //!
 //! Two consequences worth knowing before reading further:
 //!
@@ -27,12 +26,12 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
 
-use numpy::{PyArrayMethods, PyUntypedArrayMethods};
+use numpy::{PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::features::kdforest::{
-    kdf_summary, DescriptorStorage, FeatureOrigin, KdfError, KdfSiftSources, KdfWorkspaceContents,
+    kdf_summary, FeatureOrigin, KdfError, KdfSiftSources, KdfWorkspaceContents,
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 
@@ -63,42 +62,6 @@ pub(crate) fn to_py_err(err: KdfError) -> PyErr {
         | KdfError::Integrity(_)
         | KdfError::Zip(_)
         | KdfError::Json(_) => pyo3::exceptions::PyOSError::new_err(message),
-    }
-}
-
-/// Resolve the `layout` argument into a [`DescriptorStorage`].
-///
-/// `descriptor_block_bytes` is meaningful only for the shared layout, so
-/// supplying it with `layout="tree_local"` is rejected rather than ignored: in a
-/// sweep that silently-ignored argument would produce two identical runs
-/// labelled as different ones.
-fn parse_storage(
-    layout: &str,
-    descriptor_block_bytes: Option<usize>,
-) -> PyResult<DescriptorStorage> {
-    match layout {
-        "tree_local" => {
-            if descriptor_block_bytes.is_some() {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "descriptor_block_bytes applies to layout='shared' only",
-                ));
-            }
-            Ok(DescriptorStorage::TreeLocal)
-        }
-        "shared" => {
-            let bytes = descriptor_block_bytes.unwrap_or(64 << 10);
-            if bytes == 0 {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "descriptor_block_bytes must be positive",
-                ));
-            }
-            Ok(DescriptorStorage::Shared {
-                target_descriptor_block_bytes: bytes,
-            })
-        }
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "unknown layout {other:?}; expected 'tree_local' or 'shared'"
-        ))),
     }
 }
 
@@ -149,6 +112,28 @@ fn parse_sources(sources: &Bound<'_, PyAny>) -> PyResult<KdfSiftSources> {
         )));
     }
 
+    let positions: PyReadonlyArray2<'_, f32> = need(sources, "positions")?.extract()?;
+    let affine_shapes: PyReadonlyArray3<'_, f32> = need(sources, "affine_shapes")?.extract()?;
+    let positions = positions.as_array();
+    let affine_shapes = affine_shapes.as_array();
+    if positions.shape() != [image_indexes.len(), 2]
+        || affine_shapes.shape() != [image_indexes.len(), 2, 2]
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "positions must be (N, 2) and affine_shapes (N, 2, 2) for N={}",
+            image_indexes.len()
+        )));
+    }
+    let geometry = (0..image_indexes.len())
+        .map(|i| {
+            [
+                [positions[[i, 0]], positions[[i, 1]]],
+                [affine_shapes[[i, 0, 0]], affine_shapes[[i, 0, 1]]],
+                [affine_shapes[[i, 1, 0]], affine_shapes[[i, 1, 1]]],
+            ]
+        })
+        .collect();
+
     // A JSON *string* rather than a Python object: this crate has no
     // Python-to-serde_json bridge, and adding one for a provenance field no
     // benchmark reads would be a dependency for a single call site. Callers
@@ -184,6 +169,7 @@ fn parse_sources(sources: &Bound<'_, PyAny>) -> PyResult<KdfSiftSources> {
                 image_feature_index,
             })
             .collect(),
+        geometry,
     })
 }
 
@@ -211,7 +197,7 @@ impl PyLazyKdForest {
     ///     max_compressed_bytes: Ceiling on one entry's compressed buffer.
     ///     max_metadata_bytes: Ceiling on the decoded metadata JSON.
     ///     max_chunk_bytes: Ceiling on one decoded chunk.
-    ///     max_address_map_bytes: Ceiling on the shared row map, read at open.
+    ///     max_address_map_bytes: Ceiling on the storage row map, read at open.
     ///     max_leaf_features: Ceiling on the rows one leaf may own.
     ///     query_workers: Threads used by batch queries (default 1).
     ///
@@ -419,6 +405,32 @@ impl PyLazyKdForest {
         )))
     }
 
+    /// Resolve image-space keypoints and affine shapes for corpus features.
+    ///
+    /// Returns an `(M, 3, 2)` float32 array in request order, where each row is
+    /// `[[x, y], [a11, a12], [a21, a22]]`, or `None` for a generic-vector KDF.
+    /// Descriptor and geometry block numbers have identical row boundaries, so
+    /// nearby descriptor results reuse the corresponding geometry block.
+    fn resolve_feature_geometry<'py>(
+        &self,
+        py: Python<'py>,
+        feature_ids: Vec<u32>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let resolved = py
+            .detach(|| self.inner.resolve_feature_geometry(&feature_ids))
+            .map_err(to_py_err)?;
+        let Some(rows) = resolved else {
+            return Ok(None);
+        };
+        let values: Vec<f32> = rows.into_iter().flatten().flatten().collect();
+        Ok(Some(
+            numpy::PyArray1::from_vec(py, values)
+                .reshape([feature_ids.len(), 3, 2])?
+                .into_any()
+                .unbind(),
+        ))
+    }
+
     /// The image table, read once on first access.
     ///
     /// Returns:
@@ -511,23 +523,20 @@ impl PyLazyKdForest {
 /// Args:
 ///     forest: The `KdForest` to write.
 ///     path: Destination; the call fails if it already exists.
-///     layout: "tree_local" (a vector copy per tree) or "shared" (one corpus
-///         plus a row map). Explicit because which is smaller or faster is
-///         exactly what the benchmark is for; there is no default worth
-///         asserting yet.
-///     descriptor_block_bytes: Target size of one shared descriptor block
-///         (default 64 KiB). Rejected for layout="tree_local".
+///     descriptor_block_bytes: Target size of one descriptor block
+///         (default 64 KiB).
 ///     chunk_bytes: Target decoded size of one tree chunk (default 1 MiB).
 ///     compression_level: zstd level (default 3).
 ///     origin_block_rows: Rows per origin block (default 131072).
 ///     sources: Optional dict of SIFT provenance with keys `workspace`,
 ///         `image_names`, `feature_tool_hashes`, `sift_content_hashes`,
-///         `image_indexes` and `image_feature_indexes`.
-///     descriptor_order: Order the shared corpus is stored in, as a permutation
+///         `image_indexes`, `image_feature_indexes`, `positions`, and
+///         `affine_shapes`.
+///     descriptor_order: Order the corpus is stored in, as a permutation
 ///         of 0..N where entry r is the feature at row r. None uses tree 0's
 ///         leaf order. Any permutation is valid — the stored row map is what a
 ///         reader follows — so this selects an ordering policy without changing
-///         the file format. Ignored for layout="tree_local".
+///         the file format.
 ///
 /// Raises:
 ///     FileExistsError: `path` already exists. Writing goes through a sibling
@@ -535,7 +544,7 @@ impl PyLazyKdForest {
 ///         interrupted export never leaves a half-written `.kdf` in place.
 ///     ValueError: The options or the sources are inconsistent.
 #[pyfunction]
-#[pyo3(signature = (forest, path, *, layout, descriptor_block_bytes=None, chunk_bytes=None,
+#[pyo3(signature = (forest, path, *, descriptor_block_bytes=None, chunk_bytes=None,
                     compression_level=None, origin_block_rows=None, sources=None,
                     descriptor_order=None))]
 #[allow(clippy::too_many_arguments)]
@@ -543,7 +552,6 @@ fn write_kdf(
     py: Python<'_>,
     forest: PyRef<'_, super::kdforest::PyKdForest>,
     path: PathBuf,
-    layout: &str,
     descriptor_block_bytes: Option<usize>,
     chunk_bytes: Option<usize>,
     compression_level: Option<i32>,
@@ -551,8 +559,15 @@ fn write_kdf(
     sources: Option<&Bound<'_, PyAny>>,
     descriptor_order: Option<Vec<u32>>,
 ) -> PyResult<()> {
-    let mut options = KdfWriteOptions::tree_local();
-    options.descriptor_storage = parse_storage(layout, descriptor_block_bytes)?;
+    let mut options = KdfWriteOptions::default();
+    if let Some(v) = descriptor_block_bytes {
+        if v == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "descriptor_block_bytes must be positive",
+            ));
+        }
+        options.target_descriptor_block_bytes = v;
+    }
     if let Some(v) = chunk_bytes {
         options.target_chunk_bytes = v;
     }
@@ -598,7 +613,7 @@ fn write_kdf(
 /// up front and more per query.
 ///
 /// Args:
-///     path: The `.kdf` to load. Either descriptor layout works.
+///     path: The version-2 `.kdf` to load.
 ///     max_chunk_bytes / max_compressed_bytes / max_metadata_bytes: reader
 ///         limits, as for `LazyKdForest`. The cache only buffers the load here,
 ///         so its budget bounds working memory during the read, not after.
@@ -642,11 +657,9 @@ fn read_kdf(
 
 /// Account for a `.kdf`'s size without decoding its payloads.
 ///
-/// This is the file half of the layout comparison. It reads the ZIP central
-/// directory and the metadata entry only, so it costs the same on a 5 GB file as
-/// on a 5 KB one, and it splits the total per role — `tree_vectors` is what the
-/// shared layout removes T-1 copies of, `shared_vectors` and `shared_row_map`
-/// are what it adds back.
+/// It reads the ZIP central directory and the metadata entry only, so it costs
+/// the same on a 5 GB file as on a 5 KB one, and splits the total by each
+/// version-2 section's role.
 ///
 /// Args:
 ///     path: The `.kdf` to inspect.
@@ -654,9 +667,9 @@ fn read_kdf(
 ///
 /// Returns:
 ///     A dict describing the file: `feature_count`, `dimension`, `scalar_type`,
-///     `tree_count`, `descriptor_storage`, `descriptor_block_rows`,
+///     `tree_count`, `descriptor_block_rows`,
 ///     `target_chunk_bytes`, `chunks_per_tree`, `nodes_per_tree`,
-///     `has_sources`, `file_bytes`, `payload_compressed_bytes`,
+///     `has_sources`, `has_feature_geometry`, `file_bytes`, `payload_compressed_bytes`,
 ///     `payload_decoded_bytes`, and `sections` — a list of per-role dicts with
 ///     `section`, `entries`, `compressed_bytes` and `decoded_bytes`.
 ///
@@ -678,12 +691,12 @@ fn kdf_file_summary<'py>(
     d.set_item("dimension", summary.dimension)?;
     d.set_item("scalar_type", &summary.scalar_type)?;
     d.set_item("tree_count", summary.tree_count)?;
-    d.set_item("descriptor_storage", &summary.descriptor_storage)?;
     d.set_item("descriptor_block_rows", summary.descriptor_block_rows)?;
     d.set_item("target_chunk_bytes", summary.target_chunk_bytes)?;
     d.set_item("chunks_per_tree", summary.chunks_per_tree.clone())?;
     d.set_item("nodes_per_tree", summary.nodes_per_tree.clone())?;
     d.set_item("has_sources", summary.has_sources)?;
+    d.set_item("has_feature_geometry", summary.has_feature_geometry)?;
     d.set_item("file_bytes", summary.file_bytes)?;
     d.set_item("payload_compressed_bytes", summary.payload_compressed_bytes)?;
     d.set_item("payload_decoded_bytes", summary.payload_decoded_bytes)?;
@@ -770,6 +783,7 @@ fn verification_dict<'py>(
     d.set_item("trees", verified.trees)?;
     d.set_item("chunks", verified.chunks)?;
     d.set_item("descriptor_blocks", verified.descriptor_blocks)?;
+    d.set_item("geometry_blocks", verified.geometry_blocks)?;
     d.set_item("origin_blocks", verified.origin_blocks)?;
     Ok(d.unbind())
 }

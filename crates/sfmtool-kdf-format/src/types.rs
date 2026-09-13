@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Current `.kdf` wire-format version.
-pub const KDF_FORMAT_VERSION: u32 = 1;
+pub const KDF_FORMAT_VERSION: u32 = 2;
 
 /// Errors from persistent forest I/O, validation, and resource accounting.
 #[derive(thiserror::Error, Debug)]
@@ -56,7 +56,7 @@ mod sealed {
     impl Sealed for f32 {}
 }
 
-/// Scalar types admitted by version 1 of the format.
+/// Scalar types admitted by version 2 of the format.
 pub trait KdfScalar:
     sealed::Sealed + bytemuck::Pod + Copy + Send + Sync + PartialEq + std::fmt::Debug + 'static
 {
@@ -92,43 +92,22 @@ impl KdfScalar for f32 {
     }
 }
 
-/// Descriptor placement in a persistent forest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DescriptorStorage {
-    /// Each tree chunk owns the vectors used by its leaves.
-    TreeLocal,
-    /// One descriptor corpus is shared by all trees.
-    Shared {
-        target_descriptor_block_bytes: usize,
-    },
-}
-
-/// Export controls. Descriptor placement is always chosen explicitly.
+/// Export controls for the single-corpus version-2 layout.
 #[derive(Clone, Copy, Debug)]
 pub struct KdfWriteOptions {
-    pub descriptor_storage: DescriptorStorage,
+    pub target_descriptor_block_bytes: usize,
     pub target_chunk_bytes: usize,
     pub compression_level: i32,
     pub origin_block_rows: usize,
 }
 
-impl KdfWriteOptions {
-    /// Tree-local settings retained for callers whose working set is resident.
-    pub fn tree_local() -> Self {
+impl Default for KdfWriteOptions {
+    fn default() -> Self {
         Self {
-            descriptor_storage: DescriptorStorage::TreeLocal,
+            target_descriptor_block_bytes: 64 << 10,
             target_chunk_bytes: 1 << 20,
             compression_level: 3,
             origin_block_rows: 131_072,
-        }
-    }
-    /// Shared settings with an explicit independent descriptor-block target.
-    pub fn shared(target_descriptor_block_bytes: usize) -> Self {
-        Self {
-            descriptor_storage: DescriptorStorage::Shared {
-                target_descriptor_block_bytes,
-            },
-            ..Self::tree_local()
         }
     }
 }
@@ -169,6 +148,12 @@ pub struct FeatureOrigin {
     pub image_feature_index: u32,
 }
 
+/// One SIFT feature's image-space center and affine footprint.
+///
+/// Rows are `[x, y]`, `[a11, a12]`, `[a21, a22]`. The wire representation is
+/// therefore exactly one row-major `3 x 2` float32 array per corpus feature.
+pub type FeatureGeometry = [[f32; 2]; 3];
+
 /// Embedded workspace settings used only by explicit source verification.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct KdfWorkspaceContents {
@@ -194,6 +179,7 @@ pub struct KdfSiftSources {
     pub feature_tool_hashes: Vec<[u8; 16]>,
     pub sift_content_hashes: Vec<[u8; 16]>,
     pub origins: Vec<FeatureOrigin>,
+    pub geometry: Vec<FeatureGeometry>,
 }
 
 /// Lazily available image table; it never opens a referenced SIFT file.
@@ -234,14 +220,13 @@ pub struct KdfForestData<'a, S: KdfScalar> {
     pub dimension: usize,
     pub trees: Vec<KdfTree<S>>,
     pub provenance: Option<serde_json::Value>,
-    /// Order the shared corpus is stored in: row `r` holds feature
+    /// Order the corpus is stored in: row `r` holds feature
     /// `descriptor_order[r]`. Must be a permutation of `0..feature_count`.
     ///
     /// `None` means tree 0's leaf order, which makes tree 0's leaves contiguous
     /// and leaves every other tree scattered. Any permutation is valid — the
     /// stored row map is what a reader follows — so which one to choose is a
-    /// writer policy question with no effect on the wire format. Ignored in
-    /// tree-local layout, where each chunk carries its own vectors.
+    /// writer policy question with no effect on the wire format.
     pub descriptor_order: Option<&'a [u32]>,
 }
 
@@ -274,16 +259,14 @@ pub struct DecodedTreeChunk<S: KdfScalar> {
     pub logical_node_ids: Vec<u32>,
     pub nodes: Vec<DecodedNode<S>>,
     pub feature_ids: Vec<u32>,
-    pub vectors: Option<Vec<S>>,
     pub decoded_bytes: usize,
 }
 
-/// One leaf copied out of its tree-chunk pin. Shared descriptors are fetched
-/// separately by feature ID after that pin is released.
+/// One leaf copied out of its tree-chunk pin. Descriptors are fetched from the
+/// descriptor corpus by feature ID after that pin is released.
 #[derive(Clone, Debug)]
-pub struct DecodedLeaf<S: KdfScalar> {
+pub struct DecodedLeaf {
     pub feature_ids: Vec<u32>,
-    pub vectors: Option<Vec<S>>,
 }
 
 /// Monotonic I/O/cache counters for one open handle.
@@ -309,6 +292,7 @@ pub struct Verification {
     pub trees: usize,
     pub chunks: usize,
     pub descriptor_blocks: usize,
+    pub geometry_blocks: usize,
     pub origin_blocks: usize,
     pub features: usize,
 }
@@ -325,9 +309,7 @@ pub(crate) struct Metadata {
     pub target_chunk_bytes: u64,
     pub trees: Vec<TreeMetadata>,
     pub feature_source: String,
-    pub descriptor_storage: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub descriptor_block_rows: Option<u32>,
+    pub descriptor_block_rows: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_block_rows: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -354,10 +336,10 @@ pub(crate) struct ContentHash {
     pub metadata_xxh128: String,
     pub chunks_xxh128: Vec<Vec<String>>,
     pub content_xxh128: String,
+    pub storage_rows_xxh128: String,
+    pub descriptor_blocks_xxh128: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_rows_xxh128: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub descriptor_blocks_xxh128: Option<Vec<String>>,
+    pub geometry_blocks_xxh128: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images_xxh128: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,11 +360,8 @@ pub(crate) const NODE_COLUMNS: usize = 10;
 /// concatenated in that order. The counts are in the name so a reader still
 /// knows the exact decoded length before decompressing.
 ///
-/// Vectors are deliberately **not** in here, even though a tree-local chunk
-/// always reads them alongside: they are bulk near-incompressible descriptor
-/// bytes, and sharing a zstd frame with the highly compressible integer columns
-/// made both compress worse. Measured on a 9.7M-descriptor corpus, folding them
-/// in cost 0.7% of total file size to save one read per chunk.
+/// Vectors are deliberately **not** in here. Version 2 stores exactly one
+/// independently blocked corpus used by every tree.
 pub(crate) fn chunk_entry_name<S: KdfScalar>(
     tree: usize,
     chunk: usize,
@@ -391,19 +370,6 @@ pub(crate) fn chunk_entry_name<S: KdfScalar>(
 ) -> String {
     format!(
         "trees/{tree}/chunks/{chunk}/chunk.{nodes}.{features}.{}.zst",
-        S::TYPE_NAME
-    )
-}
-
-/// Name of a tree-local chunk's vector entry; absent in shared layout.
-pub(crate) fn chunk_vectors_entry_name<S: KdfScalar>(
-    tree: usize,
-    chunk: usize,
-    features: usize,
-    dimension: usize,
-) -> String {
-    format!(
-        "trees/{tree}/chunks/{chunk}/vectors.{features}.{dimension}.{}.zst",
         S::TYPE_NAME
     )
 }
@@ -429,7 +395,7 @@ pub(crate) fn chunk_spans<S: KdfScalar>(nodes: usize, features: usize) -> ChunkS
     }
 }
 
-/// Name of the shared descriptor corpus container.
+/// Name of the descriptor corpus container.
 ///
 /// `.frames` rather than `.zst`: the entry holds one independent zstd frame per
 /// descriptor block, not a single frame, so the extension says so instead of
@@ -444,4 +410,16 @@ pub(crate) fn corpus_entry_name<S: KdfScalar>(features: usize, dimension: usize)
 /// Name of the array giving each corpus frame's start, plus a final end offset.
 pub(crate) fn block_offsets_entry_name(count: usize) -> String {
     format!("features/block_offsets.{count}.uint64.zst")
+}
+
+/// Name of the optional SIFT geometry container.
+pub(crate) fn geometry_entry_name(features: usize) -> String {
+    format!("features/geometry.{features}.3.2.float32.frames")
+}
+
+/// Frame boundaries for the geometry container. Geometry uses the descriptor
+/// row order and block row count, but its compressed frames have their own
+/// lengths and therefore need an independent offset table.
+pub(crate) fn geometry_block_offsets_entry_name(count: usize) -> String {
+    format!("features/geometry_block_offsets.{count}.uint64.zst")
 }

@@ -50,7 +50,7 @@ where
         self.write_kdf_ordered(path, sources, options, None)
     }
 
-    /// [`write_kdf`](Self::write_kdf) with an explicit shared-corpus order.
+    /// [`write_kdf`](Self::write_kdf) with an explicit corpus order.
     ///
     /// `descriptor_order[r]` is the feature stored at row `r`. `None` keeps tree
     /// 0's leaf order. Exists so an ordering policy can be measured without
@@ -165,7 +165,6 @@ where
         let n_points = file.len();
         let dim = file.dim();
         let mut points = vec![S::ZERO; n_points * dim];
-        let mut have_points = false;
         let mut trees = Vec::with_capacity(file.tree_count());
 
         for ti in 0..file.tree_count() {
@@ -175,16 +174,6 @@ where
             for ci in 0..file.chunk_count(ti) {
                 let chunk = file.decoded_chunk(ti as u32, ci as u32)?;
                 let base = point_ids.len() as u32;
-                // Tree-local layout carries the corpus in its chunks, so the one
-                // pass that reads every chunk also collects the points; the
-                // shared layout keeps them elsewhere and is handled below.
-                if let Some(vectors) = &chunk.vectors {
-                    have_points = true;
-                    for (row, &id) in chunk.feature_ids.iter().enumerate() {
-                        let to = id as usize * dim;
-                        points[to..to + dim].copy_from_slice(&vectors[row * dim..(row + 1) * dim]);
-                    }
-                }
                 point_ids.extend_from_slice(&chunk.feature_ids);
                 for (local, node) in chunk.nodes.iter().enumerate() {
                     let logical = chunk.logical_node_ids[local] as usize;
@@ -224,8 +213,8 @@ where
             trees.push(Tree { nodes, point_ids });
         }
 
-        if !have_points {
-            // Shared layout: one pass over the blocks, scattering each block's
+        {
+            // One pass over the corpus blocks, scattering each block's
             // rows to the feature IDs the row map names. Two things this avoids,
             // both measured at 9.7M descriptors. Walking feature-ID order instead
             // of storage order makes a bounded cache decode a block per
@@ -234,12 +223,8 @@ where
             // single-vector accessor pays a lock and a cache lookup per
             // descriptor, which cost more than rebuilding the index from
             // scratch.
-            let order = file.storage_order().ok_or_else(|| {
-                KdfError::InvalidFormat("shared layout without a storage row map".into())
-            })?;
-            let (rows, blocks) = file.descriptor_block_shape().ok_or_else(|| {
-                KdfError::InvalidFormat("shared layout without a block shape".into())
-            })?;
+            let order = file.storage_order();
+            let (rows, blocks) = file.descriptor_block_shape();
             for block in 0..blocks {
                 let vectors = file.descriptor_block_vectors(block as u32)?;
                 let base = block * rows;
@@ -379,6 +364,12 @@ where
         ids: &[u32],
     ) -> Result<Option<Vec<super::FeatureOrigin>>, KdfError> {
         self.file.resolve_origins(ids)
+    }
+    pub fn resolve_feature_geometry(
+        &self,
+        ids: &[u32],
+    ) -> Result<Option<Vec<super::FeatureGeometry>>, KdfError> {
+        self.file.resolve_feature_geometry(ids)
     }
 
     pub fn search(
@@ -578,7 +569,6 @@ where
     /// written to each feature's own row, so the output is identical to a batch
     /// over the corpus in feature-ID order.
     ///
-    /// Shared layout only; a tree-local file has no corpus to read queries from.
     /// Peak memory is the cache budget plus the `n * k` result table, not the
     /// corpus.
     pub fn self_join_with_distances(
@@ -587,11 +577,7 @@ where
         max_leaf_checks: usize,
         max_dist: Option<f32>,
     ) -> Result<(Vec<u32>, Vec<f32>), KdfError> {
-        let mut order = self.file.storage_order().ok_or_else(|| {
-            KdfError::InvalidQuery(
-                "a self-join needs the shared descriptor layout; this file is tree-local".into(),
-            )
-        })?;
+        let mut order = self.file.storage_order();
         let n = self.len();
         let width = n
             .checked_mul(k)
@@ -617,7 +603,7 @@ where
                 .try_for_each_init(
                     || (self.new_scratch(), Vec::with_capacity(self.dim())),
                     |(scratch, query), (at, (out_idx, out_dist))| {
-                        self.file.shared_vector_into(order[at], query)?;
+                        self.file.vector_into(order[at], query)?;
                         self.search_into(query, k, max_leaf_checks, max_dist, scratch)?;
                         scratch.result.write_results(out_idx, out_dist);
                         Ok::<_, KdfError>(())
@@ -840,25 +826,14 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
                                 ));
                             }
                             self.scratch.leaf_ids.clear();
-                            for (i, &id) in chunk.feature_ids
-                                [start as usize..(start + len) as usize]
-                                .iter()
-                                .enumerate()
+                            for &id in
+                                chunk.feature_ids[start as usize..(start + len) as usize].iter()
                             {
                                 if !self.scratch.checked.insert(id) {
                                     continue;
                                 }
                                 self.stats.checks += 1;
-                                if let Some(vectors) = &chunk.vectors {
-                                    let base = (start as usize + i) * self.file.dim();
-                                    let d = S::dist_sq(
-                                        self.query,
-                                        &vectors[base..base + self.file.dim()],
-                                    );
-                                    self.scratch.result.consider(id, d);
-                                } else {
-                                    self.scratch.leaf_ids.push(id);
-                                }
+                                self.scratch.leaf_ids.push(id);
                             }
                             return Ok(true);
                         }
@@ -867,7 +842,7 @@ impl<S: ForestScalar + KdfScalar> Search<'_, S> {
             if leaf {
                 if !self.scratch.leaf_ids.is_empty() {
                     self.file
-                        .with_shared_vectors(&self.scratch.leaf_ids, |id, vector| {
+                        .with_vectors(&self.scratch.leaf_ids, |id, vector| {
                             self.scratch
                                 .result
                                 .consider(id, S::dist_sq(self.query, vector));
@@ -935,7 +910,7 @@ impl<S: ForestScalar> ResultSet<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::kdforest::{DescriptorStorage, KdForestParams};
+    use crate::features::kdforest::KdForestParams;
 
     fn options() -> LazyKdForestOptions {
         LazyKdForestOptions {
@@ -983,7 +958,15 @@ mod tests {
         let path = dir.path().join("ties.kdf");
         let order: Vec<u32> = (0..32).rev().collect();
         forest
-            .write_kdf_ordered(&path, None, &KdfWriteOptions::shared(16), Some(&order))
+            .write_kdf_ordered(
+                &path,
+                None,
+                &KdfWriteOptions {
+                    target_descriptor_block_bytes: 16,
+                    ..Default::default()
+                },
+                Some(&order),
+            )
             .unwrap();
         let lazy = LazyKdForestU8::open(&path, LazyKdForestOptions::default()).unwrap();
         let queries = vec![7u8; 3 * 4];
@@ -1006,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn both_u8_layouts_match_eager_results_and_checks() {
+    fn u8_file_queries_match_eager_results_and_checks() {
         let dim = 7;
         let n = 73;
         let points: Vec<u8> = (0..n * dim)
@@ -1024,12 +1007,7 @@ mod tests {
             },
         );
         let queries: Vec<u8> = (0..11 * dim).map(|i| ((i * 19 + 3) % 255) as u8).collect();
-        for storage in [
-            DescriptorStorage::TreeLocal,
-            DescriptorStorage::Shared {
-                target_descriptor_block_bytes: 19,
-            },
-        ] {
+        {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("forest.kdf");
             forest
@@ -1037,7 +1015,7 @@ mod tests {
                     &path,
                     None,
                     &KdfWriteOptions {
-                        descriptor_storage: storage,
+                        target_descriptor_block_bytes: 19,
                         target_chunk_bytes: 240,
                         compression_level: 1,
                         origin_block_rows: 4,
@@ -1053,7 +1031,7 @@ mod tests {
                 let (got, lazy_stats) = lazy
                     .search_with_stats(query, 4, budget, Some(300.0))
                     .unwrap();
-                assert_eq!(got, expected, "storage={storage:?}, budget={budget}");
+                assert_eq!(got, expected, "budget={budget}");
                 let mut scratch = crate::features::kdforest::search::SearchScratch::new(n);
                 let mut eager_stats = crate::features::kdforest::search::QueryStats::default();
                 forest.run_query(
@@ -1064,10 +1042,7 @@ mod tests {
                     &mut scratch,
                     &mut eager_stats,
                 );
-                assert_eq!(
-                    lazy_stats.checks, eager_stats.checks,
-                    "storage={storage:?}, budget={budget}"
-                );
+                assert_eq!(lazy_stats.checks, eager_stats.checks, "budget={budget}");
             }
             let expected = forest.search_batch_with_distances(&queries, 11, 3, 30, None);
             let got = lazy
@@ -1085,13 +1060,11 @@ mod tests {
                     .unwrap(),
                 (Vec::new(), Vec::new())
             );
-            if matches!(storage, DescriptorStorage::Shared { .. }) {
-                for k in [0, 3, 80] {
-                    assert_eq!(
-                        lazy.self_join_with_distances(k, 30, None).unwrap(),
-                        forest.search_batch_with_distances(&points, n, k, 30, None)
-                    );
-                }
+            for k in [0, 3, 80] {
+                assert_eq!(
+                    lazy.self_join_with_distances(k, 30, None).unwrap(),
+                    forest.search_batch_with_distances(&points, n, k, 30, None)
+                );
             }
         }
     }
@@ -1101,8 +1074,7 @@ mod tests {
     /// This is what makes the file an index rather than a cache of one: the
     /// topology, leaf membership and feature IDs all survive the round trip, so
     /// no rebuild is needed and no randomization has to be reproduced. Checked in
-    /// both layouts, because tree-local carries the corpus in its chunks while
-    /// shared keeps it in one table and the reload paths differ.
+    /// The descriptor corpus and topology are both restored without rebuilding.
     #[test]
     fn a_forest_reloaded_from_a_file_answers_identically() {
         let dim = 7;
@@ -1123,12 +1095,7 @@ mod tests {
         );
         let queries: Vec<u8> = (0..9 * dim).map(|i| ((i * 17 + 5) % 255) as u8).collect();
 
-        for storage in [
-            DescriptorStorage::TreeLocal,
-            DescriptorStorage::Shared {
-                target_descriptor_block_bytes: 21,
-            },
-        ] {
+        {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("round.kdf");
             forest
@@ -1136,7 +1103,7 @@ mod tests {
                     &path,
                     None,
                     &KdfWriteOptions {
-                        descriptor_storage: storage,
+                        target_descriptor_block_bytes: 21,
                         target_chunk_bytes: 300,
                         compression_level: 1,
                         origin_block_rows: 8,
@@ -1145,7 +1112,7 @@ mod tests {
                 .unwrap();
             let reloaded = KdForest::<u8>::read_kdf(&path, LazyKdForestOptions::default()).unwrap();
 
-            assert_eq!(reloaded.len(), forest.len(), "storage={storage:?}");
+            assert_eq!(reloaded.len(), forest.len());
             assert_eq!(reloaded.dim(), forest.dim());
             assert_eq!(
                 reloaded.params().num_trees,
@@ -1160,13 +1127,13 @@ mod tests {
                 assert_eq!(
                     reloaded.search(query, 4, budget, None),
                     forest.search(query, 4, budget, None),
-                    "storage={storage:?}, budget={budget}"
+                    "budget={budget}"
                 );
             }
             // The corpus itself must survive, not merely the topology.
             let batch = reloaded.search_batch_with_distances(&points, n, 1, 200, None);
             let want = forest.search_batch_with_distances(&points, n, 1, 200, None);
-            assert_eq!(batch, want, "storage={storage:?}");
+            assert_eq!(batch, want);
         }
     }
 
@@ -1183,12 +1150,7 @@ mod tests {
                 ..KdForestParams::balanced()
             },
         );
-        for storage in [
-            DescriptorStorage::TreeLocal,
-            DescriptorStorage::Shared {
-                target_descriptor_block_bytes: 8,
-            },
-        ] {
+        {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("float.kdf");
             forest
@@ -1196,7 +1158,7 @@ mod tests {
                     &path,
                     None,
                     &KdfWriteOptions {
-                        descriptor_storage: storage,
+                        target_descriptor_block_bytes: 8,
                         target_chunk_bytes: 100,
                         compression_level: 1,
                         origin_block_rows: 4,
@@ -1240,9 +1202,7 @@ mod tests {
                 &path,
                 None,
                 &KdfWriteOptions {
-                    descriptor_storage: DescriptorStorage::Shared {
-                        target_descriptor_block_bytes: 64,
-                    },
+                    target_descriptor_block_bytes: 64,
                     target_chunk_bytes: 300,
                     compression_level: 1,
                     origin_block_rows: 4,
@@ -1267,7 +1227,7 @@ mod tests {
         assert_eq!(
             lazy.io_stats().read_calls,
             0,
-            "shared open must not read descriptor blocks"
+            "open must not read descriptor blocks"
         );
         let expected = forest.search(&points[32..48], 3, 40, None);
         let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));

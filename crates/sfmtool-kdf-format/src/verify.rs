@@ -54,7 +54,7 @@ pub fn verify_kdf<S: KdfScalar>(
                 }
                 DecodedNode::Leaf { .. } => {
                     let leaf = file.leaf(ti as u32, address)?;
-                    for (i, &id) in leaf.feature_ids.iter().enumerate() {
+                    for &id in &leaf.feature_ids {
                         let Some(mark) = seen_features.get_mut(id as usize) else {
                             return Err(KdfError::InvalidFormat(
                                 "leaf feature ID out of range".into(),
@@ -65,11 +65,7 @@ pub fn verify_kdf<S: KdfScalar>(
                                 "tree {ti} repeats feature ID {id}"
                             )));
                         }
-                        let row = if let Some(local) = &leaf.vectors {
-                            local[i * file.dim()..(i + 1) * file.dim()].to_vec()
-                        } else {
-                            file.shared_vector(id)?
-                        };
+                        let row = file.vector(id)?;
                         for c in &constraints {
                             let ord = row[c.dim].total_cmp(c.split);
                             if (c.left && ord == std::cmp::Ordering::Greater)
@@ -124,15 +120,23 @@ pub fn verify_kdf<S: KdfScalar>(
         }
     }
     let descriptor_blocks = file
-        .metadata()
-        .descriptor_block_rows
-        .map_or(0, |q| file.len().div_ceil(q as usize));
-    // Shared descriptors not reached by malformed incomplete trees are still
+        .len()
+        .div_ceil(file.metadata().descriptor_block_rows as usize);
+    let geometry_blocks = if file.has_feature_geometry() {
+        for block in 0..descriptor_blocks {
+            file.feature_geometry_block(block as u32)?;
+        }
+        descriptor_blocks
+    } else {
+        0
+    };
+    // Descriptors not reached by malformed incomplete trees are still
     // forced above because every valid tree must cover every feature.
     Ok(Verification {
         trees: file.tree_count(),
         chunks: chunk_addresses.len(),
         descriptor_blocks,
+        geometry_blocks,
         origin_blocks,
         features: file.len(),
     })
@@ -214,12 +218,41 @@ pub fn verify_sift_sources(
                     "source descriptor differs for feature {id}"
                 )));
             }
+            let position = sift.positions_xy.row(image_feature as usize);
+            let feature = image_feature as usize;
+            let expected = [
+                [position[0], position[1]],
+                [
+                    sift.affine_shapes[[feature, 0, 0]],
+                    sift.affine_shapes[[feature, 0, 1]],
+                ],
+                [
+                    sift.affine_shapes[[feature, 1, 0]],
+                    sift.affine_shapes[[feature, 1, 1]],
+                ],
+            ];
+            let actual = file.feature_geometry(id)?.expect("SIFT geometry");
+            if actual
+                .iter()
+                .flatten()
+                .zip(expected.iter().flatten())
+                .any(|(stored, source)| stored.to_bits() != source.to_bits())
+            {
+                return Err(KdfError::Integrity(format!(
+                    "source feature geometry differs for feature {id}"
+                )));
+            }
         }
     }
     Ok(Verification {
         trees: file.tree_count(),
         chunks: 0,
-        descriptor_blocks: 0,
+        descriptor_blocks: file
+            .len()
+            .div_ceil(file.metadata().descriptor_block_rows as usize),
+        geometry_blocks: file
+            .len()
+            .div_ceil(file.metadata().descriptor_block_rows as usize),
         origin_blocks: file
             .metadata()
             .origin_block_rows
@@ -273,29 +306,6 @@ impl From<sift_format::SiftError> for KdfError {
 
 impl KdfFile<u8> {
     fn vector_for_verify(&self, id: u32) -> Result<Vec<u8>, KdfError> {
-        if self.is_shared() {
-            return self.shared_vector(id);
-        }
-        let mut stack = vec![self
-            .root(0)
-            .ok_or_else(|| KdfError::InvalidFormat("empty tree".into()))?];
-        while let Some(address) = stack.pop() {
-            match self.node(0, address)? {
-                DecodedNode::Internal { left, right, .. } => {
-                    stack.push(right);
-                    stack.push(left);
-                }
-                DecodedNode::Leaf { .. } => {
-                    let leaf = self.leaf(0, address)?;
-                    if let Some(pos) = leaf.feature_ids.iter().position(|&v| v == id) {
-                        let values = leaf.vectors.expect("tree-local");
-                        return Ok(values[pos * self.dim()..(pos + 1) * self.dim()].to_vec());
-                    }
-                }
-            }
-        }
-        Err(KdfError::InvalidFormat(
-            "feature ID absent from tree 0".into(),
-        ))
+        self.vector(id)
     }
 }

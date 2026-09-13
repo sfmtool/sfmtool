@@ -20,9 +20,10 @@ constellation feature's nearest neighbours will belong to images that do not
 contain the patch; RANSAC needs enough candidates per feature that the right image
 is among them, so the default is 32 rather than the matcher's 11.
 
-Feature IDs come back as corpus rows, and the `.kdf` carries the SIFT provenance
-that maps each one to its source image and feature index, so the candidate grouping
-needs no side table.
+Feature IDs come back as corpus rows. This benchmark retains side tables from
+its input SIFT files to compare the eager and lazy paths. A sourced version-2
+`.kdf` can instead resolve both origins and keypoint geometry for candidate IDs
+without those side tables or a second SIFT read.
 
 Run:
     pixi run python scripts/kdf_patch_localize.py --workspace WS --scratch DIR
@@ -193,8 +194,7 @@ def main() -> None:
     descriptors, positions, names = load_images(features, args.limit)
     counts = [len(d) for d in descriptors]
     corpus = np.vstack(descriptors)
-    # Corpus row -> (image, feature index). The `.kdf` can answer this from its own
-    # provenance; kept here too so the in-memory path can be compared against it.
+    # Corpus row -> (image, feature index), retained for eager/lazy parity.
     image_of = np.concatenate(
         [np.full(c, i, dtype=np.uint32) for i, c in enumerate(counts)]
     )
@@ -218,7 +218,6 @@ def main() -> None:
     write_kdf(
         forest,
         str(path),
-        layout="shared",
         chunk_bytes=args.chunk_bytes,
         descriptor_block_bytes=args.block_bytes,
     )

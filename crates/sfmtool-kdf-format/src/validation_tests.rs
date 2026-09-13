@@ -74,13 +74,12 @@ fn roomy() -> LazyKdForestOptions {
     }
 }
 
-fn write_tiny_u8(dir: &Path, name: &str, trees: usize, shared: bool) -> PathBuf {
+fn write_tiny_u8(dir: &Path, name: &str, trees: usize) -> PathBuf {
     let path = dir.join(name);
     let vectors = [0, 0, 1, 1, 9, 9];
-    let options = if shared {
-        KdfWriteOptions::shared(2)
-    } else {
-        KdfWriteOptions::tree_local()
+    let options = KdfWriteOptions {
+        target_descriptor_block_bytes: 2,
+        ..Default::default()
     };
     write_kdf(&path, &tiny_u8(&vectors, trees), None, &options).unwrap();
     path
@@ -193,12 +192,11 @@ fn refresh_hashes(entries: &mut StoredEntries) {
         }
     }
 
-    if hashes.storage_rows_xxh128.is_some() {
-        let name = entry_starting_with(entries, "features/storage_rows.");
-        hashes.storage_rows_xxh128 = Some(format_hash(xxh3_128(&decode_entry(entries, &name))));
-    }
+    let name = entry_starting_with(entries, "features/storage_rows.");
+    hashes.storage_rows_xxh128 = format_hash(xxh3_128(&decode_entry(entries, &name)));
 
-    if let Some(descriptor_hashes) = &mut hashes.descriptor_blocks_xxh128 {
+    {
+        let descriptor_hashes = &mut hashes.descriptor_blocks_xxh128;
         let corpus = entry_starting_with(entries, "features/corpus.");
         let offsets_name = entry_starting_with(entries, "features/block_offsets.");
         let offsets_raw = decode_entry(entries, &offsets_name);
@@ -211,21 +209,25 @@ fn refresh_hashes(entries: &mut StoredEntries) {
         }
     }
 
+    if let Some(geometry_hashes) = &mut hashes.geometry_blocks_xxh128 {
+        let corpus = entry_starting_with(entries, "features/geometry.");
+        let offsets_name = entry_starting_with(entries, "features/geometry_block_offsets.");
+        let offsets_raw = decode_entry(entries, &offsets_name);
+        let offsets: &[u64] = bytemuck::cast_slice(&offsets_raw);
+        let corpus = stored(entries, &corpus);
+        for (digest, pair) in geometry_hashes.iter_mut().zip(offsets.windows(2)) {
+            let raw =
+                zstd::decode_all(Cursor::new(&corpus[pair[0] as usize..pair[1] as usize])).unwrap();
+            *digest = format_hash(xxh3_128(&raw));
+        }
+    }
+
     for (tree, chunk_hashes) in hashes.chunks_xxh128.iter_mut().enumerate() {
         for (chunk, digest) in chunk_hashes.iter_mut().enumerate() {
             let prefix = format!("trees/{tree}/chunks/{chunk}/");
             let topology = entry_starting_with(entries, &format!("{prefix}chunk."));
             let topology = decode_entry(entries, &topology);
-            let vector_name = entries
-                .iter()
-                .find(|(name, _)| name.starts_with(&format!("{prefix}vectors.")))
-                .map(|(name, _)| name.clone());
-            let value = if let Some(name) = vector_name {
-                hash_pair(&topology, &decode_entry(entries, &name))
-            } else {
-                xxh3_128(&topology)
-            };
-            *digest = format_hash(value);
+            *digest = format_hash(xxh3_128(&topology));
         }
     }
 
@@ -236,10 +238,14 @@ fn refresh_hashes(entries: &mut StoredEntries) {
     if let Some(values) = &hashes.origins_xxh128 {
         sections.extend(values.iter().map(|value| parse_hash(value)));
     }
-    if let Some(value) = &hashes.storage_rows_xxh128 {
-        sections.push(parse_hash(value));
-    }
-    if let Some(values) = &hashes.descriptor_blocks_xxh128 {
+    sections.push(parse_hash(&hashes.storage_rows_xxh128));
+    sections.extend(
+        hashes
+            .descriptor_blocks_xxh128
+            .iter()
+            .map(|value| parse_hash(value)),
+    );
+    if let Some(values) = &hashes.geometry_blocks_xxh128 {
         sections.extend(values.iter().map(|value| parse_hash(value)));
     }
     sections.extend(
@@ -271,6 +277,44 @@ fn mutate_rehashed(good: &Path, bad: &Path, entry_prefix: &str, mutate: impl FnO
     write_stored(bad, &entries);
 }
 
+fn mutate_frame_rehashed(
+    good: &Path,
+    bad: &Path,
+    container_prefix: &str,
+    offsets_prefix: &str,
+    block: usize,
+    mutate: impl FnOnce(&mut Vec<u8>),
+) {
+    let mut entries = read_stored(good);
+    let container_name = entry_starting_with(&entries, container_prefix);
+    let offsets_name = entry_starting_with(&entries, offsets_prefix);
+    let offsets_raw = decode_entry(&entries, &offsets_name);
+    let mut offsets: Vec<u64> = bytemuck::cast_slice(&offsets_raw).to_vec();
+    let corpus = stored(&entries, &container_name);
+    let mut frames: Vec<Vec<u8>> = offsets
+        .windows(2)
+        .map(|pair| corpus[pair[0] as usize..pair[1] as usize].to_vec())
+        .collect();
+    let mut raw = zstd::decode_all(Cursor::new(&frames[block])).unwrap();
+    mutate(&mut raw);
+    frames[block] = zstd::encode_all(Cursor::new(raw), 3).unwrap();
+    let mut rebuilt = Vec::new();
+    offsets.clear();
+    offsets.push(0);
+    for frame in frames {
+        rebuilt.extend_from_slice(&frame);
+        offsets.push(rebuilt.len() as u64);
+    }
+    *stored_mut(&mut entries, &container_name) = rebuilt;
+    replace_decoded(
+        &mut entries,
+        &offsets_name,
+        bytemuck::cast_slice(offsets.as_slice()),
+    );
+    refresh_hashes(&mut entries);
+    write_stored(bad, &entries);
+}
+
 fn set_u32(raw: &mut [u8], index: usize, value: u32) {
     raw[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
 }
@@ -295,7 +339,7 @@ fn open_error(path: &Path) -> KdfError {
 #[test]
 fn malformed_node_references_and_leaf_shapes_reach_their_validators() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
     // Three nodes. Columns are stored column-major as ten rows of length three.
     let cases = [
         ("child-chunk", 3 * 3, 7, "child chunk out of range"),
@@ -333,7 +377,7 @@ fn malformed_node_references_and_leaf_shapes_reach_their_validators() {
 #[test]
 fn cycles_and_shared_children_are_rejected_by_full_verification() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
 
     let cycle = dir.path().join("cycle.kdf");
     mutate_rehashed(&good, &cycle, "trees/0/chunks/0/chunk.", |raw| {
@@ -363,7 +407,7 @@ fn cycles_and_shared_children_are_rejected_by_full_verification() {
 #[test]
 fn bad_feature_permutations_and_split_constraints_are_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
 
     let duplicate = dir.path().join("duplicate-id.kdf");
     mutate_rehashed(&good, &duplicate, "trees/0/chunks/0/chunk.", |raw| {
@@ -385,9 +429,14 @@ fn bad_feature_permutations_and_split_constraints_are_rejected() {
     );
 
     let wrong_side = dir.path().join("wrong-side.kdf");
-    mutate_rehashed(&good, &wrong_side, "trees/0/chunks/0/vectors.", |raw| {
-        raw[0] = 9
-    });
+    mutate_frame_rehashed(
+        &good,
+        &wrong_side,
+        "features/corpus.",
+        "features/block_offsets.",
+        0,
+        |raw| raw[0] = 9,
+    );
     assert_invalid(
         verify_kdf::<u8>(&wrong_side, roomy()).unwrap_err(),
         "violates a split constraint",
@@ -395,9 +444,9 @@ fn bad_feature_permutations_and_split_constraints_are_rejected() {
 }
 
 #[test]
-fn the_shared_storage_row_map_must_be_a_permutation() {
+fn the_storage_row_map_must_be_a_permutation() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, true);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
     let bad = dir.path().join("duplicate-storage-row.kdf");
     mutate_rehashed(&good, &bad, "features/storage_rows.", |raw| {
         set_u32(raw, 1, 0);
@@ -406,15 +455,18 @@ fn the_shared_storage_row_map_must_be_a_permutation() {
 }
 
 #[test]
-fn vectors_must_match_across_trees() {
+fn descriptors_are_stored_once_regardless_of_tree_count() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 2, false);
-    let bad = dir.path().join("different-tree-vector.kdf");
-    mutate_rehashed(&good, &bad, "trees/1/chunks/0/vectors.", |raw| raw[0] = 1);
-    assert_invalid(
-        verify_kdf::<u8>(&bad, roomy()).unwrap_err(),
-        "tree 1 vectors differ from tree 0",
+    let good = write_tiny_u8(dir.path(), "good.kdf", 2);
+    let entries = read_stored(&good);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|(name, _)| name.starts_with("features/corpus."))
+            .count(),
+        1
     );
+    assert!(!entries.iter().any(|(name, _)| name.contains("/vectors.")));
 }
 
 #[test]
@@ -426,7 +478,10 @@ fn nonfinite_f32_splits_and_vectors_are_rejected() {
         &good,
         &tiny_f32(&vectors),
         None,
-        &KdfWriteOptions::tree_local(),
+        &KdfWriteOptions {
+            target_descriptor_block_bytes: 8,
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -441,30 +496,37 @@ fn nonfinite_f32_splits_and_vectors_are_rejected() {
     );
 
     let vector = dir.path().join("nan-vector.kdf");
-    mutate_rehashed(&good, &vector, "trees/0/chunks/0/vectors.", |raw| {
-        raw[..4].copy_from_slice(&f32::NAN.to_le_bytes());
-    });
+    mutate_frame_rehashed(
+        &good,
+        &vector,
+        "features/corpus.",
+        "features/block_offsets.",
+        0,
+        |raw| raw[..4].copy_from_slice(&f32::NAN.to_le_bytes()),
+    );
     assert_invalid(
         verify_kdf::<f32>(&vector, roomy()).unwrap_err(),
-        "tree chunk contains non-finite vector",
+        "descriptor block contains non-finite vector",
     );
 }
 
 #[test]
 fn metadata_version_scalar_and_declared_shape_are_checked() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
 
-    let version = dir.path().join("version.kdf");
-    mutate_rehashed(&good, &version, "metadata.json.zst", |raw| {
-        let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
-        value["version"] = 99.into();
-        *raw = serde_json::to_vec(&value).unwrap();
-    });
-    assert_invalid(
-        open_error(&version),
-        "unsupported format, version, or metric",
-    );
+    for old_or_future in [1, 99] {
+        let version = dir.path().join(format!("version-{old_or_future}.kdf"));
+        mutate_rehashed(&good, &version, "metadata.json.zst", |raw| {
+            let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            value["version"] = old_or_future.into();
+            *raw = serde_json::to_vec(&value).unwrap();
+        });
+        assert_invalid(
+            open_error(&version),
+            "unsupported format, version, or metric",
+        );
+    }
 
     let scalar = dir.path().join("scalar.kdf");
     mutate_rehashed(&good, &scalar, "metadata.json.zst", |raw| {
@@ -492,17 +554,17 @@ fn metadata_version_scalar_and_declared_shape_are_checked() {
 #[test]
 fn missing_unexpected_and_duplicate_entries_are_rejected() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
 
     let mut missing_entries = read_stored(&good);
-    missing_entries.retain(|(name, _)| !name.starts_with("trees/0/chunks/0/vectors."));
+    missing_entries.retain(|(name, _)| !name.starts_with("features/corpus."));
     let missing = dir.path().join("missing.kdf");
     write_stored(&missing, &missing_entries);
     assert_invalid(open_error(&missing), "archive entry set mismatch");
 
     let mut unexpected_entries = read_stored(&good);
     unexpected_entries.push((
-        "features/storage_rows.3.uint32.zst".into(),
+        "trees/0/chunks/0/vectors.3.2.uint8.zst".into(),
         zstd::encode_all(Cursor::new([0u8; 12]), 3).unwrap(),
     ));
     let unexpected = dir.path().join("unexpected-layout-entry.kdf");
@@ -544,7 +606,7 @@ fn missing_unexpected_and_duplicate_entries_are_rejected() {
 #[test]
 fn a_truncated_frame_reports_the_entry_decode_failure() {
     let dir = tempfile::tempdir().unwrap();
-    let good = write_tiny_u8(dir.path(), "good.kdf", 1, false);
+    let good = write_tiny_u8(dir.path(), "good.kdf", 1);
     let mut entries = read_stored(&good);
     let name = entry_starting_with(&entries, "trees/0/chunks/0/chunk.");
     stored_mut(&mut entries, &name).truncate(5);
@@ -585,6 +647,11 @@ fn sources() -> KdfSiftSources {
                 image_feature_index: 0,
             },
         ],
+        geometry: vec![
+            [[1.0, 2.0], [1.0, 0.0], [0.0, 1.0]],
+            [[3.0, 4.0], [2.0, 0.0], [0.0, 2.0]],
+            [[5.0, 6.0], [3.0, 0.0], [0.0, 3.0]],
+        ],
     }
 }
 
@@ -602,7 +669,8 @@ fn write_sourced(dir: &Path) -> PathBuf {
         Some(&sources()),
         &KdfWriteOptions {
             origin_block_rows: 3,
-            ..KdfWriteOptions::tree_local()
+            target_descriptor_block_bytes: 128,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -637,6 +705,49 @@ fn invalid_and_duplicate_origins_are_rejected() {
 }
 
 #[test]
+fn nonfinite_and_missing_sift_geometry_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = write_sourced(dir.path());
+
+    let nonfinite = dir.path().join("nonfinite-geometry.kdf");
+    mutate_frame_rehashed(
+        &good,
+        &nonfinite,
+        "features/geometry.",
+        "features/geometry_block_offsets.",
+        0,
+        |raw| raw[..4].copy_from_slice(&f32::NAN.to_le_bytes()),
+    );
+    let file = KdfFile::<u8>::open(&nonfinite, roomy()).unwrap();
+    assert_eq!(file.io_stats().read_calls, 0);
+    assert_invalid(
+        file.feature_geometry(0).unwrap_err(),
+        "geometry block contains non-finite value",
+    );
+    assert_invalid(
+        verify_kdf::<u8>(&nonfinite, roomy()).unwrap_err(),
+        "geometry block contains non-finite value",
+    );
+
+    let mut entries = read_stored(&good);
+    entries.retain(|(name, _)| !name.starts_with("features/geometry."));
+    let missing = dir.path().join("missing-geometry.kdf");
+    write_stored(&missing, &entries);
+    assert_invalid(open_error(&missing), "archive entry set mismatch");
+
+    let wrong_width = dir.path().join("wrong-sift-width.kdf");
+    mutate_rehashed(&good, &wrong_width, "metadata.json.zst", |raw| {
+        let mut value: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        value["dimension"] = 127.into();
+        *raw = serde_json::to_vec(&value).unwrap();
+    });
+    assert_invalid(
+        open_error(&wrong_width),
+        "SIFT references require unchanged 128-D uint8 descriptors",
+    );
+}
+
+#[test]
 fn unvisited_chunks_stay_unread_and_warm_chunks_cost_no_io() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chunked.kdf");
@@ -647,7 +758,8 @@ fn unvisited_chunks_stay_unread_and_warm_chunks_cost_no_io() {
         None,
         &KdfWriteOptions {
             target_chunk_bytes: 90,
-            ..KdfWriteOptions::tree_local()
+            target_descriptor_block_bytes: 2,
+            ..Default::default()
         },
     )
     .unwrap();

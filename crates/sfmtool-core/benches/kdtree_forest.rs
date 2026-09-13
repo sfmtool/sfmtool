@@ -14,8 +14,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use sfmtool_core::features::feature_match::descriptor::descriptor_distance_l2_squared;
 use sfmtool_core::features::kdforest::{
-    DescriptorStorage, KdForestParams, KdForestU8, KdfWriteOptions, LazyKdForestOptions,
-    LazyKdForestU8,
+    KdForestParams, KdForestU8, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 use std::hint::black_box;
 
@@ -101,38 +100,17 @@ fn bench_vs_bruteforce(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_persistent_layouts(c: &mut Criterion) {
+fn bench_persistent(c: &mut Criterion) {
     let n = 20_000;
     let points = descriptors(n, 21);
     let queries = descriptors(256, 22);
     let forest = KdForestU8::build(&points, n, DIM, KdForestParams::balanced());
     let dir = tempfile::tempdir().unwrap();
-    let cases = [
-        ("tree_local", DescriptorStorage::TreeLocal),
-        (
-            "shared_64k",
-            DescriptorStorage::Shared {
-                target_descriptor_block_bytes: 64 << 10,
-            },
-        ),
-    ];
-    let mut paths = Vec::new();
-    for (name, storage) in cases {
-        let path = dir.path().join(format!("{name}.kdf"));
-        forest
-            .write_kdf(
-                &path,
-                None,
-                &KdfWriteOptions {
-                    descriptor_storage: storage,
-                    target_chunk_bytes: 1 << 20,
-                    compression_level: 3,
-                    origin_block_rows: 131_072,
-                },
-            )
-            .unwrap();
-        paths.push((name, path));
-    }
+    let path = dir.path().join("corpus.kdf");
+    forest
+        .write_kdf(&path, None, &KdfWriteOptions::default())
+        .unwrap();
+    let paths = [("corpus_64k", path)];
     let workers: usize = std::env::var("KDF_BENCH_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -194,6 +172,6 @@ criterion_group!(
     bench_build,
     bench_query,
     bench_vs_bruteforce,
-    bench_persistent_layouts
+    bench_persistent
 );
 criterion_main!(benches);

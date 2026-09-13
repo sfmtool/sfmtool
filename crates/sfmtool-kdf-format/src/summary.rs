@@ -1,14 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Size accounting for a `.kdf`, for comparing descriptor layouts.
+//! Size accounting for a `.kdf` corpus, trees, provenance, and feature geometry.
 //!
-//! The two version-1 layouts trade the same bytes against each other: tree-local
-//! storage keeps one vector copy per tree, shared storage keeps one copy plus a
-//! feature-ID-to-row map. Which is smaller is a question about a particular
-//! corpus's compression in the order the file stored it, not one arithmetic
-//! settles, so it has to be measured — and measuring it means splitting a file
-//! into the parts that differ rather than comparing two totals.
+//! Version 2 has one descriptor corpus. This module attributes its
+//! compressed and decoded cost separately from tree topology, feature geometry,
+//! origins, and metadata without decoding the lazy block payloads.
 //!
 //! [`kdf_summary`] does that without decoding a single payload: the ZIP central
 //! directory already carries every entry's compressed and uncompressed size, so
@@ -34,7 +31,7 @@ use crate::types::{KdfError, Metadata, NODE_COLUMNS};
 /// "uncompressed" size is the frame length and would make every ratio 100%.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdfSection {
-    /// Role of the entries in this bucket, e.g. `"tree_vectors"`.
+    /// Role of the entries in this bucket, e.g. `"descriptors"`.
     pub section: String,
     /// How many ZIP entries fell into it.
     pub entries: u64,
@@ -51,10 +48,8 @@ pub struct KdfSummary {
     pub dimension: u32,
     pub scalar_type: String,
     pub tree_count: usize,
-    /// `"tree_local"` or `"shared"`.
-    pub descriptor_storage: String,
-    /// Descriptor rows per shared block; `None` in tree-local layout.
-    pub descriptor_block_rows: Option<u32>,
+    /// Descriptor rows per corpus block.
+    pub descriptor_block_rows: u32,
     pub target_chunk_bytes: u64,
     /// Chunks in each tree, in tree order.
     pub chunks_per_tree: Vec<usize>,
@@ -62,6 +57,8 @@ pub struct KdfSummary {
     pub nodes_per_tree: Vec<u64>,
     /// Whether the file carries an image table and per-feature origins.
     pub has_sources: bool,
+    /// Whether the file carries co-blocked keypoints and affine transforms.
+    pub has_feature_geometry: bool,
     /// Size of the file itself, ZIP headers and central directory included.
     pub file_bytes: u64,
     /// Bytes in every entry's payload, which excludes those headers. The
@@ -124,16 +121,16 @@ fn decoded_bytes_from_name(name: &str) -> Option<u64> {
     // `corpus.{N}.{D}.{scalar}.frames` holds one zstd frame per descriptor
     // block, so it must be sized from the name rather than decoded: decoding it
     // would expand the entire corpus to learn a number the name already gives.
-    if parts.first() == Some(&"corpus") && suffix == "frames" {
+    if matches!(parts.first(), Some(&"corpus" | &"geometry")) && suffix == "frames" {
         let width = scalar_width(parts.pop()?)?;
         let counts: Vec<u64> = parts[1..]
             .iter()
             .map(|t| t.parse().ok())
             .collect::<Option<_>>()?;
-        let [features, dimension] = counts.as_slice() else {
-            return None;
-        };
-        return features.checked_mul(*dimension)?.checked_mul(width);
+        return counts
+            .into_iter()
+            .try_fold(1u64, |n, count| n.checked_mul(count))?
+            .checked_mul(width);
     }
 
     if suffix != "zst" {
@@ -168,19 +165,18 @@ fn section_of(name: &str) -> &'static str {
     } else if name.starts_with("origins/") {
         "origins"
     } else if name.starts_with("features/storage_rows.") {
-        "shared_row_map"
+        "storage_row_map"
     } else if name.starts_with("features/block_offsets.") {
-        "shared_block_offsets"
+        "descriptor_block_offsets"
     } else if name.starts_with("features/corpus.") {
-        "shared_vectors"
+        "descriptors"
+    } else if name.starts_with("features/geometry_block_offsets.") {
+        "geometry_block_offsets"
+    } else if name.starts_with("features/geometry.") {
+        "feature_geometry"
     } else if name.starts_with("trees/") {
-        // A chunk's three integer arrays share one entry; its vectors do not, so
-        // `tree_vectors` is still exactly what the shared layout removes T-1
-        // copies of, and `tree_chunks` is identical between the two layouts.
-        match name.rsplit('/').next().unwrap_or("") {
-            n if n.starts_with("vectors.") => "tree_vectors",
-            _ => "tree_chunks",
-        }
+        // Version 2 tree entries contain topology and feature IDs only.
+        "tree_chunks"
     } else {
         "other"
     }
@@ -295,7 +291,6 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
         dimension: metadata.dimension as u32,
         scalar_type: metadata.scalar_type.clone(),
         tree_count: metadata.trees.len(),
-        descriptor_storage: metadata.descriptor_storage.clone(),
         descriptor_block_rows: metadata.descriptor_block_rows,
         target_chunk_bytes: metadata.target_chunk_bytes,
         chunks_per_tree: metadata.trees.iter().map(|t| t.chunks.len()).collect(),
@@ -305,6 +300,7 @@ pub fn kdf_summary(path: &Path, max_metadata_bytes: usize) -> Result<KdfSummary,
             .map(|t| t.chunks.iter().map(|c| c.node_count as u64).sum())
             .collect(),
         has_sources: metadata.workspace.is_some(),
+        has_feature_geometry: metadata.feature_source == "sift_files",
         file_bytes,
         payload_compressed_bytes: payload_compressed,
         payload_decoded_bytes: payload_decoded,

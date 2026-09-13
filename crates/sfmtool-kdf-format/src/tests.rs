@@ -39,18 +39,14 @@ fn roomy() -> LazyKdForestOptions {
 }
 
 #[test]
-fn round_trip_tree_local_and_shared() {
+fn round_trip_descriptor_corpus() {
     let vectors = [0, 0, 1, 1, 9, 9];
-    for options in [
-        KdfWriteOptions {
-            target_chunk_bytes: 90,
-            ..KdfWriteOptions::tree_local()
-        },
-        KdfWriteOptions {
-            target_chunk_bytes: 90,
-            ..KdfWriteOptions::shared(2)
-        },
-    ] {
+    let options = KdfWriteOptions {
+        target_chunk_bytes: 90,
+        target_descriptor_block_bytes: 2,
+        ..Default::default()
+    };
+    {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tiny.kdf");
         write_kdf(&path, &tiny_u8(&vectors), None, &options).unwrap();
@@ -64,11 +60,7 @@ fn round_trip_tree_local_and_shared() {
         assert_eq!(right.logical, 2);
         let leaf = file.leaf(0, left).unwrap();
         assert_eq!(leaf.feature_ids, [0, 1]);
-        if file.is_shared() {
-            assert_eq!(file.shared_vector(2).unwrap(), [9, 9]);
-        } else {
-            assert_eq!(leaf.vectors.unwrap(), [0, 0, 1, 1]);
-        }
+        assert_eq!(file.vector(2).unwrap(), [9, 9]);
         let verified = verify_kdf::<u8>(&path, roomy()).unwrap();
         assert_eq!(verified.features, 3);
     }
@@ -105,12 +97,18 @@ fn source_origins_are_lazy_and_keep_requested_order() {
                 image_feature_index: 8,
             },
         ],
+        geometry: vec![
+            [[10.0, 11.0], [1.0, 0.0], [0.0, 1.0]],
+            [[20.0, 21.0], [2.0, 0.0], [0.0, 2.0]],
+            [[30.0, 31.0], [3.0, 0.0], [0.0, 3.0]],
+        ],
     };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("origins.kdf");
     let options = KdfWriteOptions {
         origin_block_rows: 2,
-        ..KdfWriteOptions::tree_local()
+        target_descriptor_block_bytes: 256,
+        ..Default::default()
     };
     // Source mode deliberately requires real SIFT-shaped descriptors.
     let mut sift_vectors = vec![0u8; 3 * 128];
@@ -119,9 +117,20 @@ fn source_origins_are_lazy_and_keep_requested_order() {
     let mut data = tiny_u8(&vectors);
     data.vectors = &sift_vectors;
     data.dimension = 128;
+    let descriptor_order = [2, 0, 1];
+    data.descriptor_order = Some(&descriptor_order);
     write_kdf(&path, &data, Some(&sources), &options).unwrap();
     let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
     assert_eq!(file.io_stats().read_calls, 0);
+    assert_eq!(file.descriptor_block_shape(), (2, 2));
+    assert_eq!(
+        file.descriptor_block_vectors(0).unwrap(),
+        [&sift_vectors[256..384], &sift_vectors[0..128]].concat()
+    );
+    assert_eq!(
+        file.feature_geometry_block(0).unwrap().unwrap().as_slice(),
+        [sources.geometry[2], sources.geometry[0]]
+    );
     let got = file.resolve_origins(&[2, 0, 2]).unwrap().unwrap();
     assert_eq!(
         got,
@@ -131,21 +140,27 @@ fn source_origins_are_lazy_and_keep_requested_order() {
         file.image_table().unwrap().unwrap().names,
         sources.image_names
     );
+    assert_eq!(
+        file.resolve_feature_geometry(&[2, 0, 2]).unwrap().unwrap(),
+        [
+            sources.geometry[2],
+            sources.geometry[0],
+            sources.geometry[2]
+        ]
+    );
 }
 
 #[test]
-fn rejects_existing_destination_and_invalid_shared_map_budget() {
+fn rejects_existing_destination_and_invalid_row_map_budget() {
     let vectors = [0, 0, 1, 1, 9, 9];
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tiny.kdf");
-    write_kdf(&path, &tiny_u8(&vectors), None, &KdfWriteOptions::shared(2)).unwrap();
-    assert!(write_kdf(
-        &path,
-        &tiny_u8(&vectors),
-        None,
-        &KdfWriteOptions::tree_local()
-    )
-    .is_err());
+    let options = KdfWriteOptions {
+        target_descriptor_block_bytes: 2,
+        ..Default::default()
+    };
+    write_kdf(&path, &tiny_u8(&vectors), None, &options).unwrap();
+    assert!(write_kdf(&path, &tiny_u8(&vectors), None, &options).is_err());
     let options = LazyKdForestOptions {
         max_address_map_bytes: 4,
         ..roomy()
@@ -165,7 +180,16 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
     let dir = tempfile::tempdir().unwrap();
     let good = dir.path().join("good.kdf");
     let corrupt = dir.path().join("corrupt.kdf");
-    write_kdf(&good, &tiny_u8(&vectors), None, &KdfWriteOptions::shared(2)).unwrap();
+    write_kdf(
+        &good,
+        &tiny_u8(&vectors),
+        None,
+        &KdfWriteOptions {
+            target_descriptor_block_bytes: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut input = zip::ZipArchive::new(std::fs::File::open(&good).unwrap()).unwrap();
     let mut output = zip::ZipWriter::new(std::fs::File::create(&corrupt).unwrap());
     for i in 0..input.len() {
@@ -193,7 +217,7 @@ fn corruption_in_lazy_descriptor_is_deferred_until_access() {
     output.finish().unwrap();
     let file = KdfFile::<u8>::open(&corrupt, roomy()).unwrap();
     assert_eq!(file.io_stats().read_calls, 0);
-    assert!(file.shared_vector(0).is_err());
+    assert!(file.vector(0).is_err());
     assert!(verify_kdf::<u8>(&corrupt, roomy()).is_err());
 }
 
@@ -216,7 +240,10 @@ fn summary_decoded_sizes_are_uncompressed_lengths() {
         &path,
         &tiny_u8(&vectors),
         None,
-        &KdfWriteOptions::tree_local(),
+        &KdfWriteOptions {
+            target_descriptor_block_bytes: 2,
+            ..Default::default()
+        },
     )
     .unwrap();
 
@@ -239,8 +266,8 @@ fn summary_decoded_sizes_are_uncompressed_lengths() {
         3 * 10 * 4 + 3 + 3 * 4,
         "decoded size must come from the shape in the name"
     );
-    // Vectors stay their own entry, so their bytes are still attributable.
-    let vectors = section("tree_vectors");
+    // Vectors stay in their own framed corpus, so their bytes are attributable.
+    let vectors = section("descriptors");
     assert_eq!(vectors.entries, 1);
     assert_eq!(vectors.decoded_bytes, 3 * 2);
     // The regression this guards: reading the size off the ZIP directory would
@@ -265,13 +292,22 @@ fn summary_decoded_sizes_are_uncompressed_lengths() {
     assert!(summary.file_bytes > summary.payload_compressed_bytes);
 }
 
-/// A shared-layout file accounts for its descriptor corpus and row map.
+/// A file accounts for its descriptor corpus and row map.
 #[test]
-fn summary_accounts_for_the_shared_corpus_and_row_map() {
+fn summary_accounts_for_the_corpus_and_row_map() {
     let vectors = [0u8, 0, 1, 1, 9, 9];
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("shared.kdf");
-    write_kdf(&path, &tiny_u8(&vectors), None, &KdfWriteOptions::shared(2)).unwrap();
+    let path = dir.path().join("corpus.kdf");
+    write_kdf(
+        &path,
+        &tiny_u8(&vectors),
+        None,
+        &KdfWriteOptions {
+            target_descriptor_block_bytes: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     let summary = kdf_summary(&path, 1 << 20).unwrap();
     let names: Vec<&str> = summary
@@ -279,15 +315,14 @@ fn summary_accounts_for_the_shared_corpus_and_row_map() {
         .iter()
         .map(|s| s.section.as_str())
         .collect();
-    assert!(names.contains(&"shared_vectors"));
-    assert!(names.contains(&"shared_row_map"));
+    assert!(names.contains(&"descriptors"));
+    assert!(names.contains(&"storage_row_map"));
     assert!(!names.contains(&"tree_vectors"));
-    assert_eq!(summary.descriptor_storage, "shared");
 
     let row_map = summary
         .sections
         .iter()
-        .find(|s| s.section == "shared_row_map")
+        .find(|s| s.section == "storage_row_map")
         .unwrap();
     // One uint32 storage row per feature.
     assert_eq!(row_map.decoded_bytes, 3 * 4);
@@ -304,7 +339,8 @@ fn an_explicit_descriptor_order_is_stored_and_changes_no_answer() {
     let dir = tempfile::tempdir().unwrap();
     let options = KdfWriteOptions {
         target_chunk_bytes: 90,
-        ..KdfWriteOptions::shared(2)
+        target_descriptor_block_bytes: 2,
+        ..Default::default()
     };
 
     let mut reference = None;
@@ -318,7 +354,7 @@ fn an_explicit_descriptor_order_is_stored_and_changes_no_answer() {
         let file = KdfFile::<u8>::open(&path, roomy()).unwrap();
         // Feature IDs, not rows: the same ID must give the same vector whatever
         // row it was stored in.
-        let got: Vec<Vec<u8>> = (0..3).map(|id| file.shared_vector(id).unwrap()).collect();
+        let got: Vec<Vec<u8>> = (0..3).map(|id| file.vector(id).unwrap()).collect();
         assert_eq!(
             got,
             vec![vec![0, 0], vec![1, 1], vec![9, 9]],
@@ -348,9 +384,17 @@ fn a_malformed_descriptor_order_is_refused() {
         ));
         let mut data = tiny_u8(&vectors);
         data.descriptor_order = Some(order);
-        let err = write_kdf(&path, &data, None, &KdfWriteOptions::shared(2))
-            .expect_err("must reject")
-            .to_string();
+        let err = write_kdf(
+            &path,
+            &data,
+            None,
+            &KdfWriteOptions {
+                target_descriptor_block_bytes: 2,
+                ..Default::default()
+            },
+        )
+        .expect_err("must reject")
+        .to_string();
         assert!(err.contains(want), "order={order:?} gave {err:?}");
     }
 }

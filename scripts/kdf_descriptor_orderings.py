@@ -1,9 +1,9 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare shared-corpus descriptor orderings for a `.kdf` forest.
+"""Compare descriptor-corpus orderings for a `.kdf` forest.
 
-The shared descriptor layout stores one copy of the corpus in a stored order of
+Version 2 stores one copy of the corpus in a stored order of
 the writer's choosing, and a query reads whole blocks of it. How well that order
 matches the leaves a query actually visits decides how much of each block is
 useful. The default — tree 0's leaf order — makes tree 0's leaves contiguous and
@@ -265,7 +265,6 @@ def main() -> None:
     write_kdf(
         forest,
         str(solo),
-        layout="shared",
         chunk_bytes=args.chunk_bytes,
         descriptor_block_bytes=len(index) * index.shape[1],
     )
@@ -290,7 +289,6 @@ def main() -> None:
         write_kdf(
             forest,
             str(path),
-            layout="shared",
             chunk_bytes=args.chunk_bytes,
             descriptor_block_bytes=args.block_bytes,
             descriptor_order=order.tolist(),
