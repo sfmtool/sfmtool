@@ -144,7 +144,7 @@ def main() -> None:
     p.add_argument("--d", type=int, default=10)
     p.add_argument("--alpha", type=float, default=0.8)
     p.add_argument("--budget", type=int, default=128)
-    p.add_argument("--block-bytes", type=int, default=4 * KIB)
+    p.add_argument("--block-bytes", type=int, default=2 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB)
     p.add_argument("--cache-bytes", type=int, default=256 * MIB)
     p.add_argument("--workers", type=int, default=4)

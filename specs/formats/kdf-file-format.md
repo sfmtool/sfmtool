@@ -241,6 +241,13 @@ and no descriptor blocks. Vectors have the same scalar type and D as the forest.
 Each vector occurs once in this table; different IDs with identical vector bytes
 remain distinct rows. This is deduplication across trees, not across identities.
 
+The writer defaults to a 2 KiB decoded descriptor-block target, giving Q = 16
+for 128-byte uint8 SIFT descriptors. The forest builder defaults to 16-feature
+leaves. These are tuning choices, not format constraints: readers use Q from
+metadata and accept files built with other positive block targets or leaf sizes.
+The [query measurements](../core/features/lazy-kdforest-query.md#current-access-path-and-performance-diagnosis)
+explain the default selection.
+
 The row permutation is explicit, not inferred from tree topology. A writer may
 choose any order; readers use the stored map. Leaf membership/order and origin
 mapping do not change when storage rows are reordered. Readers locate a vector by

@@ -96,7 +96,7 @@ def main() -> None:
     p.add_argument("--recall", type=float, default=0.60, help="iso-recall target")
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--cache-mib", type=int, default=4096)
-    p.add_argument("--block-bytes", type=int, default=4 * KIB)
+    p.add_argument("--block-bytes", type=int, default=2 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out")

@@ -9,6 +9,12 @@ use rand::rngs::StdRng;
 use rand::RngExt;
 use rand::SeedableRng;
 
+#[test]
+fn balanced_default_uses_sixteen_feature_leaves() {
+    assert_eq!(KdForestParams::balanced().leaf_size, 16);
+    assert_eq!(KdForestParams::default().leaf_size, 16);
+}
+
 /// Random `u8` point set, flat row-major.
 fn random_u8(n: usize, dim: usize, seed: u64) -> Vec<u8> {
     let mut rng = StdRng::seed_from_u64(seed);

@@ -104,7 +104,7 @@ pub struct KdfWriteOptions {
 impl Default for KdfWriteOptions {
     fn default() -> Self {
         Self {
-            target_descriptor_block_bytes: 64 << 10,
+            target_descriptor_block_bytes: 2 << 10,
             target_chunk_bytes: 1 << 20,
             compression_level: 3,
             origin_block_rows: 131_072,

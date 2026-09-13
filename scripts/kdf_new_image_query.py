@@ -77,7 +77,7 @@ def main() -> None:
     p.add_argument("--leaf-size", type=int, default=16)
     p.add_argument("--k", type=int, default=11)
     p.add_argument("--budget", type=int, default=128)
-    p.add_argument("--block-bytes", type=int, default=4 * KIB)
+    p.add_argument("--block-bytes", type=int, default=2 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument(

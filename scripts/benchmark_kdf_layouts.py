@@ -595,7 +595,7 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cache-bytes", type=int, default=256 * MIB)
     p.add_argument("--chunk-bytes", type=int, default=1 * MIB, help="stages 2 and 3")
-    p.add_argument("--block-bytes", type=int, default=64 * KIB, help="stages 1 and 3")
+    p.add_argument("--block-bytes", type=int, default=2 * KIB, help="stages 1 and 3")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--keep", action="store_true", help="keep the exported .kdf files")
     args = p.parse_args()

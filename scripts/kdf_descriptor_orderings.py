@@ -220,7 +220,7 @@ def main() -> None:
     p.add_argument("--leaf-size", type=int, default=16)
     p.add_argument("--budget", type=int, default=128)
     p.add_argument("--queries", type=int, default=1000)
-    p.add_argument("--block-bytes", type=int, default=4 * KIB)
+    p.add_argument("--block-bytes", type=int, default=2 * KIB)
     p.add_argument("--chunk-bytes", type=int, default=1 << 20)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out")

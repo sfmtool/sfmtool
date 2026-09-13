@@ -39,6 +39,14 @@ fn roomy() -> LazyKdForestOptions {
 }
 
 #[test]
+fn default_descriptor_block_target_is_two_kib() {
+    assert_eq!(
+        KdfWriteOptions::default().target_descriptor_block_bytes,
+        2 << 10
+    );
+}
+
+#[test]
 fn round_trip_descriptor_corpus() {
     let vectors = [0, 0, 1, 1, 9, 9];
     let options = KdfWriteOptions {

@@ -1,0 +1,75 @@
+{
+  "date": "2026-09-12",
+  "platform": "Windows",
+  "corpus": "DinoLedge",
+  "source_descriptors": 9702948,
+  "indexed_descriptors": 9686564,
+  "held_out_images": [299, 897],
+  "descriptors_per_held_out_image": 8192,
+  "patch_feature_counts": [153, 177, 131, 181],
+  "trees": 4,
+  "seed": 0,
+  "tree_chunk_bytes": 65536,
+  "cache_bytes": 268435456,
+  "query_workers": 4,
+  "whole_image_k": 11,
+  "patch_k": 32,
+  "calibration_queries": 1000,
+  "calibration_target_recall_at_1": 0.65,
+  "round_orders": [
+    ["2k/16", "2k/32", "4k/16", "4k/32"],
+    ["4k/32", "4k/16", "2k/32", "2k/16"],
+    ["4k/16", "2k/16", "4k/32", "2k/32"]
+  ],
+  "method": "Each round opens a fresh KDF reader for the two whole images and another fresh reader for the four patch ANN queries. Timings are ordered by round; whole_image_later_seconds is the second image. Patch timings exclude RANSAC and geometry lookup. OS page cache was not flushed. Neighbor IDs and distances were identical across rounds and descriptor block sizes for each leaf size.",
+  "results": [
+    {
+      "setting": "2k/16",
+      "descriptor_block_bytes": 2048,
+      "leaf_size": 16,
+      "max_leaf_checks": 109,
+      "calibration_recall_at_1": 0.65,
+      "file_bytes": 1245838016,
+      "whole_image_later_seconds": [5.562, 4.032, 4.115],
+      "whole_image_later_reads": [648551, 648040, 647848],
+      "patch_median_milliseconds": [110.2, 95.7, 99.3],
+      "patch_reads_per_patch": [13027, 13022, 13022]
+    },
+    {
+      "setting": "2k/32",
+      "descriptor_block_bytes": 2048,
+      "leaf_size": 32,
+      "max_leaf_checks": 183,
+      "calibration_recall_at_1": 0.652,
+      "file_bytes": 1197232209,
+      "whole_image_later_seconds": [4.498, 4.397, 5.005],
+      "whole_image_later_reads": [982641, 982852, 983356],
+      "patch_median_milliseconds": [96.5, 104.8, 110.4],
+      "patch_reads_per_patch": [20248, 20254, 20249]
+    },
+    {
+      "setting": "4k/16",
+      "descriptor_block_bytes": 4096,
+      "leaf_size": 16,
+      "max_leaf_checks": 109,
+      "calibration_recall_at_1": 0.65,
+      "file_bytes": 1226473737,
+      "whole_image_later_seconds": [4.075, 4.928, 4.617],
+      "whole_image_later_reads": [614678, 614850, 614374],
+      "patch_median_milliseconds": [100.3, 103.0, 107.7],
+      "patch_reads_per_patch": [12336, 12334, 12333]
+    },
+    {
+      "setting": "4k/32",
+      "descriptor_block_bytes": 4096,
+      "leaf_size": 32,
+      "max_leaf_checks": 183,
+      "calibration_recall_at_1": 0.652,
+      "file_bytes": 1177833839,
+      "whole_image_later_seconds": [5.918, 5.025, 5.129],
+      "whole_image_later_reads": [924227, 924060, 924278],
+      "patch_median_milliseconds": [140.6, 107.3, 121.8],
+      "patch_reads_per_patch": [18741, 18733, 18722]
+    }
+  ]
+}

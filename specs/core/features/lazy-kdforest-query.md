@@ -7,8 +7,8 @@ local seekable files, repeated queries, and corpora larger than the configured
 memory cache. It preserves the in-memory forest's search behavior while storing
 each vector once.
 
-Packing and cache values are configurable. The interface lists provisional
-defaults; the measurements and their scope are documented in
+Packing and cache values are configurable. The interface lists their defaults;
+the measurements and their scope are documented in
 [Current access path and performance diagnosis](#current-access-path-and-performance-diagnosis).
 
 It extends [randomized kd-tree forests](randomized-kdtree-forest.md)
@@ -29,7 +29,7 @@ and re-exported by the kdforest module:
 
 ```rust
 pub struct KdfWriteOptions {
-    pub target_descriptor_block_bytes: usize, // default: 64 KiB
+    pub target_descriptor_block_bytes: usize, // default: 2 KiB
     pub target_chunk_bytes: usize, // provisional: 1 MiB
     pub compression_level: i32,    // provisional: 3
     pub origin_block_rows: usize,  // provisional: 131072 (two u32 columns = 1 MiB)
@@ -668,8 +668,9 @@ that revisits its corpus; it is entirely about cold and one-shot queries.
 search costs four independent subtree misses whatever the query. Shared is far
 flatter, 221x to 576x, since its tree chunks carry no vectors.
 
-**Leaf size 32–64 is the measured file-backed range.** A leaf's members are
-contiguous in the stored corpus, so larger leaves place more of them in one block
+**Small-corpus leaf-size sweeps favor 32–64 in some cache regimes.** A
+leaf's members are contiguous in the stored corpus, so larger leaves place more
+of them in one block
 and need smaller tree arrays. They also examine more descriptors per visited
 neighbourhood. Because leaf size changes the index,
 [`scripts/kdf_leaf_size.py`](../../../scripts/kdf_leaf_size.py) finds the smallest
@@ -736,6 +737,33 @@ is near the complete stored working set or file size has more weight than query
 latency.
 [The recorded measurements](kdf-leaf-size-2026-09-11.json) include all three
 small-corpus seeds and both corpora's holdout comparisons.
+
+**DinoLedge selects 2 KiB blocks and 16-feature leaves for the default.** A
+follow-up calibrated leaf 16 to 109 checks (recall@1 0.650) and leaf 32 to 183
+checks (0.652) against 1,000 held-out descriptors from the 9,702,948-descriptor
+corpus. Four trees, seed zero, 64 KiB tree chunks and four query workers stayed
+fixed. Each measured KDF indexed 9,686,564 descriptors after withholding two
+8,192-descriptor images. At a pressured 256 MiB cache, three fresh-reader rounds
+alternated configuration order and queried those two images plus four patch
+descriptor sets of 131–181 features. Values are medians of the three rounds;
+parentheses give their ranges. The patch column times ANN only, not RANSAC or
+geometry lookup. OS page cache was not flushed.
+
+| Block / leaf | Later image | Reads / image | Patch ANN | Reads / patch |
+|---|---:|---:|---:|---:|
+| **2 KiB / 16** | **4.12 s** (4.03–5.56) | 648,040 | **99 ms** (96–110) | 13,022 |
+| 2 KiB / 32 | 4.50 s (4.40–5.01) | 982,852 | 105 ms (97–110) | 20,249 |
+| 4 KiB / 16 | 4.62 s (4.08–4.93) | 614,678 | 103 ms (100–108) | 12,334 |
+| 4 KiB / 32 | 5.13 s (5.03–5.92) | 924,227 | 122 ms (107–141) | 18,733 |
+
+Neighbor IDs and distances matched across repetitions and block sizes for each
+leaf size. The smaller block adds reads but reduces work per descriptor fetch;
+leaf 32's higher check budget adds enough reads to offset its smaller file.
+The whole-image preference for 2 KiB / 16 is clearer than the overlapping patch
+timing ranges. The builder's existing 16-feature default is retained, and the
+writer's descriptor-block default is 2 KiB; both remain caller-tunable.
+[The per-round measurements](kdf-default-2026-09-12.json) retain the run order,
+times, read counts and file sizes.
 
 **Query workers pay off only once the cache is sharded.** Every node and every
 descriptor a query touches takes a cache lock, so with one lock for the whole
@@ -1170,7 +1198,7 @@ from sfmtool._sfmtool.spatial import (
 )
 
 forest = KdForest(descriptors, num_trees=4, leaf_size=16, seed=7)
-write_kdf(forest, "corpus.kdf", descriptor_block_bytes=64 << 10, sources=sources)
+write_kdf(forest, "corpus.kdf", sources=sources)  # default: 2 KiB blocks
 
 lazy = LazyKdForest("corpus.kdf", cache_bytes=256 << 20, query_workers=4)
 indices, distances, stats = lazy.query_with_stats(queries, k=2, max_leaf_checks=128)

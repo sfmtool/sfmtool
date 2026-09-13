@@ -211,6 +211,17 @@ def test_a_budget_of_zero_still_answers_and_checks_nothing_beyond_one_leaf(tmp_p
 # ── File accounting: the other half of the comparison ─────────────────────
 
 
+def test_default_export_uses_two_kib_descriptor_blocks(tmp_path):
+    descriptors = _descriptors(n=64, dim=128)
+    forest = KdForest(descriptors)
+    path = tmp_path / "default.kdf"
+    write_kdf(forest, str(path))
+
+    summary = kdf_file_summary(str(path))
+    assert summary["descriptor_block_rows"] == 16
+    assert summary["feature_count"] == 64
+
+
 @pytest.mark.parametrize("label,extra", _BLOCK_CASES)
 def test_summary_describes_the_file_it_was_given(tmp_path, label, extra):
     forest = _forest(_descriptors())

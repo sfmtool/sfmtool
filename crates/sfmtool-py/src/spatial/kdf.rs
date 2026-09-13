@@ -524,7 +524,7 @@ impl PyLazyKdForest {
 ///     forest: The `KdForest` to write.
 ///     path: Destination; the call fails if it already exists.
 ///     descriptor_block_bytes: Target size of one descriptor block
-///         (default 64 KiB).
+///         (default 2 KiB).
 ///     chunk_bytes: Target decoded size of one tree chunk (default 1 MiB).
 ///     compression_level: zstd level (default 3).
 ///     origin_block_rows: Rows per origin block (default 131072).
