@@ -110,6 +110,81 @@ def _largest_recon(output_sfm_file: Path):
     return best_path, best_count
 
 
+def _solve_with_retries(
+    solve_fn: Callable[[int | None], Path],
+    *,
+    colmap_dir: Path,
+    output_sfm_file: Path,
+    stash_path: Path,
+    max_attempts: int,
+    rank: Callable[["SfmrReconstruction"], object],
+    accept: Callable[["SfmrReconstruction"], bool],
+    random_seed: int = 42,
+):
+    """Re-roll ``solve_fn`` until it yields an acceptable solve, keeping the best.
+
+    GLOMAP is not seed-deterministic, so a solve can come back degenerate — every
+    image registered but few or no points triangulated, or a ``RuntimeError``
+    ("No 3D points found") in the extreme. The session-scoped fixtures re-roll
+    rather than flake the suite. Each attempt starts from a removed ``colmap_dir``
+    and no stale ``{stem}*.sfmr`` siblings; the first attempt uses ``random_seed``
+    for a reproducible result and the retries let the solver randomize.
+
+    ``solve_fn(seed)`` runs one solve and returns the ``.sfmr`` path it chose.
+    ``rank`` maps that reconstruction to a sort key, or to ``None`` for an attempt
+    not worth keeping at all; the best-ranked attempt so far is stashed at
+    ``stash_path`` (which must not match the ``{stem}*.sfmr`` glob, or the next
+    attempt's cleanup would delete it). ``accept`` decides whether to stop early.
+
+    Returns ``(best_path, best_key, accepted)``: ``best_path`` is ``stash_path``,
+    or ``None`` if no attempt ever ranked. What an unranked or unaccepted outcome
+    means is the caller's to decide — some floors are hard failures and some are
+    merely a reason to keep rolling. :func:`_canonicalize_best` finishes the job
+    for a caller that is happy with what came back.
+    """
+    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
+
+    best_path, best_key = None, None
+    accepted = False
+    for attempt in range(1, max_attempts + 1):
+        if colmap_dir.exists():
+            shutil.rmtree(colmap_dir)
+        for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+            stale.unlink()
+        # First attempt uses the fixed seed for a reproducible result; retries
+        # let the solver randomize so a fresh split can register all images.
+        seed = random_seed if attempt == 1 else None
+        try:
+            path = solve_fn(seed)
+        except RuntimeError:
+            # A degenerate solve is just another attempt to rank below the rest,
+            # not a fixture failure. Retry with fresh randomization.
+            continue
+        recon = SfmrReconstruction.load(path)
+        key = rank(recon)
+        if key is not None and (best_key is None or key > best_key):
+            best_key = key
+            # Stash the best so far; the next attempt clears the output dir.
+            shutil.copy(path, stash_path)
+            best_path = stash_path
+        if accept(recon):
+            accepted = True
+            break
+    return best_path, best_key, accepted
+
+
+def _canonicalize_best(best_path: Path, output_sfm_file: Path) -> None:
+    """Leave the chosen reconstruction at ``output_sfm_file`` and nothing else.
+
+    Clears the solve's ``{stem}*.sfmr`` siblings, moves the stash
+    :func:`_solve_with_retries` kept into place, and removes the stash.
+    """
+    for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
+        stale.unlink()
+    shutil.copy(best_path, output_sfm_file)
+    best_path.unlink()
+
+
 def _rotate_by_quaternion(
     quat_wxyz: np.ndarray, vectors: np.ndarray, *, inverse: bool = False
 ) -> np.ndarray:
@@ -237,74 +312,63 @@ def build_cluster_reconstruction(
     else:
         from sfmtool._global_sfm import run_global_sfm as _solve
 
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
-
     output_sfm_file = Path(output_sfm_file)
-    # Rank attempts by (image_count, point_count): prefer a fully registered
-    # reconstruction, and among those the densest. This keeps retrying past a
-    # complete-but-sparse solve until a substantive one shows up.
-    best_path, best_key = None, (-1, -1)
-    accepted = accept is None
     last_rejection = "no attempt met the image / point-count floors"
-    for attempt in range(1, max_attempts + 1):
-        if colmap_dir.exists():
-            shutil.rmtree(colmap_dir)
-        for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
-            stale.unlink()
-        # First attempt uses the fixed seed for a reproducible result; retries
-        # let the solver randomize so a fresh split can register all images.
-        seed = random_seed if attempt == 1 else None
-        try:
-            _solve(
-                [],
-                workspace_dir,
-                colmap_dir,
-                matches_file=matches_file,
-                random_seed=seed,
-                output_sfm_file=str(output_sfm_file),
-            )
-        except RuntimeError:
-            # A degenerate solve -- GLOMAP is not seed-deterministic, and the
-            # extreme case raises "No 3D points found" -- is just another
-            # attempt to rank below the rest, not a fixture failure. Retry with
-            # fresh randomization, as the ``.camrig`` fixture below does.
-            continue
-        path, count = _largest_recon(output_sfm_file)
-        recon = SfmrReconstruction.load(path)
-        points = recon.point_count
-        key = (count, points)
-        if key > best_key:
-            best_key = key
-            # Stash the best so far; the next attempt clears the output dir.
-            stash = output_sfm_file.parent / f"_best{output_sfm_file.suffix}"
-            shutil.copy(path, stash)
-            best_path = stash
-        images_ok = expected_image_count is None or count >= expected_image_count
-        points_ok = points >= min_point_count
-        if images_ok and points_ok:
-            if accept is None:
-                break
-            reason = accept(recon)
-            if reason is None:
-                accepted = True
-                break
-            last_rejection = reason
+
+    def _attempt(seed: int | None) -> Path:
+        _solve(
+            [],
+            workspace_dir,
+            colmap_dir,
+            matches_file=matches_file,
+            random_seed=seed,
+            output_sfm_file=str(output_sfm_file),
+        )
+        # A solve can split; the most complete sub-reconstruction is the attempt.
+        path, _count = _largest_recon(output_sfm_file)
+        return path
+
+    def _accept(recon: "SfmrReconstruction") -> bool:
+        nonlocal last_rejection
+        images_ok = (
+            expected_image_count is None or recon.image_count >= expected_image_count
+        )
+        if not (images_ok and recon.point_count >= min_point_count):
+            return False
+        if accept is None:
+            return True
+        reason = accept(recon)
+        if reason is None:
+            return True
+        last_rejection = reason
+        return False
+
+    best_path, _best_key, accepted = _solve_with_retries(
+        _attempt,
+        colmap_dir=colmap_dir,
+        output_sfm_file=output_sfm_file,
+        stash_path=output_sfm_file.parent / f"_best{output_sfm_file.suffix}",
+        max_attempts=max_attempts,
+        # Rank attempts by (image_count, point_count): prefer a fully registered
+        # reconstruction, and among those the densest. This keeps retrying past a
+        # complete-but-sparse solve until a substantive one shows up.
+        rank=lambda recon: (recon.image_count, recon.point_count),
+        accept=_accept,
+        random_seed=random_seed,
+    )
 
     if best_path is None:
         raise RuntimeError(
             f"every one of {max_attempts} solve attempts on {workspace_dir} was "
             "degenerate (the solver raised each time); no reconstruction to keep."
         )
-    if not accepted:
+    if accept is not None and not accepted:
         raise RuntimeError(
             f"none of {max_attempts} solve attempts on {workspace_dir} was accepted; "
             f"last rejection: {last_rejection}."
         )
     # Canonicalize: the chosen reconstruction lives at output_sfm_file alone.
-    for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
-        stale.unlink()
-    shutil.copy(best_path, output_sfm_file)
-    best_path.unlink()
+    _canonicalize_best(best_path, output_sfm_file)
     # Strip the occasional degenerate point that collapsed onto its cameras, so
     # FeatureSize patch sizing (and any other ray-distance consumer) is robust.
     _drop_camera_coincident_points(output_sfm_file)
@@ -703,7 +767,6 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     solve path.
     """
     from sfmtool._global_sfm import run_global_sfm
-    from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 
     workspace_dir = tmp_path_factory.mktemp("kerry_park_camrig_sfmr")
     _copy_kerry_park_camrig_into(workspace_dir)
@@ -721,39 +784,38 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
     # GLOMAP is non-deterministic, and the back-to-back fisheye geometry
     # occasionally yields a degenerate solve — all frames register but few/no
     # points triangulate (``run_global_sfm`` raises "No 3D points found" in the
-    # extreme). Retry with a fresh randomization (mirroring
-    # ``build_cluster_reconstruction``), keeping the densest complete result and
-    # holding out for a substantive point cloud, rather than flaking the suite.
-    # The first attempt stays reproducible (seed 42); retries randomize.
+    # extreme). Retry with a fresh randomization, keeping the densest complete
+    # result and holding out for a substantive point cloud, rather than flaking
+    # the suite. The first attempt stays reproducible (seed 42); retries randomize.
     max_attempts = 10
-    best_stash = output_sfm_file.with_name("_best_camrig.sfmr")
-    best_points = -1
-    for attempt in range(1, max_attempts + 1):
-        if colmap_dir.exists():
-            shutil.rmtree(colmap_dir)
-        for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
-            stale.unlink()
-        seed = 42 if attempt == 1 else None
-        try:
-            sfmr_path = run_global_sfm(
-                image_paths,
-                workspace_dir,
-                colmap_dir,
-                output_sfm_file=str(output_sfm_file),
-                random_seed=seed,
-                matching_mode="cluster",
-            )
-        except RuntimeError:
-            # Degenerate solve (e.g. "No 3D points found"); re-randomize.
-            continue
-        recon = SfmrReconstruction.load(sfmr_path)
-        if recon.image_count == expected_count and recon.point_count > best_points:
-            best_points = recon.point_count
-            shutil.copy(sfmr_path, best_stash)
-        if recon.image_count == expected_count and recon.point_count >= 200:
-            break
 
-    if best_points < 0:
+    def _attempt(seed: int | None) -> Path:
+        return run_global_sfm(
+            image_paths,
+            workspace_dir,
+            colmap_dir,
+            output_sfm_file=str(output_sfm_file),
+            random_seed=seed,
+            matching_mode="cluster",
+        )
+
+    best_stash, best_points, _accepted = _solve_with_retries(
+        _attempt,
+        colmap_dir=colmap_dir,
+        output_sfm_file=output_sfm_file,
+        stash_path=output_sfm_file.with_name("_best_camrig.sfmr"),
+        max_attempts=max_attempts,
+        # An incomplete solve is not worth keeping at all here; among the
+        # complete ones, the densest wins.
+        rank=lambda recon: (
+            recon.point_count if recon.image_count == expected_count else None
+        ),
+        accept=lambda recon: (
+            recon.image_count == expected_count and recon.point_count >= 200
+        ),
+    )
+
+    if best_stash is None:
         raise RuntimeError(
             f"kerry_park .camrig global solve produced no complete reconstruction "
             f"in {max_attempts} attempts (all {expected_count} images required)."
@@ -764,10 +826,7 @@ def kerry_park_camrig_workspace_once(tmp_path_factory) -> Path:
             f"points in {max_attempts} attempts (>= 150 required); the back-to-back "
             f"fisheye geometry produced a degenerate, near-empty reconstruction."
         )
-    for stale in output_sfm_file.parent.glob(f"{output_sfm_file.stem}*.sfmr"):
-        stale.unlink()
-    shutil.copy(best_stash, output_sfm_file)
-    best_stash.unlink()
+    _canonicalize_best(best_stash, output_sfm_file)
     return output_sfm_file
 
 
