@@ -195,9 +195,22 @@ frame arrays **and** the bitmaps being `Some`):
    are present (a frame-only reconstruction renders nothing in v1 — flat-shaded
    fallback deferred). Walk `patch_u_halfvec_xyz` rows and skip zero rows
    (points without a patch).
-2. For each present patch, `write_texture` its `(R, R, 4)` tile into the atlas
-   and push a `PatchInstance` (center = `points[i].position`, `w = points[i].w`,
-   `u/v` from the half-vec arrays, `atlas_layer`, `point_index = i`).
+2. Fill the atlas a row of cells at a time: each present patch's `(R, R, 4)`
+   tile is scattered into a band spanning the atlas, and each filled band goes
+   up in one `write_texture`. Then push a `PatchInstance` per patch (center =
+   `points[i].position`, `w = points[i].w`, `u/v` from the half-vec arrays,
+   `atlas_layer`, `point_index = i`).
+
+   **The band is what keeps the upload proportional to the pixels rather than
+   to the patch count.** The bitmaps are tile-major and the atlas is grid-major,
+   so one of the two has to scatter into the other. A `write_texture` per tile
+   asks the driver to, and costs one call per patch; the call dominates a tile
+   this small, so a 2 KiB patch tile cost about what a 64 KiB thumbnail did and
+   an atlas was priced by how many tiles it held. Scattering into a band first
+   makes one row of cells contiguous and its upload one call. A row of cells
+   rather than a whole page, because a page is bounded only by the GPU's 2D
+   texture limit while a band is `atlas_width` by `R`. See
+   `upload/atlas.rs`.
 3. Build the bind group (uniform + `texture_2d_array` + sampler), mirroring
    `rebuild_frustum_bind_group` (`upload/frustums.rs`).
 

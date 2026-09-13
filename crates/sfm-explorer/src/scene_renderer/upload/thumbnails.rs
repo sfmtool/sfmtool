@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::super::gpu_types::{ImageQuadUniforms, MAX_ATLAS_COLS, THUMBNAIL_SIZE};
 use super::super::SceneRenderer;
+use super::atlas::{write_band, Band};
 use super::Uploaded;
 use crate::scene::ReconId;
 use sfmtool_core::progress::Progress;
@@ -103,46 +104,34 @@ impl SceneRenderer {
         });
         drop(atlas_phase);
 
-        // Upload each embedded thumbnail to its grid cell (RGB → RGBA)
+        // Fill the atlas one row of cells at a time and upload each row in a
+        // single call, expanding RGB to RGBA on the way in. The same shape as
+        // the patch atlas and for the same reason ([`super::atlas`]). An image
+        // table is small today, so this costs a couple of milliseconds, but it
+        // was one call per thumbnail and so grew with the image count exactly
+        // as the patch atlas grew with the patch count.
         let tiles_phase = progress.detail_phase("tiles");
-        for i in 0..image_count_clamped as usize {
-            let rgb_slice = recon
+        let mut band = Band::new(atlas_width, THUMBNAIL_SIZE);
+        for i in 0..image_count_clamped {
+            let tile = recon
                 .image_table
                 .thumbnails_y_x_rgb
-                .index_axis(ndarray::Axis(0), i);
-            let mut rgba_data = Vec::with_capacity((THUMBNAIL_SIZE * THUMBNAIL_SIZE * 4) as usize);
-            for pixel in rgb_slice.as_slice().unwrap().as_chunks::<3>().0.iter() {
-                rgba_data.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
-            }
-
-            let page = i as u32 / images_per_page;
-            let idx_in_page = i as u32 % images_per_page;
+                .index_axis(ndarray::Axis(0), i as usize);
+            let idx_in_page = i % images_per_page;
             let col = idx_in_page % cols;
-            let row = idx_in_page / cols;
+            band.place_rgb(col, tile.as_slice().expect("a contiguous thumbnail"));
 
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: col * THUMBNAIL_SIZE,
-                        y: row * THUMBNAIL_SIZE,
-                        z: page,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &rgba_data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(THUMBNAIL_SIZE * 4),
-                    rows_per_image: Some(THUMBNAIL_SIZE),
-                },
-                wgpu::Extent3d {
-                    width: THUMBNAIL_SIZE,
-                    height: THUMBNAIL_SIZE,
-                    depth_or_array_layers: 1,
-                },
-            );
+            if col + 1 == cols || i + 1 == image_count_clamped {
+                band.blank_from(col + 1);
+                write_band(
+                    queue,
+                    &texture,
+                    &band,
+                    i / images_per_page,
+                    idx_in_page / cols,
+                    THUMBNAIL_SIZE,
+                );
+            }
         }
         drop(tiles_phase);
 

@@ -426,9 +426,14 @@ On reconstruction load, `upload_thumbnails()` synchronously:
    8192px limit → 64×64 = 4096 cells, but >4096 images), creates a
    `texture_2d_array` with multiple pages (layers). Each page has the
    same cols×rows grid layout.
-2. For each image, reads the embedded 128×128 thumbnail from the `.sfmr`
-   file, converts RGB → RGBA, and uploads to the correct page and grid
-   cell (page = `i / images_per_page`, cell within page = `i % images_per_page`)
+2. Fills the atlas a row of cells at a time: each embedded 128×128 thumbnail
+   is read from the `.sfmr` file and expanded RGB → RGBA directly into a band
+   spanning the atlas, at its own cell (page = `i / images_per_page`, cell
+   within page = `i % images_per_page`), and each filled band goes up in one
+   `write_texture`. The band is shared with the patch atlas, which is where the
+   reason for it is written down (`upload/atlas.rs`): one call per tile is
+   priced by the tile count rather than the pixel count, which an image table
+   feels as it grows.
 3. Creates the image quad bind group (uniforms + texture array view + sampler)
 
 The shader receives `images_per_page` as a uniform so it can compute the

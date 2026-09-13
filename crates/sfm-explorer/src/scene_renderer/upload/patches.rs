@@ -8,6 +8,7 @@ use std::sync::Arc;
 use super::super::gpu_types::{PatchInstance, PatchUniforms};
 use super::super::recon::PatchResources;
 use super::super::SceneRenderer;
+use super::atlas::{write_band, Band};
 use super::Uploaded;
 use crate::scene::ReconId;
 use sfmtool_core::progress::Progress;
@@ -247,50 +248,41 @@ impl SceneRenderer {
         });
         drop(atlas_phase);
 
-        // Write each patch's RGBA tile into its atlas cell: one
-        // `Queue::write_texture` per tile, timed apart from the instances that
-        // describe them because on a node of tens of thousands of patches these
-        // two loops cost nothing like each other.
+        // Fill the atlas one row of cells at a time and upload each row in a
+        // single call. The bitmaps are tile-major and the atlas is grid-major,
+        // so somebody has to scatter one into the other: a `write_texture` per
+        // tile asks the driver to, and pays a call per tile, which on tens of
+        // thousands of patches is the upload. See [`super::atlas`].
         let mut tiles_phase = progress.detail_phase("tiles");
+        let mut band = Band::new(atlas_width, resolution);
         for (slot, &point) in point_indices
             .iter()
             .enumerate()
             .take(patch_count_clamped as usize)
         {
-            let i = point as usize;
-            let tile = bitmaps.index_axis(ndarray::Axis(0), i);
-            let page = slot as u32 / patches_per_page;
+            let tile = bitmaps.index_axis(ndarray::Axis(0), point as usize);
             let idx_in_page = slot as u32 % patches_per_page;
             let col = idx_in_page % cols;
-            let row = idx_in_page / cols;
+            band.place_rgba(col, tile.as_slice().expect("a contiguous tile"));
 
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: col * resolution,
-                        y: row * resolution,
-                        z: page,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                tile.as_slice().unwrap(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(resolution * 4),
-                    rows_per_image: Some(resolution),
-                },
-                wgpu::Extent3d {
-                    width: resolution,
-                    height: resolution,
-                    depth_or_array_layers: 1,
-                },
-            );
+            // A page holds whole rows of cells, so a page boundary is always a
+            // band boundary too and the last cell of a row is the only test.
+            if col + 1 == cols || slot + 1 == patch_count_clamped as usize {
+                band.blank_from(col + 1);
+                write_band(
+                    queue,
+                    &texture,
+                    &band,
+                    slot as u32 / patches_per_page,
+                    idx_in_page / cols,
+                    resolution,
+                );
+            }
         }
         progress_note!(
             tiles_phase,
-            "{patch_count_clamped} at {resolution}×{resolution} px"
+            "{patch_count_clamped} at {resolution}×{resolution} px in {} bands",
+            patch_count_clamped.div_ceil(cols),
         );
         drop(tiles_phase);
 

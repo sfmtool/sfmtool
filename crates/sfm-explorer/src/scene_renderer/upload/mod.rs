@@ -10,6 +10,7 @@
 //! share no state with each other, only the renderer they write into.
 
 mod additions;
+mod atlas;
 mod bg_image;
 mod frustums;
 mod overlay;

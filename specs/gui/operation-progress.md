@@ -818,7 +818,7 @@ the guards are inert, and the overview row is what it was.
 | `pick bases` | `points` | re-cutting the global pick index space |
 | `pipelines` | wherever it lands | compiling every shader, once per session |
 | `atlas` | `thumbnails`, `patch atlas` | allocating the atlas texture |
-| `tiles` | `thumbnails`, `patch atlas` | one `write_texture` per tile, over the whole atlas |
+| `tiles` | `thumbnails`, `patch atlas` | filling the atlas and uploading it, one row of cells per call |
 | `scan` | `patch atlas` | finding the points that carry a patch |
 | `repack` | `patch atlas` | deciding whether the atlas survives, and rewriting the instances when it does |
 
@@ -832,12 +832,15 @@ one-off of the order of a tenth of a second, and under a row named `points` it
 reads as the point cloud being slow to upload. It is a stage of its own,
 wherever it lands, and it says `compiled once per session` beside the time.
 
-**`tiles` is one `write_texture` per tile, and the call is the cost rather than
-the bytes.** A thumbnail is 64 KiB and a patch tile 2 KiB, and the two cost
-about the same each, so an atlas is priced by how many tiles it has and not by
-how large they are. That is a fact about the upload that no total can show, and
-it is only visible because the tiles are timed apart from the instances built
-over the same list.
+**`tiles` is what the atlas costs, and the call was the cost rather than the
+bytes.** A thumbnail is 64 KiB and a patch tile 2 KiB, and one
+`Queue::write_texture` for either used to cost about the same, so an atlas was
+priced by how many tiles it held and not by how large they were. That is a fact
+about the upload no total can show, and it was visible only because the tiles
+are timed apart from the instances built over the same list. It is why both
+atlases are now filled a row of cells at a time and uploaded one row per call
+(`upload/atlas.rs`), and why the stage's note counts the bands as well as the
+tiles.
 
 **A stage that says a count says which count it is**, because a duration with
 no quantity beside it cannot be read as fast or slow. `point spacing` carries

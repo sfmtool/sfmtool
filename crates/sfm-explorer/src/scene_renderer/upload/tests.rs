@@ -2299,5 +2299,11 @@ fn the_stages_that_carry_a_count_say_what_they_counted() {
         Some(format!("{DEMO_IMAGES} cameras").as_str()),
     );
     assert_eq!(notes["scan"].as_deref(), Some("3 of 4 points"));
-    assert_eq!(notes["tiles"].as_deref(), Some("3 at 16\u{d7}16 px"));
+    // Three tiles over two columns is two bands, so two calls where there
+    // used to be three. The note carries the band count because that is the
+    // number this upload is priced by.
+    assert_eq!(
+        notes["tiles"].as_deref(),
+        Some("3 at 16\u{d7}16 px in 2 bands"),
+    );
 }
