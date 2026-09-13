@@ -644,10 +644,19 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
-    // Frozen from the original writer at HEAD 6528c746.
+    // Frozen from the writer at HEAD b7ce9ece, which is where format version 10
+    // moved the depth statistics out of `images/` and into `derived/`, whose
+    // digest is deliberately not folded in here. That narrowed what this value
+    // covers, so it changed once, on purpose, from the 6528c746 value.
+    //
+    // It should not change again. A diff here means either the bytes of a
+    // hashed section moved or a section entered or left the fold, and both
+    // rename every file and every `pt3d_<content hash>_<index>` id in the
+    // wild. Re-freeze it only alongside a format version bump that intends
+    // that; otherwise the writer has regressed.
     assert_eq!(
         loaded.content_hash.content_xxh128,
-        "6a452384d3ab87bf56f5836ea82b2601"
+        "ea44f5c97d2352fde7fdd8a36d339604"
     );
 
     // All hashes should be non-empty 32-char hex strings
@@ -657,6 +666,12 @@ fn test_content_hash_populated() {
     assert_eq!(loaded.content_hash.points3d_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.tracks_xxh128.len(), 32);
     assert_eq!(loaded.content_hash.content_xxh128.len(), 32);
+    // Present from version 10, and hashed like any other section even though it
+    // stays out of `content_xxh128`.
+    assert_eq!(
+        loaded.content_hash.derived_xxh128.as_deref().map(str::len),
+        Some(32)
+    );
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
