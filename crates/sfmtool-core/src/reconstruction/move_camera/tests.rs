@@ -122,8 +122,8 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
         .collect();
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
         n,
-        sfmr_format::THUMBNAIL_SIZE,
-        sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
         3,
     )));
     recon.image_table.depth_statistics.images.truncate(n);
@@ -179,7 +179,8 @@ fn truth(observed_by: &[Vec<usize>], at_infinity: &[usize]) -> SfmrReconstructio
     set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmap));
     set.observation_confidence = Some(vec![200; observation_count]);
     set.normal_confidence = Some(vec![180; count]);
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    recon.metadata.feature_source =
+        sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     recon.rebuild_derived_fields();
 
     // A bearing carries a unit direction rather than a location: the ray of its
@@ -400,7 +401,7 @@ fn a_value_with_no_keypoints_moves_its_camera_and_keeps_every_point() {
         feature_tool_hashes: vec![[0u8; 16]; image_count],
         sift_content_hashes: vec![[0u8; 16]; image_count],
     };
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_SIFT_FILES.to_string();
+    recon.metadata.feature_source = sfmtool_sfmr_format::FEATURE_SOURCE_SIFT_FILES.to_string();
     recon.rebuild_derived_fields();
     let target = world_from_camera(looking_down_z(), Point3::new(0.9, 0.9, 0.2));
 

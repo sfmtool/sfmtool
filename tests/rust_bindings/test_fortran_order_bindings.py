@@ -14,7 +14,7 @@ There is a second spelling of the same bug: ``as_array().to_owned()`` preserves
 strides whenever the source is contiguous in memory order (which F-contiguous
 input is), producing a non-standard-layout ``Array``. The format writers then
 call ``.as_slice().unwrap()`` on it, so that one surfaces as a
-``PanicException`` from inside ``sfmr-format`` rather than as silently wrong
+``PanicException`` from inside ``sfmtool-sfmr-format`` rather than as silently wrong
 numbers. The fix there is ``.as_array().as_standard_layout().into_owned()``.
 
 The crate-wide ``to_contiguous!`` macro guards the first spelling with
@@ -158,7 +158,7 @@ class TestReconstructionCloneRoundTrip:
     """``clone_with_changes`` + ``save`` with F-ordered array kwargs.
 
     Regression: these went through ``as_array().to_owned()``, which preserved
-    the Fortran strides, and ``sfmr-format``'s writer then did
+    the Fortran strides, and ``sfmtool-sfmr-format``'s writer then did
     ``.as_slice().unwrap()`` on the non-standard-layout array — a
     ``PanicException`` surfacing from a crate the caller never touched.
     """

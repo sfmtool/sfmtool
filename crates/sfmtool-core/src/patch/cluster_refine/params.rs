@@ -12,8 +12,8 @@ use crate::patch::normal_refine::PatchWindow;
 
 /// Per-member refinement status.
 ///
-/// Discriminants MUST match `matches_format::ClusterMemberStatus` — this crate
-/// does not depend on `matches-format`, so the PyO3 binding passes the `u8`
+/// Discriminants MUST match `sfmtool_matches_format::ClusterMemberStatus` — this crate
+/// does not depend on `sfmtool-matches-format`, so the PyO3 binding passes the `u8`
 /// array straight into the `cluster_patches/` section without translation.
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,7 +42,7 @@ pub enum MemberStatus {
 
 /// Sentinel in [`ClusterRefineResult::reference_members`] for a cluster with
 /// no usable reference (mirrors
-/// `matches_format::CLUSTER_REFERENCE_UNREFINABLE`).
+/// `sfmtool_matches_format::CLUSTER_REFERENCE_UNREFINABLE`).
 pub const REFERENCE_UNREFINABLE: u32 = u32::MAX;
 
 /// Tunables for [`refine_cluster_patches`](super::refine_cluster_patches).

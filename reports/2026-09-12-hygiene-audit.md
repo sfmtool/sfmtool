@@ -941,6 +941,16 @@ format crates, and both docs say so**
 - Risk: low — compiler-checked; `sfmtool-py/src/spatial/kdf.rs` and
   `matching/cluster.rs` are the only out-of-crate users.
 
+> _Status (2026-09-13): Partially done — the crate-naming half is resolved, in the
+> opposite direction to the one proposed here. Rather than dropping the prefix from
+> `sfmtool-kdf-format`, the other five unprefixed crates gained it:
+> `sift-format` → `sfmtool-sift-format`, `matches-format` → `sfmtool-matches-format`,
+> `sfmr-format` → `sfmtool-sfmr-format`, `camrig-format` → `sfmtool-camrig-format`,
+> and `sfmr-colmap` → `sfmtool-colmap`. Every crate in the workspace except the
+> `sfm-explorer` binary now carries the prefix, so the split the finding describes is
+> gone. The `LazyKdForestOptions` → `KdfOpenOptions` rename and the `KdfIoStats` /
+> `LazyQueryStats` fork are untouched and remain open._
+
 **`sfmtool-kdf-format` is 63% undocumented at its public surface**
 - Location: `crates/sfmtool-kdf-format/src/types.rs` (**100 of 129** public items
   undocumented, 78%); crate total **121/193 (63%)**; also `cache.rs:18,25,33,99,281`

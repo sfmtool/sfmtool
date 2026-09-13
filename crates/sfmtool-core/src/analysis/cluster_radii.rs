@@ -26,8 +26,8 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 
-use matches_format::MatchesData;
 use rayon::prelude::*;
+use sfmtool_matches_format::MatchesData;
 
 use crate::geometry::focal_vote::contiguous;
 
@@ -224,7 +224,7 @@ fn coarsest_by_radius(radius: &[f32], n: usize) -> Vec<u32> {
 /// use sfmtool_core::analysis::cluster_radii::cluster_radii_from_matches;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
+/// let matches = sfmtool_matches_format::read_matches("clusters.matches".as_ref())?;
 /// let radius = cluster_radii_from_matches(&matches)?;
 /// println!("{} clusters, widest {:?}", radius.len(), radius.iter().cloned().fold(0.0, f32::max));
 /// # Ok(())

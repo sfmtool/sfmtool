@@ -10,8 +10,8 @@ the native optical-flow implementation — would give us more room for flexibili
 - Use in the Rust-only GUI for interactive feature inspection
 - Control over the algorithm for SfM-specific tuning (e.g. custom contrast/edge
   thresholds per dataset, deterministic ordering, exact subpixel conventions)
-- Integration with the rayon-parallel matching pipeline and `sift-format` I/O
-  without a Python/OpenCV round-trip
+- Integration with the rayon-parallel matching pipeline and
+  `sfmtool-sift-format` I/O without a Python/OpenCV round-trip
 - A path to GPU acceleration later, reusing the wgpu infrastructure built for
   optical flow
 
@@ -666,10 +666,11 @@ sfmtool-core/src/features/sift/
 - `detect_sift_keypoints(image, params=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, responses (N,) f32)`
 - `extract_sift(image, params=None, max_described=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, descriptors (K,128) u8)` — the binding for `extract_sift_partial`: `K = min(max_described, N)`, and `K = N` when `max_described` is `None`
 
-This output is exactly what `src/sfmtool/sift/` already consumes, so a new `extract_rust.py`
-backend slots in alongside `extract_opencv.py` / `extract_colmap.py` and writes via the
-existing `sift-format` path. The affine shapes pass straight through — no conversion needed,
-unlike the OpenCV backend, which derives them from its `KeyPoint`s via
+This output is exactly what `src/sfmtool/sift/` already consumes, so a new
+`extract_rust.py` backend slots in alongside `extract_opencv.py` /
+`extract_colmap.py` and writes via the existing `sfmtool-sift-format` path. The
+affine shapes pass straight through — no conversion needed, unlike the OpenCV
+backend, which derives them from its `KeyPoint`s via
 `opencv_keypoint_to_affine_shape`.
 
 ## Testing & validation
@@ -686,7 +687,7 @@ unlike the OpenCV backend, which derives them from its `KeyPoint`s via
   ridge, descriptor unit-norm + 0.2-clamp invariants, orientation on a synthetic
   gradient.
 - **PyO3 surface test** (`tests/rust_bindings/test_sift_extract_rust_bindings.py`) exercising the bindings and
-  round-tripping through `sift-format`.
+  round-tripping through `sfmtool-sift-format`.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/sift.rs`): pyramid build,
   detection, descriptor, end-to-end — same structure as `benches/optical_flow.rs`.
 
@@ -706,5 +707,5 @@ be detected once and described across several invocations is proposed in
 ## Dependencies
 
 The implementation adds no crate dependencies of its own: `rayon` for
-parallelism, the `sift-format` crate for I/O, `criterion` (dev) for benchmarks,
-and SIMD through `std::arch`.
+parallelism, the `sfmtool-sift-format` crate for I/O, `criterion` (dev) for
+benchmarks, and SIMD through `std::arch`.

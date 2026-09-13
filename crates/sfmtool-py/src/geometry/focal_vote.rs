@@ -8,11 +8,11 @@ use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use matches_format::MatchesData;
 use sfmtool_core::geometry::focal_vote::{
     focal_vote_from_matches, focal_vote_with_options, CameraModel, ColumnDiagnostics,
     FocalVoteOptions, FocalVoteResult, MatchesInputError, ScanCell, ScanVote,
 };
+use sfmtool_matches_format::MatchesData;
 
 use crate::io::matches_file::PyMatchesFile;
 

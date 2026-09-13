@@ -71,14 +71,14 @@ for the DirectManipulation details.
 sfmtool/
 ├── Cargo.toml                    # Workspace root
 ├── crates/
-│   ├── sfmr-format/              # .sfmr file read/write/verify
+│   ├── sfmtool-sfmr-format/      # .sfmr file read/write/verify
 │   │   └── src/
 │   │       ├── types.rs          # SfmrCamera, SfmrData, SfmrMetadata
 │   │       ├── read.rs           # .sfmr archive reading
 │   │       ├── write.rs          # .sfmr archive writing
 │   │       └── verify.rs         # .sfmr integrity verification
 │   │
-│   ├── sift-format/              # .sift file read/write/verify
+│   ├── sfmtool-sift-format/      # .sift file read/write/verify
 │   │   └── src/
 │   │       ├── types.rs          # SiftData, SiftMetadata
 │   │       ├── read.rs           # .sift archive reading
@@ -167,7 +167,7 @@ sfmtool/
 │   │           ├── target_indicator.wgsl # Rotating 3D compass / world-up indicator at target
 │   │           └── track_ray.wgsl       # Track ray visualization
 │   │
-│   ├── sfmr-colmap/              # COLMAP format read/write
+│   ├── sfmtool-colmap/           # COLMAP format read/write
 │   │   └── src/
 │   │
 │   └── sfmtool-py/               # PyO3 bindings

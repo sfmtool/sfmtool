@@ -148,10 +148,10 @@ structural constraints only it knows about.
 The primitives live in
 [sfmtool-archive-io/src/lib.rs](../../crates/sfmtool-archive-io/src/lib.rs) and are
 used by the five format crates
-([sift-format](../../crates/sift-format/),
-[matches-format](../../crates/matches-format/),
-[sfmr-format](../../crates/sfmr-format/),
-[camrig-format](../../crates/camrig-format/),
+([sfmtool-sift-format](../../crates/sfmtool-sift-format/),
+[sfmtool-matches-format](../../crates/sfmtool-matches-format/),
+[sfmtool-sfmr-format](../../crates/sfmtool-sfmr-format/),
+[sfmtool-camrig-format](../../crates/sfmtool-camrig-format/),
 [sfmtool-kdf-format](../../crates/sfmtool-kdf-format/)) and by nothing else. There are no
 Python bindings: Python reaches these bytes through each format's own binding.
 
@@ -288,10 +288,10 @@ This is a separate entry point rather than a change of behaviour inside
 `read_zst_entry` so that the parallel region is something a format crate opts
 into. A crate whose read path is a handful of small entries, or one called from
 inside a caller's own parallel region, keeps the sequential readers and pays
-nothing. [matches-format](../../crates/matches-format/)'s
-[`read_matches`](../../crates/matches-format/src/read.rs) is the caller: its
-sections between them consume every entry in the file, and its largest columns
-are tens of megabytes.
+nothing. [sfmtool-matches-format](../../crates/sfmtool-matches-format/)'s
+[`read_matches`](../../crates/sfmtool-matches-format/src/read.rs) is the caller:
+its sections between them consume every entry in the file, and its largest
+columns are tens of megabytes.
 
 The batch holds the whole decompressed file at once, where the sequential
 readers hold one entry at a time. That is the cost of the shape and the reason
@@ -327,9 +327,9 @@ let read: Vec<f64> = read_binary_array(&mut archive, "points/positions_xy.2.2.fl
 
 Note the entry names: the container treats them as opaque strings, so the
 `{field}.{dims…}.{dtype}.zst` convention is enforced by each format crate
-building its own names (`sfmr-format`'s and `matches-format`'s `entries` modules
-do this from the counts in the metadata), and by the reader passing the element
-count it expects.
+building its own names (`sfmtool-sfmr-format`'s and `sfmtool-matches-format`'s
+`entries` modules do this from the counts in the metadata), and by the reader
+passing the element count it expects.
 
 ## Implementation notes
 

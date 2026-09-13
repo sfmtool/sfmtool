@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ndarray::{Array2, Array4};
 
-use sfmr_format::{FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES};
+use sfmtool_sfmr_format::{FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES};
 
 use super::PointConstraintColumns;
 use super::{compute_observation_offsets, count_points_at_infinity, Point3D, TrackObservation};

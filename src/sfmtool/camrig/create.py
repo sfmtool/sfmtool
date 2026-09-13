@@ -59,7 +59,7 @@ def normalize_pattern(pattern: str) -> str:
     Backslashes are accepted on input and normalized to `/`. The rest of the
     grammar — a relative path with no leading `/` and no `..` component, at
     most one frame field (`%d`, `%0Nd`), and every `**` a whole path segment —
-    is checked by the `camrig-format` crate via `validate_camrig_pattern`, the
+    is checked by the `sfmtool-camrig-format` crate via `validate_camrig_pattern`, the
     same rule the format's `validate()` enforces (see
     `specs/formats/camrig-file-format.md`).
     """

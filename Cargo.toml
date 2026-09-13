@@ -4,12 +4,12 @@
 [workspace]
 members = [
     "crates/sfmtool-archive-io",
-    "crates/sift-format",
-    "crates/sfmr-format",
-    "crates/matches-format",
-    "crates/camrig-format",
+    "crates/sfmtool-sift-format",
+    "crates/sfmtool-sfmr-format",
+    "crates/sfmtool-matches-format",
+    "crates/sfmtool-camrig-format",
     "crates/sfmtool-kdf-format",
-    "crates/sfmr-colmap",
+    "crates/sfmtool-colmap",
     "crates/sfmtool-core",
     "crates/sfm-explorer",
     "crates/sfmtool-py",

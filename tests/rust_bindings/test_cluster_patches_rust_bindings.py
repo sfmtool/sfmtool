@@ -9,7 +9,7 @@ import pytest
 
 from sfmtool._sfmtool.matching import refine_cluster_patches
 
-# matches_format::ClusterMemberStatus discriminants.
+# sfmtool_matches_format::ClusterMemberStatus discriminants.
 STATUS_REFERENCE = 0
 STATUS_KEPT = 1
 STATUS_REJECTED_LOW_ZNCC = 2

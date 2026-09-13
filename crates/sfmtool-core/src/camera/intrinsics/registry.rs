@@ -9,15 +9,15 @@
 //! [`SfmrCamera`] is the **wire type** — a `model: String` plus a
 //! `BTreeMap<String, f64>`, which is literally the shape of the
 //! `cameras/metadata.json.zst` payload, with COLMAP's parameter names. It
-//! lives in `sfmr-format`, which does not depend on this crate, so
-//! `sfmr-colmap` and `camrig-format` can move cameras across the disk
+//! lives in `sfmtool-sfmr-format`, which does not depend on this crate, so
+//! `sfmtool-colmap` and `sfmtool-camrig-format` can move cameras across the disk
 //! boundary without acquiring the geometry layer.
 //!
 //! [`CameraModel`] is the **computation type** — a closed enum, so every
 //! projection, Jacobian and distortion path is exhaustively matched by the
 //! compiler.
 //!
-//! Neither absorbs the other. Pushing the enum down into `sfmr-format` would
+//! Neither absorbs the other. Pushing the enum down into `sfmtool-sfmr-format` would
 //! invert the workspace layering; computing over the map would trade
 //! compile-time exhaustiveness for runtime lookups. And the map can carry a
 //! model this build does not know, which is exactly why
@@ -50,7 +50,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use sfmr_format::SfmrCamera;
+use sfmtool_sfmr_format::SfmrCamera;
 
 use crate::camera::distortion::bspline::MIN_BSPLINE_COEFFS;
 

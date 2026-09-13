@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use matches_format::{ClusterMemberStatus, MatchesData};
+use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 
 use crate::reconstruction::SfmrReconstruction;
 

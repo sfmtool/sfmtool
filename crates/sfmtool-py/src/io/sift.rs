@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::PathBuf;
 
-use sift_format::{self, FeatureToolMetadata, SiftContentHash, SiftData, SiftMetadata};
+use sfmtool_sift_format::{self, FeatureToolMetadata, SiftContentHash, SiftData, SiftMetadata};
 
 use crate::helpers::{get_item, py_to_serde, serde_to_py};
 
@@ -39,7 +39,7 @@ fn sift_data_to_py(py: Python<'_>, data: SiftData) -> PyResult<Py<PyAny>> {
 ///   (THUMBNAIL_SIZE,THUMBNAIL_SIZE,3 uint8).
 #[pyfunction]
 pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = sift_format::read_sift(&path)
+    let data = sfmtool_sift_format::read_sift(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     sift_data_to_py(py, data)
 }
@@ -49,7 +49,7 @@ pub fn read_sift(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 /// Returns a dict with keys: feature_tool_metadata, metadata, content_hash.
 #[pyfunction]
 pub fn read_sift_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let (tool_meta, meta, hash) = sift_format::read_sift_metadata(&path)
+    let (tool_meta, meta, hash) = sfmtool_sift_format::read_sift_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -64,7 +64,7 @@ pub fn read_sift_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> 
 /// If `count` exceeds the feature count, returns all features.
 #[pyfunction]
 pub fn read_sift_partial(py: Python<'_>, path: PathBuf, count: usize) -> PyResult<Py<PyAny>> {
-    let data = sift_format::read_sift_partial(&path, count)
+    let data = sfmtool_sift_format::read_sift_partial(&path, count)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     sift_data_to_py(py, data)
 }
@@ -114,7 +114,7 @@ pub fn write_sift(
 
     // The arrays are now owned, so release the GIL around the CPU-bound
     // zstd/ZIP compression and file write.
-    py.detach(|| sift_format::write_sift(&path, &sift_data, zstd_level))
+    py.detach(|| sfmtool_sift_format::write_sift(&path, &sift_data, zstd_level))
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -182,8 +182,8 @@ impl SiftWriteQueue {
         let sift_data = sift_data_from_dict(py, data)?;
         let (tx, rx) = std::sync::mpsc::channel();
         rayon::spawn(move || {
-            let result =
-                sift_format::write_sift(&path, &sift_data, zstd_level).map_err(|e| e.to_string());
+            let result = sfmtool_sift_format::write_sift(&path, &sift_data, zstd_level)
+                .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
         self.pending.push_back(rx);
@@ -241,7 +241,8 @@ impl Drop for SiftWriteQueue {
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
 pub fn verify_sift(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    sift_format::verify_sift(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_sift_format::verify_sift(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

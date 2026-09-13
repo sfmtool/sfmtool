@@ -7,7 +7,7 @@
 //!
 //! `specs/core/reconstruction/edited-reconstruction.md` is the design; this
 //! module is the whole of it, apart from the `.sfmr` writer's hashing, which
-//! `sfmr_format::content_hash_of` supplies.
+//! `sfmtool_sfmr_format::content_hash_of` supplies.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
@@ -15,11 +15,11 @@ use std::sync::{Arc, OnceLock};
 use ndarray::{Array2, Array3, Array4, ArrayView3, Axis};
 use xxhash_rust::xxh3::Xxh3;
 
-use sfmr_format::{
+use sfmtool_archive_io::format_hash;
+use sfmtool_sfmr_format::{
     ContentHash, SfmrError, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
     POINT_CONSTRAINT_RANGED,
 };
-use sfmtool_archive_io::format_hash;
 
 use super::data::{
     ImageTable, ObservationSource, Point3D, PointConstraintColumns, PointSet, SfmrReconstruction,
@@ -803,7 +803,7 @@ impl EditedReconstruction {
     /// or a lineage entry has to name.
     ///
     /// Checking the stored hashes against the bytes is verification, and
-    /// verification is [`sfmr_format::verify_sfmr`]'s job, asked for
+    /// verification is [`sfmtool_sfmr_format::verify_sfmr`]'s job, asked for
     /// deliberately. It is not something a value does to itself every time it
     /// is asked who it is.
     ///

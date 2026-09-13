@@ -18,7 +18,7 @@ from click.testing import CliRunner
 
 from sfmtool.cli import main
 
-# matches_format::ClusterMemberStatus discriminants.
+# sfmtool_matches_format::ClusterMemberStatus discriminants.
 STATUS_REFERENCE = 0
 STATUS_KEPT = 1
 VALID_STATUSES = {0, 1, 2, 3, 4, 5, 6}

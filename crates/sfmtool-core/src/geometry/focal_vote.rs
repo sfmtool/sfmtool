@@ -32,7 +32,7 @@ use nalgebra::Matrix3;
 use ndarray::Array1;
 use rayon::prelude::*;
 
-use matches_format::MatchesData;
+use sfmtool_matches_format::MatchesData;
 
 use crate::geometry::epipolar_estimation::{
     estimate_fundamental, focal_from_fundamental, FundamentalOptions,
@@ -601,16 +601,18 @@ impl std::fmt::Display for MatchesInputError {
 
 impl std::error::Error for MatchesInputError {}
 
-impl From<matches_format::SharedDimsError> for MatchesInputError {
+impl From<sfmtool_matches_format::SharedDimsError> for MatchesInputError {
     /// The file-level reading, restated in the vote's terms: the three ways a
     /// file states no one resolution are the three dimension variants here,
     /// which keep their own wording because they say why the *vote* cannot
     /// proceed.
-    fn from(e: matches_format::SharedDimsError) -> Self {
+    fn from(e: sfmtool_matches_format::SharedDimsError) -> Self {
         match e {
-            matches_format::SharedDimsError::NoImages => MatchesInputError::NoImages,
-            matches_format::SharedDimsError::NoDimensions => MatchesInputError::NoImageDimensions,
-            matches_format::SharedDimsError::Mixed {
+            sfmtool_matches_format::SharedDimsError::NoImages => MatchesInputError::NoImages,
+            sfmtool_matches_format::SharedDimsError::NoDimensions => {
+                MatchesInputError::NoImageDimensions
+            }
+            sfmtool_matches_format::SharedDimsError::Mixed {
                 expected,
                 found,
                 image,

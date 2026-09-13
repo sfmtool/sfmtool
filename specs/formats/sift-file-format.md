@@ -38,9 +38,10 @@ and bit/byte shuffling could be applied [like in blosc](https://www.blosc.org/po
 ## Format versions
 
 `metadata.version` records the format version. There is one version, `1`: the
-`sift-format` crate always writes `metadata.version = 1`
-([`SIFT_FORMAT_VERSION`](../../crates/sift-format/src/types.rs)) and its reader
-rejects any file whose version is newer. Everything below describes version 1.
+`sfmtool-sift-format` crate always writes `metadata.version = 1`
+([`SIFT_FORMAT_VERSION`](../../crates/sfmtool-sift-format/src/types.rs)) and its
+reader rejects any file whose version is newer. Everything below describes
+version 1.
 
 A version 2 layout is proposed but not implemented: it would store descriptors as
 append-only range chunks so a keypoint pool can be detected once and described
@@ -192,10 +193,12 @@ re-reading and re-downscaling the source image. Because it is copied rather than
 `.sfmr` thumbnail edge must equal this one; see the `images/thumbnails_y_x_rgb` section of
 [`sfmr-file-format.md`](sfmr-file-format.md).
 
-In this repository the edge has a single declaration, `sift_format::THUMBNAIL_SIZE`, from which the
-entry name above, the read path, the write path and the shape check are all derived. Its equality
-with `sfmr_format::THUMBNAIL_SIZE` is enforced by a compile-time assertion in `sfmtool-core`, and the
-value is exported to Python as `sfmtool.THUMBNAIL_SIZE` for the extractors that produce the pixels.
+In this repository the edge has a single declaration,
+`sfmtool_sift_format::THUMBNAIL_SIZE`, from which the entry name above, the read
+path, the write path and the shape check are all derived. Its equality with
+`sfmtool_sfmr_format::THUMBNAIL_SIZE` is enforced by a compile-time assertion in
+`sfmtool-core`, and the value is exported to Python as `sfmtool.THUMBNAIL_SIZE`
+for the extractors that produce the pixels.
 
 ## Feature tool hash computation
 

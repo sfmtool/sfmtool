@@ -111,8 +111,8 @@ impl SfmrImage {
 
 ### Intrinsic access
 
-`SfmrCamera` provides a helper (in `sfmr-format/types.rs`) that handles both
-shared-focal-length models (e.g. SIMPLE_RADIAL uses `focal_length`) and
+`SfmrCamera` provides a helper (in `sfmtool-sfmr-format/types.rs`) that handles
+both shared-focal-length models (e.g. SIMPLE_RADIAL uses `focal_length`) and
 split-focal-length models (e.g. PINHOLE uses `focal_length_x` /
 `focal_length_y`):
 

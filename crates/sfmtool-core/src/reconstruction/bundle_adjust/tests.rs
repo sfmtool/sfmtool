@@ -75,8 +75,8 @@ fn truth() -> SfmrReconstruction {
         .collect();
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
         IMAGES,
-        sfmr_format::THUMBNAIL_SIZE,
-        sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
         3,
     )));
     let stats = recon.image_table.depth_statistics.images[0].clone();
@@ -136,7 +136,8 @@ fn truth() -> SfmrReconstruction {
     }
     set.patch_u_halfvec_xyz = Some(u);
     set.patch_v_halfvec_xyz = Some(v);
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    recon.metadata.feature_source =
+        sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     recon.rebuild_derived_fields();
     recon
 }
@@ -242,7 +243,7 @@ fn the_poses_and_the_points_converge_on_the_truth() {
     let mut columns = PointConstraintColumns::all_free(POINTS);
     for p in 0..3 {
         source.point_set.points[p].position = truth.point_set.points[p].position;
-        columns.point_constraints[p] = sfmr_format::POINT_CONSTRAINT_HELD;
+        columns.point_constraints[p] = sfmtool_sfmr_format::POINT_CONSTRAINT_HELD;
     }
     source.point_set.point_constraints = Some(columns);
     let source = source;
@@ -358,7 +359,7 @@ fn a_point_at_infinity_comes_back_a_direction() {
 fn a_held_point_comes_back_exactly() {
     let mut source = perturbed();
     let mut columns = PointConstraintColumns::all_free(source.point_set.points.len());
-    columns.point_constraints[3] = sfmr_format::POINT_CONSTRAINT_HELD;
+    columns.point_constraints[3] = sfmtool_sfmr_format::POINT_CONSTRAINT_HELD;
     source.point_set.point_constraints = Some(columns);
     let held = source.point_set.points[3].position;
 
@@ -374,7 +375,7 @@ fn a_held_point_comes_back_exactly() {
         .expect("the columns survived");
     assert_eq!(
         columns.point_constraints[3],
-        sfmr_format::POINT_CONSTRAINT_HELD
+        sfmtool_sfmr_format::POINT_CONSTRAINT_HELD
     );
 }
 
@@ -453,7 +454,7 @@ fn a_value_with_no_keypoints_is_refused() {
         feature_tool_hashes: vec![[0u8; 16]; IMAGES],
         sift_content_hashes: vec![[0u8; 16]; IMAGES],
     };
-    source.metadata.feature_source = sfmr_format::FEATURE_SOURCE_SIFT_FILES.to_string();
+    source.metadata.feature_source = sfmtool_sfmr_format::FEATURE_SOURCE_SIFT_FILES.to_string();
 
     assert_eq!(
         bundle_adjust(&source, &BundleAdjustOptions::default(), &Progress::none()).err(),
@@ -552,7 +553,7 @@ fn a_constraint_the_adjustment_cannot_honour_is_refused() {
     let mut columns = PointConstraintColumns::all_free(source.point_set.points.len());
     // Ranged at a finite distance from nowhere: the gauge is free, so a distance
     // from the world frame constrains nothing.
-    columns.point_constraints[2] = sfmr_format::POINT_CONSTRAINT_RANGED;
+    columns.point_constraints[2] = sfmtool_sfmr_format::POINT_CONSTRAINT_RANGED;
     columns.constraint_distances[2] = 4.0;
     source.point_set.point_constraints = Some(columns);
 

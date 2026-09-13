@@ -8,7 +8,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
-use sfmr_format::{self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions};
+use sfmtool_sfmr_format::{
+    self, ContentHash, DepthStatistics, SfmrData, SfmrMetadata, WriteOptions,
+};
 
 use crate::helpers::{
     dtype_name, extract_cameras_as_sfmr, extract_rig_frame_data, get_item, get_optional_item,
@@ -96,7 +98,7 @@ where
 /// the patch frame.
 #[pyfunction]
 pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = sfmr_format::read_sfmr(&path)
+    let data = sfmtool_sfmr_format::read_sfmr(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let dict = PyDict::new(py);
@@ -238,7 +240,7 @@ pub fn read_sfmr(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 /// Read only the top-level metadata from a .sfmr file (fast, no binary data).
 #[pyfunction]
 pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let metadata = sfmr_format::read_sfmr_metadata(&path)
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     serde_to_py(py, &metadata)
 }
@@ -249,7 +251,7 @@ pub fn read_sfmr_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> 
 /// directory of `.sfmr` files to resolve a `pt3d_<hash>_<index>` Point ID.
 #[pyfunction]
 pub fn read_sfmr_content_hash(path: PathBuf) -> PyResult<String> {
-    let content_hash = sfmr_format::read_sfmr_content_hash(&path)
+    let content_hash = sfmtool_sfmr_format::read_sfmr_content_hash(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     Ok(content_hash.content_xxh128)
 }
@@ -489,7 +491,7 @@ pub(crate) fn parse_sfmr_data_from_dict(
 /// the frame there.
 ///
 /// KNOWN LIMITATION: this always writes the current
-/// [`sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`
+/// [`sfmtool_sfmr_format::SFMR_FORMAT_VERSION`] regardless of the `metadata["version"]`
 /// in the dict, and assumes the arrays
 /// are already in the canonical convention — it applies no conversion. Writing a
 /// dict read from a pre-v5 file via `read_sfmr` (which does not upgrade) therefore
@@ -509,7 +511,7 @@ pub fn write_sfmr(
         zstd_level,
         skip_recompute_depth_stats,
     };
-    sfmr_format::write_sfmr_with_options(&path, &mut sfmr_data, &options)
+    sfmtool_sfmr_format::write_sfmr_with_options(&path, &mut sfmr_data, &options)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -518,7 +520,8 @@ pub fn write_sfmr(
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
 pub fn verify_sfmr(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    sfmr_format::verify_sfmr(&path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    sfmtool_sfmr_format::verify_sfmr(&path)
+        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -527,7 +530,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // legend on disk, and this is the legend every column reaching Python is on.
     m.add(
         "POINT_CONSTRAINT_NAMES",
-        pyo3::types::PyTuple::new(m.py(), sfmr_format::PointConstraint::NAMES)?,
+        pyo3::types::PyTuple::new(m.py(), sfmtool_sfmr_format::PointConstraint::NAMES)?,
     )?;
     m.add_function(wrap_pyfunction!(read_sfmr, m)?)?;
     m.add_function(wrap_pyfunction!(read_sfmr_metadata, m)?)?;

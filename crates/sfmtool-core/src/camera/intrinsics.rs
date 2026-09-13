@@ -7,7 +7,7 @@
 //! camera models used in structure-from-motion pipelines (matching COLMAP conventions).
 //!
 //! [`CameraIntrinsics`] is the computation type. For serialization, convert
-//! to/from [`sfmr_format::SfmrCamera`] using the provided `TryFrom` / `From`
+//! to/from [`sfmtool_sfmr_format::SfmrCamera`] using the provided `TryFrom` / `From`
 //! implementations, which live in the private `registry` module along with the one
 //! declaration every camera model is derived from. See
 //! `specs/core/camera/camera-model-registry.md`.
@@ -29,7 +29,7 @@ pub(crate) use registry::MODEL_COUNT;
 /// Camera model with typed parameters.
 ///
 /// Each variant carries exactly the parameters defined by its COLMAP model.
-/// Parameter names match the serialization convention used by [`sfmr_format::SfmrCamera`].
+/// Parameter names match the serialization convention used by [`sfmtool_sfmr_format::SfmrCamera`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum CameraModel {
     Pinhole {
@@ -161,7 +161,7 @@ pub enum CameraModel {
     /// Not a COLMAP model — an sfmtool extension, like
     /// [`CameraModel::Equirectangular`]. The COLMAP carrier is
     /// `SIMPLE_RADIAL_FISHEYE` with `k = 0`, which parameterizes the identical
-    /// map; `sfmr-colmap` converts in both directions.
+    /// map; `sfmtool-colmap` converts in both directions.
     EquidistantFisheye {
         focal_length: f64,
         principal_point_x: f64,
@@ -195,7 +195,7 @@ pub enum CameraModel {
     ///
     /// Not a COLMAP model — an sfmtool extension. Unlike
     /// [`CameraModel::EquidistantFisheye`] it has **no COLMAP carrier**: no
-    /// COLMAP model parameterizes the spline, so `sfmr-colmap` rejects it
+    /// COLMAP model parameterizes the spline, so `sfmtool-colmap` rejects it
     /// with `UnknownModelName` on every export path.
     ///
     /// **Beta:** the parameterization — the basis, the knot layout, the
@@ -209,7 +209,7 @@ pub enum CameraModel {
         /// `δ` continues linearly with its end slope beyond it.
         bspline_theta_max: f64,
         /// Dimensionless spline coefficients `c₀..c_{N−1}`. Serialized as
-        /// `bspline_c0..bspline_c{N−1}` in [`sfmr_format::SfmrCamera`] parameters.
+        /// `bspline_c0..bspline_c{N−1}` in [`sfmtool_sfmr_format::SfmrCamera`] parameters.
         bspline: Vec<f64>,
     },
     /// Pinhole with a monotone radial spline: `r(ρ) = f·(ρ + δ(ρ))` with
@@ -242,7 +242,7 @@ pub enum CameraModel {
     /// direct construction can produce them.
     ///
     /// Not a COLMAP model — an sfmtool extension with **no COLMAP carrier**:
-    /// no COLMAP model parameterizes the spline, so `sfmr-colmap` rejects it
+    /// no COLMAP model parameterizes the spline, so `sfmtool-colmap` rejects it
     /// with `UnknownModelName` on every export path.
     ///
     /// **Beta:** the parameterization — the basis, the knot layout, the
@@ -256,7 +256,7 @@ pub enum CameraModel {
         /// `δ` continues linearly with its end slope beyond it.
         bspline_rho_max: f64,
         /// Dimensionless spline coefficients `c₀..c_{N−1}`. Serialized as
-        /// `bspline_c0..bspline_c{N−1}` in [`sfmr_format::SfmrCamera`] parameters.
+        /// `bspline_c0..bspline_c{N−1}` in [`sfmtool_sfmr_format::SfmrCamera`] parameters.
         bspline: Vec<f64>,
     },
 }

@@ -16,7 +16,7 @@
 
 use ndarray::Array2;
 
-use sift_format::{read_sift_metadata, read_sift_positions};
+use sfmtool_sift_format::{read_sift_metadata, read_sift_positions};
 
 use super::data::ReconstructionError;
 use super::{ObservationSource, SfmrReconstruction};

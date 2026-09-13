@@ -481,11 +481,11 @@ entries, so those bytes are the whole of what a hash needs and the archive
 container and its zstd frames are the whole of what it does not. The writer
 serialises each section entry through one code path with two consumers: a save,
 which hashes each entry's bytes and then compresses and stores them, and
-`sfmr_format::content_hash_of`, which hashes them and drops them. So there is
-one serialisation rule and one hashing rule, and the returned `content_xxh128`
-is the one a save of that value stores, including the normalisations a write
-performs on its way (tracks sorted, format version and infinity count refreshed,
-depth statistics and missing normals recomputed).
+`sfmtool_sfmr_format::content_hash_of`, which hashes them and drops them. So
+there is one serialisation rule and one hashing rule, and the returned
+`content_xxh128` is the one a save of that value stores, including the
+normalisations a write performs on its way (tracks sorted, format version and
+infinity count refreshed, depth statistics and missing normals recomputed).
 
 Nothing about the act of saving is in the hash. The write timestamp lives in the
 top-level `written.json` entry, which like `content_hash.json` sits outside every
@@ -647,7 +647,7 @@ invents one is a visible failure. What they pin:
   stopped resolving in the *edited* index space the materialisation's map is
   over, while the scan follows the point's identity into the row it landed in.
 
-`crates/sfmr-format/src/tests.rs` pins the hashing itself: that
+`crates/sfmtool-sfmr-format/src/tests.rs` pins the hashing itself: that
 `content_hash_of` agrees section for section with what a write of the same data
 stores, over a reconstruction carrying every optional column; that two saves
 differ only in the timestamp; and that a file authored in the pre-version-8

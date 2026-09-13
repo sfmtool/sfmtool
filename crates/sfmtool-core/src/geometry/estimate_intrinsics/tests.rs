@@ -654,16 +654,16 @@ fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
         image_dims[[row, 1]] = h;
     }
     MatchesData {
-        metadata: matches_format::MatchesMetadata {
-            version: matches_format::MATCHES_FORMAT_VERSION,
+        metadata: sfmtool_matches_format::MatchesMetadata {
+            version: sfmtool_matches_format::MATCHES_FORMAT_VERSION,
             matching_method: "test".into(),
             matching_tool: "test".into(),
             matching_tool_version: "0".into(),
             matching_options: std::collections::BTreeMap::new(),
-            workspace: matches_format::WorkspaceMetadata {
+            workspace: sfmtool_matches_format::WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: ".".into(),
-                contents: matches_format::WorkspaceContents {
+                contents: sfmtool_matches_format::WorkspaceContents {
                     feature_tool: "none".into(),
                     feature_type: "sift".into(),
                     feature_options: serde_json::json!({}),
@@ -680,7 +680,7 @@ fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
             has_clusters: true,
             has_cluster_patches: false,
         },
-        content_hash: matches_format::MatchesContentHash {
+        content_hash: sfmtool_matches_format::MatchesContentHash {
             metadata_xxh128: String::new(),
             images_xxh128: String::new(),
             image_pairs_xxh128: None,
@@ -695,7 +695,7 @@ fn matches_of(obs: &Obs, dims: &[(u32, u32)]) -> MatchesData {
         feature_counts: ndarray::Array1::zeros(dims.len()),
         image_dims: Some(image_dims),
         image_pairs: None,
-        clusters: Some(matches_format::ClustersData {
+        clusters: Some(sfmtool_matches_format::ClustersData {
             cluster_starts: ndarray::Array1::from(obs.starts.clone()),
             member_images: ndarray::Array1::from(obs.image.clone()),
             member_features: ndarray::Array1::from_iter(0..n_members as u32),

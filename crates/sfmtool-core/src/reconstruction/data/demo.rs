@@ -15,7 +15,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::Array4;
 
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     ContentHash, DepthStatistics, ImageDepthStats, ObservedDepthStats, SfmrMetadata,
     FEATURE_SOURCE_SIFT_FILES,
 };
@@ -167,10 +167,10 @@ impl SfmrReconstruction {
             tool: "sfmtool".into(),
             tool_version: "0.1.0".into(),
             tool_options: BTreeMap::new(),
-            workspace: sfmr_format::WorkspaceMetadata {
+            workspace: sfmtool_sfmr_format::WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: ".".into(),
-                contents: sfmr_format::WorkspaceContents {
+                contents: sfmtool_sfmr_format::WorkspaceContents {
                     feature_tool: "none".into(),
                     feature_type: "sift".into(),
                     feature_options: serde_json::json!({}),

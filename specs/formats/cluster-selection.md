@@ -1,12 +1,12 @@
 # Cluster Selection
 
-Derives a smaller, self-contained working set from a cluster-backbone
-`.matches` file: a predicate over members and clusters that produces a new
-cluster-backbone file holding only the surviving subset. The operation is
-`MatchesData::select_clusters` in the `matches-format` crate, surfaced in
-Python as `MatchesFile.select_clusters`. It is a predicate, not a strategy —
-nothing is reordered or ranked; consumers that need an admission order
-compute it from the selected file's arrays.
+Derives a smaller, self-contained working set from a cluster-backbone `.matches`
+file: a predicate over members and clusters that produces a new cluster-backbone
+file holding only the surviving subset. The operation is
+`MatchesData::select_clusters` in the `sfmtool-matches-format` crate, surfaced
+in Python as `MatchesFile.select_clusters`. It is a predicate, not a strategy —
+nothing is reordered or ranked; consumers that need an admission order compute
+it from the selected file's arrays.
 
 The output is an ordinary `.matches` file whose file-level contract —
 provenance record, sentinel scoping, verifiability — is specified in

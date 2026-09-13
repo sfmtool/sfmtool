@@ -14,7 +14,7 @@ use std::sync::Arc;
 use nalgebra::Point3;
 use ndarray::Array4;
 
-use sfmr_format::{DepthStatistics, FramesMetadata, ImageDepthStats, RigFrameData};
+use sfmtool_sfmr_format::{DepthStatistics, FramesMetadata, ImageDepthStats, RigFrameData};
 
 use super::data::{compute_observation_offsets, count_points_at_infinity};
 use super::*;

@@ -30,7 +30,7 @@
 //! ([`escalation_reasons`]) -- adaptive strategy inside the estimator, not a
 //! decision each caller re-derives from the vote's diagnostics.
 
-use matches_format::MatchesData;
+use sfmtool_matches_format::MatchesData;
 
 use crate::camera::CameraIntrinsics;
 use crate::geometry::focal_vote::{
@@ -418,7 +418,7 @@ fn verdict_camera(
 /// };
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
+/// let matches = sfmtool_matches_format::read_matches("clusters.matches".as_ref())?;
 /// let estimate = estimate_intrinsics_from_matches(&matches, &IntrinsicsOptions::default())?;
 /// println!("{:?} at {:?} px", estimate.camera_model, estimate.focal_px);
 /// # Ok(())

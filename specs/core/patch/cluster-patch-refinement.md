@@ -31,7 +31,7 @@ normatively in
 ## Rust API
 
 ```rust
-/// Per-member verdict. Discriminants match `matches_format::ClusterMemberStatus`.
+/// Per-member verdict. Discriminants match `sfmtool_matches_format::ClusterMemberStatus`.
 #[repr(u8)]
 pub enum MemberStatus {
     Reference = 0,
@@ -322,11 +322,11 @@ member wins, the simplex reorder is a stable insertion sort, and the returned
 optimum is the first minimum (the numpy-argmin convention). Two runs over the
 same input are bit-identical under any thread schedule.
 
-**The status discriminants are a cross-crate invariant.** `sfmtool-core` does not
-depend on `matches-format`; the binding casts `MemberStatus` to `u8` and writes
-it straight into the `cluster_patches/` section. The two enums must stay
-numerically identical, and a new status has to land in both — plus the format's
-validator — in one change.
+**The status discriminants are a cross-crate invariant.** `sfmtool-core` does
+not depend on `sfmtool-matches-format`; the binding casts `MemberStatus` to `u8`
+and writes it straight into the `cluster_patches/` section. The two enums must
+stay numerically identical, and a new status has to land in both — plus the
+format's validator — in one change.
 
 **The tile bound is the frame test.** Each evaluation samples through a
 per-(member, level) tile: a planar f32 copy of the touched region of that pyramid

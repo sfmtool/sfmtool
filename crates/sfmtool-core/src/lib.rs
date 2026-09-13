@@ -21,8 +21,8 @@
 //! - [`progress`] — the parameter a long-running call reports its phases,
 //!   messages and counts through, and is told to stop by
 //!
-//! File-format I/O is provided by the sibling crates `sift-format`,
-//! `sfmr-format`, `matches-format`, and `camrig-format`.
+//! File-format I/O is provided by the sibling crates `sfmtool-sift-format`,
+//! `sfmtool-sfmr-format`, `sfmtool-matches-format`, and `sfmtool-camrig-format`.
 
 pub mod analysis;
 pub mod camera;
@@ -58,17 +58,17 @@ pub use reconstruction::{
 };
 /// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on
-/// `sfmr-format` directly.
-pub use sfmr_format::THUMBNAIL_SIZE;
+/// `sfmtool-sfmr-format` directly.
+pub use sfmtool_sfmr_format::THUMBNAIL_SIZE;
 /// Re-exported for the same reason, one level up: [`ImageTable::rig_frame_data`]
 /// is a public field whose type nothing downstream could otherwise name, so a
-/// consumer wanting to read — or build — a rig had to depend on `sfmr-format`
+/// consumer wanting to read — or build — a rig had to depend on `sfmtool-sfmr-format`
 /// itself to say what it was holding.
-pub use sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
+pub use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigFrameData, RigsMetadata};
 /// Re-exported alongside [`PointConstraintColumns`], whose entries are these
 /// codes: a consumer reading or building the constraint columns needs to name
-/// them without depending on `sfmr-format` itself.
-pub use sfmr_format::{
+/// them without depending on `sfmtool-sfmr-format` itself.
+pub use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 
@@ -77,15 +77,17 @@ pub use sfmr_format::{
 ///
 /// Re-exported for the same reason as the constraint codes above: a consumer
 /// composing or reading lineage works in terms of a reconstruction value, and
-/// needs these names without depending on `sfmr-format` itself.
-pub use sfmr_format::{LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT};
+/// needs these names without depending on `sfmtool-sfmr-format` itself.
+pub use sfmtool_sfmr_format::{
+    LineageEntry, LineageMap, LINEAGE_KIND_BASE, LINEAGE_KIND_POINT_EDIT,
+};
 
 // `.sfmr` thumbnails are copied verbatim out of the per-image `.sift` files, so
 // the two formats' thumbnail extents must agree. Neither format crate depends
 // on the other — this crate is the first place both are visible, which makes it
 // the only place the agreement can be enforced at compile time rather than
 // discovered as a shape mismatch at runtime.
-const _: () = assert!(sfmr_format::THUMBNAIL_SIZE == sift_format::THUMBNAIL_SIZE);
+const _: () = assert!(sfmtool_sfmr_format::THUMBNAIL_SIZE == sfmtool_sift_format::THUMBNAIL_SIZE);
 pub use spherical::{
     render_consensus_atlas, ConsensusAtlasBatchError, ConsensusAtlasBatchParams,
     ConsensusAtlasReport,

@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use nalgebra::{Point3, Quaternion, UnitQuaternion, Vector3};
 
-use matches_format::MatchesData;
+use sfmtool_matches_format::MatchesData;
 
 use crate::camera::report::angle_between;
 use crate::camera::CameraIntrinsics;
@@ -804,9 +804,11 @@ fn read_sift_positions(
 ) -> Result<Vec<[f32; 2]>, ReconstructionError> {
     let path = recon.sift_path_for_image(image);
     let count = recon.point_set.max_track_feature_index[image] as usize + 1;
-    sift_format::read_sift_positions(&path, count).map_err(|e| ReconstructionError::SiftRead {
-        path,
-        source: e.to_string(),
+    sfmtool_sift_format::read_sift_positions(&path, count).map_err(|e| {
+        ReconstructionError::SiftRead {
+            path,
+            source: e.to_string(),
+        }
     })
 }
 

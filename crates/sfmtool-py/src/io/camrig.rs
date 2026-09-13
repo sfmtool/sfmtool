@@ -16,7 +16,7 @@ use crate::helpers::{py_to_serde, serde_to_py};
 /// Returns a dict with keys `metadata` and `content_hash`.
 #[pyfunction]
 pub fn read_camrig_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let (metadata, content_hash) = camrig_format::read_camrig_metadata(&path)
+    let (metadata, content_hash) = sfmtool_camrig_format::read_camrig_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     let dict = PyDict::new(py);
     dict.set_item("metadata", serde_to_py(py, &metadata)?)?;
@@ -29,7 +29,7 @@ pub fn read_camrig_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>
 /// Returns a tuple `(is_valid, error_messages)`.
 #[pyfunction]
 pub fn verify_camrig(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    camrig_format::verify_camrig(&path)
+    sfmtool_camrig_format::verify_camrig(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -41,7 +41,7 @@ pub fn verify_camrig(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
 /// raises `ValueError`.
 #[pyfunction]
 pub fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = camrig_format::read_camrig(&path).map_err(camrig_err_to_py)?;
+    let data = sfmtool_camrig_format::read_camrig(&path).map_err(camrig_err_to_py)?;
     let dict = PyDict::new(py);
     dict.set_item("metadata", serde_to_py(py, &data.metadata)?)?;
     dict.set_item("content_hash", serde_to_py(py, &data.content_hash)?)?;
@@ -55,8 +55,8 @@ pub fn read_camrig(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 
 /// Map a `CamRigError` to an appropriate Python exception: I/O failures
 /// become `IOError`, structural problems become `ValueError`.
-fn camrig_err_to_py(e: camrig_format::CamRigError) -> PyErr {
-    use camrig_format::CamRigError;
+fn camrig_err_to_py(e: sfmtool_camrig_format::CamRigError) -> PyErr {
+    use sfmtool_camrig_format::CamRigError;
     match e {
         CamRigError::Io(_) | CamRigError::IoPath { .. } => {
             pyo3::exceptions::PyIOError::new_err(e.to_string())
@@ -113,7 +113,7 @@ pub fn write_camrig<'py>(
     rig_attributes: Option<&Bound<'py, PyAny>>,
     zstd_level: i32,
 ) -> PyResult<()> {
-    let cameras: Vec<camrig_format::CamRigCamera> = py_to_serde(py, cameras)?;
+    let cameras: Vec<sfmtool_camrig_format::CamRigCamera> = py_to_serde(py, cameras)?;
     let rig_attributes: serde_json::Value = match rig_attributes {
         Some(obj) => py_to_serde(py, obj)?,
         None => serde_json::Value::Object(serde_json::Map::new()),
@@ -127,16 +127,16 @@ pub fn write_camrig<'py>(
         .as_standard_layout()
         .into_owned();
 
-    let data = camrig_format::CamRigData {
-        metadata: camrig_format::CamRigMetadata {
-            version: camrig_format::CAMRIG_FORMAT_VERSION,
+    let data = sfmtool_camrig_format::CamRigData {
+        metadata: sfmtool_camrig_format::CamRigMetadata {
+            version: sfmtool_camrig_format::CAMRIG_FORMAT_VERSION,
             name,
             sensor_count: camera_indexes.len() as u32,
             camera_count: cameras.len() as u32,
             rig_type,
             rig_attributes,
         },
-        content_hash: camrig_format::CamRigContentHash::default(),
+        content_hash: sfmtool_camrig_format::CamRigContentHash::default(),
         cameras,
         sensor_image_patterns,
         camera_indexes,
@@ -144,7 +144,7 @@ pub fn write_camrig<'py>(
         translations_xyz,
     };
 
-    py.detach(|| camrig_format::write_camrig(&path, &data, zstd_level))
+    py.detach(|| sfmtool_camrig_format::write_camrig(&path, &data, zstd_level))
         .map_err(camrig_err_to_py)
 }
 
@@ -153,11 +153,12 @@ pub fn write_camrig<'py>(
 /// Raises `ValueError` (with the reason) when the pattern is not a valid
 /// `.camrig` image pattern: empty, absolute, containing a `..` component, a
 /// `**` that is not a whole path segment, or more than one frame field. The
-/// `camrig-format` crate owns the rule, so workspace tooling and the format's
+/// `sfmtool-camrig-format` crate owns the rule, so workspace tooling and the format's
 /// own `validate()` agree by construction.
 #[pyfunction]
 pub fn validate_camrig_pattern(pattern: &str) -> PyResult<()> {
-    camrig_format::validate_pattern(pattern).map_err(pyo3::exceptions::PyValueError::new_err)
+    sfmtool_camrig_format::validate_pattern(pattern)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 /// Convert a `.camrig` image pattern to a loose glob for filesystem
@@ -168,7 +169,7 @@ pub fn validate_camrig_pattern(pattern: &str) -> PyResult<()> {
 /// to filter the hits against the exact pattern grammar.
 #[pyfunction]
 pub fn camrig_pattern_to_glob(pattern: &str) -> String {
-    camrig_format::pattern_to_glob(pattern)
+    sfmtool_camrig_format::pattern_to_glob(pattern)
 }
 
 /// Whether `relative_path` (a forward-slash relative path) matches a
@@ -176,10 +177,10 @@ pub fn camrig_pattern_to_glob(pattern: &str) -> String {
 ///
 /// Set `case_insensitive` to mirror the filesystem that produced the glob
 /// hits — case-insensitive filesystems (Windows) glob case-insensitively, so
-/// the strict check must too. The `camrig-format` crate owns the grammar.
+/// the strict check must too. The `sfmtool-camrig-format` crate owns the grammar.
 #[pyfunction]
 pub fn camrig_pattern_matches(pattern: &str, relative_path: &str, case_insensitive: bool) -> bool {
-    camrig_format::pattern_matches(pattern, relative_path, case_insensitive)
+    sfmtool_camrig_format::pattern_matches(pattern, relative_path, case_insensitive)
 }
 
 /// The frame index a `.camrig` image `pattern`'s frame field captures from
@@ -194,7 +195,7 @@ pub fn camrig_pattern_frame_index(
     relative_path: &str,
     case_insensitive: bool,
 ) -> Option<u64> {
-    camrig_format::pattern_frame_index(pattern, relative_path, case_insensitive)
+    sfmtool_camrig_format::pattern_frame_index(pattern, relative_path, case_insensitive)
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -24,11 +24,11 @@ doctest = false
 
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
-sift-format = { path = "../sift-format" }
-sfmr-format = { path = "../sfmr-format" }
-sfmr-colmap = { path = "../sfmr-colmap" }
-matches-format = { path = "../matches-format" }
-camrig-format = { path = "../camrig-format" }
+sfmtool-sift-format = { path = "../sfmtool-sift-format" }
+sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
+sfmtool-colmap = { path = "../sfmtool-colmap" }
+sfmtool-matches-format = { path = "../sfmtool-matches-format" }
+sfmtool-camrig-format = { path = "../sfmtool-camrig-format" }
 pyo3 = { version = "0.29", features = ["extension-module", "multiple-pymethods"] }
 rayon = "1.12"
 image = "0.25"

@@ -11,7 +11,7 @@ the images a discovered rig covers) need to expand a pattern against the
 filesystem.
 
 The pattern *grammar* — what counts as a frame field, how `*` / `**` map — is
-owned by the `camrig-format` Rust crate. This module only walks the
+owned by the `sfmtool-camrig-format` Rust crate. This module only walks the
 filesystem and delegates every per-path decision to the `camrig_pattern_*`
 PyO3 bindings, so the grammar has exactly one implementation.
 

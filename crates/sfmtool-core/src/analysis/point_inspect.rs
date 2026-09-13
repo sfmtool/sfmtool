@@ -104,12 +104,14 @@ impl SfmrReconstruction {
                 ),
                 None => {
                     let sift_path = self.sift_path_for_image(img_idx);
-                    let sift =
-                        sift_format::read_sift_partial(&sift_path, feature_index as usize + 1)
-                            .map_err(|e| ReconstructionError::SiftRead {
-                                path: sift_path.clone(),
-                                source: e.to_string(),
-                            })?;
+                    let sift = sfmtool_sift_format::read_sift_partial(
+                        &sift_path,
+                        feature_index as usize + 1,
+                    )
+                    .map_err(|e| ReconstructionError::SiftRead {
+                        path: sift_path.clone(),
+                        source: e.to_string(),
+                    })?;
                     let f = feature_index as usize;
                     (
                         sift.positions_xy[[f, 0]] as f64,

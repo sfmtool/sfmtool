@@ -140,7 +140,7 @@ EQUIDISTANT_FISHEYE = "EQUIDISTANT_FISHEYE"
 
 # COLMAP has no distortion-free equidistant model, so `SIMPLE_RADIAL_FISHEYE`
 # at `k = 0` — the identical `theta = r/f` map — carries it in both
-# directions. Mirrors `sfmr-colmap`'s `EQUIDISTANT_FISHEYE_CARRIER`.
+# directions. Mirrors `sfmtool-colmap`'s `EQUIDISTANT_FISHEYE_CARRIER`.
 EQUIDISTANT_FISHEYE_CARRIER = "SIMPLE_RADIAL_FISHEYE"
 
 _NATIVE_CAMERA_PARAM_NAMES = {
@@ -274,7 +274,7 @@ def pycolmap_camera_to_intrinsics(camera, *, claim_native=False):
     `SIMPLE_RADIAL_FISHEYE` whose `k` is **exactly** `0.0` becomes
     `EQUIDISTANT_FISHEYE` with `k` dropped. Any other `k`, however small, is
     left alone. This is the import half of `colmap_camera_from_intrinsics`'s
-    export, and mirrors `sfmr-colmap`'s `claim_native_camera_model`.
+    export, and mirrors `sfmtool-colmap`'s `claim_native_camera_model`.
 
     It is off by default because the same conversion also builds the *initial*
     camera for a COLMAP solve, where the caller's requested model (from

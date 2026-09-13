@@ -11,12 +11,12 @@ use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray3, PyUntypedArrayMethods}
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use matches_format::MatchesData;
 use sfmtool_core::analysis::cluster_radii::{
     cluster_radii as core_cluster_radii, cluster_radii_from_matches,
     coarsest_cluster_ids as core_coarsest_cluster_ids, coarsest_cluster_ids_from_matches,
     ClusterRadiiError,
 };
+use sfmtool_matches_format::MatchesData;
 
 use crate::io::matches_file::PyMatchesFile;
 

@@ -51,8 +51,8 @@ mcp = [
 
 [dependencies]
 sfmtool-core = { path = "../sfmtool-core" }
-sift-format = { path = "../sift-format" }
-matches-format = { path = "../matches-format" }
+sfmtool-sift-format = { path = "../sfmtool-sift-format" }
+sfmtool-matches-format = { path = "../sfmtool-matches-format" }
 egui = "0.36"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
 egui_dock = "0.21"
@@ -140,7 +140,7 @@ wgpu = { version = "30", features = ["noop"] }
 # The save tests read the file back off disk and check what the writer put in
 # it. The crate itself never reaches past `sfmtool-core`, which is why this is a
 # dev-dependency rather than a dependency.
-sfmr-format = { path = "../sfmr-format" }
+sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 
 # UI tests drive the accessibility tree, which xa11y reads on all three desktop
 # platforms: Windows (UI Automation), macOS (AXUIElement), Linux (AT-SPI2 over

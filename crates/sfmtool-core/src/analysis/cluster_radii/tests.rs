@@ -1,8 +1,8 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use matches_format::{ClusterPatchData, ClustersData, MatchesData};
 use ndarray::{Array1, Array2, Array3};
+use sfmtool_matches_format::{ClusterPatchData, ClustersData, MatchesData};
 
 use super::*;
 
@@ -84,16 +84,16 @@ fn file(starts: &[u32], shapes: &[f32], patch_size: f64, with_patches: bool) -> 
     let m = shapes.len() / 4;
     let n_cl = starts.len() - 1;
     MatchesData {
-        metadata: matches_format::MatchesMetadata {
-            version: matches_format::MATCHES_FORMAT_VERSION,
+        metadata: sfmtool_matches_format::MatchesMetadata {
+            version: sfmtool_matches_format::MATCHES_FORMAT_VERSION,
             matching_method: "test".into(),
             matching_tool: "test".into(),
             matching_tool_version: "0".into(),
             matching_options: std::collections::BTreeMap::new(),
-            workspace: matches_format::WorkspaceMetadata {
+            workspace: sfmtool_matches_format::WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: ".".into(),
-                contents: matches_format::WorkspaceContents {
+                contents: sfmtool_matches_format::WorkspaceContents {
                     feature_tool: "none".into(),
                     feature_type: "sift".into(),
                     feature_options: serde_json::json!({}),
@@ -110,7 +110,7 @@ fn file(starts: &[u32], shapes: &[f32], patch_size: f64, with_patches: bool) -> 
             has_clusters: true,
             has_cluster_patches: with_patches,
         },
-        content_hash: matches_format::MatchesContentHash {
+        content_hash: sfmtool_matches_format::MatchesContentHash {
             metadata_xxh128: String::new(),
             images_xxh128: String::new(),
             image_pairs_xxh128: None,

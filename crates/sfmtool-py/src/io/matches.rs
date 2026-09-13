@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::path::PathBuf;
 
-use matches_format::{
+use sfmtool_matches_format::{
     ClusterPatchData, ClustersData, MatchesContentHash, MatchesData, MatchesMetadata, PairsData,
     TvgMetadata, TwoViewGeometryConfig, TwoViewGeometryData,
 };
@@ -120,7 +120,7 @@ pub fn matches_data_to_py(py: Python<'_>, data: MatchesData) -> PyResult<Py<PyAn
 /// Read a complete .matches file, returning a dict with numpy arrays and metadata.
 #[pyfunction]
 pub fn read_matches(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let data = matches_format::read_matches(&path)
+    let data = sfmtool_matches_format::read_matches(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     matches_data_to_py(py, data)
 }
@@ -128,7 +128,7 @@ pub fn read_matches(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
 /// Read only metadata from a .matches file (fast, no binary data).
 #[pyfunction]
 pub fn read_matches_metadata(py: Python<'_>, path: PathBuf) -> PyResult<Py<PyAny>> {
-    let metadata = matches_format::read_matches_metadata(&path)
+    let metadata = sfmtool_matches_format::read_matches_metadata(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
     serde_to_py(py, &metadata)
 }
@@ -268,9 +268,10 @@ pub fn write_matches(
         let config_types: Vec<TwoViewGeometryConfig> = config_type_strs
             .iter()
             .map(|s| {
-                s.parse().map_err(|e: matches_format::MatchesError| {
-                    pyo3::exceptions::PyValueError::new_err(e.to_string())
-                })
+                s.parse()
+                    .map_err(|e: sfmtool_matches_format::MatchesError| {
+                        pyo3::exceptions::PyValueError::new_err(e.to_string())
+                    })
             })
             .collect::<PyResult<_>>()?;
         let config_indexes: PyReadonlyArray1<u8> = get_item(data, "config_indexes")?.extract()?;
@@ -332,7 +333,7 @@ pub fn write_matches(
         two_view_geometries,
     };
 
-    matches_format::write_matches(&path, &matches_data, zstd_level)
+    sfmtool_matches_format::write_matches(&path, &matches_data, zstd_level)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 
@@ -341,7 +342,7 @@ pub fn write_matches(
 /// Returns a tuple (is_valid, error_messages).
 #[pyfunction]
 pub fn verify_matches(path: PathBuf) -> PyResult<(bool, Vec<String>)> {
-    matches_format::verify_matches(&path)
+    sfmtool_matches_format::verify_matches(&path)
         .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
 }
 

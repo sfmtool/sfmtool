@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::registry::MODEL_COUNT;
 use super::*;
 use approx::assert_relative_eq;
-use sfmr_format::SfmrCamera;
+use sfmtool_sfmr_format::SfmrCamera;
 
 // -----------------------------------------------------------------------
 // Helper: build test instances for each model

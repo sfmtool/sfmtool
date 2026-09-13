@@ -74,7 +74,7 @@ use pyo3::prelude::*;
 /// strides whenever the source is contiguous in memory order — which covers
 /// both F-contiguous and negative-stride input. The resulting `ArrayN` is not
 /// standard-layout, and the format writers call `.as_slice().unwrap()` on it,
-/// so the failure surfaces as a `PanicException` from inside `sfmr-format`, far
+/// so the failure surfaces as a `PanicException` from inside `sfmtool-sfmr-format`, far
 /// from the binding that let it through. Always write
 /// `.as_array().as_standard_layout().into_owned()` instead; it costs nothing
 /// extra when the input is already C-ordered. Note this spelling can be split

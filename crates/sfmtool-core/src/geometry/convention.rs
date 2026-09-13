@@ -32,7 +32,7 @@
 
 use nalgebra::{Matrix3, Vector3};
 
-use sfmr_format::SfmrData;
+use sfmtool_sfmr_format::SfmrData;
 
 use crate::geometry::RotQuaternion;
 
@@ -158,7 +158,7 @@ pub fn world_rotate_w_inverse(v: &Vector3<f64>) -> Vector3<f64> {
 /// conversion.
 ///
 /// Content hashes describe the **stored** bytes, so integrity verification
-/// ([`sfmr_format::verify_sfmr`], which re-reads the file) is unaffected by
+/// ([`sfmtool_sfmr_format::verify_sfmr`], which re-reads the file) is unaffected by
 /// this in-memory conversion; a converted reconstruction saved back to disk
 /// is a new version-5 file with freshly computed hashes.
 pub fn sfmr_data_colmap_to_canonical(data: &mut SfmrData) {

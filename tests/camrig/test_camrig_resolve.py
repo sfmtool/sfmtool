@@ -217,7 +217,7 @@ def test_resolve_camrig_globstar_pattern(tmp_path: Path):
     assert result.camera["model"] == "PINHOLE"
 
 
-# ── pattern matching (camrig-format grammar via the PyO3 binding) ───────────
+# ── pattern matching (sfmtool-camrig-format grammar via the PyO3 binding) ───────────
 
 
 def test_pattern_matches_frame_field_is_digits_only():

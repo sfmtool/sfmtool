@@ -298,19 +298,19 @@ render and render once on the finalizing stage.
 
 **Persisting the refined normals (decided).** `.sfmr` *write* used to recompute
 the per-point normals from geometry (the mean-viewing normals; see
-`sfmr-format/src/depth_stats.rs`) on every save, which would silently discard the
-refinement. The write path now **preserves** every stored normal and recomputes
-only the *missing* ones — the zero vector left for points whose normal was never
-set and for degenerate / infinity points (`merge_preserving_normals` in
-`sfmr-format/src/write.rs`, gated on `MISSING_NORMAL_NORM_SQ`). Depth statistics
-and histograms are still recomputed so they track the current geometry (e.g.
-after a prior `--bundle-adjust`). This is a global save-pipeline change, not
-special-cased to this command: a freshly imported reconstruction (normals start
-all-zero) still gets a full set computed on its first write, while any normals a
-consumer set — refined here, or otherwise — survive subsequent saves. So
-`RefineNormalsTransform.apply` just writes the normals back via
-`clone_with_changes` and the ordinary `recon.save` keeps them; no save flag is
-needed.
+`sfmtool-sfmr-format/src/depth_stats.rs`) on every save, which would silently
+discard the refinement. The write path now **preserves** every stored normal and
+recomputes only the *missing* ones — the zero vector left for points whose
+normal was never set and for degenerate / infinity points
+(`merge_preserving_normals` in `sfmtool-sfmr-format/src/write.rs`, gated on
+`MISSING_NORMAL_NORM_SQ`). Depth statistics and histograms are still recomputed
+so they track the current geometry (e.g. after a prior `--bundle-adjust`). This
+is a global save-pipeline change, not special-cased to this command: a freshly
+imported reconstruction (normals start all-zero) still gets a full set computed
+on its first write, while any normals a consumer set — refined here, or
+otherwise — survive subsequent saves. So `RefineNormalsTransform.apply` just
+writes the normals back via `clone_with_changes` and the ordinary `recon.save`
+keeps them; no save flag is needed.
 
 Image loading resolves `workspace_dir / image_name` exactly as
 `RemoveLargeFeaturesFilter` resolves its `.sift` paths (via `recon.workspace_dir`

@@ -96,7 +96,7 @@ fn a_save_with_an_overlay_materialises_into_a_version_the_cursor_sits_on() {
     assert!(!node.is_dirty());
 
     // And the hash the session holds for that base is the file's own.
-    let stored = sfmr_format::read_sfmr_content_hash(&path).expect("a written file");
+    let stored = sfmtool_sfmr_format::read_sfmr_content_hash(&path).expect("a written file");
     assert_eq!(
         current
             .base_content_hash()
@@ -116,10 +116,10 @@ fn a_save_stamps_the_provenance_it_hashed() {
         .expect("a live point");
     state.save_node(id).expect("a writable path");
 
-    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
     assert_eq!(metadata.operation, "edit");
     assert_eq!(metadata.tool, "sfm-explorer");
-    assert_eq!(metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
+    assert_eq!(metadata.version, sfmtool_sfmr_format::SFMR_FORMAT_VERSION);
 }
 
 #[test]
@@ -138,13 +138,13 @@ fn a_save_records_the_lineage_of_the_base_it_came_from() {
         .expect("a live point");
     state.save_node(id).expect("a writable path");
 
-    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
     let entry = metadata
         .lineage
         .iter()
         .find(|e| e.hash == ancestor)
         .expect("the base the session started from");
-    assert_eq!(entry.kind, sfmr_format::LINEAGE_KIND_BASE);
+    assert_eq!(entry.kind, sfmtool_sfmr_format::LINEAGE_KIND_BASE);
     // A deletion preserves order, so the map is the small encoding, and it says
     // exactly which row went.
     match &entry.map {
@@ -178,9 +178,9 @@ fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
     let dir = temp_dir("compose");
     let (mut state, id, path) = state_from_file(&dir);
     let grandparent = "aaaabbbbccccddddeeeeffff00001111";
-    state.scene[0].recon_mut().metadata.lineage = vec![sfmr_format::LineageEntry {
+    state.scene[0].recon_mut().metadata.lineage = vec![sfmtool_sfmr_format::LineageEntry {
         hash: grandparent.to_string(),
-        kind: sfmr_format::LINEAGE_KIND_BASE.to_string(),
+        kind: sfmtool_sfmr_format::LINEAGE_KIND_BASE.to_string(),
         map: LineageMap::Monotone {
             source_rows: 65,
             deleted: vec![0],
@@ -205,7 +205,7 @@ fn an_ancestors_lineage_carries_forward_every_row_it_still_has() {
         .expect("a live point");
     state.save_node(id).expect("a writable path");
 
-    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
     let entry = metadata
         .lineage
         .iter()
@@ -455,12 +455,12 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
     let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
     let (hash, _) = rest.split_once('_').expect("hash and index");
     assert_eq!(crate::point_ids::resolve(node, hash, 0), Ok(row));
-    let metadata = sfmr_format::read_sfmr_metadata(&path).expect("a written file");
+    let metadata = sfmtool_sfmr_format::read_sfmr_metadata(&path).expect("a written file");
     let entry = metadata
         .lineage
         .iter()
         .find(|e| e.hash.starts_with(hash))
         .expect("the point edit that created it");
-    assert_eq!(entry.kind, sfmr_format::LINEAGE_KIND_POINT_EDIT);
+    assert_eq!(entry.kind, sfmtool_sfmr_format::LINEAGE_KIND_POINT_EDIT);
     assert_eq!(entry.map.forward(0), Some(row));
 }

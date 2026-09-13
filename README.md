@@ -73,13 +73,16 @@ pixi run docs-serve
 
 ```
 crates/
-  sfmtool-core/     Core project functionality
-  sfm-explorer/     SfM Explorer GUI
-  sfmtool-py/       Python bindings
-  sfmr-format/      .sfmr reconstruction file I/O
-  sfmr-colmap/      COLMAP integration
-  sift-format/      SIFT feature file I/O
-  matches-format/   Feature matches file I/O
+  sfmtool-archive-io/       Shared ZIP + zstd container primitives
+  sfmtool-sfmr-format/      .sfmr reconstruction file I/O
+  sfmtool-sift-format/      SIFT feature file I/O
+  sfmtool-matches-format/   Feature matches file I/O
+  sfmtool-camrig-format/    .camrig camera-rig file I/O
+  sfmtool-kdf-format/       .kdf kd-forest file I/O
+  sfmtool-colmap/           COLMAP integration
+  sfmtool-core/             Core project functionality
+  sfm-explorer/             SfM Explorer GUI
+  sfmtool-py/               Python bindings
 ```
 
 ## License

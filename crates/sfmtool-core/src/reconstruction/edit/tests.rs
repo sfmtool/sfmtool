@@ -11,7 +11,7 @@ use crate::geometry::RotQuaternion;
 use crate::Se3Transform;
 use nalgebra::{UnitQuaternion, Vector3 as V3};
 use ndarray::{Array2, Array4};
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED,
 };
 

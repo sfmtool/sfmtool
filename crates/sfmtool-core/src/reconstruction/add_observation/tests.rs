@@ -147,8 +147,8 @@ pub(crate) fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
         .collect();
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
         n,
-        sfmr_format::THUMBNAIL_SIZE,
-        sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
         3,
     )));
     recon.image_table.depth_statistics.images.truncate(n);
@@ -192,7 +192,8 @@ pub(crate) fn fixture(scene: &Scene, world: Point3<f64>) -> SfmrReconstruction {
     let v = halfvec(patch.v_axis, patch.half_extent[1]);
     set.patch_u_halfvec_xyz = Some(Array2::from_shape_vec((1, 3), u.to_vec()).unwrap());
     set.patch_v_halfvec_xyz = Some(Array2::from_shape_vec((1, 3), v.to_vec()).unwrap());
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    recon.metadata.feature_source =
+        sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     recon.rebuild_derived_fields();
     recon
 }

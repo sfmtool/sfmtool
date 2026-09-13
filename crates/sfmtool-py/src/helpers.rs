@@ -7,7 +7,7 @@ use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use sfmr_format::{FramesMetadata, RigFrameData, RigsMetadata, SfmrCamera};
+use sfmtool_sfmr_format::{FramesMetadata, RigFrameData, RigsMetadata, SfmrCamera};
 
 use crate::PyCameraIntrinsics;
 

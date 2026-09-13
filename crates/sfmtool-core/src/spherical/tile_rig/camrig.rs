@@ -18,10 +18,12 @@
 
 use std::path::Path;
 
-use camrig_format::{CamRigCamera, CamRigContentHash, CamRigData, CamRigError, CamRigMetadata};
 use nalgebra::{Matrix3, Quaternion, Rotation3, UnitQuaternion};
 use ndarray::Array2;
-use sfmr_format::SfmrCamera;
+use sfmtool_camrig_format::{
+    CamRigCamera, CamRigContentHash, CamRigData, CamRigError, CamRigMetadata,
+};
+use sfmtool_sfmr_format::SfmrCamera;
 
 use crate::camera::{CameraIntrinsics, CameraModel};
 
@@ -120,7 +122,7 @@ impl SphericalTileRig {
 
         CamRigData {
             metadata: CamRigMetadata {
-                version: camrig_format::CAMRIG_FORMAT_VERSION,
+                version: sfmtool_camrig_format::CAMRIG_FORMAT_VERSION,
                 name: name.to_string(),
                 sensor_count: n as u32,
                 camera_count: 1,
@@ -222,19 +224,19 @@ impl SphericalTileRig {
     /// Write this rig to a `.camrig` file at `path`.
     pub fn write_camrig(&self, path: &Path, name: &str) -> Result<(), CamRigConversionError> {
         let data = self.to_camrig(name);
-        camrig_format::write_camrig(path, &data, CAMRIG_ZSTD_LEVEL)?;
+        sfmtool_camrig_format::write_camrig(path, &data, CAMRIG_ZSTD_LEVEL)?;
         Ok(())
     }
 
     /// Read a rig from a `.camrig` file at `path`.
     pub fn read_camrig(path: &Path) -> Result<Self, CamRigConversionError> {
-        let data = camrig_format::read_camrig(path)?;
+        let data = sfmtool_camrig_format::read_camrig(path)?;
         Self::from_camrig(&data)
     }
 }
 
 /// Convert a tile's `CameraIntrinsics` into a `.camrig` pool camera. The two
-/// types are structurally identical to `sfmr_format::SfmrCamera`, so the
+/// types are structurally identical to `sfmtool_sfmr_format::SfmrCamera`, so the
 /// existing `CameraIntrinsics -> SfmrCamera` conversion does the work.
 fn camrig_camera_from_intrinsics(cam: &CameraIntrinsics) -> CamRigCamera {
     let s = SfmrCamera::from(cam);

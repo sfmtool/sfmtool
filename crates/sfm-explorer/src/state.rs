@@ -587,7 +587,7 @@ pub struct AppState {
     /// The last `.matches` file parsed, kept so repeated resections against the
     /// same file pay for the read once. One entry, not a map: a reviewer works
     /// through one capture at a time, and these files are large.
-    resect_matches_cache: Option<(std::path::PathBuf, matches_format::MatchesData)>,
+    resect_matches_cache: Option<(std::path::PathBuf, sfmtool_matches_format::MatchesData)>,
 
     /// The live MCP endpoint, or `None` when the viewer was started without
     /// `--mcp`. See [`crate::mcp`].
@@ -1239,7 +1239,7 @@ pub fn ensure_sift_cached<'a>(
     // Load from disk
     let mut phase = progress.phase("sift cache");
     let sift_path = recon.sift_path_for_image(image_idx);
-    let sift_data = match sift_format::read_sift_partial(&sift_path, read_count) {
+    let sift_data = match sfmtool_sift_format::read_sift_partial(&sift_path, read_count) {
         Ok(d) => d,
         Err(e) => {
             log::warn!(

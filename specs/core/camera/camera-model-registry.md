@@ -10,23 +10,23 @@ written twice.
 ## The two types
 
 ```
-sfmr-format   SfmrCamera { model: String, width, height,
-  (bottom)                 parameters: BTreeMap<String, f64> }
+sfmtool-sfmr-format   SfmrCamera { model: String, width, height,
+  (bottom)                         parameters: BTreeMap<String, f64> }
      ▲
      │ depends on
      │
-sfmtool-core  CameraModel::Pinhole { focal_length_x: f64, … }   (15 variants)
+sfmtool-core          CameraModel::Pinhole { focal_length_x: f64, … }   (15 variants)
 ```
 
-`sfmr-format` does not depend on `sfmtool-core`. The dependency runs one way
-and must stay that way.
+`sfmtool-sfmr-format` does not depend on `sfmtool-core`. The dependency runs one
+way and must stay that way.
 
-**`SfmrCamera`** (`sfmr-format/src/types.rs`) is the **wire type**. It is a
-stringly-typed bag because that is literally the shape of the
+**`SfmrCamera`** (`sfmtool-sfmr-format/src/types.rs`) is the **wire type**. It
+is a stringly-typed bag because that is literally the shape of the
 `cameras/metadata.json.zst` payload, and because the parameter names are
-COLMAP's. Its consumers are the I/O crates — `sfmr-format`, `sfmr-colmap`,
-`camrig-format` — which read and write cameras without needing to know what a
-projection is.
+COLMAP's. Its consumers are the I/O crates — `sfmtool-sfmr-format`,
+`sfmtool-colmap`, `sfmtool-camrig-format` — which read and write cameras without
+needing to know what a projection is.
 
 **`CameraModel`** (`sfmtool-core/src/camera/intrinsics.rs`) is the
 **computation type**. It is a closed enum so that every projection, Jacobian,
@@ -34,10 +34,10 @@ distortion and GPU-mesh code path is exhaustively matched by the compiler.
 
 ### Why they are not merged
 
-- Pushing `CameraModel` down into `sfmr-format` inverts the layering: the
-  bottom crate of the workspace would inherit the algorithm layer's
-  dependencies, and `camrig-format` and `sfmr-colmap` would gain a transitive
-  dependency on geometry code they never call.
+- Pushing `CameraModel` down into `sfmtool-sfmr-format` inverts the layering:
+  the bottom crate of the workspace would inherit the algorithm layer's
+  dependencies, and `sfmtool-camrig-format` and `sfmtool-colmap` would gain a
+  transitive dependency on geometry code they never call.
 - Using `SfmrCamera` for computation loses exhaustiveness. Adding a variant
   would stop being a compile error and start being a runtime `KeyError`
   equivalent — `parameters["focal_length_x"]` in a hot loop.
@@ -170,7 +170,7 @@ must not be flattened into the table.
 
 ## Out of scope
 
-The COLMAP interop layer (`sfmr-colmap`) keeps its own model-name mapping,
+The COLMAP interop layer (`sfmtool-colmap`) keeps its own model-name mapping,
 including the `EQUIDISTANT_FISHEYE` ↔ `SIMPLE_RADIAL_FISHEYE`-with-`k=0`
 carrier rule and the `SFMTOOL_FISHEYE` export rejection. That is a translation
 between two external conventions, not a restatement of this one, and it is

@@ -327,9 +327,9 @@ pub fn create_point(
         // A created point states nothing about a distance a caller owns, so it
         // is free.
         constraint: edited.has_point_constraints().then_some((
-            sfmr_format::POINT_CONSTRAINT_FREE,
+            sfmtool_sfmr_format::POINT_CONSTRAINT_FREE,
             f64::NAN,
-            sfmr_format::NO_REFERENCE_IMAGE,
+            sfmtool_sfmr_format::NO_REFERENCE_IMAGE,
         )),
     };
 

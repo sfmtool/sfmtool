@@ -8,8 +8,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::path::PathBuf;
 
-use sfmr_colmap::colmap_io;
-use sfmr_format::SfmrCamera;
+use sfmtool_colmap::colmap_io;
+use sfmtool_sfmr_format::SfmrCamera;
 
 use crate::helpers::{extract_cameras_as_sfmr, get_item};
 use crate::PyCameraIntrinsics;

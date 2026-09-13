@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use ndarray::Array4;
-use sfmr_format::{DepthStatistics, RigFrameData};
+use sfmtool_sfmr_format::{DepthStatistics, RigFrameData};
 
 use crate::camera::CameraIntrinsics;
 

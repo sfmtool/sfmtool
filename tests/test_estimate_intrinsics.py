@@ -565,7 +565,7 @@ def test_a_pairwise_matches_file_is_refused(cluster_matches_file: Path):
 
 def test_an_unreadable_matches_file_is_a_clean_cli_error(tmp_path):
     """Whatever the reader refuses -- a version <= 5 cluster file included,
-    whose refusal names `sfm match --cluster` (see the `matches-format` version
+    whose refusal names `sfm match --cluster` (see the `sfmtool-matches-format` version
     tests) -- reaches the user as a message, not a traceback."""
     bad = tmp_path / "not-a-matches.matches"
     bad.write_bytes(b"PK\x03\x04not really a zip")

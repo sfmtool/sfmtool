@@ -477,10 +477,11 @@ image. Filtering is applied in order:
    within the prefix (per-feature check, since large features are at the start).
 4. **tracked_only** — Excludes features without an associated 3D point.
 
-**I/O optimization**: `sift_format::read_sift_partial(path, count)` already skips reading
-the tail of the arrays at the file level, so `max_features` saves real I/O for large
-`.sift` files. The size threshold requires reading affine shapes to check, but since
-features are sorted, only `max_features` entries need to be read before truncating further.
+**I/O optimization**: `sfmtool_sift_format::read_sift_partial(path, count)`
+already skips reading the tail of the arrays at the file level, so
+`max_features` saves real I/O for large `.sift` files. The size threshold
+requires reading affine shapes to check, but since features are sorted, only
+`max_features` entries need to be read before truncating further.
 
 **UI controls**: A toolbar row at the top of the Image Detail panel, alongside the overlay
 mode selector:
@@ -504,7 +505,7 @@ mode selector:
 
 When an overlay mode is active and `selected_image` changes, load:
 
-1. **SIFT data** for the image via `sift_format::read_sift_partial()`:
+1. **SIFT data** for the image via `sfmtool_sift_format::read_sift_partial()`:
    - `positions: Array2<f32>` (N×2) — keypoint (x, y) locations
    - `affine_shapes: Array3<f32>` (N×2×2) — oriented affine shape matrices
    - Read count: `max_features.unwrap_or(total_feature_count)`

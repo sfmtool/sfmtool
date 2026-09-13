@@ -768,8 +768,8 @@ after using the viewer normally.
 
 **An open's stages are `SfmrReconstruction::load`'s own**, because they are
 where `sfm-explorer` cannot reach: it deliberately does not depend on
-`sfmr-format`, so the read, the convention upgrade and the derived-index build
-are named by the core function that does them and the viewer only adds
+`sfmtool-sfmr-format`, so the read, the convention upgrade and the derived-index
+build are named by the core function that does them and the viewer only adds
 `append node`. `read` is one row over `read_sfmr`, which decompresses and
 hash-checks inside itself. `convert convention` is the upgrade a file below the
 canonical-convention version gets, and its guard is cancelled when the file is

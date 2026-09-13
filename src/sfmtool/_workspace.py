@@ -112,7 +112,7 @@ def find_workspace_for_path(path: Path) -> Optional[Path]:
 def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Optional[Path]:
     """First .sfmr under `workspace` whose content hash starts with `hash_prefix`.
 
-    Search order follows the sfmr-format spec: the conventional ``sfmr/``
+    Search order follows the sfmtool-sfmr-format spec: the conventional ``sfmr/``
     subdirectory first, then the workspace root, then the rest of the tree
     (skipping hidden directories). Reading each candidate's hash decompresses
     only ``content_hash.json.zst``, not the reconstruction data.

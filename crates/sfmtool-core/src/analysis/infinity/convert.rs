@@ -360,9 +360,12 @@ impl SfmrReconstruction {
                 None => {
                     let positions = sift_positions.entry(img).or_insert_with(|| {
                         let count = self.point_set.max_track_feature_index[img] as usize + 1;
-                        sift_format::read_sift_partial(&self.sift_path_for_image(img), count)
-                            .ok()
-                            .map(|d| d.positions_xy)
+                        sfmtool_sift_format::read_sift_partial(
+                            &self.sift_path_for_image(img),
+                            count,
+                        )
+                        .ok()
+                        .map(|d| d.positions_xy)
                     });
                     let Some(positions) = positions.as_ref() else {
                         continue;

@@ -3,7 +3,7 @@
 
 //! The `.sfmr` file boundary for [`SfmrReconstruction`].
 //!
-//! Holds the round trip against [`sfmr_format::SfmrData`], the raw columnar I/O
+//! Holds the round trip against [`sfmtool_sfmr_format::SfmrData`], the raw columnar I/O
 //! representation: [`SfmrReconstruction::from_sfmr_data`] /
 //! [`SfmrReconstruction::to_sfmr_data`] and the [`load`](SfmrReconstruction::load)
 //! / [`save`](SfmrReconstruction::save) wrappers around them. Split out of
@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     resolve_workspace_dir, SfmrCamera, SfmrData, SfmrError, FEATURE_SOURCE_EMBEDDED_PATCHES,
 };
 
@@ -67,16 +67,16 @@ impl SfmrReconstruction {
     /// 2. Fall back to `workspace.absolute_path`
     /// 3. Fall back to searching upward from the `.sfmr` file for `.sfm-workspace.json`
     ///
-    /// Files stored below [`sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION`]
+    /// Files stored below [`sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION`]
     /// (version ≤ 4) hold COLMAP-convention data and are upgraded to the
     /// canonical convention here (`.sfmr` version 5, design decision D1):
     /// `S` on camera and rig sensor poses, `W` on world points (including
     /// `w = 0` infinity directions), normals, and patch half-vectors — see
     /// [`crate::geometry::convention::sfmr_data_colmap_to_canonical`]. The
-    /// conversion lives in this crate rather than `sfmr-format` because the
+    /// conversion lives in this crate rather than `sfmtool-sfmr-format` because the
     /// convention math is `sfmtool-core`'s `geometry::convention`, which the
     /// lower-level format crate cannot depend on. Content hashes cover the
-    /// stored bytes ([`sfmr_format::verify_sfmr`] re-reads the file), so
+    /// stored bytes ([`sfmtool_sfmr_format::verify_sfmr`] re-reads the file), so
     /// integrity checks are unaffected; a subsequent [`save`](Self::save)
     /// writes a new current-version file with new hashes. A file at or above
     /// the canonical-convention version is already canonical and is loaded
@@ -84,7 +84,7 @@ impl SfmrReconstruction {
     ///
     /// `progress` is where this call names the three stages an open divides
     /// into: `read`, the archive entries and the decompression
-    /// [`sfmr_format::read_sfmr`] does; `convert convention`, the upgrade
+    /// [`sfmtool_sfmr_format::read_sfmr`] does; `convert convention`, the upgrade
     /// above; and `derive`, the columns becoming the in-memory value and its
     /// derived indexes. The `read` says how much it read and the `derive` how
     /// many observations came out, both of which the code already knows. The
@@ -107,7 +107,7 @@ impl SfmrReconstruction {
     pub fn load(path: &Path, progress: &Progress<'_>) -> Result<Self, SfmrError> {
         let mut data = {
             let mut phase = progress.phase("read");
-            let data = sfmr_format::read_sfmr(path)?;
+            let data = sfmtool_sfmr_format::read_sfmr(path)?;
             progress_note!(
                 phase,
                 "{} points, {} images",
@@ -126,7 +126,7 @@ impl SfmrReconstruction {
         // so `< SFMR_FORMAT_VERSION` would re-apply the conversion to files that
         // are already canonical each time the format version moves.
         let mut convert = progress.phase("convert convention");
-        if data.metadata.version < sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION {
+        if data.metadata.version < sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION {
             progress_note!(convert, "from version {}", data.metadata.version);
             crate::geometry::convention::sfmr_data_colmap_to_canonical(&mut data);
             drop(convert);
@@ -136,7 +136,7 @@ impl SfmrReconstruction {
         // The in-memory arrays are the current structural layout in the current
         // convention whatever the file said, so the reconstruction reports the
         // current version (and a subsequent `save` writes it).
-        data.metadata.version = sfmr_format::SFMR_FORMAT_VERSION;
+        data.metadata.version = sfmtool_sfmr_format::SFMR_FORMAT_VERSION;
         let mut recon = {
             let mut phase = progress.phase("derive");
             let recon = Self::from_sfmr_data(data)?;
@@ -158,10 +158,10 @@ impl SfmrReconstruction {
     /// record, so there is no second place that spells the clock. The value
     /// itself is untouched: the timestamp is about the act of writing, not the
     /// content, so a shared base can be saved without cloning it.
-    pub fn save(&self, path: &Path) -> Result<sfmr_format::WriteRecord, SfmrError> {
+    pub fn save(&self, path: &Path) -> Result<sfmtool_sfmr_format::WriteRecord, SfmrError> {
         let mut data = self.to_sfmr_data();
-        sfmr_format::write_sfmr(path, &mut data)?;
-        Ok(sfmr_format::WriteRecord {
+        sfmtool_sfmr_format::write_sfmr(path, &mut data)?;
+        Ok(sfmtool_sfmr_format::WriteRecord {
             timestamp: data.metadata.timestamp,
         })
     }
@@ -179,7 +179,7 @@ impl SfmrReconstruction {
     /// original.
     pub fn clone_for_edit(&self) -> Self {
         SfmrReconstruction {
-            content_hash: sfmr_format::ContentHash::default(),
+            content_hash: sfmtool_sfmr_format::ContentHash::default(),
             ..self.clone()
         }
     }
@@ -189,7 +189,7 @@ impl SfmrReconstruction {
     ///
     /// The hash is a function of the bytes the writer emits, and this runs the
     /// writer over an in-memory archive that is then discarded, so the returned
-    /// [`sfmr_format::ContentHash`] is byte-for-byte the one a save of this
+    /// [`sfmtool_sfmr_format::ContentHash`] is byte-for-byte the one a save of this
     /// value stores -- including the normalisations a write performs on its way
     /// (tracks sorted, format version and infinity count refreshed, depth
     /// statistics and missing normals recomputed). Those normalisations happen
@@ -212,13 +212,13 @@ impl SfmrReconstruction {
     /// over. Skipping them cannot change the answer. The one thing a write
     /// still does here is fill in missing normals, which are hashed, and the
     /// writer pays for that pass only when a normal is actually absent.
-    pub fn content_xxh128(&self) -> Result<sfmr_format::ContentHash, SfmrError> {
+    pub fn content_xxh128(&self) -> Result<sfmtool_sfmr_format::ContentHash, SfmrError> {
         let mut data = self.to_sfmr_data();
-        let options = sfmr_format::WriteOptions {
+        let options = sfmtool_sfmr_format::WriteOptions {
             skip_recompute_depth_stats: true,
             ..Default::default()
         };
-        sfmr_format::content_hash_of(&mut data, &options)
+        sfmtool_sfmr_format::content_hash_of(&mut data, &options)
     }
 
     /// Convert from the raw columnar I/O representation.

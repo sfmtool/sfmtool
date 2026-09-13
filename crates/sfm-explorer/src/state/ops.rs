@@ -310,7 +310,7 @@ impl AppState {
         {
             return Ok(());
         }
-        match matches_format::read_matches(&path) {
+        match sfmtool_matches_format::read_matches(&path) {
             Ok(data) => {
                 self.resect_matches_cache = Some((path, data));
                 Ok(())

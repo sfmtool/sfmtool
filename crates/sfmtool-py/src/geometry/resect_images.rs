@@ -15,12 +15,12 @@ use std::path::PathBuf;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use matches_format::MatchesData;
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::resect_images::{
     resect_images as core_resect_images, ResectImageError, ResectImageOptions, ResectImageReport,
     ResectSource, ResectTotals,
 };
+use sfmtool_matches_format::MatchesData;
 
 use crate::PySfmrReconstruction;
 
@@ -187,7 +187,7 @@ pub fn resect_images<'py>(
 
     let matches: Option<MatchesData> = match &matches_path {
         Some(path) => Some(
-            py.detach(|| matches_format::read_matches(path))
+            py.detach(|| sfmtool_matches_format::read_matches(path))
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
         ),
         None => None,

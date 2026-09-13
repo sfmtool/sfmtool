@@ -8,7 +8,7 @@
 //! in `specs/formats/sfmr-file-format.md`. This file owns the type definitions
 //! and their accessors; the rest of the type's surface lives in four children:
 //!
-//! - [`conversion`] — the `.sfmr` boundary: the [`sfmr_format::SfmrData`] round
+//! - [`conversion`] — the `.sfmr` boundary: the [`sfmtool_sfmr_format::SfmrData`] round
 //!   trip (the raw columnar I/O representation) plus the `load`/`save` wrappers.
 //! - [`recompute`] — derived quantities recomputed from geometry: per-observation
 //!   and per-point reprojection errors, and the depth statistics/histograms.
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use ndarray::Array2;
 
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     ContentHash, SfmrMetadata, NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_HELD,
     POINT_CONSTRAINT_RANGED,
 };

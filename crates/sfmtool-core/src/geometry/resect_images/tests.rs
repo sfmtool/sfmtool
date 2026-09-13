@@ -21,7 +21,7 @@ use approx::assert_relative_eq;
 use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
 use ndarray::{Array2, Array4};
 
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     ContentHash, DepthStatistics, SfmrMetadata, FEATURE_SOURCE_EMBEDDED_PATCHES,
     FEATURE_SOURCE_SIFT_FILES,
 };
@@ -229,10 +229,10 @@ fn build(
         tool: "sfmtool".into(),
         tool_version: "0".into(),
         tool_options: BTreeMap::new(),
-        workspace: sfmr_format::WorkspaceMetadata {
+        workspace: sfmtool_sfmr_format::WorkspaceMetadata {
             absolute_path: String::new(),
             relative_path: ".".into(),
-            contents: sfmr_format::WorkspaceContents {
+            contents: sfmtool_sfmr_format::WorkspaceContents {
                 feature_tool: "none".into(),
                 feature_type: "sift".into(),
                 feature_options: serde_json::json!({}),
@@ -843,18 +843,18 @@ fn drop_all_but(mut recon: SfmrReconstruction, rows: &[usize]) -> SfmrReconstruc
 }
 
 /// An empty `.matches` value, enough to reach the join's own guards.
-fn matches_fixture() -> matches_format::MatchesData {
-    matches_format::MatchesData {
-        metadata: matches_format::MatchesMetadata {
+fn matches_fixture() -> sfmtool_matches_format::MatchesData {
+    sfmtool_matches_format::MatchesData {
+        metadata: sfmtool_matches_format::MatchesMetadata {
             version: 3,
             matching_method: "test".into(),
             matching_tool: "test".into(),
             matching_tool_version: "0".into(),
             matching_options: BTreeMap::new(),
-            workspace: matches_format::WorkspaceMetadata {
+            workspace: sfmtool_matches_format::WorkspaceMetadata {
                 absolute_path: String::new(),
                 relative_path: ".".into(),
-                contents: matches_format::WorkspaceContents {
+                contents: sfmtool_matches_format::WorkspaceContents {
                     feature_tool: "none".into(),
                     feature_type: "sift".into(),
                     feature_options: serde_json::json!({}),
@@ -871,7 +871,7 @@ fn matches_fixture() -> matches_format::MatchesData {
             has_clusters: false,
             has_cluster_patches: false,
         },
-        content_hash: matches_format::MatchesContentHash {
+        content_hash: sfmtool_matches_format::MatchesContentHash {
             metadata_xxh128: String::new(),
             images_xxh128: String::new(),
             image_pairs_xxh128: None,

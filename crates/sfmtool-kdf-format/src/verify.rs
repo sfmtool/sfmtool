@@ -188,7 +188,7 @@ pub fn verify_sift_sources(
         if !sift_path.is_file() {
             return Err(KdfError::MissingSource(sift_path));
         }
-        let (_, metadata, hashes) = sift_format::read_sift_metadata(&sift_path)?;
+        let (_, metadata, hashes) = sfmtool_sift_format::read_sift_metadata(&sift_path)?;
         let tool = parse_hash_bytes(&hashes.feature_tool_xxh128)?;
         let content = parse_hash_bytes(&hashes.content_xxh128)?;
         if tool != table.feature_tool_hashes[image_index as usize]
@@ -199,7 +199,7 @@ pub fn verify_sift_sources(
                 sift_path.display()
             )));
         }
-        let sift = sift_format::read_sift(&sift_path)?;
+        let sift = sfmtool_sift_format::read_sift(&sift_path)?;
         for (id, image_feature) in members {
             if image_feature >= metadata.feature_count {
                 return Err(KdfError::InvalidFormat(
@@ -298,8 +298,8 @@ fn parse_hash_bytes(s: &str) -> Result<[u8; 16], KdfError> {
     Ok(v.to_be_bytes())
 }
 
-impl From<sift_format::SiftError> for KdfError {
-    fn from(value: sift_format::SiftError) -> Self {
+impl From<sfmtool_sift_format::SiftError> for KdfError {
+    fn from(value: sfmtool_sift_format::SiftError) -> Self {
         KdfError::InvalidFormat(format!("SIFT source: {value}"))
     }
 }

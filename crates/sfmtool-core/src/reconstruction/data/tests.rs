@@ -1,4 +1,4 @@
-use sfmr_format::{
+use sfmtool_sfmr_format::{
     RigFrameData, SfmrData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };
 
@@ -293,7 +293,7 @@ fn test_subset_rejects_out_of_bounds_and_duplicates() {
 #[test]
 fn test_subset_filters_rig_frame_data() {
     use ndarray::{Array1, Array2};
-    use sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
+    use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
 
     // Start from the demo (8 images) and attach a trivial rig/frame
     // structure: one single-sensor rig, one frame per image.
@@ -837,7 +837,7 @@ fn test_sfmr_data_colmap_to_canonical_converts_every_section() {
     };
     use crate::geometry::RotQuaternion;
     use ndarray::Array1;
-    use sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
+    use sfmtool_sfmr_format::{FramesMetadata, RigDefinition, RigsMetadata};
 
     let mut recon = SfmrReconstruction::demo(6);
     // Exercise the w = 0 branch: point 0 becomes an infinity direction.
@@ -1000,15 +1000,17 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     let mut colmap_data = recon.to_sfmr_data();
     sfmr_data_canonical_to_colmap(&mut colmap_data);
     let staged = dir.join("staged.sfmr");
-    let options = sfmr_format::WriteOptions {
+    let options = sfmtool_sfmr_format::WriteOptions {
         skip_recompute_depth_stats: true,
         ..Default::default()
     };
-    sfmr_format::write_sfmr_with_options(&staged, &mut colmap_data, &options).unwrap();
+    sfmtool_sfmr_format::write_sfmr_with_options(&staged, &mut colmap_data, &options).unwrap();
     let v4_path = dir.join("legacy_v4.sfmr");
     rewrite_sfmr_version(&staged, &v4_path, 4);
     assert_eq!(
-        sfmr_format::read_sfmr_metadata(&v4_path).unwrap().version,
+        sfmtool_sfmr_format::read_sfmr_metadata(&v4_path)
+            .unwrap()
+            .version,
         4
     );
 
@@ -1027,7 +1029,10 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
         Some("from version 4"),
         "the upgrade did not say what it upgraded from"
     );
-    assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
+    assert_eq!(
+        loaded.metadata.version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
+    );
     assert_eq!(
         loaded.image_table.images.len(),
         recon.image_table.images.len()
@@ -1059,8 +1064,10 @@ fn test_v4_file_upgrades_to_canonical_on_load_and_saves_as_v5() {
     let saved = dir.join("upgraded_v5.sfmr");
     loaded.save(&saved).unwrap();
     assert_eq!(
-        sfmr_format::read_sfmr_metadata(&saved).unwrap().version,
-        sfmr_format::SFMR_FORMAT_VERSION
+        sfmtool_sfmr_format::read_sfmr_metadata(&saved)
+            .unwrap()
+            .version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     );
     let reloaded = SfmrReconstruction::load(&saved, &Progress::none()).unwrap();
     for (li, ri) in reloaded
@@ -1182,22 +1189,25 @@ fn test_canonical_version_file_loads_without_convention_upgrade() {
     assert_projects_onto_keypoints(&recon, 1e-3, "fixture");
 
     let mut data = recon.to_sfmr_data();
-    let options = sfmr_format::WriteOptions {
+    let options = sfmtool_sfmr_format::WriteOptions {
         skip_recompute_depth_stats: true,
         ..Default::default()
     };
     let current = dir.join("current.sfmr");
-    sfmr_format::write_sfmr_with_options(&current, &mut data, &options).unwrap();
+    sfmtool_sfmr_format::write_sfmr_with_options(&current, &mut data, &options).unwrap();
 
     // Every version from the canonical-convention version up is already
     // canonical, so stamping the archive with any of them must not change what
     // `load` produces.
-    for version in sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION..=sfmr_format::SFMR_FORMAT_VERSION
+    for version in sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION
+        ..=sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     {
         let path = dir.join(format!("stamped_v{version}.sfmr"));
         rewrite_sfmr_version(&current, &path, version);
         assert_eq!(
-            sfmr_format::read_sfmr_metadata(&path).unwrap().version,
+            sfmtool_sfmr_format::read_sfmr_metadata(&path)
+                .unwrap()
+                .version,
             version
         );
 
@@ -1279,26 +1289,31 @@ fn test_canonical_version_file_round_trips_through_load_and_save() {
 
     let recon = demo_embedded_projected(24);
     let mut data = recon.to_sfmr_data();
-    let options = sfmr_format::WriteOptions {
+    let options = sfmtool_sfmr_format::WriteOptions {
         skip_recompute_depth_stats: true,
         ..Default::default()
     };
     let staged = dir.join("staged.sfmr");
-    sfmr_format::write_sfmr_with_options(&staged, &mut data, &options).unwrap();
+    sfmtool_sfmr_format::write_sfmr_with_options(&staged, &mut data, &options).unwrap();
     let v5_path = dir.join("legacy_v5.sfmr");
     rewrite_sfmr_version(
         &staged,
         &v5_path,
-        sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
+        sfmtool_sfmr_format::SFMR_CANONICAL_CONVENTION_VERSION,
     );
 
     let loaded = SfmrReconstruction::load(&v5_path, &Progress::none()).unwrap();
-    assert_eq!(loaded.metadata.version, sfmr_format::SFMR_FORMAT_VERSION);
+    assert_eq!(
+        loaded.metadata.version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
+    );
     let resaved = dir.join("resaved.sfmr");
     loaded.save(&resaved).unwrap();
     assert_eq!(
-        sfmr_format::read_sfmr_metadata(&resaved).unwrap().version,
-        sfmr_format::SFMR_FORMAT_VERSION
+        sfmtool_sfmr_format::read_sfmr_metadata(&resaved)
+            .unwrap()
+            .version,
+        sfmtool_sfmr_format::SFMR_FORMAT_VERSION
     );
 
     let mut reloaded = SfmrReconstruction::load(&resaved, &Progress::none()).unwrap();

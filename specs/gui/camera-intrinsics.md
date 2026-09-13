@@ -1050,11 +1050,11 @@ transform is not identity, a toggle appears above the block —
 while the second is active. Showing one silently would make the panel wrong half
 the time, in a way nobody would notice.
 
-`sfmr_format::{RigFrameData, RigsMetadata, RigDefinition, FramesMetadata}` are
-re-exported from `sfmtool-core`, beside `THUMBNAIL_SIZE` and for the same reason:
-`ImageTable::rig_frame_data` is a public field whose type nothing
-downstream could otherwise name, so reading — or building — a rig meant depending
-on `sfmr-format` directly.
+`sfmtool_sfmr_format::{RigFrameData, RigsMetadata, RigDefinition,
+FramesMetadata}` are re-exported from `sfmtool-core`, beside `THUMBNAIL_SIZE`
+and for the same reason: `ImageTable::rig_frame_data` is a public field whose
+type nothing downstream could otherwise name, so reading — or building — a rig
+meant depending on `sfmtool-sfmr-format` directly.
 
 **Rigs.** When `recon.rig_frame_data` is present, a further block, headed
 "Rig and frame" so that the heading and the row beneath it are not the same word

@@ -952,12 +952,13 @@ not treat a different value as a description of the data it is about to read —
 the entry name is authoritative.
 
 In this repository the value has a single declaration,
-`sfmr_format::THUMBNAIL_SIZE`, which the entry name, the read path, the write
-path and the section metadata are all derived from. `.sift` thumbnails are
-copied verbatim into `.sfmr`, so `sift_format::THUMBNAIL_SIZE` must equal it;
-that is enforced by a compile-time assertion in `sfmtool-core`, the first crate
-that sees both. The value is also exported to Python as `sfmtool.THUMBNAIL_SIZE`,
-because the SIFT extractors are what produce the pixels.
+`sfmtool_sfmr_format::THUMBNAIL_SIZE`, which the entry name, the read path, the
+write path and the section metadata are all derived from. `.sift` thumbnails are
+copied verbatim into `.sfmr`, so `sfmtool_sift_format::THUMBNAIL_SIZE` must
+equal it; that is enforced by a compile-time assertion in `sfmtool-core`, the
+first crate that sees both. The value is also exported to Python as
+`sfmtool.THUMBNAIL_SIZE`, because the SIFT extractors are what produce the
+pixels.
 
 > An earlier revision of this section told readers to use the stored
 > `thumbnail_size` "rather than hardcoding the size". No implementation ever did,
@@ -1733,9 +1734,9 @@ frame is per point (not per observation), two views of the same point share
 ## Compression Details
 
 Every entry of a `.sfmr` file is written at the same zstandard level, which
-defaults to 3 (`sfmr_format::WriteOptions::zstd_level`, and the `zstd_level`
-argument of the `write_sfmr` binding). The rest is the container's; see
-[archive-container.md](archive-container.md).
+defaults to 3 (`sfmtool_sfmr_format::WriteOptions::zstd_level`, and the
+`zstd_level` argument of the `write_sfmr` binding). The rest is the container's;
+see [archive-container.md](archive-container.md).
 
 ## File Naming Convention
 

@@ -22,12 +22,12 @@ rayon = "1.12"
 rand = "0.10"
 rand_distr = "0.6"
 serde_json = "1"
-sfmr-format = { path = "../sfmr-format" }
+sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 sfmtool-archive-io = { path = "../sfmtool-archive-io" }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-sift-format = { path = "../sift-format" }
-camrig-format = { path = "../camrig-format" }
-matches-format = { path = "../matches-format" }
+sfmtool-sift-format = { path = "../sfmtool-sift-format" }
+sfmtool-camrig-format = { path = "../sfmtool-camrig-format" }
+sfmtool-matches-format = { path = "../sfmtool-matches-format" }
 sfmtool-kdf-format = { path = "../sfmtool-kdf-format" }
 
 # GPU compute (optional)

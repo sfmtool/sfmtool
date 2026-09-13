@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use matches_format::{ClusterMemberStatus, MatchesData};
+use sfmtool_matches_format::{ClusterMemberStatus, MatchesData};
 
 use crate::geometry::focal_vote::contiguous;
 
@@ -458,7 +458,7 @@ impl ClusterCovisibility {
     /// use sfmtool_core::features::cluster_match::covisibility::ClusterCovisibility;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let matches = matches_format::read_matches("clusters.matches".as_ref())?;
+    /// let matches = sfmtool_matches_format::read_matches("clusters.matches".as_ref())?;
     /// let covis = ClusterCovisibility::from_matches(&matches, 0)?;
     /// println!("{} images", covis.num_images());
     /// # Ok(())

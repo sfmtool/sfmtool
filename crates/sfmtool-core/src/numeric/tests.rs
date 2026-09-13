@@ -237,7 +237,7 @@ const MEDIAN_ALLOWLIST: &[(&str, &str, &str)] = &[
          coordinate the tree cannot split on",
     ),
     (
-        "sfmr-format/src/depth_stats.rs",
+        "sfmtool-sfmr-format/src/depth_stats.rs",
         "median_sorted",
         "a different crate, and one this crate depends on rather than the \
          other way round, so it cannot reach `sfmtool_core::numeric`; it \

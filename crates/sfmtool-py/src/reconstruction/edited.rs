@@ -594,9 +594,9 @@ impl PyEditedReconstruction {
         accept_gate: f64,
         seed: u64,
     ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
-        let matches: Option<matches_format::MatchesData> = match &matches_path {
+        let matches: Option<sfmtool_matches_format::MatchesData> = match &matches_path {
             Some(path) => Some(
-                py.detach(|| matches_format::read_matches(path))
+                py.detach(|| sfmtool_matches_format::read_matches(path))
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
             ),
             None => None,

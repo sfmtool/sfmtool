@@ -885,20 +885,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "camrig-format"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
- "ndarray",
- "serde",
- "serde_json",
- "sfmtool-archive-io",
- "thiserror 2.0.19",
- "xxhash-rust",
- "zip",
-]
-
-[[package]]
 name = "cast"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2921,21 +2907,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matches-format"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
- "ndarray",
- "serde",
- "serde_json",
- "sfmtool-archive-io",
- "thiserror 2.0.19",
- "xxhash-rust",
- "zip",
- "zstd",
-]
-
-[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4908,7 +4879,6 @@ dependencies = [
  "jiff",
  "kiddo",
  "log",
- "matches-format",
  "nalgebra",
  "ndarray",
  "pollster 1.0.1",
@@ -4918,9 +4888,10 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
- "sfmr-format",
  "sfmtool-core",
- "sift-format",
+ "sfmtool-matches-format",
+ "sfmtool-sfmr-format",
+ "sfmtool-sift-format",
  "tokio",
  "wgpu",
  "windows",
@@ -4931,20 +4902,134 @@ dependencies = [
 ]
 
 [[package]]
-name = "sfmr-colmap"
+name = "sfmtool-archive-io"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "sfmtool-camrig-format"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "ndarray",
+ "serde",
+ "serde_json",
+ "sfmtool-archive-io",
+ "thiserror 2.0.19",
+ "xxhash-rust",
+ "zip",
+]
+
+[[package]]
+name = "sfmtool-colmap"
 version = "0.2.0"
 dependencies = [
  "approx",
- "matches-format",
  "ndarray",
  "rusqlite",
  "serde_json",
- "sfmr-format",
+ "sfmtool-matches-format",
+ "sfmtool-sfmr-format",
  "thiserror 2.0.19",
 ]
 
 [[package]]
-name = "sfmr-format"
+name = "sfmtool-core"
+version = "0.2.0"
+dependencies = [
+ "approx",
+ "bytemuck",
+ "criterion",
+ "half",
+ "image",
+ "kiddo",
+ "nalgebra",
+ "ndarray",
+ "pollster 1.0.1",
+ "rand 0.10.2",
+ "rand_distr",
+ "rayon",
+ "serde_json",
+ "sfmtool-archive-io",
+ "sfmtool-camrig-format",
+ "sfmtool-kdf-format",
+ "sfmtool-matches-format",
+ "sfmtool-sfmr-format",
+ "sfmtool-sift-format",
+ "tempfile",
+ "wgpu",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "sfmtool-kdf-format"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "serde",
+ "serde_json",
+ "sfmtool-archive-io",
+ "sfmtool-sift-format",
+ "tempfile",
+ "thiserror 2.0.19",
+ "windows-sys 0.61.2",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "sfmtool-matches-format"
+version = "0.2.0"
+dependencies = [
+ "bytemuck",
+ "ndarray",
+ "serde",
+ "serde_json",
+ "sfmtool-archive-io",
+ "thiserror 2.0.19",
+ "xxhash-rust",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "sfmtool-py"
+version = "0.2.0"
+dependencies = [
+ "half",
+ "image",
+ "nalgebra",
+ "ndarray",
+ "numpy",
+ "openjd-expr",
+ "pathdiff",
+ "pyo3",
+ "rayon",
+ "serde",
+ "serde_json",
+ "sfm-explorer",
+ "sfmtool-camrig-format",
+ "sfmtool-colmap",
+ "sfmtool-core",
+ "sfmtool-matches-format",
+ "sfmtool-sfmr-format",
+ "sfmtool-sift-format",
+]
+
+[[package]]
+name = "sfmtool-sfmr-format"
 version = "0.2.0"
 dependencies = [
  "approx",
@@ -4963,88 +5048,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "sfmtool-archive-io"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
- "rayon",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "xxhash-rust",
- "zip",
- "zstd",
-]
-
-[[package]]
-name = "sfmtool-core"
+name = "sfmtool-sift-format"
 version = "0.2.0"
 dependencies = [
  "approx",
  "bytemuck",
- "camrig-format",
- "criterion",
- "half",
- "image",
- "kiddo",
- "matches-format",
- "nalgebra",
  "ndarray",
- "pollster 1.0.1",
- "rand 0.10.2",
- "rand_distr",
- "rayon",
- "serde_json",
- "sfmr-format",
- "sfmtool-archive-io",
- "sfmtool-kdf-format",
- "sift-format",
- "tempfile",
- "wgpu",
- "xxhash-rust",
- "zip",
- "zstd",
-]
-
-[[package]]
-name = "sfmtool-kdf-format"
-version = "0.2.0"
-dependencies = [
- "bytemuck",
  "serde",
  "serde_json",
  "sfmtool-archive-io",
- "sift-format",
- "tempfile",
  "thiserror 2.0.19",
- "windows-sys 0.61.2",
  "xxhash-rust",
  "zip",
- "zstd",
-]
-
-[[package]]
-name = "sfmtool-py"
-version = "0.2.0"
-dependencies = [
- "camrig-format",
- "half",
- "image",
- "matches-format",
- "nalgebra",
- "ndarray",
- "numpy",
- "openjd-expr",
- "pathdiff",
- "pyo3",
- "rayon",
- "serde",
- "serde_json",
- "sfm-explorer",
- "sfmr-colmap",
- "sfmr-format",
- "sfmtool-core",
- "sift-format",
 ]
 
 [[package]]
@@ -5061,21 +5076,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "sift-format"
-version = "0.2.0"
-dependencies = [
- "approx",
- "bytemuck",
- "ndarray",
- "serde",
- "serde_json",
- "sfmtool-archive-io",
- "thiserror 2.0.19",
- "xxhash-rust",
- "zip",
-]
 
 [[package]]
 name = "signal-hook-registry"

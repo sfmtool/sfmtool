@@ -1081,7 +1081,7 @@ impl Default for PatchExtent {
 fn read_image_scales(recon: &SfmrReconstruction, image_index: usize) -> Option<Vec<f64>> {
     let read_count = *recon.point_set.max_track_feature_index.get(image_index)? as usize + 1;
     let path = recon.sift_path_for_image(image_index);
-    let data = sift_format::read_sift_partial(&path, read_count).ok()?;
+    let data = sfmtool_sift_format::read_sift_partial(&path, read_count).ok()?;
     let aff = &data.affine_shapes;
     Some(
         (0..aff.shape()[0])

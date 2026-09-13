@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyType};
 
-use sfmr_format::SfmrCamera;
 use sfmtool_core::CameraIntrinsics;
+use sfmtool_sfmr_format::SfmrCamera;
 
 /// Camera intrinsic parameters with image dimensions.
 ///

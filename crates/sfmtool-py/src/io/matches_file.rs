@@ -6,7 +6,7 @@
 //!
 //! The dict-shaped `read_matches` stays for whole-file consumers; this class
 //! serves pipelines that parse once and then slice — array accessors copy on
-//! access, and `select_clusters` runs the `matches-format` derivation
+//! access, and `select_clusters` runs the `sfmtool-matches-format` derivation
 //! (`specs/formats/matches-file-format.md` § "Cluster Selection").
 
 use std::borrow::Cow;
@@ -16,7 +16,7 @@ use std::str::FromStr;
 use numpy::{PyReadonlyArray1, ToPyArray};
 use pyo3::prelude::*;
 
-use matches_format::{ClusterMemberStatus, ClusterSelect, MatchesData};
+use sfmtool_matches_format::{ClusterMemberStatus, ClusterSelect, MatchesData};
 
 use crate::helpers::serde_to_py;
 
@@ -38,7 +38,7 @@ impl PyMatchesFile {
         &self.inner
     }
 
-    fn clusters(&self) -> PyResult<&matches_format::ClustersData> {
+    fn clusters(&self) -> PyResult<&sfmtool_matches_format::ClustersData> {
         self.inner.clusters.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "no clusters/ section — this file stores the pairwise backbone",
@@ -56,7 +56,7 @@ impl PyMatchesFile {
         })
     }
 
-    fn cluster_patches(&self) -> PyResult<&matches_format::ClusterPatchData> {
+    fn cluster_patches(&self) -> PyResult<&sfmtool_matches_format::ClusterPatchData> {
         self.inner.cluster_patches.as_ref().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("no cluster_patches/ section in this file")
         })
@@ -104,7 +104,7 @@ impl PyMatchesFile {
     ///     path: `.matches` file path (str or Path).
     #[new]
     fn new(path: PathBuf) -> PyResult<Self> {
-        let inner = matches_format::read_matches(&path)
+        let inner = sfmtool_matches_format::read_matches(&path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }
@@ -350,7 +350,7 @@ impl PyMatchesFile {
     }
 
     /// Derive a new handle holding only the clusters/members that pass the
-    /// selection (see `MatchesData::select_clusters` in `matches-format`):
+    /// selection (see `MatchesData::select_clusters` in `sfmtool-matches-format`):
     /// source-unrefinable clusters drop; members must have an accepted
     /// status and (when restricted) lie on a selected image; clusters must
     /// span `min_span` distinct selected images. When restricted, the image
@@ -410,7 +410,7 @@ impl PyMatchesFile {
     ///     zstd_level: Entry compression level (default 3).
     #[pyo3(signature = (path, zstd_level=3))]
     fn save(&self, path: PathBuf, zstd_level: i32) -> PyResult<()> {
-        matches_format::write_matches(&path, &self.inner, zstd_level)
+        sfmtool_matches_format::write_matches(&path, &self.inner, zstd_level)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 }

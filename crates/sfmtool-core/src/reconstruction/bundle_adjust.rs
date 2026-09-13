@@ -22,7 +22,7 @@ use crate::geometry::bundle_adjust::{
 use crate::numeric::median_in_place;
 use crate::progress::Progress;
 use crate::progress_info;
-use sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
+use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_HELD, POINT_CONSTRAINT_RANGED};
 
 /// LM iteration budget per round, the kernel's own default.
 const DEFAULT_MAX_ITERS: usize = 60;

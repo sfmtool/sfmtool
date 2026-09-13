@@ -563,14 +563,14 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
             affine[[f, 0, 0]] = s; // column-0 norm = s (a10 = 0)
             affine[[f, 1, 1]] = s;
         }
-        let data = sift_format::SiftData {
-            feature_tool_metadata: sift_format::FeatureToolMetadata {
+        let data = sfmtool_sift_format::SiftData {
+            feature_tool_metadata: sfmtool_sift_format::FeatureToolMetadata {
                 feature_tool: "test".into(),
                 feature_type: "sift".into(),
                 feature_options: serde_json::json!({}),
             },
-            metadata: sift_format::SiftMetadata {
-                version: sift_format::SIFT_FORMAT_VERSION,
+            metadata: sfmtool_sift_format::SiftMetadata {
+                version: sfmtool_sift_format::SIFT_FORMAT_VERSION,
                 image_name: recon.image_table.images[img].name.clone(),
                 image_file_xxh128: "0".repeat(32),
                 image_file_size: 1,
@@ -578,13 +578,13 @@ fn write_demo_sift(recon: &mut SfmrReconstruction, tag: &str) -> Vec<f64> {
                 image_height: recon.image_table.cameras[0].height,
                 feature_count: count as u32,
             },
-            content_hash: sift_format::SiftContentHash::default(),
+            content_hash: sfmtool_sift_format::SiftContentHash::default(),
             positions_xy: Array2::<f32>::zeros((count, 2)),
             affine_shapes: affine,
             descriptors: Array2::<u8>::zeros((count, 128)),
             thumbnail_y_x_rgb: Array3::<u8>::zeros((128, 128, 3)),
         };
-        sift_format::write_sift(&recon.sift_path_for_image(img), &data, 3).unwrap();
+        sfmtool_sift_format::write_sift(&recon.sift_path_for_image(img), &data, 3).unwrap();
     }
 
     // Per-observation scale in track order, matching what `from_reconstruction`

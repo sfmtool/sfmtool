@@ -71,12 +71,12 @@ deleting the lines.
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
 - `crates/` — Cargo workspace, 10 crates:
-  - `sift-format`, `matches-format`, `sfmr-format`, `camrig-format`,
-    `sfmtool-kdf-format` — on-disk formats (all ZIP + zstd)
+  - `sfmtool-sift-format`, `sfmtool-matches-format`, `sfmtool-sfmr-format`,
+    `sfmtool-camrig-format`, `sfmtool-kdf-format` — on-disk formats (all ZIP + zstd)
   - `sfmtool-archive-io` — the ZIP + zstd container primitives those five share
     (entry read/write, XXH128 section hashing); each format crate keeps its own
     schema, validation and error type
-  - `sfmr-colmap` — COLMAP binary + SQLite interop
+  - `sfmtool-colmap` — COLMAP binary + SQLite interop
   - `sfmtool-core` — algorithms: camera, alignment, distortion, epipolar, matching, frustum, optical flow, transforms, spatial indexing
   - `sfm-explorer` — native GUI viewer (winit + wgpu + egui); window title
     "SfM Explorer", or "SfM Explorer - <file>.sfmr" once a file is loaded

@@ -46,7 +46,8 @@ fn with_projected_keypoints(mut recon: SfmrReconstruction) -> SfmrReconstruction
         keypoints_xy: keypoints,
         image_file_hashes: vec![[0u8; 16]; recon.image_table.images.len()],
     };
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    recon.metadata.feature_source =
+        sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     recon.rebuild_derived_fields();
     recon
 }

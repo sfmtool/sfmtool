@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ndarray::{Array2, Array3, Array4};
 
-use sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_RANGED};
+use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE, POINT_CONSTRAINT_RANGED};
 
 use super::*;
 use crate::reconstruction::data::ObservationSource;
@@ -397,7 +397,7 @@ fn the_materialised_hash_is_the_files_hash_after_a_save() {
         std::thread::current().id()
     ));
     mat.save(&path).expect("saved");
-    let stored = sfmr_format::read_sfmr_content_hash(&path).expect("read back");
+    let stored = sfmtool_sfmr_format::read_sfmr_content_hash(&path).expect("read back");
     let _ = std::fs::remove_file(&path);
     assert_eq!(computed.content_xxh128, stored.content_xxh128);
     assert_eq!(computed.points3d_xxh128, stored.points3d_xxh128);
@@ -455,10 +455,10 @@ fn the_hash_survives_the_clock() {
     std::thread::sleep(std::time::Duration::from_millis(20));
     mat.save(&second).expect("saved again");
 
-    let a = sfmr_format::read_sfmr_content_hash(&first).expect("read back");
-    let b = sfmr_format::read_sfmr_content_hash(&second).expect("read back");
-    let stamp_a = sfmr_format::read_sfmr_metadata(&first).expect("metadata");
-    let stamp_b = sfmr_format::read_sfmr_metadata(&second).expect("metadata");
+    let a = sfmtool_sfmr_format::read_sfmr_content_hash(&first).expect("read back");
+    let b = sfmtool_sfmr_format::read_sfmr_content_hash(&second).expect("read back");
+    let stamp_a = sfmtool_sfmr_format::read_sfmr_metadata(&first).expect("metadata");
+    let stamp_b = sfmtool_sfmr_format::read_sfmr_metadata(&second).expect("metadata");
     let _ = std::fs::remove_dir_all(&dir);
 
     assert_eq!(computed.content_xxh128, a.content_xxh128);
@@ -716,7 +716,7 @@ fn a_base_that_came_with_a_hash_is_taken_at_its_word() {
 #[test]
 fn a_base_with_no_stored_hash_is_computed() {
     let mut recon = fixture(6);
-    recon.content_hash = sfmr_format::ContentHash::default();
+    recon.content_hash = sfmtool_sfmr_format::ContentHash::default();
     let expected = recon.content_xxh128().expect("hashable").content_xxh128;
 
     let edited = EditedReconstruction::new(Arc::new(recon));

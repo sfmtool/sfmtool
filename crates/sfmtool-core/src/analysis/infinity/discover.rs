@@ -31,7 +31,7 @@ use crate::reconstruction::data::observation_reprojection_error;
 use crate::reconstruction::{
     ObservationSource, Point3D, ReconstructionError, SfmrReconstruction, TrackObservation,
 };
-use sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE};
+use sfmtool_sfmr_format::{NO_REFERENCE_IMAGE, POINT_CONSTRAINT_FREE};
 
 /// Parameters governing the points-at-infinity search.
 #[derive(Debug, Clone, Copy)]
@@ -396,12 +396,13 @@ impl SfmrReconstruction {
         for (img_idx, image) in self.image_table.images.iter().enumerate() {
             let camera = &self.image_table.cameras[image.camera_index as usize];
             let sift_path = self.sift_path_for_image(img_idx);
-            let sift = sift_format::read_sift_partial(&sift_path, read_count).map_err(|e| {
-                ReconstructionError::SiftRead {
-                    path: sift_path.clone(),
-                    source: e.to_string(),
-                }
-            })?;
+            let sift =
+                sfmtool_sift_format::read_sift_partial(&sift_path, read_count).map_err(|e| {
+                    ReconstructionError::SiftRead {
+                        path: sift_path.clone(),
+                        source: e.to_string(),
+                    }
+                })?;
 
             let n = sift.positions_xy.nrows();
             // World-rotation: ray_world = R^T * ray_cam, where R = world->cam

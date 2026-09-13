@@ -79,8 +79,8 @@ fn fixture(observed: usize) -> SfmrReconstruction {
         .collect();
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((
         n,
-        sfmr_format::THUMBNAIL_SIZE,
-        sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
+        sfmtool_sfmr_format::THUMBNAIL_SIZE,
         3,
     )));
     recon.image_table.depth_statistics.images.truncate(n);
@@ -127,7 +127,8 @@ fn fixture(observed: usize) -> SfmrReconstruction {
     set.patch_bitmaps_y_x_rgba = Some(Arc::new(bitmap));
     set.observation_confidence = Some(vec![200; observed]);
     set.normal_confidence = Some(vec![180]);
-    recon.metadata.feature_source = sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
+    recon.metadata.feature_source =
+        sfmtool_sfmr_format::FEATURE_SOURCE_EMBEDDED_PATCHES.to_string();
     recon.rebuild_derived_fields();
     recon
 }

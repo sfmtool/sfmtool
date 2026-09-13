@@ -16,7 +16,7 @@
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use sfmr_format::SfmrError;
+use sfmtool_sfmr_format::SfmrError;
 
 use crate::camera::CameraIntrinsics;
 
@@ -53,7 +53,7 @@ impl SfmrReconstruction {
             None => {
                 let read_count = self.point_set.max_track_feature_index[image_index] as usize + 1;
                 let sift_path = self.sift_path_for_image(image_index);
-                sift_format::read_sift_positions(&sift_path, read_count).map_err(|e| {
+                sfmtool_sift_format::read_sift_positions(&sift_path, read_count).map_err(|e| {
                     ReconstructionError::SiftRead {
                         path: sift_path,
                         source: e.to_string(),
@@ -283,7 +283,7 @@ impl SfmrReconstruction {
 
     /// Recompute depth statistics, histograms, and estimated normals from the
     /// current poses, points, and tracks. Uses the same
-    /// [`sfmr_format::compute_depth_statistics`] function that `.sfmr` file
+    /// [`sfmtool_sfmr_format::compute_depth_statistics`] function that `.sfmr` file
     /// writing uses.
     pub fn recompute_depth_statistics(&mut self) -> Result<(), SfmrError> {
         use ndarray::{Array1, Array2};
@@ -321,7 +321,7 @@ impl SfmrReconstruction {
             point_indexes[i] = obs.point_index;
         }
 
-        let result = sfmr_format::compute_depth_statistics(
+        let result = sfmtool_sfmr_format::compute_depth_statistics(
             &quaternions_wxyz,
             &translations_xyz,
             &positions_xyzw,

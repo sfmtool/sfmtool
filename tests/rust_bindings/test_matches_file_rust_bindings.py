@@ -174,7 +174,7 @@ def test_shared_image_dims(tmp_path, pairwise_path):
     # one -- and the refusal names the first image to disagree rather than
     # handing back dims[0].  (The dims-less refusal belongs to version <= 3
     # files, which the writer cannot produce; it is pinned in the
-    # matches-format unit tests.)
+    # sfmtool-matches-format unit tests.)
     src = _cluster_patch_dict()
     path = tmp_path / "mixed.matches"
     write_matches(path, src)
