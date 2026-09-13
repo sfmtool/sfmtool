@@ -273,7 +273,11 @@ Families, in the proposed order:
   [`../gui/edits/create-point.md`](../gui/edits/create-point.md), which is the
   edit an added observation then places, and so is removing an observation,
   [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
-  which inverts the first. Split a track and merge two remain.
+  which inverts the first. Split a track and merge two remain, and both fall
+  out of the bench proposed in
+  [sfm-explorer-track-editing.md](sfm-explorer-track-editing.md): a track
+  taken out of the reconstruction and worked on beside it, with members turned
+  in or out and other tracks pulled in, and committed as one version.
 - **Bundle adjust**: running the adjustment on the node's value with the
   constraints it carries, as one version, is built and standing,
   [`../gui/edits/bundle-adjust.md`](../gui/edits/bundle-adjust.md), over the core
