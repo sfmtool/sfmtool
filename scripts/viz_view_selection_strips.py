@@ -29,7 +29,6 @@ Example::
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 import cv2
@@ -40,44 +39,18 @@ from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
-
-def load_images(recon) -> list[np.ndarray]:
-    ws = recon.workspace_dir
-    out = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise FileNotFoundError(f"could not read image {name!r} under {ws}")
-        out.append(np.ascontiguousarray(bgr))
-    return out
-
-
-def rotation_matrices(recon) -> np.ndarray:
-    """Per-image world->camera rotation matrices from the wxyz quaternions."""
-    q = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    n = w * w + x * x + y * y + z * z
-    s = np.where(n > 0, 2.0 / n, 0.0)
-    rot = np.empty((len(q), 3, 3))
-    rot[:, 0, 0] = 1 - s * (y * y + z * z)
-    rot[:, 0, 1] = s * (x * y - z * w)
-    rot[:, 0, 2] = s * (x * z + y * w)
-    rot[:, 1, 0] = s * (x * y + z * w)
-    rot[:, 1, 1] = 1 - s * (x * x + z * z)
-    rot[:, 1, 2] = s * (y * z - x * w)
-    rot[:, 2, 0] = s * (x * z - y * w)
-    rot[:, 2, 1] = s * (y * z + x * w)
-    rot[:, 2, 2] = 1 - s * (x * x + y * y)
-    return rot
-
-
-def track_views(recon) -> dict[int, set[int]]:
-    pids = np.asarray(recon.track_point_indexes)
-    imgs = np.asarray(recon.track_image_indexes)
-    tracks: dict[int, set[int]] = {}
-    for pid, im in zip(pids.tolist(), imgs.tolist()):
-        tracks.setdefault(int(pid), set()).add(int(im))
-    return tracks
+from _viz_common import (
+    chip,
+    draw_text,
+    gauss_window,
+    infinity_first_sample,
+    label_for,
+    load_images,
+    new_canvas,
+    rotation_matrices,
+    track_views,
+    znorm,
+)
 
 
 def geometric_candidates(
@@ -105,63 +78,15 @@ def geometric_candidates(
     return out
 
 
-def gauss_window(n: int) -> np.ndarray:
-    u = np.arange(n) - n / 2 + 0.5
-    gx, gy = np.meshgrid(u, u)
-    return np.exp(-(gx**2 + gy**2) / (2 * (n / 4.0) ** 2)).ravel()
-
-
-def znorm(tile: np.ndarray, w: np.ndarray) -> np.ndarray:
-    """Per-channel z-normalized vector with sqrt(window) folded in -> (C, P), so
-    a dot of two such vectors is a windowed ZNCC (mirrors the Rust convention)."""
-    flat = tile.reshape(-1, tile.shape[-1]) if tile.ndim == 3 else tile.reshape(-1, 1)
-    a = flat.astype(np.float64)
-    g = np.sqrt(w)
-    chans = []
-    for c in range(a.shape[1]):
-        x = a[:, c]
-        x = x - (w * x).sum() / w.sum()
-        nrm = np.sqrt((w * x * x).sum())
-        chans.append(g * (x / nrm if nrm > 1e-9 else np.zeros_like(x)))
-    return np.stack(chans, 0)
-
-
-def _chip(img, text, org, color, scale=0.3):
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
-    x, y = org
-    cv2.rectangle(img, (x - 1, y - th - 2), (x + tw + 1, y + 2), (15, 15, 15), -1)
-    cv2.putText(
-        img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA
-    )
-
-
 def _draw_tile(tile, idx, score, color, kind, tile_px):
     p8 = np.clip(tile, 0, 255).astype(np.uint8)
     bgr = p8 if p8.ndim == 3 else cv2.cvtColor(p8, cv2.COLOR_GRAY2BGR)
     bgr = cv2.resize(bgr, (tile_px, tile_px), interpolation=cv2.INTER_NEAREST)
     cv2.rectangle(bgr, (0, 0), (tile_px - 1, tile_px - 1), color, 3)
-    _chip(bgr, f"{kind}{idx}", (3, 12), color)
+    chip(bgr, f"{kind}{idx}", (3, 12), color, 0.3)
     if score is not None:
-        _chip(bgr, f"{score:+.2f}", (3, tile_px - 5), color)
+        chip(bgr, f"{score:+.2f}", (3, tile_px - 5), color, 0.3)
     return bgr
-
-
-def _infinity_first_sample(recon, ids, sample_size, rng):
-    """A point-id sample that includes ALL points at infinity plus random finite
-    points up to ``sample_size`` — guaranteeing infinity points reach row
-    selection even when they are a tiny fraction of the cloud. (The montage row
-    mix is balanced separately in ``render_strips``.)"""
-    is_inf = np.asarray(recon.point_is_at_infinity)
-    ids = [int(i) for i in np.asarray(ids).tolist()]
-    inf_ids = [i for i in ids if is_inf[i]]
-    fin_ids = [i for i in ids if not is_inf[i]]
-    k = max(0, min(sample_size, len(ids)) - len(inf_ids))
-    fin = (
-        sorted(int(x) for x in rng.choice(fin_ids, size=min(k, len(fin_ids)), replace=False))
-        if fin_ids and k
-        else []
-    )
-    return (inf_ids + fin)[:sample_size]
 
 
 def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
@@ -178,7 +103,9 @@ def render_strips(recon, cloud, images, args) -> tuple[np.ndarray | None, dict]:
     ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(args.seed)
     if args.prioritize_infinity:
-        sample = _infinity_first_sample(recon, ids, args.sample, rng)
+        # interleave=False: infinity ids lead the sample, and the montage row mix
+        # is balanced further down in this function rather than by the sampler.
+        sample = infinity_first_sample(recon, ids, args.sample, rng, interleave=False)
     else:
         sample = np.sort(
             rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
@@ -342,57 +269,33 @@ def _compose(rendered, rows_info, args) -> np.ndarray:
     header_w, gap = 360, 4
     width = header_w + max_tiles * (args.tile + gap)
     total_h = (args.tile + gap) * len(rendered) + 60
-    canvas = np.full((total_h, width, 3), 28, np.uint8)
+    canvas = new_canvas(width, total_h)
 
     title = (
         f"select_views patch strips: {args.label}  "
         f"(sample={len(rows_info)}, RES={args.resolution}, min_rel={args.min_relative_zncc})"
     )
-    cv2.putText(
-        canvas,
-        title,
-        (8, 22),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (235, 235, 235),
-        1,
-        cv2.LINE_AA,
-    )
+    draw_text(canvas, title, (8, 22), 0.5, (235, 235, 235))
     legend = "yellow=track  green=admitted(+add)  red=rejected(visible, not admitted)"
-    cv2.putText(
-        canvas,
-        legend,
-        (8, 44),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (200, 200, 200),
-        1,
-        cv2.LINE_AA,
-    )
+    draw_text(canvas, legend, (8, 44), 0.4, (200, 200, 200))
 
     y = 56
     for x, tiles in rendered:
         sa_str = f"{x['sa']:.2f}" if np.isfinite(x["sa"]) else "nan"
         n_add = len([a for a in x["admitted"] if a not in x["track"]])
-        cv2.putText(
+        draw_text(
             canvas,
             f"pt {x['pid']}  trk={len(x['track'])} +add={n_add}",
             (8, y + 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
             0.42,
             (230, 230, 230),
-            1,
-            cv2.LINE_AA,
         )
-        cv2.putText(
+        draw_text(
             canvas,
             f"rej={len(x['rejected'])}  self_agr={sa_str}",
             (8, y + 42),
-            cv2.FONT_HERSHEY_SIMPLEX,
             0.42,
             (190, 190, 190),
-            1,
-            cv2.LINE_AA,
         )
         xoff = header_w
         for tile in tiles:
@@ -400,15 +303,6 @@ def _compose(rendered, rows_info, args) -> np.ndarray:
             xoff += args.tile + gap
         y += args.tile + gap
     return canvas
-
-
-def _label_for(path: Path, recon) -> str:
-    """A short dataset label: the workspace dir name minus a trailing '_ws',
-    else the .sfmr stem."""
-    ws = Path(recon.workspace_dir).name
-    if ws:
-        return ws[:-3] if ws.endswith("_ws") else ws
-    return path.stem
 
 
 def main(argv=None):
@@ -451,7 +345,7 @@ def main(argv=None):
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.sfmr:
         recon = SfmrReconstruction.load(str(path))
-        args.label = _label_for(path, recon)
+        args.label = label_for(path, recon)
         images = load_images(recon)
         cloud = PatchCloud.from_reconstruction(
             recon, normal="mean_viewing", extent_value=5.0

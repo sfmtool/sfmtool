@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 from pathlib import Path
 
 import cv2
@@ -50,63 +49,18 @@ from sfmtool._sfmtool.patches import OrientedPatch, PatchCloud
 from sfmtool._sfmtool.geometry import RigidTransform
 from sfmtool._sfmtool.flow import WarpMap
 
-
-def load_images(recon) -> list[np.ndarray]:
-    ws = recon.workspace_dir
-    out = []
-    for name in recon.image_names:
-        bgr = cv2.imread(os.path.join(ws, name), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise FileNotFoundError(f"could not read image {name!r} under {ws}")
-        out.append(np.ascontiguousarray(bgr))
-    return out
-
-
-def rotation_matrices(recon) -> np.ndarray:
-    """Per-image world->camera rotation matrices from the wxyz quaternions."""
-    q = np.asarray(recon.quaternions_wxyz, dtype=np.float64)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    n = w * w + x * x + y * y + z * z
-    s = np.where(n > 0, 2.0 / n, 0.0)
-    rot = np.empty((len(q), 3, 3))
-    rot[:, 0, 0] = 1 - s * (y * y + z * z)
-    rot[:, 0, 1] = s * (x * y - z * w)
-    rot[:, 0, 2] = s * (x * z + y * w)
-    rot[:, 1, 0] = s * (x * y + z * w)
-    rot[:, 1, 1] = 1 - s * (x * x + z * z)
-    rot[:, 1, 2] = s * (y * z - x * w)
-    rot[:, 2, 0] = s * (x * z - y * w)
-    rot[:, 2, 1] = s * (y * z + x * w)
-    rot[:, 2, 2] = 1 - s * (x * x + y * y)
-    return rot
-
-
-def track_views(recon) -> dict[int, set[int]]:
-    pids = np.asarray(recon.track_point_indexes)
-    imgs = np.asarray(recon.track_image_indexes)
-    tracks: dict[int, set[int]] = {}
-    for pid, im in zip(pids.tolist(), imgs.tolist()):
-        tracks.setdefault(int(pid), set()).add(int(im))
-    return tracks
-
-
-def plane_hit(cam, rot, t, kpt, center, normal, w=1.0):
-    """Re-anchored patch center for the view's ray through `kpt`.
-
-    Finite patch (`w == 1`): the world point where the ray meets the patch plane.
-    Point at infinity (`w == 0`): the (unit) world ray direction itself — every
-    ray to the point is parallel to its direction."""
-    ray_cam = np.asarray(cam.pixel_to_ray(float(kpt[0]), float(kpt[1])))
-    dir_world = rot.T @ ray_cam
-    if w == 0.0:
-        n = float(np.linalg.norm(dir_world))
-        return dir_world / n if n > 0.0 else None
-    cam_center = -rot.T @ t
-    denom = float(dir_world @ normal)
-    if abs(denom) < 1e-12:
-        return None
-    s = float((center - cam_center) @ normal) / denom
-    return cam_center + s * dir_world
+from _viz_common import (
+    chip,
+    draw_text,
+    infinity_first_sample,
+    label_for,
+    load_images,
+    new_canvas,
+    plane_hit,
+    rotation_matrices,
+    sharpness,
+    track_views,
+)
 
 
 def render_patch(image, cam, t_i, quat_i, center, normal, up, half_extent, res, w=1.0):
@@ -131,24 +85,6 @@ def consensus(cores):
     return np.stack([np.asarray(c, np.float64) for c in cores]).mean(0)
 
 
-def sharpness(img) -> float:
-    """Gradient energy of an image — higher = sharper (less registration blur)."""
-    g = img.astype(np.float32)
-    g = g.mean(2) if g.ndim == 3 else g
-    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0)
-    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1)
-    return float((gx * gx + gy * gy).mean())
-
-
-def _chip(img, text, org, color, scale=0.34):
-    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
-    x, y = org
-    cv2.rectangle(img, (x - 1, y - th - 2), (x + tw + 1, y + 2), (15, 15, 15), -1)
-    cv2.putText(
-        img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1, cv2.LINE_AA
-    )
-
-
 YELLOW = (0, 220, 220)
 GREEN = (0, 200, 0)
 RED = (0, 0, 230)
@@ -166,9 +102,9 @@ def _to_bgr(img, disp):
 def _ref_panel(img, disp, label, accent, bot_label=None):
     bgr = _to_bgr(img, disp)
     cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), accent, 2)
-    _chip(bgr, label, (4, 14), accent)
+    chip(bgr, label, (4, 14), accent, 0.34)
     if bot_label is not None:
-        _chip(bgr, bot_label, (4, disp - 7), accent, 0.34)
+        chip(bgr, bot_label, (4, disp - 7), accent, 0.34)
     return bgr
 
 
@@ -187,31 +123,10 @@ def _ctx_tile(ctx_img, disp, margin, res, border, top_label, acc=None, bot_label
             bgr, margin + acc[0], margin + acc[1], res, scale, CYAN
         )  # core @ congealed
     cv2.rectangle(bgr, (0, 0), (disp - 1, disp - 1), border, 3)
-    _chip(bgr, top_label, (4, 14), border)
+    chip(bgr, top_label, (4, 14), border, 0.34)
     if bot_label is not None:
-        _chip(bgr, bot_label, (4, disp - 7), CYAN, 0.32)
+        chip(bgr, bot_label, (4, disp - 7), CYAN, 0.32)
     return bgr
-
-
-def _infinity_first_sample(recon, ids, sample_size, rng):
-    """A point-id sample that interleaves ALL points at infinity with random
-    finite points (infinity leading each pair), capped at ``sample_size`` — so a
-    prioritized montage shows BOTH kinds even when infinity is a tiny fraction of
-    the cloud."""
-    from itertools import zip_longest
-
-    is_inf = np.asarray(recon.point_is_at_infinity)
-    ids = [int(i) for i in np.asarray(ids).tolist()]
-    inf_ids = [i for i in ids if is_inf[i]]
-    fin_ids = [i for i in ids if not is_inf[i]]
-    k = max(0, min(sample_size, len(ids)) - len(inf_ids))
-    fin = (
-        sorted(int(x) for x in rng.choice(fin_ids, size=min(k, len(fin_ids)), replace=False))
-        if fin_ids and k
-        else []
-    )
-    merged = [x for pair in zip_longest(inf_ids, fin) for x in pair if x is not None]
-    return merged[:sample_size]
 
 
 def gather(recon, cloud, images, args):
@@ -221,7 +136,7 @@ def gather(recon, cloud, images, args):
     ids = np.asarray(cloud.point_indexes)
     rng = np.random.default_rng(args.seed)
     if args.prioritize_infinity:
-        sample = _infinity_first_sample(recon, ids, args.sample, rng)
+        sample = infinity_first_sample(recon, ids, args.sample, rng)
     else:
         sample = np.sort(
             rng.choice(ids, size=min(args.sample, len(ids)), replace=False)
@@ -346,64 +261,37 @@ def _compose(rows, args):
     ref_w = 2 * (tile + gap) + sep
     width = header_w + ref_w + max_cols * (tile + gap)
     total_h = (tile + gap) * len(rows) + 56
-    canvas = np.full((total_h, width, 3), 28, np.uint8)
+    canvas = new_canvas(width, total_h)
 
-    cv2.putText(
+    draw_text(
         canvas,
         f"keypoint localization: {args.label}  "
         f"(sample={args.sample}, RES={args.resolution}, search={args.search:g})",
         (8, 20),
-        cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
         (235, 235, 235),
-        1,
-        cv2.LINE_AA,
     )
-    cv2.putText(
+    draw_text(
         canvas,
         "left: reference patch before|after (x = sharpness ratio).  right: per-view "
         "context tiles, white=core@projection cyan=core@congealed.",
         (8, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
         0.38,
         GREY,
-        1,
-        cv2.LINE_AA,
     )
 
     y = 50
     for x in rows:
-        cv2.putText(
-            canvas,
-            f"pt {x['pid']}",
-            (8, y + 16),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.44,
-            (230, 230, 230),
-            1,
-            cv2.LINE_AA,
-        )
+        draw_text(canvas, f"pt {x['pid']}", (8, y + 16), 0.44, (230, 230, 230))
         floor = "  FLOOR" if x["nkept"] == 2 and x["nset"] > 2 else ""
-        cv2.putText(
+        draw_text(
             canvas,
             f"k {x['nkept']}/{x['nset']}{floor}",
             (8, y + 34),
-            cv2.FONT_HERSHEY_SIMPLEX,
             0.4,
             (190, 190, 190),
-            1,
-            cv2.LINE_AA,
         )
-        cv2.putText(
-            canvas,
-            f"{x['shift']:.2f}px",
-            (8, y + 52),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
-            (190, 190, 190),
-            1,
-            cv2.LINE_AA,
-        )
+        draw_text(canvas, f"{x['shift']:.2f}px", (8, y + 52), 0.4, (190, 190, 190))
         # Reference before / after.
         xoff = header_w
         canvas[y : y + tile, xoff : xoff + tile] = _ref_panel(
@@ -420,13 +308,6 @@ def _compose(rows, args):
             xoff += tile + gap
         y += tile + gap
     return canvas
-
-
-def _label_for(path: Path, recon) -> str:
-    ws = Path(recon.workspace_dir).name
-    if ws:
-        return ws[:-3] if ws.endswith("_ws") else ws
-    return path.stem
 
 
 def main(argv=None):
@@ -455,7 +336,7 @@ def main(argv=None):
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.sfmr:
         recon = SfmrReconstruction.load(str(path))
-        args.label = _label_for(path, recon)
+        args.label = label_for(path, recon)
         images = load_images(recon)
         cloud = PatchCloud.from_reconstruction(
             recon, normal="mean_viewing", extent_value=5.0
