@@ -413,6 +413,11 @@ fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: 
                 )
             };
             monospace(ui, glyphs as f32 * space, &lead, marker_color);
+            // The whole of a cut row is read on hover, and `Label` is what does
+            // it: an elided text goes into a tooltip of its own, in this
+            // label's font, and only when the text was actually cut. A second
+            // `on_hover_text` of the same string stacked a proportional-font
+            // copy over that one.
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(&row.text)
@@ -423,8 +428,7 @@ fn show_detail_row(ui: &mut egui::Ui, entry: &Entry, within: usize, row_height: 
                 .selectable(false),
             );
         })
-        .response
-        .on_hover_text(&row.text);
+        .response;
     if rule {
         let rect = drawn.rect;
         ui.painter().hline(

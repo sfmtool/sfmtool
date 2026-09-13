@@ -259,8 +259,14 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
     // `202\u{2026}ed`. A line of its own is the width of the panel, and the
     // same two lines a reader was watching a minute ago.
     ui.horizontal(|ui| {
+        // The cut here is ours, out of the middle, so `Label` is handed a
+        // string that already fits and would tooltip nothing: its own elision
+        // tooltip is turned off and the full name given directly. That is the
+        // one tooltip, rather than the two a `Label` that elided for itself
+        // would stack.
         ui.add(
             egui::Label::new(egui::RichText::new(elide_to_fit(ui, &label)).weak())
+                .show_tooltip_when_elided(false)
                 .truncate()
                 .selectable(false),
         )
@@ -336,18 +342,18 @@ fn show_phase_row(ui: &mut egui::Ui, breakdown: &Breakdown<'_>, index: usize, op
             egui::vec2(width, height),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                // The whole of a cut row is read on hover, and `Label` is what
+                // does it: it puts an elided text in a tooltip of its own, in
+                // this label's font, and only when the text was actually cut. A
+                // second `on_hover_text` of the same string stacks a
+                // proportional-font copy over that one.
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&text).monospace().color(color))
+                    egui::Label::new(egui::RichText::new(text).monospace().color(color))
                         .truncate()
                         .selectable(false),
                 );
             },
-        )
-        // A note or a message runs past this column far more often than it does
-        // in the Action Log, which has the width of the window to spend, so the
-        // truncated half is read the way the Action Log's is read.
-        .response
-        .on_hover_text(text);
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new(&row.cost).monospace().color(weak));
             if open {

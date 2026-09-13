@@ -1365,3 +1365,117 @@ fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
         "the finished task opened at its last stage: {idle:?}",
     );
 }
+
+/// A row too wide for its column says the whole of itself once, not twice.
+///
+/// `egui::Label` already puts an elided text in a tooltip, in the label's own
+/// font, and only when it is actually elided. A second `on_hover_text` of the
+/// same string stacks a proportional-font copy over that one: two tooltips,
+/// same words, different typefaces.
+#[test]
+fn a_truncated_row_shows_one_tooltip_rather_than_two() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    // Wider than any column this panel has, so the row is certainly elided.
+    let long = "median 0.171 px over 32205 observations, and a good deal more                 besides so that nothing can fit it";
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                progress.message(sfmtool_core::progress::Level::Info, format_args!("{long}"));
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background_task();
+
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    // Where the row landed, so the hover is over it rather than near it.
+    let first = painted_at(&ctx, &mut state, input());
+    let at = first
+        .iter()
+        .find(|(text, _)| text.contains("median 0.171"))
+        .unwrap_or_else(|| panic!("the row was not painted: {first:?}"))
+        .1;
+    let over = at + egui::vec2(8.0, 4.0);
+    let mut hovering = input();
+    hovering.events = vec![egui::Event::PointerMoved(over)];
+    painted_at(&ctx, &mut state, hovering);
+    // A second frame with the pointer at rest, which is when egui puts a
+    // tooltip up.
+    let hovered = painted_at(&ctx, &mut state, input());
+
+    // The row's own galley carries the whole string however few glyphs it drew,
+    // so the row counts once and each tooltip counts once more.
+    let copies = hovered
+        .iter()
+        .filter(|(text, _)| text.contains("median 0.171"))
+        .count();
+    assert_eq!(
+        copies, 2,
+        "the row and one tooltip make two; {copies} means a second tooltip: {hovered:?}",
+    );
+
+    gate.open();
+    state.finish_background_task();
+}
+
+/// The node's whole name is one hover away, once.
+///
+/// The cut there is ours, out of the middle, so `Label` is handed a string that
+/// already fits: it would tooltip nothing, and removing the tooltip we add
+/// would leave the full name unreadable. Its own elision tooltip is off and
+/// ours is the only one.
+#[test]
+fn the_idle_node_says_its_whole_name_on_hover_once() {
+    let (mut state, id) = adjustable();
+    running(&mut state, id, Operation::BUNDLE_ADJUST).open();
+    state.finish_background_task();
+    let whole = "a_reconstruction_with_a_name_nobody_would_shorten".to_string();
+    state
+        .last_background_task
+        .as_mut()
+        .expect("it finished")
+        .label
+        .clone_from(&whole);
+
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let first = painted_at(&ctx, &mut state, input());
+    let at = first
+        .iter()
+        .find(|(text, _)| text.starts_with("a_recon"))
+        .unwrap_or_else(|| panic!("the node was not painted: {first:?}"))
+        .1;
+    let over = at + egui::vec2(8.0, 4.0);
+    let mut hovering = input();
+    hovering.events = vec![egui::Event::PointerMoved(over)];
+    painted_at(&ctx, &mut state, hovering);
+    let hovered: Vec<String> = painted_at(&ctx, &mut state, input())
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect();
+
+    assert!(
+        hovered.contains(&whole),
+        "the whole name is not reachable on hover: {hovered:?}",
+    );
+    assert_eq!(
+        hovered.iter().filter(|text| **text == whole).count(),
+        1,
+        "more than one tooltip carries it: {hovered:?}",
+    );
+}
