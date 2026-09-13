@@ -10,7 +10,8 @@ use super::super::recon::PatchResources;
 use super::super::SceneRenderer;
 use super::Uploaded;
 use crate::scene::ReconId;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::{progress_note, SfmrReconstruction};
 use wgpu::util::DeviceExt;
 
 impl SceneRenderer {
@@ -27,16 +28,23 @@ impl SceneRenderer {
     /// [`Uploaded::Reused`] when the atlas survived and only the instances were
     /// rewritten, which is the expensive half kept and what the frame's phase
     /// note says as `reused`; otherwise the tiles it packed.
+    ///
+    /// `progress` is the frame's `patch atlas` phase, and the stages under it
+    /// are [`Progress::detail_phase`]s. This is the upload that costs the most
+    /// on a node carrying embedded patches, and the one row cannot say whether
+    /// that went on finding the patches, allocating the atlas, or filling it a
+    /// tile at a time, which are three answers with three different remedies.
     pub fn upload_patches(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         id: ReconId,
         recon: &SfmrReconstruction,
+        progress: &Progress<'_>,
     ) -> Uploaded {
         // The bind group below needs the patch pipeline's layout and the
         // node's bundle, neither of which may exist yet.
-        self.ensure_recon(device, id);
+        self.ensure_recon(device, id, progress);
         // The atlas is the expensive half of this upload by a wide margin: one
         // texture allocation and one `write_texture` per patch, which is tens of
         // thousands of them on a real embedded-patches node. The instances are a
@@ -45,12 +53,15 @@ impl SceneRenderer {
         // packing are the same the atlas is kept and only the instances are
         // rewritten -- which is what makes stepping through a node's history
         // cost the edit rather than the node.
-        if self.repack_patches(device, id, &recon.point_set) {
-            return Uploaded::Reused;
+        {
+            let _phase = progress.detail_phase("repack");
+            if self.repack_patches(device, id, &recon.point_set) {
+                return Uploaded::Reused;
+            }
         }
         // Reset so reloading a reconstruction without patches clears the old ones.
         self.recons.get_mut(&id).expect("just ensured").patch = None;
-        let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0);
+        let patch = self.build_patch_resources(device, queue, id, &recon.point_set, 0, progress);
         let packed = patch.as_ref().map_or(0, |patch| patch.count as usize);
         self.recons.get_mut(&id).expect("just ensured").patch = patch;
         Uploaded::Built(packed)
@@ -140,6 +151,10 @@ impl SceneRenderer {
     /// additions get their own `PatchResources`, and so their own atlas: the
     /// base's atlas is what a run of point edits shares, and appending to it
     /// would mean rebuilding it.
+    ///
+    /// The additions pass [`Progress::none`]: their atlas holds the handful of
+    /// points one edit added, and a breakdown of a fraction of a millisecond is
+    /// noise under an entry whose subject is the edit.
     pub(super) fn build_patch_resources(
         &mut self,
         device: &wgpu::Device,
@@ -147,6 +162,7 @@ impl SceneRenderer {
         id: ReconId,
         point_set: &sfmtool_core::PointSet,
         index_offset: u32,
+        progress: &Progress<'_>,
     ) -> Option<PatchResources> {
         let (Some(u_halfvecs), Some(v_halfvecs)) = (
             &point_set.patch_u_halfvec_xyz,
@@ -177,7 +193,17 @@ impl SceneRenderer {
             return None;
         }
 
-        let point_indices = packed_points(point_set, u_halfvecs, v_halfvecs, bitmaps);
+        let point_indices = {
+            let mut phase = progress.detail_phase("scan");
+            let found = packed_points(point_set, u_halfvecs, v_halfvecs, bitmaps);
+            progress_note!(
+                phase,
+                "{} of {} points",
+                found.len(),
+                point_set.points.len()
+            );
+            found
+        };
         let patch_count = point_indices.len() as u32;
         if patch_count == 0 {
             return None;
@@ -204,6 +230,7 @@ impl SceneRenderer {
         let atlas_width = cols * resolution;
         let atlas_height = actual_rows_per_page * resolution;
 
+        let atlas_phase = progress.detail_phase("atlas");
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("patch atlas"),
             size: wgpu::Extent3d {
@@ -218,10 +245,13 @@ impl SceneRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        drop(atlas_phase);
 
-        // Write each patch's RGBA tile into its atlas cell and build the
-        // corresponding instance.
-        let mut instances: Vec<PatchInstance> = Vec::with_capacity(patch_count_clamped as usize);
+        // Write each patch's RGBA tile into its atlas cell: one
+        // `Queue::write_texture` per tile, timed apart from the instances that
+        // describe them because on a node of tens of thousands of patches these
+        // two loops cost nothing like each other.
+        let mut tiles_phase = progress.detail_phase("tiles");
         for (slot, &point) in point_indices
             .iter()
             .enumerate()
@@ -257,23 +287,39 @@ impl SceneRenderer {
                     depth_or_array_layers: 1,
                 },
             );
-
-            let p = &point_set.points[i];
-            instances.push(PatchInstance {
-                center: [
-                    p.position.x as f32,
-                    p.position.y as f32,
-                    p.position.z as f32,
-                ],
-                w: p.w as f32,
-                u_halfvec: [u_halfvecs[[i, 0]], u_halfvecs[[i, 1]], u_halfvecs[[i, 2]]],
-                _pad0: 0.0,
-                v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
-                atlas_layer: slot as u32,
-                point_index: index_offset + point,
-            });
         }
+        progress_note!(
+            tiles_phase,
+            "{patch_count_clamped} at {resolution}×{resolution} px"
+        );
+        drop(tiles_phase);
 
+        let instances_phase = progress.detail_phase("instances");
+        let instances: Vec<PatchInstance> = point_indices
+            .iter()
+            .enumerate()
+            .take(patch_count_clamped as usize)
+            .map(|(slot, &point)| {
+                let i = point as usize;
+                let p = &point_set.points[i];
+                PatchInstance {
+                    center: [
+                        p.position.x as f32,
+                        p.position.y as f32,
+                        p.position.z as f32,
+                    ],
+                    w: p.w as f32,
+                    u_halfvec: [u_halfvecs[[i, 0]], u_halfvecs[[i, 1]], u_halfvecs[[i, 2]]],
+                    _pad0: 0.0,
+                    v_halfvec: [v_halfvecs[[i, 0]], v_halfvecs[[i, 1]], v_halfvecs[[i, 2]]],
+                    atlas_layer: slot as u32,
+                    point_index: index_offset + point,
+                }
+            })
+            .collect();
+        drop(instances_phase);
+
+        let buffers_phase = progress.detail_phase("buffers");
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("patch instances"),
             contents: bytemuck::cast_slice(&instances),
@@ -339,6 +385,7 @@ impl SceneRenderer {
                 },
             ],
         });
+        drop(buffers_phase);
 
         let resources = PatchResources {
             instance_buffer,

@@ -752,11 +752,12 @@ The operations:
 | `localize` and `refine` | the two calls `add_observation` makes | |
 | `decode views` | the full-resolution decode an edit needs | |
 
-The five under `uploads` open in `App::prepare_uploads` rather than in the
-`upload` functions they wrap: those take `&mut SceneRenderer` and no `Progress`,
-and the caller is what holds the frame's collector. Each returns what the phase
-needs for its note, which is the skip it had already decided rather than a
-signal invented for the row. `deleted mask` is the one that does not always
+The five under `uploads` open in `App::prepare_uploads` rather than inside the
+`upload` functions they wrap, because the caller is what holds the frame's
+collector and what knows which of them ran. Each returns what the phase needs
+for its note, which is the skip it had already decided rather than a signal
+invented for the row. Three of them are handed their own open phase and report
+detail stages under it (below). `deleted mask` is the one that does not always
 record: it is called every frame for every node and usually writes nothing, so
 its guard is cancelled when it wrote nothing rather than leaving an empty row
 under every entry in the log.
@@ -797,8 +798,59 @@ What a save stamps is four field assignments and not a stage; the work beside
 the fold is the lineage walk, which is why `lineage` sits under `materialise`
 where the code does it rather than beside it.
 
-Detail adds, under those: the stages inside each kernel, the per-buffer steps
-inside `uploads`, and the per-pass steps inside `scene render`.
+Detail adds, under those: the stages inside each kernel, the steps inside
+`uploads`, and the per-pass steps inside `scene render`.
+
+### What detail adds under the uploads
+
+`upload_points`, `upload_thumbnails` and `upload_patches` take a `Progress`,
+which is the open phase the frame already made for them, and open
+`detail_phase`s under it. Nothing else about them changes: with the checkbox off
+the guards are inert, and the overview row is what it was.
+
+| Stage | Under | What it covers |
+|-------|-------|----------------|
+| `instances` | `points`, `patch atlas` | building the instance rows from the point set |
+| `buffers` | `points`, `patch atlas` | the vertex, liveness and uniform buffer writes |
+| `point spacing` | `points` | the KD-tree and the nearest-neighbour queries the splat size is taken from |
+| `camera spacing` | `points` | the same over the camera centres |
+| `bounds` | `points` | the bounding sphere |
+| `pick bases` | `points` | re-cutting the global pick index space |
+| `pipelines` | wherever it lands | compiling every shader, once per session |
+| `atlas` | `thumbnails`, `patch atlas` | allocating the atlas texture |
+| `tiles` | `thumbnails`, `patch atlas` | one `write_texture` per tile, over the whole atlas |
+| `scan` | `patch atlas` | finding the points that carry a patch |
+| `repack` | `patch atlas` | deciding whether the atlas survives, and rewriting the instances when it does |
+
+Two of those are there because of what they revealed, and both are the reason
+the level is worth having at all.
+
+**`pipelines` is not the cost of the upload it appears under.** The render
+pipelines are built on first use, by whichever call reaches `ensure_pipelines`
+first, and that is usually an upload. Compiling every shader in the viewer is a
+one-off of the order of a tenth of a second, and under a row named `points` it
+reads as the point cloud being slow to upload. It is a stage of its own,
+wherever it lands, and it says `compiled once per session` beside the time.
+
+**`tiles` is one `write_texture` per tile, and the call is the cost rather than
+the bytes.** A thumbnail is 64 KiB and a patch tile 2 KiB, and the two cost
+about the same each, so an atlas is priced by how many tiles it has and not by
+how large they are. That is a fact about the upload that no total can show, and
+it is only visible because the tiles are timed apart from the instances built
+over the same list.
+
+**A stage that says a count says which count it is**, because a duration with
+no quantity beside it cannot be read as fast or slow. `point spacing` carries
+the points it walked, `scan` carries how many of them held a patch, and `tiles`
+carries the tile count and the tile size.
+
+**The stages under a row should account for the row.** The gap between a
+parent's time and its children's is the part nobody named, and on a row that is
+mostly gap the breakdown misleads more than the bare total did: it offers an
+answer that is not the answer. `pipelines` and `pick bases` exist because the
+`points` row had such a gap. This is the detail level's version of the coverage
+requirement the overview level carries, and the way to find a breach is to
+expand a slow row and add up its children.
 
 ## Cancellation
 
@@ -965,6 +1017,18 @@ pair exists for.
   thread-local collector is what this design exists to avoid.
 - Two `Progress` values with different levels used concurrently on two threads
   each see their own level.
+
+`crates/sfm-explorer/src/scene_renderer/upload/tests.rs`, against the headless
+`noop` device:
+
+- Each of the three uploads names its stages, in order, with detail on, and
+  names nothing at all with detail off.
+- An upload that kept what the GPU held reports the stage that decided that and
+  no other: a reused patch atlas is `repack` alone, and a reused thumbnail atlas
+  is silence, so the absence of `tiles` is what says the expensive half did not
+  run.
+- The stages that carry a count carry the upload's own count, not one invented
+  for the row.
 
 `crates/sfm-explorer/src/action_log/tests.rs`, headless:
 

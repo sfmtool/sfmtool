@@ -46,7 +46,7 @@ impl SceneRenderer {
         id: ReconId,
         edited: &EditedReconstruction,
     ) {
-        self.ensure_recon(device, id);
+        self.ensure_recon(device, id, &sfmtool_core::progress::Progress::none());
         let signature = addition_signature(edited);
         {
             let bundle = self.recons.get_mut(&id).expect("just ensured");
@@ -101,7 +101,14 @@ impl SceneRenderer {
         // The additions' surfels index the base's point set nowhere, so their
         // atlas is their own; `index_offset` makes each instance carry its
         // *edited* index, which is what the pick id and the mask are keyed on.
-        let patch = self.build_patch_resources(device, queue, id, added, base_count);
+        let patch = self.build_patch_resources(
+            device,
+            queue,
+            id,
+            added,
+            base_count,
+            &sfmtool_core::progress::Progress::none(),
+        );
 
         // The additions' own `ReconUniforms`, which differ from the node's in
         // one field: the pick base is shifted past the base's instances, so an

@@ -126,7 +126,7 @@ impl SceneRenderer {
         let mut distorted_vertices: Vec<DistortedQuadVertex> = Vec::new();
         let mut distorted_indices: Vec<u32> = Vec::new();
 
-        self.ensure_recon(device, id);
+        self.ensure_recon(device, id, &sfmtool_core::progress::Progress::none());
         let has_thumbnails = self.recons[&id].thumbnail_texture.is_some();
 
         for (image_idx, image) in recon.image_table.images.iter().enumerate() {

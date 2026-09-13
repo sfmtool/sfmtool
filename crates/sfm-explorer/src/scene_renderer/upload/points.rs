@@ -10,7 +10,8 @@ use super::super::gpu_types::PointInstance;
 use super::super::SceneRenderer;
 use super::Uploaded;
 use crate::scene::ReconId;
-use sfmtool_core::SfmrReconstruction;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::{progress_note, SfmrReconstruction};
 use wgpu::util::DeviceExt;
 
 impl SceneRenderer {
@@ -21,12 +22,20 @@ impl SceneRenderer {
     ///
     /// Always [`Uploaded::Built`]: nothing here can be kept, and the caller
     /// only reaches it when the base moved.
+    ///
+    /// `progress` is the frame's `points` phase, and the stages under it are
+    /// [`Progress::detail_phase`]s: what this costs divides into building the
+    /// instances, handing them to the GPU, and the three per-node statistics
+    /// read off the cloud, and those are three different kinds of answer to
+    /// "why was the upload slow".
     pub fn upload_points(
         &mut self,
         device: &wgpu::Device,
         id: ReconId,
         recon: &SfmrReconstruction,
+        progress: &Progress<'_>,
     ) -> Uploaded {
+        let instances_phase = progress.detail_phase("instances");
         let instances: Vec<PointInstance> = recon
             .point_set
             .points
@@ -48,7 +57,9 @@ impl SceneRenderer {
                 }
             })
             .collect();
+        drop(instances_phase);
 
+        let buffers_phase = progress.detail_phase("buffers");
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("point instances"),
             contents: bytemuck::cast_slice(&instances),
@@ -64,15 +75,36 @@ impl SceneRenderer {
             contents: bytemuck::cast_slice(&alive),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
-
-        self.ensure_recon(device, id);
-        let bundle = self.recons.get_mut(&id).expect("just ensured");
+        drop(buffers_phase);
 
         // Auto point size, inter-camera distance and bounding sphere are all
-        // per-recon: they describe this node's data, not the scene.
-        bundle.auto_point_size = compute_auto_point_size(&recon.point_set.points);
-        bundle.camera_nn_scale = compute_camera_nn_scale(&recon.image_table.images);
-        bundle.bounds = Some(compute_scene_bounds(&recon.point_set.points));
+        // per-recon: they describe this node's data, not the scene. None of the
+        // three touches the GPU, and the first is a KD-tree over the cloud and
+        // a nearest-neighbour query per subsampled point, so they get stages of
+        // their own rather than hiding inside a row named after a buffer.
+        let auto_point_size = {
+            let mut phase = progress.detail_phase("point spacing");
+            let size = compute_auto_point_size(&recon.point_set.points);
+            progress_note!(phase, "{} points", recon.point_set.points.len());
+            size
+        };
+        let camera_nn_scale = {
+            let mut phase = progress.detail_phase("camera spacing");
+            let scale = compute_camera_nn_scale(&recon.image_table.images);
+            progress_note!(phase, "{} cameras", recon.image_table.images.len());
+            scale
+        };
+        let bounds = {
+            let _phase = progress.detail_phase("bounds");
+            compute_scene_bounds(&recon.point_set.points)
+        };
+
+        self.ensure_recon(device, id, progress);
+        let bundle = self.recons.get_mut(&id).expect("just ensured");
+
+        bundle.auto_point_size = auto_point_size;
+        bundle.camera_nn_scale = camera_nn_scale;
+        bundle.bounds = Some(bounds);
         bundle.point_instance_buffer = Some(buffer);
         bundle.point_alive_buffer = Some(alive_buffer);
         bundle.masked_deleted.clear();
@@ -89,7 +121,10 @@ impl SceneRenderer {
         // The point count moved, so the global pick index space has to be
         // re-cut. Only the per-recon uniform blocks change; no instance buffer
         // carries a base.
-        self.assign_pick_bases();
+        {
+            let _phase = progress.detail_phase("pick bases");
+            self.assign_pick_bases();
+        }
 
         log::info!("Uploaded {count} points to GPU (auto point size: {size:.4})");
         Uploaded::Built(count as usize)

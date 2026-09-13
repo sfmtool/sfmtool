@@ -36,7 +36,8 @@ mod upload;
 use std::collections::HashMap;
 
 use nalgebra::Point3;
-use sfmtool_core::Se3Transform;
+use sfmtool_core::progress::Progress;
+use sfmtool_core::{progress_note, Se3Transform};
 
 use crate::scene::{ImageRef, PointRef, ReconId};
 use gpu_types::*;
@@ -389,8 +390,8 @@ impl SceneRenderer {
     /// point pipeline's layout and uniform buffer. Returns nothing on purpose:
     /// callers reach for the bundle with a direct `self.recons` field borrow so
     /// they can hold the shared layouts and samplers at the same time.
-    fn ensure_recon(&mut self, device: &wgpu::Device, id: ReconId) {
-        self.ensure_pipelines(device);
+    fn ensure_recon(&mut self, device: &wgpu::Device, id: ReconId, progress: &Progress<'_>) {
+        self.ensure_pipelines(device, progress);
         if !self.recons.contains_key(&id) {
             let bundle = ReconResources::new(
                 device,
@@ -463,10 +464,17 @@ impl SceneRenderer {
     }
 
     /// Ensure all render pipelines exist. Called once on first use.
-    fn ensure_pipelines(&mut self, device: &wgpu::Device) {
+    ///
+    /// Once per session, and on whichever call gets there first, which is why
+    /// it reports: compiling every shader in the viewer is not the cost of the
+    /// upload that happened to trigger it, and a stage saying so is the
+    /// difference between a slow row explained and a slow row blamed.
+    fn ensure_pipelines(&mut self, device: &wgpu::Device, progress: &Progress<'_>) {
         if self.point_pipeline.is_some() {
             return;
         }
+        let mut _phase = progress.detail_phase("pipelines");
+        progress_note!(_phase, "compiled once per session");
 
         // ── Pass 1: Point splat pipeline ──
         let pt = pipelines::points::create(device);

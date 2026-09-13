@@ -360,7 +360,9 @@ impl App {
     /// The five uploads the frame names sit under one `uploads` phase, and each
     /// says what it did as well as what it cost: an upload that kept what the
     /// GPU already held and one that rewrote it in no time both read `<1 ms`,
-    /// and the note is the only thing that tells them apart.
+    /// and the note is the only thing that tells them apart. Three of them are
+    /// handed their own phase and open detail stages under it, which is where
+    /// a surprising number gets its second question answered.
     fn prepare_uploads(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Collector) {
         let uploads = frame.phase("uploads");
         // A node that has left the scene takes its GPU bundle with it.
@@ -392,19 +394,21 @@ impl App {
                 let recon = node.recon();
                 {
                     let mut phase = uploads.phase("points");
-                    let did = self.scene_renderer.upload_points(device, id, recon);
+                    let did = self.scene_renderer.upload_points(device, id, recon, &phase);
                     note_upload(&mut phase, did, "point", "points");
                 }
                 {
                     let mut phase = uploads.phase("thumbnails");
                     let did = self
                         .scene_renderer
-                        .upload_thumbnails(device, queue, id, recon);
+                        .upload_thumbnails(device, queue, id, recon, &phase);
                     note_upload(&mut phase, did, "image", "images");
                 }
                 {
                     let mut phase = uploads.phase("patch atlas");
-                    let did = self.scene_renderer.upload_patches(device, queue, id, recon);
+                    let did = self
+                        .scene_renderer
+                        .upload_patches(device, queue, id, recon, &phase);
                     note_upload(&mut phase, did, "tile", "tiles");
                 }
                 self.scene_renderer.set_uploaded_base(id, base);

@@ -9,6 +9,7 @@ use super::super::gpu_types::{ImageQuadUniforms, MAX_ATLAS_COLS, THUMBNAIL_SIZE}
 use super::super::SceneRenderer;
 use super::Uploaded;
 use crate::scene::ReconId;
+use sfmtool_core::progress::Progress;
 use sfmtool_core::SfmrReconstruction;
 use wgpu::util::DeviceExt;
 
@@ -23,18 +24,23 @@ impl SceneRenderer {
     /// [`Uploaded::Reused`] when the atlas the node already holds is still the
     /// right one, which is the answer on every edit that leaves the image table
     /// alone, and what the frame's phase note says as `reused`.
+    ///
+    /// `progress` is the frame's `thumbnails` phase; the stages under it are
+    /// [`Progress::detail_phase`]s, and divide the cost into allocating the
+    /// atlas and filling it one thumbnail at a time.
     pub fn upload_thumbnails(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         id: ReconId,
         recon: &SfmrReconstruction,
+        progress: &Progress<'_>,
     ) -> Uploaded {
         let image_count = recon.image_table.images.len() as u32;
         if image_count == 0 {
             return Uploaded::Built(0);
         }
-        self.ensure_recon(device, id);
+        self.ensure_recon(device, id, progress);
         // The atlas is a function of the thumbnail column and the image count,
         // and of nothing else. An edit that leaves the image table alone leaves
         // it correct, so the node keeps the one it has rather than paying a
@@ -80,6 +86,7 @@ impl SceneRenderer {
         let atlas_height = actual_rows_per_page * THUMBNAIL_SIZE;
 
         // Create 2D texture array atlas
+        let atlas_phase = progress.detail_phase("atlas");
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("thumbnail atlas"),
             size: wgpu::Extent3d {
@@ -94,8 +101,10 @@ impl SceneRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        drop(atlas_phase);
 
         // Upload each embedded thumbnail to its grid cell (RGB → RGBA)
+        let tiles_phase = progress.detail_phase("tiles");
         for i in 0..image_count_clamped as usize {
             let rgb_slice = recon
                 .image_table
@@ -135,6 +144,7 @@ impl SceneRenderer {
                 },
             );
         }
+        drop(tiles_phase);
 
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),

@@ -18,7 +18,7 @@ impl SceneRenderer {
         width: u32,
         height: u32,
     ) {
-        self.ensure_pipelines(device);
+        self.ensure_pipelines(device, &sfmtool_core::progress::Progress::none());
 
         let width = width.max(1);
         let height = height.max(1);

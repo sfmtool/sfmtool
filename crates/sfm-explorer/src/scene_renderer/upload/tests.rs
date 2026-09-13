@@ -42,6 +42,12 @@ use crate::state::CachedSiftFeatures;
 /// visible at the call site.
 const RECON: ReconId = ReconId::from_raw(0);
 
+/// The uploads take a `Progress` so their detail stages have somewhere to go.
+/// Most of these tests are about what reaches the GPU rather than about what is
+/// reported, so they pass a silent one; the stages themselves are the subject of
+/// the "detail stages" section at the end of this file.
+const SILENT: sfmtool_core::progress::Progress<'static> = sfmtool_core::progress::Progress::none();
+
 /// A second reconstruction, for the tests that load two at once.
 const OTHER: ReconId = ReconId::from_raw(1);
 
@@ -269,7 +275,7 @@ fn upload_points_counts_instances_and_derives_scene_scale() {
     let recon = demo(64);
     let mut r = SceneRenderer::new();
 
-    r.upload_points(&device, RECON, &recon);
+    r.upload_points(&device, RECON, &recon, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(b.point_count, 64);
@@ -292,7 +298,7 @@ fn upload_points_handles_an_empty_cloud() {
     recon.point_set.points.clear();
     let mut r = SceneRenderer::new();
 
-    r.upload_points(&device, RECON, &recon);
+    r.upload_points(&device, RECON, &recon, &SILENT);
 
     assert_eq!(bundle(&r).point_count, 0);
 }
@@ -323,7 +329,7 @@ fn upload_frustums_builds_pinhole_image_quads_once_thumbnails_exist() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     let b = bundle(&r);
@@ -340,7 +346,7 @@ fn upload_frustums_tessellates_fisheye_cameras() {
     let recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     // n×n grid: 4 side edges + 4 boundary walks of (n-1) segments each.
@@ -362,7 +368,7 @@ fn upload_frustums_tessellates_distorted_cameras() {
     let recon = with_camera_model(demo(16), radial_distorted());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
     r.upload_frustums(&device, RECON, &recon, 1.0, 1.0);
 
     let n = DISTORTION_SUBDIVISIONS + 1;
@@ -384,7 +390,7 @@ fn upload_frustums_replaces_quad_buffers_when_the_camera_model_changes() {
     let fisheye_recon = with_camera_model(demo(16), fisheye());
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &fisheye_recon);
+    r.upload_thumbnails(&device, &queue, RECON, &fisheye_recon, &SILENT);
     r.upload_frustums(&device, RECON, &fisheye_recon, 1.0, 1.0);
     assert!(bundle(&r).distorted_quad_index_count > 0);
 
@@ -441,7 +447,7 @@ fn upload_thumbnails_packs_a_square_ish_atlas_grid() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
 
     // cols = ceil(sqrt(8)) = 3, then rows = ceil(8/3) = 3.
     let b = bundle(&r);
@@ -467,7 +473,7 @@ fn upload_thumbnails_clamps_to_the_gpu_texture_limits() {
     let recon = demo(16);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(b.atlas_cols, 2);
@@ -492,7 +498,7 @@ fn upload_thumbnails_spills_onto_extra_atlas_pages() {
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((images, 128, 128, 3)));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
 
     // sqrt would ask for 5 columns, but a page is only 4 cells wide — the
     // texture-dimension budget is what caps the grid in practice. The
@@ -515,7 +521,7 @@ fn upload_thumbnails_skips_an_imageless_reconstruction() {
     recon.image_table.thumbnails_y_x_rgb = Arc::new(Array4::zeros((0, 128, 128, 3)));
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &recon);
+    r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT);
 
     // Nothing to pack, so not even a bundle is created for it.
     assert!(r
@@ -533,7 +539,7 @@ fn upload_patches_counts_only_points_carrying_a_patch() {
     let recon = with_patches(demo(present.len()), 16, &present, None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(patch_count(&r), 5);
@@ -553,7 +559,7 @@ fn upload_patches_uploads_nothing_without_patch_arrays() {
     let recon = demo(8); // demo carries no patch frames
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(patch_count(&r), 0);
@@ -567,7 +573,7 @@ fn upload_patches_skips_frames_without_bitmaps() {
     recon.point_set.patch_bitmaps_y_x_rgba = None; // frames present, bitmaps absent
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     // v1 renders textured patches only.
     assert_eq!(patch_count(&r), 0);
@@ -580,7 +586,7 @@ fn upload_patches_rejects_non_square_bitmaps() {
     let recon = with_patches(demo(4), 16, &[true; 4], None, Some(17));
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     let b = bundle(&r);
     assert_eq!(patch_count(&r), 0);
@@ -593,7 +599,7 @@ fn upload_patches_rejects_zero_resolution_bitmaps() {
     let recon = with_patches(demo(4), 0, &[true; 4], None, Some(0));
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     assert_eq!(patch_count(&r), 0);
 }
@@ -607,7 +613,7 @@ fn upload_patches_rejects_bitmaps_larger_than_the_texture_limit() {
     let recon = with_patches(demo(2), 512, &[true; 2], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     // Skipped rather than passed to wgpu, which would be a validation error.
     assert_eq!(patch_count(&r), 0);
@@ -620,7 +626,7 @@ fn upload_patches_bounds_the_row_scan_by_the_shortest_array() {
     let recon = with_patches(demo(6), 16, &[true; 6], Some(2), None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &recon);
+    r.upload_patches(&device, &queue, RECON, &recon, &SILENT);
 
     assert_eq!(patch_count(&r), 2);
 }
@@ -631,10 +637,10 @@ fn upload_patches_clears_stale_patches_when_reloading_without_them() {
     let with = with_patches(demo(4), 16, &[true; 4], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &with);
+    r.upload_patches(&device, &queue, RECON, &with, &SILENT);
     assert_eq!(patch_count(&r), 4);
 
-    r.upload_patches(&device, &queue, RECON, &demo(4));
+    r.upload_patches(&device, &queue, RECON, &demo(4), &SILENT);
 
     let b = bundle(&r);
     assert_eq!(patch_count(&r), 0);
@@ -651,7 +657,7 @@ fn upload_patches_clears_stale_patches_when_reloading_without_them() {
 /// from.
 fn upload_node(r: &mut SceneRenderer, device: &wgpu::Device, id: ReconId, points: usize) {
     let recon = demo(points);
-    r.upload_points(device, id, &recon);
+    r.upload_points(device, id, &recon, &SILENT);
     r.upload_frustums(device, id, &recon, 1.0, 1.0);
 }
 
@@ -662,11 +668,11 @@ fn two_nodes_upload_into_two_independent_bundles() {
 
     let first = demo(12);
     let second = with_camera_model(demo(30), fisheye());
-    r.upload_points(&device, RECON, &first);
-    r.upload_thumbnails(&device, &queue, RECON, &first);
+    r.upload_points(&device, RECON, &first, &SILENT);
+    r.upload_thumbnails(&device, &queue, RECON, &first, &SILENT);
     r.upload_frustums(&device, RECON, &first, 1.0, 1.0);
-    r.upload_points(&device, OTHER, &second);
-    r.upload_thumbnails(&device, &queue, OTHER, &second);
+    r.upload_points(&device, OTHER, &second, &SILENT);
+    r.upload_thumbnails(&device, &queue, OTHER, &second, &SILENT);
     r.upload_frustums(&device, OTHER, &second, 1.0, 1.0);
 
     assert_eq!(r.recons.len(), 2);
@@ -1570,9 +1576,9 @@ fn sync(
     let base = Arc::clone(&edited.base);
     let uploaded = renderer.base_changed(id, &base);
     if uploaded {
-        renderer.upload_points(device, id, &base);
-        renderer.upload_thumbnails(device, queue, id, &base);
-        renderer.upload_patches(device, queue, id, &base);
+        renderer.upload_points(device, id, &base, &SILENT);
+        renderer.upload_thumbnails(device, queue, id, &base, &SILENT);
+        renderer.upload_patches(device, queue, id, &base, &SILENT);
         renderer.set_uploaded_base(id, base);
     }
     if renderer.additions_changed(id, edited) {
@@ -1872,7 +1878,7 @@ fn a_new_base_keeps_the_patch_atlas_when_the_tiles_are_the_same() {
     let before = with_patches(demo(8), 4, &[true; 8], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &before);
+    r.upload_patches(&device, &queue, RECON, &before, &SILENT);
     let atlas = bundle(&r)
         .patch
         .as_ref()
@@ -1889,7 +1895,7 @@ fn a_new_base_keeps_the_patch_atlas_when_the_tiles_are_the_same() {
         ),
         "the premise: a bulk edit carries the bitmap column through by pointer",
     );
-    r.upload_patches(&device, &queue, RECON, &after);
+    r.upload_patches(&device, &queue, RECON, &after, &SILENT);
 
     let patch = bundle(&r).patch.as_ref().expect("patches survive the edit");
     assert_eq!(
@@ -1909,13 +1915,13 @@ fn a_new_base_rebuilds_the_patch_atlas_when_the_tiles_are_not() {
     let before = with_patches(demo(8), 4, &[true; 8], None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &before);
+    r.upload_patches(&device, &queue, RECON, &before, &SILENT);
     let atlas = bundle(&r).patch.as_ref().unwrap().atlas_texture.clone();
 
     // A different bitmap column: what an edit that re-embedded the patches
     // would hand over, and the atlas has to be built again for it.
     let after = with_patches(demo(8), 4, &[true; 8], None, None);
-    r.upload_patches(&device, &queue, RECON, &after);
+    r.upload_patches(&device, &queue, RECON, &after, &SILENT);
 
     assert_ne!(
         bundle(&r).patch.as_ref().unwrap().atlas_texture,
@@ -1931,7 +1937,7 @@ fn a_new_base_rebuilds_the_patch_atlas_when_the_packing_moves() {
     let before = with_patches(demo(8), 4, &present, None, None);
     let mut r = SceneRenderer::new();
 
-    r.upload_patches(&device, &queue, RECON, &before);
+    r.upload_patches(&device, &queue, RECON, &before, &SILENT);
     let atlas = bundle(&r).patch.as_ref().unwrap().atlas_texture.clone();
 
     // The same tiles, but one point no longer carries a patch: every patch
@@ -1945,7 +1951,7 @@ fn a_new_base_rebuilds_the_patch_atlas_when_the_packing_moves() {
         }
     }
     after.point_set.patch_u_halfvec_xyz = Some(u);
-    r.upload_patches(&device, &queue, RECON, &after);
+    r.upload_patches(&device, &queue, RECON, &after, &SILENT);
 
     let patch = bundle(&r).patch.as_ref().unwrap();
     assert_ne!(
@@ -1961,14 +1967,14 @@ fn a_new_base_keeps_the_thumbnail_atlas_when_the_images_are_the_same() {
     let before = demo(8);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &before);
+    r.upload_thumbnails(&device, &queue, RECON, &before, &SILENT);
     let atlas = bundle(&r)
         .thumbnail_texture
         .clone()
         .expect("the demo carries thumbnails");
 
     let after = with_points_moved(before.clone());
-    r.upload_thumbnails(&device, &queue, RECON, &after);
+    r.upload_thumbnails(&device, &queue, RECON, &after, &SILENT);
 
     assert_eq!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
@@ -1983,7 +1989,7 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
     let before = demo(8);
     let mut r = SceneRenderer::new();
 
-    r.upload_thumbnails(&device, &queue, RECON, &before);
+    r.upload_thumbnails(&device, &queue, RECON, &before, &SILENT);
     let atlas = bundle(&r).thumbnail_texture.clone().unwrap();
 
     // What `delete_image` hands over: a shorter table with its own thumbnails.
@@ -1995,7 +2001,7 @@ fn a_new_base_rebuilds_the_thumbnail_atlas_when_the_image_table_moves() {
         .slice(ndarray::s![..7, .., .., ..])
         .to_owned();
     after.image_table.thumbnails_y_x_rgb = Arc::new(kept);
-    r.upload_thumbnails(&device, &queue, RECON, &after);
+    r.upload_thumbnails(&device, &queue, RECON, &after, &SILENT);
 
     assert_ne!(
         bundle(&r).thumbnail_texture.clone().unwrap(),
@@ -2015,7 +2021,7 @@ fn a_node_has_arrived_once_its_first_base_is_uploaded() {
         !r.has_uploaded_base(RECON),
         "a node the renderer has never seen has not arrived yet"
     );
-    r.upload_points(&device, RECON, &recon);
+    r.upload_points(&device, RECON, &recon, &SILENT);
     r.set_uploaded_base(RECON, Arc::clone(&base));
     assert!(r.has_uploaded_base(RECON));
 
@@ -2041,7 +2047,10 @@ fn upload_points_reports_the_instances_it_wrote() {
     let recon = demo(12);
     let mut r = SceneRenderer::new();
 
-    assert_eq!(r.upload_points(&device, RECON, &recon), Uploaded::Built(12),);
+    assert_eq!(
+        r.upload_points(&device, RECON, &recon, &SILENT),
+        Uploaded::Built(12),
+    );
 }
 
 #[test]
@@ -2051,11 +2060,11 @@ fn upload_thumbnails_reports_the_atlas_it_kept() {
     let mut r = SceneRenderer::new();
 
     assert_eq!(
-        r.upload_thumbnails(&device, &queue, RECON, &recon),
+        r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT),
         Uploaded::Built(DEMO_IMAGES as usize),
     );
     assert_eq!(
-        r.upload_thumbnails(&device, &queue, RECON, &recon),
+        r.upload_thumbnails(&device, &queue, RECON, &recon, &SILENT),
         Uploaded::Reused,
         "the second call paid a texture allocation and said nothing about it",
     );
@@ -2069,14 +2078,14 @@ fn upload_patches_reports_the_tiles_it_packed_and_the_atlas_it_kept() {
     let mut r = SceneRenderer::new();
 
     assert_eq!(
-        r.upload_patches(&device, &queue, RECON, &before),
+        r.upload_patches(&device, &queue, RECON, &before, &SILENT),
         Uploaded::Built(5),
     );
     // A bulk edit moves the surfels over the same tiles: the expensive half of
     // the upload is kept, which is what `reused` beside the time means.
     let after = with_points_moved(before);
     assert_eq!(
-        r.upload_patches(&device, &queue, RECON, &after),
+        r.upload_patches(&device, &queue, RECON, &after, &SILENT),
         Uploaded::Reused,
     );
 }
@@ -2086,7 +2095,7 @@ fn update_point_mask_reports_the_entries_it_wrote() {
     let (device, queue) = device();
     let recon = demo(8);
     let mut r = SceneRenderer::new();
-    r.upload_points(&device, RECON, &recon);
+    r.upload_points(&device, RECON, &recon, &SILENT);
 
     let deleted: std::collections::HashSet<u32> = [1, 4].into_iter().collect();
     let none = std::collections::HashSet::new();
@@ -2096,4 +2105,199 @@ fn update_point_mask_reports_the_entries_it_wrote() {
         0,
         "the mask already said this, and a frame that wrote nothing opens no phase",
     );
+}
+
+// ── detail stages ─────────────────────────────────────────────
+
+/// The phase names one upload reported into a fresh collector, in order.
+///
+/// Names rather than times: what a stage cost is the machine's answer and
+/// changes every run, while which stages exist is the code's and is what these
+/// tests are about.
+fn stages(detail: bool, upload: impl FnOnce(&sfmtool_core::progress::Progress<'_>)) -> Vec<String> {
+    let collector = crate::progress::Collector::new(detail);
+    upload(&collector.progress());
+    collector
+        .take()
+        .into_iter()
+        .filter_map(|row| match row {
+            crate::progress::Detail::Phase { name, .. } => Some(name.to_string()),
+            crate::progress::Detail::Message { .. } => None,
+        })
+        .collect()
+}
+
+/// What the point upload divides into. The three statistics are the reason this
+/// exists: they are a KD-tree and a query per subsampled point, they touch no
+/// GPU at all, and under one row named `points` they read as upload cost.
+///
+/// `pipelines` is here because this renderer is fresh and this is the call that
+/// reaches `ensure_pipelines` first, which is the whole point of it being a
+/// stage rather than part of the row above.
+#[test]
+fn the_point_upload_names_its_stages_with_detail_on() {
+    let (device, _queue) = device();
+    let recon = demo(64);
+    let mut r = SceneRenderer::new();
+
+    let rows = stages(true, |progress| {
+        r.upload_points(&device, RECON, &recon, progress);
+    });
+
+    assert_eq!(
+        rows,
+        [
+            "instances",
+            "buffers",
+            "point spacing",
+            "camera spacing",
+            "bounds",
+            "pipelines",
+            "pick bases",
+        ],
+    );
+}
+
+/// The shaders are compiled once and land on whichever upload gets there
+/// first, so the stage says `compiled once per session` and does not come back.
+/// A reader who did not know that would read a tenth of a second as the cost of
+/// the upload it appeared under.
+#[test]
+fn the_pipeline_build_is_named_once_wherever_it_lands() {
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+
+    let first = stages(true, |progress| {
+        r.upload_points(&device, RECON, &recon, progress);
+    });
+    let second = stages(true, |progress| {
+        r.upload_thumbnails(&device, &queue, RECON, &recon, progress);
+    });
+
+    assert!(
+        first.contains(&"pipelines".to_string()),
+        "the first upload built them silently: {first:?}",
+    );
+    assert!(
+        !second.contains(&"pipelines".to_string()),
+        "the second upload charged for them again: {second:?}",
+    );
+}
+
+/// The same call with the checkbox off reports nothing at all, which is what
+/// makes it affordable to leave these call sites in the frame path.
+#[test]
+fn the_point_upload_names_no_stages_with_detail_off() {
+    let (device, _queue) = device();
+    let recon = demo(64);
+    let mut r = SceneRenderer::new();
+
+    let rows = stages(false, |progress| {
+        r.upload_points(&device, RECON, &recon, progress);
+    });
+
+    assert!(rows.is_empty(), "detail was off and yet: {rows:?}");
+}
+
+/// What the patch upload divides into: finding the patches, allocating the
+/// atlas, filling it, and the instances that address it.
+#[test]
+fn the_patch_upload_names_its_stages_with_detail_on() {
+    let (device, queue) = device();
+    let present = [true, false, true, true];
+    let recon = with_patches(demo(present.len()), 16, &present, None, None);
+    let mut r = SceneRenderer::new();
+
+    let rows = stages(true, |progress| {
+        r.upload_patches(&device, &queue, RECON, &recon, progress);
+    });
+
+    assert_eq!(
+        rows,
+        [
+            "pipelines",
+            "repack",
+            "scan",
+            "atlas",
+            "tiles",
+            "instances",
+            "buffers",
+        ],
+    );
+}
+
+/// An upload that kept the atlas says so in one stage rather than in silence:
+/// `repack` alone is the shape of a reuse, and the absence of `tiles` is what
+/// tells a reader the expensive half did not run.
+#[test]
+fn a_reused_patch_atlas_names_only_the_repack() {
+    let (device, queue) = device();
+    let present = [true, false, true, true];
+    let before = with_patches(demo(present.len()), 16, &present, None, None);
+    let mut r = SceneRenderer::new();
+    r.upload_patches(&device, &queue, RECON, &before, &SILENT);
+
+    let after = with_points_moved(before);
+    let rows = stages(true, |progress| {
+        assert_eq!(
+            r.upload_patches(&device, &queue, RECON, &after, progress),
+            Uploaded::Reused,
+        );
+    });
+
+    assert_eq!(rows, ["repack"]);
+}
+
+/// The thumbnail atlas divides the same way the patch atlas does, and the
+/// second call reports nothing because it wrote nothing.
+#[test]
+fn the_thumbnail_upload_names_its_stages_with_detail_on() {
+    let (device, queue) = device();
+    let recon = demo(8);
+    let mut r = SceneRenderer::new();
+
+    let rows = stages(true, |progress| {
+        r.upload_thumbnails(&device, &queue, RECON, &recon, progress);
+    });
+    assert_eq!(rows, ["pipelines", "atlas", "tiles"]);
+
+    let again = stages(true, |progress| {
+        assert_eq!(
+            r.upload_thumbnails(&device, &queue, RECON, &recon, progress),
+            Uploaded::Reused,
+        );
+    });
+    assert!(again.is_empty(), "the reuse reported: {again:?}");
+}
+
+/// A stage says what it worked over, since a time without a quantity cannot be
+/// read as fast or slow. The counts are the upload's own, not invented for the
+/// row.
+#[test]
+fn the_stages_that_carry_a_count_say_what_they_counted() {
+    let (device, queue) = device();
+    let present = [true, false, true, true];
+    let recon = with_patches(demo(present.len()), 16, &present, None, None);
+    let mut r = SceneRenderer::new();
+
+    let collector = crate::progress::Collector::new(true);
+    r.upload_points(&device, RECON, &recon, &collector.progress());
+    r.upload_patches(&device, &queue, RECON, &recon, &collector.progress());
+    let notes: HashMap<String, Option<String>> = collector
+        .take()
+        .into_iter()
+        .filter_map(|row| match row {
+            crate::progress::Detail::Phase { name, note, .. } => Some((name.to_string(), note)),
+            crate::progress::Detail::Message { .. } => None,
+        })
+        .collect();
+
+    assert_eq!(notes["point spacing"].as_deref(), Some("4 points"));
+    assert_eq!(
+        notes["camera spacing"].as_deref(),
+        Some(format!("{DEMO_IMAGES} cameras").as_str()),
+    );
+    assert_eq!(notes["scan"].as_deref(), Some("3 of 4 points"));
+    assert_eq!(notes["tiles"].as_deref(), Some("3 at 16\u{d7}16 px"));
 }
