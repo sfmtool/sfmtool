@@ -169,7 +169,7 @@ fn show_running(ui: &mut egui::Ui, state: &mut AppState) {
         });
     });
     ui.separator();
-    show_phases(ui, &live.rows, &live.open);
+    show_phases(ui, &live.rows, &live.open, true);
     ui.ctx().request_repaint_after(TICK);
 
     if cancel {
@@ -270,7 +270,7 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
         ui.separator();
         // Nothing is open: the operation is over, so every row is a run that
         // closed.
-        show_phases(ui, &last.detail, &[]);
+        show_phases(ui, &last.detail, &[], false);
     }
 }
 
@@ -279,25 +279,34 @@ fn show_idle(ui: &mut egui::Ui, state: &AppState) {
 /// The transcript, one row per run of a stage and one per message, with `open`
 /// naming the runs that have not closed.
 ///
+/// `follow` is whether the table belongs to a task that is still reporting.
+/// A live one is read at its tail, because the stage that is running is the
+/// newest row and this panel is narrow enough that the stages which finished
+/// early fill it: without that, a reader watching a long solve sees the
+/// prologue for the whole of it. A finished one has no tail to follow and is
+/// read from the top, where the task started. The Action Log follows its own
+/// tail for the live reason and this holds still the moment the reader scrolls
+/// up, so an early stage can be read while the task keeps going.
+///
 /// Virtualized on a uniform row height, as the Action Log's list is, because
 /// nothing folds here: a three-round, sixty-iteration adjustment with detailed
 /// timing on opens `linearise` and its two siblings five hundred and forty
 /// times, and every one of those is a row. Drawing only the range in view is
 /// what keeps that affordable at ten frames a second.
-fn show_phases(ui: &mut egui::Ui, rows: &[Detail], open: &[usize]) {
+fn show_phases(ui: &mut egui::Ui, rows: &[Detail], open: &[usize], follow: bool) {
     let breakdown = Breakdown::running(rows);
     let row_height = ui.text_style_height(&egui::TextStyle::Monospace);
     egui::ScrollArea::vertical()
-        .id_salt("background_phases")
+        // A scroll position of its own for each form. They share this function
+        // and nothing else: one offset between them would open a finished task
+        // wherever the live one had got to, which is its last row.
+        .id_salt(if follow {
+            "background_task_running"
+        } else {
+            "background_task_finished"
+        })
         .auto_shrink([false, false])
-        // The stage that is running is the newest row, and this panel is narrow
-        // enough that the stages which finished early fill it: without this, a
-        // reader watching a long solve sees the prologue for the whole of it and
-        // has to scroll to find out what it is doing now. The Action Log follows
-        // its own tail for the same reason, and this holds still the moment the
-        // reader scrolls up, so an early stage can be read while the operation
-        // keeps going.
-        .stick_to_bottom(true)
+        .stick_to_bottom(follow)
         .show_rows(ui, row_height, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for index in range {

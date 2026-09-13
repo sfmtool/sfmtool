@@ -1299,3 +1299,69 @@ fn scrolling_up_holds_the_table_while_the_operation_keeps_reporting() {
         state.finish_background_task();
     }
 }
+
+/// A finished task is read from the top, where it started.
+///
+/// The running form follows its tail, and the two share one drawing function.
+/// Until they stopped sharing a scroll position, an idle panel opened wherever
+/// the live one had left off, which is its last row: a real adjustment
+/// reported thirteen rows and the panel drew twelve, silently missing
+/// `gather arrays`.
+#[test]
+fn an_idle_panel_opens_at_the_first_stage_not_the_last() {
+    let (mut state, id) = adjustable();
+    let mut gate = Gate::new();
+    let (said, heard) = mpsc::channel();
+    let held = gate.held();
+    state
+        .start_background_task(
+            Operation::BUNDLE_ADJUST,
+            id,
+            Box::new(move |progress| {
+                for i in 0..40usize {
+                    progress.message(
+                        sfmtool_core::progress::Level::Info,
+                        format_args!("event {i}"),
+                    );
+                }
+                said.send(()).expect("the test is listening");
+                let _ = held.recv();
+                Finished::Failed("the fake worker produced nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    heard.recv().expect("the worker reported");
+    state.poll_background_task();
+
+    // Short enough that the forty rows cannot all be on screen at once.
+    let mut short = input();
+    short.screen_rect = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(260.0, 200.0),
+    ));
+    let ctx = egui::Context::default();
+    let frame = |state: &mut AppState| {
+        crate::test_support::painted_texts(&ctx, short.clone(), |ui| super::panel::show(ui, state))
+    };
+    let shows = |rows: &[String], needle: &str| rows.iter().any(|row| row.ends_with(needle));
+
+    // Running, it is at the tail.
+    frame(&mut state);
+    let live = frame(&mut state);
+    assert!(shows(&live, "event 39"), "{live:?}");
+
+    gate.open();
+    state.finish_background_task();
+
+    // Finished, it is at the head, whatever the live one had scrolled to.
+    frame(&mut state);
+    let idle = frame(&mut state);
+    assert!(
+        shows(&idle, "event 0"),
+        "the finished task did not open at its first stage: {idle:?}",
+    );
+    assert!(
+        !shows(&idle, "event 39"),
+        "the finished task opened at its last stage: {idle:?}",
+    );
+}
