@@ -281,11 +281,26 @@ glow line drawn from the camera center to the nearest point on the camera's
 observation ray to the selected 3D point. The gap between the ray endpoint
 and the actual point visualizes reprojection error in 3D space.
 
-**Data flow**: When point selection changes, `upload_track_rays` computes an
-`EdgeInstance` per observation — it looks up the cached SIFT feature position,
-unprojects it through the camera intrinsics to get a world-space ray direction,
-then projects the selected 3D point onto that ray. Each `EdgeInstance` stores
-`endpoint_a` (camera center) and `endpoint_b` (nearest point on ray).
+**Data flow**: `upload_track_rays` computes an `EdgeInstance` per observation —
+it looks up the cached SIFT feature position, unprojects it through the camera
+intrinsics to get a world-space ray direction, then projects the selected 3D
+point onto that ray. Each `EdgeInstance` stores `endpoint_a` (camera center) and
+`endpoint_b` (nearest point on ray).
+
+**When they are rebuilt**: whenever what they were built from changes, which is
+the selected point *and the version of the node that owns it*, plus that node's
+transform. The point alone is not enough: a bundle adjustment that renumbers
+nothing leaves the selection exactly where it was and replaces every position
+under it, and an undo of one does the same in reverse. A `VersionSerial` is
+minted once and never reused, so holding the last frame's against this one's
+asks whether the rays on screen were built from the value on screen.
+
+**When they are cleared**: whenever there is nothing to draw: no selection, a
+node that has gone, a point this version does not have, or a node that is not
+visible. Visibility belongs here because the rays are a singleton with no node
+of their own in the draw loop: `render_track_rays` draws whatever the buffer
+holds, so nothing else would stop a hidden or solo'd-out node's rays hanging in
+the air over the node still shown.
 
 **Rendering**: Track rays reuse the shared `QuadVertex` buffer (same as point
 splats). The vertex shader expands each edge instance into a screen-space ribbon
