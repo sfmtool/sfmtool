@@ -128,8 +128,24 @@ subject, say so in the report — that is a proposed amendment to
    precise, and never says what the thing is **for**.
 
    Quote the opening in the finding and propose a replacement first sentence.
-   This is the cheapest fix in the report and the one that compounds: it is what
-   every future reader hits first, including the next audit.
+   It is the fix that compounds most: it is what every future reader hits first,
+   including the next audit.
+
+   **Recommend landing these one spec per PR, and say so in the finding.** The
+   replacement you propose is written from the spec, and the spec is what is
+   under suspicion — only the code settles whether your sentence is true. That
+   makes an opening the most expensive place in a spec to be confidently wrong:
+   it is the claim a reader accepts before they have anything to check it
+   against, and a plausible-sounding one survives review easily. Writing a good
+   one takes a single subject held in mind at a time — what the thing is, which
+   property is the defining one rather than an incidental one, and which of the
+   surrounding claims are consequences rather than the point — and then a human
+   who knows that subject reading it as a claim about the code rather than as
+   prose. Neither survives a batch: a reviewer given thirty openings at once
+   reads for fluency and passes them, and the same reviewer given one asks
+   whether it is true. However cheap each individual edit looks, do **not**
+   recommend "one PR, no other content" for a run of these — that framing is
+   what produces the batch.
 2. **A reader cannot find out what to call.** Usually this means a `specs/core/`
    spec carries no Rust types and signatures at all, or buries them under a
    derivation — the most common shortfall in the corpus. The requirement is the

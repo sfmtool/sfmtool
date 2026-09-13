@@ -145,7 +145,9 @@ CLI specs (`.sfmr`, `.matches`) and are fine. The bulk read is in the next block
 Bulk read of all 130 first paragraphs (one agent pass over the extracted list).
 **34 of 130 fail the cold-reader test; 8 of those are the quiet failure**: true,
 precise, and never says what the thing is for. The 15 worst, with a proposed first
-sentence each. The fix is one sentence per spec and compounds for every future reader:
+sentence each. The fix is one sentence per spec and compounds for every future
+reader — but land them **one spec per PR**; priority #5 says why a batch is the
+wrong shape for this particular fix:
 
 | spec | failure | first sentence today | proposed first sentence |
 |---|---|---|---|
@@ -677,9 +679,22 @@ one below), so all but one of these are spec fixes.
    reconstruction.md:192`'s `patch_size` 5.0 (ships 11.0), the run's one wrong default.
 
 5. **Thirty-four opening paragraphs fail the cold-reader test.** The table under
-   Mechanical findings §4 proposes a first sentence for the 15 worst. It is the cheapest
-   fix in the report and the one every future reader hits first; do it as one PR with
-   no other content so it reviews in minutes.
+   Mechanical findings §4 proposes a first sentence for the 15 worst. It is the fix
+   every future reader hits first.
+
+   **Land it one spec per PR, not as a batch.** The sentences proposed above are an
+   auditor's drafts, written from the spec — and the spec is the thing under
+   suspicion, so only the code settles whether a replacement is true. That makes the
+   opening the most expensive place in a spec to be confidently wrong: it is the
+   claim a reader accepts before they have anything to check it against. Getting one
+   right means holding a single subject in mind — what the thing actually is, which
+   of its properties is the defining one rather than an incidental one, and which of
+   the surrounding claims are consequences rather than the point — and then having a
+   human who knows that subject read it as a claim about the code. Neither survives a
+   batch. A reviewer handed thirty-odd rewritten openings at once reads them for
+   fluency and passes them; the same reviewer handed one asks whether it is true.
+   Expect roughly one PR per spec, ordered by the table above, each small enough that
+   the review is about the claim and not the prose.
 
 Two patterns worth naming for the next writer rather than the next fixer. First, third
 copies drift in both directions: where the code doc re-derives the spec (`extract_sfmtool.py`
