@@ -74,7 +74,7 @@ A compact horizontal bar at the top showing key properties of the selected 3D
 point:
 
 ```
-pt3d_a1b2c3d4_12345 | xyz: (1.234, -0.567, 2.891) | error: 0.42px | track: 7 obs | max∠: 12.3° | [RGB]
+pt3d_a1b2c3d4_12345 | xyzw: (1.234, -0.567, 2.891, 1) | error: 0.42px | track: 7 obs | max∠: 12.3° | [RGB]
 ```
 
 | Field | Source | Description |
@@ -208,7 +208,7 @@ Below the header, the panel shows a vertically scrollable table of observations
 | Thumbnail | Small thumbnail of the image (from `recon.thumbnails_y_x_rgb`), with a dot overlay at the feature position, tinted by that observation's reprojection error. |
 | Patch | *(embedded-patches only)* The point's patch rendered from this observation's full-res image, through the frame re-anchored on that observation's stored keypoint (see below). Omitted — and all following columns keep their original offsets — when the point has no patch frame. |
 | Image | Image index in the reconstruction. |
-| Name | Image filename (truncated with leading `…/` for long paths). |
+| Name | Image filename, shortened to the column by a cut out of the **middle**, so the directory and the file name both survive: `images/seatt…yard_13.jpg`. The full path is on hover. A path with a directory above its parent keeps a leading `…/` for what was left out; one without gets none, since there is nothing for the mark to stand for. |
 | Feat # | Feature index within the image's SIFT file (or the observation index for embedded-keypoint reconstructions with no SIFT file). |
 | Size | The feature's full extent in pixels — see "Size column" below. For SIFT observations the affine shape comes from the cached `affine_shapes`; for embedded keypoints it is derived by projecting the point's patch frame into the image. Shows `N/A` when unavailable (zero). |
 | Error | Per-observation reprojection error in pixels (`N/A` when undefined). Defined for points at infinity too: the stored unit direction rotates into camera space without translating and projects like any homogeneous coordinate, so only a point (or direction) behind the camera is undefined. |

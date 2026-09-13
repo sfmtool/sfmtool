@@ -1041,19 +1041,22 @@ fn a_running_phase_table_shows_the_newest_stage_not_the_first() {
     state.finish_background();
 }
 
-/// Where a painted string actually lies, left edge to right edge.
+/// Where a painted string actually lies: left edge, right edge, and the top
+/// of its line, since two things on different rows cannot collide however
+/// their columns overlap.
 ///
 /// Not its position: a right-aligned galley reports its *anchor*, with the
 /// glyphs running back from it, so a cost pinned to the right edge of a 260px
 /// panel is drawn at `pos.x = 260`. The span is what says whether two things
 /// overlap, and overlapping is the failure this is for.
-fn painted_spans(state: &mut AppState, width: f32) -> Vec<(String, f32, f32)> {
-    fn walk(shape: &egui::Shape, out: &mut Vec<(String, f32, f32)>) {
+fn painted_spans(state: &mut AppState, width: f32) -> Vec<(String, f32, f32, f32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, f32, f32, f32)>) {
         match shape {
             egui::Shape::Text(text) => out.push((
                 text.galley.text().to_owned(),
                 text.pos.x + text.galley.rect.min.x,
                 text.pos.x + text.galley.rect.max.x,
+                text.pos.y,
             )),
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| walk(shape, out)),
             _ => {}
@@ -1091,25 +1094,38 @@ fn an_idle_panel_keeps_the_cost_clear_of_a_long_label() {
     let last = state.last_background.as_mut().expect("it finished");
     last.label = "a_reconstruction_with_a_name_nobody_would_shorten".to_string();
     let took = ActionLog::format_took(last.took);
-    let label = last.label.clone();
 
     let width = 260.0;
     let spans = painted_spans(&mut state, width);
-    let span = |needle: &str| {
-        spans
-            .iter()
-            .find(|(text, _, _)| text == needle)
-            .unwrap_or_else(|| panic!("{needle:?} was not painted: {spans:?}"))
-    };
-    let (_, cost_left, cost_right) = *span(&took);
-    let (_, _, label_right) = *span(&label);
+    let (_, cost_left, cost_right, cost_row) = *spans
+        .iter()
+        .find(|(text, _, _, _)| *text == took)
+        .unwrap_or_else(|| panic!("{took:?} was not painted: {spans:?}"));
     assert!(
         cost_right <= width,
-        "the cost ran to {cost_right} past the {width}px edge",
+        "the cost ran to {cost_right} past the {width}px edge: {spans:?}",
     );
+    // Nothing sharing its line reaches it. Asserted over the row rather than
+    // by finding one text, because what the names read as is the eliding
+    // rule's business rather than this test's.
+    for (text, _, right, row) in &spans {
+        if *text == took || (*row - cost_row).abs() > 1.0 {
+            continue;
+        }
+        assert!(
+            *right <= cost_left,
+            "{text:?} ran to {right}, under a cost starting at {cost_left}",
+        );
+    }
+    // The node is still there to be read, shortened, and on a line of its own
+    // below the operation rather than squeezed beside it.
+    let (_, _, _, label_row) = *spans
+        .iter()
+        .find(|(text, _, _, _)| text.starts_with("a_recon") && text.ends_with("horten"))
+        .unwrap_or_else(|| panic!("the node was not drawn: {spans:?}"));
     assert!(
-        label_right <= cost_left,
-        "the label ran to {label_right}, under a cost starting at {cost_left}",
+        label_row > cost_row,
+        "the node shared the operation's line: {spans:?}",
     );
 }
 

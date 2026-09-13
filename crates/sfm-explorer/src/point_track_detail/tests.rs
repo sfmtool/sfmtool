@@ -86,6 +86,15 @@ fn with_nested_image_paths(mut recon: SfmrReconstruction) -> SfmrReconstruction 
     recon
 }
 
+/// One directory and a file, which is what an ordinary workspace stores and
+/// what the seattle_backyard and dino sets both look like.
+fn with_flat_image_paths(mut recon: SfmrReconstruction) -> SfmrReconstruction {
+    for (i, image) in recon.image_table.images.iter_mut().enumerate() {
+        image.name = format!("images/image_{i:03}.jpg");
+    }
+    recon
+}
+
 /// Give the reconstruction a content hash. `demo` leaves it empty, which sends
 /// the Point ID down its zero-fill fallback.
 fn with_content_hash(mut recon: SfmrReconstruction, hash: &str) -> SfmrReconstruction {
@@ -446,6 +455,27 @@ fn a_missing_sift_cache_leaves_the_feature_columns_empty() {
     for obs in &panel.observations {
         assert_eq!(obs.feature_extents, [0.0, 0.0]);
         assert_eq!(obs.feature_xy, [0.0, 0.0]);
+    }
+}
+
+/// A path with nothing above its parent is shown whole, with no mark.
+///
+/// The mark stands for an ancestor that was left out, and `images/a.jpg` has
+/// none: writing it `\u{2026}/images/a.jpg` claims a directory that nothing
+/// knows about, and spends a column that is already too narrow saying so.
+#[test]
+fn a_path_with_nothing_above_it_gets_no_mark() {
+    let recon = with_flat_image_paths(SfmrReconstruction::demo(12));
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+
+    show_once(&mut panel, &ctx, &recon, Some(1), &sift_cache(8, 16));
+
+    assert_eq!(panel.observations.len(), 2);
+    for obs in &panel.observations {
+        let i = obs.image_index;
+        assert_eq!(obs.image_name, format!("images/image_{i:03}.jpg"));
+        assert_eq!(obs.image_full_name, format!("images/image_{i:03}.jpg"));
     }
 }
 

@@ -24,6 +24,7 @@ mod colormap;
 mod dock;
 mod document;
 mod edit_history_panel;
+mod elide;
 mod goto_point;
 mod image_browser;
 mod image_detail;

@@ -162,16 +162,28 @@ fn affine_full_extents(a: &[[f32; 2]; 2]) -> [f32; 2] {
 /// Return a short display name from an image path, keeping the filename plus
 /// its parent directory so that rig images sharing the same filename are
 /// distinguishable. For example `images/fisheye_left/image_0345.jpg` becomes
-/// `…/fisheye_left/image_0345.jpg`. Plain filenames without a parent are
-/// returned as-is.
+/// `…/fisheye_left/image_0345.jpg`, and `images/image_0345.jpg` stays
+/// `images/image_0345.jpg`, since nothing was left out of it. Plain filenames
+/// without a parent are returned as-is.
 fn truncated_path_suffix(path_str: &str) -> String {
     let p = Path::new(path_str);
     let file_name = match p.file_name() {
         Some(f) => f.to_string_lossy(),
         None => return path_str.to_string(),
     };
-    match p.parent().and_then(|par| par.file_name()) {
-        Some(parent_dir) => format!("\u{2026}/{}/{}", parent_dir.to_string_lossy(), file_name),
-        None => file_name.into_owned(),
-    }
+    let Some(parent) = p.parent() else {
+        return file_name.into_owned();
+    };
+    let Some(parent_dir) = parent.file_name() else {
+        return file_name.into_owned();
+    };
+    // The mark stands for an ancestor that was left out, so it is only earned
+    // when there is one. `images/a.jpg` is the whole of what the file stores,
+    // and writing it `\u{2026}/images/a.jpg` claims a directory above `images` that
+    // nothing knows about, in a column that has no room to spare.
+    let elided = parent
+        .parent()
+        .is_some_and(|above| above.file_name().is_some());
+    let mark = if elided { "\u{2026}/" } else { "" };
+    format!("{mark}{}/{}", parent_dir.to_string_lossy(), file_name)
 }

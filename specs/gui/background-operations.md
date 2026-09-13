@@ -98,8 +98,9 @@ tree ([panel-layout.md](panel-layout.md) § "Home positions").
 ### Idle
 
 The panel is not blank when nothing is running. It shows the last operation of
-the session, greyed: its name, its node, what it cost, and its phases, collapsed
-under a toggle that works as the Action Log's does. Those phases are the
+the session, greyed: its name and what it cost on one line, its node on the
+next as it is while the operation runs, and its phases collapsed under a toggle
+that works as the Action Log's does. Those phases are the
 transcript the panel drew while it ran, not the entry's folded breakdown: an
 operation that collapsed into a summary at the instant it finished would be a
 panel that changed its mind about what the reader had just watched. A session

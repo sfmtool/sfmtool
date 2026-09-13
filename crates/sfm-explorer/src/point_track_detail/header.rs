@@ -19,9 +19,14 @@ impl PointTrackDetail {
         point: &sfmtool_core::Point3D,
     ) -> bool {
         let point_id = self.point_id.clone();
+        // Homogeneous, because `w` is the whole difference between a position
+        // and a direction: it is `1` for a finite point and `0` for one at
+        // infinity, whose `position` is then a unit direction rather than a
+        // place. Printing three numbers under the label `xyz` reads as a point
+        // a metre from the origin, which is the one thing it is not.
         let coords = format!(
-            "{:.3}, {:.3}, {:.3}",
-            point.position.x, point.position.y, point.position.z
+            "{:.3}, {:.3}, {:.3}, {:.0}",
+            point.position.x, point.position.y, point.position.z, point.w
         );
 
         let mut goto_clicked = false;
@@ -52,8 +57,8 @@ impl PointTrackDetail {
 
             ui.label("|");
 
-            // XYZ coordinates — with copy button
-            ui.label(format!("xyz: ({coords})"));
+            // Homogeneous coordinates, with a copy button
+            ui.label(format!("xyzw: ({coords})"));
             if copy_button(ui, "Copy coordinates") {
                 ui.ctx().copy_text(coords.clone());
             }
@@ -67,6 +72,15 @@ impl PointTrackDetail {
 
             // Track length
             ui.label(format!("track: {} obs", obs_count));
+
+            // Said in words as well as in `w`, because the rest of this row is
+            // about a point that has a place and this one does not: the lines
+            // that would say where it is are absent rather than zero, and a
+            // reader is owed the reason.
+            if point.w == 0.0 {
+                ui.label("|");
+                ui.label(egui::RichText::new("at infinity").color(ui.visuals().warn_fg_color));
+            }
 
             // Max triangulation angle
             if self.max_angle_deg > 0.0 {

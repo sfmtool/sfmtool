@@ -198,6 +198,25 @@ fn show_bar(ui: &mut egui::Ui, bar: &Bar) {
     }
 }
 
+/// `text` cut to the width left in `ui`, out of the middle.
+///
+/// Both ends of a node's name carry meaning and the middle does not: the front
+/// is the date every run of that day shares, and the back is the range and the
+/// `-embedded` suffix. See [`crate::elide`].
+fn elide_to_fit(ui: &egui::Ui, text: &str) -> String {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let color = ui.visuals().weak_text_color();
+    let room = ui.available_width();
+    crate::elide::middle(text, room, |candidate| {
+        ui.ctx().fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(candidate.to_owned(), font.clone(), color)
+                .rect
+                .width()
+        })
+    })
+}
+
 // -- Idle ------------------------------------------------------------------
 
 /// The idle form: the last operation of the session, greyed, with its phases
@@ -214,6 +233,9 @@ fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
     let took = ActionLog::format_took(last.took);
 
     let mut toggled = false;
+    // What the toggle occupies, so the node below lines up with the operation
+    // above it rather than with the button.
+    let mut indent = 0.0;
     ui.horizontal(|ui| {
         // The Action Log's glyphs and the Action Log's meaning: `+` opens, `-`
         // closes, and nothing at all where there is nothing to open.
@@ -221,31 +243,40 @@ fn show_idle(ui: &mut egui::Ui, state: &mut AppState) {
             let toggle = if expanded { "-" } else { "+" };
             let response =
                 ui.add(egui::Button::new(egui::RichText::new(toggle).monospace()).frame(false));
+            indent = response.rect.width() + ui.spacing().item_spacing.x;
             if response.clicked() {
                 toggled = true;
             }
         }
-        // The cost is reserved before the names are drawn, for the reason a
-        // phase row reserves it: a node with a long label would otherwise push
-        // the number off the panel, and the number is what a reader came back
-        // to this panel to find.
+        // The cost is reserved before the name is drawn: a long one would
+        // otherwise push the number off the panel, and the number is what a
+        // reader came back to this panel to find.
         let width = (ui.available_width() - COST_WIDTH).max(0.0);
         ui.allocate_ui_with_layout(
             egui::vec2(width, ui.text_style_height(&egui::TextStyle::Body)),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.label(egui::RichText::new(name).weak());
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&label).weak())
-                        .truncate()
-                        .selectable(false),
-                )
-                .on_hover_text(label);
             },
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new(took).weak());
         });
+    });
+    // The node goes on a line of its own, as it does while the operation runs.
+    // Sharing the row with the operation and the cost left it a third of a
+    // narrow panel, which is not enough of a name to tell one run from
+    // another: `20260628-01-solve-seattle_backyard_1-26-embedded` came out as
+    // `202\u{2026}ed`. A line of its own is the width of the panel, and the
+    // same two lines a reader was watching a minute ago.
+    ui.horizontal(|ui| {
+        ui.add_space(indent);
+        ui.add(
+            egui::Label::new(egui::RichText::new(elide_to_fit(ui, &label)).weak())
+                .truncate()
+                .selectable(false),
+        )
+        .on_hover_text(label);
     });
     if expanded {
         ui.separator();

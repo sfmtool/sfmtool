@@ -287,18 +287,29 @@ impl PointTrackDetail {
             text_color,
         );
 
-        // Image name — right-aligned and clipped to column bounds so
-        // long paths show the distinguishing suffix without overflowing.
+        // Image name. The column is a fixed width and an ordinary name is
+        // wider than it, so a cut is the common case rather than the rare one:
+        // it comes out of the middle, which keeps the directory and the file
+        // name a reader tells one row from another by. Still clipped, because a
+        // name that fits by a hair should not spill into the next column.
         // Tooltip shows the full path on hover.
         let name_col_gap = 8.0;
         let name_clip = egui::Rect::from_x_y_ranges(
             (x0 + cols.name)..=(x0 + cols.feat - name_col_gap),
             row_rect.y_range(),
         );
+        let shown = crate::elide::middle(&obs_image_name, name_clip.width(), |text| {
+            ui.ctx().fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(text.to_owned(), font.clone(), weak_color)
+                    .rect
+                    .width()
+            })
+        });
         painter.with_clip_rect(name_clip).text(
-            egui::pos2(x0 + cols.feat - name_col_gap, cy),
-            egui::Align2::RIGHT_CENTER,
-            &obs_image_name,
+            egui::pos2(x0 + cols.name, cy),
+            egui::Align2::LEFT_CENTER,
+            &shown,
             font.clone(),
             weak_color,
         );
