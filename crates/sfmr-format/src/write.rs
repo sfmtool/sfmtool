@@ -344,8 +344,7 @@ fn write_sfmr_into<S: EntrySink>(
     )?;
 
     let mut sink = open_sink()?;
-    let has_rigs = data.rig_frame_data.is_some();
-    let mut section_digests: Vec<u128> = Vec::with_capacity(if has_rigs { 7 } else { 5 });
+    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
 
     // === Written (version 8+, top level, outside every digest) ===
     // Stamped here, at the moment of writing, and stored before the metadata so
@@ -781,11 +780,7 @@ fn write_sfmr_into<S: EntrySink>(
     section_digests.push(tracks_hash);
 
     // === Content hash ===
-    let all_digests_bytes: Vec<u8> = section_digests
-        .iter()
-        .flat_map(|d| d.to_be_bytes())
-        .collect();
-    let content_hash_value = xxhash_rust::xxh3::xxh3_128(&all_digests_bytes);
+    let content_hash_value = section_digests.finish();
 
     let content_hash = ContentHash {
         metadata_xxh128: format_hash(metadata_hash),

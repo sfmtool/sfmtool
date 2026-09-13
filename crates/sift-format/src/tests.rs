@@ -118,6 +118,11 @@ fn test_content_hash_populated() {
 
     write_sift(&path, &data, 3).unwrap();
     let loaded = read_sift(&path).unwrap();
+    // Frozen from the original writer at HEAD 6528c746.
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        "577fc9bd3d53068b8e198073ffa7d840"
+    );
 
     // All hashes should be 32-char hex strings
     assert_eq!(loaded.content_hash.feature_tool_xxh128.len(), 32);

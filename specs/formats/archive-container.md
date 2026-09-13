@@ -147,7 +147,8 @@ used by the five format crates
 ([sift-format](../../crates/sift-format/),
 [matches-format](../../crates/matches-format/),
 [sfmr-format](../../crates/sfmr-format/),
-[camrig-format](../../crates/camrig-format/)) and by nothing else. There are no
+[camrig-format](../../crates/camrig-format/),
+[sfmtool-kdf-format](../../crates/sfmtool-kdf-format/)) and by nothing else. There are no
 Python bindings: Python reaches these bytes through each format's own binding.
 
 ```rust
@@ -155,6 +156,15 @@ Python bindings: Python reaches these bytes through each format's own binding.
 /// public error type, so callers of `read_sfmr` / `write_matches` / … never
 /// see it.
 pub enum ArchiveIoError { Io(..), Zip(..), Json(..), InvalidFormat(String), ShapeMismatch(String) }
+
+// Whole-file content identity: push section digests in format-defined order.
+pub struct SectionDigests { /* streaming XXH128 hasher */ }
+impl SectionDigests {
+    pub fn new() -> Self;
+    pub fn push(&mut self, digest: u128);
+    pub fn push_bytes(&mut self, uncompressed_entry: &[u8]);
+    pub fn finish(self) -> u128;
+}
 
 // Reading
 pub fn read_zst_entry<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str)
@@ -232,6 +242,13 @@ copy at the moment it opens it, so a failure part-way through leaves a partial
 archive where the original was. The in-memory hashing path, which serialises into
 a buffer to compute a content hash without writing anything, does not go through
 it and is unaffected.
+
+`SectionDigests` handles only the final fold: `push` appends a section's digest
+as 16 big-endian bytes, `push_bytes` first hashes an entry's uncompressed bytes
+for one-entry sections, and `finish` returns XXH128 over that stream. The format
+still decides which sections exist and their order. For example, a format with
+metadata and an optional images section calls `push_bytes(&metadata_raw)`, then
+`push(images_digest)` only when images are present, then `finish()`.
 
 Three consequences of the entry-at-a-time choice are visible in the signatures:
 

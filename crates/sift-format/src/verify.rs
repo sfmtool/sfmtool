@@ -55,42 +55,40 @@ pub fn verify_sift(path: &Path) -> Result<(bool, Vec<String>), SiftError> {
     }
 
     // Recompute content hash from individual digests
-    let mut content_hash_digests: Vec<u8> = Vec::new();
+    let mut content_hash_digests = sfmtool_archive_io::SectionDigests::new();
 
     // 1. feature_tool_metadata.json
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&feature_tool_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&feature_tool_raw);
 
     // 2. metadata.json
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&metadata_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&metadata_raw);
 
     // 3. features/positions_xy
     let pos_raw = read_zst_entry(
         &mut archive,
         &format!("features/positions_xy.{feature_count}.2.float32.zst"),
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&pos_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&pos_raw);
 
     // 4. features/affine_shapes
     let shape_raw = read_zst_entry(
         &mut archive,
         &format!("features/affine_shapes.{feature_count}.2.2.float32.zst"),
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&shape_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&shape_raw);
 
     // 5. features/descriptors
     let desc_raw = read_zst_entry(
         &mut archive,
         &format!("features/descriptors.{feature_count}.128.uint8.zst"),
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&desc_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&desc_raw);
 
     // 6. thumbnail_y_x_rgb
     let thumb_raw = read_zst_entry(&mut archive, &thumbnail_entry_name())?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&thumb_raw).to_be_bytes());
+    content_hash_digests.push_bytes(&thumb_raw);
 
-    let content_hash = xxhash_rust::xxh3::xxh3_128(&content_hash_digests);
+    let content_hash = content_hash_digests.finish();
     if format_hash(content_hash) != stored.content_xxh128 {
         errors.push(format!(
             "Content hash mismatch: computed {}, stored {}",

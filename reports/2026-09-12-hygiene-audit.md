@@ -851,6 +851,8 @@ the four monoliths grew 8%**
 
 **The content-hash fold is hand-written nine times, in two incompatible spellings, in a
 workspace that has a crate for exactly this**
+
+> _Status (2026-09-13): Done — `SectionDigests` in `sfmtool-archive-io` now owns the big-endian fold across all format writers and verifiers. The audit missed a tenth production fold in `sfmtool-kdf-format/src/read.rs`, which is included in the cleanup._
 - Location: `crates/sfmr-format/src/write.rs:783–788` and `verify.rs:637–641`;
   `matches-format/src/write.rs:460–464` and `verify.rs:267–271`;
   `sift-format/src/write.rs:55–97` and `verify.rs:62–93`;

@@ -60,7 +60,7 @@ fn write_matches_into<W: std::io::Write + std::io::Seek>(
     let mut zip = ZipWriter::new(writer);
     // Present-section digests, accumulated in the canonical order: metadata,
     // images, pairs, clusters, cluster_patches, two_view_geometries.
-    let mut section_digests: Vec<u128> = Vec::with_capacity(6);
+    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
 
     // === Top-level metadata (always emitted at the current format version) ===
     let mut metadata = data.metadata.clone();
@@ -457,11 +457,7 @@ fn write_matches_into<W: std::io::Write + std::io::Seek>(
     };
 
     // === Content hash ===
-    let all_digests_bytes: Vec<u8> = section_digests
-        .iter()
-        .flat_map(|d| d.to_be_bytes())
-        .collect();
-    let content_hash_value = xxhash_rust::xxh3::xxh3_128(&all_digests_bytes);
+    let content_hash_value = section_digests.finish();
 
     let content_hash = MatchesContentHash {
         metadata_xxh128: format_hash(metadata_hash),

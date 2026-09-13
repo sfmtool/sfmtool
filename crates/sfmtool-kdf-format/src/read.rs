@@ -1249,7 +1249,8 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
     {
         parse_hash(s)?;
     }
-    let mut sections = vec![parse_hash(&h.metadata_xxh128)?];
+    let mut sections = sfmtool_archive_io::SectionDigests::new();
+    sections.push(parse_hash(&h.metadata_xxh128)?);
     if let Some(v) = &h.images_xxh128 {
         sections.push(parse_hash(v)?);
     }
@@ -1270,11 +1271,7 @@ fn validate_hash_shape(h: &ContentHash, m: &Metadata) -> Result<(), KdfError> {
     for v in h.chunks_xxh128.iter().flatten() {
         sections.push(parse_hash(v)?);
     }
-    let mut raw = Vec::with_capacity(sections.len() * 16);
-    for v in sections {
-        raw.extend_from_slice(&v.to_be_bytes());
-    }
-    if hash_string(xxh3_128(&raw)) != h.content_xxh128 {
+    if hash_string(sections.finish()) != h.content_xxh128 {
         return Err(KdfError::Integrity(
             "whole-file digest composition mismatch".into(),
         ));

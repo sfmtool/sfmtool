@@ -307,7 +307,12 @@ fn assert_round_trip(data: &CamRigData, label: &str) -> CamRigData {
 
 #[test]
 fn round_trip_single_camera() {
-    assert_round_trip(&single_camera_rig(), "single");
+    let loaded = assert_round_trip(&single_camera_rig(), "single");
+    // Frozen from the original writer at HEAD 6528c746.
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        "49e0f7bf297a165a8834f8ef6bab7e53"
+    );
 }
 
 #[test]

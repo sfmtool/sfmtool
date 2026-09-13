@@ -446,7 +446,8 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         options.compression_level,
     )?;
     let metadata_digest = xxh3_128(&metadata_raw);
-    let mut section_digests = vec![metadata_digest];
+    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
+    section_digests.push(metadata_digest);
 
     let (images_digest, origin_digests) = if let Some(src) = sources {
         let imeta = ImagesMetadata {
@@ -519,7 +520,9 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
             ods.push(h.digest128());
         }
         section_digests.push(images_digest);
-        section_digests.extend(ods.iter().copied());
+        for &digest in &ods {
+            section_digests.push(digest);
+        }
         (Some(images_digest), Some(ods))
     } else {
         (None, None)
@@ -696,17 +699,14 @@ fn write_into<W: Write + Seek, S: KdfScalar>(
         }
         chunk_digests.push(td);
     }
-    let mut whole = Vec::with_capacity(section_digests.len() * 16);
-    for d in &section_digests {
-        whole.extend_from_slice(&d.to_be_bytes());
-    }
+
     let hashes = ContentHash {
         metadata_xxh128: format_hash(metadata_digest),
         chunks_xxh128: chunk_digests
             .iter()
             .map(|v| v.iter().map(|&d| format_hash(d)).collect())
             .collect(),
-        content_xxh128: format_hash(xxh3_128(&whole)),
+        content_xxh128: format_hash(section_digests.finish()),
         storage_rows_xxh128: format_hash(storage_digest),
         descriptor_blocks_xxh128: descriptor_digests.into_iter().map(format_hash).collect(),
         geometry_blocks_xxh128: geometry_digests.map(|v| v.into_iter().map(format_hash).collect()),

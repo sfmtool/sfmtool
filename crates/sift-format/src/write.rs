@@ -52,11 +52,9 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
     let metadata_xxh128 = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
 
     // Accumulate hash digests for content hash
-    let mut content_hash_digests: Vec<u8> = Vec::new();
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&feature_tool_bytes).to_be_bytes());
-    content_hash_digests
-        .extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&metadata_bytes).to_be_bytes());
+    let mut content_hash_digests = sfmtool_archive_io::SectionDigests::new();
+    content_hash_digests.push_bytes(&feature_tool_bytes);
+    content_hash_digests.push_bytes(&metadata_bytes);
 
     // Position data
     let pos_bytes: &[u8] = bytemuck::cast_slice(data.positions_xy.as_slice().unwrap());
@@ -66,7 +64,7 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
         pos_bytes,
         zstd_level,
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(pos_bytes).to_be_bytes());
+    content_hash_digests.push_bytes(pos_bytes);
 
     // Affine shape data
     let shape_bytes: &[u8] = bytemuck::cast_slice(data.affine_shapes.as_slice().unwrap());
@@ -76,7 +74,7 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
         shape_bytes,
         zstd_level,
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(shape_bytes).to_be_bytes());
+    content_hash_digests.push_bytes(shape_bytes);
 
     // Descriptor data
     let desc_bytes: &[u8] = data.descriptors.as_slice().unwrap();
@@ -86,15 +84,15 @@ fn write_sift_into<W: std::io::Write + std::io::Seek>(
         desc_bytes,
         zstd_level,
     )?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(desc_bytes).to_be_bytes());
+    content_hash_digests.push_bytes(desc_bytes);
 
     // Thumbnail data
     let thumb_bytes: &[u8] = data.thumbnail_y_x_rgb.as_slice().unwrap();
     write_binary_entry(&mut zip, &thumbnail_entry_name(), thumb_bytes, zstd_level)?;
-    content_hash_digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(thumb_bytes).to_be_bytes());
+    content_hash_digests.push_bytes(thumb_bytes);
 
     // Compute and write content hash
-    let content_xxh128 = xxhash_rust::xxh3::xxh3_128(&content_hash_digests);
+    let content_xxh128 = content_hash_digests.finish();
     let content_hash = SiftContentHash {
         metadata_xxh128: format_hash(metadata_xxh128),
         feature_tool_xxh128: format_hash(feature_tool_xxh128),

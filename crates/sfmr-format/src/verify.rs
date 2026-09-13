@@ -63,7 +63,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
         return Ok((false, errors));
     }
 
-    let mut section_digests: Vec<u128> = Vec::with_capacity(5);
+    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
 
     // === Metadata hash (raw bytes, not re-serialized) ===
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_raw);
@@ -634,11 +634,7 @@ pub fn verify_sfmr(path: &Path) -> Result<(bool, Vec<String>), SfmrError> {
     }
 
     // === Overall content hash ===
-    let all_digests_bytes: Vec<u8> = section_digests
-        .iter()
-        .flat_map(|d| d.to_be_bytes())
-        .collect();
-    let content_hash_value = xxhash_rust::xxh3::xxh3_128(&all_digests_bytes);
+    let content_hash_value = section_digests.finish();
     if format_hash(content_hash_value) != stored.content_xxh128 {
         errors.push(format!(
             "Overall content hash mismatch: computed {}, stored {}",

@@ -52,12 +52,12 @@ pub fn verify_camrig(path: &Path) -> Result<(bool, Vec<String>), CamRigError> {
         format!("sensors/quaternions_wxyz.{s}.4.float64.zst"),
         format!("sensors/translations_xyz.{s}.3.float64.zst"),
     ];
-    let mut digests: Vec<u8> = Vec::new();
+    let mut digests = sfmtool_archive_io::SectionDigests::new();
     for name in &members {
         let raw = read_zst_entry(&mut archive, name)?;
-        digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(&raw).to_be_bytes());
+        digests.push_bytes(&raw);
     }
-    let content_hash = xxhash_rust::xxh3::xxh3_128(&digests);
+    let content_hash = digests.finish();
     if format_hash(content_hash) != stored.content_xxh128 {
         errors.push(format!(
             "Content hash mismatch: computed {}, stored {}",

@@ -314,6 +314,11 @@ fn test_round_trip_no_tvg() {
     let data = make_test_data();
     let (dir, path) = write_to_temp("matches_test_round_trip", &data);
     let loaded = read_matches(&path).unwrap();
+    // Frozen from the original writer at HEAD 6528c746.
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        "665fc243fe4cda3bb4ec493fdc3bcaa6"
+    );
 
     // Verify metadata
     assert_eq!(loaded.metadata.matching_method, "sequential");

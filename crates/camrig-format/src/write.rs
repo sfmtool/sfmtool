@@ -55,11 +55,8 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         write_json_entry(&mut zip, "metadata.json.zst", &data.metadata, zstd_level)?;
     let metadata_xxh128 = xxhash_rust::xxh3::xxh3_128(&metadata_bytes);
 
-    let mut digests: Vec<u8> = Vec::new();
-    let push = |digests: &mut Vec<u8>, bytes: &[u8]| {
-        digests.extend_from_slice(&xxhash_rust::xxh3::xxh3_128(bytes).to_be_bytes());
-    };
-    push(&mut digests, &metadata_bytes);
+    let mut digests = sfmtool_archive_io::SectionDigests::new();
+    digests.push_bytes(&metadata_bytes);
 
     // cameras/metadata.json
     let cameras_bytes = write_json_entry(
@@ -68,7 +65,7 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         &data.cameras,
         zstd_level,
     )?;
-    push(&mut digests, &cameras_bytes);
+    digests.push_bytes(&cameras_bytes);
 
     // sensors/image_file_patterns.json
     let patterns_bytes = write_json_entry(
@@ -77,7 +74,7 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         &data.sensor_image_patterns,
         zstd_level,
     )?;
-    push(&mut digests, &patterns_bytes);
+    digests.push_bytes(&patterns_bytes);
 
     // sensors/camera_indexes
     let cam_idx_bytes: &[u8] = bytemuck::cast_slice(&data.camera_indexes);
@@ -87,7 +84,7 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         cam_idx_bytes,
         zstd_level,
     )?;
-    push(&mut digests, cam_idx_bytes);
+    digests.push_bytes(cam_idx_bytes);
 
     // sensors/quaternions_wxyz — `as_standard_layout` makes a contiguous copy
     // only if the caller handed us a non-contiguous array; the common case
@@ -100,7 +97,7 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         quat_bytes,
         zstd_level,
     )?;
-    push(&mut digests, quat_bytes);
+    digests.push_bytes(quat_bytes);
 
     // sensors/translations_xyz
     let translations = data.translations_xyz.as_standard_layout();
@@ -111,10 +108,10 @@ fn write_camrig_into<W: std::io::Write + std::io::Seek>(
         trans_bytes,
         zstd_level,
     )?;
-    push(&mut digests, trans_bytes);
+    digests.push_bytes(trans_bytes);
 
     // content_hash.json
-    let content_xxh128 = xxhash_rust::xxh3::xxh3_128(&digests);
+    let content_xxh128 = digests.finish();
     let content_hash = CamRigContentHash {
         metadata_xxh128: format_hash(metadata_xxh128),
         content_xxh128: format_hash(content_xxh128),

@@ -27,6 +27,37 @@ use xxhash_rust::xxh3::Xxh3;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+/// Accumulates a whole-file XXH128 digest from ordered section digests.
+///
+/// Each section digest contributes its 16 big-endian bytes. Formats decide
+/// which sections exist and the order in which they are pushed.
+#[derive(Default)]
+pub struct SectionDigests {
+    hasher: Xxh3,
+}
+
+impl SectionDigests {
+    /// Start an empty content-hash accumulator.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append an already-computed section digest.
+    pub fn push(&mut self, digest: u128) {
+        self.hasher.update(&digest.to_be_bytes());
+    }
+
+    /// Hash an entry's uncompressed bytes and append its digest as a section.
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        self.push(xxhash_rust::xxh3::xxh3_128(bytes));
+    }
+
+    /// Return the whole-file digest.
+    pub fn finish(self) -> u128 {
+        self.hasher.digest128()
+    }
+}
+
 /// Errors that can occur during archive I/O operations.
 ///
 /// Each format crate converts this into its own public error type, so callers

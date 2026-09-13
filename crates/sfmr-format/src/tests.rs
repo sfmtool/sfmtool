@@ -643,6 +643,11 @@ fn test_content_hash_populated() {
 
     write_sfmr(&path, &mut data).unwrap();
     let loaded = read_sfmr(&path).unwrap();
+    // Frozen from the original writer at HEAD 6528c746.
+    assert_eq!(
+        loaded.content_hash.content_xxh128,
+        "6a452384d3ab87bf56f5836ea82b2601"
+    );
 
     // All hashes should be non-empty 32-char hex strings
     assert_eq!(loaded.content_hash.metadata_xxh128.len(), 32);

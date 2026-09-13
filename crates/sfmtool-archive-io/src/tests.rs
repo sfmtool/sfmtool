@@ -576,3 +576,31 @@ fn a_missing_parent_directory_is_an_error_and_creates_nothing() {
     assert!(!dir.join("nested").exists());
     assert!(entries(&dir).is_empty(), "{:?}", entries(&dir));
 }
+#[test]
+fn section_digests_preserve_big_endian_content_identity() {
+    use crate::SectionDigests;
+    use xxhash_rust::xxh3::xxh3_128;
+
+    let first = 0x00112233445566778899aabbccddeeff_u128;
+    let second_bytes = b"uncompressed entry";
+    let second = xxh3_128(second_bytes);
+    let mut reference = Vec::new();
+    reference.extend_from_slice(&first.to_be_bytes());
+    reference.extend_from_slice(&second.to_be_bytes());
+
+    let mut digests = SectionDigests::new();
+    digests.push(first);
+    digests.push_bytes(second_bytes);
+    assert_eq!(digests.finish(), xxh3_128(&reference));
+
+    for count in [0, 1, 2, 15, 16, 32] {
+        let mut old_fold = Vec::new();
+        let mut streamed = SectionDigests::new();
+        for n in 0..count {
+            let digest = xxh3_128(&(n as u128).to_le_bytes());
+            old_fold.extend_from_slice(&digest.to_be_bytes());
+            streamed.push(digest);
+        }
+        assert_eq!(streamed.finish(), xxh3_128(&old_fold), "{count} sections");
+    }
+}

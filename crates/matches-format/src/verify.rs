@@ -211,7 +211,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
 
     // Present-section digests in the canonical order: metadata, images,
     // pairs, clusters, cluster_patches, two_view_geometries.
-    let mut section_digests: Vec<u128> = Vec::with_capacity(6);
+    let mut section_digests = sfmtool_archive_io::SectionDigests::new();
 
     // === Metadata hash ===
     let metadata_hash = xxhash_rust::xxh3::xxh3_128(&metadata_raw);
@@ -264,11 +264,7 @@ pub fn verify_matches(path: &Path) -> Result<(bool, Vec<String>), MatchesError> 
     }
 
     // === Overall content hash ===
-    let all_digests_bytes: Vec<u8> = section_digests
-        .iter()
-        .flat_map(|d| d.to_be_bytes())
-        .collect();
-    let content_hash_value = xxhash_rust::xxh3::xxh3_128(&all_digests_bytes);
+    let content_hash_value = section_digests.finish();
     if format_hash(content_hash_value) != stored.content_xxh128 {
         errors.push(format!(
             "Overall content hash mismatch: computed {}, stored {}",

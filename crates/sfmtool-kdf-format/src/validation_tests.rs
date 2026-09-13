@@ -85,6 +85,17 @@ fn write_tiny_u8(dir: &Path, name: &str, trees: usize) -> PathBuf {
     path
 }
 
+#[test]
+fn tiny_u8_content_hash_is_stable() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_tiny_u8(dir.path(), "stable.kdf", 1);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let raw = sfmtool_archive_io::read_zst_entry(&mut archive, "content_hash.json.zst").unwrap();
+    let hash: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    // Frozen from the original writer at HEAD 6528c746.
+    assert_eq!(hash["content_xxh128"], "583f0b7dd71eb8a5107042f3d0de4012");
+}
+
 fn read_stored(path: &Path) -> StoredEntries {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     (0..archive.len())
