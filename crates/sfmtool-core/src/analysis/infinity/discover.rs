@@ -506,7 +506,7 @@ impl SfmrReconstruction {
         // baseline couldn't adjudicate them) with a debug line for review. Every
         // member is a previously untracked feature, so no appended observation
         // collides with an existing point's observation.
-        let mut recon = self.clone();
+        let mut recon = self.clone_for_edit();
         let old_point_count = recon.point_set.points.len();
         // A `sift_files` reconstruction may carry an inline copy of its
         // observation coordinates; the appended observations extend it in

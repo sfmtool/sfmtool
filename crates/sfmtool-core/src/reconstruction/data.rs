@@ -292,7 +292,16 @@ pub struct SfmrReconstruction {
     pub workspace_dir: PathBuf,
     /// Top-level reconstruction metadata.
     pub metadata: SfmrMetadata,
-    /// Content integrity hashes (from the file, or empty if newly constructed).
+    /// Content integrity hashes **of the file this value was read from**, or
+    /// empty for a value that was not read from one.
+    ///
+    /// An invariant, not a cache:
+    /// [`EditedReconstruction::base_content_hash`](crate::EditedReconstruction::base_content_hash)
+    /// takes a non-empty value here at its word rather than spending a
+    /// serialisation of the whole reconstruction to re-derive what the file
+    /// already said. A copy that is about to be changed must therefore not
+    /// carry these along, which is what [`SfmrReconstruction::clone_for_edit`]
+    /// is for.
     pub content_hash: ContentHash,
     /// The cameras, the posed images, and every per-image column.
     pub image_table: ImageTable,

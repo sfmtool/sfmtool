@@ -433,7 +433,7 @@ impl SfmrReconstruction {
         // (the loop holds `recon.points` mutably).
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
 
-        let mut recon = self.clone();
+        let mut recon = self.clone_for_edit();
         for (pidx, pt) in recon.point_set.points.iter_mut().enumerate() {
             if pt.is_at_infinity() {
                 continue;
@@ -598,7 +598,7 @@ impl SfmrReconstruction {
             .fold(0.0_f64, f64::max)
             .max(1.0);
 
-        let mut recon = self.clone();
+        let mut recon = self.clone_for_edit();
         let mut patch_fixes: Vec<(usize, PatchFix)> = Vec::new();
         for (pidx, pt) in recon.point_set.points.iter_mut().enumerate() {
             if !pt.is_at_infinity() {

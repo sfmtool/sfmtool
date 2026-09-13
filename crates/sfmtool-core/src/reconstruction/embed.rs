@@ -146,7 +146,7 @@ impl SfmrReconstruction {
             }
         };
 
-        let mut out = self.clone();
+        let mut out = self.clone_for_edit();
         out.point_set.observations = ObservationSource::EmbeddedPatches {
             keypoints_xy,
             image_file_hashes,

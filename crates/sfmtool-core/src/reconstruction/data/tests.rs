@@ -1816,3 +1816,30 @@ fn test_observation_reprojection_error_rejects_ghost_projections() {
     );
     assert_eq!(got, None, "a folded-branch ray must have no reprojection");
 }
+
+/// A copy taken to be changed does not carry the file's hashes onto content
+/// that file does not hold.
+///
+/// `base_content_hash` believes a stored hash rather than spending a
+/// serialisation of the whole value to re-derive it, so this is the invariant
+/// that makes believing it safe. A plain `clone` keeps the hashes, which is
+/// right for a copy that stays equal to the original.
+#[test]
+fn a_copy_taken_for_an_edit_leaves_the_files_hashes_behind() {
+    let mut recon = SfmrReconstruction::demo(12);
+    recon.content_hash.content_xxh128 = "a".repeat(32);
+    recon.content_hash.points3d_xxh128 = "b".repeat(32);
+
+    assert_eq!(
+        recon.clone().content_hash.content_xxh128,
+        "a".repeat(32),
+        "a plain clone is still the same value",
+    );
+
+    let edited = recon.clone_for_edit();
+    assert!(edited.content_hash.content_xxh128.is_empty());
+    assert!(edited.content_hash.points3d_xxh128.is_empty());
+    // Everything else came along.
+    assert_eq!(edited.point_count(), recon.point_count());
+    assert_eq!(edited.image_count(), recon.image_count());
+}

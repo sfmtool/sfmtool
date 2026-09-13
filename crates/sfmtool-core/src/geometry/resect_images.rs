@@ -538,7 +538,7 @@ pub fn resect_images(
         .collect();
 
     // ── The derived reconstruction ─────────────────────────────────────────
-    let mut out = recon.clone();
+    let mut out = recon.clone_for_edit();
     for &t in image_indexes {
         let estimate = &estimates[&t];
         if estimate.accepted {

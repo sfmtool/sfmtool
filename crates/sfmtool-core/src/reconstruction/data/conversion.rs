@@ -166,6 +166,24 @@ impl SfmrReconstruction {
         })
     }
 
+    /// A copy of this value for a caller that is about to change it.
+    ///
+    /// [`Clone`] with the content hashes left behind. They name the file this
+    /// value was read from, and a caller taking this copy is about to make it
+    /// something that file does not hold; carrying them onto changed content
+    /// would have `base_content_hash` name the wrong file, and every
+    /// `pt3d_<hash>_<index>` minted from it would name rows in that one.
+    ///
+    /// Every edit that derives a new reconstruction from an existing one starts
+    /// here. A plain `clone` is right only when the copy will stay equal to the
+    /// original.
+    pub fn clone_for_edit(&self) -> Self {
+        SfmrReconstruction {
+            content_hash: sfmr_format::ContentHash::default(),
+            ..self.clone()
+        }
+    }
+
     /// The content hashes a [`save`](Self::save) of this value would write,
     /// computed from the value alone without touching the filesystem.
     ///

@@ -474,7 +474,7 @@ pub fn bundle_adjust(
 
     let _write_back = p_write.phase("write back");
     // ── Writing the answer back ───────────────────────────────────────────
-    let mut out = recon.clone();
+    let mut out = recon.clone_for_edit();
     for (slot, &i) in posed.iter().enumerate() {
         out.image_table.images[i].quaternion_wxyz = quats[slot];
         out.image_table.images[i].translation_xyz = trans[slot];

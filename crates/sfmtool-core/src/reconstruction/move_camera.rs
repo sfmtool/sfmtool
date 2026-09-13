@@ -179,7 +179,7 @@ pub fn move_camera(
         &image_reprojection_samples(recon, image),
     );
 
-    let mut out = recon.clone();
+    let mut out = recon.clone_for_edit();
     {
         let row = &mut out.image_table.images[image];
         row.quaternion_wxyz = cam_from_world;
