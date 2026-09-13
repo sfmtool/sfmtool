@@ -1048,6 +1048,19 @@ itself**
 > _Carried forward unchanged from 2026-08-08. Re-verified: `conftest.py` is **571**,
 > `build_cluster_reconstruction` still at **154**, `kerry_park_camrig_workspace_once`
 > still at **480**._
+>
+> _Status (2026-09-12): **Done** as `b0bc9b2`. Re-read first: `conftest.py` had grown
+> to **782**, and the `except RuntimeError: continue` this finding lists as a
+> difference is now in **both** copies. The loop is
+> `_solve_with_retries(solve_fn, *, colmap_dir, output_sfm_file, stash_path,
+> max_attempts, rank, accept, random_seed=42)` plus `_canonicalize_best`. What stays
+> with the callers is what genuinely differs: the ranking key — a
+> `(image_count, point_count)` tuple against points-if-complete, with `rank`
+> returning `None` for an attempt not worth keeping at all — the acceptance test, and
+> the meaning of an unranked or unaccepted outcome, which one caller treats as a hard
+> failure and the other tolerates down to a second, lower floor. Every threshold,
+> seed, stash name and error message is unchanged; the full suite (2516 passed, 1
+> skipped) builds both session fixtures._
 - Location: `tests/conftest.py`
 - Problem: Identical algorithm in both: rmtree `colmap_dir`, glob-unlink stale
   `.sfmr`, `seed = 42 if attempt == 1 else None`, solve, load, keep best by point
@@ -1066,6 +1079,14 @@ itself**
 **`test_densify.py` is misnamed — 12% of it is about densify**
 > _Carried forward unchanged from 2026-08-08, now at its post-move path. Re-verified:
 > **702** lines, 12 classes._
+>
+> _Status (2026-09-12): **Done** as `85d915e`. Split three ways rather than two, and
+> the ranges were re-derived: `test_epipolar_geometry.py` (133) takes the E/F,
+> epipole, rectification-safety and intrinsics classes; `test_sweep_matching.py`
+> (432) takes the filter config, both sweeps and `TestMatchImagePair` along with the
+> helpers at 178–333 that only they use; `test_densify.py` is **146** —
+> `TestPruneImagePairs` stays with the densify tests, since `prune_image_pairs` is
+> `sfmtool._densify`'s. Same 32 tests, bodies unchanged._
 - Location: `tests/matching/test_densify.py`
 - Problem: Densify is `TestDensifyCLI` (615) and `TestDensifyE2E` (657) — ~88 of 702
   lines. The other ten classes are epipolar geometry (`TestEssentialMatrix` 33,
@@ -1082,6 +1103,14 @@ itself**
 
 **`test_embed_patches_compaction.py` mixes four topics**
 > _Carried forward unchanged from 2026-08-08. Re-verified: **674** lines, 16 tests._
+>
+> _Status (2026-09-12): **Done** as `746b08c`. `tests/test_progress.py` (63) takes the
+> five progress-polling tests — they depend on nothing in `tests/patch/conftest.py`,
+> so they move out of the package cleanly — and
+> `tests/patch/test_embed_patches_rounds.py` (185) takes the three `embed_patches`
+> round tests. The remaining **453** is halfvec round-trip, image hashes, compaction
+> and the grazing drop, which is what the name says. Same 16 tests, bodies
+> unchanged._
 - Location: `tests/patch/test_embed_patches_compaction.py`
 - Problem: Four unrelated groups. Halfvec array round-trip and image-hash shape
   (50–74); compaction proper (75–411, seven tests — the name); the `embed_patches`
@@ -1098,6 +1127,22 @@ itself**
 **Patch visualization helpers: the `scripts/` half is still open, in reduced form**
 > _Carried forward from 2026-08-08, **partially resolved**: the `_load_images` copies
 > the finding led with are gone from all three scripts. What it also listed remains._
+>
+> _Status (2026-09-12): **Done** as `7ad8c91`, and the `_load_images` acquittal above
+> was wrong — all three still carried a byte-identical `load_images`, along with
+> `rotation_matrices` (×3), `track_views`, `gauss_window`, `znorm`, `sharpness` and
+> `plane_hit`, which differed only in a docstring. `scripts/_viz_common.py` (181) now
+> holds all of those plus `label_for`, `infinity_first_sample` and `chip`; the three
+> scripts import it by plain name, which resolves because a script's own directory
+> leads `sys.path`. The two divergences: `chip` takes `scale` as a required argument
+> and each call site states the value it was already getting (0.34 / 0.32 / 0.3), and
+> `infinity_first_sample` takes `interleave=`, with `viz_view_selection_strips`
+> passing `False` for its concatenating variant. `_compose` was **not** consolidated
+> — the three are different montage layouts, not copies; what they did share is the
+> dark canvas and the `cv2.putText` spelling, identical at all 15 call sites and now
+> `new_canvas()` / `draw_text()`. Verified by running all three scripts before and
+> after on `seoul_bull-infinity.sfmr`, with and without `--prioritize-infinity`: six
+> byte-identical montage JPEGs._
 - Location: `scripts/viz_keypoint_localization.py` (—),
   `scripts/viz_keypoint_localization_strips.py` (488),
   `scripts/viz_view_selection_strips.py` (469)
@@ -1118,6 +1163,11 @@ itself**
 to correct them**
 > _Carried forward from 2026-08-08, where the fix was proposed and not applied. Both
 > numbers have drifted **further** since._
+>
+> _Status (2026-09-12): **Done** as `c09491c`, by deletion — the counts had drifted
+> again (152 and 150 at the time of the fix), so both sentences now read without a
+> number rather than being corrected a fourth time. `skills/` is listed in "Structure
+> at a glance", with the note that it is symlinked into `.claude/skills/`._
 - Location: `AGENTS.md:56` and `:82`
 - Problem: `AGENTS.md:56` says "`src/sfmtool/` — Python package (**~93 modules**)";
   `git ls-files` returns **150**. `AGENTS.md:82` says "`tests/` — pytest, **~114
