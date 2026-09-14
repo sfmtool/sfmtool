@@ -653,8 +653,10 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
     }
 }
 
-/// Fill the measurement slots of every ``in`` and ``candidate`` observation of
-/// `track`, at the stage it is in, and leave every verdict where it is.
+/// Fill the measurement slots of every observation of `track`, whatever its
+/// verdict, at the stage it is in, and leave every verdict where it is. An
+/// ``out`` observation is scored the way a candidate is, against the ``in``
+/// set and never as part of it.
 ///
 /// At the **cluster stage** the seeds are an in-memory ``.matches`` cluster and
 /// the refinement kernel is run over it: the kernel picks the reference, cuts

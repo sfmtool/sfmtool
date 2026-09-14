@@ -125,9 +125,9 @@ impl std::error::Error for EvaluateError {}
 
 /// What one evaluation measured.
 ///
-/// The counts are of the observations the evaluation *ran over* -- the `in` and
-/// the candidates -- so an `out` observation is in neither: it was not
-/// measured and it was not refused, it was simply not run.
+/// The counts are of every observation of the track, whatever its verdict: an
+/// evaluation measures the `out` ones too, so a refusal is shown beside the
+/// number it would have been judged on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluateReport {
     /// The stage it ran at.
@@ -169,8 +169,8 @@ impl std::fmt::Display for EvaluateReport {
     }
 }
 
-/// Fill the measurement slots of every `in` and `candidate` observation of
-/// `track` at the stage it is in, and leave every verdict where it is.
+/// Fill the measurement slots of every observation of `track`, whatever its
+/// verdict, at the stage it is in, and leave every verdict where it is.
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
 /// index -- the decoded pixels the kernels need, which a reconstruction value
@@ -178,7 +178,7 @@ impl std::fmt::Display for EvaluateReport {
 /// [`add_observation`](crate::reconstruction::add_observation::add_observation)
 /// takes them.
 ///
-/// **At the cluster stage** the `in` and `candidate` observations' seeds are an
+/// **At the cluster stage** every observation's seed is a member of an
 /// in-memory `.matches` cluster, and
 /// [`refine_cluster_patches`](crate::patch::cluster_refine::refine_cluster_patches)
 /// is run over it: the kernel picks the reference (its largest-scale usable
@@ -187,10 +187,11 @@ impl std::fmt::Display for EvaluateReport {
 /// achieved ZNCC, the drift from the seed, the observation's own tile
 /// localizability and the kernel's `member_status`. No pose is read.
 ///
-/// **At the track stage** the track's surfel is registered into every `in` and
-/// `candidate` view by the two kernels the embed pass and `add_observation`
-/// chain, the `in` results are re-triangulated, and the consensus bitmap is
-/// fused over them. What lands in each slot is the keypoint, the leave-one-out
+/// **At the track stage** the track's surfel is registered into every view by
+/// the two kernels the embed pass and `add_observation` chain, an `out`
+/// observation being scored the way a candidate is, against the `in` set and
+/// never as part of it; the `in` results are re-triangulated, and the consensus
+/// bitmap is fused over them. What lands in each slot is the keypoint, the leave-one-out
 /// ZNCC, the drift from the surfel's projection, the reprojection error against
 /// the triangulated position, the ray angle and the tile localizability.
 ///
@@ -256,17 +257,11 @@ fn check_views(
     Ok(())
 }
 
-/// The observations an evaluation runs over: the `in` ones and the candidates,
-/// in index order. An `out` observation is not run, and keeps whatever was
-/// measured about it before.
+/// The observations an evaluation runs over: every one, in index order. An
+/// `out` observation is measured like a candidate, so the person sees the
+/// number the refusal stands beside; only the `in` set decides anything.
 fn evaluated(track: &EditableTrack) -> Vec<usize> {
-    track
-        .observations
-        .iter()
-        .enumerate()
-        .filter(|(_, o)| o.verdict != Verdict::Out)
-        .map(|(i, _)| i)
-        .collect()
+    (0..track.observations.len()).collect()
 }
 
 /// Where an observation currently is, in its image's pixels: the keypoint a
@@ -285,8 +280,8 @@ fn seed_of(observation: &Observation) -> Option<[f64; 2]> {
 /// the affine shape at it, in that image's pixels.
 type SeedRow = ([f64; 2], [[f64; 2]; 2]);
 
-/// Refine the in-memory cluster the `in` and `candidate` seeds make, and write
-/// the kernel's answer into their cluster slots.
+/// Refine the in-memory cluster every observation's seed makes, and write the
+/// kernel's answer into their cluster slots.
 fn evaluate_cluster(
     track: &EditableTrack,
     payload: &ClusterPayload,
@@ -507,9 +502,9 @@ fn finite_frame(
     ))
 }
 
-/// Register `frame` into every `in` and `candidate` view, re-triangulate the
-/// `in` results, fuse the consensus bitmap, and write the whole of it into the
-/// track's track-stage slots.
+/// Register `frame` into every view, `out` ones scored like candidates,
+/// re-triangulate the `in` results, fuse the consensus bitmap, and write the
+/// whole of it into the track's track-stage slots.
 ///
 /// Shared by [`evaluate`] at the track stage and by the upgrade
 /// ([`set_stage`](super::stage::set_stage)), which differ only in where the

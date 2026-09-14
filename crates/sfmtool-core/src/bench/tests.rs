@@ -975,8 +975,8 @@ fn an_evaluation_sets_no_verdict_and_leaves_a_pinned_one_alone() {
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let track = track_of(&bench, &label);
-    // A third sighting, refused by hand: an evaluation neither runs it nor
-    // moves it.
+    // A third sighting, refused by hand: an evaluation scores it like a
+    // candidate and does not move it.
     let (track, added) = add_observation(
         &track,
         &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
@@ -985,13 +985,17 @@ fn an_evaluation_sets_no_verdict_and_leaves_a_pinned_one_alone() {
     let (track, _) = set_verdict(&track, added.observation, Verdict::Out).expect("a live row");
 
     let (measured, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
-    assert_eq!((report.measured, report.unmeasured), (2, 0));
+    assert_eq!((report.measured, report.unmeasured), (3, 0));
     assert_eq!(measured.verdict_counts(), (2, 0, 1));
     assert!(measured.observations[2].pinned);
     assert_eq!(measured.observations[2].verdict, Verdict::Out);
+    let scored = measured.observations[2]
+        .track
+        .as_ref()
+        .expect("an out observation is scored like a candidate");
     assert!(
-        measured.observations[2].track.is_none(),
-        "an out observation is not run"
+        scored.zncc.is_some(),
+        "and the refusal stands beside its number"
     );
 }
 

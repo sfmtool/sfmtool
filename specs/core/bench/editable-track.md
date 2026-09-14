@@ -373,12 +373,13 @@ stage, its origin and everything it was.
 
 ### Evaluating
 
-`evaluate` fills the measurement slots of every `in` and `candidate`
-observation at the stage the track is in, and sets no verdict. An `out`
-observation is not run, so a refusal costs nothing to keep and what was measured
-about it before stays where it was.
+`evaluate` fills the measurement slots of every observation at the stage the
+track is in, whatever its verdict, and sets no verdict. An `out` observation is
+scored the way a candidate is, against the `in` set and never as part of it, so
+a refusal is shown beside the number it would have been judged on and a slider
+can propose taking it back.
 
-**At the cluster stage** the `in` and `candidate` seeds are an in-memory
+**At the cluster stage** every observation's seed is a member of an in-memory
 `.matches` cluster, and
 [`refine_cluster_patches`](../patch/cluster-patch-refinement.md) is run over it
 through its borrowed-pyramid entry. The kernel picks the reference -- its
@@ -629,7 +630,7 @@ same frame and seeds produces, keypoint for keypoint and score for score. Beside
 it: a downgrade re-seeding every sighting at its keypoint and an upgrade
 triangulating back to within a pixel's worth of where the point was; a candidate
 placed on the plane clearing the bar and one placed off every image coming back
-unmeasured; a pinned `out` surviving an evaluation unrun; a cluster started from
+unmeasured; a pinned `out` scored by an evaluation and left `out`; a cluster started from
 two pixels refining, upgrading and committing a point onto the planted surface;
 setting the current stage reporting `changed` false; and each refusal naming
 what did not hold.
