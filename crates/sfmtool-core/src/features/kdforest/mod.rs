@@ -40,14 +40,22 @@
 
 mod build;
 mod calibrate;
+mod constellation;
 mod distance;
+mod neighbor_index;
 mod persistent;
 mod search;
 
 #[cfg(test)]
 mod tests;
 
+pub use constellation::{
+    constellation_at_pixel, constellation_query, Constellation, ConstellationCorrespondence,
+    ConstellationDescriptors, ConstellationMatch, ConstellationParams, FeatureSources,
+    ImageKeypoints, PatchConstellation, QueryImage, ResidentSources,
+};
 pub use distance::{ForestScalar, OrdF32};
+pub use neighbor_index::NeighborIndex;
 pub use persistent::{LazyKdForest, LazyKdForestF32, LazyKdForestU8, LazyQueryStats};
 pub use search::Neighbor;
 pub use sfmtool_kdf_format::{
@@ -329,6 +337,30 @@ impl<S: ForestScalar> KdForest<S> {
     /// Number of trees in the forest.
     pub fn num_trees(&self) -> usize {
         self.trees.len()
+    }
+
+    /// Copy the indexed vectors for `feature_ids`, in request order, as a flat
+    /// `feature_ids.len() * dim` row-major array.
+    ///
+    /// The resident counterpart of the file-backed corpus read
+    /// (`LazyKdForest::resolve_vectors`): a caller holding IDs rather than
+    /// vectors -- a constellation taken from an image the forest itself indexes
+    /// -- gets the same array from either path. It reports the same
+    /// out-of-range error as that path so both are one `Result` to a caller
+    /// generic over [`NeighborIndex`],
+    /// rather than a panic here and an error there.
+    pub fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
+        let mut out = Vec::with_capacity(feature_ids.len() * self.dim);
+        for &id in feature_ids {
+            let row = id as usize;
+            if row >= self.n_points {
+                return Err(KdfError::InvalidQuery(format!(
+                    "feature ID {id} is out of range"
+                )));
+            }
+            out.extend_from_slice(&self.points[row * self.dim..(row + 1) * self.dim]);
+        }
+        Ok(out)
     }
 
     fn search_batch_inner(

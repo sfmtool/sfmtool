@@ -257,6 +257,115 @@ impl PyKdForest {
         let dist_arr = numpy::PyArray1::from_vec(py, distances).reshape([m, k])?;
         Ok((idx_arr.into_any().unbind(), dist_arr.into_any().unbind()))
     }
+
+    /// Rank the images that contain a constellation of features.
+    ///
+    /// The resident twin of `LazyKdForest.constellation_query`, and it answers
+    /// identically for the same forest. It takes the source tables explicitly
+    /// because this forest has none: a forest built here, or loaded back from a
+    /// `.kdf`, holds the trees and the corpus and no record of which image any
+    /// feature came from.
+    ///
+    /// Args:
+    ///     positions: (N, 2) float32 positions of the constellation's features
+    ///         in the query image.
+    ///     sources: Per-feature source tables, in corpus feature-ID order, as
+    ///         keys `image_indexes`, `image_feature_indexes`, `positions`
+    ///         ((N, 2) float32) and `affine_shapes` ((N, 2, 2) float32) -- the
+    ///         same mapping `write_kdf` takes, whose other keys are ignored.
+    ///     descriptors: (N, D) uint8 descriptors. Pass this or `feature_ids`.
+    ///     feature_ids: Their indices in this forest, when the query image is
+    ///         itself indexed.
+    ///     image_index: The query image's index; candidates from it are dropped.
+    ///     Remaining arguments are as `LazyKdForest.constellation_query`.
+    ///
+    /// Returns:
+    ///     The same list of dicts `LazyKdForest.constellation_query` returns.
+    #[pyo3(signature = (positions, sources, *, descriptors=None, feature_ids=None,
+                        image_index=None, k=32, max_leaf_checks=128, threshold_px=8.0,
+                        iterations=200, min_correspondences=3, min_inliers=6, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn constellation_query<'py>(
+        &self,
+        py: Python<'py>,
+        positions: &Bound<'py, PyAny>,
+        sources: &Bound<'py, PyAny>,
+        descriptors: Option<&Bound<'py, PyAny>>,
+        feature_ids: Option<Vec<u32>>,
+        image_index: Option<u32>,
+        k: usize,
+        max_leaf_checks: usize,
+        threshold_px: f64,
+        iterations: usize,
+        min_correspondences: usize,
+        min_inliers: usize,
+        seed: u64,
+    ) -> PyResult<Py<pyo3::types::PyList>> {
+        let sources = super::constellation::parse_resident_sources(sources)?;
+        super::constellation::query(
+            py,
+            &self.inner,
+            &sources,
+            positions,
+            descriptors,
+            feature_ids,
+            image_index,
+            &super::constellation::QueryOptions {
+                k,
+                max_leaf_checks,
+                threshold_px,
+                iterations,
+                min_correspondences,
+                min_inliers,
+                seed,
+            },
+        )
+    }
+
+    /// `constellation_query` for a pixel and a radius in one image.
+    ///
+    /// The resident twin of `LazyKdForest.constellation_at_pixel`, taking the
+    /// same `sources` mapping as `constellation_query` above.
+    #[pyo3(signature = (sift_path, center, radius, sources, *, image_index=None,
+                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
+                        min_correspondences=3, min_inliers=6, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn constellation_at_pixel<'py>(
+        &self,
+        py: Python<'py>,
+        sift_path: std::path::PathBuf,
+        center: (f32, f32),
+        radius: f32,
+        sources: &Bound<'py, PyAny>,
+        image_index: Option<u32>,
+        k: usize,
+        max_leaf_checks: usize,
+        threshold_px: f64,
+        iterations: usize,
+        min_correspondences: usize,
+        min_inliers: usize,
+        seed: u64,
+    ) -> PyResult<Py<pyo3::types::PyDict>> {
+        let sources = super::constellation::parse_resident_sources(sources)?;
+        super::constellation::at_pixel(
+            py,
+            &self.inner,
+            &sources,
+            sift_path,
+            center,
+            radius,
+            image_index,
+            &super::constellation::QueryOptions {
+                k,
+                max_leaf_checks,
+                threshold_px,
+                iterations,
+                min_correspondences,
+                min_inliers,
+                seed,
+            },
+        )
+    }
 }
 
 // ── Registration ──────────────────────────────────────────────────────────

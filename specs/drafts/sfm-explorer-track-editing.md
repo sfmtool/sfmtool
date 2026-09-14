@@ -815,6 +815,13 @@ print(report)                                  # the sentence the Action Log wou
   the wire tools, each of which is one `AppState` call that decodes the images
   through the node's full-resolution cache, calls the core function, and
   pushes the result.
+- **No second SIFT cache.** The viewer already holds each image's keypoints
+  (positions and affine shapes, never descriptors) in `AppState::sift_cache`,
+  and the constellation query takes an already-read keypoint set as its input
+  for exactly this reason: the constellation around an observation comes from
+  that cache, and the few dozen descriptors it needs come by id from the
+  forest's own corpus reads, under the forest's cache budget. Nothing in the
+  viewer holds descriptors.
 
 Two core pieces were built ahead of the bench, and one more is needed:
 

@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 
+pub mod constellation;
 pub mod kdf;
 pub mod kdforest;
 pub mod kdtree;

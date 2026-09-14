@@ -1,0 +1,692 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! Which other images hold the patch around a pixel, and where in them it sits.
+//!
+//! Given the SIFT features inside a small radius of one pixel in one image, the
+//! query looks each of them up in a descriptor index, groups the hits by the
+//! image they came from, and keeps the images whose correspondences agree on a
+//! single affine warp. The answer is per image: the warp, how many
+//! correspondences voted for it, and which ones they were.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+
+use rand::rngs::StdRng;
+use rand::seq::index::sample;
+use rand::SeedableRng;
+use sfmtool_kdf_format::KdfScalar;
+use sfmtool_sift_format::SiftError;
+
+use super::distance::ForestScalar;
+use super::neighbor_index::NeighborIndex;
+use super::{FeatureGeometry, FeatureOrigin, KdfError, LazyKdForest};
+
+#[cfg(test)]
+mod tests;
+
+/// How many feature IDs one pass of the origin scan resolves at a time.
+///
+/// The origin table is indexed by corpus feature ID, never by image, so finding
+/// one image's features means reading all of them. Resolving the whole table in
+/// one call would allocate an origin per corpus feature; a chunk keeps that
+/// bounded while still reading each origin block exactly once.
+const ORIGIN_SCAN_CHUNK: usize = 1 << 16;
+
+/// Tunables for [`constellation_query`].
+///
+/// `k` is much larger than a descriptor matcher's. Most of a constellation
+/// feature's nearest neighbours belong to images that do not contain the patch
+/// at all, so a small `k` can leave the right image with no candidates to fit;
+/// the model only has to survive a consensus test afterwards, so the cost of
+/// carrying wrong candidates is far lower than the cost of missing the image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConstellationParams {
+    /// Neighbours retrieved per constellation feature.
+    pub k: usize,
+    /// Per-query budget of distance evaluations in the forest traversal.
+    pub max_leaf_checks: usize,
+    /// Reprojection distance, in the candidate image's pixels, within which a
+    /// correspondence agrees with a model.
+    pub threshold_px: f64,
+    /// Three-point samples drawn per candidate image.
+    pub iterations: usize,
+    /// Fewest correspondences an image needs before it is fitted at all.
+    pub min_correspondences: usize,
+    /// Fewest inliers an image needs to be reported.
+    pub min_inliers: usize,
+    /// Base RNG seed; each candidate image draws from `seed + image_index`.
+    pub seed: u64,
+}
+
+impl Default for ConstellationParams {
+    fn default() -> Self {
+        Self {
+            k: 32,
+            max_leaf_checks: 128,
+            threshold_px: 8.0,
+            iterations: 200,
+            min_correspondences: 3,
+            min_inliers: 6,
+            seed: 0,
+        }
+    }
+}
+
+/// Where a constellation's descriptors come from.
+///
+/// A caller that computed the descriptors holds vectors; a caller whose query
+/// image is itself in the corpus holds IDs and would otherwise have to reopen a
+/// `.sift` file to turn them back into vectors. Both reach the same search, and
+/// the ID form reads the vectors through
+/// [`NeighborIndex::resolve_vectors`].
+#[derive(Clone, Copy, Debug)]
+pub enum ConstellationDescriptors<'a, S> {
+    /// Flat `n * dim` row-major vectors, one row per constellation feature.
+    Vectors(&'a [S]),
+    /// Corpus feature IDs, one per constellation feature.
+    FeatureIds(&'a [u32]),
+}
+
+/// The features inside the patch, in the query image.
+#[derive(Clone, Copy, Debug)]
+pub struct Constellation<'a, S> {
+    /// Each feature's position in the query image, in that image's pixels.
+    pub positions: &'a [[f32; 2]],
+    /// The descriptors for those same features, in the same order.
+    pub descriptors: ConstellationDescriptors<'a, S>,
+    /// The query image's index in the corpus, when the corpus indexes it.
+    /// Candidates from that image are dropped: an image matching itself is not
+    /// an answer to "where else is this patch".
+    pub image_index: Option<u32>,
+}
+
+/// One inlier correspondence of a candidate image.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConstellationCorrespondence {
+    /// Position of this feature within the query constellation.
+    pub query_index: u32,
+    /// The corpus feature it matched.
+    pub feature_id: u32,
+    /// That feature's keypoint center in the candidate image.
+    pub position: [f32; 2],
+    /// That feature's 2x2 affine shape, as the `.sift` file stores it.
+    pub affine_shape: [[f32; 2]; 2],
+}
+
+/// One candidate image and the warp that places the query patch in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstellationMatch {
+    /// The candidate's index in the corpus image table.
+    pub image_index: u32,
+    /// Row-major 2x3 affine taking query-image pixels to this image's pixels:
+    /// `x' = affine[0][0] * x + affine[0][1] * y + affine[0][2]`, and likewise
+    /// `y'` from `affine[1]`.
+    pub affine: [[f64; 3]; 2],
+    /// Correspondences agreeing with `affine` within the pixel threshold.
+    pub inliers: usize,
+    /// Correspondences this image had before the fit.
+    pub correspondences: usize,
+    /// The inliers themselves, in constellation order, enough to seed a patch
+    /// cluster without a second lookup.
+    pub inlier_correspondences: Vec<ConstellationCorrespondence>,
+}
+
+/// Where a corpus feature came from and where it sits in its own image.
+///
+/// The file-backed forest answers both from the `.kdf` itself; a forest loaded
+/// eagerly answers neither, because loading rebuilds the trees and the corpus
+/// and keeps no source tables, so a caller of the eager path supplies them as
+/// [`ResidentSources`]. Making this an argument rather than something the query
+/// digs out of the index is what keeps that gap visible.
+pub trait FeatureSources {
+    /// Corpus features these sources describe. IDs run `0..feature_count`.
+    fn feature_count(&self) -> usize;
+
+    /// Origins in request order, repeats included.
+    fn resolve_origins(&self, feature_ids: &[u32]) -> Result<Vec<FeatureOrigin>, KdfError>;
+
+    /// Keypoint centers and affine shapes in request order, repeats included.
+    fn resolve_feature_geometry(
+        &self,
+        feature_ids: &[u32],
+    ) -> Result<Vec<FeatureGeometry>, KdfError>;
+
+    /// Corpus feature IDs of one image's features, keyed by each feature's row
+    /// in that image's `.sift` file.
+    ///
+    /// This is the reverse of [`resolve_origins`](Self::resolve_origins), and
+    /// it costs a pass over the whole origin table because nothing indexes it
+    /// by image: origins are stored in corpus feature-ID order, and a subset
+    /// corpus may hold any part of any image. The pass is chunked and reads
+    /// each origin block once.
+    fn image_feature_ids(&self, image_index: u32) -> Result<HashMap<u32, u32>, KdfError> {
+        let total = self.feature_count();
+        let mut map = HashMap::new();
+        let mut ids: Vec<u32> = Vec::with_capacity(ORIGIN_SCAN_CHUNK.min(total));
+        let mut start = 0;
+        while start < total {
+            let end = (start + ORIGIN_SCAN_CHUNK).min(total);
+            ids.clear();
+            ids.extend((start..end).map(|id| id as u32));
+            for (offset, origin) in self.resolve_origins(&ids)?.into_iter().enumerate() {
+                if origin.image_index == image_index {
+                    map.insert(origin.image_feature_index, (start + offset) as u32);
+                }
+            }
+            start = end;
+        }
+        Ok(map)
+    }
+}
+
+impl<S: ForestScalar + KdfScalar> FeatureSources for LazyKdForest<S> {
+    fn feature_count(&self) -> usize {
+        self.len()
+    }
+
+    fn resolve_origins(&self, feature_ids: &[u32]) -> Result<Vec<FeatureOrigin>, KdfError> {
+        Self::resolve_origins(self, feature_ids)?.ok_or_else(no_sources)
+    }
+
+    fn resolve_feature_geometry(
+        &self,
+        feature_ids: &[u32],
+    ) -> Result<Vec<FeatureGeometry>, KdfError> {
+        Self::resolve_feature_geometry(self, feature_ids)?.ok_or_else(no_sources)
+    }
+}
+
+/// Source tables held in memory, for a corpus whose origins and geometry the
+/// caller already has: a forest built from `.sift` files in this process, or one
+/// reloaded from a `.kdf`, which keeps neither.
+#[derive(Clone, Debug)]
+pub struct ResidentSources {
+    origins: Vec<FeatureOrigin>,
+    geometry: Vec<FeatureGeometry>,
+}
+
+impl ResidentSources {
+    /// Both tables are in corpus feature-ID order and must be the same length.
+    pub fn new(
+        origins: Vec<FeatureOrigin>,
+        geometry: Vec<FeatureGeometry>,
+    ) -> Result<Self, KdfError> {
+        if origins.len() != geometry.len() {
+            return Err(KdfError::ShapeMismatch(format!(
+                "{} origins against {} geometry rows",
+                origins.len(),
+                geometry.len()
+            )));
+        }
+        Ok(Self { origins, geometry })
+    }
+}
+
+impl FeatureSources for ResidentSources {
+    fn feature_count(&self) -> usize {
+        self.origins.len()
+    }
+
+    fn resolve_origins(&self, feature_ids: &[u32]) -> Result<Vec<FeatureOrigin>, KdfError> {
+        feature_ids
+            .iter()
+            .map(|&id| {
+                self.origins
+                    .get(id as usize)
+                    .copied()
+                    .ok_or_else(|| out_of_range(id))
+            })
+            .collect()
+    }
+
+    fn resolve_feature_geometry(
+        &self,
+        feature_ids: &[u32],
+    ) -> Result<Vec<FeatureGeometry>, KdfError> {
+        feature_ids
+            .iter()
+            .map(|&id| {
+                self.geometry
+                    .get(id as usize)
+                    .copied()
+                    .ok_or_else(|| out_of_range(id))
+            })
+            .collect()
+    }
+}
+
+fn no_sources() -> KdfError {
+    KdfError::InvalidQuery(
+        "the corpus carries no SIFT sources, so its features have no image or geometry".into(),
+    )
+}
+
+fn out_of_range(id: u32) -> KdfError {
+    KdfError::InvalidQuery(format!("feature ID {id} is out of range"))
+}
+
+/// Rank the images that contain the query constellation.
+///
+/// Each constellation feature is looked up in `index`, every hit is attributed
+/// to its source image through `sources`, and each image with enough
+/// correspondences is fitted by three-point affine RANSAC. Images reaching
+/// `min_inliers` are returned, most inliers first, ties in ascending image
+/// index. The query's own image, when it names one, is never a candidate.
+///
+/// Determinism is a requirement rather than a nicety here, because this is the
+/// function a `.kdf`'s two access paths are compared through: given the same
+/// neighbours, the resident and file-backed forests must produce identical
+/// warps and identical inlier sets. So candidate images are fitted in ascending
+/// index order, and **each one seeds its own generator from
+/// `params.seed + image_index`** rather than drawing from one generator
+/// threaded through the run. A shared generator would make each image's samples
+/// depend on how many images preceded it, so adding, dropping or reordering a
+/// candidate would silently change every later fit, and two paths handed
+/// identical neighbours could still disagree. That disagreement would read as
+/// an index bug.
+pub fn constellation_query<S, I, F>(
+    index: &I,
+    sources: &F,
+    query: &Constellation<'_, S>,
+    params: &ConstellationParams,
+) -> Result<Vec<ConstellationMatch>, KdfError>
+where
+    S: ForestScalar,
+    I: NeighborIndex<S> + ?Sized,
+    F: FeatureSources + ?Sized,
+{
+    let n = query.positions.len();
+    let dim = index.dim();
+    let owned;
+    let descriptors: &[S] = match query.descriptors {
+        ConstellationDescriptors::Vectors(vectors) => {
+            if vectors.len() != n * dim {
+                return Err(KdfError::ShapeMismatch(format!(
+                    "{} descriptor values for {n} positions of dimension {dim}",
+                    vectors.len()
+                )));
+            }
+            vectors
+        }
+        ConstellationDescriptors::FeatureIds(ids) => {
+            if ids.len() != n {
+                return Err(KdfError::ShapeMismatch(format!(
+                    "{} feature IDs for {n} positions",
+                    ids.len()
+                )));
+            }
+            owned = index.resolve_vectors(ids)?;
+            &owned
+        }
+    };
+    if n == 0 || params.k == 0 {
+        return Ok(Vec::new());
+    }
+
+    let (neighbors, distances) = index.search_batch_with_distances(
+        descriptors,
+        n,
+        params.k,
+        params.max_leaf_checks,
+        None,
+    )?;
+
+    // Every hit, in encounter order, so the origin and geometry lookups below
+    // ask for IDs in the order the corpus is most likely to hold them together.
+    let mut hit_ids = Vec::with_capacity(neighbors.len());
+    let mut hit_query = Vec::with_capacity(neighbors.len());
+    for (slot, (&id, &dist)) in neighbors.iter().zip(distances.iter()).enumerate() {
+        if id == u32::MAX || !dist.is_finite() {
+            continue;
+        }
+        hit_ids.push(id);
+        hit_query.push((slot / params.k) as u32);
+    }
+    if hit_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let origins = sources.resolve_origins(&hit_ids)?;
+    let mut kept_ids = Vec::with_capacity(hit_ids.len());
+    let mut kept: Vec<(u32, u32)> = Vec::with_capacity(hit_ids.len());
+    for (slot, origin) in origins.iter().enumerate() {
+        if query.image_index == Some(origin.image_index) {
+            continue;
+        }
+        kept_ids.push(hit_ids[slot]);
+        kept.push((origin.image_index, hit_query[slot]));
+    }
+    if kept_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let geometry = sources.resolve_feature_geometry(&kept_ids)?;
+
+    // Group before fitting: a model needs three correspondences, so an image
+    // with fewer cannot win and is never sampled.
+    let mut by_image: BTreeMap<u32, Vec<ConstellationCorrespondence>> = BTreeMap::new();
+    for (slot, &(image, query_index)) in kept.iter().enumerate() {
+        let row = geometry[slot];
+        by_image
+            .entry(image)
+            .or_default()
+            .push(ConstellationCorrespondence {
+                query_index,
+                feature_id: kept_ids[slot],
+                position: row[0],
+                affine_shape: [row[1], row[2]],
+            });
+    }
+
+    let mut matches = Vec::new();
+    for (image, pairs) in by_image {
+        if pairs.len() < params.min_correspondences.max(3) {
+            continue;
+        }
+        let src: Vec<[f64; 2]> = pairs
+            .iter()
+            .map(|c| {
+                let p = query.positions[c.query_index as usize];
+                [p[0] as f64, p[1] as f64]
+            })
+            .collect();
+        let dst: Vec<[f64; 2]> = pairs
+            .iter()
+            .map(|c| [c.position[0] as f64, c.position[1] as f64])
+            .collect();
+        let mut rng = StdRng::seed_from_u64(params.seed.wrapping_add(image as u64));
+        let Some((affine, inliers)) = fit_affine_ransac(&src, &dst, params, &mut rng) else {
+            continue;
+        };
+        if inliers.len() < params.min_inliers {
+            continue;
+        }
+        matches.push(ConstellationMatch {
+            image_index: image,
+            affine,
+            inliers: inliers.len(),
+            correspondences: pairs.len(),
+            inlier_correspondences: inliers.into_iter().map(|i| pairs[i]).collect(),
+        });
+    }
+
+    // A stable sort over an ascending-index list leaves equal inlier counts in
+    // image order, so a tie is broken by identity rather than by hash order.
+    matches.sort_by_key(|m| std::cmp::Reverse(m.inliers));
+    Ok(matches)
+}
+
+/// Best affine fit and its inlier positions within `src`/`dst`.
+///
+/// Three correspondences determine an affine transform, so each trial draws
+/// three and scores the rest by reprojection distance. Affine rather than a
+/// homography because a small patch seen from a nearby viewpoint is well
+/// approximated by one, and a three-point model reaches a clean sample in far
+/// fewer trials than a four-point one.
+fn fit_affine_ransac(
+    src: &[[f64; 2]],
+    dst: &[[f64; 2]],
+    params: &ConstellationParams,
+    rng: &mut StdRng,
+) -> Option<([[f64; 3]; 2], Vec<usize>)> {
+    let n = src.len();
+    if n < 3 {
+        return None;
+    }
+    let threshold_sq = params.threshold_px * params.threshold_px;
+    let mut best: Option<([[f64; 3]; 2], usize)> = None;
+    for _ in 0..params.iterations {
+        let pick = sample(rng, n, 3).into_vec();
+        let Some(model) = solve_affine(
+            [src[pick[0]], src[pick[1]], src[pick[2]]],
+            [dst[pick[0]], dst[pick[1]], dst[pick[2]]],
+        ) else {
+            continue;
+        };
+        let count = (0..n)
+            .filter(|&i| residual_sq(&model, src[i], dst[i]) <= threshold_sq)
+            .count();
+        if best.is_none_or(|(_, previous)| count > previous) {
+            best = Some((model, count));
+        }
+    }
+    let (model, _) = best?;
+    let inliers: Vec<usize> = (0..n)
+        .filter(|&i| residual_sq(&model, src[i], dst[i]) <= threshold_sq)
+        .collect();
+    Some((model, inliers))
+}
+
+/// The affine transform through three correspondences, or `None` when it is not
+/// an invertible warp of the patch.
+///
+/// Two ways that happens, and both have to be refused. Collinear or coincident
+/// *source* points determine no transform at all. Collinear or coincident
+/// *destination* points determine one that collapses the whole patch onto a
+/// line or a point, and that one is worse than useless: a few corpus features
+/// hit repeatedly by different constellation features give every one of those
+/// correspondences the same destination, so a collapsing model scores every
+/// pair sharing a keypoint as an inlier and manufactures a consensus out of an
+/// image that contains nothing. The determinant of the 2x2 linear part is what
+/// separates the two cases, and it is checked here rather than at scoring time
+/// because a model this shape is never worth scoring.
+fn solve_affine(src: [[f64; 2]; 3], dst: [[f64; 2]; 3]) -> Option<[[f64; 3]; 2]> {
+    // The three homogeneous source rows, whose determinant is twice the signed
+    // area of their triangle: the degeneracy test and the inverse share it.
+    let [a, b, c] = src;
+    let det = a[0] * (b[1] - c[1]) - a[1] * (b[0] - c[0]) + (b[0] * c[1] - c[0] * b[1]);
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    // Adjugate of [[ax, ay, 1], [bx, by, 1], [cx, cy, 1]], transposed in place.
+    let inverse = [
+        [b[1] - c[1], c[1] - a[1], a[1] - b[1]],
+        [c[0] - b[0], a[0] - c[0], b[0] - a[0]],
+        [
+            b[0] * c[1] - c[0] * b[1],
+            c[0] * a[1] - a[0] * c[1],
+            a[0] * b[1] - b[0] * a[1],
+        ],
+    ];
+    let mut affine = [[0.0f64; 3]; 2];
+    for (axis, row) in affine.iter_mut().enumerate() {
+        for (coefficient, weights) in row.iter_mut().zip(inverse.iter()) {
+            *coefficient =
+                (weights[0] * dst[0][axis] + weights[1] * dst[1][axis] + weights[2] * dst[2][axis])
+                    / det;
+        }
+    }
+    let linear = affine[0][0] * affine[1][1] - affine[0][1] * affine[1][0];
+    if !linear.is_finite() || linear.abs() < 1e-9 {
+        return None;
+    }
+    Some(affine)
+}
+
+fn residual_sq(model: &[[f64; 3]; 2], src: [f64; 2], dst: [f64; 2]) -> f64 {
+    let x = model[0][0] * src[0] + model[0][1] * src[1] + model[0][2] - dst[0];
+    let y = model[1][0] * src[0] + model[1][1] * src[1] + model[1][2] - dst[1];
+    x * x + y * y
+}
+
+/// One image's keypoints, without its descriptors.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ImageKeypoints {
+    /// Keypoint centers in image pixels.
+    pub positions: Vec<[f32; 2]>,
+    /// The matching 2x2 affine shapes, one per position.
+    pub affine_shapes: Vec<[[f32; 2]; 2]>,
+}
+
+impl ImageKeypoints {
+    /// Read every keypoint of a `.sift` file, and none of its descriptors.
+    pub fn read(sift_path: &Path) -> Result<Self, KdfError> {
+        let (positions, affine_shapes) =
+            sfmtool_sift_format::read_sift_keypoints(sift_path, usize::MAX)
+                .map_err(|e| sift_error(sift_path, e))?;
+        Ok(Self {
+            positions,
+            affine_shapes,
+        })
+    }
+
+    /// Number of keypoints.
+    pub fn len(&self) -> usize {
+        self.positions.len()
+    }
+
+    /// Whether the image has no keypoints.
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    /// Rows within `radius` pixels of `center`, in ascending row order.
+    pub fn within(&self, center: [f32; 2], radius: f32) -> Vec<u32> {
+        let limit = (radius as f64) * (radius as f64);
+        self.positions
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                let dx = p[0] as f64 - center[0] as f64;
+                let dy = p[1] as f64 - center[1] as f64;
+                dx * dx + dy * dy <= limit
+            })
+            .map(|(row, _)| row as u32)
+            .collect()
+    }
+}
+
+/// The image a patch is taken from.
+#[derive(Clone, Copy, Debug)]
+pub struct QueryImage<'a> {
+    /// Its `.sift` file. Read for the keypoints when `keypoints` is `None`, and
+    /// for descriptors only when the corpus does not index this image.
+    pub sift_path: &'a Path,
+    /// Its keypoints, when the caller has already read them.
+    pub keypoints: Option<&'a ImageKeypoints>,
+    /// Its index in the corpus image table, when the corpus indexes it.
+    pub image_index: Option<u32>,
+}
+
+/// A patch's constellation and what the index made of it.
+#[derive(Clone, Debug)]
+pub struct PatchConstellation {
+    /// The query image's `.sift` rows that made up the constellation, in the
+    /// order the correspondences' `query_index` refers to.
+    pub feature_rows: Vec<u32>,
+    /// Their corpus feature IDs, when the query image is indexed; empty when it
+    /// is not.
+    pub feature_ids: Vec<u32>,
+    /// Candidate images, most inliers first.
+    pub matches: Vec<ConstellationMatch>,
+}
+
+/// [`constellation_query`] for a pixel and a radius in one image.
+///
+/// The constellation is taken from the image's **`.sift` file**, not from the
+/// corpus: a `.kdf` stores geometry in corpus storage order, so one image's
+/// keypoints are scattered across every block and selecting a radius out of
+/// them would touch most of the file, while the `.sift` file holds exactly that
+/// image's keypoints in one entry. So this reads the keypoints there, selects
+/// the few inside the radius, and only then fetches those few descriptors: from
+/// the corpus by feature ID when the image is indexed, and from the `.sift`
+/// file's descriptor entry when it is not. In the indexed case the descriptor
+/// payload of the `.sift` file is never decompressed.
+///
+/// Features inside the radius that the corpus does not index are dropped from
+/// the constellation, so an index built over a subset stays usable.
+pub fn constellation_at_pixel<I, F>(
+    index: &I,
+    sources: &F,
+    image: &QueryImage<'_>,
+    center: [f32; 2],
+    radius: f32,
+    params: &ConstellationParams,
+) -> Result<PatchConstellation, KdfError>
+where
+    I: NeighborIndex<u8> + ?Sized,
+    F: FeatureSources + ?Sized,
+{
+    let read;
+    let keypoints = match image.keypoints {
+        Some(keypoints) => keypoints,
+        None => {
+            read = ImageKeypoints::read(image.sift_path)?;
+            &read
+        }
+    };
+    let mut rows = keypoints.within(center, radius);
+
+    let mut feature_ids = Vec::new();
+    let descriptors;
+    match image.image_index {
+        Some(indexed) => {
+            let map = sources.image_feature_ids(indexed)?;
+            rows.retain(|row| map.contains_key(row));
+            feature_ids = rows.iter().map(|row| map[row]).collect();
+            descriptors = None;
+        }
+        None => descriptors = Some(read_sift_rows(image.sift_path, &rows)?),
+    }
+
+    let positions: Vec<[f32; 2]> = rows
+        .iter()
+        .map(|&row| keypoints.positions[row as usize])
+        .collect();
+    let query = Constellation {
+        positions: &positions,
+        descriptors: match &descriptors {
+            Some(vectors) => ConstellationDescriptors::Vectors(vectors),
+            None => ConstellationDescriptors::FeatureIds(&feature_ids),
+        },
+        image_index: image.image_index,
+    };
+    let matches = constellation_query(index, sources, &query, params)?;
+    Ok(PatchConstellation {
+        feature_rows: rows,
+        feature_ids,
+        matches,
+    })
+}
+
+/// Gather the named descriptor rows from a `.sift` file.
+///
+/// The partial reader takes a prefix length rather than a row list, so this
+/// costs the file's descriptors up to the highest selected row. It is the
+/// fallback for an image the corpus does not index; an indexed image reads its
+/// descriptors from the corpus instead and never lands here.
+fn read_sift_rows(path: &Path, rows: &[u32]) -> Result<Vec<u8>, KdfError> {
+    let Some(&highest) = rows.iter().max() else {
+        return Ok(Vec::new());
+    };
+    let data = sfmtool_sift_format::read_sift_partial(path, highest as usize + 1)
+        .map_err(|e| sift_error(path, e))?;
+    let descriptors = data.descriptors;
+    let dim = descriptors.ncols();
+    let mut out = Vec::with_capacity(rows.len() * dim);
+    for &row in rows {
+        let row = row as usize;
+        if row >= descriptors.nrows() {
+            return Err(KdfError::InvalidQuery(format!(
+                "{} has no feature {row}",
+                path.display()
+            )));
+        }
+        out.extend(descriptors.row(row).iter().copied());
+    }
+    Ok(out)
+}
+
+/// Carry a `.sift` failure in the error type the rest of this query uses.
+///
+/// One `Result` for a caller is worth more than the extra variant an error of
+/// its own would add: an unreadable `.sift` file and an unreadable `.kdf` are
+/// the same problem to the caller, and the I/O kind is preserved so a missing
+/// file still surfaces as a missing file.
+fn sift_error(path: &Path, err: SiftError) -> KdfError {
+    match err {
+        SiftError::Io(e) => KdfError::Io(e),
+        SiftError::IoPath { source, .. } => KdfError::Io(source),
+        other => KdfError::InvalidFormat(format!("{}: {other}", path.display())),
+    }
+}

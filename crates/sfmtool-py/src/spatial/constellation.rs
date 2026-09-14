@@ -1,0 +1,278 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The constellation query, shared by the two forest classes.
+//!
+//! Both `KdForest` and `LazyKdForest` expose the same two methods, so the body
+//! lives here once and each class's `#[pymethods]` block forwards to it through
+//! `&dyn` references. The only difference between them is where the source
+//! tables come from: the file-backed forest is its own, and the resident forest
+//! takes them as a `sources` mapping, because loading a `.kdf` into memory
+//! rebuilds the trees and the corpus and keeps no origins or geometry.
+
+use std::path::{Path, PathBuf};
+
+use numpy::{PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+
+use sfmtool_core::features::kdforest::{
+    constellation_at_pixel, constellation_query, Constellation, ConstellationDescriptors,
+    ConstellationMatch, ConstellationParams, FeatureGeometry, FeatureOrigin, FeatureSources,
+    NeighborIndex, QueryImage, ResidentSources,
+};
+
+use super::kdf::to_py_err;
+use super::kdforest::extract_u8_2d;
+
+/// Every tunable of the query, in one struct, so the two call sites declare the
+/// same keyword arguments instead of drifting apart.
+pub(crate) struct QueryOptions {
+    pub k: usize,
+    pub max_leaf_checks: usize,
+    pub threshold_px: f64,
+    pub iterations: usize,
+    pub min_correspondences: usize,
+    pub min_inliers: usize,
+    pub seed: u64,
+}
+
+impl From<&QueryOptions> for ConstellationParams {
+    fn from(value: &QueryOptions) -> Self {
+        Self {
+            k: value.k,
+            max_leaf_checks: value.max_leaf_checks,
+            threshold_px: value.threshold_px,
+            iterations: value.iterations,
+            min_correspondences: value.min_correspondences,
+            min_inliers: value.min_inliers,
+            seed: value.seed,
+        }
+    }
+}
+
+/// Build resident source tables from the same mapping `write_kdf` accepts.
+///
+/// It reads the four per-feature columns and ignores the workspace and image
+/// identity a write needs, so a caller can hand the same dict to both.
+pub(crate) fn parse_resident_sources(sources: &Bound<'_, PyAny>) -> PyResult<ResidentSources> {
+    fn need<'py>(d: &Bound<'py, PyAny>, key: &str) -> PyResult<Bound<'py, PyAny>> {
+        d.get_item(key).map_err(|_| {
+            pyo3::exceptions::PyKeyError::new_err(format!("sources is missing {key:?}"))
+        })
+    }
+    let image_indexes: Vec<u32> = need(sources, "image_indexes")?.extract()?;
+    let image_feature_indexes: Vec<u32> = need(sources, "image_feature_indexes")?.extract()?;
+    if image_indexes.len() != image_feature_indexes.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "image_indexes has {} entries but image_feature_indexes has {}",
+            image_indexes.len(),
+            image_feature_indexes.len()
+        )));
+    }
+    let positions: PyReadonlyArray2<'_, f32> = need(sources, "positions")?.extract()?;
+    let affine_shapes: PyReadonlyArray3<'_, f32> = need(sources, "affine_shapes")?.extract()?;
+    let positions = positions.as_array();
+    let affine_shapes = affine_shapes.as_array();
+    let n = image_indexes.len();
+    if positions.shape() != [n, 2] || affine_shapes.shape() != [n, 2, 2] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "positions must be (N, 2) and affine_shapes (N, 2, 2) for N={n}"
+        )));
+    }
+    let origins = image_indexes
+        .into_iter()
+        .zip(image_feature_indexes)
+        .map(|(image_index, image_feature_index)| FeatureOrigin {
+            image_index,
+            image_feature_index,
+        })
+        .collect();
+    let geometry: Vec<FeatureGeometry> = (0..n)
+        .map(|i| {
+            [
+                [positions[[i, 0]], positions[[i, 1]]],
+                [affine_shapes[[i, 0, 0]], affine_shapes[[i, 0, 1]]],
+                [affine_shapes[[i, 1, 0]], affine_shapes[[i, 1, 1]]],
+            ]
+        })
+        .collect();
+    ResidentSources::new(origins, geometry).map_err(to_py_err)
+}
+
+/// Body of both classes' `constellation_query`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn query<'py>(
+    py: Python<'py>,
+    index: &(dyn NeighborIndex<u8> + Sync),
+    sources: &(dyn FeatureSources + Sync),
+    positions: &Bound<'py, PyAny>,
+    descriptors: Option<&Bound<'py, PyAny>>,
+    feature_ids: Option<Vec<u32>>,
+    image_index: Option<u32>,
+    options: &QueryOptions,
+) -> PyResult<Py<PyList>> {
+    let positions = read_positions(positions)?;
+    let params = ConstellationParams::from(options);
+    let matches = match (descriptors, feature_ids) {
+        (Some(descriptors), None) => {
+            let descriptors = extract_u8_2d(descriptors, "constellation descriptors")?;
+            let shape = descriptors.shape();
+            if shape[1] != index.dim() {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "descriptor width {} does not match the index dim {}",
+                    shape[1],
+                    index.dim()
+                )));
+            }
+            let data: std::borrow::Cow<[u8]> = to_contiguous!(descriptors);
+            py.detach(|| {
+                constellation_query(
+                    index,
+                    sources,
+                    &Constellation {
+                        positions: &positions,
+                        descriptors: ConstellationDescriptors::Vectors(&data),
+                        image_index,
+                    },
+                    &params,
+                )
+            })
+        }
+        (None, Some(ids)) => py.detach(|| {
+            constellation_query(
+                index,
+                sources,
+                &Constellation {
+                    positions: &positions,
+                    descriptors: ConstellationDescriptors::FeatureIds(&ids),
+                    image_index,
+                },
+                &params,
+            )
+        }),
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "pass exactly one of descriptors or feature_ids",
+            ))
+        }
+    }
+    .map_err(to_py_err)?;
+    matches_list(py, &matches)
+}
+
+/// Body of both classes' `constellation_at_pixel`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn at_pixel<'py>(
+    py: Python<'py>,
+    index: &(dyn NeighborIndex<u8> + Sync),
+    sources: &(dyn FeatureSources + Sync),
+    sift_path: PathBuf,
+    center: (f32, f32),
+    radius: f32,
+    image_index: Option<u32>,
+    options: &QueryOptions,
+) -> PyResult<Py<PyDict>> {
+    let params = ConstellationParams::from(options);
+    let found = py
+        .detach(|| {
+            constellation_at_pixel(
+                index,
+                sources,
+                &QueryImage {
+                    sift_path: Path::new(&sift_path),
+                    keypoints: None,
+                    image_index,
+                },
+                [center.0, center.1],
+                radius,
+                &params,
+            )
+        })
+        .map_err(to_py_err)?;
+    let out = PyDict::new(py);
+    out.set_item(
+        "feature_rows",
+        numpy::PyArray1::from_vec(py, found.feature_rows),
+    )?;
+    out.set_item(
+        "feature_ids",
+        numpy::PyArray1::from_vec(py, found.feature_ids),
+    )?;
+    out.set_item("matches", matches_list(py, &found.matches)?)?;
+    Ok(out.unbind())
+}
+
+/// `(N, 2)` float32 query positions, in the query image's pixels.
+fn read_positions(positions: &Bound<'_, PyAny>) -> PyResult<Vec<[f32; 2]>> {
+    let array: PyReadonlyArray2<'_, f32> = positions.extract().map_err(|_| {
+        pyo3::exceptions::PyTypeError::new_err("positions must be an (N, 2) float32 array")
+    })?;
+    let array = array.as_array();
+    if array.ncols() != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "positions must be (N, 2), got width {}",
+            array.ncols()
+        )));
+    }
+    Ok((0..array.nrows())
+        .map(|i| [array[[i, 0]], array[[i, 1]]])
+        .collect())
+}
+
+/// One dict per candidate image, keys named exactly as the Rust fields.
+///
+/// The inlier correspondences are columns rather than a list of per-row dicts:
+/// they are consumed as arrays, by a caller seeding a patch cluster from them,
+/// and a few hundred one-key-per-field dicts would cost more to build than the
+/// query itself.
+fn matches_list<'py>(py: Python<'py>, matches: &[ConstellationMatch]) -> PyResult<Py<PyList>> {
+    let list = PyList::empty(py);
+    for found in matches {
+        let entry = PyDict::new(py);
+        entry.set_item("image_index", found.image_index)?;
+        entry.set_item(
+            "affine",
+            numpy::PyArray1::from_vec(py, found.affine.iter().flatten().copied().collect())
+                .reshape([2, 3])?,
+        )?;
+        entry.set_item("inliers", found.inliers)?;
+        entry.set_item("correspondences", found.correspondences)?;
+
+        let inliers = &found.inlier_correspondences;
+        let columns = PyDict::new(py);
+        columns.set_item(
+            "query_index",
+            numpy::PyArray1::from_vec(py, inliers.iter().map(|c| c.query_index).collect()),
+        )?;
+        columns.set_item(
+            "feature_id",
+            numpy::PyArray1::from_vec(py, inliers.iter().map(|c| c.feature_id).collect()),
+        )?;
+        columns.set_item(
+            "position",
+            numpy::PyArray1::from_vec(
+                py,
+                inliers
+                    .iter()
+                    .flat_map(|c| c.position)
+                    .collect::<Vec<f32>>(),
+            )
+            .reshape([inliers.len(), 2])?,
+        )?;
+        columns.set_item(
+            "affine_shape",
+            numpy::PyArray1::from_vec(
+                py,
+                inliers
+                    .iter()
+                    .flat_map(|c| c.affine_shape.into_iter().flatten())
+                    .collect::<Vec<f32>>(),
+            )
+            .reshape([inliers.len(), 2, 2])?,
+        )?;
+        entry.set_item("inlier_correspondences", columns)?;
+        list.append(entry)?;
+    }
+    Ok(list.unbind())
+}

@@ -78,6 +78,55 @@ pub fn read_sift_positions(path: &Path, count: usize) -> Result<Vec<[f32; 2]>, S
     Ok(result)
 }
 
+/// One image's keypoint columns: centers and 2x2 affine shapes, one entry each
+/// per feature, in feature order.
+pub type SiftKeypoints = (Vec<[f32; 2]>, Vec<[[f32; 2]; 2]>);
+
+/// Read only feature keypoints from a `.sift` file.
+///
+/// Returns the first `count` features' positions and affine shapes, reading
+/// those two binary entries and nothing else. The descriptor payload is far
+/// larger than the geometry, so a consumer that wants to know *where* an
+/// image's features are, and only afterwards which few of them it needs, never
+/// decompresses it. If `count` exceeds `feature_count`, returns all features.
+pub fn read_sift_keypoints(path: &Path, count: usize) -> Result<SiftKeypoints, SiftError> {
+    let file = open_file(path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    let metadata: SiftMetadata = read_json_entry(&mut archive, "metadata.json.zst")?;
+    check_version(&metadata)?;
+    let total = metadata.feature_count as usize;
+    let read_count = count.min(total);
+
+    let positions = read_partial_f32_array(
+        &mut archive,
+        &format!("features/positions_xy.{total}.2.float32.zst"),
+        read_count,
+        2,
+    )?;
+    let shapes = read_partial_f32_array(
+        &mut archive,
+        &format!("features/affine_shapes.{total}.2.2.float32.zst"),
+        read_count,
+        4,
+    )?;
+
+    // A truncated entry yields fewer whole rows than asked for. The two columns
+    // describe the same features, so the pair stops at the shorter of them
+    // rather than pairing row i of one with row i of a longer other.
+    let rows = positions.nrows().min(shapes.nrows());
+    let mut centers = Vec::with_capacity(rows);
+    let mut affine = Vec::with_capacity(rows);
+    for i in 0..rows {
+        centers.push([positions[[i, 0]], positions[[i, 1]]]);
+        affine.push([
+            [shapes[[i, 0]], shapes[[i, 1]]],
+            [shapes[[i, 2]], shapes[[i, 3]]],
+        ]);
+    }
+    Ok((centers, affine))
+}
+
 /// Read only metadata from a `.sift` file (fast, no binary data).
 pub fn read_sift_metadata(
     path: &Path,

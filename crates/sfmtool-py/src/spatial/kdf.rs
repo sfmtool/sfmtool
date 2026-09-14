@@ -466,6 +466,136 @@ impl PyLazyKdForest {
         Ok(Some(d.unbind()))
     }
 
+    /// Rank the images that contain a constellation of features.
+    ///
+    /// Args:
+    ///     positions: (N, 2) float32 positions of the constellation's features
+    ///         in the query image.
+    ///     descriptors: (N, D) uint8 descriptors for those features. Pass this
+    ///         or `feature_ids`, not both.
+    ///     feature_ids: Their corpus feature IDs, when the query image is
+    ///         itself indexed; the descriptors are read from the corpus.
+    ///     image_index: The query image's index in the file's image table.
+    ///         Candidates from it are dropped.
+    ///     k: Neighbours per constellation feature (default 32, far above a
+    ///         matcher's, because the right image only has to be among the
+    ///         candidates).
+    ///     max_leaf_checks: Per-query leaf budget (default 128).
+    ///     threshold_px: RANSAC inlier distance in the candidate's pixels.
+    ///     iterations: Three-point samples drawn per candidate image.
+    ///     min_correspondences: Fewest correspondences to fit an image at all.
+    ///     min_inliers: Fewest inliers to report one.
+    ///     seed: Base RNG seed; candidate image i draws from `seed + i`.
+    ///
+    /// Returns:
+    ///     A list of dicts, most inliers first, with keys `image_index`,
+    ///     `affine` ((2, 3) float64, query pixels to that image's pixels),
+    ///     `inliers`, `correspondences` and `inlier_correspondences` -- itself a
+    ///     dict of columns `query_index`, `feature_id`, `position` and
+    ///     `affine_shape`.
+    ///
+    /// Raises:
+    ///     ValueError: The arrays disagree, or the file carries no SIFT
+    ///         sources, so its features have no image or geometry.
+    #[pyo3(signature = (positions, *, descriptors=None, feature_ids=None, image_index=None,
+                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
+                        min_correspondences=3, min_inliers=6, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn constellation_query<'py>(
+        &self,
+        py: Python<'py>,
+        positions: &Bound<'py, PyAny>,
+        descriptors: Option<&Bound<'py, PyAny>>,
+        feature_ids: Option<Vec<u32>>,
+        image_index: Option<u32>,
+        k: usize,
+        max_leaf_checks: usize,
+        threshold_px: f64,
+        iterations: usize,
+        min_correspondences: usize,
+        min_inliers: usize,
+        seed: u64,
+    ) -> PyResult<Py<PyList>> {
+        super::constellation::query(
+            py,
+            &self.inner,
+            &self.inner,
+            positions,
+            descriptors,
+            feature_ids,
+            image_index,
+            &super::constellation::QueryOptions {
+                k,
+                max_leaf_checks,
+                threshold_px,
+                iterations,
+                min_correspondences,
+                min_inliers,
+                seed,
+            },
+        )
+    }
+
+    /// `constellation_query` for a pixel and a radius in one image.
+    ///
+    /// The constellation is taken from the image's `.sift` file rather than
+    /// from the corpus, because a `.kdf` stores geometry in corpus order and
+    /// one image's keypoints are scattered across every block of it. Only the
+    /// keypoint entries are read; when `image_index` is given, the descriptors
+    /// come from the corpus by feature ID and the `.sift` file's descriptors
+    /// are never decompressed.
+    ///
+    /// Args:
+    ///     sift_path: The query image's `.sift` file.
+    ///     center: (x, y) pixel the patch is centred on.
+    ///     radius: Patch radius in that image's pixels.
+    ///     image_index: Its index in the file's image table, when indexed.
+    ///     Remaining arguments are as `constellation_query`.
+    ///
+    /// Returns:
+    ///     A dict with `feature_rows` (the `.sift` rows the constellation was
+    ///     built from), `feature_ids` (their corpus IDs, empty when the image
+    ///     is not indexed) and `matches`, the list `constellation_query`
+    ///     returns.
+    #[pyo3(signature = (sift_path, center, radius, *, image_index=None,
+                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
+                        min_correspondences=3, min_inliers=6, seed=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn constellation_at_pixel<'py>(
+        &self,
+        py: Python<'py>,
+        sift_path: PathBuf,
+        center: (f32, f32),
+        radius: f32,
+        image_index: Option<u32>,
+        k: usize,
+        max_leaf_checks: usize,
+        threshold_px: f64,
+        iterations: usize,
+        min_correspondences: usize,
+        min_inliers: usize,
+        seed: u64,
+    ) -> PyResult<Py<PyDict>> {
+        super::constellation::at_pixel(
+            py,
+            &self.inner,
+            &self.inner,
+            sift_path,
+            center,
+            radius,
+            image_index,
+            &super::constellation::QueryOptions {
+                k,
+                max_leaf_checks,
+                threshold_px,
+                iterations,
+                min_correspondences,
+                min_inliers,
+                seed,
+            },
+        )
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "LazyKdForest(path={:?}, len={}, dim={})",
