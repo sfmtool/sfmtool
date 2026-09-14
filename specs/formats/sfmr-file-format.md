@@ -505,6 +505,9 @@ XXH128 hashes for integrity verification:
 **Field descriptions.** Each section hash covers that section's data files in
 lexicographic path order; see [archive-container.md](archive-container.md) for how
 a section digest is taken and how the digests combine into `content_xxh128`.
+The [verifier](../../crates/sfmtool-sfmr-format/src/verify.rs) checks each section
+in the order below, then compares the overall digest. For version 10+, it
+checks `derived/` before images but excludes that digest from the overall fold.
 
 - `metadata_xxh128`: Hash of the uncompressed JSON content of `metadata.json.zst`
 - `cameras_xxh128`: Hash of the uncompressed JSON content of `cameras/metadata.json.zst`

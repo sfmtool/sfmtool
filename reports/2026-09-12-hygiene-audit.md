@@ -789,6 +789,7 @@ them**
 
 **The per-section split proven in `matches-format/verify.rs` was carried nowhere, and
 the four monoliths grew 8%**
+> _Status (2026-09-13): Partially done — `verify_sfmr` now delegates to per-section helpers and folds their digests explicitly; the reader and writers named below remain open._
 > _Carried forward. Re-measured brace-to-brace; two of the four **grew**, and the two
 > that look renamed were not split._
 - Location: `crates/sfmr-format/src/verify.rs:18–651` (`verify_sfmr`, **634**);
@@ -1889,6 +1890,7 @@ did not are findings above.
    `app/menu.rs` inherits a proven pattern and should absorb `panels_menu` on the way.
 
 2. **`SectionDigests` in `sfmtool-archive-io`, then `verify_sfmr`.**
+   > _Status (2026-09-13): Done — `SectionDigests` had landed; `verify_sfmr` now uses per-section helpers with the digest order explicit._
    Two items, paired because the first de-risks the second and is worth doing alone.
    The content-hash rule that defines every `.sfmr`, `.matches`, `.sift`, `.camrig` and
    `.kdf` file's identity is hand-written **nine times in two incompatible spellings**,

@@ -2947,6 +2947,72 @@ fn a_corrupted_derived_entry_still_fails_verification() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A damaged hash record reports every affected section in traversal order,
+/// with the overall identity last. The derived section is checked before
+/// images, even though it does not participate in the overall identity.
+#[test]
+fn verification_reports_multiple_section_mismatches_in_order() {
+    use std::io::{Read, Write};
+
+    let dir = std::env::temp_dir().join("sfmr_test_verifier_error_order");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("good.sfmr");
+    let bad = dir.join("bad.sfmr");
+    let mut data = data_with_every_optional_column();
+    write_sfmr(&good, &mut data).unwrap();
+
+    let mut hashes = read_sfmr_content_hash(&good).unwrap();
+    let wrong = "0".repeat(32);
+    hashes.metadata_xxh128 = wrong.clone();
+    hashes.cameras_xxh128 = wrong.clone();
+    hashes.derived_xxh128 = Some(wrong.clone());
+    hashes.images_xxh128 = wrong.clone();
+    hashes.points3d_xxh128 = wrong.clone();
+    hashes.tracks_xxh128 = wrong.clone();
+    hashes.content_xxh128 = wrong;
+
+    let source = std::fs::File::open(&good).unwrap();
+    let mut archive = zip::ZipArchive::new(source).unwrap();
+    let out = std::fs::File::create(&bad).unwrap();
+    let mut zip = zip::ZipWriter::new(out);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().to_string();
+        if name == "content_hash.json.zst" {
+            sfmtool_archive_io::write_json_entry(&mut zip, &name, &hashes, 3).unwrap();
+        } else {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            zip.start_file(&name, options).unwrap();
+            zip.write_all(&bytes).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+
+    let (ok, errors) = verify_sfmr(&bad).unwrap();
+    assert!(!ok);
+    let labels: Vec<&str> = errors
+        .iter()
+        .map(|e| e.split(':').next().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Metadata hash mismatch",
+            "Cameras hash mismatch",
+            "Derived section hash mismatch",
+            "Images hash mismatch",
+            "Points3D hash mismatch",
+            "Tracks hash mismatch",
+            "Overall content hash mismatch",
+        ],
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A version-10 file says what its derived section hashes to, and a reader of
 /// an older one finds the statistics where that version kept them.
 #[test]
