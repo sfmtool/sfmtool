@@ -110,6 +110,7 @@ maintained by hand in six places.
 
 **`run_egui_pass` is a 600-line method holding five concerns — the growth the last
 snapshot predicted**
+> _Status (2026-09-13): Done — extracted the menu/shortcuts, modal handling, save helpers and Panels menu into `app/{menu,modals,save}.rs`; preserved the frame order and headless Panels-menu coverage._
 > _Carried forward as a **prediction**, not a finding. 2026-08-29 acquitted `app.rs`
 > with: "`run_egui_pass` is back to **245** lines from the 180 the last snapshot
 > measured, and a `menu.rs` extraction is again defensible — but `dock.rs::ui` is the
@@ -1873,6 +1874,7 @@ did not are findings above.
 ## Top 3
 
 1. **`app.rs::run_egui_pass` → `app/{menu,modals,save}.rs`.**
+   > _Status (2026-09-13): Done — see the updated finding above._
    The best effort-to-value ratio in the report, and the one the last snapshot already
    did the analysis for. `app.rs` is the largest single-file growth in the repository
    (879 → **1631**, +85%) and `run_egui_pass` went **180 → 245 → 600** across three

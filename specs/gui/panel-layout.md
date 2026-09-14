@@ -511,9 +511,12 @@ wants its arrangement to survive a restart asks the human to save it;
 
 ## Rust API
 
-Two modules. `crates/sfm-explorer/src/layout.rs` holds the document, the panel
-schema, the conversions and the operations; `crates/sfm-explorer/src/window.rs`
-holds what a window *is* and how a placement reaches one. Both are
+The [layout module](../../crates/sfm-explorer/src/layout.rs) holds the document,
+the panel schema, the conversions and the operations; the
+[window module](../../crates/sfm-explorer/src/window.rs) holds what a window
+*is* and how a placement reaches one. The
+[Panels menu](../../crates/sfm-explorer/src/app/menu.rs) calls those operations.
+All three modules are
 unconditional: Panels ▸ Save Layout… carries the window's placement in every
 build, not only where the MCP feature is compiled in.
 

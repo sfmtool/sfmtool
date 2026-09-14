@@ -24,16 +24,38 @@ use winit::window::Window;
 use sfmtool_core::progress::{Phase, Progress};
 use sfmtool_core::progress_note;
 
-use crate::dock::{self, Tab, TabContext};
+use crate::dock::{self, TabContext};
 
 #[cfg(test)]
 mod tests;
-use crate::goto_point;
 use crate::platform;
 use crate::progress::Collector;
 use crate::scene::ImageRef;
 use crate::scene_renderer::{NodeDisplay, PickTarget, Uploaded};
 use crate::App;
+
+pub(crate) mod menu;
+mod modals;
+mod save;
+
+use menu::forget_selected;
+
+/// Mutable panel state shared by the menu and dialogs during one egui frame.
+struct UiParts<'a> {
+    app_state: &'a mut crate::state::AppState,
+    viewer_3d: &'a mut crate::viewer_3d::Viewer3D,
+    image_browser: &'a mut crate::image_browser::ImageBrowser,
+    image_detail: &'a mut crate::image_detail::ImageDetail,
+    point_track_detail: &'a mut crate::point_track_detail::PointTrackDetail,
+    intrinsics_detail: &'a mut crate::intrinsics_detail::IntrinsicsDetail,
+}
+
+#[derive(Default)]
+struct UiRequests {
+    close_all_requested: bool,
+    quit_requested: bool,
+    quit_from_menu: bool,
+}
 
 #[cfg(target_os = "windows")]
 use crate::platform::windows::WinGestureHandler;
@@ -805,12 +827,10 @@ impl App {
         let point_track_detail = &mut self.point_track_detail;
         let intrinsics_detail = &mut self.intrinsics_detail;
 
-        let mut quit_requested = false;
         // Both close paths are collected here rather than acted on in the menu
         // closure, because a dirty node turns either of them into a question
         // first and the answer arrives on a later frame.
-        let mut close_all_requested = false;
-        let mut quit_from_menu = false;
+        let mut requests = UiRequests::default();
 
         let full_output = self.egui_ctx.run_ui(raw_input, |root_ui| {
             // Accumulate scroll events once per frame, with DM-aware suppression.
@@ -819,477 +839,18 @@ impl App {
                 handler_ok && !gesture_events.is_empty(),
             );
 
-            egui::Panel::top("menu_bar").show(root_ui, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
-                    ui.menu_button("File", |ui| {
-                        if ui.button("Open...").clicked() {
-                            // Multi-select, and every chosen file *appends* a
-                            // node, a path that is already open included: that
-                            // opens it a second time, as a second node with a
-                            // history of its own.
-                            if let Some(paths) = rfd::FileDialog::new()
-                                .add_filter("SfM Reconstruction", &["sfmr"])
-                                .pick_files()
-                            {
-                                for path in paths {
-                                    // `load_file` returns its failure rather
-                                    // than logging it, so the menu writes the
-                                    // line in the vocabulary of the person who
-                                    // asked. See `AppState::load_file`.
-                                    if let Err(message) = app_state.load_file(&path) {
-                                        app_state
-                                            .action_log
-                                            .fail(crate::action_log::Kind::File, message);
-                                    }
-                                }
-                            }
-                            ui.close();
-                        }
-                        ui.separator();
-                        // Both act on the selected node, which is what every
-                        // other node-scoped command in this menu bar does.
-                        let target = app_state.selected_recon;
-                        let has_path = target
-                            .and_then(|id| app_state.node(id))
-                            .is_some_and(|node| node.path.is_some());
-                        let save = ui
-                            .add_enabled(
-                                has_path,
-                                egui::Button::new("Save")
-                                    .shortcut_text(ui.ctx().format_shortcut(&SAVE_SHORTCUT)),
-                            )
-                            .on_disabled_hover_text(
-                                "The selected reconstruction came from no file — use Save As",
-                            );
-                        if save.clicked() {
-                            let outcome = target.map(|id| app_state.save_node(id));
-                            save_outcome(app_state, outcome);
-                            ui.close();
-                        }
-                        let save_as = ui
-                            .add_enabled(
-                                target.is_some(),
-                                egui::Button::new("Save As...")
-                                    .shortcut_text(ui.ctx().format_shortcut(&SAVE_AS_SHORTCUT)),
-                            )
-                            .on_disabled_hover_text("Select a reconstruction to save it");
-                        if save_as.clicked() {
-                            let outcome = target.map(|id| save_as_with_dialog(app_state, id));
-                            save_outcome(app_state, outcome);
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .add_enabled(
-                                !app_state.scene.is_empty(),
-                                egui::Button::new("Close All"),
-                            )
-                            .clicked()
-                        {
-                            close_all_requested = true;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Load Demo Data...").clicked() {
-                            app_state.show_demo_dialog = true;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Quit").clicked() {
-                            // Not `send_viewport_cmd(ViewportCommand::Close)`:
-                            // this app drives its own winit loop and never
-                            // reads `full_output.viewport_output`, so the
-                            // command was silently dropped and Quit did
-                            // nothing. The flag is read straight after the
-                            // egui pass, where the event loop can act on it.
-                            quit_requested = true;
-                            quit_from_menu = true;
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button("Edit", |ui| {
-                        let target = app_state.selected_recon;
-                        let can_undo = target.is_some_and(|id| app_state.can_undo(id));
-                        let can_redo = target.is_some_and(|id| app_state.can_redo(id));
-                        let undo = ui
-                            .add_enabled(
-                                can_undo,
-                                egui::Button::new("Undo")
-                                    .shortcut_text(ui.ctx().format_shortcut(&UNDO_SHORTCUT)),
-                            )
-                            .on_disabled_hover_text(
-                                "The selected reconstruction has nothing to undo",
-                            );
-                        if undo.clicked() {
-                            let outcome = target.map(|id| app_state.undo(id));
-                            edit_outcome(app_state, outcome);
-                            forget_selected(
-                                target,
-                                image_browser,
-                                image_detail,
-                                point_track_detail,
-                                intrinsics_detail,
-                            );
-                            crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
-                            ui.close();
-                        }
-                        let redo = ui
-                            .add_enabled(
-                                can_redo,
-                                egui::Button::new("Redo")
-                                    .shortcut_text(ui.ctx().format_shortcut(&REDO_SHORTCUT)),
-                            )
-                            .on_disabled_hover_text(
-                                "The selected reconstruction has nothing to redo",
-                            );
-                        if redo.clicked() {
-                            let outcome = target.map(|id| app_state.redo(id));
-                            edit_outcome(app_state, outcome);
-                            forget_selected(
-                                target,
-                                image_browser,
-                                image_detail,
-                                point_track_detail,
-                                intrinsics_detail,
-                            );
-                            crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
-                            ui.close();
-                        }
-                        ui.separator();
-                        let point = app_state.selected_point;
-                        let delete_point = ui
-                            .add_enabled(
-                                point.is_some(),
-                                egui::Button::new("Delete Point").shortcut_text(
-                                    ui.ctx().format_shortcut(&DELETE_POINT_SHORTCUT),
-                                ),
-                            )
-                            .on_disabled_hover_text("Select a 3D point to delete it");
-                        if delete_point.clicked() {
-                            let outcome = app_state.delete_selected_point();
-                            edit_outcome(app_state, Some(outcome));
-                            ui.close();
-                        }
-                        let image = app_state.selected_image;
-                        let delete_image = ui
-                            .add_enabled(image.is_some(), egui::Button::new("Delete Image"))
-                            .on_disabled_hover_text("Select an image to delete it");
-                        if delete_image.clicked() {
-                            let outcome = image.map(|image| app_state.delete_image(image));
-                            edit_outcome(app_state, outcome);
-                            forget_selected(
-                                image.map(|i| i.recon),
-                                image_browser,
-                                image_detail,
-                                point_track_detail,
-                                intrinsics_detail,
-                            );
-                            ui.close();
-                        }
-                        ui.separator();
-                        // Move Camera, and the two entries a held lock turns it
-                        // into. The gate is the lock's own, so the entry and the
-                        // lock cannot disagree about when a camera can be taken
-                        // in hand.
-                        let locked = viewer_3d.camera_lock.is_some();
-                        let lock_refusal = crate::camera_lock::refusal(app_state, viewer_3d);
-                        let move_camera = ui
-                            .add_enabled(
-                                lock_refusal.is_none() || locked,
-                                egui::Button::new(if locked {
-                                    "Commit Camera Move"
-                                } else {
-                                    "Move Camera"
-                                })
-                                .shortcut_text("M"),
-                            )
-                            .on_disabled_hover_text(lock_refusal.unwrap_or_default())
-                            .on_hover_text(
-                                "Take the camera you are looking through in hand: every \
-                                 navigation input moves it, and committing keeps the pose \
-                                 as one version of the reconstruction.",
-                            );
-                        if move_camera.clicked() {
-                            if locked {
-                                // `move_camera` writes its own lines, success or
-                                // refusal, in the document model's vocabulary;
-                                // what comes back is the node whose geometry
-                                // moved, and whose panel caches describe one it
-                                // no longer holds.
-                                if let Ok(moved) = crate::camera_lock::commit(viewer_3d, app_state)
-                                {
-                                    forget_selected(
-                                        moved,
-                                        image_browser,
-                                        image_detail,
-                                        point_track_detail,
-                                        intrinsics_detail,
-                                    );
-                                }
-                            } else if let Err(message) =
-                                crate::camera_lock::enter(viewer_3d, app_state)
-                            {
-                                app_state
-                                    .action_log
-                                    .fail(crate::action_log::Kind::View, message);
-                            }
-                            ui.close();
-                        }
-                        let cancel_move = ui
-                            .add_enabled(locked, egui::Button::new("Cancel Camera Move"))
-                            .on_disabled_hover_text("No camera is being moved");
-                        if cancel_move.clicked() {
-                            crate::camera_lock::cancel(viewer_3d, app_state);
-                            ui.close();
-                        }
-                        ui.separator();
-                        // The gate is the edit's own, so the entry and the edit
-                        // cannot disagree about when the adjustment can run.
-                        let refusal = match target.and_then(|id| app_state.node(id)) {
-                            Some(node) => crate::bundle_adjust_prompt::refusal(node.edited()),
-                            None => Some("Select a reconstruction to adjust it".to_string()),
-                        };
-                        let adjust = ui
-                            .add_enabled(refusal.is_none(), egui::Button::new("Bundle Adjust..."))
-                            .on_disabled_hover_text(refusal.unwrap_or_default())
-                            .on_hover_text(
-                                "Refine every pose and point of the selected reconstruction \
-                                 against its observations, as one version of it.",
-                            );
-                        if adjust.clicked() {
-                            if let Some(id) = target {
-                                app_state.open_bundle_adjust(id);
-                            }
-                            ui.close();
-                        }
-                    });
-                    ui.menu_button("Go", |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new("Go to Point...")
-                                    .shortcut_text(ui.ctx().format_shortcut(&goto_point::SHORTCUT)),
-                            )
-                            .clicked()
-                        {
-                            app_state.open_goto_point();
-                            ui.close();
-                        }
-                    });
-                    // No View menu: the display controls it used to hold belong
-                    // to the 3D viewport's own HUD (`viewer_3d/hud.rs`), on the
-                    // principle that a panel owns its controls. What *is*
-                    // app-global about the window is which panels are in it,
-                    // and that is the Panels menu below rather than a View one.
-                    ui.menu_button("Panels", |ui| {
-                        crate::layout::panels_menu(ui, app_state, &mut window_host);
-                    });
-                });
-            });
-
-            // Ctrl/Cmd+G opens the same dialog from anywhere, gated on egui's
-            // own keyboard arbitration so a HUD `DragValue` — or the dialog's
-            // own text field — keeps the key while it is being typed into.
-            // `open` is idempotent, so racing the menu item is harmless.
-            if !root_ui.ctx().egui_wants_keyboard_input()
-                && root_ui.input_mut(|i| i.consume_shortcut(&goto_point::SHORTCUT))
             {
-                app_state.open_goto_point();
-            }
-
-            // The Edit menu's shortcuts, under the same keyboard arbitration:
-            // Delete is a printable-looking key that a text field must keep,
-            // and undo belongs to whatever field is being typed into.
-            // The File menu's save shortcuts, under the same arbitration: Ctrl+S
-            // belongs to whatever field is being typed into while it is.
-            if !root_ui.ctx().egui_wants_keyboard_input() {
-                let (save, save_as) = root_ui.input_mut(|i| {
-                    (
-                        i.consume_shortcut(&SAVE_SHORTCUT),
-                        i.consume_shortcut(&SAVE_AS_SHORTCUT),
-                    )
-                });
-                let target = app_state.selected_recon;
-                if save || save_as {
-                    let outcome = target.map(|id| {
-                        if save_as {
-                            save_as_with_dialog(app_state, id)
-                        } else {
-                            app_state.save_node(id)
-                        }
-                    });
-                    save_outcome(app_state, outcome);
-                }
-            }
-
-            if !root_ui.ctx().egui_wants_keyboard_input() {
-                let (undo, redo, delete) = root_ui.input_mut(|i| {
-                    (
-                        i.consume_shortcut(&UNDO_SHORTCUT),
-                        i.consume_shortcut(&REDO_SHORTCUT)
-                            || i.consume_shortcut(&REDO_SHORTCUT_ALT),
-                        i.consume_shortcut(&DELETE_POINT_SHORTCUT),
-                    )
-                });
-                let target = app_state.selected_recon;
-                if undo || redo {
-                    let outcome = target.map(|id| {
-                        if undo {
-                            app_state.undo(id)
-                        } else {
-                            app_state.redo(id)
-                        }
-                    });
-                    edit_outcome(app_state, outcome);
-                    forget_selected(
-                        target,
-                        image_browser,
-                        image_detail,
-                        point_track_detail,
-                        intrinsics_detail,
-                    );
-                    // A step of the cursor can move the very pose the viewport
-                    // is looking through, and camera view follows the value.
-                    crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
-                }
-                if delete && app_state.selected_point.is_some() {
-                    let outcome = app_state.delete_selected_point();
-                    edit_outcome(app_state, Some(outcome));
-                }
-            }
-
-            // The Bundle Adjust dialog, and the adjustment it asks for. The
-            // solve starts here and runs on a worker; the version it produces
-            // is installed by the poll at the top of a later frame, which is
-            // also where the panel caches it invalidates are dropped.
-            if let Some(answer) = app_state.bundle_adjust_prompt.show(root_ui.ctx()) {
-                let options = sfmtool_core::BundleAdjustOptions {
-                    opt_f: answer.release_focal,
-                    ..sfmtool_core::BundleAdjustOptions::default()
+                let mut parts = UiParts {
+                    app_state,
+                    viewer_3d,
+                    image_browser,
+                    image_detail,
+                    point_track_detail,
+                    intrinsics_detail,
                 };
-                // The refusal is already an Action Log row: the start writes it
-                // itself, in the words the menu's own gate uses.
-                let _ = app_state.start_bundle_adjust(answer.recon, &options);
-            }
-
-            // The close prompt, and the answer to whichever question it asked.
-            // Drawn before the panels so it sits over them, and answered here so
-            // the close it was standing in front of happens on the same frame.
-            // What the menu asked for goes through the prompt when something is
-            // dirty; what the prompt answered goes straight through, since the
-            // question has already been put.
-            let mut close_all_now = false;
-            let dirty = app_state.dirty_labels();
-            if let Some(answer) = app_state.close_prompt.show(root_ui.ctx(), &dirty) {
-                let (pending, save_first) = match answer {
-                    crate::close_prompt::CloseAnswer::Save(pending) => (pending, true),
-                    crate::close_prompt::CloseAnswer::Discard(pending) => (pending, false),
-                };
-                if !save_first || save_dirty_before_closing(app_state, pending) {
-                    match pending {
-                        crate::close_prompt::PendingClose::Node(id) => {
-                            forget_selected(
-                                Some(id),
-                                image_browser,
-                                image_detail,
-                                point_track_detail,
-                                intrinsics_detail,
-                            );
-                            if let Err(message) = app_state.close_node(id) {
-                                app_state
-                                    .action_log
-                                    .fail(crate::action_log::Kind::File, message);
-                            }
-                        }
-                        crate::close_prompt::PendingClose::All => close_all_now = true,
-                        crate::close_prompt::PendingClose::Quit => quit_requested = true,
-                    }
-                }
-            }
-
-            if std::mem::take(&mut close_all_requested) {
-                if app_state.any_dirty() {
-                    app_state
-                        .close_prompt
-                        .ask(crate::close_prompt::PendingClose::All);
-                } else {
-                    close_all_now = true;
-                }
-            }
-            if close_all_now {
-                for node in &app_state.scene {
-                    let id = node.id;
-                    image_browser.forget_recon(id);
-                    image_detail.forget_recon(id);
-                    point_track_detail.forget_recon(id);
-                    intrinsics_detail.forget_recon(id);
-                }
-                if let Err(message) = app_state.close_all() {
-                    app_state
-                        .action_log
-                        .fail(crate::action_log::Kind::File, message);
-                }
-            }
-            if quit_from_menu && app_state.any_dirty() {
-                quit_requested = false;
-                app_state
-                    .close_prompt
-                    .ask(crate::close_prompt::PendingClose::Quit);
-            }
-
-            if app_state.show_demo_dialog {
-                let mut open = true;
-                let mut load_clicked = false;
-                egui::Window::new("Load Demo Data")
-                    .open(&mut open)
-                    .collapsible(false)
-                    .resizable(false)
-                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .show(root_ui.ctx(), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Number of points:");
-                            ui.add(
-                                egui::DragValue::new(&mut app_state.demo_num_points)
-                                    .range(1..=100_000)
-                                    .speed(10.0),
-                            );
-                        });
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            if ui.button("Load").clicked() {
-                                load_clicked = true;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                app_state.show_demo_dialog = false;
-                            }
-                        });
-                    });
-                if !open {
-                    app_state.show_demo_dialog = false;
-                }
-                if load_clicked {
-                    // Same node-creation path as File > Open, so the demo load
-                    // resets the caches and selection too.
-                    app_state.load_demo(app_state.demo_num_points);
-                    app_state.show_demo_dialog = false;
-                }
-            }
-
-            // Go to Point. `select_point` also selects the owning
-            // reconstruction, so a pasted ID naming a *different* loaded file
-            // moves the whole session there — which is what makes an ID copied
-            // out of one session usable in the next.
-            if let Some(point) =
-                app_state
-                    .goto_point
-                    .show(root_ui.ctx(), &app_state.scene, app_state.selected_recon)
-            {
-                app_state.select_point(point);
-                // Raise the panel that answers "what is this point?", so the
-                // jump has something to show for itself even when Point Track
-                // is tabbed behind Image Detail (which is the default layout)
-                // — or closed, which `show_panel` re-opens at its home rather
-                // than silently finding nothing to raise.
-                app_state.show_panel(Tab::PointTrackDetail);
+                menu::show(root_ui, &mut parts, &mut requests, &mut window_host);
+                menu::shortcuts(root_ui, &mut parts);
+                modals::show(root_ui, &mut parts, &mut requests);
             }
 
             egui::CentralPanel::default().show(root_ui, |ui| {
@@ -1323,7 +884,7 @@ impl App {
             });
         });
 
-        self.quit_requested |= quit_requested;
+        self.quit_requested |= requests.quit_requested;
 
         egui_winit_state.handle_platform_output(window, full_output.platform_output);
 
@@ -1463,155 +1024,6 @@ impl App {
             }
         }
     }
-}
-
-// ── The File menu's save shortcuts and their helpers ─────────────────────
-
-/// Write the selected reconstruction over its own file.
-pub(crate) const SAVE_SHORTCUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
-
-/// Write the selected reconstruction to a file chosen in the dialog.
-pub(crate) const SAVE_AS_SHORTCUT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers {
-        command: true,
-        shift: true,
-        ..egui::Modifiers::NONE
-    },
-    egui::Key::S,
-);
-
-/// Ask for a path and write `id` to it, through the same native dialog
-/// `File ▸ Open` uses.
-///
-/// `Ok(())` with nothing written when the dialog was dismissed: choosing not to
-/// choose a file is not a failure, and a log line saying so would be noise.
-fn save_as_with_dialog(
-    state: &mut crate::state::AppState,
-    id: crate::scene::ReconId,
-) -> Result<(), String> {
-    let suggested = state
-        .node(id)
-        .map(|node| format!("{}.sfmr", node.label))
-        .unwrap_or_else(|| "reconstruction.sfmr".to_string());
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("SfM Reconstruction", &["sfmr"])
-        .set_file_name(suggested)
-        .save_file()
-    else {
-        return Ok(());
-    };
-    state.save_node_as(id, &path)
-}
-
-/// Write everything the close prompt was standing in front of, and say whether
-/// the close may go ahead.
-///
-/// A node with no file goes through the Save As dialog, so *Save* on demo data
-/// or a resection is a real offer rather than a refusal. A write that fails, or
-/// a dialog that is dismissed, stops the close: the point of the prompt is that
-/// nothing is lost without an answer, and neither of those is one.
-fn save_dirty_before_closing(
-    state: &mut crate::state::AppState,
-    pending: crate::close_prompt::PendingClose,
-) -> bool {
-    let ids = match pending {
-        crate::close_prompt::PendingClose::Node(id) => vec![id],
-        _ => state.dirty_ids(),
-    };
-    for id in ids {
-        let has_path = state.node(id).is_some_and(|node| node.path.is_some());
-        let outcome = if has_path {
-            state.save_node(id)
-        } else {
-            save_as_with_dialog(state, id)
-        };
-        if let Err(message) = outcome {
-            state
-                .action_log
-                .fail(crate::action_log::Kind::File, message);
-            return false;
-        }
-        if state.is_dirty(id) {
-            // Save As was dismissed, so nothing was written and the node is
-            // still where it was.
-            return false;
-        }
-    }
-    true
-}
-
-/// Report a save's outcome, if one was attempted.
-///
-/// The counterpart of [`edit_outcome`]: a save writes its own success line
-/// naming the path and the version, so this exists for the refusals.
-fn save_outcome(state: &mut crate::state::AppState, outcome: Option<Result<(), String>>) {
-    if let Some(Err(message)) = outcome {
-        state
-            .action_log
-            .fail(crate::action_log::Kind::File, message);
-    }
-}
-
-// ── The Edit menu's shortcuts and its two shared helpers ─────────────────
-
-/// Undo the selected reconstruction's newest version.
-pub(crate) const UNDO_SHORTCUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
-
-/// Redo, in the spelling the menu shows.
-pub(crate) const REDO_SHORTCUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
-
-/// Redo, in the spelling the rest of the desktop also accepts. Both are live;
-/// only [`REDO_SHORTCUT`] is written beside the menu item, because a menu that
-/// lists two spellings of one action reads as two actions.
-pub(crate) const REDO_SHORTCUT_ALT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(
-    egui::Modifiers {
-        command: true,
-        shift: true,
-        ..egui::Modifiers::NONE
-    },
-    egui::Key::Z,
-);
-
-/// Delete the selected 3D point. Plain Delete, and so live only while no text
-/// field has the keyboard.
-pub(crate) const DELETE_POINT_SHORTCUT: egui::KeyboardShortcut =
-    egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Delete);
-
-/// Report an edit's outcome, if one was attempted.
-///
-/// Every edit method writes its own success line, in the vocabulary of the
-/// document model, so this exists for the refusals: an edit that could not run
-/// says why, once, wherever it was asked for.
-fn edit_outcome(state: &mut crate::state::AppState, outcome: Option<Result<(), String>>) {
-    if let Some(Err(message)) = outcome {
-        state
-            .action_log
-            .fail(crate::action_log::Kind::Edit, message);
-    }
-}
-
-/// Drop the panel-local caches of `id` after an edit that renumbered its
-/// images.
-///
-/// The counterpart of `dock.rs`'s `forget_recon`, reachable from the menu bar,
-/// where the panels are in scope but the dock is not. A node keeps its
-/// [`crate::scene::ReconId`] across an edit, so nothing here becomes
-/// unreachable on its own the way a closed node's does -- it has to be dropped.
-fn forget_selected(
-    id: Option<crate::scene::ReconId>,
-    image_browser: &mut crate::image_browser::ImageBrowser,
-    image_detail: &mut crate::image_detail::ImageDetail,
-    point_track_detail: &mut crate::point_track_detail::PointTrackDetail,
-    intrinsics_detail: &mut crate::intrinsics_detail::IntrinsicsDetail,
-) {
-    let Some(id) = id else { return };
-    image_browser.forget_recon(id);
-    image_detail.forget_recon(id);
-    point_track_detail.forget_recon(id);
-    intrinsics_detail.forget_recon(id);
 }
 
 /// The note beside an upload's time: `reused`, or how much it wrote.

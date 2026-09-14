@@ -18,7 +18,7 @@
 //!   [`AppState::hide_panel`], [`AppState::reset_layout`],
 //!   [`AppState::apply_layout`], [`AppState::apply_window_layout`],
 //!   [`AppState::load_layout_file`] — which is where the Action Log is in
-//!   reach, and the Panels menu that drives them ([`panels_menu`]).
+//!   reach. The Panels menu lives in [`crate::app::menu`].
 //!
 //! The JSON is read and written by hand rather than through `serde`: a node is
 //! a leaf or a split by which keys it carries, and `serde` does not honour
@@ -1240,91 +1240,4 @@ impl AppState {
         self.action_log
             .record(Kind::Layout, format!("Closed {} panel", tab.title()));
     }
-}
-
-// ── The Panels menu ──────────────────────────────────────────────────────
-
-/// The body of the **Panels** menu: a checkbox per panel, then the three
-/// layout-wide items.
-///
-/// Split out of `app.rs` so it can be drawn — and read back — in a headless
-/// frame. It takes the window host because Save and Load carry the window's
-/// placement as well as the panels; the frame passes a clone of its
-/// `Arc<Window>` and the headless test passes a fake. A menu load applies the
-/// window change mid-frame rather than at the top of one, so the *next* frame
-/// is the first laid out at the new size — right for a human click, and not
-/// worth a deferral.
-pub(crate) fn panels_menu(ui: &mut egui::Ui, state: &mut AppState, host: &mut dyn WindowHost) {
-    for tab in Tab::ALL {
-        let mut open = state.is_panel_open(tab);
-        if ui.checkbox(&mut open, tab.title()).clicked() {
-            if open {
-                state.show_panel(tab);
-            } else {
-                state.hide_panel(tab);
-            }
-            ui.close();
-        }
-    }
-    ui.separator();
-    if ui
-        .button("Reset Layout")
-        .on_hover_text("Put every panel back in its default place")
-        .clicked()
-    {
-        state.reset_layout();
-        ui.close();
-    }
-    ui.separator();
-    if ui.button("Save Layout...").clicked() {
-        save_layout(state);
-        ui.close();
-    }
-    if ui.button("Load Layout...").clicked() {
-        load_layout(state, host);
-        ui.close();
-    }
-}
-
-/// Panels ▸ Save Layout…: a save dialog, then the file.
-///
-/// The dialog opens on the default file (§ "The default layout file"), so the
-/// common case — "keep it like this" — is Save Layout…, Enter, and the viewer
-/// comes up this way next time.
-fn save_layout(state: &mut AppState) {
-    let mut dialog = rfd::FileDialog::new()
-        .add_filter("Layout", &["json"])
-        .set_file_name(DEFAULT_LAYOUT_FILE_NAME);
-    if let Some(directory) =
-        default_layout_path().and_then(|path| path.parent().map(Path::to_owned))
-    {
-        dialog = dialog.set_directory(directory);
-    }
-    let Some(path) = dialog.save_file() else {
-        return;
-    };
-    match std::fs::write(&path, state.window_layout().to_json()) {
-        Ok(()) => state
-            .action_log
-            .record(Kind::Layout, format!("Saved layout to {}", path.display())),
-        Err(error) => state.action_log.fail(
-            Kind::Layout,
-            format!("Save layout to {}: {error}", path.display()),
-        ),
-    }
-}
-
-/// Panels ▸ Load Layout…: an open dialog, then the file — or a refusal that
-/// leaves the window and the arrangement exactly as they were.
-fn load_layout(state: &mut AppState, host: &mut dyn WindowHost) {
-    let mut dialog = rfd::FileDialog::new().add_filter("Layout", &["json"]);
-    if let Some(directory) =
-        default_layout_path().and_then(|path| path.parent().map(Path::to_owned))
-    {
-        dialog = dialog.set_directory(directory);
-    }
-    let Some(path) = dialog.pick_file() else {
-        return;
-    };
-    state.load_layout_file(host, &path);
 }

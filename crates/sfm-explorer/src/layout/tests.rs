@@ -794,7 +794,9 @@ fn menu_texts(state: &mut AppState) -> Vec<String> {
         ..Default::default()
     };
     let mut host = FakeWindow::default();
-    crate::test_support::painted_texts(&ctx, input, |ui| panels_menu(ui, state, &mut host))
+    crate::test_support::painted_texts(&ctx, input, |ui| {
+        crate::app::menu::panels_menu(ui, state, &mut host)
+    })
 }
 
 #[test]
