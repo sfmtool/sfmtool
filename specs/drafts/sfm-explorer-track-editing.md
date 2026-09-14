@@ -298,8 +298,9 @@ of every camera and not degenerate. It runs the spawn pipeline's own steps
    embed pass and `add_observation` chain, and re-triangulate from the result.
 4. **Fuse** the consensus bitmap over the surviving observations.
 
-Every observation's cluster-stage measurements are kept beside the new ones. Nothing
-is thrown away by moving up: a downgrade gets them back without re-running.
+The cluster-stage measurements are dropped with the stage: each is a registration
+against a reference and a template the track no longer has, and a track carries
+the measurements of its current stage and no other.
 
 **Downgrade, track to cluster**, is always possible and is lossy on purpose. The
 reference becomes the `in` observation with the largest projected patch scale; each

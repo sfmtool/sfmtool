@@ -296,8 +296,8 @@ class TestEvaluating:
             # area.
             shape = np.asarray(after["cluster"]["seed_shape"])
             assert abs(np.linalg.det(shape)) > 0.0
-            # What the track stage measured stays in its own slot.
-            assert "track" in after
+            # What the track stage measured went with the stage.
+            assert "track" not in after
 
     def test_an_upgrade_comes_back_to_the_point_it_came_from(
         self, edited, images, long_track_point
@@ -311,9 +311,9 @@ class TestEvaluating:
         moved = np.linalg.norm(np.asarray(again.position) - np.asarray(track.position))
         extent = np.linalg.norm(np.asarray(edited.point(long_track_point)["position"]))
         assert moved < 0.05 * max(extent, 1.0), f"the round trip moved {moved}"
-        # Both stages' measurements are on the observations now.
+        # Only the track stage's measurements are on the observations now.
         for observation in again.observations:
-            assert "cluster" in observation and "track" in observation
+            assert "cluster" not in observation and "track" in observation
 
     def test_setting_the_stage_a_track_is_already_at_changes_nothing(
         self, edited, images, long_track_point

@@ -1064,8 +1064,8 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         let det = seed.seed_shape[0][0] * seed.seed_shape[1][1]
             - seed.seed_shape[0][1] * seed.seed_shape[1][0];
         assert!(det.abs() > 0.0, "the projected shape spans an area");
-        // The 3D is gone, and what was measured at the track stage is not.
-        assert!(observation.track.is_some());
+        // The 3D is gone, and so is what was measured against it.
+        assert!(observation.track.is_none());
     }
     assert!(cluster.track().is_none());
 
@@ -1148,11 +1148,11 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
         (position - WORLD).norm() < 0.1,
         "the hand-placed cluster landed at {position}"
     );
-    // Both stages' measurements are on the observations now.
+    // Only the track stage's measurements are on the observations now.
     assert!(upgraded
         .observations
         .iter()
-        .all(|o| o.cluster.is_some() && o.track.is_some()));
+        .all(|o| o.cluster.is_none() && o.track.is_some()));
 
     let (next, report) = commit(&edited, &upgraded).expect("a track with a position");
     assert_eq!(report.observation_count, 2);
@@ -1188,8 +1188,8 @@ fn a_split_of_a_track_stage_track_hands_back_a_cluster() {
         .expect("the downgrade seeded it");
     assert!((seed.seed_position[0] - f64::from(keypoint[0])).abs() < 1e-6);
     assert!(
-        second.observations[0].track.is_some(),
-        "the track stage's measurements stay in their slot"
+        second.observations[0].track.is_none(),
+        "the track stage's measurements went with the stage"
     );
 }
 

@@ -111,15 +111,16 @@ impl std::fmt::Display for StageReport {
 /// triangulated depth, with the mean viewing direction as the normal; and the
 /// track-stage evaluation then localizes and refines every `in` and
 /// `candidate` observation against that surfel, re-triangulates the `in`
-/// results and fuses the consensus. Every observation's cluster-stage
-/// measurements are kept beside the new ones.
+/// results and fuses the consensus. The cluster-stage measurements are
+/// dropped: they describe a registration against a reference and a template
+/// the track no longer has.
 ///
 /// **Down, track to cluster.** Always possible, and lossy on purpose: the
 /// reference becomes the `in` observation with the largest projected patch
 /// scale, each observation is re-seeded at its keypoint with the affine shape
 /// the format derives by projecting the frame at that observation's anchor, and
-/// the position, the frame and the bitmap are dropped. Track-stage
-/// measurements stay in their slots. This is the step for a track whose
+/// the position, the frame, the bitmap and the track-stage measurements are
+/// dropped. This is the step for a track whose
 /// observations were right and whose 3D hypothesis was the problem: the cluster
 /// kernel then judges the observations on appearance alone.
 ///
@@ -277,7 +278,12 @@ fn upgrade(
 
     // 3-4. Localize, refine, re-triangulate and fuse: the track stage's own
     //      evaluation, over seeds that are the cluster's refined positions.
-    let (next, report) = evaluate_track(&seeded, edited, images, &frame, options, progress)?;
+    let (mut next, report) = evaluate_track(&seeded, edited, images, &frame, options, progress)?;
+    // A cluster measurement is a registration against a reference and a
+    // template the track no longer has, so it goes with the stage.
+    for observation in &mut next.observations {
+        observation.cluster = None;
+    }
     Ok((next, report))
 }
 
@@ -311,7 +317,8 @@ fn upgrade_reference(
 }
 
 /// Track to cluster: re-seed every observation from its keypoint and the shape
-/// the frame projects to there, and drop the 3D.
+/// the frame projects to there, and drop the 3D with the measurements made
+/// against it.
 fn downgrade(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -372,6 +379,7 @@ fn downgrade(
             [f64::from(keypoint[0]), f64::from(keypoint[1])],
             shape,
         ));
+        next.observations[i].track = None;
         seeded.push((observation.verdict == Verdict::In).then_some((i, det.abs().sqrt())));
     }
 

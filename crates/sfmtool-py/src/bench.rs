@@ -709,14 +709,14 @@ fn evaluate(
 /// **Up**, cluster to track: the ``in`` observations' refined cluster positions
 /// are triangulated, the patch is framed at that position from the reference
 /// observation's affine shape at the triangulated depth, and the track-stage
-/// evaluation then runs over it. Every observation's cluster-stage
-/// measurements are kept beside the new ones.
+/// evaluation then runs over it. The cluster-stage measurements are dropped
+/// with the stage.
 ///
 /// **Down**, track to cluster: always possible and lossy on purpose. The
 /// reference becomes the ``in`` observation with the largest projected patch
 /// scale, every observation is re-seeded at its keypoint with the shape the
-/// frame projects to there, and the position, the frame and the bitmap are
-/// dropped. Track-stage measurements stay in their slots.
+/// frame projects to there, and the position, the frame, the bitmap and the
+/// track-stage measurements are dropped.
 ///
 /// Setting the stage a track is already at gives the track back unchanged, with
 /// ``changed`` false, and the caller pushes no version for it.

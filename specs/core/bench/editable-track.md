@@ -451,8 +451,9 @@ toggle straight to it and push no version for a step that did not happen.
 3. **Localize, refine, re-triangulate and fuse**, which is the track-stage
    evaluation above over seeds that are the cluster's refined positions.
 
-Every observation's cluster-stage measurements are kept beside the new ones:
-nothing is thrown away by moving up.
+The cluster-stage measurements are dropped with the stage: each describes a
+registration against a reference and a template the track no longer has, and
+the track stage measures every observation afresh against the surfel.
 
 **Down, track to cluster**, is always possible and lossy on purpose. Each
 observation is re-seeded at its keypoint with the affine shape the format
@@ -462,16 +463,18 @@ derives by projecting the frame at that observation's anchor
 the upgrade does, so the two directions state one relationship). The reference
 becomes the `in` observation with the largest projected patch scale, which is
 the one showing the most of the patch, and the position, the frame and the
-bitmap are dropped. Track-stage measurements stay in their slots. This is the
+bitmap are dropped, and the track-stage measurements with them, since each was
+made against that position and frame. This is the
 step for a track whose observations were right and whose 3D hypothesis was the
 problem: the cluster kernel then judges the observations on appearance alone,
 and an upgrade builds the 3D afresh from whatever survives.
 
-A downgrade **re-seeds rather than restores**: a cluster measurement describes a
-registration against one particular reference and template, and a downgrade
-picks both afresh, so the refined values go and the next evaluation makes them
-again. The seeds it writes are the keypoints, which is the point of taking a
-track down -- the sightings are what is being kept.
+A track therefore carries the measurements of its current stage and no other.
+What crosses a transition is what the next stage starts from: the refined
+cluster positions become the seeds of the triangulation going up, and the
+localized keypoints become the cluster seeds going down, which is the point of
+taking a track down -- the sightings are what is being kept, and the 3D
+hypothesis is what goes.
 
 ### The commit
 
