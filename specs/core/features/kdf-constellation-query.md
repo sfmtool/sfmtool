@@ -145,8 +145,7 @@ term it drops grows with the patch; across five captures the two curves cross
 around fifty, and past two hundred features the warp is wrong more often than
 right. Keypoints cluster on texture and a patch is usually centred on one, so
 the radius this predicts held 70 to 100% of the features asked for in
-measurement. See
-[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md).
+measurement.
 
 ```rust
 use sfmtool_core::features::kdforest::{
@@ -246,8 +245,7 @@ were 28 to 75% of the candidates at fifty features, with a correctness rate of
 0.00 to 0.50 against 0.58 to 0.89 for the rest. A video walk shows almost none of
 either, because consecutive frames differ by a few percent of scale; the guards
 bite where a small corpus lets chaff dominate a candidate image's correspondence
-list. Measured in
-[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md).
+list.
 
 ### Why `k` is larger than the matcher's
 
@@ -409,9 +407,8 @@ capture at every constellation size. Eight removes 42 to 95% of the false
 candidates and 55 to 100% of the never-covisible ones, and raises the share of
 trustworthy warps or leaves it flat everywhere, at the cost of image recall that
 is mostly six-inlier candidates. A caller who wants a list of images to look at
-rather than warps to use can set it back to 6. Both numbers come from
-[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md),
-as does `max_scale`, whose default only refuses the absurd: a legitimate two- or
+rather than warps to use can set it back to 6.
+The `max_scale` default only refuses the absurd: a legitimate two- or
 threefold scale change between two frames exists, so the bound is loose by
 default and a caller who knows its own baselines tightens it.
 

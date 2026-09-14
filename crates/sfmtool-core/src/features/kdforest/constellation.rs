@@ -727,8 +727,7 @@ pub struct PatchConstellation {
 /// 0.28 / 0.37 / 0.06 at two hundred and 0.23 / 0.06 / 0.04 / 0.07 / 0.01 at
 /// eight hundred, while image recall climbs only 0.03 to 0.40 over that whole
 /// range, because the affine is the first-order approximation of a homography
-/// about the patch centre and the term it drops grows with the patch
-/// (reports/exp/2026-09-14-constellation-query-eval.md).
+/// about the patch centre and the term it drops grows with the patch.
 ///
 /// Keypoints cluster where there is texture and a patch is usually centred on
 /// one, so the radius measured at fifty features ran 70 to 100% of what this
