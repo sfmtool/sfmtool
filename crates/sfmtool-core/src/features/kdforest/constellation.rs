@@ -79,7 +79,7 @@ impl Default for ConstellationParams {
 /// image is itself in the corpus holds IDs and would otherwise have to reopen a
 /// `.sift` file to turn them back into vectors. Both reach the same search, and
 /// the ID form reads the vectors through
-/// [`NeighborIndex::resolve_vectors`].
+/// [`NeighborIndex::resolve_descriptors`].
 #[derive(Clone, Copy, Debug)]
 pub enum ConstellationDescriptors<'a, S> {
     /// Flat `n * dim` row-major vectors, one row per constellation feature.
@@ -316,7 +316,7 @@ where
                     ids.len()
                 )));
             }
-            owned = index.resolve_vectors(ids)?;
+            owned = index.resolve_descriptors(ids)?;
             &owned
         }
     };

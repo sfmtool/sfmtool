@@ -37,7 +37,7 @@ pub trait NeighborIndex<S: ForestScalar> {
     fn search_batch_with_distances(&self, queries: &[S], n_queries: usize, k: usize,
         max_leaf_checks: usize, max_dist: Option<f32>)
         -> Result<(Vec<u32>, Vec<f32>), KdfError>;
-    fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
+    fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
 }
 
 pub trait FeatureSources {

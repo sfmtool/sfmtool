@@ -40,9 +40,9 @@ pub trait NeighborIndex<S: ForestScalar> {
         max_dist: Option<f32>,
     ) -> Result<(Vec<u32>, Vec<f32>), KdfError>;
 
-    /// Copy the indexed vectors for `feature_ids`, in request order, as a flat
+    /// Copy the indexed descriptors for `feature_ids`, in request order, as a flat
     /// `feature_ids.len() * dim` row-major array.
-    fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
+    fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
 }
 
 /// The resident forest cannot fail at either operation, so its implementation
@@ -71,8 +71,8 @@ impl<S: ForestScalar> NeighborIndex<S> for KdForest<S> {
         ))
     }
 
-    fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
-        Self::resolve_vectors(self, feature_ids)
+    fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
+        Self::resolve_descriptors(self, feature_ids)
     }
 }
 
@@ -92,7 +92,7 @@ impl<S: ForestScalar + KdfScalar> NeighborIndex<S> for LazyKdForest<S> {
         Self::search_batch_with_distances(self, queries, n_queries, k, max_leaf_checks, max_dist)
     }
 
-    fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
-        Self::resolve_vectors(self, feature_ids)
+    fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
+        Self::resolve_descriptors(self, feature_ids)
     }
 }

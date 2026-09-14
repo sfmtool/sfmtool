@@ -383,7 +383,7 @@ where
     /// file, which is the whole point of embedding them. IDs that fall in one
     /// descriptor block share a single cache pin, so a request in ID order
     /// costs one block read per block it touches.
-    pub fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
+    pub fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
         let mut out = Vec::with_capacity(feature_ids.len() * self.dim());
         self.file
             .with_vectors(feature_ids, |_, vector| out.extend_from_slice(vector))?;

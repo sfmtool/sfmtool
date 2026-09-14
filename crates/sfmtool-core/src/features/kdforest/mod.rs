@@ -343,13 +343,13 @@ impl<S: ForestScalar> KdForest<S> {
     /// `feature_ids.len() * dim` row-major array.
     ///
     /// The resident counterpart of the file-backed corpus read
-    /// (`LazyKdForest::resolve_vectors`): a caller holding IDs rather than
+    /// (`LazyKdForest::resolve_descriptors`): a caller holding IDs rather than
     /// vectors -- a constellation taken from an image the forest itself indexes
     /// -- gets the same array from either path. It reports the same
     /// out-of-range error as that path so both are one `Result` to a caller
     /// generic over [`NeighborIndex`],
     /// rather than a panic here and an error there.
-    pub fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
+    pub fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError> {
         let mut out = Vec::with_capacity(feature_ids.len() * self.dim);
         for &id in feature_ids {
             let row = id as usize;

@@ -70,7 +70,7 @@ impl<S: KdfScalar> LazyKdForest<S> {
         -> Result<Option<Vec<FeatureOrigin>>, KdfError>;
     pub fn resolve_feature_geometry(&self, feature_ids: &[u32])
         -> Result<Option<Vec<FeatureGeometry>>, KdfError>;
-    pub fn resolve_vectors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
+    pub fn resolve_descriptors(&self, feature_ids: &[u32]) -> Result<Vec<S>, KdfError>;
     pub fn image_table(&self) -> Result<Option<&KdfImageTable>, KdfError>;
     pub fn io_stats(&self) -> KdfIoStats;
 }
@@ -138,11 +138,11 @@ requests, returns `None` for a generic corpus, and rejects out-of-range IDs.
 `resolve_feature_geometry` follows the same contract and returns rows shaped as
 `[[x, y], [a11, a12], [a21, a22]]`.
 
-`resolve_vectors` is the same contract for the descriptor corpus itself, so a
+`resolve_descriptors` is the same contract for the descriptor corpus itself, so a
 caller holding feature IDs rather than descriptors reads them back here instead
 of reopening a `.sift` file; consecutive IDs in one block share a cache pin. The
 [constellation query](kdf-constellation-query.md) is what wants all three, and
-what the eager forest's matching `resolve_vectors` exists for.
+what the eager forest's matching `resolve_descriptors` exists for.
 
 Origin and geometry blocks are cached on demand under the same byte budget as tree chunks;
 only blocks covering requested result IDs are read. Image metadata/hashes load

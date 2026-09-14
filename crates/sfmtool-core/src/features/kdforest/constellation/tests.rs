@@ -323,7 +323,7 @@ fn the_two_forests_answer_identically() {
 
     // Same again with the descriptors handed over directly rather than read
     // back by ID, which is the other way a caller reaches this function.
-    let vectors = forest.resolve_vectors(&corpus.query_ids).unwrap();
+    let vectors = forest.resolve_descriptors(&corpus.query_ids).unwrap();
     let direct = constellation_query(
         &lazy,
         &lazy,
