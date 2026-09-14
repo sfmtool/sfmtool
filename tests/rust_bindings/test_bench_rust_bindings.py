@@ -142,9 +142,9 @@ class TestTheEditableTrack:
             assert observation["provenance"] == {"kind": "origin"}
             assert "keypoint" in observation["track"]
 
-    def test_a_named_point_id_is_the_label(self, edited, long_track_point):
+    def test_a_named_label_is_used_as_given(self, edited, long_track_point):
         bench, _ = create_track(
-            Bench(), edited, long_track_point, point_id="pt3d_a1b2c3d4_1207", version=7
+            Bench(), edited, long_track_point, label="pt3d_a1b2c3d4_1207", version=7
         )
         assert bench.labels == ["pt3d_a1b2c3d4_1207"]
         assert bench.track("pt3d_a1b2c3d4_1207").origin["version"] == 7

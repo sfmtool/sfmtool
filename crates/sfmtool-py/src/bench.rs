@@ -395,7 +395,8 @@ impl PyBench {
 /// track on the bench and doing nothing shows the numbers the reconstruction
 /// already holds.
 ///
-/// `point_id` is the portable point id the label is minted from; with none, the
+/// `label` is what the track is put on the bench under, before any collision
+/// suffix; the viewer passes the point's portable id. With none, the
 /// label is ``pt3d_<hash>_<index>`` over the base's own content hash for a point
 /// that is a row of it, and ``point_<index>`` for one an edit added.
 /// `version` is the version serial the origin records, which is the caller's own
@@ -405,19 +406,19 @@ impl PyBench {
 /// the bench like any other -- inspecting a track is allowed everywhere -- and
 /// it is :func:`commit` that refuses to write one back.
 #[pyfunction]
-#[pyo3(signature = (bench, edited, point, *, version = 0, point_id = None))]
+#[pyo3(signature = (bench, edited, point, *, version = 0, label = None))]
 fn create_track(
     bench: &PyBench,
     edited: &PyEditedReconstruction,
     point: u32,
     version: u64,
-    point_id: Option<String>,
+    label: Option<String>,
 ) -> PyResult<(PyBench, PyEditableTrack)> {
     let (next, report) = core_create_track(
         &bench.inner,
         &edited.inner,
         point,
-        &CreateTrackOptions { version, point_id },
+        &CreateTrackOptions { version, label },
     )
     .map_err(refused)?;
     let track = PyEditableTrack {

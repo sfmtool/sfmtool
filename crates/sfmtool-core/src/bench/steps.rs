@@ -62,14 +62,16 @@ pub struct CreateTrackOptions {
     /// The version serial the origin records, as the caller numbers versions.
     /// Core neither mints nor interprets it.
     pub version: u64,
-    /// The portable point id the label is minted from.
+    /// The label to put the track on the bench under, before the collision
+    /// suffix. The viewer passes the point's portable id, so the item is named
+    /// by the point it came from.
     ///
     /// `None` mints one from what core can see: `pt3d_<hash>_<index>` over the
     /// first eight hex digits of the base's content hash for a point that is a
     /// row of that base, and `point_<index>` for a point the overlay added,
     /// which is a row of no content and which only the caller's own version
     /// graph can name.
-    pub point_id: Option<String>,
+    pub label: Option<String>,
 }
 
 /// Why a point could not be put on the bench.
@@ -188,7 +190,7 @@ pub fn create_track(
         thresholds: Thresholds::default(),
     };
 
-    let base = match &options.point_id {
+    let base = match &options.label {
         Some(id) => id.clone(),
         None => default_point_label(edited, point),
     };

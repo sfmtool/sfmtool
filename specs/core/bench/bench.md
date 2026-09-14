@@ -143,7 +143,8 @@ takes, so a reader who knows one knows the other. A label is stable until
 renamed, and **a discarded item's label is free to be minted again**, because it
 names nothing then: the minting reads the bench as it stands and nothing else.
 
-A point id is the caller's to mint, because it names the content a point is a
+The label is the caller's to give, through `CreateTrackOptions::label`, and the
+viewer gives the point's portable id: that id names the content a point is a
 row of and the version graph that content sits in, and core has neither. What
 core does when a caller names none is fall back to what it can see: the first
 eight hex digits of the base's own content hash and the point's index there for

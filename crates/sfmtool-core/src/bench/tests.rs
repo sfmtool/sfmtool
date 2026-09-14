@@ -131,7 +131,7 @@ fn a_point_that_is_not_live_is_refused() {
 // ---- Labels ----------------------------------------------------------------
 
 #[test]
-fn a_track_from_a_point_is_labelled_by_its_point_id() {
+fn a_track_from_a_point_is_labelled_as_the_caller_asks() {
     let scene = Scene::new();
     let edited = edited_fixture(&scene, WORLD);
     let (_, report) = create_track(
@@ -140,7 +140,7 @@ fn a_track_from_a_point_is_labelled_by_its_point_id() {
         0,
         &CreateTrackOptions {
             version: 3,
-            point_id: Some("pt3d_a1b2c3d4_1207".to_string()),
+            label: Some("pt3d_a1b2c3d4_1207".to_string()),
         },
     )
     .expect("a live point");
