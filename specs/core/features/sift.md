@@ -549,7 +549,57 @@ pub fn extract_sift(image: &GrayImage, params: &SiftParams) -> SiftFeatures;
 // capped. `None` describes all. Lets you detect a large pool cheaply and pay
 // descriptor cost for just a small working set in a single call.
 pub fn extract_sift_partial(image, params, max_described: Option<usize>) -> SiftFeatures;
+
+// Describe keypoints the detector did not find: a pixel a person pointed at, a
+// feature carried over from another image. The caller states position and
+// affine shape (equivalently size and orientation); the octave and pyramid
+// level follow from the size, so nothing about the pyramid is in the signature.
+// Refuses, before any work, a keypoint outside the image or one with a
+// non-positive size.
+pub fn describe_keypoints(image: &GrayImage, params: &SiftParams,
+                          keypoints: &[QueryKeypoint])
+    -> Result<Descriptors, DescribeKeypointsError>;
+
+pub struct QueryKeypoint {
+    pub x: f32,                       // full-resolution, pixel-center convention
+    pub y: f32,
+    pub affine_shape: [[f32; 2]; 2],  // the `.sift` layout, as above
+}
 ```
+
+### Describing a keypoint nothing detected
+
+A descriptor is a pure function of the scale space and a keypoint, so the
+detector's role is only to *choose* keypoints: any position, size and
+orientation can be described against the same pyramid with the same kernel.
+`describe_keypoints` is that entry point, and it is what gives a pixel
+observation a descriptor to search a `.kdf` forest with.
+
+The one thing a query lacks is the `(octave, layer)` pair detection records,
+which say which Gaussian level to sample and how wide a subregion is.
+Neither is a free parameter: octave scale ranges are disjoint and contiguous
+(`σ·k^[0.5, s+0.5]·2^o`, by the localizer's layer clamp and its `|offset| < 0.5`
+bound), so with `t = log2(scale / (σ·base_step)) = octave + layer/s` the octave
+is `floor(t − 0.5/s)` and the layer is `(t − octave)·s` --
+`ScaleSpace::octave_layer_for_scale`, the inverse of `abs_sigma_full`. Feeding a
+detected keypoint's own size back through it returns that keypoint's octave and
+a layer that agrees to `f32` rounding, which is why describing a detection at its
+own position, shape and size reproduces the extractor's descriptor **byte for
+byte** (validated over every keypoint of a 270×480 and a 2040×1536 test image,
+both query forms). A size coarser or finer than any octave holds is described at
+the nearest octave rather than refused.
+
+The similarity form and the 2x2 form are the same keypoint, related by the
+module's three conversion functions -- `affine_shape_from_similarity`,
+`affine_shape_scale` (the column-norm average) and `affine_shape_orientation`
+(`atan2` of the first column) -- which `SiftKeypoint` and `QueryKeypoint` both
+defer to, so the correspondence is stated once.
+
+The whole scale space is built per call, as an extraction builds it (no octave
+can be skipped, since a query may name any size), so describing a handful of
+keypoints costs about what extracting the image costs. A caller holding one
+`ScaleSpace` across many queries pairs `QueryKeypoint::to_sift_keypoint` with
+`compute_descriptors` instead.
 
 Raising the *detection* cap is nearly free: detection is dominated by
 extrema-finding and sub-pixel localization, which scan the whole image
@@ -665,6 +715,8 @@ sfmtool-core/src/features/sift/
 
 - `detect_sift_keypoints(image, params=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, responses (N,) f32)`
 - `extract_sift(image, params=None, max_described=None) -> (positions (N,2) f32, affine_shapes (N,2,2) f32, descriptors (K,128) u8)` — the binding for `extract_sift_partial`: `K = min(max_described, N)`, and `K = N` when `max_described` is `None`
+- `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
+- `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 
 This output is exactly what `src/sfmtool/sift/` already consumes, so a new
 `extract_rust.py` backend slots in alongside `extract_opencv.py` /
@@ -688,6 +740,10 @@ backend, which derives them from its `KeyPoint`s via
   gradient.
 - **PyO3 surface test** (`tests/rust_bindings/test_sift_extract_rust_bindings.py`) exercising the bindings and
   round-tripping through `sfmtool-sift-format`.
+- **Describe-at-a-detection** (Rust, and mirrored in the PyO3 surface test):
+  describing every detected keypoint at its own position, shape and size returns
+  the extractor's descriptors byte for byte, by both query forms; a keypoint
+  outside the image or with no size is refused by name.
 - **Criterion benchmarks** (`crates/sfmtool-core/benches/sift.rs`): pyramid build,
   detection, descriptor, end-to-end — same structure as `benches/optical_flow.rs`.
 

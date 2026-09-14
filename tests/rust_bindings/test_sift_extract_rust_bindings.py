@@ -6,7 +6,12 @@
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.sift import detect_sift_keypoints, extract_sift
+from sfmtool._sfmtool.sift import (
+    affine_shapes_from_similarity,
+    describe_keypoints,
+    detect_sift_keypoints,
+    extract_sift,
+)
 
 
 def _noise_image(n: int = 224, seed: int = 0) -> np.ndarray:
@@ -91,3 +96,97 @@ class TestDeterminismAndOrder:
         )
         assert len(sizes) > 50
         assert np.all(np.diff(sizes) <= 1e-4), "keypoints not sorted by descending size"
+
+
+class TestDescribeKeypoints:
+    """`describe_keypoints` describes keypoints the detector did not find."""
+
+    def test_describing_the_detections_reproduces_their_descriptors(self):
+        """Both query forms reproduce the extractor's bytes exactly.
+
+        A descriptor is a pure function of the scale space and a keypoint, so
+        asking for one at a detection's own position, shape and size must return
+        the detection's own descriptor -- the octave and pyramid level are
+        recovered from the size rather than remembered.
+        """
+        img = _noise_image(224, seed=5)
+        pos, aff, desc = extract_sift(img)
+        n = len(pos)
+        assert n > 50, f"need a non-trivial keypoint count, got {n}"
+
+        from_shape = describe_keypoints(img, pos, aff)
+        assert from_shape.shape == (n, 128)
+        assert np.array_equal(from_shape, desc)
+
+        # The same keypoints stated as (size, orientation).
+        scales = 0.5 * (
+            np.linalg.norm(aff[:, :, 0], axis=1) + np.linalg.norm(aff[:, :, 1], axis=1)
+        )
+        orientations = np.arctan2(aff[:, 1, 0], aff[:, 0, 0])
+        shapes = affine_shapes_from_similarity(
+            scales.astype(np.float32), orientations.astype(np.float32)
+        )
+        assert shapes.shape == (n, 2, 2)
+        assert np.array_equal(describe_keypoints(img, pos, shapes), desc)
+
+    def test_a_keypoint_of_its_own_beside_the_detections(self):
+        """A pixel nothing detected describes fine, and differently."""
+        img = _noise_image(128, seed=7)
+        pos, aff, _desc = extract_sift(img)
+        query_pos = np.array([[64.5, 64.5]], dtype=np.float32)
+        query_aff = affine_shapes_from_similarity(
+            np.array([5.0], dtype=np.float32), np.array([0.4], dtype=np.float32)
+        )
+        row = describe_keypoints(img, query_pos, query_aff)
+        assert row.shape == (1, 128)
+        assert row.any(), "a textured patch must describe to something"
+        # Not a copy of some detection's row.
+        described = describe_keypoints(img, pos, aff)
+        assert not (described == row).all(axis=1).any()
+
+    @pytest.mark.parametrize(
+        "position",
+        [
+            [-1.0, 10.0],  # left of the image
+            [10.0, 128.0],  # one row past the bottom
+            [500.0, 10.0],  # far right
+            [float("nan"), 10.0],
+        ],
+    )
+    def test_a_keypoint_outside_the_image_is_refused(self, position):
+        img = _noise_image(128)
+        pos = np.array([[20.0, 20.0], position], dtype=np.float32)
+        aff = affine_shapes_from_similarity(
+            np.array([4.0, 4.0], dtype=np.float32),
+            np.array([0.0, 0.0], dtype=np.float32),
+        )
+        with pytest.raises(ValueError, match="outside"):
+            describe_keypoints(img, pos, aff)
+
+    def test_a_keypoint_with_no_size_is_refused(self):
+        img = _noise_image(128)
+        pos = np.array([[20.0, 20.0], [30.0, 30.0]], dtype=np.float32)
+        aff = np.zeros((2, 2, 2), dtype=np.float32)
+        aff[0] = [[4.0, 0.0], [0.0, 4.0]]
+        with pytest.raises(ValueError, match="positive size"):
+            describe_keypoints(img, pos, aff)
+
+    def test_mismatched_arrays_are_refused(self):
+        img = _noise_image(64)
+        pos = np.zeros((3, 2), dtype=np.float32) + 20.0
+        with pytest.raises(ValueError, match="affine_shapes"):
+            describe_keypoints(img, pos, np.zeros((2, 2, 2), dtype=np.float32))
+        with pytest.raises(ValueError, match="positions"):
+            describe_keypoints(
+                img,
+                np.zeros((3, 3), dtype=np.float32),
+                np.zeros((3, 2, 2), dtype=np.float32),
+            )
+
+    def test_no_keypoints_describes_nothing(self):
+        out = describe_keypoints(
+            _noise_image(64),
+            np.zeros((0, 2), dtype=np.float32),
+            np.zeros((0, 2, 2), dtype=np.float32),
+        )
+        assert out.shape == (0, 128)

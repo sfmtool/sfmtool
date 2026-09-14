@@ -4,7 +4,10 @@
 use super::*;
 use crate::camera::WarpMap;
 use crate::camera::{CameraIntrinsics, CameraModel};
+use crate::reconstruction::data::patch_affine_shape;
+use crate::reconstruction::{ImageTable, Point3D, SfmrImage};
 use nalgebra::{Point3, UnitQuaternion, Vector3};
+use sfmtool_sfmr_format::DepthStatistics;
 
 fn pinhole(f: f64, cx: f64, cy: f64, w: u32, h: u32) -> CameraIntrinsics {
     CameraIntrinsics {
@@ -962,4 +965,227 @@ fn from_tracks_feature_size_reads_the_view_camera_model() {
     // cos 55° = 0.574: the perspective reading is materially smaller, and the
     // pre-uniform-Jacobian rule (`σ·R/f` for every model) is the fisheye value.
     assert!(persp.patch(0).half_extent[0] < 0.6 * ray.patch(0).half_extent[0]);
+}
+
+// ── from_affine_shape_at_depth ────────────────────────────────────────────
+
+/// A one-image `ImageTable` carrying `camera` at `pose`, so the format's own
+/// frame-to-shape rule ([`patch_affine_shape`]) can be run against a patch built
+/// here. The columns a shape read does not touch are left empty.
+fn one_image_table(camera: CameraIntrinsics, pose: &RigidTransform) -> ImageTable {
+    ImageTable {
+        cameras: vec![camera],
+        images: vec![SfmrImage {
+            name: "view.jpg".to_string(),
+            camera_index: 0,
+            quaternion_wxyz: *pose.rotation.as_nalgebra(),
+            translation_xyz: pose.translation,
+        }],
+        thumbnails_y_x_rgb: std::sync::Arc::new(ndarray::Array4::zeros((1, 1, 1, 3))),
+        depth_statistics: DepthStatistics {
+            num_histogram_buckets: 0,
+            images: Vec::new(),
+        },
+        depth_histogram_counts: Vec::new(),
+        rig_frame_data: None,
+    }
+}
+
+/// The format's frame-to-shape rule applied to `patch` as seen from `camera` at
+/// `pose` with the keypoint `keypoint`: the inverse of the constructor under
+/// test, run through the shipped implementation rather than restated here.
+fn project_shape_back(
+    patch: &OrientedPatch,
+    camera: CameraIntrinsics,
+    pose: &RigidTransform,
+    keypoint: [f64; 2],
+) -> [[f32; 2]; 2] {
+    let point = Point3D {
+        position: patch.center,
+        w: patch.w,
+        color: [0, 0, 0],
+        error: 0.0,
+        normal: Vector3::zeros(),
+    };
+    let table = one_image_table(camera, pose);
+    patch_affine_shape(
+        &point,
+        patch.u_axis * patch.half_extent[0],
+        patch.v_axis * patch.half_extent[1],
+        &table,
+        0,
+        [keypoint[0] as f32, keypoint[1] as f32],
+    )
+    .expect("the frame projects in the view it was built from")
+}
+
+/// A pose that is not the identity, so the round trip exercises the world/camera
+/// rotation and translation rather than cancelling them.
+fn shape_test_pose() -> RigidTransform {
+    let rotation = UnitQuaternion::from_euler_angles(0.12, -0.31, 0.07);
+    RigidTransform::from_wxyz_translation(
+        [rotation.w, rotation.i, rotation.j, rotation.k],
+        [0.4, -0.9, 2.3],
+    )
+}
+
+/// Build a frame from a shape at a depth, project it back with the format's own
+/// rule, and get the shape again -- for a pinhole and for a radially distorted
+/// camera. Both sides go through the camera model, so the distortion cancels
+/// instead of accumulating.
+#[test]
+fn from_affine_shape_at_depth_round_trips_the_shape() {
+    let pose = shape_test_pose();
+    let keypoint = [412.0, 173.0];
+    // A patch-convention shape: `v` points image-UP while pixel rows count down,
+    // so a front-facing frame projects to a negative determinant (see the
+    // constructor's "Chirality"). Skewed and anisotropic on purpose -- the
+    // constructor must not quietly orthogonalize it.
+    let shape = [[7.5, 1.2], [1.9, -6.1]];
+    let depth = 5.25;
+
+    let distorted = CameraIntrinsics {
+        model: CameraModel::SimpleRadial {
+            focal_length: 520.0,
+            principal_point_x: 320.0,
+            principal_point_y: 240.0,
+            radial_distortion_k1: -0.11,
+        },
+        width: 640,
+        height: 480,
+    };
+    for (name, camera) in [
+        ("pinhole", pinhole(520.0, 320.0, 240.0, 640, 480)),
+        ("simple radial", distorted),
+    ] {
+        let patch =
+            OrientedPatch::from_affine_shape_at_depth(&camera, &pose, keypoint, shape, depth)
+                .expect("the shape unprojects");
+
+        // The centre is the keypoint's ray at `depth`, and the normal looks back
+        // down that ray.
+        let to_camera = (pose.inverse_translation_origin() - patch.center).normalize();
+        assert!(
+            ((patch.center - pose.inverse_translation_origin()).norm() - depth).abs() < 1e-9,
+            "{name}: centre must sit `depth` along the bearing"
+        );
+        assert!(
+            (patch.normal().dot(&to_camera) - 1.0).abs() < 1e-9,
+            "{name}: fronto-parallel normal, got {}",
+            patch.normal().dot(&to_camera)
+        );
+        assert!(patch.is_front_facing(&pose), "{name}: faces the camera");
+
+        let back = project_shape_back(&patch, camera, &pose, keypoint);
+        for r in 0..2 {
+            for c in 0..2 {
+                assert!(
+                    (back[r][c] as f64 - shape[r][c]).abs() < 1e-3,
+                    "{name}: shape[{r}][{c}] came back as {} (wanted {})",
+                    back[r][c],
+                    shape[r][c]
+                );
+            }
+        }
+    }
+}
+
+/// A `.sift`-style scaled rotation has the opposite chirality to a patch frame,
+/// so its second column is negated to keep the patch facing the camera. The
+/// recovered shape differs in exactly that column's sign.
+#[test]
+fn from_affine_shape_at_depth_flips_a_sift_shape_to_face_the_camera() {
+    let camera = pinhole(520.0, 320.0, 240.0, 640, 480);
+    let pose = shape_test_pose();
+    let keypoint = [290.0, 260.0];
+    // [[s*cos, -s*sin], [s*sin, s*cos]] -- determinant +s^2.
+    let (sin, cos) = 0.6f64.sin_cos();
+    let s = 8.0;
+    let shape = [[s * cos, -s * sin], [s * sin, s * cos]];
+
+    let patch = OrientedPatch::from_affine_shape_at_depth(&camera, &pose, keypoint, shape, 4.0)
+        .expect("the shape unprojects");
+    assert!(
+        patch.is_front_facing(&pose),
+        "a flipped frame still faces us"
+    );
+
+    // The first column round-trips exactly; the negated one comes back to within
+    // the projection's second-order term, because the tip it unprojects from is
+    // on the other side of the centre and a camera is not linear across the
+    // patch. A few thousandths of a pixel on an 8 px column.
+    let back = project_shape_back(&patch, camera, &pose, keypoint);
+    let expected = [[shape[0][0], -shape[0][1]], [shape[1][0], -shape[1][1]]];
+    for r in 0..2 {
+        assert!(
+            (back[r][0] as f64 - expected[r][0]).abs() < 1e-3,
+            "shape[{r}][0] came back as {} (wanted {})",
+            back[r][0],
+            expected[r][0]
+        );
+        assert!(
+            (back[r][1] as f64 - expected[r][1]).abs() < 0.02,
+            "shape[{r}][1] came back as {} (wanted about {})",
+            back[r][1],
+            expected[r][1]
+        );
+    }
+}
+
+/// At the principal point an isotropic shape of radius `sigma` gives the same
+/// world half-size as the `FeatureSize` / `PixelRadius` sizing rule, which is
+/// the one the reconstruction's own patches are built with. Off axis the two
+/// differ (the unprojection is exact where the sizing rule linearizes), which is
+/// why this pins the on-axis agreement only.
+#[test]
+fn from_affine_shape_at_depth_agrees_with_the_pixel_radius_rule_on_axis() {
+    let camera = pinhole(520.0, 320.0, 240.0, 640, 480);
+    let pose = RigidTransform::identity();
+    let sigma = 6.0;
+    let depth = 3.5;
+    let patch = OrientedPatch::from_affine_shape_at_depth(
+        &camera,
+        &pose,
+        [320.0, 240.0],
+        [[sigma, 0.0], [0.0, -sigma]],
+        depth,
+    )
+    .expect("the shape unprojects");
+
+    // Canonical cameras look down -Z, so the centre sits at z = -depth.
+    let expected = camera.pixel_radius_to_world([0.0, 0.0, -depth], sigma);
+    for (axis, half) in patch.half_extent.iter().enumerate() {
+        assert!(
+            (half - expected).abs() < 1e-9,
+            "half-extent {axis} is {half}, the sizing rule says {expected}"
+        );
+    }
+}
+
+/// The refusals: a depth that is not a positive, finite distance, and a shape
+/// with no size.
+#[test]
+fn from_affine_shape_at_depth_refuses_a_bad_depth_or_shape() {
+    let camera = pinhole(520.0, 320.0, 240.0, 640, 480);
+    let pose = RigidTransform::identity();
+    let keypoint = [320.0, 240.0];
+    let shape = [[6.0, 0.0], [0.0, -6.0]];
+    for depth in [0.0, -2.0, f64::NAN, f64::INFINITY] {
+        assert!(
+            OrientedPatch::from_affine_shape_at_depth(&camera, &pose, keypoint, shape, depth)
+                .is_none(),
+            "depth {depth} must be refused"
+        );
+    }
+    assert!(
+        OrientedPatch::from_affine_shape_at_depth(
+            &camera,
+            &pose,
+            keypoint,
+            [[0.0, 0.0], [0.0, 0.0]],
+            3.0
+        )
+        .is_none(),
+        "a zero shape has no frame"
+    );
 }

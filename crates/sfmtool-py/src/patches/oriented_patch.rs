@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use sfmtool_core::patch::cloud::OrientedPatch;
 
 use crate::geometry::rigid_transform::PyRigidTransform;
+use crate::PyCameraIntrinsics;
 
 /// An oriented planar patch (surfel) in world space.
 ///
@@ -89,6 +90,59 @@ impl PyOrientedPatch {
                 half_extent,
             ),
         }
+    }
+
+    /// Build a **finite** patch from one observation: the keypoint's ray at
+    /// ``depth``, framed fronto-parallel, carrying the in-plane axes and
+    /// half-extents that the keypoint's 2x2 ``affine_shape`` unprojects to.
+    ///
+    /// The inverse of the rule the ``.sfmr`` format states for reading a
+    /// keypoint's shape off a patch frame (``SfmrReconstruction
+    /// .observation_affine_shape``): that rule projects the anchor and the two
+    /// half-axis tips and takes the pixel differences as the shape's columns, so
+    /// this one back-projects the two tip pixels and takes the world differences
+    /// as the half-axes. Round-tripping a shape through the two returns it,
+    /// distortion included.
+    ///
+    /// Args:
+    ///     camera: The observing view's intrinsics.
+    ///     cam_from_world: The observing view's pose (``p_cam = R·p_world + t``).
+    ///     keypoint: The observation's pixel, ``(x, y)``.
+    ///     affine_shape: ``[[a11, a12], [a21, a22]]``, columns first: column 0
+    ///         becomes ``u``, column 1 becomes ``v``. The ``.sift`` layout.
+    ///     depth: Distance from the camera centre along the pixel's **unit
+    ///         bearing** -- a range, not a camera-frame ``z``, so it reads the
+    ///         same for a fisheye.
+    ///
+    /// Returns:
+    ///     The patch, or ``None`` when the depth is not a positive finite
+    ///     distance, the camera model has no ray for the keypoint or a tip pixel,
+    ///     a tip's ray runs parallel to (or away from) the patch plane, or the
+    ///     shape unprojects to a degenerate frame.
+    ///
+    /// Note:
+    ///     A patch frame's ``v`` points up in the image while pixel rows count
+    ///     down, so a front-facing patch projects to a shape of negative
+    ///     determinant. A ``.sift``-style scaled rotation has positive
+    ///     determinant, so its second column is negated here to keep the patch
+    ///     facing the camera.
+    #[staticmethod]
+    #[pyo3(signature = (camera, cam_from_world, keypoint, affine_shape, depth))]
+    fn from_affine_shape_at_depth(
+        camera: &PyCameraIntrinsics,
+        cam_from_world: &PyRigidTransform,
+        keypoint: [f64; 2],
+        affine_shape: [[f64; 2]; 2],
+        depth: f64,
+    ) -> Option<Self> {
+        OrientedPatch::from_affine_shape_at_depth(
+            &camera.inner,
+            &cam_from_world.inner,
+            keypoint,
+            affine_shape,
+            depth,
+        )
+        .map(|inner| Self { inner })
     }
 
     #[getter]

@@ -77,3 +77,78 @@ def test_from_patch_remaps_an_image():
         WarpMap.from_patch(patch, cam, _identity(), 16).remap_bilinear(img)
     )
     assert out.shape == (16, 16, 3)
+
+
+def _simple_radial(f, cx, cy, k1, w, h):
+    return CameraIntrinsics(
+        "SIMPLE_RADIAL",
+        w,
+        h,
+        {
+            "focal_length": f,
+            "principal_point_x": cx,
+            "principal_point_y": cy,
+            "radial_distortion_k1": k1,
+        },
+    )
+
+
+def _shape_from_frame(patch, cam, keypoint):
+    """The format's frame-to-shape rule, in the camera's own frame.
+
+    Project the patch anchor and the tips of its two half-vectors; the pixel
+    differences are the shape's columns. Written against an identity pose, so
+    world and camera coordinates coincide.
+    """
+    center = np.asarray(patch.center)
+    u = np.asarray(patch.u_axis) * patch.half_extent[0]
+    v = np.asarray(patch.v_axis) * patch.half_extent[1]
+    k = np.asarray(cam.ray_to_pixel(list(center)))
+    np.testing.assert_allclose(k, keypoint, atol=1e-9)
+    pu = np.asarray(cam.ray_to_pixel(list(center + u)))
+    pv = np.asarray(cam.ray_to_pixel(list(center + v)))
+    return np.array([[pu[0] - k[0], pv[0] - k[0]], [pu[1] - k[1], pv[1] - k[1]]])
+
+
+def test_from_affine_shape_at_depth_round_trips_the_shape():
+    """A frame built from a shape at a depth projects back to that shape.
+
+    A patch-convention shape (negative determinant, since `v` points image-up
+    while pixel rows count down) comes back unchanged, for a pinhole and for a
+    radially distorted camera: both directions go through the camera model.
+    """
+    keypoint = [412.0, 173.0]
+    shape = [[7.5, 1.2], [1.9, -6.1]]
+    depth = 5.25
+    for cam in (
+        _pinhole(520.0, 320.0, 240.0, 640, 480),
+        _simple_radial(520.0, 320.0, 240.0, -0.11, 640, 480),
+    ):
+        patch = OrientedPatch.from_affine_shape_at_depth(
+            cam, _identity(), keypoint, shape, depth
+        )
+        assert patch is not None
+        assert patch.w == 1.0
+        assert patch.is_front_facing(_identity())
+        assert abs(np.linalg.norm(np.asarray(patch.center)) - depth) < 1e-9
+        np.testing.assert_allclose(
+            _shape_from_frame(patch, cam, keypoint), shape, atol=1e-9
+        )
+
+
+def test_from_affine_shape_at_depth_refuses_a_bad_depth():
+    cam = _pinhole(520.0, 320.0, 240.0, 640, 480)
+    shape = [[6.0, 0.0], [0.0, -6.0]]
+    for depth in (0.0, -2.0, float("nan")):
+        assert (
+            OrientedPatch.from_affine_shape_at_depth(
+                cam, _identity(), [320.0, 240.0], shape, depth
+            )
+            is None
+        )
+    assert (
+        OrientedPatch.from_affine_shape_at_depth(
+            cam, _identity(), [320.0, 240.0], [[0.0, 0.0], [0.0, 0.0]], 3.0
+        )
+        is None
+    )

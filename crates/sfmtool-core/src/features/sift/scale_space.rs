@@ -374,6 +374,31 @@ impl ScaleSpace {
     pub fn abs_sigma_full(&self, octave: i32, layer: f64) -> f64 {
         self.abs_sigma(layer) * self.octave_pixel_step(octave)
     }
+
+    /// The `(octave, layer)` a keypoint of full-resolution size `scale` is
+    /// described at: the inverse of [`Self::abs_sigma_full`].
+    ///
+    /// Detection pins a keypoint's octave by where it found it; a caller-supplied
+    /// keypoint ([`super::describe_keypoints`]) has only a size, and this is what
+    /// recovers the pair from it. Octave ranges are disjoint and contiguous
+    /// (`σ·k^[0.5, s+0.5]·2^o`, since localization clamps the integer layer to
+    /// `1..=s` and bounds the offset by 0.5), so the octave is determined by the
+    /// size alone: with `t = log2(scale / (σ·base_step)) = octave + layer/s`, the
+    /// octave is `floor(t − 0.5/s)`. The result round-trips a detected keypoint --
+    /// feeding `abs_sigma_full`'s own output back gives that keypoint's octave and
+    /// a layer that agrees with it to `f32` rounding.
+    ///
+    /// The octave is clamped to the pyramid, so a size coarser or finer than any
+    /// octave holds is described at the nearest one; the returned layer keeps the
+    /// unclamped relationship, so `abs_sigma_full` of the pair still reproduces
+    /// `scale`.
+    pub fn octave_layer_for_scale(&self, scale: f64) -> (i32, f32) {
+        let base_step = if self.double_image { 0.5 } else { 1.0 };
+        let s = self.s as f64;
+        let t = (scale / (self.sigma * base_step)).log2();
+        let octave = ((t - 0.5 / s).floor() as i32).clamp(0, self.num_octaves() as i32 - 1);
+        (octave, ((t - octave as f64) * s) as f32)
+    }
 }
 
 /// Upsample an image 2x using bilinear interpolation (pixel-center convention).

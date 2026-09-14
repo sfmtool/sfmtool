@@ -203,6 +203,136 @@ impl OrientedPatch {
         p
     }
 
+    /// Build a **finite** patch (`w == 1`) from one observation: the keypoint's
+    /// ray at `depth`, framed fronto-parallel, carrying the in-plane axes and
+    /// half-extents that the keypoint's 2x2 `affine_shape` unprojects to.
+    ///
+    /// This is the inverse of the rule the `.sfmr` format states for reading a
+    /// keypoint's shape off a patch frame
+    /// (`specs/formats/sfmr-file-format.md`, "Deriving keypoint shape, scale, and
+    /// orientation", implemented by `patch_affine_shape` and
+    /// [`SfmrReconstruction::observation_affine_shape`]):
+    /// that rule projects the anchor and the two half-axis tips and takes the
+    /// pixel differences as the shape's columns, so this one back-projects the
+    /// two tip pixels `keypoint + column` onto the patch plane and takes the
+    /// world differences as the half-axes. Round-tripping a shape through the two
+    /// returns it, distortion included, because both sides go through the camera
+    /// model rather than a focal-length approximation.
+    ///
+    /// - `cam_from_world` is the observing view's pose, the crate's convention
+    ///   (`p_cam = R·p_world + t`).
+    /// - `keypoint` is the observation's pixel.
+    /// - `affine_shape` is `[[a11, a12], [a21, a22]]`, columns first: column 0
+    ///   `(a11, a21)` becomes `u`, column 1 `(a12, a22)` becomes `v`. This is the
+    ///   `.sift` layout and the layout the format's rule produces.
+    /// - `depth` is the distance from the camera centre along the pixel's **unit
+    ///   bearing** -- a range, not a camera-frame `z`, so the statement holds
+    ///   unchanged for a fisheye.
+    ///
+    /// The normal is the viewing direction (the patch faces the camera squarely),
+    /// which is what a single observation can say about orientation and how
+    /// `create_point` frames a patch from a radius. A frame from one observation
+    /// is a starting point for a normal that refinement or several views will
+    /// fix, not a measurement of the surface's tilt.
+    ///
+    /// **Chirality.** A patch frame's `v` points *up* in the image while pixel
+    /// rows count *down*, so a front-facing patch projects to a shape of negative
+    /// determinant -- which is what the format's rule yields, and what round-trips
+    /// exactly. A `.sift`-style scaled rotation has positive determinant, so its
+    /// second column is negated here to keep the patch facing the camera; the
+    /// recovered shape then differs from such an input in that column's sign, and
+    /// nothing else.
+    ///
+    /// `None` when `depth` is not positive and finite, when the camera model has
+    /// no ray for the keypoint or a tip pixel, when a tip's ray runs parallel to
+    /// (or away from) the patch plane, or when the shape unprojects to a
+    /// degenerate frame.
+    ///
+    /// ```
+    /// # use sfmtool_core::camera::CameraIntrinsics;
+    /// # use sfmtool_core::geometry::RigidTransform;
+    /// # use sfmtool_core::patch::cloud::OrientedPatch;
+    /// # fn frame_a_cluster_member(
+    /// #     camera: &CameraIntrinsics,
+    /// #     cam_from_world: &RigidTransform,
+    /// #     keypoint: [f64; 2],
+    /// #     affine_shape: [[f64; 2]; 2],
+    /// #     depth: f64,
+    /// # ) {
+    /// // The surfel a triangulated cluster member implies: its own pixel, its
+    /// // own shape, at the depth the triangulation put it.
+    /// let patch = OrientedPatch::from_affine_shape_at_depth(
+    ///     camera,
+    ///     cam_from_world,
+    ///     keypoint,
+    ///     affine_shape,
+    ///     depth,
+    /// );
+    /// # let _ = patch;
+    /// # }
+    /// ```
+    pub fn from_affine_shape_at_depth(
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+        affine_shape: [[f64; 2]; 2],
+        depth: f64,
+    ) -> Option<Self> {
+        if !(depth.is_finite() && depth > 0.0) {
+            return None;
+        }
+        let rotation = cam_from_world.to_rotation_matrix();
+        // The pixel's bearing in world, and the plane it anchors: centred at the
+        // ray point, normal back along the ray toward the camera centre.
+        let bearing = |pixel: [f64; 2]| -> Option<Vector3<f64>> {
+            let ray = camera.pixel_to_ray(pixel[0], pixel[1]);
+            let cam = Vector3::new(ray[0], ray[1], ray[2]);
+            let norm = cam.norm();
+            if !norm.is_finite() || norm <= 0.0 {
+                return None;
+            }
+            let world = rotation.transpose() * (cam / norm);
+            world.iter().all(|c| c.is_finite()).then_some(world)
+        };
+        let center_dir = bearing(keypoint)?;
+        let cam_center = cam_from_world.inverse_translation_origin();
+        let center = cam_center + center_dir * depth;
+        let normal = -center_dir;
+
+        // Each shape column names a tip pixel; the half-axis is where that
+        // pixel's ray meets the plane, relative to the centre. `ray·normal` is
+        // `-1` for the centre ray itself and falls off with the angle between
+        // them, so the guard only bites on a tip that grazes or leaves the plane.
+        let half_axis = |column: [f64; 2]| -> Option<Vector3<f64>> {
+            let dir = bearing([keypoint[0] + column[0], keypoint[1] + column[1]])?;
+            let denom = dir.dot(&normal);
+            if !denom.is_finite() || denom > -1e-12 {
+                return None;
+            }
+            let lambda = -depth / denom;
+            Some((cam_center + dir * lambda) - center)
+        };
+        let u = half_axis([affine_shape[0][0], affine_shape[1][0]])?;
+        let mut v = half_axis([affine_shape[0][1], affine_shape[1][1]])?;
+
+        // Keep the frame facing the camera (see "Chirality" above).
+        if u.cross(&v).dot(&normal) < 0.0 {
+            v = -v;
+        }
+
+        let (hu, hv) = (u.norm(), v.norm());
+        if !(hu.is_finite() && hu > 0.0 && hv.is_finite() && hv > 0.0) {
+            return None;
+        }
+        Some(Self {
+            center,
+            u_axis: u / hu,
+            v_axis: v / hv,
+            half_extent: [hu, hv],
+            w: 1.0,
+        })
+    }
+
     /// Whether the `cam_from_world` camera looks at the patch's front face — its
     /// outward normal points toward the camera centre.
     ///

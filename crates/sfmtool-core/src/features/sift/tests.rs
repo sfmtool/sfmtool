@@ -205,3 +205,174 @@ fn test_extract_sift_partial_describes_prefix() {
         n
     );
 }
+
+/// Load the checked-in test image as the detector sees it.
+fn seoul_bull_gray(params: &SiftParams) -> GrayImage {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../test-data/images/seoul_bull_sculpture/seoul_bull_sculpture_01.jpg"
+    );
+    let dynimg = image::open(path).expect("load test image").to_rgb8();
+    let (w, h) = (dynimg.width(), dynimg.height());
+    gray_from_rgb(w, h, dynimg.as_raw(), &params.image_to_gray)
+}
+
+/// Describing a detected keypoint at its own position, shape and size
+/// reproduces the extractor's descriptor byte for byte: the query path derives
+/// the same `(octave, layer)` detection recorded and runs the same kernel.
+///
+/// Both query forms are covered -- the stored 2x2 shape, and the
+/// `(scale, orientation)` pair recovered from it -- because they are the two ways
+/// a caller has a keypoint in hand.
+#[test]
+fn test_describe_keypoints_matches_the_extractor() {
+    let params = SiftParams::default();
+    let img = seoul_bull_gray(&params);
+
+    let features = extract_sift(&img, &params);
+    let n = features.keypoints.len();
+    assert!(n > 50, "need a non-trivial keypoint count, got {n}");
+
+    let from_shape: Vec<QueryKeypoint> = features
+        .keypoints
+        .iter()
+        .map(|kp| QueryKeypoint {
+            x: kp.x,
+            y: kp.y,
+            affine_shape: kp.affine_shape,
+        })
+        .collect();
+    let from_similarity: Vec<QueryKeypoint> = features
+        .keypoints
+        .iter()
+        .map(|kp| QueryKeypoint::from_similarity(kp.x, kp.y, kp.scale(), kp.orientation()))
+        .collect();
+
+    for (form, queries) in [("shape", &from_shape), ("similarity", &from_similarity)] {
+        let described =
+            describe_keypoints(&img, &params, queries).expect("every keypoint is valid");
+        assert_eq!(described.len(), n);
+        for (i, (a, b)) in features
+            .descriptors
+            .rows()
+            .iter()
+            .zip(described.rows())
+            .enumerate()
+        {
+            assert_eq!(
+                a, b,
+                "{form} query {i} at ({}, {}) must reproduce the extractor's descriptor",
+                queries[i].x, queries[i].y
+            );
+        }
+    }
+}
+
+/// The `(octave, layer)` a query's size implies is the one detection recorded
+/// for that keypoint -- the invariant the byte-identity above rests on.
+#[test]
+fn test_query_keypoint_recovers_the_detected_octave_and_layer() {
+    let params = SiftParams::default();
+    let img = seoul_bull_gray(&params);
+    let detection = detect_keypoints(&img, &params);
+
+    for kp in &detection.keypoints {
+        let query = QueryKeypoint {
+            x: kp.x,
+            y: kp.y,
+            affine_shape: kp.affine_shape,
+        };
+        let derived = query.to_sift_keypoint(&detection.scale_space);
+        assert_eq!(
+            derived.octave,
+            kp.octave,
+            "octave for a keypoint of size {}",
+            kp.scale()
+        );
+        assert_eq!(
+            derived.layer.round(),
+            kp.layer.round(),
+            "pyramid level for a keypoint of size {}",
+            kp.scale()
+        );
+        // The size round-trips through the pair.
+        let scale = detection
+            .scale_space
+            .abs_sigma_full(derived.octave, derived.layer as f64);
+        assert!(
+            ((scale as f32) - kp.scale()).abs() <= 1e-4 * kp.scale(),
+            "size {} came back as {scale}",
+            kp.scale()
+        );
+    }
+}
+
+/// A keypoint the image does not contain, or one with no size, is refused by
+/// name rather than panicking or silently describing noise.
+#[test]
+fn test_describe_keypoints_refuses_bad_queries() {
+    let params = SiftParams::default();
+    let img = seoul_bull_gray(&params);
+    let (w, h) = (img.width(), img.height());
+    let good = QueryKeypoint::from_similarity(10.0, 20.0, 4.0, 0.3);
+
+    for bad in [
+        QueryKeypoint::from_similarity(-1.0, 20.0, 4.0, 0.0),
+        QueryKeypoint::from_similarity(10.0, h as f32, 4.0, 0.0),
+        QueryKeypoint::from_similarity(w as f32 + 5.0, 20.0, 4.0, 0.0),
+        QueryKeypoint::from_similarity(f32::NAN, 20.0, 4.0, 0.0),
+    ] {
+        let err = describe_keypoints(&img, &params, &[good, bad]).expect_err("outside the image");
+        assert!(
+            matches!(err, DescribeKeypointsError::OutsideImage { index: 1, .. }),
+            "expected an OutsideImage refusal naming keypoint 1, got {err:?}"
+        );
+        assert!(err.to_string().contains("outside"), "{err}");
+    }
+
+    // A *negative* scale is not degenerate: the shape it builds is the same
+    // keypoint turned 180 degrees, and its column norms are positive. What has
+    // no size is a zero or non-finite shape.
+    for shape in [
+        QueryKeypoint::from_similarity(10.0, 20.0, 0.0, 0.0).affine_shape,
+        QueryKeypoint::from_similarity(10.0, 20.0, f32::NAN, 0.0).affine_shape,
+        [[f32::INFINITY, 0.0], [0.0, 4.0]],
+    ] {
+        let bad = QueryKeypoint {
+            x: 10.0,
+            y: 20.0,
+            affine_shape: shape,
+        };
+        let err = describe_keypoints(&img, &params, &[good, bad]).expect_err("no size");
+        assert!(
+            matches!(err, DescribeKeypointsError::BadScale { index: 1, .. }),
+            "expected a BadScale refusal naming keypoint 1, got {err:?}"
+        );
+        assert!(err.to_string().contains("positive size"), "{err}");
+    }
+
+    // An empty query is not an error; it describes nothing.
+    assert!(describe_keypoints(&img, &params, &[])
+        .expect("empty is fine")
+        .is_empty());
+}
+
+/// A keypoint at a size no octave holds is described at the nearest octave
+/// rather than refused, and a size finer than octave 0 is not silently turned
+/// into a negative octave index.
+#[test]
+fn test_query_keypoint_clamps_a_size_outside_the_pyramid() {
+    let params = SiftParams::default();
+    let img = seoul_bull_gray(&params);
+    let scale_space = ScaleSpace::build(&img, &params);
+    let octaves = scale_space.num_octaves() as i32;
+
+    let tiny = QueryKeypoint::from_similarity(100.0, 100.0, 1e-4, 0.0);
+    assert_eq!(tiny.to_sift_keypoint(&scale_space).octave, 0);
+    let huge = QueryKeypoint::from_similarity(100.0, 100.0, 1e6, 0.0);
+    assert_eq!(huge.to_sift_keypoint(&scale_space).octave, octaves - 1);
+
+    // Both still describe, without panicking.
+    let described = describe_keypoints(&img, &params, &[tiny, huge]).expect("valid queries");
+    assert_eq!(described.len(), 2);
+}

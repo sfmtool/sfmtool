@@ -183,34 +183,60 @@ impl SiftKeypoint {
         layer: f32,
         response: f32,
     ) -> Self {
-        let (sin, cos) = orientation.sin_cos();
-        let affine_shape = [[scale * cos, -scale * sin], [scale * sin, scale * cos]];
         Self {
             x,
             y,
-            affine_shape,
+            affine_shape: affine_shape_from_similarity(scale, orientation),
             octave,
             layer,
             response,
         }
     }
 
-    /// The keypoint scale (size), recovered from the affine shape as the average
-    /// of its two column norms:
-    /// `0.5 · (sqrt(a11² + a21²) + sqrt(a12² + a22²))`.
+    /// The keypoint scale (size), recovered from the affine shape by
+    /// [`affine_shape_scale`].
     pub fn scale(&self) -> f32 {
-        let [[a11, a12], [a21, a22]] = self.affine_shape;
-        let col0 = (a11 * a11 + a21 * a21).sqrt();
-        let col1 = (a12 * a12 + a22 * a22).sqrt();
-        0.5 * (col0 + col1)
+        affine_shape_scale(&self.affine_shape)
     }
 
-    /// The keypoint orientation in radians, recovered from the affine shape as
-    /// `atan2(a21, a11)`.
+    /// The keypoint orientation in radians, recovered from the affine shape by
+    /// [`affine_shape_orientation`].
     pub fn orientation(&self) -> f32 {
-        let [[a11, _], [a21, _]] = self.affine_shape;
-        a21.atan2(a11)
+        affine_shape_orientation(&self.affine_shape)
     }
+}
+
+/// The affine shape of a similarity keypoint: the scaled rotation
+/// `[[s·cosθ, -s·sinθ], [s·sinθ, s·cosθ]]`, which is how COLMAP and the `.sift`
+/// format store a keypoint whose geometry is a location, a scale and an
+/// orientation.
+///
+/// The inverse pair is [`affine_shape_scale`] and [`affine_shape_orientation`].
+/// Every keypoint type in this module states the similarity/affine
+/// correspondence through these three functions, so a caller supplying
+/// `(scale, orientation)` and a caller supplying a 2x2 shape describe the same
+/// keypoint.
+pub fn affine_shape_from_similarity(scale: f32, orientation: f32) -> [[f32; 2]; 2] {
+    let (sin, cos) = orientation.sin_cos();
+    [[scale * cos, -scale * sin], [scale * sin, scale * cos]]
+}
+
+/// The scale (size) of an affine shape: the average of its two column norms,
+/// `0.5 · (sqrt(a11² + a21²) + sqrt(a12² + a22²))`. For the scaled rotation
+/// [`affine_shape_from_similarity`] builds, this is `s`.
+pub fn affine_shape_scale(affine_shape: &[[f32; 2]; 2]) -> f32 {
+    let [[a11, a12], [a21, a22]] = *affine_shape;
+    let col0 = (a11 * a11 + a21 * a21).sqrt();
+    let col1 = (a12 * a12 + a22 * a22).sqrt();
+    0.5 * (col0 + col1)
+}
+
+/// The orientation of an affine shape in radians: `atan2(a21, a11)`, the angle
+/// of its first column. For the scaled rotation
+/// [`affine_shape_from_similarity`] builds, this is `θ`.
+pub fn affine_shape_orientation(affine_shape: &[[f32; 2]; 2]) -> f32 {
+    let [[a11, _], [a21, _]] = *affine_shape;
+    a21.atan2(a11)
 }
 
 /// A block of 128-D unsigned-byte SIFT descriptors, one row per keypoint.
@@ -540,6 +566,202 @@ pub fn extract_sift_partial(
         keypoints: detection.keypoints,
         descriptors,
     }
+}
+
+/// A keypoint the caller asks to have described, rather than one the detector
+/// found: a position and the 2x2 affine shape a `.sift` file stores per feature.
+///
+/// It is a [`SiftKeypoint`] without the fields only detection can fill -- the
+/// `octave` and `layer` that say which pyramid level to sample, and the contrast
+/// `response`. Those are not free parameters: the octave and layer follow from
+/// the size, which [`ScaleSpace::octave_layer_for_scale`] recovers, so a query
+/// carries exactly what a descriptor is a function of.
+///
+/// Build one from a similarity `(scale, orientation)` with
+/// [`Self::from_similarity`], or from a stored shape by setting
+/// [`affine_shape`](Self::affine_shape) directly; the two forms are the same
+/// keypoint, related by [`affine_shape_from_similarity`] and its inverse pair.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QueryKeypoint {
+    /// x coordinate, full-resolution, pixel-center convention.
+    pub x: f32,
+    /// y coordinate, full-resolution, pixel-center convention.
+    pub y: f32,
+    /// Affine shape `[[a11, a12], [a21, a22]]` (COLMAP convention), whose
+    /// column-norm average is the keypoint size and whose first column's angle
+    /// is its orientation.
+    pub affine_shape: [[f32; 2]; 2],
+}
+
+impl QueryKeypoint {
+    /// A query keypoint from its similarity geometry: position, size `scale`
+    /// (the affine-shape column norm) and `orientation` in radians.
+    pub fn from_similarity(x: f32, y: f32, scale: f32, orientation: f32) -> Self {
+        Self {
+            x,
+            y,
+            affine_shape: affine_shape_from_similarity(scale, orientation),
+        }
+    }
+
+    /// The keypoint size, by [`affine_shape_scale`].
+    pub fn scale(&self) -> f32 {
+        affine_shape_scale(&self.affine_shape)
+    }
+
+    /// The keypoint orientation in radians, by [`affine_shape_orientation`].
+    pub fn orientation(&self) -> f32 {
+        affine_shape_orientation(&self.affine_shape)
+    }
+
+    /// The [`SiftKeypoint`] that describes this query against `scale_space`: the
+    /// same position and shape, with the `(octave, layer)` the size implies
+    /// ([`ScaleSpace::octave_layer_for_scale`]) and a zero `response`, which
+    /// description does not read.
+    ///
+    /// This is the bridge [`describe_keypoints`] crosses, exposed so a caller
+    /// holding one scale space across many queries can pair it with
+    /// [`compute_descriptors`] directly.
+    pub fn to_sift_keypoint(&self, scale_space: &ScaleSpace) -> SiftKeypoint {
+        let (octave, layer) = scale_space.octave_layer_for_scale(self.scale() as f64);
+        SiftKeypoint {
+            x: self.x,
+            y: self.y,
+            affine_shape: self.affine_shape,
+            octave,
+            layer,
+            response: 0.0,
+        }
+    }
+}
+
+/// Why [`describe_keypoints`] refused a query keypoint. Each variant names the
+/// offending keypoint by its index in the caller's slice.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DescribeKeypointsError {
+    /// The position is not a finite coordinate inside the image. A descriptor is
+    /// sampled from a window centred on the keypoint, so a keypoint the image
+    /// does not contain has nothing to describe.
+    OutsideImage {
+        /// Index into the caller's keypoint slice.
+        index: usize,
+        /// The position named.
+        position: [f32; 2],
+        /// The image's `(width, height)`.
+        size: (u32, u32),
+    },
+    /// The affine shape's size is not positive and finite. The descriptor window
+    /// is `magnification · σ` wide per subregion, so a non-positive size leaves
+    /// the sampling geometry undefined.
+    BadScale {
+        /// Index into the caller's keypoint slice.
+        index: usize,
+        /// The size the shape yields ([`affine_shape_scale`]).
+        scale: f32,
+    },
+}
+
+impl std::fmt::Display for DescribeKeypointsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DescribeKeypointsError::OutsideImage {
+                index,
+                position,
+                size,
+            } => write!(
+                f,
+                "keypoint {index} at ({}, {}) is outside the {}x{} image",
+                position[0], position[1], size.0, size.1
+            ),
+            DescribeKeypointsError::BadScale { index, scale } => write!(
+                f,
+                "keypoint {index} has a scale of {scale}, which is not a positive size"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DescribeKeypointsError {}
+
+/// Describe caller-supplied keypoints: the 128-D descriptor of each, computed
+/// from `image`'s scale space exactly as [`extract_sift`] computes the
+/// descriptors of its own detections.
+///
+/// A descriptor is a pure function of the scale space and a keypoint, so a
+/// keypoint nothing detected -- a pixel a person pointed at, a feature carried
+/// over from another image -- can be described as well as a detected one. The
+/// caller states the keypoint's position and its affine shape (equivalently its
+/// size and orientation, see [`QueryKeypoint::from_similarity`]); the octave and
+/// pyramid level follow from the size
+/// ([`ScaleSpace::octave_layer_for_scale`]), which is why nothing about the
+/// pyramid appears in the signature.
+///
+/// `descriptors.rows()[i]` describes `keypoints[i]`. Describing a detected
+/// keypoint's own position, shape and size this way reproduces the extractor's
+/// descriptor byte for byte.
+///
+/// The whole scale space is built for the call, as an extraction builds it, so
+/// describing a handful of keypoints costs about what extracting the image
+/// would; an empty slice builds nothing.
+///
+/// # Errors
+///
+/// [`DescribeKeypointsError`] when any keypoint is outside the image or has a
+/// non-positive size. The whole call is refused, before any work, so the result
+/// is all or nothing.
+///
+/// ```no_run
+/// # use sfmtool_core::features::sift::{describe_keypoints, QueryKeypoint, SiftParams};
+/// # fn run(image: &sfmtool_core::features::sift::GrayImage)
+/// # -> Result<(), Box<dyn std::error::Error>> {
+/// let query = QueryKeypoint::from_similarity(142.0, 197.5, 6.4, 0.0);
+/// let descriptors = describe_keypoints(image, &SiftParams::default(), &[query])?;
+/// assert_eq!(descriptors.rows()[0].len(), 128);
+/// # Ok(())
+/// # }
+/// ```
+pub fn describe_keypoints(
+    image: &GrayImage,
+    params: &SiftParams,
+    keypoints: &[QueryKeypoint],
+) -> Result<Descriptors, DescribeKeypointsError> {
+    let (w, h) = (image.width(), image.height());
+    for (index, kp) in keypoints.iter().enumerate() {
+        if !(kp.x.is_finite()
+            && kp.y.is_finite()
+            && kp.x >= 0.0
+            && kp.y >= 0.0
+            && (kp.x as f64) < w as f64
+            && (kp.y as f64) < h as f64)
+        {
+            return Err(DescribeKeypointsError::OutsideImage {
+                index,
+                position: [kp.x, kp.y],
+                size: (w, h),
+            });
+        }
+        let scale = kp.scale();
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(DescribeKeypointsError::BadScale { index, scale });
+        }
+    }
+    if keypoints.is_empty() {
+        return Ok(Descriptors::default());
+    }
+
+    // The full pyramid: a query can name any size, so no octave can be skipped
+    // the way the cap-aware detection walk skips them.
+    let scale_space = ScaleSpace::build(image, params);
+    let sift_keypoints: Vec<SiftKeypoint> = keypoints
+        .iter()
+        .map(|kp| kp.to_sift_keypoint(&scale_space))
+        .collect();
+    Ok(compute_descriptors(
+        &scale_space,
+        &sift_keypoints,
+        params.descriptor_magnification as f32,
+        params.descriptor_clamp as f32,
+    ))
 }
 
 #[cfg(test)]

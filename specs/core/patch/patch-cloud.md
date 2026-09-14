@@ -129,6 +129,24 @@ impl OrientedPatch {
         half_extent: [f64; 2],
     ) -> Self;
 
+    /// Build a **finite** patch (`w = 1`) from one observation: the keypoint's
+    /// ray at `depth` (a range along the unit bearing, not a camera-frame `z`),
+    /// framed fronto-parallel, with the in-plane axes and half-extents the
+    /// keypoint's 2x2 `affine_shape` unprojects to on that plane. Column 0 of
+    /// the shape becomes `u`, column 1 becomes `v`; a shape of positive
+    /// determinant (a `.sift`-style scaled rotation) has its second column
+    /// negated so the patch faces the camera. `None` when the depth is not a
+    /// positive finite distance, the model has no ray for the keypoint or a tip
+    /// pixel, a tip's ray grazes or leaves the plane, or the frame comes out
+    /// degenerate.
+    pub fn from_affine_shape_at_depth(
+        camera: &CameraIntrinsics,
+        cam_from_world: &RigidTransform,
+        keypoint: [f64; 2],
+        affine_shape: [[f64; 2]; 2],
+        depth: f64,
+    ) -> Option<OrientedPatch>;
+
     /// Whether `cam_from_world` looks at the front face. A point at infinity is
     /// always front-facing (its normal `normalize(-d)` faces every observer;
     /// cheirality is enforced by the projection).
@@ -171,6 +189,34 @@ a rendered tile cannot disagree about where a keypoint puts the patch:
 let anchored = patch.anchored_at_keypoint(camera, &cam_from_world, [1024.3, 512.7]);
 let map = WarpMap::from_patch(anchored.as_ref().unwrap_or(&patch), camera, &cam_from_world, 64);
 ```
+
+`from_affine_shape_at_depth` is the one place the correspondence between a
+keypoint's local **affine shape** and a patch frame is stated in the
+frame-building direction. The other direction is the `.sfmr` format's
+([sfmr-file-format.md](../../formats/sfmr-file-format.md), "Deriving keypoint
+shape, scale, and orientation"): project the anchor and the two half-axis tips,
+and the pixel differences are the shape's columns. So this one back-projects the
+two tip pixels `keypoint + column` onto the plane and takes the world differences
+as the half-axes, and a shape carried through the two comes back unchanged,
+distortion included, because both sides go through the camera model rather than a
+focal-length approximation. Two things the round trip does not say. The frame is
+fronto-parallel, which is all one observation can state about a surface's tilt, so
+the normal is a starting point for refinement rather than a measurement. And a
+patch frame's `v` points *up* in the image while pixel rows count *down*, so a
+front-facing patch projects to a shape of negative determinant: a `.sift` shape
+has the opposite chirality, hence the negated column, and such an input comes back
+with that column's sign flipped and nothing else changed.
+
+```rust
+// The surfel a triangulated cluster member implies: its own pixel, its own
+// shape, at the depth the triangulation put it.
+let patch = OrientedPatch::from_affine_shape_at_depth(
+    camera, &cam_from_world, [142.0, 197.5], [[7.1, -0.4], [0.4, -7.1]], 5.25);
+```
+
+The half-extent it yields is the exact unprojection of the shape, which agrees
+with `PatchExtent::FeatureSize`'s `sigma / sigma_min(J)` sizing on axis and
+departs from it off axis, where the sizing rule linearizes and this does not.
 
 ## `PatchCloud`
 
@@ -629,8 +675,11 @@ The bindings mirror the Rust API, in
 [flow/warp.rs](../../../crates/sfmtool-py/src/flow/warp.rs) and the
 [patches/](../../../crates/sfmtool-py/src/patches/) modules:
 
-- `OrientedPatch(center, u_axis, v_axis, half_extent)` and
-  `OrientedPatch.from_center_normal(center, normal, up_hint, half_extent)`.
+- `OrientedPatch(center, u_axis, v_axis, half_extent)`,
+  `OrientedPatch.from_center_normal(center, normal, up_hint, half_extent)`,
+  `OrientedPatch.from_infinity_direction(direction, up_hint, half_extent)` and
+  `OrientedPatch.from_affine_shape_at_depth(camera, cam_from_world, keypoint,
+  affine_shape, depth)`, which returns `None` on the refusals above.
 - `WarpMap.from_patch(patch, camera, cam_from_world, resolution)` returning a
   `WarpMap` (then `remap_bilinear` / `remap_aniso` as today).
 - `PatchCloud.from_reconstruction(recon, extent)` and indexing to `OrientedPatch`.

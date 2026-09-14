@@ -8,13 +8,17 @@
 //! conventions: numpy in, `IntoPyArray` out, the heavy compute wrapped in
 //! `py.detach(...)`, and `PyValueError` for bad inputs.
 
-use numpy::{IntoPyArray, PyReadonlyArrayDyn, PyUntypedArrayMethods};
+use numpy::{
+    IntoPyArray, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyReadonlyArrayDyn,
+    PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use sfmtool_core::features::sift::{
-    self, detect_keypoints, extract_sift_partial as core_extract_sift_partial, gray, SiftKeypoint,
-    SiftParams,
+    self, affine_shape_from_similarity, describe_keypoints as core_describe_keypoints,
+    detect_keypoints, extract_sift_partial as core_extract_sift_partial, gray, QueryKeypoint,
+    SiftKeypoint, SiftParams,
 };
 
 /// Build the `(positions, affine_shapes)` numpy arrays shared by both entry
@@ -296,10 +300,126 @@ pub fn extract_sift(
     Ok((positions, affine_shapes, desc_arr.into_pyarray(py).into()))
 }
 
+/// Describe caller-supplied keypoints.
+///
+/// A descriptor is a pure function of the image's scale space and a keypoint, so
+/// a keypoint nothing detected -- a pixel a person pointed at, a feature carried
+/// over from another image -- is described exactly as `extract_sift` describes
+/// its own detections: the same descriptor kernel, the octave and pyramid level
+/// derived from the keypoint's size.
+///
+/// Args:
+///     image: (H, W, 3) uint8 RGB or (H, W) uint8 grayscale numpy array
+///         (see `detect_sift_keypoints` for the conversion rules).
+///     positions: (N, 2) float32 -- (x, y) full-resolution, pixel-center coords.
+///     affine_shapes: (N, 2, 2) float32 -- [[a11, a12], [a21, a22]], the same
+///         layout `extract_sift` returns. Its column-norm average is the
+///         keypoint size and its first column's angle the orientation; build one
+///         from a size and an angle with `affine_shapes_from_similarity`.
+///     params: optional dict of overrides onto SiftParams::default()
+///         (see `detect_sift_keypoints` for accepted keys).
+///
+/// Returns:
+///     descriptors: (N, 128) uint8 -- row `i` describes keypoint `i`.
+///
+/// Raises:
+///     ValueError: if a keypoint is outside the image or has a non-positive
+///         size, if the two arrays disagree on N, or if params are invalid.
+#[pyfunction]
+#[pyo3(signature = (image, positions, affine_shapes, params=None))]
+pub fn describe_keypoints(
+    py: Python<'_>,
+    image: PyReadonlyArrayDyn<'_, u8>,
+    positions: PyReadonlyArray2<'_, f32>,
+    affine_shapes: PyReadonlyArray3<'_, f32>,
+    params: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<numpy::PyArray2<u8>>> {
+    let sift_params = parse_sift_params(params)?;
+    let gray_image = image_to_gray(&image, &sift_params)?;
+
+    let n = positions.shape()[0];
+    if positions.shape()[1] != 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "positions must be (N, 2) float32, got shape {:?}",
+            positions.shape()
+        )));
+    }
+    if affine_shapes.shape() != [n, 2, 2] {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "affine_shapes must be (N, 2, 2) float32 with the same N as positions ({n}), got              shape {:?}",
+            affine_shapes.shape()
+        )));
+    }
+    let pos = positions.as_array();
+    let aff = affine_shapes.as_array();
+    let keypoints: Vec<QueryKeypoint> = (0..n)
+        .map(|i| QueryKeypoint {
+            x: pos[[i, 0]],
+            y: pos[[i, 1]],
+            affine_shape: [
+                [aff[[i, 0, 0]], aff[[i, 0, 1]]],
+                [aff[[i, 1, 0]], aff[[i, 1, 1]]],
+            ],
+        })
+        .collect();
+
+    let descriptors = py
+        .detach(|| core_describe_keypoints(&gray_image, &sift_params, &keypoints))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let mut flat = Vec::with_capacity(n * 128);
+    for row in descriptors.rows() {
+        flat.extend_from_slice(row);
+    }
+    let arr = ndarray::Array2::from_shape_vec((n, 128), flat)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py).into())
+}
+
+/// The affine shapes of similarity keypoints: the scaled rotations
+/// `[[s·cosθ, -s·sinθ], [s·sinθ, s·cosθ]]` that COLMAP and the `.sift` format
+/// store, from a size and an angle. The conversion `describe_keypoints` and the
+/// detector both state, so a caller with a size and an angle in hand does not
+/// restate it.
+///
+/// Args:
+///     scales: (N,) float32 -- keypoint sizes (the affine-shape column norm).
+///     orientations: (N,) float32 -- orientations in radians.
+///
+/// Returns:
+///     affine_shapes: (N, 2, 2) float32, ready for `describe_keypoints`.
+#[pyfunction]
+#[pyo3(signature = (scales, orientations))]
+pub fn affine_shapes_from_similarity(
+    py: Python<'_>,
+    scales: PyReadonlyArray1<'_, f32>,
+    orientations: PyReadonlyArray1<'_, f32>,
+) -> PyResult<Py<numpy::PyArray3<f32>>> {
+    let n = scales.shape()[0];
+    if orientations.shape()[0] != n {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "scales and orientations must have the same length, got {n} and {}",
+            orientations.shape()[0]
+        )));
+    }
+    let s = scales.as_array();
+    let o = orientations.as_array();
+    let mut flat = Vec::with_capacity(n * 4);
+    for i in 0..n {
+        let [[a11, a12], [a21, a22]] = affine_shape_from_similarity(s[i], o[i]);
+        flat.extend_from_slice(&[a11, a12, a21, a22]);
+    }
+    let arr = ndarray::Array3::from_shape_vec((n, 2, 2), flat)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py).into())
+}
+
 // ── Registration ──────────────────────────────────────────────────────────
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_sift_keypoints, m)?)?;
     m.add_function(wrap_pyfunction!(extract_sift, m)?)?;
+    m.add_function(wrap_pyfunction!(describe_keypoints, m)?)?;
+    m.add_function(wrap_pyfunction!(affine_shapes_from_similarity, m)?)?;
     Ok(())
 }
