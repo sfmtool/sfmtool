@@ -56,8 +56,10 @@ pub struct ConstellationParams {
     /// Keep at most one hit of each constellation feature in each candidate
     /// image, the nearest one. A feature's `k` neighbours may hold several
     /// features of one image, and only one of them can be that feature's match
-    /// there; the rest are extra correspondences RANSAC has to outvote.
-    /// A `same_image_ratio` below 1.0 implies this, and adds a test to it.
+    /// there; the rest are extra correspondences RANSAC has to outvote. On by
+    /// default, since the hits it drops cannot be right and a small corpus
+    /// produces many of them. A `same_image_ratio` below 1.0 implies this, and
+    /// adds a test to it.
     pub one_hit_per_image: bool,
     /// Lowe's ratio test inside one (constellation feature, candidate image)
     /// cell. Below 1.0 it is on: the cell collapses to the feature's nearest
@@ -66,7 +68,8 @@ pub struct ConstellationParams {
     /// same image**, so a feature that matches one spot of an image no better
     /// than it matches another contributes nothing there. A cell holding a
     /// single hit has no runner-up and is kept. 1.0 and above is off, which is
-    /// the default: every hit is a correspondence, as it is without the test.
+    /// the default: a cell keeps its nearest hit unconditionally, that being
+    /// what `one_hit_per_image` does on its own.
     ///
     /// The ratio is a ratio of Euclidean distances. The forest reports squared
     /// ones, so it is applied squared.
@@ -93,7 +96,7 @@ impl ConstellationParams {
         threshold_px: 8.0,
         iterations: 200,
         min_correspondences: 3,
-        one_hit_per_image: false,
+        one_hit_per_image: true,
         same_image_ratio: 1.0,
         min_inliers: 8,
         max_scale: 4.0,

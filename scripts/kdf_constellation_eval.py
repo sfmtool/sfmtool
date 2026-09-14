@@ -37,7 +37,7 @@ measurement `--same-image-ratio` and `--one-hit-per-image` act on.
 
 Parameter sweeps over `k`, `max_leaf_checks`, `min_inliers`, `threshold_px` and
 `iterations` run at one chosen size, one knob at a time with the rest at their
-defaults.
+defaults; `--sweep-grid` replaces that list with knobs and values of its own.
 
 The ground truth is the reconstruction's tracks, which came from the same SIFT
 descriptors the index holds, so "recall" here is agreement with that solve and
@@ -66,6 +66,15 @@ from sfmtool.sift.file import SiftReader
 
 MIB = 1 << 20
 DEFAULT_SIZES = (10, 25, 50, 100, 200, 400, 800)
+# The knobs swept by default, and the values each is swept over, unless
+# `--sweep-grid` names a grid of its own.
+DEFAULT_SWEEPS = (
+    ("k", [16, 32, 64]),
+    ("max_leaf_checks", [128, 512, 2048]),
+    ("min_inliers", [4, 6, 8, 12]),
+    ("threshold_px", [4.0, 8.0, 12.0]),
+    ("iterations", [200, 1000, 5000]),
+)
 
 
 # ── Corpus and ground-truth tables ───────────────────────────────────────────
@@ -652,6 +661,12 @@ def main() -> None:
     p.add_argument("--sweep-size", type=int, default=100)
     p.add_argument("--sweep-patches", type=int, default=0, help="0 means --patches")
     p.add_argument("--no-sweeps", action="store_true")
+    p.add_argument(
+        "--sweep-grid",
+        default="",
+        help='which knobs to sweep and over what, as "k=8,16;iterations=100,200";'
+        " empty means the built-in grid",
+    )
     p.add_argument("--cache-mib", type=int, default=256)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k", type=int, default=32)
@@ -669,8 +684,10 @@ def main() -> None:
     )
     p.add_argument(
         "--one-hit-per-image",
-        action="store_true",
-        help="keep only the nearest hit of each feature in each image, no ratio",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="keep only the nearest hit of each feature in each image, no ratio;"
+        " the core default, so --no-one-hit-per-image is what measures the rest",
     )
     p.add_argument(
         "--multiplicity",
@@ -714,6 +731,9 @@ def main() -> None:
     )
 
     sizes = [int(s) for s in args.sizes.split(",")]
+    sweep_grid = (
+        parse_sweep_grid(args.sweep_grid) if args.sweep_grid else DEFAULT_SWEEPS
+    )
     rng = np.random.default_rng(args.seed)
     # Sample patch centres once, so every size and every sweep point sees the
     # same patches and the comparison is on a fixed observation set.
@@ -791,13 +811,7 @@ def main() -> None:
     sweeps: dict[str, dict] = {}
     if not args.no_sweeps:
         subset = patches[: (args.sweep_patches or args.patches)]
-        for knob, values in (
-            ("k", [16, 32, 64]),
-            ("max_leaf_checks", [128, 512, 2048]),
-            ("min_inliers", [4, 6, 8, 12]),
-            ("threshold_px", [4.0, 8.0, 12.0]),
-            ("iterations", [200, 1000, 5000]),
-        ):
+        for knob, values in sweep_grid:
             sweeps[knob] = {}
             for value in values:
                 knobs = dict(base, **{knob: value})
@@ -813,7 +827,7 @@ def main() -> None:
                 }
                 s = summarize(records)
                 print(
-                    f"{knob}={value:<5} recall3 {fmt(s['recall_3'])}"
+                    f"{knob}={value!s:<6} recall3 {fmt(s['recall_3'])}"
                     f" prec3 {fmt(s['precision_3'])}"
                     f" corr {fmt(s['correspondence_recall'])}"
                     f" res {fmt(s['residual_median'])}/{fmt(s['residual_p90'])}px"
@@ -856,6 +870,28 @@ def main() -> None:
     }
     Path(args.out).write_text(json.dumps(out, indent=1))
     print(f"wrote {args.out}")
+
+
+def parse_sweep_grid(text: str) -> tuple[tuple[str, list], ...]:
+    """`"k=8,16;iterations=100,200"` as the list of sweeps to run.
+
+    A value carrying a decimal point is a float, as `threshold_px` needs, and
+    every other one is an int, so the parsed grid is typed like the built-in.
+    """
+    grid = []
+    for clause in text.split(";"):
+        if not clause.strip():
+            continue
+        knob, sep, values = clause.partition("=")
+        if not sep:
+            raise SystemExit(f"--sweep-grid clause {clause!r} has no '='")
+        grid.append(
+            (
+                knob.strip(),
+                [float(v) if "." in v else int(v) for v in values.split(",")],
+            )
+        )
+    return tuple(grid)
 
 
 def fmt(value) -> str:

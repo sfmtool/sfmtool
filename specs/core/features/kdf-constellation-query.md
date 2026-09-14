@@ -279,7 +279,13 @@ neither.
 `one_hit_per_image` keeps the nearest hit of each (constellation feature,
 candidate image) cell and drops the rest. It is the cheapest statement of "one
 feature, one place": no threshold to choose, and the hit it keeps is the one the
-index already ranked first.
+index already ranked first. It is on by default. How much it removes is a
+function of how many images the corpus holds: with a thousand images a feature's
+32 neighbours land in nearly 32 distinct images and hardly any cell is crowded,
+while with seventeen they cannot, and the pigeonhole alone puts two thirds of
+the cells above one hit. So the collapse is nearly inert on a large capture and
+removes half the correspondences per candidate on a small one, which is exactly
+where the inlier ratio needs the help.
 
 `same_image_ratio` adds Lowe's test to that choice, scoped to the same cell. The
 classic ratio test compares a descriptor's nearest neighbour against its second
@@ -297,8 +303,9 @@ arbitrary first choice.
 The ratio is a ratio of Euclidean distances and the forest reports squared ones,
 so the comparison is made against the square of the ratio. A cell holding a
 single hit has no runner-up and is kept, that being the shape the test is
-looking for. Both knobs are off by default, so by default every hit of every
-cell is a correspondence.
+looking for. The ratio is off by default, so by default a cell keeps its nearest
+hit whatever its runner-up looks like; turning `one_hit_per_image` off as well
+is what makes every hit of every cell a correspondence.
 
 ### Seeding per candidate image
 
@@ -368,7 +375,7 @@ their keyword defaults, so there is one copy of each number.
 | `threshold_px` | `8.0` | Reprojection distance, in the candidate image's pixels, within which a correspondence agrees with a model. |
 | `iterations` | `200` | Three-point samples drawn per candidate image. |
 | `min_correspondences` | `3` | Fewest correspondences before an image is fitted at all; three is also the floor the model needs, so a smaller value has no effect. |
-| `one_hit_per_image` | `false` | Keep only the nearest hit of each constellation feature in each candidate image, dropping the rest of that cell. |
+| `one_hit_per_image` | `true` | Keep only the nearest hit of each constellation feature in each candidate image, dropping the rest of that cell. |
 | `same_image_ratio` | `1.0` | Lowe's ratio inside one (constellation feature, candidate image) cell. Below 1.0 the cell collapses to its nearest hit and keeps it only when that hit's distance is under this factor times the cell's runner-up; a cell with one hit is kept. 1.0 and above is off. |
 | `min_inliers` | `8` | Fewest inliers for an image to be reported. |
 | `max_scale` | `4.0` | Widest scale change a model may claim, as `sqrt(\|det\|)` of its 2x2 linear part; one outside `[1/max_scale, max_scale]` is refused unscored, as is any reflection. |
@@ -382,6 +389,19 @@ recall on four of five captures and +0.04 to +0.20 image recall on all five, for
 1.7 to 2.3 times the wall time, with residual medians and the correspondence
 count per candidate unchanged -- unlike a larger `k`, the budget replaces chaff
 rather than adding it.
+
+`one_hit_per_image` is on because the hits it drops cannot be right: a point of
+the patch's surface appears once per photograph of it, so at most one hit of a
+cell is that feature's correspondence in that image and the rest are outliers of
+whatever the right warp is. They are correlated outliers, sharing a source
+position, so a sample drawing two of them asks for a transform sending one point
+to two places and a model fitted elsewhere collects a vote from each. The index
+agrees about which one to keep: where a cell holds a corroborated correspondence
+at all, it is the cell's nearest hit 94 to 98% of the time, so the collapse costs
+a few percent of the true correspondences and removes every crowded cell's
+surplus. On a seventeen-image capture that surplus is half of everything a
+candidate is offered, and removing it roughly doubles the inlier ratio, which
+enters the three-point sampler's success rate cubed.
 
 `min_inliers` is 8 because 6 is the noise floor: the median inlier count of a
 candidate sharing no point at all with the query image is exactly six, on every
@@ -509,9 +529,10 @@ radius rule, handed that image's own size and keypoint count, picks a disc
 holding tens of features rather than a handful or most of the frame. Because
 image 1 is image 0's descriptors again, a feature's neighbour list there holds
 its own twin beside other features of that image, so the same file is where
-`one_hit_per_image` and `same_image_ratio` are checked from Python: the default
-offers some image more correspondences than the constellation has features,
-either knob offers none, and the planted warp survives both.
+`one_hit_per_image` and `same_image_ratio` are checked from Python: turning the
+collapse off offers some image more correspondences than the constellation has
+features, the default and the ratio each offer none, and the planted warp
+survives both.
 
 ## Non-goals
 
@@ -522,7 +543,8 @@ either knob offers none, and the planted warp survives both.
   per-descriptor filtering of it. The consensus is the filter, and a ratio test
   over the whole corpus would discard the repeated-texture matches a
   constellation is able to keep. `same_image_ratio` is that test scoped to one
-  candidate image, which is a different question, and it is off by default.
+  candidate image, which is a different question, and it is off by default; what
+  is on is `one_hit_per_image`, which chooses within a cell without judging it.
 - No scoring of a candidate image beyond its inlier count. Photometric agreement
   belongs to the patch refinement a caller seeds from this result.
 - The `.sift` entry point is `u8` descriptors only, because that is what a

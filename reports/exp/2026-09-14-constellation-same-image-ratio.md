@@ -281,6 +281,16 @@ out of crowded pairs.
 Neither knob is turned on in this change. Both are parameters, defaulted off, so
 every existing caller gets the answer it got before.
 
+> _Status (2026-09-14): Done. `ConstellationParams::DEFAULT` now carries
+> `one_hit_per_image = true`; `same_image_ratio` stays at 1.0. The obligation
+> this section attached to the flip is discharged in
+> [the dedupe sweep](2026-09-14-constellation-dedupe-sweep.md), which re-ran `k`,
+> `iterations` and `min_inliers` with the collapse on over the same five
+> captures and the same 60 patches: none of the three moves, and the guess that
+> the conclusion about `k` would change sign is confirmed -- `k = 32` is no
+> longer harmful on a small corpus, which removes the caveat rather than the
+> default._
+
 ---
 
 ## Appendix: reproducing

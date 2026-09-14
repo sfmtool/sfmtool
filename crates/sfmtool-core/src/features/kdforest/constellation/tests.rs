@@ -455,9 +455,14 @@ fn a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest() {
             .clone()
     };
 
-    // Untouched, image 1 is offered more correspondences than the constellation
-    // has features, which is only possible if some feature is counted twice.
-    let base = planted(&found(&params()));
+    // Untouched -- the collapse is on by default, so it has to be asked for --
+    // image 1 is offered more correspondences than the constellation has
+    // features, which is only possible if some feature is counted twice.
+    let crowded = ConstellationParams {
+        one_hit_per_image: false,
+        ..params()
+    };
+    let base = planted(&found(&crowded));
     assert!(
         base.correspondences > n,
         "{} correspondences for {n} features",
@@ -468,10 +473,7 @@ fn a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest() {
     // Collapsed, no image can hold more correspondences than the constellation
     // has features, and the decoys are gone: the twins they shadowed are still
     // inliers, so the collapse kept the nearer of each pair.
-    let deduped = found(&ConstellationParams {
-        one_hit_per_image: true,
-        ..params()
-    });
+    let deduped = found(&params());
     for candidate in &deduped {
         assert!(candidate.correspondences <= n, "{candidate:?}");
     }
@@ -500,10 +502,7 @@ fn a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest() {
     // plain dedupe keep theirs either way. Distances are squared, so these are
     // Euclidean 2 against 10, and 9 against 10.
     let cells = [(1u32, 0u32), (1, 1), (1, 0)];
-    let dedupe_only = ConstellationParams {
-        one_hit_per_image: true,
-        ..ConstellationParams::default()
-    };
+    let dedupe_only = ConstellationParams::default();
     let ratio_test = ConstellationParams {
         same_image_ratio: 0.8,
         ..ConstellationParams::default()
@@ -520,9 +519,16 @@ fn a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest() {
         collapse_cells(&cells, &[81.0, 7.0, 100.0], &ratio_test),
         Some(vec![false, true, false])
     );
-    // Off by default, and off for a ratio that refuses nothing.
+    // Skipped only when both knobs are off: no cell is then collapsed at all.
     assert_eq!(
-        collapse_cells(&cells, &[4.0, 7.0, 100.0], &ConstellationParams::default()),
+        collapse_cells(
+            &cells,
+            &[4.0, 7.0, 100.0],
+            &ConstellationParams {
+                one_hit_per_image: false,
+                ..ConstellationParams::default()
+            }
+        ),
         None
     );
 }

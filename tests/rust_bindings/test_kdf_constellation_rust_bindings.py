@@ -235,7 +235,8 @@ def test_the_same_image_ratio_collapses_repeated_hits(duplicated_capture):
     Image 1 is image 0's descriptors again, so a feature's neighbour list holds
     its own twin there and often other features of that image beside it. Left
     alone, those are all correspondences; collapsed, an image can hold no more
-    of them than the constellation has features.
+    of them than the constellation has features. The collapse is the default,
+    so the crowded answer is the one that has to be asked for.
     """
     centre, radius, inside = _patch(duplicated_capture, wanted=24)
     positions = duplicated_capture["positions"][inside]
@@ -246,11 +247,14 @@ def test_the_same_image_ratio_collapses_repeated_hits(duplicated_capture):
             positions, feature_ids=ids, image_index=0, **_KNOBS, **extra
         )
 
-    plain = run()
-    assert _same(plain, run(same_image_ratio=1.0, one_hit_per_image=False))
-    assert max(m["correspondences"] for m in plain) > len(inside)
+    crowded = run(one_hit_per_image=False)
+    assert max(m["correspondences"] for m in crowded) > len(inside)
 
-    for arm in (dict(one_hit_per_image=True), dict(same_image_ratio=0.8)):
+    plain = run()
+    assert _same(plain, run(same_image_ratio=1.0, one_hit_per_image=True))
+    assert not _same(plain, crowded)
+
+    for arm in (dict(), dict(same_image_ratio=0.8)):
         collapsed = run(**arm)
         assert collapsed, f"{arm} lost the planted image"
         assert collapsed[0]["image_index"] == 1

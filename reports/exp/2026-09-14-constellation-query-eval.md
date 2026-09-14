@@ -687,6 +687,16 @@ throughout: DinoLedge, dino_dog_toy, seattle_backyard, kerry_park, seoul_bull.)
    adapt one knob to corpus size, `k` scaled down for small image counts is the
    one with evidence behind it.
 
+   > _Status (2026-09-14): Kept, and the "worse on the small corpora" half is
+   > superseded. With `one_hit_per_image` on by default, `warp ok` across
+   > k = 8 / 16 / 32 / 64 is 0.93 / 0.86 / 0.93 / 0.83 on seoul_bull and
+   > 0.92 / 0.91 / 0.93 / 0.89 on seattle_backyard, flat to within their standard
+   > errors, where it had been 0.66 / 0.32 / 0.00 and 0.81 / 0.65 / 0.32 across
+   > 16 / 32 / 64. The crowding was the harm. There is no longer a case for
+   > adapting `k` to corpus size; 16 is simply the cheaper, more precise end of
+   > one trade. Measured in
+   > [the dedupe sweep](2026-09-14-constellation-dedupe-sweep.md)._
+
 5. **`iterations` 200: keep.** No effect at all on DinoLedge at N=50 (three
    sweep points bit-identical), and where it helps it is compensating for a low
    inlier ratio that `k` and `max_leaf_checks` address more cheaply. It does

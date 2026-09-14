@@ -490,12 +490,13 @@ impl PyLazyKdForest {
     ///     min_correspondences: Fewest correspondences to fit an image at all.
     ///     one_hit_per_image: Keep only the nearest hit of each constellation
     ///         feature in each candidate image, since only one feature of an
-    ///         image can be that feature's match there.
+    ///         image can be that feature's match there. On by default; turn it
+    ///         off to have every hit of every cell be a correspondence.
     ///     same_image_ratio: Lowe's ratio inside one (constellation feature,
     ///         candidate image) cell. Below 1.0 the cell collapses to its
     ///         nearest hit and keeps it only when that hit is nearer than the
     ///         cell's runner-up by this factor; 1.0 and above, the default, is
-    ///         off and every hit is a correspondence.
+    ///         off and the cell keeps its nearest hit unconditionally.
     ///     min_inliers: Fewest inliers to report one.
     ///     max_scale: Widest scale change a model may claim, as `sqrt(|det|)`
     ///         of its 2x2 part; one mirroring the patch is always refused.
