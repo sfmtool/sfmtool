@@ -388,19 +388,38 @@ evaluation. This is the gesture for the patch every detector missed.
 
 ### From the descriptor index
 
-**Search descriptors** takes the selected observation's descriptor and asks the
-workspace's `.kdf` forest for its neighbours, keeping the cross-image ones inside
-the matcher's own membership radius (`alpha` times the `d`-th nearest distance,
-[`../core/features/track-cluster-matching.md`](../core/features/track-cluster-matching.md)),
-and adds each to the track as a candidate with its position and affine shape
-read from the forest's geometry corpus, so no `.sift` file is opened for it.
-The radius is shown and can be widened; a wider radius is more background, and
-the cluster refinement's ZNCC is what then sorts it.
+**Search descriptors** is a **constellation query**, not a lookup of one
+descriptor. A SIFT keypoint is an extremum of the difference-of-Gaussians scale
+space, and every descriptor in a `.kdf` was computed at one; a pixel someone
+pointed at is not an extremum at any scale, so a descriptor computed there
+corresponds to nothing any detector produced for the same surface in another
+image, and its neighbours in the index are noise. What is stable is the
+**neighbourhood**: the detected keypoints around the observation are extrema,
+each has a descriptor in the index, and the same surface in another image
+carries the same constellation under a locally affine warp.
 
-The query descriptor comes from the `.sift` file when the observation is a SIFT
-feature, by a partial read of that one row. When the observation is a pixel, the
-descriptor is computed at that keypoint with `describe_keypoints`
-(§ "Where it lives").
+So the query takes the detected keypoints within a radius of the observation
+in its own image (a few dozen to a few hundred), asks the forest for each
+one's `k` nearest neighbours (a larger `k` than the matcher's, since most of a
+feature's neighbours belong to images that do not show the patch), groups the
+hits by image, and fits an **affine warp per image by RANSAC** over the
+correspondences, reading the hits' positions from the forest's geometry corpus
+so no `.sift` file is opened. An image whose best warp carries enough inliers
+is a candidate, and the warp is what makes it useful: applied to the
+observation's own pixel and affine shape, it gives that image a **seed
+position and shape** for the cluster stage, whether the observation was a
+detected feature or a hand-placed pixel. The inlier count is shown per
+candidate, ranks them, and is an admission the cluster kernel's ZNCC then
+judges photometrically. This is the access pattern the file-backed index was
+measured against
+([`../core/features/lazy-kdforest-query.md`](../core/features/lazy-kdforest-query.md)
+§ "patch constellation"): a query touches a small fraction of the corpus and
+costs tens of milliseconds with a warm cache.
+
+For a detected-feature observation the constellation still includes the
+feature's own descriptor, so a single-descriptor hit is a special case of the
+constellation with one correspondence, and it is the geometric consistency of
+the rest that earns the candidate a warp rather than a guess.
 
 The forest has to exist. The panel carries a **Descriptor index** row naming the
 `.kdf` it will search, with a file chooser, and a **Build** button that runs the
@@ -797,10 +816,21 @@ print(report)                                  # the sentence the Action Log wou
   through the node's full-resolution cache, calls the core function, and
   pushes the result.
 
-Two core pieces this draft leans on were built first, and both are standing
-interface now:
+Two core pieces were built ahead of the bench, and one more is needed:
 
-1. **Describing a keypoint that was not detected.**
+1. **The constellation query** is not in core yet. It exists as the benchmark
+   [`kdf_patch_localize.py`](../../scripts/kdf_patch_localize.py): the
+   per-feature forest query, the grouping of hits by image, and a three-point
+   affine RANSAC per image returning inlier counts and models. The bench needs
+   that as a core function taking the query image's keypoints inside a radius
+   of a pixel, the forest, and the RANSAC parameters, and returning per image
+   the warp, its inlier count and the correspondences, with the hit geometry
+   read from the forest's geometry corpus rather than from side tables. It
+   belongs beside the forest in `features::kdforest`, bound to Python, and is
+   what `search_bench_track_descriptors` calls (§ "Part 5").
+   `describe_keypoints` (below) is **not** the search's query: a descriptor at a
+   pixel nobody detected matches nothing the index holds.
+2. **Describing a keypoint that was not detected.**
    `sfmtool_core::features::sift::describe_keypoints(image, params, keypoints)`
    returns the 128-byte descriptor of each caller-supplied `QueryKeypoint` (a
    position and a 2x2 affine shape, or a position, size and orientation),
@@ -808,10 +838,12 @@ interface now:
    octave and pyramid level follow from the size
    (`ScaleSpace::octave_layer_for_scale`). It is bound beside `extract_sift` as
    `sfmtool._sfmtool.sift.describe_keypoints`, with
-   `affine_shapes_from_similarity` for the size-and-angle form. This is what
-   gives a pixel observation a descriptor to search the `.kdf` forest with
-   (§ "Part 5"). See [`../core/features/sift.md`](../core/features/sift.md).
-2. **Framing a surfel from one observation's affine shape at a depth.**
+   `affine_shapes_from_similarity` for the size-and-angle form. It was built
+   for the search and turned out not to serve it (item 1); what remains useful
+   is the shape, scale and orientation correspondence it defined once, which
+   the cluster stage's seeds use. See
+   [`../core/features/sift.md`](../core/features/sift.md).
+3. **Framing a surfel from one observation's affine shape at a depth.**
    `OrientedPatch::from_affine_shape_at_depth(camera, cam_from_world, keypoint,
    affine_shape, depth)` in
    [cloud.rs](../../crates/sfmtool-core/src/patch/cloud.rs) is the upgrade's
@@ -951,7 +983,8 @@ covered by the existing layout test that walks every tab.
    a point on the bench and starting from a pixel; the commit with and without
    an origin. Files into `specs/gui/bench.md`, `specs/gui/track-edit.md` and a
    `specs/gui/edits/commit-track.md`.
-3. The descriptor index row, the build task, and the descriptor search.
+3. The constellation query in core, over the benchmark script; then the
+   descriptor index row, the build task, and the search built on it.
 4. The view sweep with the keypoint-search switch.
 5. Pull-in from a point and from the bench, the coherence grid, the merging
    commit, and *Split off selected observations*.
