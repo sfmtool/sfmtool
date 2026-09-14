@@ -28,6 +28,13 @@ and for every size records:
   inflate, the ones that share no point with the query image anywhere in it;
 * **wall time** per query.
 
+With `--multiplicity` it also reports, from the raw neighbour lists before any
+of the query's own filtering, how often one constellation feature lands two or
+more hits in one candidate image, what share of all correspondences those extra
+hits are, and -- against the same ground truth -- whether the nearest hit of
+such a group is the true correspondence or a later one is. That is the
+measurement `--same-image-ratio` and `--one-hit-per-image` act on.
+
 Parameter sweeps over `k`, `max_leaf_checks`, `min_inliers`, `threshold_px` and
 `iterations` run at one chosen size, one knob at a time with the rest at their
 defaults.
@@ -92,6 +99,29 @@ def load_keypoints(sift_paths):
         reader.close()
         positions.append(np.asarray(xy, dtype=np.float32))
     return positions
+
+
+class ImageDescriptors:
+    """One image's `.sift` descriptors at a time, for the crowding count.
+
+    The corpus holds the same bytes, but nothing on `LazyKdForest` reads a
+    descriptor back by feature ID, so the raw neighbour lists have to be asked
+    for with vectors and those come from the `.sift` file. One image is cached,
+    which is all the sweep's access pattern rewards.
+    """
+
+    def __init__(self, sift_paths):
+        self._paths = sift_paths
+        self._image = None
+        self._descriptors = None
+
+    def rows(self, image: int, rows: np.ndarray) -> np.ndarray:
+        if image != self._image:
+            reader = SiftReader(self._paths[image])
+            self._descriptors = np.asarray(reader.read_descriptors(), dtype=np.uint8)
+            reader.close()
+            self._image = image
+        return self._descriptors[rows]
 
 
 def corpus_offsets(lazy, positions):
@@ -253,6 +283,72 @@ def image_of_feature(offsets: np.ndarray, feature_ids: np.ndarray) -> np.ndarray
     return np.searchsorted(offsets, feature_ids, side="right") - 1
 
 
+NO_NEIGHBOR = np.uint32(0xFFFFFFFF)
+
+
+def multiplicity(
+    lazy, offsets, image: int, descriptors, knobs: dict, gt_triples
+) -> dict:
+    """How often one feature hits one image twice, in the raw neighbour lists.
+
+    The query itself never exposes its hits, only the inliers it kept, so this
+    repeats the same batch search through `LazyKdForest.query` -- the same
+    `search_batch_with_distances` underneath, at the same `k` and leaf budget --
+    and groups the result the way the query does: by (constellation feature,
+    candidate image) cell, with the query's own image dropped. The neighbour
+    list of one feature is in ascending distance, so a cell's first hit is its
+    nearest.
+    """
+    ids, _ = lazy.query(
+        np.ascontiguousarray(descriptors, dtype=np.uint8),
+        k=knobs["k"],
+        max_leaf_checks=knobs["max_leaf_checks"],
+    )
+    ids = np.asarray(ids)
+    n, k = ids.shape
+    live = (ids != NO_NEIGHBOR).ravel()
+    query_rows = np.repeat(np.arange(n, dtype=np.int64), k)[live]
+    feature_ids = ids.ravel()[live].astype(np.int64)
+    images = image_of_feature(offsets, feature_ids)
+    elsewhere = images != image
+    query_rows, feature_ids, images = (
+        query_rows[elsewhere],
+        feature_ids[elsewhere],
+        images[elsewhere],
+    )
+    features = feature_ids - offsets[images]
+
+    cells: dict[tuple[int, int], list[int]] = {}
+    for slot, (row, other) in enumerate(zip(query_rows, images)):
+        cells.setdefault((int(row), int(other)), []).append(slot)
+
+    def is_true(slot: int) -> bool:
+        return (
+            int(query_rows[slot]),
+            int(images[slot]),
+            int(features[slot]),
+        ) in gt_triples
+
+    crowded = [members for members in cells.values() if len(members) >= 2]
+    best_true = other_true = 0
+    for members in crowded:
+        truths = [is_true(slot) for slot in members]
+        if not any(truths):
+            continue
+        if truths[0]:
+            best_true += 1
+        else:
+            other_true += 1
+    return {
+        "hits": int(len(query_rows)),
+        "cells": len(cells),
+        "crowded_cells": len(crowded),
+        "crowded_extra_hits": sum(len(m) - 1 for m in crowded),
+        "crowded_gt_best": best_true,
+        "crowded_gt_other": other_true,
+    }
+
+
 def measure(
     lazy,
     gt: GroundTruth,
@@ -262,6 +358,7 @@ def measure(
     rows: np.ndarray,
     knobs: dict,
     warp_tolerance_px: float = 3.0,
+    descriptors=None,
 ) -> dict:
     """Run one query and score it against the ground truth."""
     xy = positions[image][rows]
@@ -334,7 +431,14 @@ def measure(
     def ratio(num: int, den: int) -> float | None:
         return float(num) / den if den else None
 
+    crowding = (
+        {}
+        if descriptors is None
+        else multiplicity(lazy, offsets, image, descriptors, knobs, gt_triples)
+    )
+
     return {
+        **crowding,
         "image": int(image),
         "features": int(len(rows)),
         "gt_correspondences": len(gt_triples),
@@ -382,10 +486,29 @@ def summarize(records: list[dict]) -> dict:
         values = [r[key] for r in records if r[key] is not None]
         return float(np.mean(values)) if values else None
 
+    def total(key):
+        return sum(r.get(key, 0) for r in records)
+
     inliers = [i for r in records for i in r["false_candidate_inliers"]]
     strict = [i for r in records for i in r["never_covisible_inliers"]]
     checked = sum(r["warp_checked"] for r in records)
+    # Crowding is pooled over patches rather than averaged over them: the
+    # ground-truth split counts a few dozen cells per patch, and a mean of
+    # per-patch ratios would weight a patch with three of them like one with
+    # three hundred.
+    cells, hits = total("cells"), total("hits")
+    crowded, extra = total("crowded_cells"), total("crowded_extra_hits")
+    gt_best, gt_other = total("crowded_gt_best"), total("crowded_gt_other")
     return {
+        "cells": cells,
+        "crowded_cells": crowded,
+        "crowded_cell_fraction": crowded / cells if cells else None,
+        "crowded_extra_hit_fraction": extra / hits if hits else None,
+        "crowded_gt_best": gt_best,
+        "crowded_gt_other": gt_other,
+        "crowded_gt_best_share": (
+            gt_best / (gt_best + gt_other) if gt_best + gt_other else None
+        ),
         "warp_ok_rate": (
             sum(r["warp_ok"] for r in records) / checked if checked else None
         ),
@@ -538,6 +661,22 @@ def main() -> None:
     p.add_argument("--min-correspondences", type=int, default=3)
     p.add_argument("--min-inliers", type=int, default=8)
     p.add_argument("--max-scale", type=float, default=4.0)
+    p.add_argument(
+        "--same-image-ratio",
+        type=float,
+        default=1.0,
+        help="Lowe ratio inside one (feature, candidate image) cell; >=1 is off",
+    )
+    p.add_argument(
+        "--one-hit-per-image",
+        action="store_true",
+        help="keep only the nearest hit of each feature in each image, no ratio",
+    )
+    p.add_argument(
+        "--multiplicity",
+        action="store_true",
+        help="also count the crowded cells in the raw neighbour lists",
+    )
     p.add_argument("--dump-disagreements", type=int, default=0)
     p.add_argument("--crops-dir")
     args = p.parse_args()
@@ -593,17 +732,32 @@ def main() -> None:
         "threshold_px": args.threshold,
         "iterations": args.iterations,
         "min_correspondences": args.min_correspondences,
+        "one_hit_per_image": args.one_hit_per_image,
+        "same_image_ratio": args.same_image_ratio,
         "min_inliers": args.min_inliers,
         "max_scale": args.max_scale,
         "seed": args.seed,
     }
+
+    descriptors = ImageDescriptors(sift_paths) if args.multiplicity else None
 
     by_size: dict[int, list[dict]] = {}
     for wanted in sizes:
         records = []
         for image, centre in patches:
             radius, rows = grow_radius(positions[image], centre, wanted)
-            record = measure(lazy, gt, positions, offsets, image, rows, base)
+            record = measure(
+                lazy,
+                gt,
+                positions,
+                offsets,
+                image,
+                rows,
+                base,
+                descriptors=(
+                    None if descriptors is None else descriptors.rows(image, rows)
+                ),
+            )
             record["radius"] = radius
             record["centre"] = [float(centre[0]), float(centre[1])]
             record["wanted"] = wanted
@@ -621,6 +775,15 @@ def main() -> None:
             f" {s['ms_median']:.0f}ms",
             flush=True,
         )
+        if s["cells"]:
+            print(
+                f"         crowded cells {fmt(s['crowded_cell_fraction'])}"
+                f" extra hits {fmt(s['crowded_extra_hit_fraction'])}"
+                f" gt in crowded cell: nearest {s['crowded_gt_best']}"
+                f" later {s['crowded_gt_other']}"
+                f" ({fmt(s['crowded_gt_best_share'])} nearest)",
+                flush=True,
+            )
 
     # The two entry points must agree: same constellation, same answer.
     agreement = check_at_pixel(lazy, positions, sift_paths, patches[:3], base)

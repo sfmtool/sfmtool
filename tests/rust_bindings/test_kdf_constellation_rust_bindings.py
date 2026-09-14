@@ -229,6 +229,37 @@ def test_the_two_forests_answer_identically(duplicated_capture):
     assert _same(by_vector, lazy["matches"])
 
 
+def test_the_same_image_ratio_collapses_repeated_hits(duplicated_capture):
+    """One feature may hit an image twice, and the two knobs that stop it.
+
+    Image 1 is image 0's descriptors again, so a feature's neighbour list holds
+    its own twin there and often other features of that image beside it. Left
+    alone, those are all correspondences; collapsed, an image can hold no more
+    of them than the constellation has features.
+    """
+    centre, radius, inside = _patch(duplicated_capture, wanted=24)
+    positions = duplicated_capture["positions"][inside]
+    ids = inside.astype(np.uint32).tolist()
+
+    def run(**extra):
+        return duplicated_capture["lazy"].constellation_query(
+            positions, feature_ids=ids, image_index=0, **_KNOBS, **extra
+        )
+
+    plain = run()
+    assert _same(plain, run(same_image_ratio=1.0, one_hit_per_image=False))
+    assert max(m["correspondences"] for m in plain) > len(inside)
+
+    for arm in (dict(one_hit_per_image=True), dict(same_image_ratio=0.8)):
+        collapsed = run(**arm)
+        assert collapsed, f"{arm} lost the planted image"
+        assert collapsed[0]["image_index"] == 1
+        np.testing.assert_allclose(collapsed[0]["affine"], _WARP, atol=1e-2)
+        assert all(m["correspondences"] <= len(inside) for m in collapsed), arm
+        # Each feature has exactly one right answer in image 1, and it survives.
+        assert collapsed[0]["inliers"] >= len(inside) // 2, arm
+
+
 def test_bad_arguments_and_a_sourceless_file_are_value_errors(
     duplicated_capture, tmp_path
 ):

@@ -23,6 +23,14 @@ const DISTRACTOR: usize = 60;
 /// How many of the patch's features the near-miss image copies: enough to be
 /// fitted, too few to be reported.
 const NEAR_MISS: usize = 4;
+/// Patch features given a near-copy inside the planted image, so that each of
+/// them has two hits there. Fewer than `min_inliers`, so the decoys can never
+/// be a consensus of their own.
+const DECOYS: usize = 6;
+/// Every coordinate of a decoy differs from the descriptor it copies by this,
+/// which puts it 8192 squared units away: a distant second to the exact twin,
+/// and far nearer than any unrelated descriptor in a corpus of random ones.
+const DECOY_OFFSET: u8 = 0x08;
 /// A wide canvas keeps a wrong correspondence from landing inside the inlier
 /// threshold by luck, which is what makes an exact inlier count assertable.
 const CANVAS: f32 = 4000.0;
@@ -70,7 +78,12 @@ struct Corpus {
 
 /// [`corpus_with`] and nothing else planted.
 fn corpus() -> Corpus {
-    corpus_with(&[])
+    corpus_with(&[], 0)
+}
+
+/// [`corpus_with`] and `DECOYS` second hits inside the planted image.
+fn corpus_with_decoys() -> Corpus {
+    corpus_with(&[], DECOYS)
 }
 
 /// Image 0 is the query image. Image 1 holds every one of its patch features
@@ -79,8 +92,9 @@ fn corpus() -> Corpus {
 /// `extra`, holding the whole patch under that warp, so a test about which
 /// warps are refused adds images without disturbing the ones above it: the
 /// extras draw nothing from the generator, so with none of them the corpus is
-/// the same bytes it always was.
-fn corpus_with(extra: &[PlantedWarp]) -> Corpus {
+/// the same bytes it always was. `decoys` does the same for image 1, whose
+/// first `decoys` patch features gain a near-copy of themselves there.
+fn corpus_with(extra: &[PlantedWarp], decoys: usize) -> Corpus {
     let mut rng = StdRng::seed_from_u64(11);
     let mut descriptors: Vec<u8> = Vec::new();
     let mut origins = Vec::new();
@@ -140,6 +154,28 @@ fn corpus_with(extra: &[PlantedWarp]) -> Corpus {
             1,
             row as u32,
             planted_affine(patch_positions[row]),
+            3.0,
+        );
+    }
+
+    // Image 1 again: near-copies of its first `decoys` features, far from where
+    // the planted warp puts anything, so each of those constellation features
+    // has a second hit in this image and that hit is a geometric outlier. The
+    // offset is deterministic, so with no decoys the generator is untouched.
+    for row in 0..decoys {
+        let vector: Vec<u8> = patch_vectors[row]
+            .iter()
+            .map(|v| v ^ DECOY_OFFSET)
+            .collect();
+        let at = patch_positions[row];
+        push(
+            &mut descriptors,
+            &mut origins,
+            &mut geometry,
+            &vector,
+            1,
+            (patch_vectors.len() + row) as u32,
+            [at[0] + 2500.0, at[1] + 2500.0],
             3.0,
         );
     }
@@ -338,7 +374,7 @@ fn the_query_image_and_the_thin_candidate_are_absent() {
 
 #[test]
 fn a_mirrored_or_an_inflated_candidate_is_refused_and_a_doubled_one_is_not() {
-    let corpus = corpus_with(&[doubled_affine, mirrored_affine, inflated_affine]);
+    let corpus = corpus_with(&[doubled_affine, mirrored_affine, inflated_affine], 0);
     let forest = forest(&corpus);
     let sources = resident(&corpus);
     let found = constellation_query(
@@ -388,6 +424,106 @@ fn a_mirrored_or_an_inflated_candidate_is_refused_and_a_doubled_one_is_not() {
     assert!(
         found.iter().all(|m| m.image_index != 6),
         "a mirrored model survived the sign test"
+    );
+}
+
+#[test]
+fn a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest() {
+    // Image 1 holds the patch under `planted_affine`, and now also a decoy copy
+    // of each of the first `DECOYS` patch descriptors, perturbed so the true
+    // twin is the nearer of the two, and parked where the planted warp does not
+    // put it. Each of those features therefore has two hits in image 1.
+    let corpus = corpus_with_decoys();
+    let forest = forest(&corpus);
+    let sources = resident(&corpus);
+    let n = corpus.query_positions.len();
+
+    let found = |params: &ConstellationParams| {
+        constellation_query(
+            &forest,
+            &sources,
+            &query(&corpus, &corpus.query_ids),
+            params,
+        )
+        .unwrap()
+    };
+    let planted = |matches: &[ConstellationMatch]| {
+        matches
+            .iter()
+            .find(|m| m.image_index == 1)
+            .expect("the planted image")
+            .clone()
+    };
+
+    // Untouched, image 1 is offered more correspondences than the constellation
+    // has features, which is only possible if some feature is counted twice.
+    let base = planted(&found(&params()));
+    assert!(
+        base.correspondences > n,
+        "{} correspondences for {n} features",
+        base.correspondences
+    );
+    assert_eq!(base.inliers, PLANTED);
+
+    // Collapsed, no image can hold more correspondences than the constellation
+    // has features, and the decoys are gone: the twins they shadowed are still
+    // inliers, so the collapse kept the nearer of each pair.
+    let deduped = found(&ConstellationParams {
+        one_hit_per_image: true,
+        ..params()
+    });
+    for candidate in &deduped {
+        assert!(candidate.correspondences <= n, "{candidate:?}");
+    }
+    let deduped = planted(&deduped);
+    assert!(deduped.correspondences <= base.correspondences - DECOYS);
+    assert_eq!(deduped.inliers, PLANTED);
+
+    // The ratio test keeps the same twins -- a decoy sits far enough away for
+    // the twin, at distance zero, to clear any ratio -- and refuses further
+    // cells whose two hits are too alike to choose between.
+    let ratio = found(&ConstellationParams {
+        same_image_ratio: 0.8,
+        ..params()
+    });
+    for candidate in &ratio {
+        assert!(candidate.correspondences <= n, "{candidate:?}");
+    }
+    let ratio = planted(&ratio);
+    assert_eq!(ratio.inliers, PLANTED);
+    assert!(ratio.correspondences <= deduped.correspondences);
+
+    // Straight at the collapse, where a cell's two hits can be placed exactly.
+    // Slots 0 and 2 are one cell, 1 is a cell of its own: the nearer of the
+    // pair survives a ratio of 0.8 at 4 against 100 and fails it at 81, whose
+    // square root is nine tenths of the runner-up's, while the lone hit and the
+    // plain dedupe keep theirs either way. Distances are squared, so these are
+    // Euclidean 2 against 10, and 9 against 10.
+    let cells = [(1u32, 0u32), (1, 1), (1, 0)];
+    let dedupe_only = ConstellationParams {
+        one_hit_per_image: true,
+        ..ConstellationParams::default()
+    };
+    let ratio_test = ConstellationParams {
+        same_image_ratio: 0.8,
+        ..ConstellationParams::default()
+    };
+    assert_eq!(
+        collapse_cells(&cells, &[4.0, 7.0, 100.0], &dedupe_only),
+        Some(vec![true, true, false])
+    );
+    assert_eq!(
+        collapse_cells(&cells, &[4.0, 7.0, 100.0], &ratio_test),
+        Some(vec![true, true, false])
+    );
+    assert_eq!(
+        collapse_cells(&cells, &[81.0, 7.0, 100.0], &ratio_test),
+        Some(vec![false, true, false])
+    );
+    // Off by default, and off for a ratio that refuses nothing.
+    assert_eq!(
+        collapse_cells(&cells, &[4.0, 7.0, 100.0], &ConstellationParams::default()),
+        None
     );
 }
 

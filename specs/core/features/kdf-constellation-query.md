@@ -29,7 +29,7 @@ The query lives in
 with the forest trait it is written against in
 [`kdforest/neighbor_index.rs`](../../../crates/sfmtool-core/src/features/kdforest/neighbor_index.rs),
 both re-exported from `sfmtool_core::features::kdforest` and bound for Python in
-[`spatial/constellation.rs`](../../../crates/sfmtool-py/src/spatial/constellation.rs).
+[`spatial/constellation_query.rs`](../../../crates/sfmtool-py/src/spatial/constellation_query.rs).
 
 ```rust
 pub trait NeighborIndex<S: ForestScalar> {
@@ -52,6 +52,7 @@ pub struct ResidentSources { /* origins and geometry in corpus order */ }
 pub struct ConstellationParams {
     pub k: usize, pub max_leaf_checks: usize, pub threshold_px: f64,
     pub iterations: usize, pub min_correspondences: usize,
+    pub one_hit_per_image: bool, pub same_image_ratio: f32,
     pub min_inliers: usize, pub max_scale: f64, pub seed: u64,
 }
 impl ConstellationParams { pub const DEFAULT: Self; }
@@ -262,6 +263,43 @@ cannot be recovered at any cost, so the asymmetry favours a generous `k`. What
 sets the ceiling is the correspondence count per candidate image, which is what
 RANSAC's inlier ratio, and so its iteration count, depends on.
 
+### One feature matches one place in an image
+
+A constellation feature's `k` neighbours are spread across the corpus, and
+nothing stops several of them from belonging to one image. Only one of those can
+be where that feature is in that image: the patch is one piece of surface, and a
+point of it appears once per photograph of it. The rest are the lookalike
+problem of a single lookup, reappearing inside one candidate's correspondence
+list, and they cost twice over. They dilute the inlier ratio the three-point
+sampler works against, since an extra hit is an outlier of whatever the right
+warp is; and they are correlated outliers rather than independent ones, because
+they share a source position, so a model fitted through two of them agrees with
+neither.
+
+`one_hit_per_image` keeps the nearest hit of each (constellation feature,
+candidate image) cell and drops the rest. It is the cheapest statement of "one
+feature, one place": no threshold to choose, and the hit it keeps is the one the
+index already ranked first.
+
+`same_image_ratio` adds Lowe's test to that choice, scoped to the same cell. The
+classic ratio test compares a descriptor's nearest neighbour against its second
+nearest anywhere in the corpus and refuses the match when the two are too alike.
+Applied to a constellation it would throw away exactly the repeated texture the
+consensus is able to keep, because a feature of a brick wall has a hundred near
+neighbours across a capture and no single one of them is decisive. Scoped to one
+image it asks a different and answerable question: given that this image is the
+candidate, is this feature's best spot in it clearly better than its second-best
+spot in it? A feature whose two best positions inside one photograph are equally
+good says nothing about where the patch is in that photograph, whatever it says
+elsewhere, and the cell then contributes nothing rather than contributing an
+arbitrary first choice.
+
+The ratio is a ratio of Euclidean distances and the forest reports squared ones,
+so the comparison is made against the square of the ratio. A cell holding a
+single hit has no runner-up and is kept, that being the shape the test is
+looking for. Both knobs are off by default, so by default every hit of every
+cell is a correspondence.
+
 ### Seeding per candidate image
 
 Each candidate image seeds its own generator from `seed + image_index`, and the
@@ -289,6 +327,15 @@ feature, and origins are resolved for that whole flat list in one call; only the
 surviving hits' geometry is then resolved, again in one call. Geometry and
 descriptor blocks share the corpus permutation and row boundaries, so a run of
 IDs that came back together tends to be one block read in each corpus.
+
+The per-cell collapse runs on the flat hit list, after the query image's own
+hits are dropped and before the geometry lookup, rather than on the grouped
+candidates. A hit already knows its cell at that point, and a hit dropped there
+costs no geometry read. The survivors keep the encounter order, which is
+neighbour order within each constellation feature, so nothing downstream of the
+collapse can tell it happened except by the count. A cell's nearest hit is the
+first slot holding its smallest distance, so two hits at one distance resolve to
+the earlier, which is the earlier neighbour in the list the forest returned.
 
 `image_feature_ids` is the one expensive operation here, and it is unavoidable
 rather than unconsidered. Origins are stored by corpus feature ID, nothing indexes
@@ -321,6 +368,8 @@ their keyword defaults, so there is one copy of each number.
 | `threshold_px` | `8.0` | Reprojection distance, in the candidate image's pixels, within which a correspondence agrees with a model. |
 | `iterations` | `200` | Three-point samples drawn per candidate image. |
 | `min_correspondences` | `3` | Fewest correspondences before an image is fitted at all; three is also the floor the model needs, so a smaller value has no effect. |
+| `one_hit_per_image` | `false` | Keep only the nearest hit of each constellation feature in each candidate image, dropping the rest of that cell. |
+| `same_image_ratio` | `1.0` | Lowe's ratio inside one (constellation feature, candidate image) cell. Below 1.0 the cell collapses to its nearest hit and keeps it only when that hit's distance is under this factor times the cell's runner-up; a cell with one hit is kept. 1.0 and above is off. |
 | `min_inliers` | `8` | Fewest inliers for an image to be reported. |
 | `max_scale` | `4.0` | Widest scale change a model may claim, as `sqrt(\|det\|)` of its 2x2 linear part; one outside `[1/max_scale, max_scale]` is refused unscored, as is any reflection. |
 | `seed` | `0` | Base RNG seed; candidate image `i` draws from `seed + i`. |
@@ -428,6 +477,15 @@ Over it:
   distinguishes a guard refusing the model from an index never finding the
   correspondences, and the reflection stays absent because its refusal is a sign
   test with nothing to lift.
+- `a_second_hit_of_one_feature_in_one_image_collapses_to_its_nearest` plants a
+  near-copy of six of the patch's descriptors inside the planted image, parked
+  where the planted warp puts nothing, so six constellation features have two
+  hits there. Untouched, that image is offered more correspondences than the
+  constellation has features; under either knob no candidate is offered more
+  than that, the decoys are gone and the twins they shadowed are still inliers.
+  It then drives the collapse directly over a hand-built pair of cells, where a
+  ratio of 0.8 keeps a nearest hit at nine tenths of nothing and refuses one at
+  nine tenths of its runner-up.
 - `the_model_solver_refuses_a_reflection_and_a_scale_far_from_unity` drives the
   three-point solve directly, over a mirrored, a tenfold, a tenth-scale and a
   doubled destination triangle, at the default bound and at a wider one.
@@ -448,16 +506,23 @@ that reported positions match the geometry the sources carry, that both forest
 classes return the same thing through both entry points and both descriptor
 forms, that a `.kdf` written without sources is a `ValueError`, and that the
 radius rule, handed that image's own size and keypoint count, picks a disc
-holding tens of features rather than a handful or most of the frame.
+holding tens of features rather than a handful or most of the frame. Because
+image 1 is image 0's descriptors again, a feature's neighbour list there holds
+its own twin beside other features of that image, so the same file is where
+`one_hit_per_image` and `same_image_ratio` are checked from Python: the default
+offers some image more correspondences than the constellation has features,
+either knob offers none, and the planted warp survives both.
 
 ## Non-goals
 
 - No homography, and no refinement of the affine from its inliers. The transform
   is the best three-point model, not a least-squares fit to the consensus; a
   caller wanting a refined warp fits one from `inlier_correspondences`.
-- No ratio test or other per-descriptor filtering before grouping. The consensus
-  is the filter, and a ratio test would discard the repeated-texture matches that
-  a constellation is able to keep.
+- No ratio test against the neighbour list as a whole, and no other
+  per-descriptor filtering of it. The consensus is the filter, and a ratio test
+  over the whole corpus would discard the repeated-texture matches a
+  constellation is able to keep. `same_image_ratio` is that test scoped to one
+  candidate image, which is a different question, and it is off by default.
 - No scoring of a candidate image beyond its inlier count. Photometric agreement
   belongs to the patch refinement a caller seeds from this result.
 - The `.sift` entry point is `u8` descriptors only, because that is what a

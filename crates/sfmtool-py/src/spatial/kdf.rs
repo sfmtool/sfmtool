@@ -35,7 +35,7 @@ use sfmtool_core::features::kdforest::{
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 
-use super::constellation::DEFAULTS;
+use super::constellation_query::DEFAULTS;
 use super::kdforest::extract_u8_2d;
 
 /// Map a format error onto the closest Python exception.
@@ -488,6 +488,14 @@ impl PyLazyKdForest {
     ///     threshold_px: RANSAC inlier distance in the candidate's pixels.
     ///     iterations: Three-point samples drawn per candidate image.
     ///     min_correspondences: Fewest correspondences to fit an image at all.
+    ///     one_hit_per_image: Keep only the nearest hit of each constellation
+    ///         feature in each candidate image, since only one feature of an
+    ///         image can be that feature's match there.
+    ///     same_image_ratio: Lowe's ratio inside one (constellation feature,
+    ///         candidate image) cell. Below 1.0 the cell collapses to its
+    ///         nearest hit and keeps it only when that hit is nearer than the
+    ///         cell's runner-up by this factor; 1.0 and above, the default, is
+    ///         off and every hit is a correspondence.
     ///     min_inliers: Fewest inliers to report one.
     ///     max_scale: Widest scale change a model may claim, as `sqrt(|det|)`
     ///         of its 2x2 part; one mirroring the patch is always refused.
@@ -507,6 +515,8 @@ impl PyLazyKdForest {
                         k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
                         threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
                         min_correspondences=DEFAULTS.min_correspondences,
+                        one_hit_per_image=DEFAULTS.one_hit_per_image,
+                        same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
@@ -522,11 +532,13 @@ impl PyLazyKdForest {
         threshold_px: f64,
         iterations: usize,
         min_correspondences: usize,
+        one_hit_per_image: bool,
+        same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<PyList>> {
-        super::constellation::query(
+        super::constellation_query::query(
             py,
             &self.inner,
             &self.inner,
@@ -534,12 +546,14 @@ impl PyLazyKdForest {
             descriptors,
             feature_ids,
             image_index,
-            &super::constellation::QueryOptions {
+            &super::constellation_query::QueryOptions {
                 k,
                 max_leaf_checks,
                 threshold_px,
                 iterations,
                 min_correspondences,
+                one_hit_per_image,
+                same_image_ratio,
                 min_inliers,
                 max_scale,
                 seed,
@@ -572,6 +586,8 @@ impl PyLazyKdForest {
                         k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
                         threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
                         min_correspondences=DEFAULTS.min_correspondences,
+                        one_hit_per_image=DEFAULTS.one_hit_per_image,
+                        same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
@@ -587,11 +603,13 @@ impl PyLazyKdForest {
         threshold_px: f64,
         iterations: usize,
         min_correspondences: usize,
+        one_hit_per_image: bool,
+        same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<PyDict>> {
-        super::constellation::at_pixel(
+        super::constellation_query::at_pixel(
             py,
             &self.inner,
             &self.inner,
@@ -599,12 +617,14 @@ impl PyLazyKdForest {
             center,
             radius,
             image_index,
-            &super::constellation::QueryOptions {
+            &super::constellation_query::QueryOptions {
                 k,
                 max_leaf_checks,
                 threshold_px,
                 iterations,
                 min_correspondences,
+                one_hit_per_image,
+                same_image_ratio,
                 min_inliers,
                 max_scale,
                 seed,

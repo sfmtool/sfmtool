@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 
 use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
 
-use super::constellation::DEFAULTS;
+use super::constellation_query::DEFAULTS;
 
 /// Extract an `(N, D)` `uint8` array, with a clear error if the dtype is wrong.
 ///
@@ -288,6 +288,8 @@ impl PyKdForest {
                         max_leaf_checks=DEFAULTS.max_leaf_checks,
                         threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
                         min_correspondences=DEFAULTS.min_correspondences,
+                        one_hit_per_image=DEFAULTS.one_hit_per_image,
+                        same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
@@ -304,12 +306,14 @@ impl PyKdForest {
         threshold_px: f64,
         iterations: usize,
         min_correspondences: usize,
+        one_hit_per_image: bool,
+        same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<pyo3::types::PyList>> {
-        let sources = super::constellation::parse_resident_sources(sources)?;
-        super::constellation::query(
+        let sources = super::constellation_query::parse_resident_sources(sources)?;
+        super::constellation_query::query(
             py,
             &self.inner,
             &sources,
@@ -317,12 +321,14 @@ impl PyKdForest {
             descriptors,
             feature_ids,
             image_index,
-            &super::constellation::QueryOptions {
+            &super::constellation_query::QueryOptions {
                 k,
                 max_leaf_checks,
                 threshold_px,
                 iterations,
                 min_correspondences,
+                one_hit_per_image,
+                same_image_ratio,
                 min_inliers,
                 max_scale,
                 seed,
@@ -338,6 +344,8 @@ impl PyKdForest {
                         k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
                         threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
                         min_correspondences=DEFAULTS.min_correspondences,
+                        one_hit_per_image=DEFAULTS.one_hit_per_image,
+                        same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
@@ -354,12 +362,14 @@ impl PyKdForest {
         threshold_px: f64,
         iterations: usize,
         min_correspondences: usize,
+        one_hit_per_image: bool,
+        same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<pyo3::types::PyDict>> {
-        let sources = super::constellation::parse_resident_sources(sources)?;
-        super::constellation::at_pixel(
+        let sources = super::constellation_query::parse_resident_sources(sources)?;
+        super::constellation_query::at_pixel(
             py,
             &self.inner,
             &sources,
@@ -367,12 +377,14 @@ impl PyKdForest {
             center,
             radius,
             image_index,
-            &super::constellation::QueryOptions {
+            &super::constellation_query::QueryOptions {
                 k,
                 max_leaf_checks,
                 threshold_px,
                 iterations,
                 min_correspondences,
+                one_hit_per_image,
+                same_image_ratio,
                 min_inliers,
                 max_scale,
                 seed,

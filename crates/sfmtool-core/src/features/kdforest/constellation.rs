@@ -53,6 +53,24 @@ pub struct ConstellationParams {
     pub iterations: usize,
     /// Fewest correspondences an image needs before it is fitted at all.
     pub min_correspondences: usize,
+    /// Keep at most one hit of each constellation feature in each candidate
+    /// image, the nearest one. A feature's `k` neighbours may hold several
+    /// features of one image, and only one of them can be that feature's match
+    /// there; the rest are extra correspondences RANSAC has to outvote.
+    /// A `same_image_ratio` below 1.0 implies this, and adds a test to it.
+    pub one_hit_per_image: bool,
+    /// Lowe's ratio test inside one (constellation feature, candidate image)
+    /// cell. Below 1.0 it is on: the cell collapses to the feature's nearest
+    /// hit in that image, and that hit survives only when its distance is less
+    /// than `same_image_ratio` times the distance of the runner-up **in the
+    /// same image**, so a feature that matches one spot of an image no better
+    /// than it matches another contributes nothing there. A cell holding a
+    /// single hit has no runner-up and is kept. 1.0 and above is off, which is
+    /// the default: every hit is a correspondence, as it is without the test.
+    ///
+    /// The ratio is a ratio of Euclidean distances. The forest reports squared
+    /// ones, so it is applied squared.
+    pub same_image_ratio: f32,
     /// Fewest inliers an image needs to be reported.
     pub min_inliers: usize,
     /// Widest change of scale a model may claim, as the geometric mean
@@ -75,6 +93,8 @@ impl ConstellationParams {
         threshold_px: 8.0,
         iterations: 200,
         min_correspondences: 3,
+        one_hit_per_image: false,
+        same_image_ratio: 1.0,
         min_inliers: 8,
         max_scale: 4.0,
         seed: 0,
@@ -288,6 +308,12 @@ fn out_of_range(id: u32) -> KdfError {
 /// `min_inliers` are returned, most inliers first, ties in ascending image
 /// index. The query's own image, when it names one, is never a candidate.
 ///
+/// One feature's neighbour list can hold several features of one image, and
+/// [`ConstellationParams::one_hit_per_image`] and
+/// [`ConstellationParams::same_image_ratio`] cut each such group down to its
+/// nearest member, or drop it outright when that member is not clearly nearer.
+/// Both are off by default, so by default every hit is a correspondence.
+///
 /// Determinism is a requirement rather than a nicety here, because this is the
 /// function a `.kdf`'s two access paths are compared through: given the same
 /// neighbours, the resident and file-backed forests must produce identical
@@ -350,12 +376,14 @@ where
     // ask for IDs in the order the corpus is most likely to hold them together.
     let mut hit_ids = Vec::with_capacity(neighbors.len());
     let mut hit_query = Vec::with_capacity(neighbors.len());
+    let mut hit_dist = Vec::with_capacity(neighbors.len());
     for (slot, (&id, &dist)) in neighbors.iter().zip(distances.iter()).enumerate() {
         if id == u32::MAX || !dist.is_finite() {
             continue;
         }
         hit_ids.push(id);
         hit_query.push((slot / params.k) as u32);
+        hit_dist.push(dist);
     }
     if hit_ids.is_empty() {
         return Ok(Vec::new());
@@ -364,12 +392,28 @@ where
     let origins = sources.resolve_origins(&hit_ids)?;
     let mut kept_ids = Vec::with_capacity(hit_ids.len());
     let mut kept: Vec<(u32, u32)> = Vec::with_capacity(hit_ids.len());
+    let mut kept_dist = Vec::with_capacity(hit_ids.len());
     for (slot, origin) in origins.iter().enumerate() {
         if query.image_index == Some(origin.image_index) {
             continue;
         }
         kept_ids.push(hit_ids[slot]);
         kept.push((origin.image_index, hit_query[slot]));
+        kept_dist.push(hit_dist[slot]);
+    }
+    // Before the grouping rather than after it, because the cell a hit belongs
+    // to is already known here and a dropped hit then costs no geometry read.
+    if let Some(keep) = collapse_cells(&kept, &kept_dist, params) {
+        let mut ids = Vec::with_capacity(kept_ids.len());
+        let mut cells = Vec::with_capacity(kept.len());
+        for (slot, &survives) in keep.iter().enumerate() {
+            if survives {
+                ids.push(kept_ids[slot]);
+                cells.push(kept[slot]);
+            }
+        }
+        kept_ids = ids;
+        kept = cells;
     }
     if kept_ids.is_empty() {
         return Ok(Vec::new());
@@ -428,6 +472,65 @@ where
     // image order, so a tie is broken by identity rather than by hash order.
     matches.sort_by_key(|m| std::cmp::Reverse(m.inliers));
     Ok(matches)
+}
+
+/// Which hits survive the per-cell collapse, or `None` when it is off.
+///
+/// A cell is one (constellation feature, candidate image) pair, and `cells`
+/// names each hit's cell as `(image, query_index)`. Only the nearest hit of a
+/// cell can be that feature's match in that image, so the cell keeps that one
+/// and drops the rest; with [`ConstellationParams::same_image_ratio`] below 1.0
+/// it keeps the nearest only when it is nearer than the runner-up **of the same
+/// cell** by that factor, and a cell with one hit has no runner-up and is kept.
+///
+/// `distances` are the **squared** Euclidean distances the forest reports, so
+/// the ratio, which is a ratio of Euclidean distances, is squared to meet them.
+/// The comparison widens to `f64` so a squared `f32` ratio cannot round a
+/// borderline cell the wrong way.
+///
+/// The nearest hit is the first slot holding the smallest distance, so two hits
+/// at exactly one distance resolve to the earlier of them, which is the nearer
+/// neighbour in the list the forest returned. The mask is in slot order, and
+/// nothing about it depends on how the cells hash, so the survivors keep the
+/// encounter order the rest of the query relies on.
+fn collapse_cells(
+    cells: &[(u32, u32)],
+    distances: &[f32],
+    params: &ConstellationParams,
+) -> Option<Vec<bool>> {
+    let ratio = (params.same_image_ratio < 1.0).then_some(params.same_image_ratio);
+    if !params.one_hit_per_image && ratio.is_none() {
+        return None;
+    }
+    // Cell -> the slot of its nearest hit, that distance, and the runner-up's.
+    let mut best: HashMap<(u32, u32), (usize, f32, f32)> = HashMap::new();
+    for (slot, (&cell, &distance)) in cells.iter().zip(distances).enumerate() {
+        let entry = best.entry(cell).or_insert((slot, distance, f32::INFINITY));
+        if distance < entry.1 {
+            *entry = (slot, distance, entry.1);
+        } else if slot != entry.0 && distance < entry.2 {
+            entry.2 = distance;
+        }
+    }
+    let limit = ratio.map(|r| (r as f64) * (r as f64));
+    Some(
+        cells
+            .iter()
+            .enumerate()
+            .map(|(slot, cell)| {
+                let &(nearest, near, runner_up) = &best[cell];
+                if slot != nearest {
+                    return false;
+                }
+                match limit {
+                    Some(limit) if runner_up.is_finite() => {
+                        (near as f64) < limit * (runner_up as f64)
+                    }
+                    _ => true,
+                }
+            })
+            .collect(),
+    )
 }
 
 /// Best affine fit and its inlier positions within `src`/`dst`.
