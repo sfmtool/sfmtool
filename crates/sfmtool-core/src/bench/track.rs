@@ -11,7 +11,7 @@
 //! [`steps`](super::steps) and [`commit`](mod@super::commit).
 
 use nalgebra::Point3;
-use ndarray::{Array2, Array3};
+use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{ClusterRefineParams, MemberStatus};
@@ -141,8 +141,11 @@ pub struct TrackMeasurement {
     pub shift_px: Option<f64>,
     /// The reprojection error against the triangulated position, in px.
     pub reprojection_error: Option<f64>,
-    /// The angle this observation's ray makes with the widest-separated other
-    /// ray of the track, in degrees.
+    /// The angle between this observation's own ray and the direction from its
+    /// camera to the triangulated position, in degrees: the reprojection
+    /// residual stated as an angle, which is what makes it comparable across
+    /// lenses and depths. The same number the Point Track Detail panel's
+    /// *Angle* column shows for a committed track.
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
     pub localizability: Option<f64>,
@@ -210,10 +213,16 @@ pub struct ClusterPayload {
 }
 
 /// The template the cluster stage registers its observations onto.
+///
+/// The samples are the reference observation's own tile on the template grid,
+/// as the refinement's sampler reads it, which is the tile a panel draws. The
+/// correlation the cascade runs z-normalizes it inside the kernel, over the
+/// window and without the pixels that window drops, so what is kept here is the
+/// picture rather than the kernel's working copy of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterTemplate {
-    /// The `(resolution, resolution)` z-normalized samples.
-    pub samples: Array2<f32>,
+    /// The `(resolution, resolution, channels)` samples.
+    pub samples: Array3<f32>,
     /// The half-width the cut used, in the reference's keypoint-frame units.
     pub radius: f64,
 }

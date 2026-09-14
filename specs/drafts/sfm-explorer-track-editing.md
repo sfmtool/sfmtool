@@ -34,8 +34,8 @@ descriptor index lives on disk.
 
 Related standing specs: [`../core/bench/bench.md`](../core/bench/bench.md) and
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the core
-half that is built: the two values and the steps that need no kernel run, whose
-non-goals are what this draft proposes),
+half that is built: the two values, the steps, the evaluation at both stages and
+the transitions between them, whose non-goals are what this draft proposes),
 [`../gui/point-track-detail.md`](../gui/point-track-detail.md)
 (the view-only panel the editable track is the editing counterpart of),
 [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
@@ -758,12 +758,13 @@ the wire.
 ### In core
 
 The module `sfmtool_core::bench`, bound as `sfmtool._sfmtool.bench`. **The two
-values and the steps that need no kernel run are built**, and are filed as
+values, every step over them, the evaluation at both stages and the transitions
+between them are built**, and are filed as
 [`../core/bench/bench.md`](../core/bench/bench.md) and
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md); what those
 specs list as non-goals is what this draft still proposes.
 
-- **`EditableTrack`**, *built*: the observations with their provenance, seeds,
+- **`EditableTrack`**, *built*, with the evaluation and the stage change: the observations with their provenance, seeds,
   measurements and verdicts, the stage and the stage's data (reference and
   template, or position, frame and consensus bitmap), the origin, the
   thresholds. A plain value: `Clone`, no interior mutability, no handle to any
@@ -779,17 +780,21 @@ specs list as non-goals is what this draft still proposes.
   a report, never `&mut` on a shared thing. *Built*: `create_cluster` from a
   seed, `create_track` from a point of an `EditedReconstruction`,
   `add_observation`, `set_verdict`, `apply_thresholds` (the painting, as
-  proposed verdicts), `split`, and **`commit`**, which is a function from an
+  proposed verdicts), `split`, **`commit`**, which is a function from an
   `EditedReconstruction` and a track to the next `EditedReconstruction` and a
-  report, the same shape as `add_observation` and `create_point`. *Proposed
-  here*: `search_descriptors` over a `LazyKdForest`, `sweep_views`, `evaluate`
-  and `set_stage`, each of which registers pixels, and `pull_in`, which reads
-  another track. Every refusal is an error enum whose `Display` is the sentence
-  the panel and the wire show.
+  report, the same shape as `add_observation` and `create_point`, and the two
+  that register pixels, `evaluate` and `set_stage`, which take the decoded views
+  and a `Progress`. *Proposed here*: `search_descriptors` over a
+  `LazyKdForest`, `sweep_views`, and `pull_in`, which reads another track. Every
+  refusal is an error enum whose `Display` is the sentence the panel and the
+  wire show.
 - **Progress** through the one `Progress` parameter every long core function
   takes ([`../gui/operation-progress.md`](../gui/operation-progress.md)), so an
   evaluation names its phases the same way whether the Background Task panel or
-  a script is watching. The built steps take none: each is decided by what the
+  a script is watching. `evaluate` and `set_stage` name the phases the batch
+  kernels carry -- `refine` and `localizability` at the cluster stage,
+  `localize`, `refine`, `fuse` and `localizability` at the track stage. The
+  steps that read no photograph take no `Progress`: each is decided by what the
   reconstruction and the person already say, with no phase inside it worth a
   row.
 
@@ -797,29 +802,40 @@ specs list as non-goals is what this draft still proposes.
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
 § "The point map"), so `commit` returns the write's map, chained with a
 `Removed` of the absorbed points where there are any, and the viewer pushes it as
-it stands. **A split preserves the stage** rather than always
-producing a cluster, because moving a track-stage half down to the cluster stage
-is `set_stage`'s own work and reads the cameras; once `set_stage` exists, the
-Split off entry can chain the two.
+it stands. **A split hands the half it takes off back as a cluster**, through
+the same downgrade `set_stage` runs, which is why `split` takes the
+reconstruction: the 3D hypothesis fitted to both halves is the thing a split
+questions, and carrying it onto the new half would state it as fact.
 
-Most of what those functions call is already there, because the batch
+Most of what those functions call was already there, because the batch
 pipeline needed it: the cluster stage is `refine_cluster_patches` over an
 in-memory cluster; the upgrade is the spawn pipeline's steps over one candidate
 with a caller-supplied view set and seeds; the track-stage measurements are
-`localize_patch_keypoints`, `refine_patch_keypoints`, `select_patch_views`,
-`score_localizability_stack` and `member_coherence`; the descriptor search is
+`localize_patch_keypoints`, `refine_patch_keypoints` and
+`score_localizability_stack`; the commit is `add_point` and `replace_point`.
+What the sweep and the searches still need: `select_patch_views` for the
+candidacy test, `member_coherence` for the pairwise grid, and
 `LazyKdForest::search` plus `resolve_feature_geometry` and the matcher's
-membership radius; the commit is `add_point` and `replace_point`.
+membership radius for the descriptor query.
 
 Every step answers `(next value, report)`, so the line that is not yet built
 reads exactly like the ones that are:
 
 ```python
-from sfmtool._sfmtool.bench import Bench, create_track, sweep_views, apply_thresholds, commit
+from sfmtool._sfmtool.bench import (
+    Bench, add_observation, apply_thresholds, commit, create_cluster, evaluate,
+    set_stage, set_verdict, sweep_views,
+)
 
 edited = EditedReconstruction(recon)
 bench = Bench()
-bench, track = create_track(bench, edited, point=1207)
+bench, track = create_cluster(bench, image=4, image_stem="IMG_0042",
+                              pixel=(142.0, 197.5), radius_px=3.0)
+track, added = add_observation(track, 7, (88.5, 210.0))     # the same patch, another photograph
+track, _ = set_verdict(track, added["observation"], "in")
+track, report = evaluate(track, edited, images)             # the cluster kernel, over the seeds
+print(report["measured"], "of", track.observation_count, "register")
+track, staged = set_stage(track, edited, images, "track")   # triangulate, frame, localize, fuse
 track, report = sweep_views(track, edited, images, keypoint_search=True)   # proposed here
 track, painted = apply_thresholds(track, min_zncc=0.9)  # proposes verdicts; pinned ones stay
 edited, report = commit(edited, track, node="bull")
@@ -1004,21 +1020,21 @@ covered by the existing layout test that walks every tab.
 
 ## Steps
 
-1. **Done.** `sfmtool_core::bench`: the two values, and every step that needs no
-   kernel run -- `create_track`, `create_cluster`, `add_observation`,
-   `set_verdict`, `apply_thresholds`, `split` and `commit` -- as pure functions,
-   with bindings. Filed as [`../core/bench/bench.md`](../core/bench/bench.md)
-   and [`../core/bench/editable-track.md`](../core/bench/editable-track.md).
-   What remains of the core module is the kernel-driven half: `evaluate` at both
-   stages, `set_stage` in both directions, `sweep_views`, `search_descriptors`
-   and `pull_in`, which arrive with the steps below that need them.
-2. The bench in the history, with its items and labels; the editable track, its
-   two stages, the transitions and the evaluations, over the existing kernels,
-   as a background task; the Bench group in the Scene tree; the Track Edit
-   panel with the track row, the table, the thresholds and the toolbar; putting
-   a point on the bench and starting from a pixel; the commit with and without
-   an origin. Files into `specs/gui/bench.md`, `specs/gui/track-edit.md` and a
-   `specs/gui/edits/commit-track.md`.
+1. **Done.** `sfmtool_core::bench`: the two values, and every step over them --
+   `create_track`, `create_cluster`, `add_observation`, `set_verdict`,
+   `apply_thresholds`, `split` and `commit`, then `evaluate` at both stages and
+   `set_stage` in both directions -- as pure functions, with bindings. Filed as
+   [`../core/bench/bench.md`](../core/bench/bench.md) and
+   [`../core/bench/editable-track.md`](../core/bench/editable-track.md). What
+   remains of the core module is what a search needs: `sweep_views`,
+   `search_descriptors` and `pull_in`, which arrive with the steps below that
+   need them.
+2. The bench in the history, with its items and labels; the evaluation and the
+   stage change as background tasks; the Bench group in the Scene tree; the
+   Track Edit panel with the track row, the table, the thresholds and the
+   toolbar; putting a point on the bench and starting from a pixel; the commit
+   with and without an origin. Files into `specs/gui/bench.md`,
+   `specs/gui/track-edit.md` and a `specs/gui/edits/commit-track.md`.
 3. The constellation query in core, over the benchmark script; then the
    descriptor index row, the build task, and the search built on it.
 4. The view sweep with the keypoint-search switch.

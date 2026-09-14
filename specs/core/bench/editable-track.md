@@ -26,17 +26,27 @@ and [`../reconstruction/create-point.md`](../reconstruction/create-point.md)
 [`../patch/cluster-patches.md`](../patch/cluster-patches.md) and
 [`../patch/cluster-patch-refinement.md`](../patch/cluster-patch-refinement.md)
 (the cluster stage's representation and the kernel that measures it),
+[`../patch/patch-keypoint-localization.md`](../patch/patch-keypoint-localization.md),
+[`../patch/patch-localizability.md`](../patch/patch-localizability.md) and
+[`../patch/candidate-track-spawning.md`](../patch/candidate-track-spawning.md)
+(the track stage's kernels and the pipeline an upgrade runs),
+[`../patch/patch-cloud.md`](../patch/patch-cloud.md) (the frame an upgrade
+builds and the shape a downgrade derives),
 [`../../formats/matches-file-format.md`](../../formats/matches-file-format.md)
 (the `member_status` legend a cluster measurement carries), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
-(the proposal for the evaluations, the stage transitions, the searches and the
-viewer's panels).
+(the proposal for the searches, the pull-in and the viewer's panels).
 
 ## Rust API
 
 The value lives in
-[bench/track.rs](../../../crates/sfmtool-core/src/bench/track.rs), the steps in
-[bench/steps.rs](../../../crates/sfmtool-core/src/bench/steps.rs), and the
+[bench/track.rs](../../../crates/sfmtool-core/src/bench/track.rs), the steps
+that read no photograph in
+[bench/steps.rs](../../../crates/sfmtool-core/src/bench/steps.rs), the
+evaluation in
+[bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the
+stage change in
+[bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), and the
 commit in [bench/commit.rs](../../../crates/sfmtool-core/src/bench/commit.rs),
 bound as `sfmtool._sfmtool.bench`.
 
@@ -110,9 +120,51 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
 
 pub fn split(
     bench: &Bench,
+    edited: &EditedReconstruction,
     label: &str,
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError>;
+
+// The steps that read photographs.
+pub fn evaluate(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, EvaluateReport), EvaluateError>;
+
+pub fn set_stage(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    images: &[ProjectedImage<'_>],
+    stage: StageKind,
+    options: &EvaluateOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, StageReport), StageError>;
+
+pub struct EvaluateOptions {
+    pub cluster: ClusterRefineParams,
+    pub localize: KeypointLocalizeParams,
+    pub refine: KeypointSubpixelParams,
+}
+
+pub struct EvaluateReport {
+    pub stage: StageKind,
+    pub measured: usize,
+    pub unmeasured: usize,
+    pub reference: Option<usize>,        // the cluster stage's
+    pub position: Option<Point3<f64>>,   // the track stage's
+    pub condition_number: Option<f64>,
+}
+
+pub struct StageReport {
+    pub from: StageKind,
+    pub to: StageKind,
+    pub changed: bool,
+    pub evaluate: Option<EvaluateReport>,  // the upgrade's
+    pub reference: Option<usize>,          // the downgrade's
+}
 
 // The one step that writes the reconstruction.
 pub fn commit(
@@ -172,6 +224,21 @@ what the label's sentence counts.
 own versions with. Core neither mints nor interprets it; what core does with the
 origin is decide whether a commit replaces a point or creates one.
 
+**The decoded views are a named input.** `evaluate` and `set_stage` take one
+[`ProjectedImage`](../../../crates/sfmtool-core/src/patch/normal_refine/params.rs)
+per image of the reconstruction -- a camera, a pose and a pyramid -- indexed by
+image index, exactly as
+[`add_observation`](../reconstruction/add-observation.md) takes them. A
+reconstruction carries poses and lenses rather than photographs, so decoding and
+caching stay the caller's, and the same call serves a viewer with a warm cache
+and a script that just read the files.
+
+**The kernel parameters are not the track's thresholds.** `EvaluateOptions`
+carries what the kernels are allowed to do and defaults to their own defaults;
+the track's `Thresholds` are what the *painting* judges the result against.
+Keeping them apart is what makes a slider a question about verdicts rather than
+about numbers: moving one repaints, and it cannot change what was measured.
+
 ### Example
 
 ```rust
@@ -223,8 +290,8 @@ the refined absolute position and shape, the achieved ZNCC, the shift from the
 seed, the observation's own tile localizability and a status in the
 `member_status` legend. No pose, no position, no normal. It is what a track is
 when it starts from a pixel or from a search hit. The template is `Option`
-because cutting it reads the reference's pixels, and the steps in this spec read
-no photograph.
+because cutting it reads the reference's pixels: a track carries one once an
+evaluation has run, and none before that.
 
 **The track stage** is an `embedded_patches` point that is not in the
 reconstruction yet: a position, an
@@ -295,6 +362,117 @@ so a commit of it creates a point while a commit of the first still replaces the
 one it came from. An empty list, or every observation, is refused: neither
 leaves two tracks.
 
+**The second track is a cluster.** A split is the step for a track that is two
+surfaces, and the half being taken off is a set of sightings that agree with
+each other and not with a 3D hypothesis fitted to both; carrying that hypothesis
+onto it would state as fact the thing the split is questioning. So a
+track-stage half is put down to the cluster stage by the same downgrade
+`set_stage` runs, which is why `split` takes the reconstruction: the downgrade
+projects the frame through each observation's camera. The first track keeps its
+stage, its origin and everything it was.
+
+### Evaluating
+
+`evaluate` fills the measurement slots of every `in` and `candidate`
+observation at the stage the track is in, and sets no verdict. An `out`
+observation is not run, so a refusal costs nothing to keep and what was measured
+about it before stays where it was.
+
+**At the cluster stage** the `in` and `candidate` seeds are an in-memory
+`.matches` cluster, and
+[`refine_cluster_patches`](../patch/cluster-patch-refinement.md) is run over it
+through its borrowed-pyramid entry. The kernel picks the reference -- its
+largest-scale usable member -- cuts the template there and warps every other
+seed onto it; what lands in each observation's slot is the refined position and
+shape, the achieved ZNCC, the drift from the seed, the observation's own tile
+localizability and the kernel's `member_status`. The payload's reference is set
+to where the kernel cut, and `ClusterPayload::template` to the reference's own
+tile on the template grid, sampled by the kernel's own sampler. No pose is read,
+so a cluster evaluates on a node whose images have none.
+
+The tile localizability is scored at each observation's **seed** geometry, which
+is where the kernel's own gate scores it, so the column and a
+`RejectedUnlocalizable` status are the same measurement rather than two.
+
+**At the track stage** the track's surfel is registered into every `in` and
+`candidate` view by the two kernels the embed pass and `add_observation` chain
+-- [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) then
+`refine_patch_keypoints` -- the `in` results are re-triangulated, and the
+consensus bitmap is fused over them. What lands in each slot is the keypoint,
+the localizer's leave-one-out ZNCC, the drift from the surfel's projection, the
+reprojection error against the triangulated position, the ray angle and the tile
+localizability, rendered through the frame anchored at that observation's own
+keypoint. The payload takes the position, the frame re-centred there, the fused
+bitmap, the colour at that bitmap's centre and the triangulation's condition
+number.
+
+**One localization holds one observation per image**, because it registers a
+point's sighting in a view and two sightings in one view are two hypotheses
+about that view. So the first round is the `in` observations plus every
+candidate in an image none of them holds -- the shape `add_observation` runs --
+and a candidate in an image that is already spoken for gets a round of its own,
+against the `in` observations minus the one whose image it wants, which asks the
+same leave-one-out question about the other hypothesis.
+
+**An observation the fit did not place keeps its pixel and loses its scores.**
+Out of frame, or refused by one of the localizer's gates, its keypoint stays
+wherever it already sat -- the one it arrived with, or the cluster stage's
+refined position for a track just upgraded -- so the column still says where the
+sighting is and the re-triangulation still has its ray, while the absent ZNCC is
+what says the round did not place it. An observation whose seed is off its
+image's sensor is in no round at all: that is the refusal `add_observation`
+makes about a clicked pixel, made here about one observation instead of about
+the whole call.
+
+The fuse is the sub-pixel kernel's own `render_bitmaps` path, run over the `in`
+views alone with no Gauss-Newton step, so it moves nothing and only renders and
+blends the keypoints the evaluation settled. Its grid is the reconstruction's
+own bitmap grid where it stores one, so what is fused is a tile the column can
+hold and a commit can write.
+
+### Moving between the stages
+
+`set_stage` is one operation in both directions. Setting the stage a track is
+already at gives it back unchanged with `changed` false, so a caller can wire a
+toggle straight to it and push no version for a step that did not happen.
+
+**Up, cluster to track**, is the spawn pipeline's own steps over one candidate:
+
+1. **Triangulate** the `in` observations' refined cluster positions through
+   their cameras.
+2. **Frame** the patch at that position: the in-plane axes and half-extents are
+   what the reference observation's affine shape unprojects to on the plane at
+   the triangulated depth
+   ([`OrientedPatch::from_affine_shape_at_depth`](../patch/patch-cloud.md)), and
+   the normal is the mean viewing direction, which is how `to_embedded_patches`
+   frames a surfel from the views that see it. The reference is the cluster's
+   own when it is `in`, and otherwise the largest-scale `in` observation, which
+   is what the cluster kernel would have picked among them.
+3. **Localize, refine, re-triangulate and fuse**, which is the track-stage
+   evaluation above over seeds that are the cluster's refined positions.
+
+Every observation's cluster-stage measurements are kept beside the new ones:
+nothing is thrown away by moving up.
+
+**Down, track to cluster**, is always possible and lossy on purpose. Each
+observation is re-seeded at its keypoint with the affine shape the format
+derives by projecting the frame at that observation's anchor
+([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md)
+§ "Deriving keypoint shape, scale, and orientation", the inverse of the framing
+the upgrade does, so the two directions state one relationship). The reference
+becomes the `in` observation with the largest projected patch scale, which is
+the one showing the most of the patch, and the position, the frame and the
+bitmap are dropped. Track-stage measurements stay in their slots. This is the
+step for a track whose observations were right and whose 3D hypothesis was the
+problem: the cluster kernel then judges the observations on appearance alone,
+and an upgrade builds the 3D afresh from whatever survives.
+
+A downgrade **re-seeds rather than restores**: a cluster measurement describes a
+registration against one particular reference and template, and a downgrade
+picks both afresh, so the refined values go and the next evaluation makes them
+again. The seeds it writes are the keypoints, which is the point of taking a
+track down -- the sightings are what is being kept.
+
 ### The commit
 
 `commit` is the only step that touches the reconstruction, and it is one
@@ -361,14 +539,28 @@ renumbers both lists; a reference that moved out is pointed at the first
 observation the half has left. The template goes with it, because a template is a
 cut around one particular reference.
 
-**A split preserves the stage.** The measurements the moved observations carry
-are measurements of the representation the track is in, and moving a track-stage
-half down to the cluster stage means projecting the frame through each
-observation's camera, which is the stage step's work and not the split's.
-
 **A `NaN` score clears no bar and is not "unmeasured".** The painting reads a
 `NaN` ZNCC as a measured failure and proposes `out` for it, because a round that
-produced a `NaN` did run; only an absent measurement is unmeasured.
+produced a `NaN` did run; only an absent measurement is unmeasured. An
+evaluation therefore writes `None` where a kernel reported `NaN`: a kernel's
+`NaN` means it did not score the row, and storing it as a number would turn a
+silence into a refusal.
+
+**The cluster stage's kernel reaches through a borrowed-pyramid entry.** A
+pyramid is a decoded image and cloning one copies every pixel, while the bench's
+views are borrowed ([`ProjectedImage`]); `refine_cluster_patches_borrowed` is
+the same kernel over `&[&ImageU8Pyramid]`, and `refine_cluster_patches` is a
+wrapper that collects the references. Nothing about the refinement differs.
+
+[`ProjectedImage`]: ../../../crates/sfmtool-core/src/patch/normal_refine/params.rs
+
+**A track at infinity is promoted before it is registered against.** A `w = 0`
+frame is tangent to the direction sphere, and a fit against one would pull every
+sighting back onto the bearing's projection and undo the depth the other
+sightings carry. So a track-stage evaluation of one triangulates the seeds
+first and promotes the frame to that depth -- the two-pass shape
+[`add_observation`](../reconstruction/add-observation.md) takes, and the same
+rescale from the camera-cloud centroid.
 
 **A commit's absorb list is filtered by what is still live.** A point another
 version already deleted is nothing to absorb, and a commit is not the place to
@@ -390,6 +582,15 @@ a script can differ from the pipeline's default in one number without restating
 the others. `commit` takes the reconstruction's name as `node`, which is what
 the report's `label` reads.
 
+`evaluate` and `set_stage` take `images` the way every patch kernel does -- a
+list of `HxW[xC]` `uint8` arrays, one per image of the reconstruction, or a
+prebuilt `ImagePyramidSet` -- and run the kernels at their own defaults.
+`set_stage` takes the stage as the word `"cluster"` or `"track"`. Their reports
+are dicts: `stage`, `measured` and `unmeasured`, with `reference` at the cluster
+stage and `position` and `condition_number` at the track stage; and `from`,
+`to`, `changed`, the upgrade's `evaluate` report and the downgrade's
+`reference`.
+
 ```python
 from sfmtool._sfmtool import bench as bench_module
 from sfmtool._sfmtool.reconstruction import EditedReconstruction
@@ -397,6 +598,8 @@ from sfmtool._sfmtool.reconstruction import EditedReconstruction
 edited = EditedReconstruction(recon)
 bench = bench_module.Bench()
 bench, track = bench_module.create_track(bench, edited, point=1207)
+track, measured = bench_module.evaluate(track, edited, images)
+print(measured["measured"], "of", track.observation_count, "sightings register")
 track, painted = bench_module.apply_thresholds(track, min_zncc=0.9)
 edited, report = bench_module.commit(edited, track, node="bull")
 print(report["label"])
@@ -412,23 +615,37 @@ covers: a point put on the bench being at the track stage with every observation
 `in` and the stored numbers carried; two observations in one image not both
 being `in`; the painting proposing from the measurements, leaving a pinned
 verdict alone and giving one image one `in`; a split taking exactly the named
-observations and refusing an empty list or all of them; and every commit path --
-appending, replacing, absorbing a pulled-from point, the map each of those
-reports, and each refusal naming why.
+observations, handing the half it takes off back as a cluster, and refusing an
+empty list or all of them; and every commit path -- appending, replacing,
+absorbing a pulled-from point, the map each of those reports, and each refusal
+naming why.
+
+The evaluation is tested against the kernels themselves: a track put on the
+bench from a point measures to what a direct call of the same two kernels on the
+same frame and seeds produces, keypoint for keypoint and score for score. Beside
+it: a downgrade re-seeding every sighting at its keypoint and an upgrade
+triangulating back to within a pixel's worth of where the point was; a candidate
+placed on the plane clearing the bar and one placed off every image coming back
+unmeasured; a pinned `out` surviving an evaluation unrun; a cluster started from
+two pixels refining, upgrading and committing a point onto the planted surface;
+setting the current stage reporting `changed` false; and each refusal naming
+what did not hold.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same surface through the bindings, over the 17-image seoul_bull solve
 converted to `embedded_patches`.
 
 ## Non-goals
 
-- **Reading a photograph.** Every step here is decided by what the
-  reconstruction and the person already say. The evaluations that register
-  pixels -- the cluster refinement, the localizer, the view sweep, the
-  descriptor search -- are proposed in
+- **Searching for observations to add.** The view sweep over the images that
+  see the surfel, and the descriptor search over a `.kdf` forest, are what
+  propose candidates; both are proposed in
   [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
-- **Moving between the stages.** Upgrading a cluster to a track triangulates and
-  frames a surfel, and downgrading a track to a cluster projects the frame
-  through each observation's camera; both are proposed in the same draft.
+  An evaluation scores the candidates something else put on the track.
+- **The pairwise coherence matrix.** An evaluation scores each observation
+  against the others' consensus; the `k x k` matrix that shows a track made of
+  two surfaces as two blocks is
+  [`member_zncc_matrix`](../patch/member-coherence-validation.md), and reading
+  it into the track is proposed in the same draft.
 - **Pulling observations in from another point or another item.** The
   `Provenance::Point` a commit absorbs is set by the caller today; the step that
   reads a point's track and adds it is proposed in the same draft.

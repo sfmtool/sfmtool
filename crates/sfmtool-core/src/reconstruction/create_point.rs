@@ -381,7 +381,7 @@ fn sample_color(view: &ProjectedImage<'_>, pixel: [f64; 2]) -> [u8; 3] {
 /// A pixel the warp cannot sample is left black, and the alpha channel -- the
 /// fourth, when the column carries one -- is opaque everywhere, because the
 /// whole tile is content this one image saw.
-fn render_bitmap(
+pub(crate) fn render_bitmap(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,
     resolution: usize,

@@ -20,6 +20,8 @@ from sfmtool._sfmtool.bench import (
     commit,
     create_cluster,
     create_track,
+    evaluate,
+    set_stage,
     set_verdict,
     split,
 )
@@ -40,6 +42,21 @@ def embedded(seoul_bull_workspace_once):
 @pytest.fixture
 def edited(embedded):
     return EditedReconstruction(embedded)
+
+
+@pytest.fixture(scope="module")
+def images(embedded):
+    """The workspace's own photographs, one per image of the reconstruction.
+
+    Every step that registers pixels takes these: a reconstruction carries
+    poses and lenses, and the kernels need what the cameras saw.
+    """
+    from sfmtool._workspace_image import read_workspace_image
+
+    return [
+        read_workspace_image(embedded.workspace_dir, name)
+        for name in embedded.image_names
+    ]
 
 
 @pytest.fixture
@@ -221,6 +238,152 @@ class TestTheEditableTrack:
         }
 
 
+class TestEvaluating:
+    """The one step that reads photographs, at both stages."""
+
+    def test_an_evaluation_measures_the_track_and_moves_no_verdict(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        measured, report = evaluate(track, edited, images)
+
+        assert report["stage"] == "track"
+        assert report["measured"] + report["unmeasured"] == track.observation_count
+        # How many sightings register is the fixture's business: these frames
+        # are the cheap ``to_embedded_patches`` baseline, never photometrically
+        # adapted, and the localizer keeps what registers against them. What
+        # this test is about is the call's shape and what lands in the slots.
+        assert report["measured"] >= 1
+        assert len(report["position"]) == 3
+        assert report["condition_number"] > 0.0
+        assert "reference" not in report
+
+        # The verdicts are the person's, and an evaluation is not the person.
+        assert measured.verdict_counts == track.verdict_counts
+        assert measured.stage == "track"
+        np.testing.assert_allclose(measured.position, report["position"])
+        # The object the step was called on is unchanged.
+        assert track.observation(0)["track"].get("reprojection_error") is None
+
+        placed = [o["track"] for o in measured.observations if "keypoint" in o["track"]]
+        assert len(placed) == track.observation_count
+        for entry in placed:
+            assert len(entry["keypoint"]) == 2
+            # Where the position puts the sighting is measured for every row
+            # that has a pixel at all, fitted this round or not.
+            assert entry["reprojection_error"] >= 0.0
+            assert entry["ray_angle_deg"] >= 0.0
+            assert entry.get("shift_px", 0.0) >= 0.0
+            assert entry.get("localizability", 1.0) > 0.0
+
+    def test_a_downgrade_re_seeds_every_sighting_and_drops_the_geometry(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        cluster, report = set_stage(track, edited, images, "cluster")
+
+        assert report["from"] == "track"
+        assert report["to"] == "cluster"
+        assert report["changed"]
+        assert cluster.stage == "cluster"
+        assert cluster.reference == report["reference"]
+        assert cluster.position is None, "the 3D hypothesis is what a downgrade drops"
+        for before, after in zip(track.observations, cluster.observations):
+            keypoint = before["track"]["keypoint"]
+            seed = after["cluster"]["seed_position"]
+            np.testing.assert_allclose(seed, keypoint, atol=1e-5)
+            # The shape is the frame projected into that image, so it spans an
+            # area.
+            shape = np.asarray(after["cluster"]["seed_shape"])
+            assert abs(np.linalg.det(shape)) > 0.0
+            # What the track stage measured stays in its own slot.
+            assert "track" in after
+
+    def test_an_upgrade_comes_back_to_the_point_it_came_from(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        cluster, _ = set_stage(track, edited, images, "cluster")
+        again, report = set_stage(cluster, edited, images, "track")
+
+        assert again.stage == "track"
+        assert report["evaluate"]["stage"] == "track"
+        moved = np.linalg.norm(np.asarray(again.position) - np.asarray(track.position))
+        extent = np.linalg.norm(np.asarray(edited.point(long_track_point)["position"]))
+        assert moved < 0.05 * max(extent, 1.0), f"the round trip moved {moved}"
+        # Both stages' measurements are on the observations now.
+        for observation in again.observations:
+            assert "cluster" in observation and "track" in observation
+
+    def test_setting_the_stage_a_track_is_already_at_changes_nothing(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        same, report = set_stage(track, edited, images, "track")
+        assert not report["changed"]
+        assert (report["from"], report["to"]) == ("track", "track")
+        assert "evaluate" not in report
+        assert same.observation_count == track.observation_count
+
+    def test_an_unknown_stage_is_refused_by_name(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        with pytest.raises(ValueError, match="unknown stage"):
+            set_stage(track, edited, images, "surfel")
+
+    def test_a_track_stage_evaluation_of_one_sighting_is_refused(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        for i in range(1, track.observation_count):
+            track, _ = set_verdict(track, i, "out")
+        with pytest.raises(ValueError, match="needs two or more"):
+            evaluate(track, edited, images)
+
+    def test_a_cluster_from_pixels_refines_upgrades_and_commits(
+        self, edited, images, long_track_point
+    ):
+        """The whole path a candidate takes: pixels, a refinement, a point.
+
+        The two pixels are a committed track's own sightings, so they are two
+        photographs of one surface -- which is what the person pointing at them
+        would be claiming.
+        """
+        record = edited.point(long_track_point)
+        seen = [int(i) for i in record["image_indexes"]]
+        keypoints = np.asarray(record["keypoints_xy"])
+
+        bench, track = create_cluster(
+            Bench(),
+            seen[0],
+            "IMG_0000",
+            tuple(float(v) for v in keypoints[0]),
+            radius_px=3.0,
+        )
+        track, added = add_observation(
+            track, seen[1], tuple(float(v) for v in keypoints[1])
+        )
+        track, _ = set_verdict(track, added["observation"], "in")
+
+        refined, report = evaluate(track, edited, images)
+        assert report["stage"] == "cluster"
+        assert refined.stage == "cluster"
+        assert refined.reference == report["reference"]
+        for observation in refined.observations:
+            assert "status" in observation["cluster"]
+
+        upgraded, staged = set_stage(refined, edited, images, "track")
+        assert staged["changed"]
+        assert len(upgraded.position) == 3
+
+        after, commit_report = commit(edited, upgraded, node="bull")
+        assert commit_report["observation_count"] == 2
+        assert after.point_count == edited.point_count + 1
+        written = after.point(commit_report["point"])
+        np.testing.assert_allclose(written["position"], upgraded.position)
+
+
 class TestSplitting:
     def test_a_split_takes_exactly_the_named_observations(
         self, edited, long_track_point
@@ -229,7 +392,7 @@ class TestSplitting:
         label = bench.labels[0]
         images = [int(o["image"]) for o in track.observations]
 
-        bench, report = split(bench, label, [1])
+        bench, report = split(bench, edited, label, [1])
         assert report["label"] == f"{label}-split"
         assert (report["moved"], report["kept"]) == (1, len(images) - 1)
 
@@ -241,6 +404,11 @@ class TestSplitting:
         assert [int(o["image"]) for o in second.observations] == [images[1]]
         # The second half is a point of its own, so a commit of it creates.
         assert second.origin is None
+        # And it is a set of patches again: the 3D hypothesis fitted to both
+        # halves is the thing the split is questioning.
+        assert first.stage == "track"
+        assert second.stage == "cluster"
+        assert second.observation(0)["cluster"]["seed_position"] is not None
 
     def test_a_split_of_nothing_or_of_everything_is_refused(
         self, edited, long_track_point
@@ -248,9 +416,9 @@ class TestSplitting:
         bench, track = create_track(Bench(), edited, long_track_point)
         label = bench.labels[0]
         with pytest.raises(ValueError, match="no observations|empty track"):
-            split(bench, label, [])
+            split(bench, edited, label, [])
         with pytest.raises(ValueError, match="leave an empty track"):
-            split(bench, label, list(range(track.observation_count)))
+            split(bench, edited, label, list(range(track.observation_count)))
         assert len(bench) == 1
 
 
@@ -286,12 +454,18 @@ class TestCommitting:
         )
         np.testing.assert_allclose(written["keypoints_xy"], original["keypoints_xy"])
 
-    def test_a_commit_with_no_origin_appends(self, edited, long_track_point):
+    def test_a_commit_with_no_origin_appends(self, edited, images, long_track_point):
         # A track started from a search rather than from the point has no
         # origin; splitting one off is how a caller reaches that state here.
+        # The half taken off is a cluster, so it is upgraded before it can be
+        # written back -- which is the whole path a candidate takes.
         bench, _ = create_track(Bench(), edited, long_track_point)
-        bench, report = split(bench, bench.labels[0], [0, 1])
-        after, commit_report = commit(edited, bench.track(report["label"]))
+        bench, report = split(bench, edited, bench.labels[0], [0, 1])
+        half = bench.track(report["label"])
+        assert half.stage == "cluster"
+        half, staged = set_stage(half, edited, images, "track")
+        assert staged["changed"]
+        after, commit_report = commit(edited, half)
         assert "replaced" not in commit_report, "a track with no origin creates"
         assert commit_report["point"] == edited.base_point_count
         assert after.point_count == edited.point_count + 1

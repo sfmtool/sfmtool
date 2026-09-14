@@ -155,7 +155,7 @@ fn cache_istride(res: usize) -> usize {
 /// is a small error, not a missing measurement, so [candidate
 /// spawning](super::spawn) measures against this while the visibility-gated
 /// [`project`] decides which views a patch can be rendered in at all.
-pub(super) fn project_unclipped(
+pub(crate) fn project_unclipped(
     view: &ProjectedImage<'_>,
     p: &Point3<f64>,
     w: f64,

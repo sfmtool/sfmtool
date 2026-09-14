@@ -266,6 +266,38 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
     ])
 }
 
+/// One member's own tile on the template grid: the `R×R×C` interleaved `f32`
+/// samples the localizability gate scores, at the member's own position and
+/// affine shape.
+///
+/// `position` is the member's keypoint in source-image pixels and
+/// `affine_shape` its absolute affine shape `S` (the map from the detector's
+/// canonical unit frame onto that image's pixels) -- a seed's, or the
+/// refinement's answer for it. The grid, the mip rule and the border clamp are
+/// the kernel's own, so a caller that wants the number the gate computed
+/// ([`score_localizability_stack`](crate::patch::localizability::score_localizability_stack)
+/// over this stack, with [`ClusterRefineParams::window`] and the crate's
+/// `SIGMA_NOISE`) gets exactly it, and a caller that wants the reference's
+/// template to draw gets the tile the cascade registers against.
+///
+/// `None` for a degenerate shape, a non-finite coordinate, or a pyramid whose
+/// selected level is too small to bilinear-sample.
+pub fn sample_member_grid(
+    pyramid: &ImageU8Pyramid,
+    position: [f64; 2],
+    affine_shape: [[f64; 2]; 2],
+    params: &ClusterRefineParams,
+) -> Option<Vec<f32>> {
+    let det = det2(&affine_shape);
+    if !det.is_finite() || det.abs() < MIN_ABS_DET {
+        return None;
+    }
+    let resolution = params.resolution.max(2);
+    let step = 2.0 * params.radius / resolution as f64;
+    let off = 0.5 * step - params.radius;
+    sample_patch_grid(pyramid, position, &affine_shape, resolution, step, off)
+}
+
 /// Sample a member's own full `R×R` grid at its SIFT geometry (identity
 /// warp, mip-selected level, bit-exact `bilinear_geometry` convention) into
 /// an interleaved `R×R×C` f32 patch — the layout [`patch_localizability`]
@@ -277,12 +309,13 @@ fn warp_map(pos: [f64; 2], t: [f64; 2], b: &Mat2, step: f64, off: f64) -> Affine
 /// geometry) or a level too small to bilinear-sample.
 fn sample_patch_grid(
     pyramid: &ImageU8Pyramid,
-    geo: &MemberGeo,
+    pos: [f64; 2],
+    a: &Mat2,
     resolution: u32,
     step: f64,
     off: f64,
 ) -> Option<Vec<f32>> {
-    let map = warp_map(geo.pos, [0.0, 0.0], &geo.a, step, off);
+    let map = warp_map(pos, [0.0, 0.0], a, step, off);
     let level = level_for_map(&map, pyramid.num_levels());
     let lmap = map_at_level(&map, level);
     let img = pyramid.level(level);
@@ -557,7 +590,7 @@ fn refine_member(
 fn refine_cluster(
     k0: usize,
     k1: usize,
-    pyramids: &[ImageU8Pyramid],
+    pyramids: &[&ImageU8Pyramid],
     features: &[FeatureGeometry<'_>],
     member_images: &[u32],
     member_features: &[u32],
@@ -633,7 +666,7 @@ fn refine_cluster(
                 continue;
             };
             let Some(raw) = prof::GATE_SAMPLE
-                .time(|| sample_patch_grid(&pyramids[g.image], g, resolution, step, off))
+                .time(|| sample_patch_grid(pyramids[g.image], g.pos, &g.a, resolution, step, off))
             else {
                 continue;
             };
@@ -670,17 +703,9 @@ fn refine_cluster(
     let mut reference: Option<(usize, TemplateKernel)> = None;
     for &j in &cands {
         let g = geo[j].as_ref().unwrap();
-        if let Some(t) = prof::TEMPLATE.time(|| {
-            build_template(
-                &pyramids[g.image],
-                g,
-                support,
-                tables,
-                resolution,
-                step,
-                off,
-            )
-        }) {
+        if let Some(t) = prof::TEMPLATE
+            .time(|| build_template(pyramids[g.image], g, support, tables, resolution, step, off))
+        {
             reference = Some((j, t));
             break;
         }
@@ -721,7 +746,7 @@ fn refine_cluster(
         prof::count(&prof::N_REFINES, 1);
         if let Some((zncc, shift, affine)) = prof::REFINE.time(|| {
             refine_member(
-                &pyramids[g.image],
+                pyramids[g.image],
                 &ref_geo,
                 g,
                 &tmpl,
@@ -803,6 +828,38 @@ fn refine_cluster(
 /// is reported as [`MemberStatus::NotEvaluated`] rather than panicking.
 pub fn refine_cluster_patches(
     pyramids: &[ImageU8Pyramid],
+    features: &[FeatureGeometry<'_>],
+    cluster_starts: &[u32],
+    member_images: &[u32],
+    member_features: &[u32],
+    params: &ClusterRefineParams,
+    progress: Option<&AtomicUsize>,
+) -> ClusterRefineResult {
+    let borrowed: Vec<&ImageU8Pyramid> = pyramids.iter().collect();
+    refine_cluster_patches_borrowed(
+        &borrowed,
+        features,
+        cluster_starts,
+        member_images,
+        member_features,
+        params,
+        progress,
+    )
+}
+
+/// [`refine_cluster_patches`] over **borrowed** pyramids: the same kernel, for
+/// a caller that holds one pyramid per image behind a reference rather than a
+/// table of its own.
+///
+/// A pyramid is a decoded image and cloning one copies every pixel, so a caller
+/// whose views are
+/// [`ProjectedImage`](crate::patch::normal_refine::ProjectedImage)s -- the
+/// bench's evaluation, which registers an in-memory cluster over the same views
+/// the patch kernels read -- reaches the kernel through this entry instead of
+/// building a table it would have to own. Everything else, the panics included,
+/// is [`refine_cluster_patches`].
+pub fn refine_cluster_patches_borrowed(
+    pyramids: &[&ImageU8Pyramid],
     features: &[FeatureGeometry<'_>],
     cluster_starts: &[u32],
     member_images: &[u32],

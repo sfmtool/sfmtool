@@ -16,6 +16,11 @@ use std::sync::Arc;
 use nalgebra::Point3;
 use ndarray::Array3;
 
+use crate::patch::cloud::OrientedPatch;
+use crate::patch::cluster_refine::MemberStatus;
+use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalization};
+use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
+use crate::progress::Progress;
 use crate::reconstruction::add_observation::tests::{
     edited as edited_fixture, fixture_with_columns, Scene, WORLD,
 };
@@ -492,6 +497,8 @@ fn four_observation_cluster() -> (Bench, String) {
 
 #[test]
 fn a_split_takes_exactly_the_named_observations() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = four_observation_cluster();
     let images: Vec<u32> = bench
         .track(&label)
@@ -502,7 +509,7 @@ fn a_split_takes_exactly_the_named_observations() {
         .collect();
     assert_eq!(images, [0, 1, 2, 3]);
 
-    let (bench, report) = split(&bench, &label, &[1, 3]).expect("two of four");
+    let (bench, report) = split(&bench, &edited, &label, &[1, 3]).expect("two of four");
     assert_eq!(report.label, format!("{label}-split"));
     assert_eq!((report.moved, report.kept), (2, 2));
 
@@ -532,9 +539,11 @@ fn a_split_takes_exactly_the_named_observations() {
 
 #[test]
 fn a_split_whose_reference_moved_reseats_both_halves() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = four_observation_cluster();
     // Observation 0 is the reference; move it to the second half.
-    let (bench, report) = split(&bench, &label, &[0]).expect("one of four");
+    let (bench, report) = split(&bench, &edited, &label, &[0]).expect("one of four");
     let first = bench.track(&label).expect("still on");
     let second = bench.track(&report.label).expect("just put on");
     assert_eq!(first.cluster().expect("a cluster").reference, 0);
@@ -545,17 +554,19 @@ fn a_split_whose_reference_moved_reseats_both_halves() {
 
 #[test]
 fn a_split_of_nothing_or_of_everything_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
     let (bench, label) = four_observation_cluster();
     assert_eq!(
-        split(&bench, &label, &[]).expect_err("nothing named"),
+        split(&bench, &edited, &label, &[]).expect_err("nothing named"),
         SplitError::NoObservations
     );
     assert_eq!(
-        split(&bench, &label, &[0, 1, 2, 3]).expect_err("all four named"),
+        split(&bench, &edited, &label, &[0, 1, 2, 3]).expect_err("all four named"),
         SplitError::EveryObservation(4)
     );
     assert_eq!(
-        split(&bench, &label, &[0, 9]).expect_err("there is no observation 9"),
+        split(&bench, &edited, &label, &[0, 9]).expect_err("there is no observation 9"),
         SplitError::NoSuchObservation {
             observation: 9,
             observation_count: 4
@@ -818,4 +829,439 @@ fn the_committed_colour_is_the_consensus_bitmap_centre() {
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
     let written = next.point(report.point).expect("just written");
     assert_eq!(written.point().color, [10, 20, 30]);
+}
+
+// ---- The evaluation --------------------------------------------------------
+
+/// The track's own surfel, which is what an evaluation registers against.
+fn frame_of(track: &EditableTrack) -> OrientedPatch {
+    track
+        .track()
+        .expect("the track stage")
+        .frame
+        .clone()
+        .expect("the fixture stores a patch frame")
+}
+
+/// The two kernels an evaluation chains at the track stage, called directly on
+/// `scene` seeded at `seeds`: what the bench has to agree with.
+fn fit_directly(
+    scene: &Scene,
+    frame: &OrientedPatch,
+    view_set: &[u32],
+    seeds: &[Option<[f64; 2]>],
+) -> (KeypointLocalization, KeypointRefinement) {
+    let views = scene.views();
+    let options = EvaluateOptions::default();
+    let localized =
+        localize_patch_keypoints(frame, &views, view_set, Some(seeds), &options.localize);
+    let refined = refine_patch_keypoints(
+        frame,
+        &views,
+        &localized.views,
+        Some(
+            &localized
+                .keypoints
+                .iter()
+                .map(|&k| Some(k))
+                .collect::<Vec<_>>(),
+        ),
+        &options.refine,
+    );
+    (localized, refined)
+}
+
+/// Evaluate `track` over `scene` with the default kernel parameters.
+fn evaluate_over(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
+    evaluate(
+        track,
+        edited,
+        &scene.views(),
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+}
+
+/// Put `track` into `stage` over `scene` with the default kernel parameters.
+fn stage_over(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+    stage: StageKind,
+) -> Result<(EditableTrack, StageReport), StageError> {
+    set_stage(
+        track,
+        edited,
+        &scene.views(),
+        stage,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+}
+
+#[test]
+fn a_track_from_a_point_evaluates_to_the_kernels_own_numbers() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let frame = frame_of(&track);
+    let seeds: Vec<Option<[f64; 2]>> = (0..2)
+        .map(|k| {
+            track.observations[k]
+                .track
+                .as_ref()
+                .and_then(|m| m.keypoint)
+                .map(|p| [f64::from(p[0]), f64::from(p[1])])
+        })
+        .collect();
+
+    let (measured, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!(report.stage, StageKind::Track);
+    assert_eq!((report.measured, report.unmeasured), (2, 0));
+
+    // The same two kernels, called straight on the same frame and seeds.
+    let (localized, refined) = fit_directly(&scene, &frame, &[0, 1], &seeds);
+    for (slot, &image) in localized.views.iter().enumerate() {
+        let at = refined
+            .views
+            .iter()
+            .position(|&v| v == image)
+            .expect("the refinement kept both views");
+        let expected = refined.keypoints[at];
+        let m = measured.observations[image as usize]
+            .track
+            .as_ref()
+            .expect("a track slot");
+        assert_eq!(
+            m.keypoint,
+            Some([expected[0] as f32, expected[1] as f32]),
+            "image {image}"
+        );
+        assert_eq!(m.zncc, Some(localized.loo_zncc[slot]), "image {image}");
+        assert!(m.localizability.expect("a scored tile") > 0.0);
+        assert!(m.reprojection_error.expect("a residual") < 1.0);
+    }
+
+    // The track's own point is where its sightings say it is, and the frame
+    // stands there.
+    let position = report.position.expect("a triangulation");
+    assert!(
+        (position - WORLD).norm() < 0.02,
+        "the re-triangulation moved to {position}"
+    );
+    let payload = measured.track().expect("the track stage");
+    assert_eq!(payload.position, Some(position));
+    assert_eq!(
+        payload.frame.as_ref().expect("a frame").center,
+        position,
+        "the frame follows the position"
+    );
+    let bitmap = payload.bitmap.as_ref().expect("a fused consensus");
+    assert_eq!(bitmap.shape(), [BITMAP_R, BITMAP_R, 4]);
+    assert!(
+        bitmap.iter().any(|&v| v > 0),
+        "the fused tile shows the plane"
+    );
+}
+
+#[test]
+fn an_evaluation_sets_no_verdict_and_leaves_a_pinned_one_alone() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    // A third sighting, refused by hand: an evaluation neither runs it nor
+    // moves it.
+    let (track, added) = add_observation(
+        &track,
+        &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
+    )
+    .expect("a finite pixel");
+    let (track, _) = set_verdict(&track, added.observation, Verdict::Out).expect("a live row");
+
+    let (measured, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!((report.measured, report.unmeasured), (2, 0));
+    assert_eq!(measured.verdict_counts(), (2, 0, 1));
+    assert!(measured.observations[2].pinned);
+    assert_eq!(measured.observations[2].verdict, Verdict::Out);
+    assert!(
+        measured.observations[2].track.is_none(),
+        "an out observation is not run"
+    );
+}
+
+#[test]
+fn a_candidate_on_the_plane_scores_and_one_nowhere_is_not_evaluated() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (on_plane, added) = add_observation(
+        &track,
+        &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
+    )
+    .expect("a finite pixel");
+    let at = added.observation;
+    let (on_plane, _) = evaluate_over(&scene, &edited, &on_plane).expect("two observations in");
+    let scored = on_plane.observations[at]
+        .track
+        .as_ref()
+        .expect("a track slot");
+    assert!(
+        scored.zncc.expect("a score") > on_plane.thresholds.min_zncc,
+        "the third camera sees the same patch: {:?}",
+        scored.zncc
+    );
+    assert!(scored.shift_px.expect("a drift") < 3.0);
+
+    // The same gesture, pointed at nothing: the pixel is off the sensor, so no
+    // round places it and the row stays unmeasured.
+    let (nowhere, added) =
+        add_observation(&track, &ObservationSeed::at_pixel(2, [10_000.0, 10_000.0]))
+            .expect("a finite pixel");
+    let at = added.observation;
+    let (nowhere, report) = evaluate_over(&scene, &edited, &nowhere).expect("two observations in");
+    assert_eq!((report.measured, report.unmeasured), (2, 1));
+    let unscored = nowhere.observations[at].track.as_ref();
+    assert!(
+        unscored.is_none_or(|m| m.zncc.is_none()),
+        "nothing registered there"
+    );
+}
+
+#[test]
+fn a_downgrade_then_an_upgrade_triangulates_back() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (cluster, report) =
+        stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a frame to project");
+    assert_eq!(cluster.stage_kind(), StageKind::Cluster);
+    assert!(report.changed);
+    assert_eq!(
+        report.reference,
+        Some(cluster.cluster().expect("a cluster").reference)
+    );
+    // Every observation is seeded where its keypoint was, with the shape the
+    // frame projects to there.
+    for (k, observation) in cluster.observations.iter().enumerate() {
+        let seed = observation.cluster.as_ref().expect("a cluster slot");
+        let keypoint = track.observations[k]
+            .track
+            .as_ref()
+            .and_then(|m| m.keypoint)
+            .expect("a stored keypoint");
+        assert!((seed.seed_position[0] - f64::from(keypoint[0])).abs() < 1e-6);
+        assert!((seed.seed_position[1] - f64::from(keypoint[1])).abs() < 1e-6);
+        let det = seed.seed_shape[0][0] * seed.seed_shape[1][1]
+            - seed.seed_shape[0][1] * seed.seed_shape[1][0];
+        assert!(det.abs() > 0.0, "the projected shape spans an area");
+        // The 3D is gone, and what was measured at the track stage is not.
+        assert!(observation.track.is_some());
+    }
+    assert!(cluster.track().is_none());
+
+    let (again, report) =
+        stage_over(&scene, &edited, &cluster, StageKind::Track).expect("two observations in");
+    assert_eq!(again.stage_kind(), StageKind::Track);
+    let position = report
+        .evaluate
+        .expect("an upgrade evaluates")
+        .position
+        .expect("a triangulation");
+    assert!(
+        (position - WORLD).norm() < 0.05,
+        "the round trip landed at {position}"
+    );
+}
+
+#[test]
+fn setting_the_stage_a_track_is_already_at_changes_nothing() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (same, report) =
+        stage_over(&scene, &edited, &track, StageKind::Track).expect("the stage it is at");
+    assert!(!report.changed);
+    assert_eq!(report.from, StageKind::Track);
+    assert_eq!(report.to, StageKind::Track);
+    assert_eq!(same, track);
+}
+
+#[test]
+fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+
+    // Two sightings of the same piece of plane, both pointed at by hand.
+    let seed = ClusterSeed::from_pixel(0, "image_0", scene.project(0, WORLD), 2.0);
+    let (bench, created) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
+    let track = track_of(&bench, &created.label);
+    let (track, added) = add_observation(
+        &track,
+        &ObservationSeed::at_pixel(1, scene.project(1, WORLD)),
+    )
+    .expect("a finite pixel");
+    let (track, _) = set_verdict(&track, added.observation, Verdict::In).expect("a live row");
+
+    let (refined, report) = evaluate_over(&scene, &edited, &track).expect("a cluster of two");
+    assert_eq!(report.stage, StageKind::Cluster);
+    assert_eq!(report.measured, 2);
+    let reference = report.reference.expect("a reference was cut");
+    let payload = refined.cluster().expect("the cluster stage");
+    assert_eq!(payload.reference, reference);
+    let template = payload.template.as_ref().expect("a template was cut");
+    assert_eq!(template.radius, EvaluateOptions::default().cluster.radius);
+    assert!(template.samples.iter().any(|&v| v > 0.0));
+    for observation in &refined.observations {
+        let m = observation.cluster.as_ref().expect("a cluster slot");
+        assert!(m.status.is_some());
+        assert!(m.position.is_some(), "both members were fitted");
+        assert!(m.localizability.expect("a scored tile") > 0.0);
+    }
+    assert_eq!(
+        refined.observations[reference]
+            .cluster
+            .as_ref()
+            .expect("a cluster slot")
+            .status,
+        Some(MemberStatus::Reference)
+    );
+
+    let (upgraded, _) =
+        stage_over(&scene, &edited, &refined, StageKind::Track).expect("two observations in");
+    let position = upgraded
+        .track()
+        .expect("the track stage")
+        .position
+        .expect("a triangulation");
+    assert!(
+        (position - WORLD).norm() < 0.1,
+        "the hand-placed cluster landed at {position}"
+    );
+    // Both stages' measurements are on the observations now.
+    assert!(upgraded
+        .observations
+        .iter()
+        .all(|o| o.cluster.is_some() && o.track.is_some()));
+
+    let (next, report) = commit(&edited, &upgraded).expect("a track with a position");
+    assert_eq!(report.observation_count, 2);
+    let written = next.point(report.point).expect("just written");
+    assert!((written.point().position - WORLD).norm() < 0.1);
+    assert_eq!(written.observations().len(), 2);
+}
+
+#[test]
+fn a_split_of_a_track_stage_track_hands_back_a_cluster() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let keypoint = track_of(&bench, &label).observations[1]
+        .track
+        .as_ref()
+        .and_then(|m| m.keypoint)
+        .expect("a stored keypoint");
+
+    let (bench, report) = split(&bench, &edited, &label, &[1]).expect("one of two");
+    let first = bench.track(&label).expect("still on");
+    let second = bench.track(&report.label).expect("just put on");
+    assert_eq!(first.stage_kind(), StageKind::Track);
+    assert_eq!(
+        second.stage_kind(),
+        StageKind::Cluster,
+        "the half taken off is a set of patches again"
+    );
+    assert_eq!(second.cluster().expect("a cluster").reference, 0);
+    let seed = second.observations[0]
+        .cluster
+        .as_ref()
+        .expect("the downgrade seeded it");
+    assert!((seed.seed_position[0] - f64::from(keypoint[0])).abs() < 1e-6);
+    assert!(
+        second.observations[0].track.is_some(),
+        "the track stage's measurements stay in their slot"
+    );
+}
+
+// ---- The refusals ----------------------------------------------------------
+
+#[test]
+fn an_evaluation_with_fewer_views_than_images_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let views = scene.views();
+    assert_eq!(
+        evaluate(
+            &track,
+            &edited,
+            &views[..1],
+            &EvaluateOptions::default(),
+            &Progress::none(),
+        )
+        .expect_err("the reconstruction has three images"),
+        EvaluateError::ViewsMissing {
+            got: 1,
+            expected: 3
+        }
+    );
+}
+
+#[test]
+fn a_track_stage_evaluation_of_one_sighting_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (track, _) = set_verdict(&track_of(&bench, &label), 1, Verdict::Out).expect("a live row");
+    assert_eq!(
+        evaluate_over(&scene, &edited, &track).expect_err("one sighting fixes no point"),
+        EvaluateError::TooFewObservations(1)
+    );
+}
+
+#[test]
+fn an_observation_naming_an_image_with_no_view_is_refused() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (track, _) = add_observation(
+        &track_of(&bench, &label),
+        &ObservationSeed::at_pixel(9, [10.0, 10.0]),
+    )
+    .expect("a finite pixel");
+    assert_eq!(
+        evaluate_over(&scene, &edited, &track).expect_err("there is no image 9"),
+        EvaluateError::NoView { image: 9 }
+    );
+}
+
+#[test]
+fn a_track_with_no_frame_has_nothing_to_register_against() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    if let Stage::Track(payload) = &mut track.stage {
+        payload.frame = None;
+    }
+    assert_eq!(
+        evaluate_over(&scene, &edited, &track).expect_err("there is no surfel"),
+        EvaluateError::NoFrame
+    );
+    assert_eq!(
+        stage_over(&scene, &edited, &track, StageKind::Cluster)
+            .expect_err("there is no frame to project"),
+        StageError::NoFrame
+    );
 }

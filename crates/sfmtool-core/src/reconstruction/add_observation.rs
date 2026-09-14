@@ -527,7 +527,7 @@ fn triangulate_record(
 /// at `position`: the distance from the camera-cloud centroid, which is the
 /// reference `SfmrReconstruction::materialize_points_at_infinity` measures its
 /// own placement from.
-fn placement_scale(position: &Point3<f64>, views: &[ProjectedImage<'_>]) -> f64 {
+pub(crate) fn placement_scale(position: &Point3<f64>, views: &[ProjectedImage<'_>]) -> f64 {
     let mut centroid = Vector3::zeros();
     for view in views {
         centroid += view.cam_from_world.inverse_translation_origin().coords;

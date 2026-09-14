@@ -7,15 +7,21 @@
 //! `specs/core/bench/editable-track.md` is the design. Nothing here reads a
 //! photograph or runs a kernel: these are the steps that are decided by what
 //! the reconstruction and the person already say. The steps that register
-//! pixels are evaluations, and they are separate.
+//! pixels are the evaluation and the stage change, and they are separate --
+//! with one seam: a split of a track-stage track puts the half it takes off
+//! down to the cluster stage, which is the stage step's own work over the
+//! cameras and reads no photograph either.
 
 use std::sync::Arc;
 
 use nalgebra::Vector3;
 
 use crate::patch::cloud::OrientedPatch;
+use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
+use super::evaluate::EvaluateOptions;
+use super::stage::{set_stage, StageError};
 use super::track::{
     ClusterPayload, EditableTrack, Observation, Origin, Provenance, Stage, StageKind, Thresholds,
     TrackMeasurement, TrackPayload, Verdict,
@@ -706,6 +712,9 @@ pub enum SplitError {
         /// How many observations the track holds.
         observation_count: usize,
     },
+    /// The split-off half is a cluster, and putting the track-stage half down
+    /// to that stage was refused.
+    Downgrade(StageError),
 }
 
 impl std::fmt::Display for SplitError {
@@ -729,6 +738,7 @@ impl std::fmt::Display for SplitError {
                 "observation {observation} is past the {observation_count} \
                  observations of this track"
             ),
+            SplitError::Downgrade(e) => write!(f, "{e}"),
         }
     }
 }
@@ -757,16 +767,25 @@ pub struct SplitReport {
 /// measurements; the new track has no origin, so a commit of it creates a point
 /// while a commit of the first still replaces the one it came from.
 ///
-/// The second track starts at the stage the first is in. The measurements the
-/// moved observations carry are measurements of that representation, and moving
-/// a track-stage half down to the cluster stage is the stage step's own work,
-/// which reads the cameras.
+/// **The second track is a cluster.** A split is the step for a track that is
+/// two surfaces, and the half being taken off is a set of sightings that agree
+/// with each other and not with a 3D hypothesis fitted to both; carrying that
+/// hypothesis onto it would state as fact the thing the split is questioning.
+/// So a track-stage half is put down to the cluster stage through the same
+/// downgrade the stage step runs ([`set_stage`](super::stage::set_stage())),
+/// which needs the reconstruction for the cameras it projects the frame
+/// through, and a half whose frame projects nowhere is refused there rather
+/// than half-moved. The first track keeps its stage, its origin and everything
+/// it was.
 ///
 /// A cluster whose reference moved out takes the first observation it has left
-/// as its reference, and the new track takes its own first; the template is
-/// dropped on both, because a template is a cut around a particular reference.
+/// as its reference, and the new track takes the one the downgrade picks -- the
+/// observation the patch is largest in -- or its own first when it was already
+/// a cluster; the template is dropped on both, because a template is a cut
+/// around a particular reference.
 pub fn split(
     bench: &Bench,
+    edited: &EditedReconstruction,
     label: &str,
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError> {
@@ -807,6 +826,18 @@ pub fn split(
     second.observations = moved;
     second.origin = None;
     reseat_reference(&mut second);
+    if second.stage_kind() == StageKind::Track {
+        let (down, _) = set_stage(
+            &second,
+            edited,
+            &[],
+            StageKind::Cluster,
+            &EvaluateOptions::default(),
+            &Progress::none(),
+        )
+        .map_err(SplitError::Downgrade)?;
+        second = down;
+    }
 
     let report_moved = second.observations.len();
     let report_kept = first.observations.len();

@@ -25,11 +25,15 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
-    create_track as core_create_track, set_verdict as core_set_verdict, split as core_split, Bench,
-    BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, ItemKind, Observation,
-    ObservationSeed, Provenance, Verdict,
+    create_track as core_create_track, evaluate as core_evaluate, set_stage as core_set_stage,
+    set_verdict as core_set_verdict, split as core_split, Bench, BenchItem, ClusterSeed,
+    CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport, ItemKind, Observation,
+    ObservationSeed, Provenance, StageKind, Verdict,
 };
+use sfmtool_core::patch::normal_refine::ProjectedImage;
+use sfmtool_core::progress::Progress;
 
+use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
 
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
@@ -594,6 +598,171 @@ fn apply_thresholds(
     ))
 }
 
+/// The decoded views a photometric step reads, one per image of `edited`.
+///
+/// `images` is what every patch kernel takes -- a list of ``HxW[xC]`` ``uint8``
+/// arrays, one per image of the base, or a prebuilt :class:`ImagePyramidSet` --
+/// because registering a patch needs pixels and a reconstruction carries poses
+/// and lenses rather than photographs.
+fn views_of<'a>(
+    posed: &'a PosedViews,
+    pyramids: &'a crate::patches::views::PyramidSet,
+) -> Vec<ProjectedImage<'a>> {
+    posed
+        .cameras
+        .iter()
+        .zip(&posed.poses)
+        .zip(pyramids.as_slice())
+        .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
+            camera,
+            cam_from_world,
+            pyramid,
+        })
+        .collect()
+}
+
+/// The dict form of one evaluation's report.
+fn evaluate_report_dict<'py>(
+    py: Python<'py>,
+    report: &EvaluateReport,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("stage", report.stage.to_string())?;
+    d.set_item("measured", report.measured)?;
+    d.set_item("unmeasured", report.unmeasured)?;
+    if let Some(reference) = report.reference {
+        d.set_item("reference", reference)?;
+    }
+    if let Some(p) = report.position {
+        d.set_item("position", PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
+    }
+    if let Some(condition_number) = report.condition_number {
+        d.set_item("condition_number", condition_number)?;
+    }
+    Ok(d)
+}
+
+/// The stage `word` names.
+fn parse_stage(word: &str) -> PyResult<StageKind> {
+    match word {
+        "cluster" => Ok(StageKind::Cluster),
+        "track" => Ok(StageKind::Track),
+        other => Err(PyValueError::new_err(format!(
+            "unknown stage: {other:?} (expected cluster|track)"
+        ))),
+    }
+}
+
+/// Fill the measurement slots of every ``in`` and ``candidate`` observation of
+/// `track`, at the stage it is in, and leave every verdict where it is.
+///
+/// At the **cluster stage** the seeds are an in-memory ``.matches`` cluster and
+/// the refinement kernel is run over it: the kernel picks the reference, cuts
+/// the template there and warps every other seed onto it, and each observation
+/// gets the refined position and shape, the achieved ZNCC, the drift from its
+/// seed, its own tile localizability and the kernel's ``member_status``. No
+/// pose is read.
+///
+/// At the **track stage** the track's surfel is registered into every ``in``
+/// and ``candidate`` view by the same two kernels ``add_observation`` chains,
+/// the ``in`` results are re-triangulated and the consensus bitmap is fused
+/// over them; each observation gets the keypoint, the leave-one-out ZNCC, the
+/// drift from the surfel's projection, the reprojection error, the ray angle
+/// and its tile localizability.
+///
+/// Nothing here decides anything: the thresholds propose and
+/// :func:`apply_thresholds` applies the proposal.
+///
+/// Returns ``(EditableTrack, report)``. The report carries ``stage``,
+/// ``measured`` and ``unmeasured``; ``reference`` at the cluster stage; and
+/// ``position`` and ``condition_number`` at the track stage. Raises
+/// ``ValueError`` with the reason when the evaluation is refused.
+#[pyfunction]
+fn evaluate(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    let views = views_of(&posed, &pyramids);
+    let (next, report) = core_evaluate(
+        &track.inner,
+        &edited.inner,
+        &views,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .map_err(refused)?;
+    let d = evaluate_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Put `track` into `stage`, which is ``"cluster"`` or ``"track"``.
+///
+/// **Up**, cluster to track: the ``in`` observations' refined cluster positions
+/// are triangulated, the patch is framed at that position from the reference
+/// observation's affine shape at the triangulated depth, and the track-stage
+/// evaluation then runs over it. Every observation's cluster-stage
+/// measurements are kept beside the new ones.
+///
+/// **Down**, track to cluster: always possible and lossy on purpose. The
+/// reference becomes the ``in`` observation with the largest projected patch
+/// scale, every observation is re-seeded at its keypoint with the shape the
+/// frame projects to there, and the position, the frame and the bitmap are
+/// dropped. Track-stage measurements stay in their slots.
+///
+/// Setting the stage a track is already at gives the track back unchanged, with
+/// ``changed`` false, and the caller pushes no version for it.
+///
+/// Returns ``(EditableTrack, report)``, whose report carries ``from``, ``to``,
+/// ``changed``, the upgrade's ``evaluate`` report and the downgrade's
+/// ``reference``.
+#[pyfunction]
+fn set_stage(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    stage: &str,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let stage = parse_stage(stage)?;
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    let views = views_of(&posed, &pyramids);
+    let (next, report) = core_set_stage(
+        &track.inner,
+        &edited.inner,
+        &views,
+        stage,
+        &EvaluateOptions::default(),
+        &Progress::none(),
+    )
+    .map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("from", report.from.to_string())?;
+    d.set_item("to", report.to.to_string())?;
+    d.set_item("changed", report.changed)?;
+    if let Some(evaluated) = &report.evaluate {
+        d.set_item("evaluate", evaluate_report_dict(py, evaluated)?)?;
+    }
+    if let Some(reference) = report.reference {
+        d.set_item("reference", reference)?;
+    }
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
 /// Split the observations at `observations` off the track called `label` into a
 /// second track beside it on the bench.
 ///
@@ -605,15 +774,23 @@ fn apply_thresholds(
 /// still replaces the one it came from. An empty list, or every observation, is
 /// refused.
 ///
+/// **The second track is a cluster.** The half being taken off is a set of
+/// sightings that agree with each other and not with a 3D hypothesis fitted to
+/// both, so a track-stage half is put down to the cluster stage through the
+/// same downgrade :func:`set_stage` runs -- which is why `edited` is needed:
+/// the downgrade projects the frame through each observation's camera.
+///
 /// Returns ``(Bench, report)``; the report's ``label`` names the second track.
 #[pyfunction]
 fn split(
     py: Python<'_>,
     bench: &PyBench,
+    edited: &PyEditedReconstruction,
     label: &str,
     observations: Vec<usize>,
 ) -> PyResult<(PyBench, Py<PyDict>)> {
-    let (next, report) = core_split(&bench.inner, label, &observations).map_err(refused)?;
+    let (next, report) =
+        core_split(&bench.inner, &edited.inner, label, &observations).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("label", report.label)?;
     d.set_item("moved", report.moved)?;
@@ -668,6 +845,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(apply_thresholds, m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate, m)?)?;
+    m.add_function(wrap_pyfunction!(set_stage, m)?)?;
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     Ok(())
