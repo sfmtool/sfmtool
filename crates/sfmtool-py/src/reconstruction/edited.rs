@@ -262,7 +262,9 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
 /// resolved before an edit resolves to the same point after it.
 #[pyclass(name = "EditedReconstruction", module = "sfmtool.reconstruction")]
 pub struct PyEditedReconstruction {
-    inner: EditedReconstruction,
+    // `pub(crate)` so the bench bindings, which commit a track into a version,
+    // can read the value and hand back the next one without a second wrapper.
+    pub(crate) inner: EditedReconstruction,
 }
 
 #[pymethods]

@@ -8,8 +8,9 @@
 //!
 //! Every binding lives on a PyO3 submodule (`_sfmtool.geometry`,
 //! `_sfmtool.io`, `_sfmtool.sift`, `_sfmtool.reconstruction`,
-//! `_sfmtool.patches`, `_sfmtool.matching`, `_sfmtool.analysis`,
-//! `_sfmtool.flow`, `_sfmtool.spatial`, `_sfmtool.spherical`); each
+//! `_sfmtool.patches`, `_sfmtool.bench`, `_sfmtool.matching`,
+//! `_sfmtool.analysis`, `_sfmtool.flow`, `_sfmtool.spatial`,
+//! `_sfmtool.spherical`); each
 //! submodule's `__name__` reads as the public `sfmtool.<name>` so binding
 //! objects report the public location in tracebacks, IPython, and Sphinx.
 //! The only root-level registrations are `build_profile` (build
@@ -21,6 +22,10 @@
 //! re-exports each submodule wholesale (`from sfmtool._sfmtool.<sub> import
 //! *`), so the flat `sfmtool.*` surface still exists — it is now assembled on
 //! the Python side from named submodules rather than registered flat here.
+//! `bench` is the one submodule deliberately left out of that assembly: its
+//! steps are named for what they do to a track (`add_observation`, `commit`,
+//! `split`), which are words the flat surface already spends on other things,
+//! so it is imported as `sfmtool._sfmtool.bench` and read as `bench.commit(…)`.
 //!
 //! # Example
 //!
@@ -128,6 +133,10 @@ pub use patches::{
 mod py_progress;
 pub use py_progress::ProgressCounter;
 
+// ── The bench beside a reconstruction, and the editable track on it ───────
+
+mod bench;
+
 // ── Optical flow + warp maps ─────────────────────────────────────────────
 
 mod flow;
@@ -183,6 +192,10 @@ fn _sfmtool(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Patches (surfels): OrientedPatch, PatchCloud + its kernels, scene
     // inputs, photometric RANSAC, consensus atlas.
     helpers::install_submodule(m, "sfmtool.patches", patches::register)?;
+
+    // The bench beside a reconstruction: the item list and its labels, the
+    // editable track, and the steps that work one up to a point and commit it.
+    helpers::install_submodule(m, "sfmtool.bench", bench::register)?;
 
     // Feature matching: descriptor + image-pair + sweep + cluster.
     helpers::install_submodule(m, "sfmtool.matching", matching::register)?;

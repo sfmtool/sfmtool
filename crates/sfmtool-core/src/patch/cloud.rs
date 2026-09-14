@@ -89,7 +89,7 @@ impl std::error::Error for PatchCloudError {}
 /// for a point at infinity (`center` is a direction `d`, the patch is tangent to
 /// the unit sphere around `d`, and corners are themselves directions). Rendering
 /// and visibility branch on it; see [`Self::corner_homogeneous`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OrientedPatch {
     pub center: Point3<f64>,
     /// Unit, in-plane.

@@ -16,6 +16,9 @@
 //!   consistency census
 //! - [`spherical`] — spherical-tile rigs, consensus atlases, photometric RANSAC
 //! - [`patch`] — patch clouds and patch-normal refinement
+//! - [`bench`](mod@bench): the bench beside a reconstruction and the editable
+//!   track on it: the item list, its labels, and the steps that work a track up
+//!   to a point and commit it
 //! - [`spatial`] — generic KD-tree point-cloud utility used across groups, and
 //!   the per-image keypoint reach enumeration in the pixel domain
 //! - [`progress`] — the parameter a long-running call reports its phases,
@@ -25,6 +28,7 @@
 //! `sfmtool-sfmr-format`, `sfmtool-matches-format`, and `sfmtool-camrig-format`.
 
 pub mod analysis;
+pub mod bench;
 pub mod camera;
 pub mod features;
 pub mod geometry;
