@@ -42,34 +42,19 @@ last change in another.
 ## The maps
 
 Each version but the first was made from exactly one other, and the step between
-them carries a `PointMap`
-([document.rs](../../crates/sfm-explorer/src/document.rs)):
+them carries a `PointMap`. The type is core's, described in
+[`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+§ "The point map": `forward(before)` is where an index lands after the step and
+`inverse(after)` is where it came from, over the five cases a step can be -- the
+indexes a point edit removed, the pairs it moved, the indexes it created, a
+whole-value edit's row map, and a chain of those.
 
-```rust
-pub enum PointMap {
-    /// Indexes are stable across this step; these ones stopped resolving.
-    Removed(Vec<u32>),
-    /// A point edit that modified points: the index each held before the step
-    /// and the one it took after it. Every index not named is unchanged.
-    Replaced(Vec<(u32, u32)>),
-    /// A point edit that created points, naming the indexes they took. The
-    /// forward direction is the identity; the inverse has no answer for a
-    /// created index, which is what makes an undo clear a selection on one.
-    Created(Vec<u32>),
-    /// A whole-value edit's row map: a materialisation's, or the one
-    /// `RowMap::by_scan` reads off a bulk edit's input and output.
-    Rows(RowMap),
-    /// The steps one edit took, applied in order.
-    Chain(Vec<PointMap>),
-}
-
-impl PointMap {
-    /// Where an index before this step lands after it.
-    pub fn forward(&self, before: u32) -> Option<u32>;
-    /// Where an index after this step came from.
-    pub fn inverse(&self, after: u32) -> Option<u32>;
-}
-```
+**A version stores the map its edit handed back.** Every core edit reports the
+map it made, so an added observation's pair, a removed observation's pair or
+removal and a created point's index arrive already spelled this way; the
+viewer's own bulk edits chain the row maps they read off their two values. There
+is no second vocabulary in between, and one question -- `forward` -- is asked of
+every step whatever kind of edit made it.
 
 Each case is stored as what it is rather than as a pair of dense arrays, so a map
 costs the size of the edit that made it: a list of the indexes one point edit
@@ -79,8 +64,7 @@ deletion's map is one `u32`, and an added observation's is one pair, because
 delete-and-re-add gives a modified point a new index while it stays the same
 point and the selection has to follow it there. An
 image deletion's is a materialisation's row map chained with the one scanned off
-the image subset's input and output
-([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)).
+the image subset's input and output.
 
 **The maps are kept for every version ever minted**, including versions a new
 edit after an undo discarded. They are small enough that a node holds the whole
@@ -336,13 +320,13 @@ of a stale index.
 
 ## Testing
 
-`crates/sfm-explorer/src/document/tests.rs` covers the cursor and the maps: that
-undo and redo move the cursor without moving the versions, that an edit after an
-undo truncates the tail and keeps its maps, that serials are not reused, that the
-budget releases values and never maps, and that each map case is its own inverse
-on the indexes that survive it, over maps built the way the edits build them.
-The scan those maps come from is covered in core, in
-`crates/sfmtool-core/src/reconstruction/edited/tests.rs`.
+`crates/sfm-explorer/src/document/tests.rs` covers the cursor and the step list:
+that undo and redo move the cursor without moving the versions, that an edit
+after an undo truncates the tail and keeps its maps, that serials are not reused,
+and that the budget releases values and never maps. The maps themselves are
+covered in core, in `crates/sfmtool-core/src/reconstruction/edited/tests.rs`:
+each case forward and inverse, over maps built the way the edits build them, and
+the scan a row map comes from.
 
 `crates/sfm-explorer/src/state/edits/tests.rs` covers what follows: a surviving
 selection keeping its index across a point edit, a deleted selection clearing,

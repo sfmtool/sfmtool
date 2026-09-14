@@ -26,11 +26,11 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, set_verdict as core_set_verdict, split as core_split, Bench,
-    BenchItem, ClusterSeed, CommitOutcome, CreateTrackOptions, EditableTrack, ItemKind,
-    Observation, ObservationSeed, Provenance, Verdict,
+    BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, ItemKind, Observation,
+    ObservationSeed, Provenance, Verdict,
 };
 
-use crate::reconstruction::edited::PyEditedReconstruction;
+use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
 
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
 fn refused<E: std::fmt::Display>(e: E) -> PyErr {
@@ -632,10 +632,12 @@ fn split(
 /// and a track that carries none refuses naming the evaluation as the step that
 /// is missing.
 ///
-/// Returns ``(EditedReconstruction, report)``. The report carries ``outcome``
-/// (``"created"`` or ``"replaced"``), ``point``, ``replaced`` where there is
-/// one, the ``absorbed`` point indexes, ``observation_count`` and ``label``, the
-/// sentence a log records.
+/// Returns ``(EditedReconstruction, report)``. The report carries ``point``,
+/// the index the written point took; ``replaced``, the index it took the place
+/// of, present only when the track's origin resolved; the ``absorbed`` point
+/// indexes; ``observation_count``; ``label``, the sentence a log records; and
+/// ``map``, the :class:`PointMap` the commit made -- the write, with the
+/// absorbed points' removal chained after it when there was one.
 #[pyfunction]
 #[pyo3(signature = (edited, track, *, node = "the reconstruction"))]
 fn commit(
@@ -646,20 +648,14 @@ fn commit(
 ) -> PyResult<(PyEditedReconstruction, Py<PyDict>)> {
     let (next, report) = core_commit(&edited.inner, &track.inner).map_err(refused)?;
     let d = PyDict::new(py);
-    match report.outcome {
-        CommitOutcome::Created(point) => {
-            d.set_item("outcome", "created")?;
-            d.set_item("point", point)?;
-        }
-        CommitOutcome::Replaced { point, replaced } => {
-            d.set_item("outcome", "replaced")?;
-            d.set_item("point", point)?;
-            d.set_item("replaced", replaced)?;
-        }
+    d.set_item("point", report.point)?;
+    if let Some(replaced) = report.replaced {
+        d.set_item("replaced", replaced)?;
     }
-    d.set_item("absorbed", report.absorbed.clone().into_pyarray(py))?;
+    d.set_item("absorbed", report.absorbed().to_vec().into_pyarray(py))?;
     d.set_item("observation_count", report.observation_count)?;
     d.set_item("label", report.label(node))?;
+    d.set_item("map", PyPointMap::wrap(report.map))?;
     Ok((PyEditedReconstruction { inner: next }, d.unbind()))
 }
 

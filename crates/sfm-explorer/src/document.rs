@@ -20,17 +20,22 @@
 //!   [`PointMap`] per version ever minted, discarded redo tails included, and
 //!   are never pruned: a map is the size of the edit that produced it, and it
 //!   is what lets an index taken at any version be followed to any other.
-//! - **A map is per step, not per index space.** [`PointMap::Removed`] is what
-//!   a point edit did (indexes are stable, so it says only which ones stopped
-//!   resolving); a [`PointMap::Chain`] of two [`PointMap::Rows`] is what a bulk
-//!   edit's materialisation and renumbering did. Both answer the same
-//!   question, [`PointMap::forward`].
+//! - **A map is the core edits' own [`PointMap`].** A point edit hands one back
+//!   in its report and a bulk edit's is read off its two values, so a version
+//!   stores what the edit said it did rather than a translation of it, and one
+//!   question -- [`PointMap::forward`] -- is asked of every step whatever kind
+//!   of edit made it.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
+
+/// What one step did to point indexes, which is the core edits' own vocabulary:
+/// every edit that can be a step of a history answers in it, so a version keeps
+/// the map its edit handed back rather than one translated here.
+pub use sfmtool_core::reconstruction::edited::PointMap;
 
 #[cfg(test)]
 mod tests;
@@ -67,86 +72,6 @@ impl std::fmt::Display for VersionSerial {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "v{}", self.0)
     }
-}
-
-/// What one step of the history did to point indexes.
-///
-/// Every version but the first carries one, naming the version it was made
-/// from. It is what the selection and any stored index follow across an edit.
-/// Every case is stored as what it is rather than as a pair of dense arrays,
-/// so a map is the size of the edit that made it: a list of indexes, or a row
-/// map, or the few steps one bulk edit took.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PointMap {
-    /// A point edit. Indexes are stable across it, so the map is only the
-    /// indexes that stopped resolving, ascending.
-    Removed(Vec<u32>),
-    /// A point edit that **modified** points: each pair is the index a point
-    /// held before the step and the one it took after it.
-    ///
-    /// Delete-and-re-add gives a modified point a new index while it stays the
-    /// same point, so this is what carries a selection, a copied id and a
-    /// panel's prepared state across the edit. Every index not named is
-    /// unchanged, which is what makes the map the size of the edit.
-    Replaced(Vec<(u32, u32)>),
-    /// A point edit that **created** points, naming the indexes they took.
-    ///
-    /// Every index the version already held is unchanged, so the forward
-    /// direction is the identity; the created ones are what the inverse has no
-    /// answer for, which is how an undo drops a selection that sits on one
-    /// rather than carrying it back to an index that held nothing.
-    Created(Vec<u32>),
-    /// A whole-value edit's row map: a materialisation's, or the one
-    /// `RowMap::by_scan` reads off a bulk edit's input and output.
-    Rows(RowMap),
-    /// The steps one edit took, applied in order.
-    Chain(Vec<PointMap>),
-}
-
-impl PointMap {
-    /// Where the index `before` this step lands after it, or `None` when the
-    /// point it named is gone.
-    pub fn forward(&self, before: u32) -> Option<u32> {
-        match self {
-            PointMap::Removed(removed) => is_live(removed, before).then_some(before),
-            PointMap::Replaced(moves) => Some(
-                moves
-                    .iter()
-                    .find(|&&(from, _)| from == before)
-                    .map_or(before, |&(_, to)| to),
-            ),
-            PointMap::Created(_) => Some(before),
-            PointMap::Rows(map) => map.forward(before),
-            PointMap::Chain(steps) => steps
-                .iter()
-                .try_fold(before, |index, step| step.forward(index)),
-        }
-    }
-
-    /// Where the index `after` this step came from, or `None` when this step
-    /// created the point it names.
-    pub fn inverse(&self, after: u32) -> Option<u32> {
-        match self {
-            PointMap::Removed(removed) => is_live(removed, after).then_some(after),
-            PointMap::Replaced(moves) => Some(
-                moves
-                    .iter()
-                    .find(|&&(_, to)| to == after)
-                    .map_or(after, |&(from, _)| from),
-            ),
-            PointMap::Created(created) => (!created.contains(&after)).then_some(after),
-            PointMap::Rows(map) => map.inverse(after),
-            PointMap::Chain(steps) => steps
-                .iter()
-                .rev()
-                .try_fold(after, |index, step| step.inverse(index)),
-        }
-    }
-}
-
-/// Whether `index` survived a step that removed `removed` (ascending).
-fn is_live(removed: &[u32], index: u32) -> bool {
-    removed.binary_search(&index).is_err()
 }
 
 /// The points one version's edit brought into existence, and the hash they are

@@ -3,9 +3,9 @@
 
 //! Bindings for the reconstruction core types: the `SfmrReconstruction`
 //! wrapper (with its `clone_with_changes` editor), the `EditedReconstruction`
-//! overlay of point edits on a shared base, and the `RangeExpr` integer-range
-//! parser used for image/frame selection, plus the point estimation operation
-//! over a track set.
+//! overlay of point edits on a shared base with the `PointMap` its edits report
+//! their index effect in, and the `RangeExpr` integer-range parser used for
+//! image/frame selection, plus the point estimation operation over a track set.
 
 use pyo3::prelude::*;
 
@@ -18,6 +18,7 @@ pub mod sfmr_reconstruction;
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<sfmr_reconstruction::PySfmrReconstruction>()?;
     m.add_class::<edited::PyEditedReconstruction>()?;
+    m.add_class::<edited::PyPointMap>()?;
     m.add_class::<range_expr::PyRangeExpr>()?;
     point_estimation::register(m)?;
     Ok(())

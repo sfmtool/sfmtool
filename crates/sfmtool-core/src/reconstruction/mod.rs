@@ -33,7 +33,7 @@ pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, Reprojecti
 pub use remove_observation::{remove_observation, RemoveObservationError, RemoveObservationReport};
 
 pub use edited::{
-    EditError, EditedReconstruction, PointRecord, PointView, RecordObservation, RowMap,
+    EditError, EditedReconstruction, PointMap, PointRecord, PointView, RecordObservation, RowMap,
 };
 
 pub use data::{

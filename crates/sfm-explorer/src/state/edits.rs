@@ -220,18 +220,13 @@ impl AppState {
         )
         .map_err(|e| format!("Cannot add that observation: {e}"))?;
 
-        let moved = report.point;
         let text = format!(
             "Added observation of point {} in {image_name} ({label})",
             point.point
         );
         let serial = {
             let _phase = collector.phase("push version");
-            node.history.push(
-                next,
-                PointMap::Replaced(vec![(point.point, moved)]),
-                text.clone(),
-            )
+            node.history.push(next, report.map, text.clone())
         };
         let parent = version_before(node, serial);
         // The selection stays on the point, which has taken a new index; the
@@ -296,13 +291,9 @@ impl AppState {
             point.point
         );
         // The point survived and took a new index, or it was the track's last
-        // sighting and the point went with it. The map is what the selection
-        // follows in either case.
-        let map = match report.point {
-            Some(moved) => PointMap::Replaced(vec![(point.point, moved)]),
-            None => PointMap::Removed(vec![point.point]),
-        };
-        let serial = node.history.push(next, map, text.clone());
+        // sighting and the point went with it. The edit's own map is what the
+        // selection follows in either case.
+        let serial = node.history.push(next, report.map, text.clone());
         let parent = version_before(node, serial);
         self.follow_selection_forward(point.recon);
         let outcome = if report.deleted {
@@ -402,12 +393,8 @@ impl AppState {
         let text = format!("Created point in {image_name} ({label}), radius {radius_px:.1} px");
         let serial = {
             let _phase = collector.phase("push version");
-            node.history.push_creating(
-                next,
-                PointMap::Created(vec![report.point]),
-                text.clone(),
-                created,
-            )
+            node.history
+                .push_creating(next, report.map, text.clone(), created)
         };
         let parent = version_before(node, serial);
         // The selection moves to the point that was just made: it is what the

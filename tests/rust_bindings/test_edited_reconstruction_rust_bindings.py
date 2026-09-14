@@ -14,7 +14,11 @@ import time
 import numpy as np
 import pytest
 
-from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
+from sfmtool._sfmtool.reconstruction import (
+    EditedReconstruction,
+    PointMap,
+    SfmrReconstruction,
+)
 
 
 @pytest.fixture
@@ -322,6 +326,16 @@ class TestAddObservation:
         assert len(report["keypoint"]) == 2
         assert report["shift_px"] >= 0.0
 
+        # The edit reports what it did to point indexes: the one pair a
+        # modification is, which a caller carrying an index follows.
+        index_map = report["map"]
+        assert isinstance(index_map, PointMap)
+        assert index_map.kind == "replaced"
+        assert index_map.payload == [(point, report["point"])]
+        assert index_map.forward(point) == report["point"]
+        assert index_map.inverse(report["point"]) == point
+        assert f"{point}" in repr(index_map)
+
         record = next_value.point(report["point"])
         assert list(record["image_indexes"]).count(image) == 1
         assert list(record["image_indexes"]) == sorted(record["image_indexes"])
@@ -390,6 +404,16 @@ class TestCreatePoint:
         assert report["image"] == self.IMAGE
         assert report["half_extent"] > 0.0
         assert abs(float(np.linalg.norm(report["direction"])) - 1.0) < 1e-9
+
+        # Forward is the identity and the created index has no inverse, which
+        # is what makes an undo clear a selection sitting on it.
+        index_map = report["map"]
+        assert index_map.kind == "created"
+        assert index_map.payload == [report["point"]]
+        assert index_map.forward(0) == 0
+        assert index_map.forward(report["point"]) == report["point"]
+        assert index_map.inverse(report["point"]) is None
+        assert index_map.inverse(0) == 0
 
         record = next_value.point(report["point"])
         assert record["w"] == 0.0
@@ -496,6 +520,13 @@ class TestRemoveObservation:
         assert report["retriangulated"] is True
         assert report["observation_count"] == len(before) - 1
         assert len(report["position"]) == 3
+
+        # A point that survived took a new index, and the map says which.
+        index_map = report["map"]
+        assert index_map.kind == "replaced"
+        assert index_map.payload == [(point, report["point"])]
+        assert index_map.forward(point) == report["point"]
+
         record = next_value.point(report["point"])
         assert list(int(i) for i in record["image_indexes"]) == [
             i for i in before if i != image
@@ -564,6 +595,13 @@ class TestRemoveObservation:
         assert report["observation_count"] == 0
         assert value.point(index) is None
         assert value.point_count == embedded.point_count - 1
+        # The last sighting's removal takes the point, so the map is a removal
+        # and the index stops resolving.
+        index_map = report["map"]
+        assert index_map.kind == "removed"
+        assert index_map.payload == [index]
+        assert index_map.forward(index) is None
+        assert index_map.inverse(index) is None
 
 
 class TestResectImageInPlace:

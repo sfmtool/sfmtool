@@ -68,6 +68,7 @@ pub struct CreatePointReport {
     pub radius_px: f32,
     pub half_extent: f64,
     pub color: [u8; 3],
+    pub map: PointMap,
 }
 
 pub enum CreatePointError {
@@ -106,6 +107,13 @@ takes them; only the clicked image's entry is read.
 **The report names the bearing and the frame it built**, because those are what
 a caller has to be able to check without materialising: `direction` is the unit
 ray, `half_extent` is what `radius_px` became.
+
+**The report carries the index map.** `map` is the `PointMap` this edit made, a
+`Created` naming the one index: every index the value already held is unchanged
+and the created one is what the inverse has no answer for, which is how a caller
+undoing the edit drops a selection sitting on it rather than carrying it back to
+an index that held nothing
+([`edited-reconstruction.md`](edited-reconstruction.md) § "The point map").
 
 ### Example
 

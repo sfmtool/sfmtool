@@ -129,7 +129,7 @@ version already held is unchanged, so the version's map is a `PointMap::Created`
 naming the one new index: the forward direction is the identity, and the inverse
 has no answer for the created index. That is what makes an undo **clear** a
 selection sitting on the point rather than carry it back to an index that held
-nothing.
+nothing. The map comes from the kernel's report and is pushed as it stands.
 
 The version is pushed with `History::push_creating`, carrying a `CreatedPoints`:
 the point edit's own content hash (`EditedReconstruction::point_edit_hash` over

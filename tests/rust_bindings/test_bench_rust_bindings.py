@@ -260,11 +260,17 @@ class TestCommitting:
         track, _ = apply_thresholds(track, min_zncc=0.9)
         after, report = commit(edited, track, node="bull")
 
-        assert report["outcome"] == "replaced"
         assert report["replaced"] == long_track_point
         assert report["point"] == edited.base_point_count
         assert report["observation_count"] == track.observation_count
         assert report["absorbed"].size == 0
+        # The commit says what it did to point indexes in the same vocabulary
+        # every other edit does, so a caller carrying a selection follows it.
+        index_map = report["map"]
+        assert index_map.kind == "replaced"
+        assert index_map.payload == [(long_track_point, report["point"])]
+        assert index_map.forward(long_track_point) == report["point"]
+        assert index_map.inverse(report["point"]) == long_track_point
         assert report["label"] == (
             f"Committed track: {track.observation_count} observations in bull, "
             f"replacing point {long_track_point}"
@@ -286,10 +292,14 @@ class TestCommitting:
         bench, _ = create_track(Bench(), edited, long_track_point)
         bench, report = split(bench, bench.labels[0], [0, 1])
         after, commit_report = commit(edited, bench.track(report["label"]))
-        assert commit_report["outcome"] == "created"
+        assert "replaced" not in commit_report, "a track with no origin creates"
         assert commit_report["point"] == edited.base_point_count
         assert after.point_count == edited.point_count + 1
         assert after.point(long_track_point) is not None
+        index_map = commit_report["map"]
+        assert index_map.kind == "created"
+        assert index_map.payload == [commit_report["point"]]
+        assert index_map.inverse(commit_report["point"]) is None
 
     def test_a_track_with_one_observation_in_refuses(self, edited, long_track_point):
         _, track = create_track(Bench(), edited, long_track_point)

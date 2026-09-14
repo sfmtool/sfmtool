@@ -793,10 +793,11 @@ specs list as non-goals is what this draft still proposes.
   reconstruction and the person already say, with no phase inside it worth a
   row.
 
-**The commit answers with an outcome, not a `PointMap`.** `PointMap` is the
-viewer's type, so `commit` returns `CommitOutcome::{Created, Replaced}` plus the
-absorbed point indexes, and the viewer builds the `Chain` of the replacement and
-the removals from that. **A split preserves the stage** rather than always
+**The commit answers with a `PointMap`.** `PointMap` is core's type
+([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
+§ "The point map"), so `commit` returns the write's map, chained with a
+`Removed` of the absorbed points where there are any, and the viewer pushes it as
+it stands. **A split preserves the stage** rather than always
 producing a cluster, because moving a track-stage half down to the cluster stage
 is `set_stage`'s own work and reads the cameras; once `set_stage` exists, the
 Split off entry can chain the two.

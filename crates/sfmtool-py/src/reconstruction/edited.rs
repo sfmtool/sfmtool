@@ -17,7 +17,7 @@ use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyDict, PyDictMethods, PyList};
 
 use sfmtool_core::geometry::batch_resection::ResectOptions;
 use sfmtool_core::geometry::{
@@ -29,7 +29,7 @@ use sfmtool_core::reconstruction::bundle_adjust::{
     bundle_adjust as core_bundle_adjust, BundleAdjustOptions,
 };
 use sfmtool_core::reconstruction::edited::{
-    EditedReconstruction, PointRecord, RecordObservation, RowMap,
+    EditedReconstruction, PointMap, PointRecord, RecordObservation, RowMap,
 };
 use sfmtool_core::reconstruction::move_camera::move_camera as core_move_camera;
 use sfmtool_core::{
@@ -252,6 +252,112 @@ fn record_to_dict<'py>(py: Python<'py>, r: &PointRecord) -> PyResult<Bound<'py, 
     Ok(d)
 }
 
+/// What one edit did to point indexes.
+///
+/// It is what a caller holding a point index across an edit follows: a
+/// selection, a stored id, a row of its own bookkeeping. Every edit that can
+/// change an index answers in this one vocabulary, so a caller reads
+/// :meth:`forward` and :meth:`inverse` without knowing which edit made the map.
+///
+/// :attr:`kind` says which case it is, and :attr:`payload` is that case's
+/// content:
+///
+/// - ``"removed"``: the indexes that stopped resolving, as a list of ints.
+///   Every other index is unchanged.
+/// - ``"replaced"``: ``(before, after)`` pairs, as a list of tuples. Every
+///   index not named is unchanged.
+/// - ``"created"``: the indexes the created points took, as a list of ints.
+///   Forward is the identity; the inverse has no answer for one of these.
+/// - ``"rows"``: a whole-value edit's row map. It renumbers everything, so it
+///   has no short payload and ``payload`` is ``None``; read it through
+///   :meth:`forward` and :meth:`inverse`.
+/// - ``"chain"``: the steps one edit took, as a list of ``PointMap``, applied
+///   in order.
+#[pyclass(
+    name = "PointMap",
+    module = "sfmtool.reconstruction",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+pub struct PyPointMap {
+    inner: PointMap,
+}
+
+impl PyPointMap {
+    /// The wrapper an edit's report hands back.
+    pub fn wrap(inner: PointMap) -> Self {
+        Self { inner }
+    }
+}
+
+#[pymethods]
+impl PyPointMap {
+    /// Which case this map is: ``"removed"``, ``"replaced"``, ``"created"``,
+    /// ``"rows"`` or ``"chain"``.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        match &self.inner {
+            PointMap::Removed(_) => "removed",
+            PointMap::Replaced(_) => "replaced",
+            PointMap::Created(_) => "created",
+            PointMap::Rows(_) => "rows",
+            PointMap::Chain(_) => "chain",
+        }
+    }
+
+    /// The case's content, as the class docstring describes it.
+    #[getter]
+    fn payload<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        match &self.inner {
+            PointMap::Removed(indexes) | PointMap::Created(indexes) => {
+                Ok(PyList::new(py, indexes)?.into_any())
+            }
+            PointMap::Replaced(pairs) => {
+                Ok(PyList::new(py, pairs.iter().map(|&(from, to)| (from, to)))?.into_any())
+            }
+            PointMap::Rows(_) => Ok(py.None().into_bound(py)),
+            PointMap::Chain(steps) => {
+                let steps = steps
+                    .iter()
+                    .map(|step| Py::new(py, PyPointMap::wrap(step.clone())))
+                    .collect::<PyResult<Vec<_>>>()?;
+                Ok(PyList::new(py, steps)?.into_any())
+            }
+        }
+    }
+
+    /// Where `index` lands after this edit, or ``None`` when the point it
+    /// named is gone.
+    fn forward(&self, index: u32) -> Option<u32> {
+        self.inner.forward(index)
+    }
+
+    /// Where `index` came from before this edit, or ``None`` when the edit
+    /// created the point it names.
+    fn inverse(&self, index: u32) -> Option<u32> {
+        self.inner.inverse(index)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PointMap({})", describe_map(&self.inner))
+    }
+}
+
+/// One map as the text its `__repr__` shows, a chain's steps included.
+fn describe_map(map: &PointMap) -> String {
+    match map {
+        PointMap::Removed(indexes) => format!("removed={indexes:?}"),
+        PointMap::Replaced(pairs) => format!("replaced={pairs:?}"),
+        PointMap::Created(indexes) => format!("created={indexes:?}"),
+        PointMap::Rows(_) => "rows".to_string(),
+        PointMap::Chain(steps) => {
+            let steps: Vec<String> = steps.iter().map(describe_map).collect();
+            format!("chain=[{}]", steps.join(", "))
+        }
+    }
+}
+
 /// A reconstruction that is a shared immutable base plus the point edits made
 /// on it.
 ///
@@ -392,6 +498,10 @@ impl PyEditedReconstruction {
     /// `min_zncc` overrides the acceptance bar; the default is the localizer's
     /// own absolute floor, which is the bar the embed pass keeps an observation
     /// on. Raises ``ValueError`` with the reason when the edit is refused.
+    ///
+    /// The report's ``map`` is the :class:`PointMap` the edit made: the one
+    /// pair ``replaced -> point``, which a caller carrying an index across the
+    /// edit follows.
     #[pyo3(signature = (point, image, pixel, images, min_zncc = None))]
     fn add_observation(
         &self,
@@ -447,6 +557,7 @@ impl PyEditedReconstruction {
         d.set_item("position_shift", report.position_shift)?;
         d.set_item("from_infinity", report.from_infinity)?;
         d.set_item("condition_number", report.condition_number)?;
+        d.set_item("map", PyPointMap::wrap(report.map))?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 
@@ -465,6 +576,10 @@ impl PyEditedReconstruction {
     /// ``(EditedReconstruction, report)``; this object is not changed, and the
     /// returned value shares its base. Raises ``ValueError`` with the reason
     /// when the edit is refused.
+    ///
+    /// The report's ``map`` is the :class:`PointMap` the edit made: the one
+    /// pair ``replaced -> point`` for a point that survived, and the removal of
+    /// ``replaced`` for one whose last sighting this was.
     fn remove_observation(
         &self,
         py: Python<'_>,
@@ -485,6 +600,7 @@ impl PyEditedReconstruction {
         d.set_item("position", PyArray1::from_vec(py, report.position.to_vec()))?;
         d.set_item("position_shift", report.position_shift)?;
         d.set_item("condition_number", report.condition_number)?;
+        d.set_item("map", PyPointMap::wrap(report.map))?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 
@@ -507,6 +623,10 @@ impl PyEditedReconstruction {
     /// :class:`ImagePyramidSet` -- because the colour and the patch bitmap are
     /// read out of the photograph. Raises ``ValueError`` with the reason when
     /// the edit is refused.
+    ///
+    /// The report's ``map`` is the :class:`PointMap` the edit made: the one
+    /// created index. Every index the value already held is unchanged, and the
+    /// created one is what the inverse has no answer for.
     #[pyo3(signature = (image, pixel, radius_px, images))]
     fn create_point(
         &self,
@@ -550,6 +670,7 @@ impl PyEditedReconstruction {
         d.set_item("radius_px", report.radius_px)?;
         d.set_item("half_extent", report.half_extent)?;
         d.set_item("color", PyArray1::from_vec(py, report.color.to_vec()))?;
+        d.set_item("map", PyPointMap::wrap(report.map))?;
         Ok((PyEditedReconstruction { inner: next }, d.unbind()))
     }
 

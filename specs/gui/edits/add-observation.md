@@ -102,8 +102,9 @@ The point takes a **new index**, because a modification is delete-and-re-add
 ([`../../core/reconstruction/edited-reconstruction.md`](../../core/reconstruction/edited-reconstruction.md)),
 and it is the same point throughout. The version's map is therefore a
 `PointMap::Replaced`, one pair saying which index became which; every index not
-named is unchanged. The selection follows that map, so it stays on the point,
-and an undo brings it back to the index it had.
+named is unchanged. It is the map the kernel's report carries, pushed as it
+stands. The selection follows it, so it stays on the point, and an undo brings
+it back to the index it had.
 
 The version's label is
 

@@ -13,53 +13,43 @@ use nalgebra::Vector3;
 
 use crate::reconstruction::data::Point3D;
 use crate::reconstruction::edited::{
-    EditError, EditedReconstruction, PointRecord, RecordObservation,
+    EditError, EditedReconstruction, PointMap, PointRecord, RecordObservation,
 };
 
 use super::track::{EditableTrack, Provenance, StageKind, TrackPayload};
 
-/// What the commit did to the reconstruction's point set.
-///
-/// The reconstruction-side index map is the caller's to build: the bench knows
-/// which points were written and which were absorbed, and nothing about how the
-/// caller carries a selection or an id across a version.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitOutcome {
-    /// The track had no origin that resolves, so its point was appended. The
-    /// index it took.
-    Created(u32),
-    /// The track's origin resolved, so its point took that point's place.
-    Replaced {
-        /// The index the written point took.
-        point: u32,
-        /// The index it replaced, which is now deleted.
-        replaced: u32,
-    },
-}
-
-impl CommitOutcome {
-    /// The index the written point took.
-    pub fn point(&self) -> u32 {
-        match self {
-            CommitOutcome::Created(point) => *point,
-            CommitOutcome::Replaced { point, .. } => *point,
-        }
-    }
-}
-
 /// What one commit wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitReport {
-    /// Whether the point was appended or replaced, and at which index.
-    pub outcome: CommitOutcome,
-    /// The points the commit deleted because `in` observations had been pulled
-    /// from them, ascending. A merge is what this list being non-empty means.
-    pub absorbed: Vec<u32>,
+    /// The index the written point took.
+    pub point: u32,
+    /// The index it replaced, which is now deleted, or `None` when the track
+    /// had no origin that resolves and its point was appended.
+    pub replaced: Option<u32>,
+    /// What the commit did to point indexes: the write, and the absorbed
+    /// points' removal chained after it when there was one.
+    ///
+    /// A caller carrying a selection, a point id or an undo across the commit
+    /// reads this rather than reassembling it from the fields above, and it is
+    /// the same vocabulary every other edit answers in.
+    pub map: PointMap,
     /// How many observations were written, which is how many were `in`.
     pub observation_count: usize,
 }
 
 impl CommitReport {
+    /// The points the commit deleted because `in` observations had been pulled
+    /// from them, ascending. A merge is what this list being non-empty means.
+    pub fn absorbed(&self) -> &[u32] {
+        match &self.map {
+            PointMap::Chain(steps) => match steps.last() {
+                Some(PointMap::Removed(absorbed)) => absorbed,
+                _ => &[],
+            },
+            _ => &[],
+        }
+    }
+
     /// The sentence the log records, given the name the caller knows the
     /// reconstruction by.
     ///
@@ -71,11 +61,12 @@ impl CommitReport {
             "Committed track: {} observations in {node}",
             self.observation_count
         );
-        if let CommitOutcome::Replaced { replaced, .. } = self.outcome {
+        if let Some(replaced) = self.replaced {
             text.push_str(&format!(", replacing point {replaced}"));
         }
-        if !self.absorbed.is_empty() {
-            text.push_str(&format!(", absorbing {} points", self.absorbed.len()));
+        let absorbed = self.absorbed().len();
+        if absorbed > 0 {
+            text.push_str(&format!(", absorbing {absorbed} points"));
         }
         text
     }
@@ -215,7 +206,7 @@ impl From<EditError> for CommitError {
 /// # -> Result<(), Box<dyn std::error::Error>> {
 /// let (next, report) = commit(edited, track)?;
 /// println!("{}", report.label("bull"));
-/// let settled = track.with_origin(1, report.outcome.point());
+/// let settled = track.with_origin(1, report.point);
 /// # let _ = (next, settled);
 /// # Ok(())
 /// # }
@@ -329,12 +320,15 @@ pub fn commit(
         .map(|o| o.point)
         .filter(|&p| edited.point(p).is_some());
     let mut next = edited.clone();
-    let outcome = match origin {
-        Some(replaced) => CommitOutcome::Replaced {
-            point: next.replace_point(replaced, record)?,
-            replaced,
-        },
-        None => CommitOutcome::Created(next.add_point(record)?),
+    let (point, written) = match origin {
+        Some(replaced) => {
+            let point = next.replace_point(replaced, record)?;
+            (point, PointMap::Replaced(vec![(replaced, point)]))
+        }
+        None => {
+            let point = next.add_point(record)?;
+            (point, PointMap::Created(vec![point]))
+        }
     };
 
     // ---- The points the kept observations were pulled from ----
@@ -352,11 +346,21 @@ pub fn commit(
     // commit is not the place to complain about it.
     absorbed.retain(|&point| next.delete_point(point).is_ok());
 
+    // The write first, then what it absorbed: the absorbed indexes are the ones
+    // this value held before the write, and a point edit leaves indexes where
+    // they were, so the two steps compose in the order they were applied.
+    let map = if absorbed.is_empty() {
+        written
+    } else {
+        PointMap::Chain(vec![written, PointMap::Removed(absorbed)])
+    };
+
     Ok((
         next,
         CommitReport {
-            outcome,
-            absorbed,
+            point,
+            replaced: origin,
+            map,
             observation_count: rows.len(),
         },
     ))

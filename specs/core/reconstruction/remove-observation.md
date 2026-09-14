@@ -58,6 +58,7 @@ pub struct RemoveObservationReport {
     pub position: [f64; 3],
     pub position_shift: f64,
     pub condition_number: f64,
+    pub map: PointMap,
 }
 
 pub enum RemoveObservationError {
@@ -87,6 +88,13 @@ so there is nothing for a caller to tune.
 and a report that named an index in that case would be naming an index that is
 no longer live. `None` is the outcome, `deleted` says the same thing in the
 positive, and `replaced` always names the index the caller passed in.
+
+**The report carries the index map.** `map` is the `PointMap` this edit made:
+the one pair `replaced -> point` for a point that survived, and a `Removed`
+naming `replaced` for one whose last sighting this was. A caller carrying a
+selection across the edit reads that one field instead of branching on `point`
+itself ([`edited-reconstruction.md`](edited-reconstruction.md) § "The point
+map").
 
 **The report names what the remainder can still state.** `observation_count`,
 `to_infinity` and `retriangulated` are three different claims about the value

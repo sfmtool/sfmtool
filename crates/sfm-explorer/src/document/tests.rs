@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
+use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
 use super::*;
 
@@ -136,90 +136,4 @@ fn a_point_edit_keeps_the_base_and_the_timestamps_do_not_go_backwards() {
     assert!(times.windows(2).all(|w| w[0] <= w[1]));
     // A point edit's unshared cost is the overlay's, not the base's.
     assert!(history.versions()[1].unshared_bytes < 1024);
-}
-
-// ── The maps ────────────────────────────────────────────────────────────
-
-#[test]
-fn a_removal_map_keeps_every_surviving_index_where_it_was() {
-    let map = PointMap::Removed(vec![2, 5]);
-    assert_eq!(map.forward(1), Some(1));
-    assert_eq!(map.forward(2), None);
-    assert_eq!(map.forward(6), Some(6));
-    assert_eq!(map.inverse(6), Some(6));
-    assert_eq!(map.inverse(5), None);
-}
-
-/// A point-mask filter over `recon`, and the map the history stores for it:
-/// the one `RowMap::by_scan` reads off the filter's input and output, which is
-/// how a bulk edit's map is made.
-fn dropping(recon: &SfmrReconstruction, keep: &[bool]) -> (SfmrReconstruction, PointMap) {
-    let after = recon.filter_points_by_mask(keep);
-    let map = RowMap::by_scan(recon, &after, None).expect("a filter keeps point order");
-    (after, PointMap::Rows(map))
-}
-
-#[test]
-fn a_row_map_closes_up_behind_what_it_removed_and_inverts() {
-    let removed = [0u32, 2, 3];
-    let before = SfmrReconstruction::demo(6);
-    let keep: Vec<bool> = (0..6).map(|i| !removed.contains(&i)).collect();
-    let (_, map) = dropping(&before, &keep);
-    // Survivors 1, 4, 5 become 0, 1, 2.
-    assert_eq!(map.forward(1), Some(0));
-    assert_eq!(map.forward(4), Some(1));
-    assert_eq!(map.forward(5), Some(2));
-    assert_eq!(map.forward(0), None);
-    assert_eq!(map.forward(3), None);
-    // And back, landing on a live slot every time.
-    for (new, old) in [(0u32, 1u32), (1, 4), (2, 5)] {
-        assert_eq!(map.inverse(new), Some(old), "inverse of {new}");
-        assert!(!removed.contains(&old));
-    }
-}
-
-#[test]
-fn a_chain_applies_its_steps_in_order_and_inverts_in_reverse() {
-    // Remove 1 of 5, then remove what was 3 (2 after the first step).
-    let before = SfmrReconstruction::demo(5);
-    let (middle, first) = dropping(&before, &[true, false, true, true, true]);
-    let (_, second) = dropping(&middle, &[true, true, false, true]);
-    let chain = PointMap::Chain(vec![first, second]);
-    assert_eq!(chain.forward(0), Some(0));
-    assert_eq!(chain.forward(1), None);
-    assert_eq!(chain.forward(2), Some(1));
-    assert_eq!(chain.forward(3), None);
-    assert_eq!(chain.forward(4), Some(2));
-    for (new, old) in [(0u32, 0u32), (1, 2), (2, 4)] {
-        assert_eq!(chain.inverse(new), Some(old));
-    }
-}
-
-// ── The map a modification makes ────────────────────────────────────────
-
-#[test]
-fn a_replacement_map_moves_the_named_index_and_no_other() {
-    // Delete-and-re-add gives a modified point a new index while it stays the
-    // same point, so this is what carries a selection across such an edit.
-    let map = PointMap::Replaced(vec![(3, 40), (7, 41)]);
-    assert_eq!(map.forward(3), Some(40));
-    assert_eq!(map.forward(7), Some(41));
-    assert_eq!(map.inverse(40), Some(3));
-    assert_eq!(map.inverse(41), Some(7));
-    // Everything not named is unchanged, which is what makes the map the size
-    // of the edit rather than the size of the reconstruction.
-    for index in [0, 4, 39, 42] {
-        assert_eq!(map.forward(index), Some(index));
-        assert_eq!(map.inverse(index), Some(index));
-    }
-}
-
-#[test]
-fn a_replacement_map_round_trips_through_a_chain() {
-    let map = PointMap::Chain(vec![
-        PointMap::Replaced(vec![(3, 40)]),
-        PointMap::Replaced(vec![(40, 41)]),
-    ]);
-    assert_eq!(map.forward(3), Some(41));
-    assert_eq!(map.inverse(41), Some(3));
 }

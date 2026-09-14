@@ -19,7 +19,7 @@ use ndarray::Array3;
 use crate::reconstruction::add_observation::tests::{
     edited as edited_fixture, fixture_with_columns, Scene, WORLD,
 };
-use crate::reconstruction::edited::EditedReconstruction;
+use crate::reconstruction::edited::{EditedReconstruction, PointMap};
 use crate::reconstruction::SfmrReconstruction;
 
 use super::*;
@@ -576,13 +576,12 @@ fn a_commit_with_no_origin_appends_the_in_observations_keypoints() {
     track.origin = None;
 
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
-    let created = match report.outcome {
-        CommitOutcome::Created(index) => index,
-        other => panic!("expected a creation, got {other:?}"),
-    };
+    assert_eq!(report.replaced, None, "a track with no origin creates");
+    let created = report.point;
     assert_eq!(created, edited.base_point_count() as u32);
+    assert_eq!(report.map, PointMap::Created(vec![created]));
     assert_eq!(report.observation_count, 2);
-    assert!(report.absorbed.is_empty());
+    assert!(report.absorbed().is_empty());
     assert_eq!(next.point_count(), edited.point_count() + 1);
     assert!(
         next.point(0).is_some(),
@@ -615,13 +614,12 @@ fn a_commit_with_an_origin_replaces_the_point() {
     let track = track_of(&bench, &label);
 
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
-    assert_eq!(
-        report.outcome,
-        CommitOutcome::Replaced {
-            point: edited.base_point_count() as u32,
-            replaced: 0
-        }
-    );
+    assert_eq!(report.point, edited.base_point_count() as u32);
+    assert_eq!(report.replaced, Some(0));
+    // The map is what carries a selection on the origin onto what was written.
+    assert_eq!(report.map, PointMap::Replaced(vec![(0, report.point)]));
+    assert_eq!(report.map.forward(0), Some(report.point));
+    assert_eq!(report.map.inverse(report.point), Some(0));
     assert!(next.point(0).is_none(), "the origin's index is spent");
     assert_eq!(next.point_count(), edited.point_count());
     assert_eq!(
@@ -631,9 +629,9 @@ fn a_commit_with_an_origin_replaces_the_point() {
 
     // Re-seating the track on what was written makes a second commit a
     // replacement of the first.
-    let settled = track.with_origin(1, report.outcome.point());
+    let settled = track.with_origin(1, report.point);
     let (after, second) = commit(&next, &settled).expect("still two in");
-    assert!(matches!(second.outcome, CommitOutcome::Replaced { .. }));
+    assert_eq!(second.replaced, Some(report.point));
     assert_eq!(after.point_count(), edited.point_count());
 }
 
@@ -647,7 +645,8 @@ fn an_origin_that_names_a_deleted_point_creates_instead() {
     let mut deleted = edited.clone();
     deleted.delete_point(0).expect("a live point");
     let (next, report) = commit(&deleted, &track).expect("the track still stands on its own");
-    assert!(matches!(report.outcome, CommitOutcome::Created(_)));
+    assert_eq!(report.replaced, None);
+    assert_eq!(report.map, PointMap::Created(vec![report.point]));
     assert_eq!(next.point_count(), 1);
 }
 
@@ -664,7 +663,18 @@ fn a_commit_deletes_the_points_the_kept_observations_were_pulled_from() {
     track.observations[1].provenance = Provenance::Point { point: other };
 
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
-    assert_eq!(report.absorbed, vec![other]);
+    assert_eq!(report.absorbed(), [other]);
+    // A merge's map is the write and then the absorbed point's removal, so an
+    // index on the absorbed point stops resolving while the origin's follows.
+    assert_eq!(
+        report.map,
+        PointMap::Chain(vec![
+            PointMap::Replaced(vec![(0, report.point)]),
+            PointMap::Removed(vec![other]),
+        ])
+    );
+    assert_eq!(report.map.forward(0), Some(report.point));
+    assert_eq!(report.map.forward(other), None);
     assert!(next.point(other).is_none(), "the absorbed point is gone");
     assert_eq!(
         report.label("bull"),
@@ -690,7 +700,7 @@ fn an_out_observation_pulled_from_a_point_leaves_that_point_alone() {
     track.observations[2].verdict = Verdict::Out;
 
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
-    assert!(report.absorbed.is_empty());
+    assert!(report.absorbed().is_empty());
     assert!(
         next.point(other).is_some(),
         "a refused sighting absorbs nothing"
@@ -806,6 +816,6 @@ fn the_committed_colour_is_the_consensus_bitmap_centre() {
         payload.color = [99, 99, 99];
     }
     let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
-    let written = next.point(report.outcome.point()).expect("just written");
+    let written = next.point(report.point).expect("just written");
     assert_eq!(written.point().color, [10, 20, 30]);
 }

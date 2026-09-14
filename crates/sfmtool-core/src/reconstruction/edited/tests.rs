@@ -725,3 +725,102 @@ fn a_base_with_no_stored_hash_is_computed() {
     assert_eq!(*got, expected);
     assert_eq!(got.len(), 32, "a real hash, not the empty placeholder");
 }
+
+// ── The point map ───────────────────────────────────────────────────────
+
+#[test]
+fn a_removal_map_keeps_every_surviving_index_where_it_was() {
+    let map = PointMap::Removed(vec![2, 5]);
+    assert_eq!(map.forward(1), Some(1));
+    assert_eq!(map.forward(2), None);
+    assert_eq!(map.forward(6), Some(6));
+    assert_eq!(map.inverse(6), Some(6));
+    assert_eq!(map.inverse(5), None);
+}
+
+/// A point-mask filter over `recon`, and the map for it: the one
+/// [`RowMap::by_scan`] reads off the filter's input and output, which is how a
+/// bulk edit's map is made.
+fn dropping(recon: &SfmrReconstruction, keep: &[bool]) -> (SfmrReconstruction, PointMap) {
+    let after = recon.filter_points_by_mask(keep);
+    let map = RowMap::by_scan(recon, &after, None).expect("a filter keeps point order");
+    (after, PointMap::Rows(map))
+}
+
+#[test]
+fn a_row_map_closes_up_behind_what_it_removed_and_inverts() {
+    let removed = [0u32, 2, 3];
+    let before = SfmrReconstruction::demo(6);
+    let keep: Vec<bool> = (0..6).map(|i| !removed.contains(&i)).collect();
+    let (_, map) = dropping(&before, &keep);
+    // Survivors 1, 4, 5 become 0, 1, 2.
+    assert_eq!(map.forward(1), Some(0));
+    assert_eq!(map.forward(4), Some(1));
+    assert_eq!(map.forward(5), Some(2));
+    assert_eq!(map.forward(0), None);
+    assert_eq!(map.forward(3), None);
+    // And back, landing on a live slot every time.
+    for (new, old) in [(0u32, 1u32), (1, 4), (2, 5)] {
+        assert_eq!(map.inverse(new), Some(old), "inverse of {new}");
+        assert!(!removed.contains(&old));
+    }
+}
+
+#[test]
+fn a_chain_applies_its_steps_in_order_and_inverts_in_reverse() {
+    // Remove 1 of 5, then remove what was 3 (2 after the first step).
+    let before = SfmrReconstruction::demo(5);
+    let (middle, first) = dropping(&before, &[true, false, true, true, true]);
+    let (_, second) = dropping(&middle, &[true, true, false, true]);
+    let chain = PointMap::Chain(vec![first, second]);
+    assert_eq!(chain.forward(0), Some(0));
+    assert_eq!(chain.forward(1), None);
+    assert_eq!(chain.forward(2), Some(1));
+    assert_eq!(chain.forward(3), None);
+    assert_eq!(chain.forward(4), Some(2));
+    for (new, old) in [(0u32, 0u32), (1, 2), (2, 4)] {
+        assert_eq!(chain.inverse(new), Some(old));
+    }
+}
+
+#[test]
+fn a_replacement_map_moves_the_named_index_and_no_other() {
+    // Delete-and-re-add gives a modified point a new index while it stays the
+    // same point, so this is what carries a selection across such an edit.
+    let map = PointMap::Replaced(vec![(3, 40), (7, 41)]);
+    assert_eq!(map.forward(3), Some(40));
+    assert_eq!(map.forward(7), Some(41));
+    assert_eq!(map.inverse(40), Some(3));
+    assert_eq!(map.inverse(41), Some(7));
+    // Everything not named is unchanged, which is what makes the map the size
+    // of the edit rather than the size of the reconstruction.
+    for index in [0, 4, 39, 42] {
+        assert_eq!(map.forward(index), Some(index));
+        assert_eq!(map.inverse(index), Some(index));
+    }
+}
+
+#[test]
+fn a_replacement_map_round_trips_through_a_chain() {
+    let map = PointMap::Chain(vec![
+        PointMap::Replaced(vec![(3, 40)]),
+        PointMap::Replaced(vec![(40, 41)]),
+    ]);
+    assert_eq!(map.forward(3), Some(41));
+    assert_eq!(map.inverse(41), Some(3));
+}
+
+#[test]
+fn a_creation_map_is_the_identity_forward_and_has_no_inverse_for_what_it_made() {
+    let map = PointMap::Created(vec![40, 41]);
+    for index in [0, 3, 40, 41, 42] {
+        assert_eq!(map.forward(index), Some(index));
+    }
+    // The created indexes are what an undo has no answer for, which is how it
+    // drops a selection sitting on one rather than carrying it back to an
+    // index that held nothing.
+    assert_eq!(map.inverse(40), None);
+    assert_eq!(map.inverse(41), None);
+    assert_eq!(map.inverse(39), Some(39));
+    assert_eq!(map.inverse(42), Some(42));
+}

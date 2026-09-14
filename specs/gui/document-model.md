@@ -360,8 +360,9 @@ introduces or removes. Nothing on a frame path materialises.
 ## Testing
 
 `crates/sfm-explorer/src/document/tests.rs` covers the history in isolation: the
-cursor, truncation, the maps that outlive a truncation, the budget releasing
-values and never maps, and each `PointMap` case forward and inverse.
+cursor, truncation, the maps that outlive a truncation, and the budget releasing
+values and never maps. Each `PointMap` case forward and inverse is covered where
+the type lives, in `crates/sfmtool-core/src/reconstruction/edited/tests.rs`.
 
 `crates/sfm-explorer/src/state/edits/tests.rs` covers the two edits end to end --
 that a point edit leaves the base the same `Arc` and moves the count by one, that

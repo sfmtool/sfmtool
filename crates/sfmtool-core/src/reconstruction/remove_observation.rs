@@ -11,7 +11,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::data::ImageTable;
-use super::edited::{EditError, EditedReconstruction, PointRecord};
+use super::edited::{EditError, EditedReconstruction, PointMap, PointRecord};
 use super::triangulation::{triangulate_track, Triangulation};
 
 /// Why an observation could not be removed. Every variant names what did not
@@ -95,6 +95,10 @@ pub struct RemoveObservationReport {
     /// The re-triangulation's condition number, or `NaN` when no
     /// re-triangulation ran.
     pub condition_number: f64,
+    /// What the edit did to point indexes: the one pair `replaced -> point`
+    /// for a point that survived, and the removal of `replaced` for one whose
+    /// last sighting this was.
+    pub map: PointMap,
 }
 
 /// Remove the observation of `point` in `image` from `edited`.
@@ -181,6 +185,9 @@ pub fn remove_observation(
         position: [position_before.x, position_before.y, position_before.z],
         position_shift: 0.0,
         condition_number: f64::NAN,
+        // The map of the branch that deletes the point. Every other branch
+        // replaces it, and overwrites this with the pair below.
+        map: PointMap::Removed(vec![point]),
     };
 
     let mut next = edited.clone();
@@ -219,6 +226,7 @@ pub fn remove_observation(
 
     let new_index = next.replace_point(point, record)?;
     report.point = Some(new_index);
+    report.map = PointMap::Replaced(vec![(point, new_index)]);
     Ok((next, report))
 }
 

@@ -25,7 +25,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub use commit::{commit, CommitError, CommitOutcome, CommitReport};
+pub use commit::{commit, CommitError, CommitReport};
 pub use steps::{
     add_observation, apply_thresholds, create_cluster, create_track, set_verdict, split,
     AddObservationReport, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,

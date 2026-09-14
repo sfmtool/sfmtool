@@ -120,15 +120,18 @@ pub fn commit(
     track: &EditableTrack,
 ) -> Result<(EditedReconstruction, CommitReport), CommitError>;
 
-pub enum CommitOutcome {
-    Created(u32),
-    Replaced { point: u32, replaced: u32 },
+pub struct CommitReport {
+    pub point: u32,
+    pub replaced: Option<u32>,
+    pub map: PointMap,
+    pub observation_count: usize,
 }
 
-pub struct CommitReport {
-    pub outcome: CommitOutcome,
-    pub absorbed: Vec<u32>,
-    pub observation_count: usize,
+impl CommitReport {
+    /// The points the commit deleted because `in` observations had been pulled
+    /// from them, ascending. Read off `map`.
+    pub fn absorbed(&self) -> &[u32];
+    pub fn label(&self, node: &str) -> String;
 }
 ```
 
@@ -154,11 +157,16 @@ a threshold slider would either be unable to propose anything or would silently
 overwrite a judgement, and the whole difference between the bench and the batch
 pipeline is that here the numbers are shown and the person decides.
 
-**The commit returns an outcome enum and not an index map.** The bench knows
-which point was written and which points were absorbed; how a caller carries a
-selection, a point id or an undo across that is the caller's own model. Handing
-back `CommitOutcome` plus `absorbed` gives a viewer everything it needs to build
-its map and gives a script something it can read without knowing what a map is.
+**The commit reports an index map.** `map` is the `PointMap` the write made --
+the pair `replaced -> point`, or the created index, chained with a `Removed` of
+the points it absorbed when there are any
+([`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)
+§ "The point map"). A caller carrying a selection, a point id or an undo across
+the commit reads that one field, in the same vocabulary every other edit answers
+in. `point` and `replaced` stand beside it for the caller that wants the write
+itself rather than the mapping -- re-seating a track with `with_origin` takes
+`point` -- and `absorbed()` reads the removal step back off the map, which is
+what the label's sentence counts.
 
 **The origin's version serial is opaque.** It is a `u64` the caller numbers its
 own versions with. Core neither mints nor interprets it; what core does with the
@@ -298,16 +306,18 @@ leave-one-out ZNCC in `observation_confidence` where the column exists. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on.
 
-- **With no origin that resolves**, `EditedReconstruction::add_point`. The
-  outcome is `Created`.
+- **With no origin that resolves**, `EditedReconstruction::add_point`.
+  `replaced` is `None` and the map is a `Created` naming the index it took.
 - **With an origin that resolves** in the value being committed into,
-  `replace_point` on that index. The outcome is `Replaced`.
+  `replace_point` on that index. `replaced` names it and the map is a
+  `Replaced` of the one pair.
 - **With `in` observations whose provenance names a point** other than the
   origin, those points are deleted as well, because a track cannot observe an
   image twice and a reconstruction should not hold two points for one surface.
   Only `in` observations count: a candidate or an `out` sighting pulled from a
-  point leaves that point alone. This is the merge, and `absorbed` is what it
-  absorbed.
+  point leaves that point alone. This is the merge, and the map becomes a
+  `Chain` of the write and a `Removed` of what it absorbed, which is what
+  `absorbed()` reads back.
 
 An origin whose point the value no longer holds names nothing, and the commit
 creates rather than refusing: the person is looking at a track whose point was
@@ -403,8 +413,8 @@ covers: a point put on the bench being at the track stage with every observation
 being `in`; the painting proposing from the measurements, leaving a pinned
 verdict alone and giving one image one `in`; a split taking exactly the named
 observations and refusing an empty list or all of them; and every commit path --
-appending, replacing, absorbing a pulled-from point, and each refusal naming
-why.
+appending, replacing, absorbing a pulled-from point, the map each of those
+reports, and each refusal naming why.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same surface through the bindings, over the 17-image seoul_bull solve
 converted to `embedded_patches`.

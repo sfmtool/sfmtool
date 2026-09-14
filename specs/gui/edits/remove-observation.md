@@ -98,6 +98,9 @@ When the removed sighting was the track's last, the point is deleted instead and
 the map is a `PointMap::Removed` naming the index it held, which is the map
 delete-point pushes: the selection clears, and an undo does not guess it back.
 
+The kernel's report carries whichever of the two the edit made, and the version
+is pushed with it, so the window never decides between them itself.
+
 The version's label is
 
 `Removed observation of point <index> in <image name> (<node label>)`

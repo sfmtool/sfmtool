@@ -12,7 +12,7 @@ use nalgebra::{Point3, Vector3};
 use ndarray::Array3;
 
 use super::data::Point3D;
-use super::edited::{EditError, EditedReconstruction, PointRecord, RecordObservation};
+use super::edited::{EditError, EditedReconstruction, PointMap, PointRecord, RecordObservation};
 use crate::camera::remap::{remap_bilinear_mip, sample_bilinear_u8};
 use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
@@ -142,6 +142,10 @@ pub struct CreatePointReport {
     pub half_extent: f64,
     /// The colour sampled at the pixel.
     pub color: [u8; 3],
+    /// What the edit did to point indexes: the one created index. Every index
+    /// the value already held is unchanged, and the created one is what the
+    /// inverse has no answer for.
+    pub map: PointMap,
 }
 
 /// The world-space unit ray of `pixel` in `view`, or `None` when the camera
@@ -345,6 +349,7 @@ pub fn create_point(
             radius_px,
             half_extent,
             color,
+            map: PointMap::Created(vec![index]),
         },
     ))
 }

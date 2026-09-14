@@ -10,7 +10,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::edited::{EditError, EditedReconstruction, PointRecord, RecordObservation};
+use super::edited::{EditError, EditedReconstruction, PointMap, PointRecord, RecordObservation};
 use super::triangulation::{triangulate_batch, Triangulation};
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
@@ -184,6 +184,9 @@ pub struct AddObservationReport {
     pub from_infinity: bool,
     /// The re-triangulation's condition number.
     pub condition_number: f64,
+    /// What the edit did to point indexes: the one pair `replaced -> point`,
+    /// which is what a caller carrying an index across the edit follows.
+    pub map: PointMap,
 }
 
 /// Add an observation of `point` in `image`, at `pixel`, to `edited`.
@@ -403,6 +406,7 @@ pub fn add_observation(
             position_shift,
             from_infinity: at_infinity,
             condition_number: tri.condition_number,
+            map: PointMap::Replaced(vec![(point, new_index)]),
         },
     ))
 }

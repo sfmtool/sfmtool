@@ -457,6 +457,70 @@ be: with rows the edit created, interleaved anywhere, a survivor's new index is
 no longer its old one less the holes below it, and no amount of hole counting
 recovers it. Both directions are then a lookup.
 
+## The point map
+
+A row map answers one question -- where did this index go? -- for one kind of
+edit. `PointMap` is that question asked of *any* edit, so a caller holding a
+point index across one has a single thing to read whatever the edit was: a
+selection, a copied id, a constraint written against an earlier state, a panel's
+prepared row.
+
+```rust
+pub enum PointMap {
+    /// A point edit. Indexes are stable across it, so this is only the indexes
+    /// that stopped resolving, ascending.
+    Removed(Vec<u32>),
+    /// A point edit that modified points: the index each held before the step
+    /// and the one it took after it. Every index not named is unchanged.
+    Replaced(Vec<(u32, u32)>),
+    /// A point edit that created points, naming the indexes they took. Forward
+    /// is the identity; the inverse has no answer for a created index.
+    Created(Vec<u32>),
+    /// A whole-value edit's row map: a materialisation's, or the one
+    /// `RowMap::by_scan` reads off a bulk edit's input and output.
+    Rows(RowMap),
+    /// The steps one edit took, applied in order.
+    Chain(Vec<PointMap>),
+}
+
+impl PointMap {
+    /// Where the index `before` this step lands after it, or `None` when the
+    /// point it named is gone.
+    pub fn forward(&self, before: u32) -> Option<u32>;
+    /// Where the index `after` this step came from, or `None` when this step
+    /// created the point it names.
+    pub fn inverse(&self, after: u32) -> Option<u32>;
+}
+```
+
+It is in [edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs)
+beside `RowMap`, and reachable as `sfmtool_core::PointMap`.
+
+**Every edit that can move an index reports one.** `add_observation` hands back a
+`Replaced` of its one pair, `remove_observation` a `Replaced` or, for a track's
+last sighting, a `Removed`, `create_point` a `Created`, and a bench commit the
+write chained with a `Removed` of the points it absorbed. A caller that assembles
+versions therefore stores what the edit said it did rather than a translation of
+it, and every such caller says the same thing the same way.
+
+**A map is per step, not per index space.** `Removed` describes a point edit,
+across which indexes are stable, so it names only what stopped resolving;
+`Rows` describes a whole-value edit, which renumbers everything. Both answer
+`forward` and `inverse`, and a `Chain` composes them: forward applies its steps
+in order, inverse applies them in reverse, so the two-step map an image deletion
+makes -- a materialisation followed by the subset's renumbering -- reads like any
+single step.
+
+**Each case is stored as what it is**, rather than as a pair of dense arrays over
+the whole point set, so a map costs the size of the edit that made it: one `u32`
+for a point deletion, one pair for an added observation, a sorted list of holes
+plus an entry per addition for a materialisation. That is what makes it cheap
+enough for a caller to keep one per edit for as long as it keeps the edits.
+
+**`Removed` is read by binary search and so is stored ascending.** A caller
+building one from a list it gathered sorts it first; every edit here already
+produces one in order.
+
 ## Reading through the overlay
 
 `EditedReconstruction::point` resolves one index without materialising: below
@@ -646,6 +710,11 @@ invents one is a visible failure. What they pin:
   the one place they are answering different questions: a replaced base index
   stopped resolving in the *edited* index space the materialisation's map is
   over, while the scan follows the point's identity into the row it landed in.
+- Each `PointMap` case forward and inverse, over maps built the way the edits
+  build them: a removal keeping every surviving index where it was, a row map
+  closing up behind what it dropped, a chain applying its steps in order and
+  inverting in reverse, a replacement moving the named index and no other, and
+  a creation being the identity forward with no inverse for what it made.
 
 `crates/sfmtool-sfmr-format/src/tests.rs` pins the hashing itself: that
 `content_hash_of` agrees section for section with what a write of the same data

@@ -75,6 +75,7 @@ pub struct AddObservationReport {
     pub position_shift: f64,
     pub from_infinity: bool,
     pub condition_number: f64,
+    pub map: PointMap,
 }
 
 pub enum AddObservationError {
@@ -128,6 +129,12 @@ one that scored 0.98 after walking 0.3 px, and only the caller knows which it
 wanted. `replaced` and `point` are both reported because a modification takes a
 new index while remaining the same point, and a caller holding the old index
 needs the new one.
+
+**The report carries the index map.** `map` is the `PointMap` this edit made --
+the one pair `replaced -> point` -- so a caller carrying a selection or a stored
+id across the edit reads it the same way it reads any other edit's, rather than
+assembling one from the two fields itself
+([`edited-reconstruction.md`](edited-reconstruction.md) § "The point map").
 
 **Every refusal names its subject.** The caller is a menu entry that has to say
 in one sentence why nothing happened, so each variant carries the index, the

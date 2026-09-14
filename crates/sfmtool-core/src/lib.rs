@@ -49,8 +49,8 @@ pub use reconstruction::{
     add_observation, create_point, move_camera, remove_observation, AddObservationError,
     AddObservationOptions, AddObservationReport, CreatePointError, CreatePointOptions,
     CreatePointReport, EditError, EditedReconstruction, ImageTable, MoveCameraError,
-    MoveCameraReport, ObservationSource, Point3D, PointConstraintColumns, PointRecord, PointSet,
-    PointView, ReconstructionError, RecordObservation, RemoveObservationError,
+    MoveCameraReport, ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord,
+    PointSet, PointView, ReconstructionError, RecordObservation, RemoveObservationError,
     RemoveObservationReport, ReprojectionSample, RowMap, SfmrImage, SfmrReconstruction,
     TrackObservation,
 };
