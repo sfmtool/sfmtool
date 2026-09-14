@@ -52,8 +52,9 @@ pub struct ResidentSources { /* origins and geometry in corpus order */ }
 pub struct ConstellationParams {
     pub k: usize, pub max_leaf_checks: usize, pub threshold_px: f64,
     pub iterations: usize, pub min_correspondences: usize,
-    pub min_inliers: usize, pub seed: u64,
+    pub min_inliers: usize, pub max_scale: f64, pub seed: u64,
 }
+impl ConstellationParams { pub const DEFAULT: Self; }
 pub enum ConstellationDescriptors<'a, S> { Vectors(&'a [S]), FeatureIds(&'a [u32]) }
 pub struct Constellation<'a, S> {
     pub positions: &'a [[f32; 2]],
@@ -88,6 +89,9 @@ pub fn constellation_at_pixel<I, F>(index: &I, sources: &F, image: &QueryImage<'
     center: [f32; 2], radius: f32, params: &ConstellationParams)
     -> Result<PatchConstellation, KdfError>
 where I: NeighborIndex<u8> + ?Sized, F: FeatureSources + ?Sized;
+
+pub fn radius_for_feature_count(image_width: u32, image_height: u32,
+    keypoint_count: usize, target: usize) -> f32;
 ```
 
 **Why an index trait rather than two functions.** The resident `KdForest` and the
@@ -126,6 +130,22 @@ only the handful inside the radius are then turned into descriptors: from the
 corpus by feature ID when the image is indexed, and from the `.sift` file's
 descriptor entry when it is not. In the indexed case the descriptor payload,
 which is the large part of a `.sift` file, is never decompressed.
+
+**Choosing the constellation size.** The query takes a radius, but what governs
+the answer is how many features that radius holds, and the two are related
+through the image's keypoint density. `radius_for_feature_count` is that
+relation, `sqrt(target * A / (pi * K))` for image area `A` and `K` keypoints in
+the image, and it is a separate function rather than a mode of the query so that
+a caller who has its own radius keeps it. Fifty features is the size to ask for.
+Recall rises with the constellation and never stops rising, while the share of
+found images whose warp is trustworthy falls monotonically, because the affine
+is the first-order approximation of a homography about the patch centre and the
+term it drops grows with the patch; across five captures the two curves cross
+around fifty, and past two hundred features the warp is wrong more often than
+right. Keypoints cluster on texture and a patch is usually centred on one, so
+the radius this predicts held 70 to 100% of the features asked for in
+measurement. See
+[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md).
 
 ```rust
 use sfmtool_core::features::kdforest::{
@@ -205,6 +225,29 @@ unrelated images. The test is the determinant of the fitted transform's 2x2
 linear part: a warp of a patch into another image is invertible, and a model that
 flattens it to a line or a point is not a candidate worth scoring.
 
+The same determinant refuses two further models that are not degenerate but are
+impossible. It is the signed area ratio, so a **negative** one mirrors the patch,
+and two cameras looking at one piece of surface cannot mirror it however they are
+placed: a reflection is refusable on sight, with no threshold to choose. Its
+square root is the geometric-mean scale of the warp, so a value far from unity is
+a model that blows the patch up or shrinks it past anything a change of viewpoint
+explains; `max_scale` bounds that, refusing a model whose scale leaves
+`[1/max_scale, max_scale]`. Both are applied where the collapse test is, inside
+the three-point solve, so a refused model is never scored and can neither win a
+trial nor be reported.
+
+Neither guard is free-floating. On four wide-baseline-stills captures, mirrored
+models were 2 to 30% of all reported candidates and almost none of them were
+right: 0.00 to 0.22 of them placed the ground truth's own correspondences within
+3 px, where the candidates with a positive determinant on those same captures
+managed 0.22 to 0.72. Candidates whose scale left `[0.5, 2]`
+were 28 to 75% of the candidates at fifty features, with a correctness rate of
+0.00 to 0.50 against 0.58 to 0.89 for the rest. A video walk shows almost none of
+either, because consecutive frames differ by a few percent of scale; the guards
+bite where a small corpus lets chaff dominate a candidate image's correspondence
+list. Measured in
+[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md).
+
 ### Why `k` is larger than the matcher's
 
 The descriptor matcher in [track-cluster-matching.md](track-cluster-matching.md)
@@ -266,19 +309,42 @@ I/O kind is preserved, so a missing file still surfaces as a missing file.
 
 ## Parameters
 
-All defaults are `ConstellationParams::default()` in
+All defaults are `ConstellationParams::DEFAULT` in
 [`constellation.rs`](../../../crates/sfmtool-core/src/features/kdforest/constellation.rs),
-and the Python bindings repeat them as their keyword defaults.
+which is what `Default` returns and what the Python bindings name a field of in
+their keyword defaults, so there is one copy of each number.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `k` | `32` | Neighbours retrieved per constellation feature. |
-| `max_leaf_checks` | `128` | Per-query budget of distance evaluations in the forest traversal. |
+| `max_leaf_checks` | `512` | Per-query budget of distance evaluations in the forest traversal. |
 | `threshold_px` | `8.0` | Reprojection distance, in the candidate image's pixels, within which a correspondence agrees with a model. |
 | `iterations` | `200` | Three-point samples drawn per candidate image. |
 | `min_correspondences` | `3` | Fewest correspondences before an image is fitted at all; three is also the floor the model needs, so a smaller value has no effect. |
-| `min_inliers` | `6` | Fewest inliers for an image to be reported. |
+| `min_inliers` | `8` | Fewest inliers for an image to be reported. |
+| `max_scale` | `4.0` | Widest scale change a model may claim, as `sqrt(\|det\|)` of its 2x2 linear part; one outside `[1/max_scale, max_scale]` is refused unscored, as is any reflection. |
 | `seed` | `0` | Base RNG seed; candidate image `i` draws from `seed + i`. |
+
+`max_leaf_checks` is 512 because 128 leaves a fifth to a third of the ground
+truth's own correspondences outside the neighbour lists entirely: on one capture
+where the budget was swept directly it carries 78% of them, against 90% at 512
+and 97% at 2048, and end to end the move to 512 is +0.14 to +0.18 correspondence
+recall on four of five captures and +0.04 to +0.20 image recall on all five, for
+1.7 to 2.3 times the wall time, with residual medians and the correspondence
+count per candidate unchanged -- unlike a larger `k`, the budget replaces chaff
+rather than adding it.
+
+`min_inliers` is 8 because 6 is the noise floor: the median inlier count of a
+candidate sharing no point at all with the query image is exactly six, on every
+capture at every constellation size. Eight removes 42 to 95% of the false
+candidates and 55 to 100% of the never-covisible ones, and raises the share of
+trustworthy warps or leaves it flat everywhere, at the cost of image recall that
+is mostly six-inlier candidates. A caller who wants a list of images to look at
+rather than warps to use can set it back to 6. Both numbers come from
+[the constellation query evaluation](../../../reports/exp/2026-09-14-constellation-query-eval.md),
+as does `max_scale`, whose default only refuses the absurd: a legitimate two- or
+threefold scale change between two frames exists, so the bound is loose by
+default and a caller who knows its own baselines tightens it.
 
 ## Python bindings
 
@@ -313,6 +379,11 @@ returns one dict with `feature_rows` (the `.sift` rows the constellation was
 built from), `feature_ids` (their corpus IDs, empty when the image is not
 indexed) and `matches`. The `KdForest` forms take `sources` as an extra
 positional argument, after `positions` and after `radius` respectively.
+
+`radius_for_feature_count(image_width, image_height, keypoint_count, target)` is
+a free function on the same module, next to the forest classes, and returns the
+float radius to hand `constellation_at_pixel` for a constellation of about
+`target` features.
 
 A budget too small for what was asked raises `MemoryError`, a damaged file
 raises `OSError`, and a bad argument raises `ValueError`, matching the rest of
@@ -349,6 +420,21 @@ Over it:
   image as a real `.sift` file and localizes a radius around one of its
   keypoints, indexed and unindexed, and with the keypoints supplied rather than
   read.
+- `a_mirrored_or_an_inflated_candidate_is_refused_and_a_doubled_one_is_not`
+  plants three more images holding the whole patch, under a doubling, a
+  reflection and a tenfold blow-up. The doubling is reported with every planted
+  feature as an inlier; the other two are absent. Lifting `max_scale` to infinity
+  brings the tenfold image back at the same inlier count, which is what
+  distinguishes a guard refusing the model from an index never finding the
+  correspondences, and the reflection stays absent because its refusal is a sign
+  test with nothing to lift.
+- `the_model_solver_refuses_a_reflection_and_a_scale_far_from_unity` drives the
+  three-point solve directly, over a mirrored, a tenfold, a tenth-scale and a
+  doubled destination triangle, at the default bound and at a wider one.
+- `the_radius_rule_holds_the_features_it_promises` checks that the disc
+  `radius_for_feature_count` returns covers `target / K` of the frame, against
+  the radii measured on two real captures, and that an image with no keypoints
+  gets zero.
 
 The corpus uses a wide canvas deliberately: the odds of a wrong correspondence
 landing inside an eight-pixel threshold scale with the inverse of the image area,
@@ -360,7 +446,9 @@ descriptors twice, the second copy at warped positions as a second image. It
 checks the dict surface key by key, that the recovered warp is the planted one,
 that reported positions match the geometry the sources carry, that both forest
 classes return the same thing through both entry points and both descriptor
-forms, and that a `.kdf` written without sources is a `ValueError`.
+forms, that a `.kdf` written without sources is a `ValueError`, and that the
+radius rule, handed that image's own size and keypoint count, picks a disc
+holding tens of features rather than a handful or most of the frame.
 
 ## Non-goals
 

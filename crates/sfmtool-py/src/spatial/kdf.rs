@@ -35,6 +35,7 @@ use sfmtool_core::features::kdforest::{
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 
+use super::constellation::DEFAULTS;
 use super::kdforest::extract_u8_2d;
 
 /// Map a format error onto the closest Python exception.
@@ -468,6 +469,10 @@ impl PyLazyKdForest {
 
     /// Rank the images that contain a constellation of features.
     ///
+    /// Every tunable below defaults to the Rust `ConstellationParams::DEFAULT`,
+    /// which is where those values are written down; the spec's parameter table
+    /// lists them.
+    ///
     /// Args:
     ///     positions: (N, 2) float32 positions of the constellation's features
     ///         in the query image.
@@ -477,14 +482,15 @@ impl PyLazyKdForest {
     ///         itself indexed; the descriptors are read from the corpus.
     ///     image_index: The query image's index in the file's image table.
     ///         Candidates from it are dropped.
-    ///     k: Neighbours per constellation feature (default 32, far above a
-    ///         matcher's, because the right image only has to be among the
-    ///         candidates).
-    ///     max_leaf_checks: Per-query leaf budget (default 128).
+    ///     k: Neighbours per constellation feature, far above a matcher's,
+    ///         because the right image only has to be among the candidates.
+    ///     max_leaf_checks: Per-query leaf budget.
     ///     threshold_px: RANSAC inlier distance in the candidate's pixels.
     ///     iterations: Three-point samples drawn per candidate image.
     ///     min_correspondences: Fewest correspondences to fit an image at all.
     ///     min_inliers: Fewest inliers to report one.
+    ///     max_scale: Widest scale change a model may claim, as `sqrt(|det|)`
+    ///         of its 2x2 part; one mirroring the patch is always refused.
     ///     seed: Base RNG seed; candidate image i draws from `seed + i`.
     ///
     /// Returns:
@@ -498,8 +504,11 @@ impl PyLazyKdForest {
     ///     ValueError: The arrays disagree, or the file carries no SIFT
     ///         sources, so its features have no image or geometry.
     #[pyo3(signature = (positions, *, descriptors=None, feature_ids=None, image_index=None,
-                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
-                        min_correspondences=3, min_inliers=6, seed=0))]
+                        k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
+                        threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
+                        min_correspondences=DEFAULTS.min_correspondences,
+                        min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_query<'py>(
         &self,
@@ -514,6 +523,7 @@ impl PyLazyKdForest {
         iterations: usize,
         min_correspondences: usize,
         min_inliers: usize,
+        max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<PyList>> {
         super::constellation::query(
@@ -531,6 +541,7 @@ impl PyLazyKdForest {
                 iterations,
                 min_correspondences,
                 min_inliers,
+                max_scale,
                 seed,
             },
         )
@@ -558,8 +569,11 @@ impl PyLazyKdForest {
     ///     is not indexed) and `matches`, the list `constellation_query`
     ///     returns.
     #[pyo3(signature = (sift_path, center, radius, *, image_index=None,
-                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
-                        min_correspondences=3, min_inliers=6, seed=0))]
+                        k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
+                        threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
+                        min_correspondences=DEFAULTS.min_correspondences,
+                        min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_at_pixel<'py>(
         &self,
@@ -574,6 +588,7 @@ impl PyLazyKdForest {
         iterations: usize,
         min_correspondences: usize,
         min_inliers: usize,
+        max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<PyDict>> {
         super::constellation::at_pixel(
@@ -591,6 +606,7 @@ impl PyLazyKdForest {
                 iterations,
                 min_correspondences,
                 min_inliers,
+                max_scale,
                 seed,
             },
         )

@@ -15,7 +15,12 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, write_kdf
+from sfmtool._sfmtool.spatial import (
+    KdForest,
+    LazyKdForest,
+    radius_for_feature_count,
+    write_kdf,
+)
 from sfmtool.cli import main
 from sfmtool.sift.file import SiftReader, get_sift_path_for_image
 
@@ -247,3 +252,24 @@ def test_bad_arguments_and_a_sourceless_file_are_value_errors(
         LazyKdForest(str(plain)).constellation_query(
             positions, feature_ids=inside.astype(np.uint32).tolist(), image_index=0
         )
+
+
+def test_the_radius_rule_sizes_a_constellation(duplicated_capture):
+    """The radius helper picks a disc that holds about the features asked for."""
+    positions = duplicated_capture["positions"]
+    metadata = SiftReader(duplicated_capture["sift_path"]).metadata
+    width, height = metadata["image_width"], metadata["image_height"]
+
+    radius = radius_for_feature_count(width, height, len(positions), 50)
+    area = np.pi * radius * radius
+    assert area == pytest.approx(50 / len(positions) * width * height, rel=1e-3)
+
+    # Centred on a sample of keypoints, the disc holds tens of features rather
+    # than a handful or most of the image: keypoints cluster on texture, so the
+    # count runs above the fifty a uniform density would predict.
+    counts = [
+        np.count_nonzero(np.hypot(*(positions - centre).T) <= radius)
+        for centre in positions[::37]
+    ]
+    assert 20 <= float(np.median(counts)) <= 200
+    assert radius_for_feature_count(width, height, 0, 50) == 0.0

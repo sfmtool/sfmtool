@@ -27,6 +27,9 @@ const NEAR_MISS: usize = 4;
 /// threshold by luck, which is what makes an exact inlier count assertable.
 const CANVAS: f32 = 4000.0;
 
+/// A warp planted between the query image and one further corpus image.
+type PlantedWarp = fn([f32; 2]) -> [f32; 2];
+
 /// The warp planted between the query image and image 1.
 fn planted_affine(p: [f32; 2]) -> [f32; 2] {
     let (x, y) = (p[0] as f64, p[1] as f64);
@@ -34,6 +37,25 @@ fn planted_affine(p: [f32; 2]) -> [f32; 2] {
         (0.9 * x - 0.3 * y + 120.0) as f32,
         (0.3 * x + 0.9 * y - 45.0) as f32,
     ]
+}
+
+/// A doubling: a change of viewpoint the guard has to let through.
+fn doubled_affine(p: [f32; 2]) -> [f32; 2] {
+    [2.0 * p[0] + 70.0, 2.0 * p[1] - 40.0]
+}
+
+/// A reflection, scale 0.95: no pair of cameras can mirror one surface.
+fn mirrored_affine(p: [f32; 2]) -> [f32; 2] {
+    let (x, y) = (p[0] as f64, p[1] as f64);
+    [
+        (-0.9 * x + 0.3 * y + 3000.0) as f32,
+        (0.3 * x + 0.9 * y - 45.0) as f32,
+    ]
+}
+
+/// A tenfold blow-up, well outside the default scale bound.
+fn inflated_affine(p: [f32; 2]) -> [f32; 2] {
+    [10.0 * p[0] + 5.0, 10.0 * p[1] + 9.0]
 }
 
 struct Corpus {
@@ -46,10 +68,19 @@ struct Corpus {
     query_ids: Vec<u32>,
 }
 
+/// [`corpus_with`] and nothing else planted.
+fn corpus() -> Corpus {
+    corpus_with(&[])
+}
+
 /// Image 0 is the query image. Image 1 holds every one of its patch features
 /// under [`planted_affine`]. Images 2 and 3 are unrelated. Image 4 copies four
-/// patch features under a different warp.
-fn corpus() -> Corpus {
+/// patch features under a different warp. Then one further image per entry of
+/// `extra`, holding the whole patch under that warp, so a test about which
+/// warps are refused adds images without disturbing the ones above it: the
+/// extras draw nothing from the generator, so with none of them the corpus is
+/// the same bytes it always was.
+fn corpus_with(extra: &[PlantedWarp]) -> Corpus {
     let mut rng = StdRng::seed_from_u64(11);
     let mut descriptors: Vec<u8> = Vec::new();
     let mut origins = Vec::new();
@@ -146,6 +177,23 @@ fn corpus() -> Corpus {
         );
     }
 
+    // One image per extra warp, each holding the whole patch under it.
+    for (offset, warp) in extra.iter().enumerate() {
+        for (row, vector) in patch_vectors.iter().enumerate() {
+            push(
+                &mut descriptors,
+                &mut origins,
+                &mut geometry,
+                vector,
+                5 + offset as u32,
+                row as u32,
+                warp(patch_positions[row]),
+                2.5,
+            );
+        }
+    }
+
+    let images = 5 + extra.len() as u32;
     let count = origins.len();
     let sources = KdfSiftSources {
         workspace: KdfWorkspaceMetadata {
@@ -158,9 +206,9 @@ fn corpus() -> Corpus {
                 feature_prefix_dir: "features/sift".into(),
             },
         },
-        image_names: (0..5).map(|i| format!("img{i}.jpg")).collect(),
-        feature_tool_hashes: (0..5).map(|i| [i as u8; 16]).collect(),
-        sift_content_hashes: (0..5).map(|i| [100 + i as u8; 16]).collect(),
+        image_names: (0..images).map(|i| format!("img{i}.jpg")).collect(),
+        feature_tool_hashes: (0..images).map(|i| [i as u8; 16]).collect(),
+        sift_content_hashes: (0..images).map(|i| [100 + i as u8; 16]).collect(),
         origins,
         geometry,
     };
@@ -286,6 +334,101 @@ fn the_query_image_and_the_thin_candidate_are_absent() {
     let found = constellation_query(&forest, &sources, &including, &params()).unwrap();
     assert_eq!(found[0].image_index, 0);
     assert_eq!(found[0].inliers, PLANTED);
+}
+
+#[test]
+fn a_mirrored_or_an_inflated_candidate_is_refused_and_a_doubled_one_is_not() {
+    let corpus = corpus_with(&[doubled_affine, mirrored_affine, inflated_affine]);
+    let forest = forest(&corpus);
+    let sources = resident(&corpus);
+    let found = constellation_query(
+        &forest,
+        &sources,
+        &query(&corpus, &corpus.query_ids),
+        &params(),
+    )
+    .unwrap();
+
+    // Twice the size is a viewpoint a caller wants back.
+    let doubled = found
+        .iter()
+        .find(|m| m.image_index == 5)
+        .expect("the doubled image");
+    assert_eq!(doubled.inliers, PLANTED);
+    assert!(
+        found.iter().all(|m| m.image_index != 6),
+        "a mirrored model was reported"
+    );
+    assert!(
+        found.iter().all(|m| m.image_index != 7),
+        "a tenfold model was reported"
+    );
+
+    // Both images hold every one of the patch's descriptors, so their absence
+    // is the guard's doing and not a missing correspondence: lift the scale
+    // bound and the tenfold image comes back with every feature as an inlier.
+    // The reflection has no bound to lift, which is the point of testing it
+    // against the sign rather than against a number.
+    let unbounded = ConstellationParams {
+        max_scale: f64::INFINITY,
+        ..params()
+    };
+    let found = constellation_query(
+        &forest,
+        &sources,
+        &query(&corpus, &corpus.query_ids),
+        &unbounded,
+    )
+    .unwrap();
+    let inflated = found
+        .iter()
+        .find(|m| m.image_index == 7)
+        .expect("the tenfold image, with the bound lifted");
+    assert_eq!(inflated.inliers, PLANTED);
+    assert!(
+        found.iter().all(|m| m.image_index != 6),
+        "a mirrored model survived the sign test"
+    );
+}
+
+#[test]
+fn the_model_solver_refuses_a_reflection_and_a_scale_far_from_unity() {
+    let src = [[0.0, 0.0], [10.0, 0.0], [0.0, 10.0]];
+    let default = ConstellationParams::default().max_scale;
+
+    // Swapping the axes mirrors the patch: determinant -1, scale 1.
+    let mirrored = [[0.0, 0.0], [0.0, 10.0], [10.0, 0.0]];
+    assert!(solve_affine(src, mirrored, default).is_none());
+    assert!(solve_affine(src, mirrored, f64::INFINITY).is_none());
+
+    let tenfold = [[0.0, 0.0], [100.0, 0.0], [0.0, 100.0]];
+    assert!(solve_affine(src, tenfold, default).is_none());
+    assert!(solve_affine(src, tenfold, 20.0).is_some());
+
+    let tenth = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+    assert!(solve_affine(src, tenth, default).is_none());
+    assert!(solve_affine(src, tenth, 20.0).is_some());
+
+    let doubled = [[0.0, 0.0], [20.0, 0.0], [0.0, 20.0]];
+    assert!(solve_affine(src, doubled, default).is_some());
+}
+
+#[test]
+fn the_radius_rule_holds_the_features_it_promises() {
+    // A uniform scattering: the disc of the returned radius covers
+    // `target / keypoints` of the frame, so it holds `target` of them.
+    let radius = radius_for_feature_count(2160, 3840, 8112, 50);
+    let covered = std::f64::consts::PI * (radius as f64) * (radius as f64);
+    let expected = 50.0 / 8112.0 * (2160.0 * 3840.0);
+    assert!((covered - expected).abs() < 1e-3 * expected);
+    // The five measured captures, to the pixel the report quotes.
+    assert_eq!(radius.round() as i32, 128);
+    assert_eq!(
+        radius_for_feature_count(270, 480, 2186, 50).round() as i32,
+        31
+    );
+    // No keypoints, no radius that holds any.
+    assert_eq!(radius_for_feature_count(640, 480, 0, 50), 0.0);
 }
 
 #[test]

@@ -532,11 +532,12 @@ def main() -> None:
     p.add_argument("--cache-mib", type=int, default=256)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--k", type=int, default=32)
-    p.add_argument("--budget", type=int, default=128)
+    p.add_argument("--budget", type=int, default=512)
     p.add_argument("--threshold", type=float, default=8.0)
     p.add_argument("--iterations", type=int, default=200)
     p.add_argument("--min-correspondences", type=int, default=3)
-    p.add_argument("--min-inliers", type=int, default=6)
+    p.add_argument("--min-inliers", type=int, default=8)
+    p.add_argument("--max-scale", type=float, default=4.0)
     p.add_argument("--dump-disagreements", type=int, default=0)
     p.add_argument("--crops-dir")
     args = p.parse_args()
@@ -593,6 +594,7 @@ def main() -> None:
         "iterations": args.iterations,
         "min_correspondences": args.min_correspondences,
         "min_inliers": args.min_inliers,
+        "max_scale": args.max_scale,
         "seed": args.seed,
     }
 

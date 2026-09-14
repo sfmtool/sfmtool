@@ -55,21 +55,35 @@ pub struct ConstellationParams {
     pub min_correspondences: usize,
     /// Fewest inliers an image needs to be reported.
     pub min_inliers: usize,
+    /// Widest change of scale a model may claim, as the geometric mean
+    /// `sqrt(|det|)` of its 2x2 linear part. A model scaling the patch by more
+    /// than this, or by less than its reciprocal, is refused unfitted. The
+    /// default is permissive on purpose: two frames of one capture can
+    /// legitimately differ by two or three times in scale, so it only refuses
+    /// the absurd, and a caller who knows its baselines tightens it.
+    pub max_scale: f64,
     /// Base RNG seed; each candidate image draws from `seed + image_index`.
     pub seed: u64,
 }
 
+impl ConstellationParams {
+    /// The defaults, as a constant, so the Python bindings can name a single
+    /// field in a keyword default instead of repeating the number.
+    pub const DEFAULT: Self = Self {
+        k: 32,
+        max_leaf_checks: 512,
+        threshold_px: 8.0,
+        iterations: 200,
+        min_correspondences: 3,
+        min_inliers: 8,
+        max_scale: 4.0,
+        seed: 0,
+    };
+}
+
 impl Default for ConstellationParams {
     fn default() -> Self {
-        Self {
-            k: 32,
-            max_leaf_checks: 128,
-            threshold_px: 8.0,
-            iterations: 200,
-            min_correspondences: 3,
-            min_inliers: 6,
-            seed: 0,
-        }
+        Self::DEFAULT
     }
 }
 
@@ -440,6 +454,7 @@ fn fit_affine_ransac(
         let Some(model) = solve_affine(
             [src[pick[0]], src[pick[1]], src[pick[2]]],
             [dst[pick[0]], dst[pick[1]], dst[pick[2]]],
+            params.max_scale,
         ) else {
             continue;
         };
@@ -458,19 +473,26 @@ fn fit_affine_ransac(
 }
 
 /// The affine transform through three correspondences, or `None` when it is not
-/// an invertible warp of the patch.
+/// a physically possible warp of the patch.
 ///
-/// Two ways that happens, and both have to be refused. Collinear or coincident
-/// *source* points determine no transform at all. Collinear or coincident
-/// *destination* points determine one that collapses the whole patch onto a
-/// line or a point, and that one is worse than useless: a few corpus features
-/// hit repeatedly by different constellation features give every one of those
-/// correspondences the same destination, so a collapsing model scores every
-/// pair sharing a keypoint as an inlier and manufactures a consensus out of an
-/// image that contains nothing. The determinant of the 2x2 linear part is what
-/// separates the two cases, and it is checked here rather than at scoring time
-/// because a model this shape is never worth scoring.
-fn solve_affine(src: [[f64; 2]; 3], dst: [[f64; 2]; 3]) -> Option<[[f64; 3]; 2]> {
+/// Three ways that happens, and all of them have to be refused. Collinear or
+/// coincident *source* points determine no transform at all. Collinear or
+/// coincident *destination* points determine one that collapses the whole patch
+/// onto a line or a point, and that one is worse than useless: a few corpus
+/// features hit repeatedly by different constellation features give every one
+/// of those correspondences the same destination, so a collapsing model scores
+/// every pair sharing a keypoint as an inlier and manufactures a consensus out
+/// of an image that contains nothing. The third is a model no pair of cameras
+/// could produce: the determinant of the 2x2 linear part is the signed area
+/// ratio, so a *negative* one mirrors the surface, which two views of one piece
+/// of surface cannot do, and `sqrt(|det|)` far from unity blows the patch up or
+/// shrinks it past anything a change of viewpoint explains.
+///
+/// All three are read off the same 2x2 determinant, and all three are checked
+/// here rather than at scoring time because a model of any of these shapes is
+/// never worth scoring: a refused one is skipped, so it can neither win a trial
+/// nor be reported.
+fn solve_affine(src: [[f64; 2]; 3], dst: [[f64; 2]; 3], max_scale: f64) -> Option<[[f64; 3]; 2]> {
     // The three homogeneous source rows, whose determinant is twice the signed
     // area of their triangle: the degeneracy test and the inverse share it.
     let [a, b, c] = src;
@@ -496,8 +518,14 @@ fn solve_affine(src: [[f64; 2]; 3], dst: [[f64; 2]; 3]) -> Option<[[f64; 3]; 2]>
                     / det;
         }
     }
+    // One test with three jobs: not finite or near zero is a collapse, below
+    // zero is a reflection, and the square root is the geometric-mean scale.
     let linear = affine[0][0] * affine[1][1] - affine[0][1] * affine[1][0];
-    if !linear.is_finite() || linear.abs() < 1e-9 {
+    if !linear.is_finite() || linear < 1e-9 {
+        return None;
+    }
+    let scale = linear.sqrt();
+    if scale > max_scale || scale < 1.0 / max_scale {
         return None;
     }
     Some(affine)
@@ -579,6 +607,39 @@ pub struct PatchConstellation {
     pub feature_ids: Vec<u32>,
     /// Candidate images, most inliers first.
     pub matches: Vec<ConstellationMatch>,
+}
+
+/// The radius that holds about `target` keypoints of one image.
+///
+/// `sqrt(target * A / (pi * K))` for image area `A` and `K` keypoints in the
+/// image: a disc of that radius is `target / K` of the frame, so a uniform
+/// scattering of `K` keypoints leaves `target` of them inside it.
+///
+/// Fifty is the size to ask for. Across five captures the share of found images
+/// whose warp places the ground truth's own correspondences within 3 px is
+/// 0.76 / 0.75 / 0.65 / 0.89 / 0.33 at fifty features against 0.54 / 0.33 /
+/// 0.28 / 0.37 / 0.06 at two hundred and 0.23 / 0.06 / 0.04 / 0.07 / 0.01 at
+/// eight hundred, while image recall climbs only 0.03 to 0.40 over that whole
+/// range, because the affine is the first-order approximation of a homography
+/// about the patch centre and the term it drops grows with the patch
+/// (reports/exp/2026-09-14-constellation-query-eval.md).
+///
+/// Keypoints cluster where there is texture and a patch is usually centred on
+/// one, so the radius measured at fifty features ran 70 to 100% of what this
+/// predicts; it is a starting point, not a count. An image with no keypoints
+/// has no such radius, and the answer is then zero.
+pub fn radius_for_feature_count(
+    image_width: u32,
+    image_height: u32,
+    keypoint_count: usize,
+    target: usize,
+) -> f32 {
+    if keypoint_count == 0 {
+        return 0.0;
+    }
+    let area = image_width as f64 * image_height as f64;
+    let radius_sq = (target as f64 * area) / (std::f64::consts::PI * keypoint_count as f64);
+    radius_sq.sqrt() as f32
 }
 
 /// [`constellation_query`] for a pixel and a radius in one image.

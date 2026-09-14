@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 
 use sfmtool_core::features::kdforest::{KdForestParams, KdForestU8};
 
+use super::constellation::DEFAULTS;
+
 /// Extract an `(N, D)` `uint8` array, with a clear error if the dtype is wrong.
 ///
 /// PyO3's own extraction failure for a mismatched dtype is opaque; this mirrors
@@ -282,8 +284,12 @@ impl PyKdForest {
     /// Returns:
     ///     The same list of dicts `LazyKdForest.constellation_query` returns.
     #[pyo3(signature = (positions, sources, *, descriptors=None, feature_ids=None,
-                        image_index=None, k=32, max_leaf_checks=128, threshold_px=8.0,
-                        iterations=200, min_correspondences=3, min_inliers=6, seed=0))]
+                        image_index=None, k=DEFAULTS.k,
+                        max_leaf_checks=DEFAULTS.max_leaf_checks,
+                        threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
+                        min_correspondences=DEFAULTS.min_correspondences,
+                        min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_query<'py>(
         &self,
@@ -299,6 +305,7 @@ impl PyKdForest {
         iterations: usize,
         min_correspondences: usize,
         min_inliers: usize,
+        max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<pyo3::types::PyList>> {
         let sources = super::constellation::parse_resident_sources(sources)?;
@@ -317,6 +324,7 @@ impl PyKdForest {
                 iterations,
                 min_correspondences,
                 min_inliers,
+                max_scale,
                 seed,
             },
         )
@@ -327,8 +335,11 @@ impl PyKdForest {
     /// The resident twin of `LazyKdForest.constellation_at_pixel`, taking the
     /// same `sources` mapping as `constellation_query` above.
     #[pyo3(signature = (sift_path, center, radius, sources, *, image_index=None,
-                        k=32, max_leaf_checks=128, threshold_px=8.0, iterations=200,
-                        min_correspondences=3, min_inliers=6, seed=0))]
+                        k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
+                        threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
+                        min_correspondences=DEFAULTS.min_correspondences,
+                        min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_at_pixel<'py>(
         &self,
@@ -344,6 +355,7 @@ impl PyKdForest {
         iterations: usize,
         min_correspondences: usize,
         min_inliers: usize,
+        max_scale: f64,
         seed: u64,
     ) -> PyResult<Py<pyo3::types::PyDict>> {
         let sources = super::constellation::parse_resident_sources(sources)?;
@@ -362,6 +374,7 @@ impl PyKdForest {
                 iterations,
                 min_correspondences,
                 min_inliers,
+                max_scale,
                 seed,
             },
         )

@@ -25,6 +25,10 @@ use sfmtool_core::features::kdforest::{
 use super::kdf::to_py_err;
 use super::kdforest::extract_u8_2d;
 
+/// The Rust defaults, for the four `#[pyo3(signature = ...)]` blocks to name a
+/// field of rather than to repeat a number that would then drift.
+pub(crate) const DEFAULTS: ConstellationParams = ConstellationParams::DEFAULT;
+
 /// Every tunable of the query, in one struct, so the two call sites declare the
 /// same keyword arguments instead of drifting apart.
 pub(crate) struct QueryOptions {
@@ -34,6 +38,7 @@ pub(crate) struct QueryOptions {
     pub iterations: usize,
     pub min_correspondences: usize,
     pub min_inliers: usize,
+    pub max_scale: f64,
     pub seed: u64,
 }
 
@@ -46,9 +51,46 @@ impl From<&QueryOptions> for ConstellationParams {
             iterations: value.iterations,
             min_correspondences: value.min_correspondences,
             min_inliers: value.min_inliers,
+            max_scale: value.max_scale,
             seed: value.seed,
         }
     }
+}
+
+/// The radius that holds about `target` keypoints of one image.
+///
+/// Args:
+///     image_width: The image's width in pixels.
+///     image_height: Its height in pixels.
+///     keypoint_count: How many keypoints the detector found in it.
+///     target: Constellation size wanted.
+///
+/// Returns:
+///     `sqrt(target * width * height / (pi * keypoint_count))`, the radius a
+///     uniform keypoint density puts `target` keypoints inside, and 0.0 for an
+///     image with no keypoints. Keypoints cluster on texture and a patch is
+///     usually centred on one, so the measured radius runs 70 to 100% of this.
+///     Fifty is the size to ask for: the warp is trustworthy far more often
+///     there than at two hundred, where it is wrong more often than right.
+#[pyfunction]
+#[pyo3(signature = (image_width, image_height, keypoint_count, target))]
+fn radius_for_feature_count(
+    image_width: u32,
+    image_height: u32,
+    keypoint_count: usize,
+    target: usize,
+) -> f32 {
+    sfmtool_core::features::kdforest::radius_for_feature_count(
+        image_width,
+        image_height,
+        keypoint_count,
+        target,
+    )
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(radius_for_feature_count, m)?)?;
+    Ok(())
 }
 
 /// Build resident source tables from the same mapping `write_kdf` accepts.

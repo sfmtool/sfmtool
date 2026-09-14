@@ -15,5 +15,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     kdtree::register(m)?;
     kdforest::register(m)?;
     kdf::register(m)?;
+    constellation::register(m)?;
     Ok(())
 }

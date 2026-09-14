@@ -25,7 +25,8 @@ right.
 Tooling added: [`scripts/kdf_constellation_eval.py`](../../scripts/kdf_constellation_eval.py),
 which samples patches, sweeps constellation size and the parameters, and scores
 every query against a `sift_files` `.sfmr`. Nothing in the implementation was
-changed.
+changed while measuring; the Addendum records what changed afterwards and
+re-measures seoul_bull.
 
 ---
 
@@ -544,6 +545,11 @@ mapped mostly off the edge of the candidate image.
 
 Not fixed here, per the terms of this evaluation.
 
+> _Status (2026-09-14): Done. The three-point solve now refuses a negative
+> determinant outright and a geometric-mean scale outside
+> `[1/max_scale, max_scale]`, `max_scale` defaulting to 4.0. Measured in the
+> Addendum._
+
 ---
 
 ## 5. The ground truth is a solve, and it is not always right
@@ -622,6 +628,11 @@ often than right on every dataset measured, and past four hundred the query is
 doing whole-image matching at whole-image cost (3.4 s per query on DinoLedge at
 N=800, against 259 ms at N=50).
 
+> _Status (2026-09-14): Done as far as a library can take it. The rule of thumb
+> is now `radius_for_feature_count(width, height, keypoints, target)` beside the
+> query; the size itself stays the caller's choice, since the query takes a
+> radius._
+
 The justification, in three numbers: at N=50 the fraction of found images whose
 warp places the ground truth's own correspondences within 3 px is 0.76 / 0.75 /
 0.65 / 0.89 / 0.33 across the five datasets; at N=200 it is 0.54 / 0.33 / 0.28 /
@@ -631,6 +642,11 @@ the extra features buy images at the cost of knowing where they are. (Order
 throughout: DinoLedge, dino_dog_toy, seattle_backyard, kerry_park, seoul_bull.)
 
 **Defaults to change.**
+
+> _Status (2026-09-14): Done for 1 and 2 (`max_leaf_checks` 512, `min_inliers`
+> 8, both in `ConstellationParams::DEFAULT` and so in the Python keyword
+> defaults). 3, 4 and 5 stand as written: nothing changed for `threshold_px`,
+> `k` or `iterations`. Measured in the Addendum._
 
 1. **`max_leaf_checks` 128 → 512.** The biggest single win and the one with the
    least downside. At 128 only 62 to 78% of the ground truth's correspondences
@@ -687,6 +703,9 @@ the four small datasets and 1.4% on DinoLedge, and their correctness rate is
 0.00 to 0.50 against 0.58 to 0.89 for the rest. Both are §4; neither was
 implemented here.
 
+> _Status (2026-09-14): Done. Both tests ship, the scale one as the `max_scale`
+> parameter. Measured in the Addendum._
+
 **Where DinoLedge and the small datasets disagree, and why.** Only on `k`, and
 the mechanism is the correspondence count per candidate image. With 1,196 images
 the neighbour lists spread thin: at k=64 a candidate on DinoLedge is offered 14.5
@@ -714,3 +733,54 @@ pixi run -e test python scripts/kdf_constellation_eval.py \
 by workspace-relative path, as for DinoLedge. Raw per-patch results, the crops
 and the scale/ANN diagnostics were written to the scratch directory, not to the
 repository.
+
+---
+
+## Addendum, 2026-09-14: the guards and the new defaults, measured on seoul_bull
+
+The two findings above were applied to the implementation:
+`ConstellationParams::DEFAULT` now carries `max_leaf_checks = 512` and
+`min_inliers = 8` (§6, recommendations 1 and 2), and the three-point solve
+refuses a model whose 2x2 linear part has a negative determinant or a
+geometric-mean scale `sqrt(|det|)` outside `[1/max_scale, max_scale]`, with
+`max_scale` a new parameter defaulting to 4.0 (§4). A refused model is skipped
+inside the solve, so it never scores and can neither win a trial nor be
+reported. `radius_for_feature_count` was added beside the query, turning §6's
+`sqrt(N·A / (π·K))` rule of thumb into a function.
+
+**Re-run.** seoul_bull only, the same workspace, `.kdf` and ground-truth `.sfmr`
+as §1, the same 60 seeded patch centres, N=50, 64 MiB cache, no parameter
+sweeps. DinoLedge was not re-run. The first row reproduces §2's seoul_bull N=50
+row exactly on the pre-change build, so the four rows are directly comparable;
+the middle two exist to separate the guards from the defaults, and were obtained
+by holding the old defaults and, in the second row, lifting the scale bound to
+infinity (the reflection test has no bound to lift).
+
+| arm | `max_leaf_checks` | `min_inliers` | guards | recall≥3 | prec≥3 | corr recall | res med | res p90 | **warp ok** | false | never-covis | ms |
+|---|--:|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| before | 128 | 6 | none | 0.60 | 0.19 | 0.17 | 20.19 | 157.5 | **0.33** | 2.32 | 0.58 | 2 |
+| guards only, reflection alone | 128 | 6 | sign | 0.52 | 0.23 | 0.16 | 5.70 | 138.8 | **0.38** | 1.43 | 0.33 | 1 |
+| guards only, both | 128 | 6 | sign + scale 4.0 | 0.46 | 0.32 | 0.18 | 3.14 | 77.7 | **0.44** | 0.85 | 0.17 | 2 |
+| after | 512 | 8 | sign + scale 4.0 | 0.26 | 0.67 | 0.14 | 2.17 | 8.8 | **0.54** | 0.05 | 0.00 | 3 |
+
+False candidates fall 2.32 to 0.05 per query and never-covisible ones 0.58 to
+0.00, the share of trustworthy warps rises 0.33 to 0.54, the residual 90th
+percentile falls from 157 px to 8.8 px, and a query costs 3 ms against 2 ms.
+Image recall falls 0.60 to 0.26, as §3 said it would: most of what is lost is
+six-inlier candidates, and precision rises 0.19 to 0.67 over the same move. On
+the dataset the §4 defect was found on, the guards alone carry more than half of
+the improvement in `warp ok` and remove 63% of the false candidates, for 0.14 of the
+image recall.
+
+Two things the split says that the earlier tables could not. The reflection test
+and the scale bound are not redundant: each removes candidates the other keeps
+(2.32 to 1.43 to 0.85 false candidates as they are added). And at the new
+defaults they overlap completely with `min_inliers = 8` on this dataset, where
+the run with the scale bound lifted to infinity is identical row for row to the
+one at 4.0: the absurd scales here ride on six- and seven-inlier candidates that
+the higher floor already removes. Compared against §3's combined row, which is
+these defaults without any guard, the reflection test still earns its place
+(`warp ok` 0.44 to 0.54, false 0.2 to 0.05, residual p90 10.6 px to 8.8 px). The
+scale bound's value at the default is as a cap a caller can tighten, and as
+insurance for the datasets of §4 where a third to three quarters of candidates
+sit outside `[0.5, 2]`.
