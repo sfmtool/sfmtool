@@ -3454,6 +3454,158 @@ fn every_advertised_argument_is_one_the_parser_knows() {
     }
 }
 
+/// One valid call for every catalog entry, kept as an exact set so adding a
+/// tool also requires choosing arguments that exercise its parser.
+fn representative_tool_calls() -> Vec<(&'static str, Value)> {
+    vec![
+        ("get_scene", json!({})),
+        ("list_camera_images", json!({})),
+        ("get_camera_image", json!({ "camera_image": 0 })),
+        (
+            "get_camera_intrinsics",
+            json!({ "camera_intrinsics_index": 0 }),
+        ),
+        ("get_point", json!({ "point": 0 })),
+        ("get_action_log", json!({})),
+        ("get_timing_detail", json!({})),
+        ("get_window_layout", json!({})),
+        ("get_image_detail_display", json!({})),
+        ("get_history", json!({ "reconstruction_label": "alpha" })),
+        ("open_reconstruction", json!({ "path": "scene.sfmr" })),
+        (
+            "close_reconstruction",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "select_reconstruction",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        ("select_camera_image", json!({ "camera_image": 0 })),
+        (
+            "select_camera_intrinsics",
+            json!({ "camera_intrinsics_index": 0 }),
+        ),
+        ("select_point", json!({ "point": 0 })),
+        ("clear_selection", json!({ "scope": "all" })),
+        (
+            "set_reconstruction_display",
+            json!({ "reconstruction_label": "alpha", "visible": true }),
+        ),
+        ("set_solo", json!({ "reconstruction_label": "alpha" })),
+        ("set_image_detail_display", json!({ "tracked_only": true })),
+        ("set_timing_detail", json!({ "enabled": true })),
+        ("set_view", json!({ "fit": "alpha" })),
+        ("set_window_layout", json!({ "layout": "default" })),
+        ("show_panel", json!({ "panel_name": "scene" })),
+        ("hide_panel", json!({ "panel_name": "scene" })),
+        ("undo", json!({ "reconstruction_label": "alpha" })),
+        ("redo", json!({ "reconstruction_label": "alpha" })),
+        (
+            "jump_to_version",
+            json!({ "reconstruction_label": "alpha", "serial": "v1" }),
+        ),
+        (
+            "save_reconstruction",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "delete_point",
+            json!({ "reconstruction_label": "alpha", "point": 0 }),
+        ),
+        (
+            "delete_camera_image",
+            json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
+        ),
+        (
+            "add_observation",
+            json!({
+                "reconstruction_label": "alpha",
+                "point": 0,
+                "camera_image": 0,
+                "pixel": [10.0, 20.0],
+            }),
+        ),
+        (
+            "create_point",
+            json!({
+                "reconstruction_label": "alpha",
+                "camera_image": 0,
+                "pixel": [10.0, 20.0],
+            }),
+        ),
+        (
+            "remove_observation",
+            json!({ "reconstruction_label": "alpha", "point": 0, "camera_image": 0 }),
+        ),
+        (
+            "move_camera_image",
+            json!({
+                "reconstruction_label": "alpha",
+                "camera_image": 0,
+                "world_from_camera": {
+                    "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                    "translation": [0.0, 0.0, 0.0],
+                },
+            }),
+        ),
+        (
+            "resect_camera_image_in_place",
+            json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
+        ),
+        ("bundle_adjust", json!({ "reconstruction_label": "alpha" })),
+        ("get_background_task", json!({})),
+        ("cancel_background_task", json!({})),
+        ("screenshot", json!({})),
+    ]
+}
+
+/// The catalog, parser and command metadata are three descriptions of the same
+/// tool. Exercise the parser rather than constructing commands by hand so name
+/// and read-only drift on either side is caught at the boundary.
+#[test]
+fn every_advertised_tool_parses_to_matching_command_metadata() {
+    let catalog = tools::catalog();
+    let calls = representative_tool_calls();
+    let catalog_names: std::collections::BTreeSet<_> =
+        catalog.iter().map(|spec| spec.name).collect();
+    let fixture_names: std::collections::BTreeSet<_> =
+        calls.iter().map(|(name, _)| *name).collect();
+
+    assert_eq!(
+        catalog_names.len(),
+        catalog.len(),
+        "duplicate tool in catalog"
+    );
+    assert_eq!(
+        fixture_names.len(),
+        calls.len(),
+        "duplicate tool in fixture"
+    );
+    assert_eq!(
+        fixture_names, catalog_names,
+        "representative calls must cover exactly the advertised tools"
+    );
+
+    for spec in catalog {
+        let arguments = calls
+            .iter()
+            .find_map(|(name, arguments)| (*name == spec.name).then_some(arguments))
+            .expect("catalog and fixture names were checked above")
+            .as_object()
+            .expect("representative arguments are objects");
+        let command = tools::parse(spec.name, Some(arguments))
+            .unwrap_or_else(|error| panic!("{} representative call: {error}", spec.name));
+
+        assert_eq!(command.tool_name(), spec.name, "{} command name", spec.name);
+        assert_eq!(
+            matches!(command.kind(), Kind::Query(_)),
+            spec.kind == ToolKind::Read,
+            "{} read-only classification",
+            spec.name
+        );
+    }
+}
+
 /// A misspelled argument is refused rather than ignored. An agent that believes
 /// it asked for something it did not is the failure this surface is shaped to
 /// avoid, and `additionalProperties: false` only binds clients that enforce it.

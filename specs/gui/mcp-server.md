@@ -2676,6 +2676,10 @@ where a test hands no host over.
   the same way, including that a panel argument is `panel_name` and never
   `panel`, and that `hud` — the one allowed initialism — is on `screenshot` and
   nowhere else, so a second one cannot arrive quietly.
+- **Catalog and command metadata agree**: one valid representative call for
+  every advertised tool is parsed and its command name and query classification
+  are compared with the catalog. The fixture and catalog must contain exactly
+  the same unique names, so adding a tool requires adding its valid call too.
 - **The tool list carries its cache hints at the revision a real client
   negotiates.** The test initializes the way a current client does and then uses
   whatever version comes back, rather than hard-coding one — the SDK negotiates

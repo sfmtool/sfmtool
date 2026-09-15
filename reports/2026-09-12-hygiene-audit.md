@@ -146,6 +146,12 @@ snapshot predicted**
 
 **Adding an MCP tool means editing six places, and only one edge of that is
 machine-checked**
+
+> _Status (2026-09-14): Partially done — every advertised tool now has an exact-set
+> representative call fixture that is parsed and checked against `Command::tool_name()`
+> and the catalog/command read-only classification. Schema/parser key deduplication
+> remains open._
+
 - Location: `crates/sfm-explorer/src/mcp/tools.rs` **56–904** (`catalog`, 849 — the
   longest function in the workspace) and **1194–1569** (`parse`, 376); `mcp/mod.rs`
   **74–273** (the 40-variant `Command`), **550–783** (`apply_with_window`),
@@ -1936,6 +1942,9 @@ lines **inside a test that already walks the catalog** — and that test,
 `the_wire_vocabulary_holds_across_the_catalog`, is the best piece of enforcement in this
 codebase and the model the rest of this report keeps pointing at. Extending it is the
 cheapest way to keep it that way.
+
+> _Status (2026-09-14): Done — an exact catalog fixture now parses every advertised
+> tool and compares both its command name and query classification._
 
 ---
 
