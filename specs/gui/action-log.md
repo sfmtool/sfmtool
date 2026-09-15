@@ -179,7 +179,10 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Edit | — | User / MCP | `Undo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User / MCP | `Redo: {what the version was labelled} ({from} → {to})` |
 | Edit | — | User / MCP | `Go to: {what the version was labelled} ({from} → {to})` -- an Edit History panel jump |
+| Edit | — | User / MCP | `Committed track: {n} observations in {label}, replacing point {index} ({from} → {to})` -- the bench's one edit ([edits/commit-track.md](edits/commit-track.md)) |
 | Edit | — | User / MCP | the reason an edit, undo, redo or jump was refused — **failed** |
+| Bench | — | User / MCP | one row per bench step, in that step's own words: `Put point {index} on the bench as {item}`, `Turned {image} out of {item}`, `Evaluated {item}: …`, `Set {item} to the {stage} stage`, `Discarded {item} from the bench`, each with ` ({from} → {to})` ([bench.md](bench.md)) |
+| Bench | — | User / MCP | the reason a bench step was refused, and a report that came home to a bench its item had left — **failed** |
 | Selection | `reconstruction` | User / MCP | `Selected reconstruction {label}` |
 | Selection | `image` | User / MCP | `Selected image {name} in {label}` |
 | Selection | `camera intrinsics` | User / MCP | `Selected camera intrinsics #{k} in {label}` |
@@ -319,8 +322,8 @@ distinction gives every kind its answer:
   being scrubbed through; it is a picture the agent took and presumably
   looked at, and the human reading the log wants to know how many were taken
   and of what. Ten screenshots in a second are ten lines.
-- Everything else — Session, File, Scene, Edit, Animation, Layout, Window — is
-  discrete, as before.
+- Everything else — Session, File, Scene, Edit, Bench, Animation, Layout, Window
+  — is discrete, as before.
 
 Coalescing is decided at record time and is not reversible; the entries it
 replaces are gone. This is deliberate — the log is a readable record, not an
@@ -430,6 +433,10 @@ pub(crate) enum Kind {
     /// An edit to a reconstruction, and the undo or redo of one. See
     /// `specs/gui/document-model.md`.
     Edit,
+    /// A step on the bench beside a reconstruction. A kind of its own because
+    /// nothing here touches the file: the one bench step that does is the
+    /// commit, whose row is an `Edit`. See `specs/gui/bench.md`.
+    Bench,
     Selection,
     View,
     Display,

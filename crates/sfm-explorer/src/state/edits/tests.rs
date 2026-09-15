@@ -761,7 +761,7 @@ fn a_node_with_no_patch_frames_falls_back_to_the_named_radius() {
 /// The projections are what make the re-triangulation well-conditioned, and the
 /// three lengths are the three outcomes: point 0 is deleted by the edit, point 1
 /// becomes a bearing, point 2 stays finite and is re-solved.
-fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
+pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     use ndarray::Array2;
     use sfmtool_core::{ObservationSource, TrackObservation};
 

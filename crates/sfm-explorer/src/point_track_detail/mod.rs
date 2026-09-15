@@ -250,6 +250,18 @@ impl PointTrackDetail {
                 .weak()
                 .small(),
             );
+            // The way onto the bench, said where the track is being read. This
+            // panel stays view-only: the line names the button and the panel it
+            // is in, quoting the label from the one constant that spells it.
+            ui.label(
+                egui::RichText::new(format!(
+                    "To work on this track: press \u{201c}{}\u{201d} in the Track Edit panel. \
+                     The bench holds it beside the reconstruction until you commit it.",
+                    crate::track_edit::PUT_ON_BENCH_LABEL
+                ))
+                .weak()
+                .small(),
+            );
         }
 
         ui.separator();

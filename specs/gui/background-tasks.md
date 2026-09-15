@@ -10,7 +10,10 @@ it is not, and `get_background_task` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node, with an id of its own. One task runs at a time.
+one, on one node, with an id of its own. One task runs at a time. The three
+operations are `Bundle adjust`, and the two the bench runs -- `Evaluate track`
+and `Set track stage` ([bench.md](bench.md)), neither of which is cancellable,
+since the patch kernels they call never ask whether they should stop.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.
@@ -392,6 +395,11 @@ pub(crate) struct BackgroundTask {
 pub(crate) struct Operation {
     pub name: &'static str,
     pub cancellable: bool,
+    /// The kind the Action Log row it ends with carries: an `Edit` for an
+    /// operation that writes the reconstruction, a `Bench` for one that writes
+    /// an item beside it. Stated per operation because only the wrapper knows
+    /// what its answer touches.
+    pub kind: Kind,
 }
 
 /// What crosses the channel, worker to GUI thread. Phases, messages and counts
@@ -405,11 +413,29 @@ pub(crate) enum Report {
 
 /// How an operation ended.
 ///
-/// Three ways rather than a `Result`, because only the job knows it was
-/// cancelled: the kernel is what met the flag and said so, and deciding at poll
-/// time from the flag alone races a solve that finished on its own between the
-/// last poll and the cancel.
-pub(crate) enum Finished {
+/// Cancelled and failed are ways rather than a `Result`, because only the job
+/// knows it was cancelled: the kernel is what met the flag and said so, and
+/// deciding at poll time from the flag alone races a solve that finished on its
+/// own between the last poll and the cancel. What it produced is one variant
+/// per half of the version: a whole reconstruction, or one item of the bench.
+pub(crate) enum Finished {};
+s{    Cancelled,
+    Failed(String),
+}
+```}{    /// One bench item's next value. The document half is untouched, so there
+    /// is no map and no selection to follow; a report for an item that has
+    /// left the bench at the cursor is discarded with one row
+    /// ([bench.md](bench.md)).
+    BenchTrack {
+        label: String,
+        track: Box<EditableTrack>,
+        version_label: String,
+        text: String,
+    },
+    Cancelled,
+    Failed(String),
+}
+```
     Produced {
         /// The next value, and the map from the input's rows to its own.
         value: SfmrReconstruction,

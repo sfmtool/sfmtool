@@ -52,7 +52,7 @@ const PYRAMID_LEVELS: usize = 6;
 /// One entry per image of the node, because the patch kernels index their view
 /// slice by image index; the entries the call does not read are one-pixel
 /// placeholders.
-pub(super) struct DecodedViews {
+pub(crate) struct DecodedViews {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
     pyramids: Vec<ImageU8Pyramid>,
@@ -60,7 +60,7 @@ pub(super) struct DecodedViews {
 
 impl DecodedViews {
     /// The borrowed form a patch kernel takes.
-    pub(super) fn views(&self) -> Vec<ProjectedImage<'_>> {
+    pub(crate) fn views(&self) -> Vec<ProjectedImage<'_>> {
         self.cameras
             .iter()
             .zip(&self.poses)
@@ -1185,7 +1185,11 @@ impl AppState {
     /// `needed` gets a one-pixel placeholder, which nothing samples. Decoding
     /// goes through the node's full-resolution cache, so an image the panels
     /// have already shown is not read twice.
-    fn decode_views_for(&mut self, id: ReconId, needed: &[usize]) -> Result<DecodedViews, String> {
+    pub(crate) fn decode_views_for(
+        &mut self,
+        id: ReconId,
+        needed: &[usize],
+    ) -> Result<DecodedViews, String> {
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };

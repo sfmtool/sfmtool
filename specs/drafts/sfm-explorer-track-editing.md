@@ -32,7 +32,12 @@ functions in `sfmtool-core`, bound to Python, and the viewer adds only the
 history, the panels and the wire. **Not decided:** where a workspace's
 descriptor index lives on disk.
 
-Related standing specs: [`../core/bench/bench.md`](../core/bench/bench.md) and
+Related standing specs: [`../gui/bench.md`](../gui/bench.md),
+[`../gui/track-edit.md`](../gui/track-edit.md) and
+[`../gui/edits/commit-track.md`](../gui/edits/commit-track.md) (the viewer half
+that is built: the bench as a half of every version, the panel, the Scene tree
+group and the commit),
+[`../core/bench/bench.md`](../core/bench/bench.md) and
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the core
 half that is built: the two values, the steps, the evaluation at both stages and
 the transitions between them, whose non-goals are what this draft proposes),
@@ -845,23 +850,33 @@ print(report["label"])                         # the sentence the Action Log wou
 
 ### In the viewer
 
-- `History`'s `Version` gains the bench half, `push` takes the pair, the dirty
-  test reads the document half, and the budget sums both. This is the only
+**Built**, and filed as [`../gui/bench.md`](../gui/bench.md),
+[`../gui/track-edit.md`](../gui/track-edit.md) and
+[`../gui/edits/commit-track.md`](../gui/edits/commit-track.md):
+
+- `History`'s `Version` holds the bench half, a push states both halves, the
+  dirty test reads the document half, and the budget sums both. This is the only
   place a bench step becomes a *version*: core has no history.
-- The Track Edit panel (`track_edit/` beside `point_track_detail/`), the Bench
-  child in the Scene tree, the preview buffer in the 3D viewer, the Image
-  Detail overlay layer and the Image Browser borders.
-- The Action Log row and version label for each step, the actor column, and
-  the wire tools, each of which is one `AppState` call that decodes the images
-  through the node's full-resolution cache, calls the core function, and
-  pushes the result.
-- **No second SIFT cache.** The viewer already holds each image's keypoints
-  (positions and affine shapes, never descriptors) in `AppState::sift_cache`,
-  and the constellation query takes an already-read keypoint set as its input
-  for exactly this reason: the constellation around an observation comes from
-  that cache, and the few dozen descriptors it needs come by id from the
-  forest's own corpus reads, under the forest's cache budget. Nothing in the
-  viewer holds descriptors.
+- The Track Edit panel (`track_edit/` beside `point_track_detail/`) with its
+  item tabs, header, toolbar, sliders and observation table, and the Bench child
+  in the Scene tree.
+- The Action Log row and version label for each step, the actor column, and the
+  evaluation and the stage change as background tasks, each of which is one
+  `AppState` call that decodes the images through the node's full-resolution
+  cache, calls the core function, and pushes the result.
+
+**Still proposed here**: the preview buffer in the 3D viewer, the Image Detail
+overlay layer, the Image Browser borders, the per-observation tile column, the
+searches and the pull-in with their toolbar entries and the coherence grid, and
+the wire tools.
+
+**No second SIFT cache.** The viewer already holds each image's keypoints
+(positions and affine shapes, never descriptors) in `AppState::sift_cache`, and
+the constellation query takes an already-read keypoint set as its input for
+exactly this reason: the constellation around an observation comes from that
+cache, and the few dozen descriptors it needs come by id from the forest's own
+corpus reads, under the forest's cache budget. Nothing in the viewer holds
+descriptors.
 
 Two core pieces were built ahead of the bench, and one more is needed:
 
@@ -1030,16 +1045,20 @@ covered by the existing layout test that walks every tab.
    remains of the core module is what a search needs: `sweep_views`,
    `search_descriptors` and `pull_in`, which arrive with the steps below that
    need them.
-2. The bench in the history, with its items and labels; the evaluation and the
-   stage change as background tasks; the Bench group in the Scene tree; the
-   Track Edit panel with the track row, the table, the thresholds and the
-   toolbar; putting a point on the bench and starting from a pixel; the commit
-   with and without an origin. Files into `specs/gui/bench.md`,
-   `specs/gui/track-edit.md` and a `specs/gui/edits/commit-track.md`.
+2. **Done.** The bench in the history, with its items and labels; the
+   evaluation and the stage change as background tasks; the Bench group in the
+   Scene tree; the Track Edit panel with the item tabs, the table, the
+   thresholds and the toolbar; putting a point on the bench and starting from a
+   pixel; the commit with and without an origin. Filed as
+   [`../gui/bench.md`](../gui/bench.md),
+   [`../gui/track-edit.md`](../gui/track-edit.md) and
+   [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md). What remains
+   of the panel is what the steps below add to it, plus the per-observation
+   tile column.
 3. The constellation query in core, over the benchmark script; then the
    descriptor index row, the build task, and the search built on it.
 4. The view sweep with the keypoint-search switch.
-5. Pull-in from a point and from the bench, the coherence grid, the merging
-   commit, and *Split off selected observations*.
+5. Pull-in from a point and from the bench, the coherence grid, and the merging
+   commit. *Split off selected observations* arrived with step 2.
 6. The wire.
 7. The `.matches` opener, if step 2's cluster stage earns it.

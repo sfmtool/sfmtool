@@ -3,8 +3,9 @@
 
 //! Dock tab identity and tab rendering.
 //!
-//! Names the nine panels (Scene, Background, 3D Viewer, Image Browser, Image
-//! Detail, Point Track Detail, Camera Intrinsics, Action Log, Edit History) and holds the `TabViewer`
+//! Names the ten panels (Scene, Background, 3D Viewer, Image Browser, Image
+//! Detail, Point Track Detail, Camera Intrinsics, Track Edit, Action Log, Edit
+//! History) and holds the `TabViewer`
 //! implementation that renders each panel's content. How they are *arranged* —
 //! the default grid, the Panels menu, the layout file — is [`crate::layout`].
 
@@ -20,6 +21,7 @@ use crate::point_track_detail::PointTrackDetail;
 use crate::scene::{selected_node, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_graph::{SceneGraphPanel, SceneGraphResponse};
 use crate::state::{AppState, FeatureDisplaySettings, IntrinsicsDisplaySettings, OverlayMode};
+use crate::track_edit::TrackEdit;
 use crate::viewer_3d::Viewer3D;
 
 #[cfg(test)]
@@ -46,6 +48,9 @@ pub(crate) enum Tab {
     ImageDetail,
     PointTrackDetail,
     IntrinsicsDetail,
+    /// The bench's active track, and the steps that act on it. See
+    /// [`crate::track_edit`].
+    TrackEdit,
     ActionLog,
     EditHistory,
 }
@@ -60,6 +65,7 @@ impl Tab {
             Tab::ImageDetail => "Image Detail",
             Tab::PointTrackDetail => "Point Track",
             Tab::IntrinsicsDetail => "Camera Intrinsics",
+            Tab::TrackEdit => "Track Edit",
             Tab::ActionLog => "Action Log",
             Tab::EditHistory => "Edit History",
         }
@@ -75,6 +81,7 @@ pub(crate) struct TabContext<'a> {
     pub image_detail: &'a mut ImageDetail,
     pub point_track_detail: &'a mut PointTrackDetail,
     pub intrinsics_detail: &'a mut IntrinsicsDetail,
+    pub track_edit: &'a mut TrackEdit,
     /// Where the panel work that can outlast a frame reports: the `.sift`
     /// reads the overlays ask for.
     ///
@@ -122,6 +129,7 @@ impl TabViewer for TabContext<'_> {
             Tab::ImageDetail => self.show_image_detail(ui),
             Tab::PointTrackDetail => self.show_point_track_detail(ui),
             Tab::IntrinsicsDetail => self.show_intrinsics_detail(ui),
+            Tab::TrackEdit => self.show_track_edit(ui),
             // One of the two tabs with no empty state: an empty scene still has
             // a session, and the log is exactly what says so.
             Tab::ActionLog => crate::action_log::show(ui, &mut self.state.action_log),
@@ -236,6 +244,117 @@ impl TabContext<'_> {
     /// The jump is applied here rather than in the panel for the reason every
     /// other panel's response is: the panel holds `&AppState` while it draws,
     /// and moving the cursor needs it mutably.
+    /// The Track Edit tab: the bench's active track, and each step the panel
+    /// asked for.
+    ///
+    /// Applied here rather than in the panel for the reason the Edit History
+    /// panel's jump is: the panel holds `&AppState` while it draws, and every
+    /// step below needs it mutably. One gesture per frame, so the order these
+    /// are read in decides nothing.
+    fn show_track_edit(&mut self, ui: &mut egui::Ui) {
+        let response = self.track_edit.show(ui, self.state);
+        let Some(id) = self.state.selected_recon else {
+            return;
+        };
+        let refuse = |state: &mut AppState, outcome: Result<(), String>| {
+            if let Err(why) = outcome {
+                state.action_log.fail(Kind::Bench, why);
+            }
+        };
+        if let Some(label) = response.activate.as_deref() {
+            let outcome = self.state.activate_bench_item(id, label);
+            refuse(self.state, outcome);
+        }
+        if let Some(label) = response.discard.as_deref() {
+            let outcome = self.state.discard_bench_item(id, label);
+            refuse(self.state, outcome);
+        }
+        if let Some((label, to)) = response.rename.as_ref() {
+            let outcome = self.state.rename_bench_item(id, label, to);
+            refuse(self.state, outcome);
+        }
+        if response.put_selected_point_on_bench {
+            if let Some(point) = self.state.selected_point {
+                let outcome = self.state.put_point_on_bench(point).map(|_| ());
+                refuse(self.state, outcome);
+            }
+        }
+        if response.start_cluster {
+            if let (Some(image), Some(pixel)) = (
+                self.state.selected_image,
+                self.state.pending_observation_pixel,
+            ) {
+                let radius = self
+                    .state
+                    .create_point_radius
+                    .unwrap_or_else(|| self.state.create_point_default_radius(image));
+                let outcome = self
+                    .state
+                    .start_bench_cluster(image, pixel, radius)
+                    .map(|_| ());
+                refuse(self.state, outcome);
+            }
+        }
+        // Everything below acts on the active track, which is what a bench
+        // panel's gesture means when it names no item.
+        let active = self
+            .state
+            .bench(id)
+            .and_then(|bench| crate::bench::active_track_label(bench))
+            .map(str::to_string);
+        let Some(label) = active else {
+            return;
+        };
+        if response.add_observation {
+            if let (Some(image), Some(pixel)) = (
+                self.state.selected_image,
+                self.state.pending_observation_pixel,
+            ) {
+                let outcome = self.state.add_bench_observation(&label, image, pixel);
+                refuse(self.state, outcome);
+            }
+        }
+        if let Some((observation, verdict)) = response.set_verdict {
+            let outcome = self
+                .state
+                .set_bench_verdict(id, &label, observation, verdict);
+            refuse(self.state, outcome);
+        }
+        if let Some(thresholds) = response.apply_thresholds.as_ref() {
+            let outcome = self.state.apply_bench_thresholds(id, &label, thresholds);
+            refuse(self.state, outcome);
+        }
+        if let Some(rows) = response.split.as_ref() {
+            let outcome = self.state.split_bench_track(id, &label, rows).map(|_| ());
+            refuse(self.state, outcome);
+        }
+        if response.evaluate {
+            let outcome = self.state.start_bench_evaluate(id, &label);
+            // A refusal to begin is logged by the starter, in the words its
+            // own gate uses; there is nothing to say twice.
+            let _ = outcome;
+        }
+        if let Some(stage) = response.set_stage {
+            let _ = self.state.start_bench_stage(id, &label, stage);
+        }
+        if response.commit {
+            let outcome = self.state.commit_bench_track(id, &label);
+            if let Err(why) = outcome {
+                self.state.action_log.fail(Kind::Edit, why);
+            } else {
+                // The commit gave the node a new version, so what the panels
+                // cached about its points describes a value it no longer holds.
+                self.forget_recon(id);
+            }
+        }
+        if let Some(image) = response.select_image {
+            self.state.select_image(Some(ImageRef::new(id, image)));
+        }
+        if response.has_pointer {
+            self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
+        }
+    }
+
     fn show_edit_history(&mut self, ui: &mut egui::Ui) {
         let response = crate::edit_history_panel::show(ui, self.state);
         if let Some((id, serial)) = response.jump {
@@ -812,6 +931,31 @@ impl TabContext<'_> {
                 }
             }
         }
+        // The Bench rows, whose items the tree names by position so that the
+        // response stays a `Copy` value; the label is read off the bench here.
+        if let Some((id, position)) = response.activate_bench_item {
+            if let Some(label) = self.bench_label_at(id, position) {
+                if let Err(why) = self.state.activate_bench_item(id, &label) {
+                    self.state.action_log.fail(Kind::Bench, why);
+                }
+            }
+        }
+        if let Some((id, position)) = response.discard_bench_item {
+            if let Some(label) = self.bench_label_at(id, position) {
+                if let Err(why) = self.state.discard_bench_item(id, &label) {
+                    self.state.action_log.fail(Kind::Bench, why);
+                }
+            }
+        }
+    }
+
+    /// The label of the item at `position` on `id`'s bench.
+    fn bench_label_at(&self, id: ReconId, position: usize) -> Option<String> {
+        self.state
+            .bench(id)?
+            .entries()
+            .get(position)
+            .map(|entry| entry.label.clone())
     }
 
     /// Resect one image, asking for a `.matches` file first when the matches
@@ -893,6 +1037,7 @@ impl TabContext<'_> {
         self.image_detail.forget_recon(id);
         self.point_track_detail.forget_recon(id);
         self.intrinsics_detail.forget_recon(id);
+        self.track_edit.forget_recon(id);
     }
 }
 

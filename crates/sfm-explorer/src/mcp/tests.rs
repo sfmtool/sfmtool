@@ -2729,7 +2729,7 @@ fn get_window_layout_returns_the_file_the_window_and_the_panels() {
     assert_eq!(names, ["DISPLAY1", "DISPLAY2"], "the current monitor first");
 
     let panels = reply["panels"].as_object().expect("a panels map");
-    assert_eq!(panels.len(), Tab::ALL.len(), "all nine, always");
+    assert_eq!(panels.len(), Tab::ALL.len(), "all of them, always");
     for tab in Tab::ALL {
         assert_eq!(
             panel(&reply, tab.wire_name())["open"],

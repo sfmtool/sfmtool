@@ -123,6 +123,14 @@ until a second sighting is added to it -- a bearing at infinity -- because that
 is what this panel then shows: one observation, and a position the reconstruction
 does not yet claim. It quotes its menu entry's label from one constant too.
 
+A third line names the way to **work on** this track rather than grow it by one:
+press *Put selected point on bench* in the Track Edit panel
+([`track-edit.md`](track-edit.md)), which takes a copy of the track out to the
+bench ([`bench.md`](bench.md)) where sightings can be tried, measured and
+refused before any of it reaches the file. This panel stays view-only: the line
+is a pointer at the panel that edits, and quotes that button's label from one
+constant like the two above it.
+
 #### Removing an observation
 
 A secondary click on an observation row opens a context menu with one entry,

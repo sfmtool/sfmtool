@@ -39,6 +39,7 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use sfmtool_core::bench::BenchItem;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
@@ -67,6 +68,13 @@ pub(crate) struct Operation {
     pub(crate) name: &'static str,
     /// Whether asking it to stop does anything.
     pub(crate) cancellable: bool,
+    /// The kind the Action Log row it ends with carries.
+    ///
+    /// Stated per operation because only the wrapper knows what its answer
+    /// touches: an adjustment writes the reconstruction and is an `Edit`, and a
+    /// bench evaluation writes an item beside it and is a
+    /// [`Kind::Bench`].
+    pub(crate) kind: Kind,
 }
 
 impl Operation {
@@ -79,6 +87,28 @@ impl Operation {
     pub(crate) const BUNDLE_ADJUST: Operation = Operation {
         name: "Bundle adjust",
         cancellable: true,
+        kind: Kind::Edit,
+    };
+
+    /// One bench track measured at the stage it is in
+    /// (`specs/gui/track-edit.md`).
+    ///
+    /// Not cancellable: the patch kernels it runs take the `Progress` for their
+    /// phases and never ask whether they should stop, and an operation that
+    /// says `true` here is held to it by a test.
+    pub(crate) const BENCH_EVALUATE: Operation = Operation {
+        name: "Evaluate track",
+        cancellable: false,
+        kind: Kind::Bench,
+    };
+
+    /// One bench track moved between the cluster and the track stage. Not
+    /// cancellable, for the reason [`Operation::BENCH_EVALUATE`] is not: an
+    /// upgrade is that evaluation with a triangulation in front of it.
+    pub(crate) const BENCH_SET_STAGE: Operation = Operation {
+        name: "Set track stage",
+        cancellable: false,
+        kind: Kind::Bench,
     };
 
     /// Every operation that can go to the background.
@@ -88,7 +118,11 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 1] = [Operation::BUNDLE_ADJUST];
+    pub(crate) const ALL: [Operation; 3] = [
+        Operation::BUNDLE_ADJUST,
+        Operation::BENCH_EVALUATE,
+        Operation::BENCH_SET_STAGE,
+    ];
 }
 
 /// The work one background operation does, as a function of the [`Progress`]
@@ -181,6 +215,24 @@ pub(crate) enum Finished {
         version_label: String,
         /// The Action Log sentence, up to the serials, which only the GUI
         /// thread can know because only it can push the version.
+        text: String,
+    },
+    /// One bench item's next value, and everything the GUI thread needs to
+    /// install it.
+    ///
+    /// The document half is untouched, so there is no map and no selection to
+    /// follow: what the GUI thread does with this is put the track back on the
+    /// bench under its own label and push one version. A report that comes
+    /// home to a bench the item has left is discarded, because there is
+    /// nothing left for it to describe.
+    BenchTrack {
+        /// The item on the node's bench the report is about.
+        label: String,
+        /// The measured track, which replaces the value under that label.
+        track: Box<sfmtool_core::bench::EditableTrack>,
+        /// The version's label, as the Edit History panel lists it.
+        version_label: String,
+        /// The Action Log sentence, up to the serials.
         text: String,
     },
     /// The operation was asked to stop, and did.
@@ -525,6 +577,44 @@ impl AppState {
                     Ok(format!("{text} ({parent} → {serial})"))
                 }
             },
+            // A report lands on the item it measured, wherever the cursor has
+            // gone in the meantime: measurements are keyed by observation index
+            // and observations are never renumbered, so a verdict set while the
+            // task ran is shown over the number the run produced. What the
+            // report cannot survive is the item leaving the bench at the
+            // cursor, and then it is dropped with the row that says so.
+            Finished::BenchTrack {
+                label: item,
+                track,
+                version_label,
+                text,
+            } => match self.scene.iter().position(|n| n.id == node) {
+                None => Err(format!(
+                    "{} of {label} finished, but it is no longer loaded.",
+                    operation.name
+                )),
+                Some(index) => {
+                    let bench = self.scene[index].history.current_bench();
+                    match bench.replace(&item, BenchItem::Track(Arc::new(*track))) {
+                        Err(_) => Err(format!(
+                            "{} of {item} finished, and {item} is no longer on {label}'s bench.",
+                            operation.name
+                        )),
+                        Ok(next) => {
+                            let serial = {
+                                let _phase = collector.phase("push version");
+                                self.scene[index]
+                                    .history
+                                    .push_bench(Arc::new(next), version_label)
+                            };
+                            let parent =
+                                crate::state::edits::version_before(&self.scene[index], serial);
+                            installed = Some(node);
+                            Ok(format!("{text} ({parent} → {serial})"))
+                        }
+                    }
+                }
+            },
             // No elapsed in the sentence: the entry is timed from `started`
             // like the successful one, so the cost column already says how
             // long it ran, and two spellings of one number can only disagree.
@@ -546,13 +636,17 @@ impl AppState {
         let detail = collector.take();
         let took = started.elapsed();
         match &outcome {
-            Ok(text) => self
-                .action_log
-                .record_done_as(actor, Kind::Edit, started, text, detail),
-            Err(message) => {
+            Ok(text) => {
                 self.action_log
-                    .fail_done_as(actor, Kind::Edit, started, message.clone(), detail)
+                    .record_done_as(actor, operation.kind, started, text, detail)
             }
+            Err(message) => self.action_log.fail_done_as(
+                actor,
+                operation.kind,
+                started,
+                message.clone(),
+                detail,
+            ),
         }
         self.last_background_task = Some(FinishedTask {
             id,

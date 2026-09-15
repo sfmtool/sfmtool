@@ -63,6 +63,8 @@ Scene (root, implicit)
 │   ├── Points (1,204,551 · 12 at ∞)  ← fixed group node
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
+│   ├── Bench (2)                  ← present when something is on the bench
+│   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the active one marked
 │   └── Patches                   ← toggle-only row, present when the recon
 │                                    carries patch data; not expandable
 ├── Reconstruction "run_b"
@@ -373,6 +375,15 @@ fixed-height for virtualization.
   it should arrive as a filtered/query view (e.g. "worst reprojection error",
   "longest tracks"), not a raw list.
 
+**Bench group row** — `[▸] Bench (2)` — no eye, shown only when something is on
+the node's bench ([bench.md](bench.md)). Expands to one row per item, by label,
+with its `in` count; the active item of its kind is drawn as the selected row. A
+click makes an item active, which is a step of the node's history like any
+other, and a secondary click offers *Discard*. Nothing here is drawn in the 3D
+viewport, which is why the row has no eye, and the group is per node because an
+item names that node's images and poses. The panel that edits a track on it is
+[track-edit.md](track-edit.md).
+
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
 
@@ -399,6 +410,9 @@ pub struct SceneGraphResponse {
     pub toggle_solo: Option<ReconId>,
     pub close_node: Option<ReconId>,
     pub delete_image: Option<ImageRef>,
+    /// A Bench row, named by its position so the response stays `Copy`.
+    pub activate_bench_item: Option<(ReconId, usize)>,
+    pub discard_bench_item: Option<(ReconId, usize)>,
 }
 ```
 

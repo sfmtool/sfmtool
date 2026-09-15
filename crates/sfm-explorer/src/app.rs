@@ -48,6 +48,7 @@ struct UiParts<'a> {
     image_detail: &'a mut crate::image_detail::ImageDetail,
     point_track_detail: &'a mut crate::point_track_detail::PointTrackDetail,
     intrinsics_detail: &'a mut crate::intrinsics_detail::IntrinsicsDetail,
+    track_edit: &'a mut crate::track_edit::TrackEdit,
 }
 
 #[derive(Default)]
@@ -164,6 +165,7 @@ impl App {
                 &mut self.image_detail,
                 &mut self.point_track_detail,
                 &mut self.intrinsics_detail,
+                &mut self.track_edit,
             );
         }
         if polled.changed {
@@ -826,6 +828,7 @@ impl App {
         let image_detail = &mut self.image_detail;
         let point_track_detail = &mut self.point_track_detail;
         let intrinsics_detail = &mut self.intrinsics_detail;
+        let track_edit = &mut self.track_edit;
 
         // Both close paths are collected here rather than acted on in the menu
         // closure, because a dirty node turns either of them into a question
@@ -847,6 +850,7 @@ impl App {
                     image_detail,
                     point_track_detail,
                     intrinsics_detail,
+                    track_edit,
                 };
                 menu::show(root_ui, &mut parts, &mut requests, &mut window_host);
                 menu::shortcuts(root_ui, &mut parts);
@@ -870,6 +874,7 @@ impl App {
                     image_detail,
                     point_track_detail,
                     intrinsics_detail,
+                    track_edit,
                     frame: *progress,
                     scene_texture_id,
                     hover_depth,
@@ -966,6 +971,7 @@ impl App {
                             &mut self.image_detail,
                             &mut self.point_track_detail,
                             &mut self.intrinsics_detail,
+                            &mut self.track_edit,
                         );
                         // Double-click on frustum → enter/switch camera view mode
                         if let Some(node) = crate::scene::node_by_id(&self.state.scene, image.recon)

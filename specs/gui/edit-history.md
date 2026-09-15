@@ -18,6 +18,12 @@ Edit History panel the list is read and walked in. What
 a version *is*, and how an edit is applied, is
 [document-model.md](document-model.md).
 
+A version is a pair -- the reconstruction value and the node's **bench**
+([bench.md](bench.md)) -- and everything below holds for both halves. A bench
+step is a version like any other: it appends, it truncates a redo tail, undo and
+redo walk it, and its map is the identity because point indexes are untouched.
+The one question asked of the document half alone is whether the node is dirty.
+
 ## The cursor
 
 A node's history is a list of versions, oldest first, and a cursor into it. The
@@ -230,8 +236,10 @@ selected row: it is what the node is showing. The row at the **disk state** --
 the version the node's file on disk holds, which is the version it was loaded at
 until a save moves it (`History::disk_serial`, [saving.md](saving.md)) -- is
 marked with `●`. A cursor
-mark anywhere but the disk mark is the panel's way of saying the node is dirty,
-which is a fact about two rows rather than a badge of its own.
+mark anywhere but the disk mark says the node has moved off the version on disk.
+Whether it is **dirty** is the finer question, asked of the document half alone:
+a bench step above the disk mark is a row like any other and leaves the node
+clean, because a save of it would write the same bytes ([bench.md](bench.md)).
 
 **A row whose value the budget released still lists**, says `(released)`, and
 refuses the jump with a hover text saying why: the maps are kept for every

@@ -1,16 +1,24 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The document model: a node's reconstruction as a sequence of values with a
-//! cursor.
+//! The document model: a node's reconstruction and its bench as a sequence of
+//! value pairs with a cursor.
 //!
-//! See `specs/gui/document-model.md` and `specs/gui/edit-history.md`. A node
-//! ([`crate::scene::SceneNode`]) holds one [`History`]. A [`Version`] in it is
-//! an [`EditedReconstruction`] -- a shared immutable base plus this version's
-//! point edits -- under a serial that is minted once and never reused. An edit
-//! is a function from the value at the cursor to the next value; undo and redo
-//! move the cursor; a new edit at a cursor that is not at the end discards the
-//! versions after it.
+//! See `specs/gui/document-model.md`, `specs/gui/edit-history.md` and
+//! `specs/gui/bench.md`. A node ([`crate::scene::SceneNode`]) holds one
+//! [`History`]. A [`Version`] in it is a **pair** -- an
+//! [`EditedReconstruction`], a shared immutable base plus this version's point
+//! edits, and the [`Bench`] as it stood beside it -- under a serial that is
+//! minted once and never reused. An edit is a function from the value at the
+//! cursor to the next value; undo and redo move the cursor; a new edit at a
+//! cursor that is not at the end discards the versions after it.
+//!
+//! A step changes one half or the other, and only a commit changes both: a
+//! document edit carries the bench along ([`History::push`]), a bench step
+//! carries the document value along ([`History::push_bench`]), and the commit
+//! states both ([`History::push_pair`]). One Undo therefore walks the pair,
+//! which is the whole reason the bench lives here rather than in a stack of its
+//! own.
 //!
 //! Two things are deliberately separate here:
 //!
@@ -30,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use jiff::Timestamp;
+use sfmtool_core::bench::{Bench, BenchItem};
 use sfmtool_core::{EditedReconstruction, SfmrReconstruction};
 
 /// What one step did to point indexes, which is the core edits' own vocabulary:
@@ -66,6 +75,16 @@ impl VersionSerial {
     fn next() -> Self {
         Self(NEXT_VERSION_SERIAL.fetch_add(1, Ordering::Relaxed))
     }
+
+    /// The number the serial is, for a caller that has to hand it to something
+    /// outside the viewer.
+    ///
+    /// `sfmtool_core::bench::Origin` numbers the version a track was put on the
+    /// bench from with an opaque `u64`, which core neither mints nor
+    /// interprets; this is what the viewer puts in it.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 impl std::fmt::Display for VersionSerial {
@@ -91,7 +110,7 @@ pub struct CreatedPoints {
     pub indexes: Vec<u32>,
 }
 
-/// One version of a node's reconstruction.
+/// One version of a node's reconstruction and the bench beside it.
 pub struct Version {
     /// Minted once, never reused.
     pub serial: VersionSerial,
@@ -105,8 +124,20 @@ pub struct Version {
     /// keeps its place, its label and its map; it is simply no longer a version
     /// the cursor can reach.
     pub value: Option<EditedReconstruction>,
+    /// The bench as it stood, which is the version's other half. Kept whether
+    /// or not the value is: a bench is a few tracks and the budget is about
+    /// the reconstruction.
+    pub bench: Arc<Bench>,
+    /// The version whose document half this one shares, which is itself for a
+    /// version that changed it.
+    ///
+    /// What "dirty" is asked of ([`History::is_dirty`]): a run of bench steps
+    /// over a clean value is clean, because saving any of them would write the
+    /// same bytes.
+    pub document_serial: VersionSerial,
     /// What this version holds that its predecessor did not, as the budget
-    /// counts it.
+    /// counts it: the unshared half of the value plus the items of the bench
+    /// its predecessor's bench does not share.
     pub unshared_bytes: u64,
 }
 
@@ -155,6 +186,8 @@ impl History {
                 label: label.into(),
                 at: Timestamp::now(),
                 value: Some(value),
+                bench: Arc::new(Bench::new()),
+                document_serial: serial,
                 unshared_bytes,
             }],
             cursor: 0,
@@ -184,6 +217,28 @@ impl History {
     /// The version the node shows.
     pub fn current_version(&self) -> &Version {
         &self.versions[self.cursor]
+    }
+
+    /// The bench the node shows, which is the other half of the value at the
+    /// cursor.
+    pub fn current_bench(&self) -> &Arc<Bench> {
+        &self.versions[self.cursor].bench
+    }
+
+    /// Whether the version at the cursor holds a document half other than the
+    /// one on disk.
+    ///
+    /// The **document** half: a bench step pushes a version like any other, and
+    /// a run of them over a clean value stays clean, because a save of any of
+    /// them would write the same bytes and the bench is not written at all. A
+    /// disk version a truncation has taken with it leaves the node dirty, since
+    /// what the file holds is then no version of this history.
+    pub fn is_dirty(&self) -> bool {
+        let current = self.versions[self.cursor].document_serial;
+        match self.versions.iter().find(|v| v.serial == self.disk_serial) {
+            Some(disk) => disk.document_serial != current,
+            None => true,
+        }
     }
 
     /// Every version, oldest first.
@@ -338,9 +393,10 @@ impl History {
 
     /// Append `value` as the next version, discarding any redo tail.
     ///
-    /// `map` says what the step did to point indexes and is kept for good;
-    /// `label` is the sentence the Action Log recorded. Returns the new
-    /// version's serial.
+    /// A **document edit**: the bench at the cursor is carried along unchanged,
+    /// because the step did nothing to it. `map` says what the step did to
+    /// point indexes and is kept for good; `label` is the sentence the Action
+    /// Log recorded. Returns the new version's serial.
     pub fn push(
         &mut self,
         value: EditedReconstruction,
@@ -362,17 +418,61 @@ impl History {
         label: impl Into<String>,
         created: Option<CreatedPoints>,
     ) -> VersionSerial {
+        let bench = Arc::clone(&self.versions[self.cursor].bench);
+        self.push_pair(Some(value), bench, map, label, created)
+    }
+
+    /// Append the next version with `bench` in place of the one at the cursor
+    /// and the document half exactly as it stands.
+    ///
+    /// A **bench step**: every step on an item, every change to the list and
+    /// every activation. Point indexes are untouched, so the map is an empty
+    /// `Removed` -- the identity -- and a selection, an id copied before the
+    /// step and an undo across it all resolve unchanged.
+    pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>) -> VersionSerial {
+        self.push_pair(None, bench, PointMap::Removed(Vec::new()), label, None)
+    }
+
+    /// Append the next version stating **both** halves, which is what a commit
+    /// of a bench track does and nothing else does.
+    ///
+    /// `value` is `None` for a step that left the document half alone; such a
+    /// version shares its predecessor's document serial, which is what keeps a
+    /// run of bench steps over a clean value clean.
+    pub fn push_pair(
+        &mut self,
+        value: Option<EditedReconstruction>,
+        bench: Arc<Bench>,
+        map: PointMap,
+        label: impl Into<String>,
+        created: Option<CreatedPoints>,
+    ) -> VersionSerial {
         // The redo tail's values go; its maps stay, which is what lets an index
         // taken on a discarded version still be followed.
         self.versions.truncate(self.cursor + 1);
         let parent = self.versions[self.cursor].serial;
         let serial = VersionSerial::next();
-        let unshared_bytes = value_bytes(&value, self.versions[self.cursor].value());
+        let changed_document = value.is_some();
+        let value = value.unwrap_or_else(|| {
+            self.versions[self.cursor]
+                .value()
+                .expect("the cursor never rests on a released version")
+                .clone()
+        });
+        let unshared_bytes = value_bytes(&value, self.versions[self.cursor].value())
+            + bench_bytes(&bench, Some(&self.versions[self.cursor].bench));
+        let document_serial = if changed_document {
+            serial
+        } else {
+            self.versions[self.cursor].document_serial
+        };
         self.versions.push(Version {
             serial,
             label: label.into(),
             at: Timestamp::now(),
             value: Some(value),
+            bench,
+            document_serial,
             unshared_bytes,
         });
         self.cursor = self.versions.len() - 1;
@@ -496,6 +596,41 @@ fn value_bytes(value: &EditedReconstruction, previous: Option<&EditedReconstruct
         }
     }
     bytes + overlay
+}
+
+/// What `bench` holds that `previous` did not, in bytes, as the budget counts
+/// it.
+///
+/// Every item the step did not touch is the same `Arc` in both benches, so a
+/// step on one track costs that track and nothing else. An item is charged its
+/// observations with their two measurement slots plus the bitmap the track
+/// stage carries, which is the whole of what one costs against a
+/// reconstruction's columns.
+fn bench_bytes(bench: &Bench, previous: Option<&Bench>) -> u64 {
+    bench
+        .entries()
+        .iter()
+        .filter(|entry| {
+            !previous.is_some_and(|before| {
+                before
+                    .get(&entry.label)
+                    .is_some_and(|held| match (held, &entry.item) {
+                        (BenchItem::Track(held), BenchItem::Track(now)) => Arc::ptr_eq(held, now),
+                    })
+            })
+        })
+        .map(|entry| match &entry.item {
+            BenchItem::Track(track) => {
+                let observations = track.observations.len()
+                    * std::mem::size_of::<sfmtool_core::bench::Observation>();
+                let bitmap = track
+                    .track()
+                    .and_then(|payload| payload.bitmap.as_ref())
+                    .map_or(0, |bitmap| bitmap.len());
+                (entry.label.len() + observations + bitmap) as u64
+            }
+        })
+        .sum()
 }
 
 /// A point set's light columns in bytes: the points, the tracks and the

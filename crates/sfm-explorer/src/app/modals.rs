@@ -13,6 +13,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
         image_detail,
         point_track_detail,
         intrinsics_detail,
+        track_edit,
         ..
     } = parts;
     let UiRequests {
@@ -56,6 +57,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
                         image_detail,
                         point_track_detail,
                         intrinsics_detail,
+                        track_edit,
                     );
                     if let Err(message) = app_state.close_node(id) {
                         app_state
@@ -85,6 +87,7 @@ pub(super) fn show(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>, requests: &m
             image_detail.forget_recon(id);
             point_track_detail.forget_recon(id);
             intrinsics_detail.forget_recon(id);
+            track_edit.forget_recon(id);
         }
         if let Err(message) = app_state.close_all() {
             app_state

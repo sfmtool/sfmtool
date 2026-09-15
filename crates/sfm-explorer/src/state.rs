@@ -977,7 +977,7 @@ impl AppState {
 
     /// An image's `.sfmr` name, or a placeholder when the ref no longer
     /// resolves. Only ever used to build a log entry.
-    fn image_name(&self, image: ImageRef) -> String {
+    pub(crate) fn image_name(&self, image: ImageRef) -> String {
         self.node(image.recon)
             .and_then(|node| node.recon().image_table.images.get(image.index()))
             .map(|i| i.name.clone())

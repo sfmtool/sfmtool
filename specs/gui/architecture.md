@@ -151,6 +151,11 @@ sfmtool/
 │   │       │   ├── header.rs         # Point summary bar + stored-patch tile
 │   │       │   ├── table.rs          # Observation table, rows, thumbnails
 │   │       │   └── patch.rs          # Oriented-patch frames and textures
+│   │       ├── track_edit/           # The bench's active track: the observation
+│   │       │                         # table, the sliders and the toolbar
+│   │       │   ├── mod.rs            # Panel state, tabs, header, toolbar, sliders
+│   │       │   └── table.rs          # Observation table, rows, verdict controls
+│   │       ├── bench.rs              # Every bench step as a version of the node
 │   │       ├── colormap.rs           # Shared colour ramps for overlays
 │   │       ├── metrics.rs            # Reprojection error, ray angles, triangulation diagnostics
 │   │       ├── platform/
@@ -193,6 +198,8 @@ sfmtool/
 | `image_browser.rs` | Horizontally-scrollable thumbnail strip with click-to-select, double-click to enter camera view, gesture-driven panning, lazy thumbnail loading, navigation minibar + animation playback. |
 | `image_detail/` | Full-resolution image display for the selected camera, with lazy loading, aspect-ratio-preserving fit, pan/zoom that persists across image and reconstruction switches, and 7 overlay modes. |
 | `point_track_detail/` | Per-observation diagnostics for the selected 3D point: per-image reprojection error, ray angle, thumbnails, `pt3d_<hash>_<index>` ID copy. `mod.rs` holds the panel state and orchestrates a frame; `prepare.rs` builds the per-observation data on selection change, `header.rs`/`table.rs` draw, `patch.rs` builds oriented-patch textures. The numbers themselves are `metrics.rs`, at the crate root. |
+| `track_edit/` | The Track Edit panel: the active track of the selected node's bench, its observation table with a verdict per row, the threshold sliders that paint it, and the toolbar that evaluates, moves the stage, splits and commits. `mod.rs` holds the panel state and draws everything above the table, `table.rs` the table. See [track-edit.md](track-edit.md). |
+| `bench.rs` | Every step on a node's bench, as a version of that node: the `AppState` methods that call the pure `sfmtool_core::bench` steps, push one version and write one Action Log row, and the two that read photographs as background tasks. See [bench.md](bench.md). |
 | `goto_point.rs` | Go to Point: parses a typed point index or `pt3d_<hash>_<index>` ID, resolves it against the loaded scene (bare index → selected node, hash → the node carrying it), and owns the modal that collects it. Parse and lookup are plain functions over the scene slice; the dialog returns a `PointRef` rather than applying it. See [goto-point.md](goto-point.md). |
 | `colormap.rs` | The two color ramps — `ERROR_COLORMAP` and `QUALITY_COLORMAP` — one `ramp(value, vmin, vmax, &Colormap)` that samples either, and the colorbar legend the heatmap overlays draw. |
 | `metrics.rs` | Triangulation numerics: per-observation reprojection error and ray angle, whole-track condition number and inverse-depth z-score, and the widest pairwise ray angle. At the crate root because three surfaces quote the same numbers — the Point Track Detail table, the Image Detail overlay's heatmaps, and the MCP `get_point` tool. |
@@ -468,9 +475,10 @@ For 10K+ cameras, async loading and an LRU texture cache are planned.
 The crate's tests split by what they need underneath them. The **lib** tests
 are headless and run anywhere: `scene_renderer/upload/tests.rs` drives real
 `wgpu` uploads on the `noop` backend, which validates in wgpu-core while
-stubbing the driver, and `point_track_detail/tests.rs` runs whole egui frames
-through `Context::run_ui`. Everything decidable without an OS is decided there,
-because it is decidable in milliseconds and on every platform.
+stubbing the driver, and `point_track_detail/tests.rs` and
+`track_edit/tests.rs` run whole egui frames through `Context::run_ui`.
+Everything decidable without an OS is decided there, because it is decidable in
+milliseconds and on every platform.
 
 The **`ui_basic`** integration tests are the other half: a real window, a real
 GPU surface, and the app's own accessibility tree read back out of the OS by

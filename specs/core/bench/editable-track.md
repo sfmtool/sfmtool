@@ -35,7 +35,8 @@ builds and the shape a downgrade derives),
 [`../../formats/matches-file-format.md`](../../formats/matches-file-format.md)
 (the `member_status` legend a cluster measurement carries), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
-(the proposal for the searches, the pull-in and the viewer's panels).
+(the proposal for the searches and the pull-in), and
+[`../../gui/track-edit.md`](../../gui/track-edit.md) (the panel it is edited in).
 
 ## Rust API
 

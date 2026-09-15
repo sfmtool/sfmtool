@@ -47,7 +47,7 @@ const DEFAULT_JSON: &str = r#"{
             "active": "viewer_3d"
           },
           "second": {
-            "tabs": ["image_detail", "point_track", "camera_intrinsics"],
+            "tabs": ["image_detail", "point_track", "camera_intrinsics", "track_edit"],
             "active": "image_detail"
           }
         },
@@ -283,6 +283,7 @@ fn tab_all_is_in_the_menus_order() {
             Tab::ImageDetail,
             Tab::PointTrackDetail,
             Tab::IntrinsicsDetail,
+            Tab::TrackEdit,
             Tab::ActionLog,
             Tab::EditHistory,
         ]
@@ -524,7 +525,7 @@ fn an_unknown_panel_name_lists_them_all() {
     assert_eq!(
         message,
         "layout.main: unknown panel \"viewer3d\"; the panels are scene, background_task, viewer_3d, \
-         image_browser, image_detail, point_track, camera_intrinsics, action_log, edit_history"
+         image_browser, image_detail, point_track, camera_intrinsics, track_edit, action_log, edit_history"
     );
 }
 

@@ -26,10 +26,11 @@ label, without touching the list, the labels or the steps that work on a track.
 
 Related specs: [editable-track.md](editable-track.md) (the item),
 [`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)
-(the reconstruction value a commit writes into), and
+(the reconstruction value a commit writes into),
+[`../../gui/bench.md`](../../gui/bench.md) (the viewer's half: the version each
+step is pushed as, the Scene tree group and the row each writes), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
-(the proposal for the viewer's half: the history, the panels, the tree and the
-wire).
+(the proposal for what remains of it: the searches, the overlays and the wire).
 
 ## Rust API
 
@@ -216,4 +217,4 @@ it was called on unchanged.
 - **Persisting the bench.** A save writes the reconstruction; a commit is how
   bench work reaches a file.
 - **A history.** The bench is a value; the version list that walks a run of them
-  is the viewer's, and is proposed in the draft above.
+  is the viewer's, in [`../../gui/bench.md`](../../gui/bench.md).

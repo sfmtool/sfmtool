@@ -160,6 +160,13 @@ pub struct SceneGraphResponse {
     pub reset_transform: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
+    /// A Bench row was clicked: make that item the active one of its kind. The
+    /// item is named by its position on the bench rather than by its label, so
+    /// this response stays a `Copy` value; the dock reads the label off the
+    /// bench at that position.
+    pub activate_bench_item: Option<(ReconId, usize)>,
+    /// `Discard` chosen on a Bench row, the item named the same way.
+    pub discard_bench_item: Option<(ReconId, usize)>,
     /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
     /// the image to resect and which correspondence source was asked for. The
     /// `.matches` file itself is chosen a layer up, where the file dialog and
@@ -423,6 +430,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_camera_intrinsics_group(ui, node, ctx, out);
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
+        show_bench_group(ui, node, out);
         if node.has_patch_data() {
             ui.horizontal(|ui| {
                 ui.set_height(ROW_HEIGHT);
@@ -592,6 +600,64 @@ fn show_node_header(
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let counts = counts_text(ui, node);
         ui.add(egui::Label::new(egui::RichText::new(counts).weak().small()).selectable(false));
+    });
+}
+
+/// `[▸] Bench (2)`, expanding to one row per item, the active one marked.
+///
+/// No eye: nothing on the bench is drawn from this row, and an item is not part
+/// of the reconstruction. The group is here because the tree is where a node's
+/// parts are listed, and it is per node because an item names that node's
+/// images and poses (`specs/gui/bench.md`).
+///
+/// Clicking a row makes that item active, which is a step like any other; the
+/// panel that edits the item is [`crate::track_edit`], and a secondary click
+/// offers *Discard*.
+fn show_bench_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let bench = node.history.current_bench();
+    if bench.is_empty() {
+        return;
+    }
+    let id = node.id;
+    let active = crate::bench::active_track_label(bench).map(str::to_string);
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        row_id(id, "bench"),
+        true,
+    );
+    let header = state.show_header(ui, |ui| {
+        ui.set_height(ROW_HEIGHT);
+        ui.label(format!("Bench ({})", bench.len()));
+    });
+    header.body(|ui| {
+        for (position, entry) in bench.entries().iter().enumerate() {
+            let Some(track) = entry.item.as_track() else {
+                continue;
+            };
+            let selected = active.as_deref() == Some(entry.label.as_str());
+            let (kept, candidates, out_count) = track.verdict_counts();
+            let text = format!("{}  {kept} in", entry.label);
+            let row = ui
+                .push_id(("bench_item", entry.label.as_str()), |ui| {
+                    ui.add(egui::Button::selectable(selected, text))
+                })
+                .inner
+                .on_hover_text(format!(
+                    "{} · the {} stage · {kept} in, {candidates} candidates, {out_count} out",
+                    entry.label,
+                    track.stage_kind()
+                ));
+            let row = out.hit(row_id(id, &format!("bench_item_{}", entry.label)), row);
+            if row.clicked() {
+                out.response.activate_bench_item = Some((id, position));
+            }
+            egui::Popup::context_menu(&row).show(|ui| {
+                if ui.button("Discard").clicked() {
+                    out.response.discard_bench_item = Some((id, position));
+                    ui.close();
+                }
+            });
+        }
     });
 }
 

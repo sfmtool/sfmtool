@@ -681,6 +681,7 @@ fn running(state: &mut AppState, id: ReconId, operation: Operation) -> Gate {
 const NOT_CANCELLABLE: Operation = Operation {
     name: "Fake solve",
     cancellable: false,
+    kind: crate::action_log::Kind::Edit,
 };
 
 /// A session that has run nothing says so and says nothing else: one greyed

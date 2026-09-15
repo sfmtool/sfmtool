@@ -16,6 +16,7 @@ mod action_log;
 mod align;
 mod app;
 mod background;
+mod bench;
 mod bundle_adjust_prompt;
 mod camera_lock;
 mod cli;
@@ -45,6 +46,7 @@ mod state;
 #[cfg(test)]
 mod test_support;
 mod texture;
+mod track_edit;
 mod viewer_3d;
 mod window;
 
@@ -63,6 +65,7 @@ use scene::{CameraRef, ImageRef, PointRef};
 use scene_graph::SceneGraphPanel;
 use scene_renderer::SceneRenderer;
 use state::AppState;
+use track_edit::TrackEdit;
 use viewer_3d::Viewer3D;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
@@ -214,6 +217,7 @@ pub fn run() {
         image_browser: ImageBrowser::new(),
         image_detail: ImageDetail::new(),
         point_track_detail: PointTrackDetail::new(),
+        track_edit: TrackEdit::new(),
         intrinsics_detail: IntrinsicsDetail::new(),
         scene_renderer: SceneRenderer::new(),
         frame: Arc::new(Collector::new(false)),
@@ -317,6 +321,7 @@ pub(crate) struct App {
     pub(crate) image_browser: ImageBrowser,
     pub(crate) image_detail: ImageDetail,
     pub(crate) point_track_detail: PointTrackDetail,
+    pub(crate) track_edit: TrackEdit,
     pub(crate) intrinsics_detail: IntrinsicsDetail,
     pub(crate) scene_renderer: SceneRenderer,
     /// Where this frame's own phases land: the uploads, the two draws and the

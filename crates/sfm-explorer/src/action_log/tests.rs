@@ -359,6 +359,8 @@ fn every_kind_and_actor_has_a_distinct_wire_name() {
         Kind::File,
         Kind::Selection,
         Kind::Scene,
+        Kind::Edit,
+        Kind::Bench,
         Kind::View,
         Kind::Display,
         Kind::Animation,

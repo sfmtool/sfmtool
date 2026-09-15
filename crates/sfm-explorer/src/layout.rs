@@ -183,13 +183,14 @@ const GROUPS: [&[Tab]; 3] = [
         Tab::ImageDetail,
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
+        Tab::TrackEdit,
     ],
     &[Tab::ImageBrowser, Tab::ActionLog, Tab::EditHistory],
 ];
 
 impl Tab {
     /// Every panel, in default-layout order — which is the Panels menu's order.
-    pub(crate) const ALL: [Tab; 9] = [
+    pub(crate) const ALL: [Tab; 10] = [
         Tab::SceneGraph,
         Tab::BackgroundTask,
         Tab::Viewer3D,
@@ -197,6 +198,7 @@ impl Tab {
         Tab::ImageDetail,
         Tab::PointTrackDetail,
         Tab::IntrinsicsDetail,
+        Tab::TrackEdit,
         Tab::ActionLog,
         Tab::EditHistory,
     ];
@@ -212,6 +214,7 @@ impl Tab {
             Tab::ImageDetail => "image_detail",
             Tab::PointTrackDetail => "point_track",
             Tab::IntrinsicsDetail => "camera_intrinsics",
+            Tab::TrackEdit => "track_edit",
             Tab::ActionLog => "action_log",
             Tab::EditHistory => "edit_history",
         }
@@ -247,10 +250,12 @@ impl Tab {
                 edge: Split::Below,
                 share: 0.20,
             },
-            Tab::ImageDetail | Tab::PointTrackDetail | Tab::IntrinsicsDetail => Home::Edge {
-                edge: Split::Right,
-                share: 0.33,
-            },
+            Tab::ImageDetail | Tab::PointTrackDetail | Tab::IntrinsicsDetail | Tab::TrackEdit => {
+                Home::Edge {
+                    edge: Split::Right,
+                    share: 0.33,
+                }
+            }
         }
     }
 
@@ -276,7 +281,7 @@ impl Tab {
 const LEFT_COLUMN_SPLIT: f32 = 0.72;
 
 impl Default for Layout {
-    /// The stock nine-panel grid:
+    /// The stock ten-panel grid:
     ///
     /// ```text
     /// ┌────────┬──────────────────┬───────────────┐
@@ -318,6 +323,7 @@ impl Default for Layout {
                             Tab::ImageDetail,
                             Tab::PointTrackDetail,
                             Tab::IntrinsicsDetail,
+                            Tab::TrackEdit,
                         ])),
                     }),
                     second: Box::new(LayoutNode::leaf(&[

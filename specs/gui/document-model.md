@@ -19,10 +19,18 @@ it and costs the size of the edit; a bulk edit -- one that changes the image
 table or the structure wholesale -- produces a new base, sharing the two heavy
 columns with the old one when it did not touch them.
 
+A version is a **pair**: that value, and the node's **bench** as it stood beside
+it -- the things being worked on but not yet written into the reconstruction
+([bench.md](bench.md)). A document edit produces the next version with the same
+bench, a bench step produces it with the same value, and one step, the commit of
+a bench track, changes both. One cursor therefore walks both, and the person
+never has to know which of their steps touched the file.
+
 This spec describes what a node holds, the two kinds of edit, and how the
 renderer notices a change. The cursor's own semantics -- undo, redo, truncation,
 and how a selection follows an edit -- are in
-[edit-history.md](edit-history.md); the value type under all of it is
+[edit-history.md](edit-history.md); the bench half is [bench.md](bench.md); the
+value type under all of it is
 [`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md).
 
 ## What a node holds
@@ -42,16 +50,32 @@ pub struct Version {
     pub at: jiff::Timestamp,
     /// `None` once the budget has released it.
     pub value: Option<EditedReconstruction>,
+    /// The other half of the pair, kept whether or not the value is.
+    pub bench: Arc<Bench>,
+    /// The version whose document half this one shares, which is itself for a
+    /// version that changed it.
+    pub document_serial: VersionSerial,
     pub unshared_bytes: u64,
 }
 
 impl History {
     pub fn new(base: SfmrReconstruction, label: impl Into<String>) -> Self;
     pub fn current(&self) -> &EditedReconstruction;
+    pub fn current_bench(&self) -> &Arc<Bench>;
     pub fn current_version(&self) -> &Version;
     pub fn versions(&self) -> &[Version];
+    /// A document edit: the bench at the cursor is carried along.
     pub fn push(&mut self, value: EditedReconstruction, map: PointMap,
                 label: impl Into<String>) -> VersionSerial;
+    /// A bench step, and a commit, which states both halves
+    /// ([bench.md](bench.md)).
+    pub fn push_bench(&mut self, bench: Arc<Bench>, label: impl Into<String>)
+        -> VersionSerial;
+    pub fn push_pair(&mut self, value: Option<EditedReconstruction>,
+                     bench: Arc<Bench>, map: PointMap, label: impl Into<String>,
+                     created: Option<CreatedPoints>) -> VersionSerial;
+    /// Whether the **document** half at the cursor is not the one on disk.
+    pub fn is_dirty(&self) -> bool;
     pub fn can_undo(&self) -> bool;
     pub fn can_redo(&self) -> bool;
     pub fn undo(&mut self) -> Option<(VersionSerial, VersionSerial)>;
@@ -314,7 +338,9 @@ the cursor can reach, and undo refuses at it rather than stepping onto it.
 The unshared cost of a version is what it holds that its predecessor did not: the
 overlay alone when the two share a base, and otherwise the base's light columns
 plus the thumbnail and patch-bitmap arrays only when this base does not point at
-the same allocations. On the largest reconstruction measured -- 1 354 MB in
+the same allocations; plus the bench items its predecessor's bench does not
+share, each charged its observations and its consensus bitmap
+([bench.md](bench.md)). On the largest reconstruction measured -- 1 354 MB in
 memory, of which 1 189 MB are those two columns -- that is some 165 MB for a
 bulk edit, so the budget holds twenty-odd of them, or any number of point edits.
 

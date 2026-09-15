@@ -92,9 +92,18 @@ disk, and the Edit History panel's disk mark follows it
 
 ## The dirty marker
 
-`SceneNode::is_dirty()` is true when the node's cursor is not at
-`History::disk_serial()`. It answers from state the node already keeps rather
-than from a flag a write has to remember to clear.
+`SceneNode::is_dirty()` is true when the **document half** of the version at the
+node's cursor is not the one `History::disk_serial()` names. It answers from
+state the node already keeps rather than from a flag a write has to remember to
+clear.
+
+The document half, because a version is a pair: the reconstruction and the
+node's bench ([bench.md](bench.md)). A run of bench steps over a saved value
+leaves the cursor off the disk version and the node clean all the same, because
+a save of any of them would write the same bytes and the bench is not written at
+all; each version records which version it shares its document half with, and
+that is what the two are compared by. A commit, the one bench step that writes
+the reconstruction, makes the node dirty like any other edit.
 
 A node that came from no file is **not** dirty until something is done to it:
 its disk serial starts on its first version like every other node's, and demo

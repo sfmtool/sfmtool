@@ -371,8 +371,12 @@ impl SceneNode {
     /// and demo data nobody has touched is not unsaved work. The first edit
     /// moves the cursor off that version and the marker appears, and a save,
     /// which for such a node is a Save As, moves the disk serial to meet it.
+    ///
+    /// The question is about the version's **document** half, so a run of bench
+    /// steps over a saved value leaves the node clean
+    /// ([`crate::document::History::is_dirty`]).
     pub fn is_dirty(&self) -> bool {
-        self.history.current_version().serial != self.history.disk_serial()
+        self.history.is_dirty()
     }
 
     /// The value this node is showing: its current base plus that version's

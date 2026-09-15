@@ -25,6 +25,7 @@ pub(super) fn show(
         image_detail,
         point_track_detail,
         intrinsics_detail,
+        track_edit,
     } = parts;
     let UiRequests {
         close_all_requested,
@@ -136,6 +137,7 @@ pub(super) fn show(
                         image_detail,
                         point_track_detail,
                         intrinsics_detail,
+                        track_edit,
                     );
                     crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                     ui.close();
@@ -156,6 +158,7 @@ pub(super) fn show(
                         image_detail,
                         point_track_detail,
                         intrinsics_detail,
+                        track_edit,
                     );
                     crate::camera_lock::resnap_camera_view(viewer_3d, app_state);
                     ui.close();
@@ -187,6 +190,7 @@ pub(super) fn show(
                         image_detail,
                         point_track_detail,
                         intrinsics_detail,
+                        track_edit,
                     );
                     ui.close();
                 }
@@ -227,6 +231,7 @@ pub(super) fn show(
                                 image_detail,
                                 point_track_detail,
                                 intrinsics_detail,
+                                track_edit,
                             );
                         }
                     } else if let Err(message) = crate::camera_lock::enter(viewer_3d, app_state) {
@@ -296,6 +301,7 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
         image_detail,
         point_track_detail,
         intrinsics_detail,
+        track_edit,
     } = parts;
     // Ctrl/Cmd+G opens the same dialog from anywhere, gated on egui's
     // own keyboard arbitration so a HUD `DragValue` — or the dialog's
@@ -356,6 +362,7 @@ pub(super) fn shortcuts(root_ui: &mut egui::Ui, parts: &mut UiParts<'_>) {
                 image_detail,
                 point_track_detail,
                 intrinsics_detail,
+                track_edit,
             );
             // A step of the cursor can move the very pose the viewport
             // is looking through, and camera view follows the value.
@@ -421,12 +428,14 @@ pub(super) fn forget_selected(
     image_detail: &mut crate::image_detail::ImageDetail,
     point_track_detail: &mut crate::point_track_detail::PointTrackDetail,
     intrinsics_detail: &mut crate::intrinsics_detail::IntrinsicsDetail,
+    track_edit: &mut crate::track_edit::TrackEdit,
 ) {
     let Some(id) = id else { return };
     image_browser.forget_recon(id);
     image_detail.forget_recon(id);
     point_track_detail.forget_recon(id);
     intrinsics_detail.forget_recon(id);
+    track_edit.forget_recon(id);
 }
 
 // ── The Panels menu ──────────────────────────────────────────────────────
