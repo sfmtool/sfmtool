@@ -15,7 +15,7 @@ use sfmtool_core::patch::normal_refine::{
 
 use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
-use super::views::{resolve_pyramids, resolve_scene};
+use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
 
 #[pymethods]
@@ -152,41 +152,14 @@ impl PyPatchCloud {
         render_bitmaps: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        // Resolve the scene: a reconstruction (track-derived per-patch view
-        // defaults) or a bare CameraViews (no tracks — `view_indices` required).
-        let (posed, recon_guard) = resolve_scene(recon)?;
+        let (posed, recon_guard, n_images) = resolve_patch_scene(
+            recon,
+            &self.inner,
+            view_indices.is_some(),
+            "view_indices",
+            "per-patch views",
+        )?;
         let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
-        let n_images = posed.len() as u32;
-        if self.inner.point_indexes.len() != self.inner.len() {
-            return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
-            ));
-        }
-        // The cloud's per-patch point_indexes index the reconstruction's points, so
-        // this range check catches a too-small recon (and would-be panics in the
-        // core). A CameraViews carries no points, so it does not apply there;
-        // supplied view lists are still validated against the view count below.
-        if let Some(recon) = recon_opt {
-            if self
-                .inner
-                .point_indexes
-                .iter()
-                .any(|&p| p as usize >= recon.point_set.points.len())
-            {
-                return Err(PyValueError::new_err(
-                    "patch cloud point_indexes are out of range for this reconstruction \
-                     (was the cloud built from a different recon?)",
-                ));
-            }
-        }
-        // Without tracks there is no default per-patch view list, so `view_indices`
-        // is required. Fail fast before decoding any imagery.
-        if recon_opt.is_none() && view_indices.is_none() {
-            return Err(PyValueError::new_err(
-                "view_indices is required when the first argument is a CameraViews \
-                 (there are no tracks to derive per-patch views from)",
-            ));
-        }
         let objective = match objective {
             "mean" | "mean_pairwise" => Objective::MeanPairwise,
             "robust" | "robust_weighted" => Objective::RobustWeighted {

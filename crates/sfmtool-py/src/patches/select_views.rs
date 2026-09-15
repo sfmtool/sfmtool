@@ -15,7 +15,7 @@ use sfmtool_core::patch::view_selection::{
 
 use super::args::{parse_patch_window, parse_sampler};
 use super::cloud::PyPatchCloud;
-use super::views::{resolve_pyramids, resolve_scene};
+use super::views::{resolve_patch_scene, resolve_pyramids};
 use crate::ProgressCounter;
 
 #[pymethods]
@@ -107,35 +107,14 @@ impl PyPatchCloud {
         keypoint_anchor: bool,
         progress: Option<ProgressCounter>,
     ) -> PyResult<Vec<Bound<'py, PyDict>>> {
-        let (posed, recon_guard) = resolve_scene(recon)?;
+        let (posed, recon_guard, n_images) = resolve_patch_scene(
+            recon,
+            &self.inner,
+            candidate_views.is_some(),
+            "candidate_views",
+            "per-patch candidate views",
+        )?;
         let recon_opt = recon_guard.as_ref().map(|r| &r.inner);
-        let n_images = posed.len() as u32;
-        if self.inner.point_indexes.len() != self.inner.len() {
-            return Err(PyValueError::new_err(
-                "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
-            ));
-        }
-        if let Some(recon) = recon_opt {
-            if self
-                .inner
-                .point_indexes
-                .iter()
-                .any(|&p| p as usize >= recon.point_set.points.len())
-            {
-                return Err(PyValueError::new_err(
-                    "patch cloud point_indexes are out of range for this reconstruction \
-                     (was the cloud built from a different recon?)",
-                ));
-            }
-        }
-        // Without tracks there is no default candidate list, so `candidate_views`
-        // is required. Fail fast before decoding any imagery.
-        if recon_opt.is_none() && candidate_views.is_none() {
-            return Err(PyValueError::new_err(
-                "candidate_views is required when the first argument is a CameraViews \
-                 (there are no tracks to derive per-patch candidate views from)",
-            ));
-        }
 
         let window = parse_patch_window(window, window_sigma)?;
         let sampler = parse_sampler(sampler)?;

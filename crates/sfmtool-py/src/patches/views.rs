@@ -15,6 +15,7 @@ use rayon::prelude::*;
 
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::PatchCloud;
 use sfmtool_core::CameraIntrinsics;
 
 use crate::flow::warp::extract_image_u8;
@@ -171,6 +172,45 @@ pub(super) fn resolve_scene<'py>(
             "expected an SfmrReconstruction or CameraViews as the first argument",
         ))
     }
+}
+
+/// Resolve and validate the scene shared by patch-cloud kernel bindings.
+/// The point-range check applies only to reconstructions because
+/// [`PyCameraViews`] carries no points. The explicit-view guard runs here,
+/// before callers decode any imagery.
+pub(super) fn resolve_patch_scene<'py>(
+    scene: &Bound<'py, PyAny>,
+    cloud: &PatchCloud,
+    explicit_views_present: bool,
+    view_arg_name: &str,
+    derived_views_name: &str,
+) -> PyResult<(PosedViews, Option<PyRef<'py, PySfmrReconstruction>>, u32)> {
+    let (posed, recon_guard) = resolve_scene(scene)?;
+    if cloud.point_indexes.len() != cloud.len() {
+        return Err(PyValueError::new_err(
+            "patch cloud has no per-patch point_indexes; rebuild it with from_reconstruction",
+        ));
+    }
+    if let Some(recon) = recon_guard.as_ref() {
+        if cloud
+            .point_indexes
+            .iter()
+            .any(|&p| p as usize >= recon.inner.point_set.points.len())
+        {
+            return Err(PyValueError::new_err(
+                "patch cloud point_indexes are out of range for this reconstruction \
+                 (was the cloud built from a different recon?)",
+            ));
+        }
+    }
+    if recon_guard.is_none() && !explicit_views_present {
+        return Err(PyValueError::new_err(format!(
+            "{view_arg_name} is required when the first argument is a CameraViews \
+             (there are no tracks to derive {derived_views_name} from)"
+        )));
+    }
+    let n_images = posed.len() as u32;
+    Ok((posed, recon_guard, n_images))
 }
 
 /// Resolve the `images` argument of a PatchCloud kernel method — either a

@@ -1026,6 +1026,9 @@ two newest subsystems**
 ## Rust — `sfmtool-py`
 
 **The shared prologue spread from three bindings to five instead of being lifted**
+> _Status (2026-09-14): Done (shared prologue) — the five bindings now share
+> `resolve_patch_scene`, preserving their validation order and argument-specific
+> `CameraViews` errors._
 > _Partially resolved. The `parse_patch_window` / `parse_sampler` half of the old
 > finding **landed** as `f51a109`; `args.rs` is now 93 lines and all ten inline matches
 > route through it. The prologue half did not land, **and it got worse.**_
