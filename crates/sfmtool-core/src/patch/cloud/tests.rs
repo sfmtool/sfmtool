@@ -544,6 +544,42 @@ fn a_ray_pointing_away_from_a_direction_patch_refuses_to_anchor() {
         .is_none());
 }
 
+/// A stored tangent frame is not always exactly perpendicular to its bearing:
+/// a bundle adjustment that moved the direction leaves the half-vectors where
+/// they were. The anchoring must still put the centre on the keypoint, since
+/// the offsets are a few thousandths and a perpendicular assumption is wrong by
+/// that much.
+#[test]
+fn anchoring_a_direction_patch_whose_axes_lean_off_its_bearing_lands_on_the_keypoint() {
+    let cam = pinhole(2800.0, 2040.0, 1536.0, 4080, 3072);
+    let pose = tilted_pose();
+    let mut patch = OrientedPatch::from_infinity_direction(
+        Point3::new(0.2, -0.1, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [0.0055, 0.0055],
+    );
+    // Lean both axes a fraction of a degree toward the bearing, as the file
+    // that showed this held them.
+    let d = patch.center.coords;
+    patch.u_axis = (patch.u_axis - d * 0.0017).normalize();
+    patch.v_axis = (patch.v_axis - d * 0.0043).normalize();
+    let keypoint = {
+        let [x, y] = project_center(&patch, &cam, &pose);
+        [x + 7.3, y - 1.0]
+    };
+
+    let anchored = patch
+        .anchored_at_keypoint(&cam, &pose, keypoint)
+        .expect("the keypoint's ray meets the tangent plane");
+    let landed = project_center(&anchored, &cam, &pose);
+    assert!(
+        (landed[0] - keypoint[0]).abs() < 1e-6 && (landed[1] - keypoint[1]).abs() < 1e-6,
+        "anchored centre projects to {landed:?}, keypoint {keypoint:?}"
+    );
+    assert_eq!(anchored.w, 0.0);
+    assert!((anchored.center.coords.norm() - 1.0).abs() < 1e-12);
+}
+
 // ---------------------------------------------------------------------------
 // `PatchCloud::from_tracks` (the array-fed counterpart of `from_reconstruction`)
 // ---------------------------------------------------------------------------

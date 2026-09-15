@@ -483,18 +483,22 @@ impl OrientedPatch {
         if self.w == 0.0 {
             // Point at infinity: `center` is the unit direction `d`, the patch
             // corner `d + a·û + b·v̂` is a direction, and the observed ray is
-            // parallel to it: `dir ∝ d + a·û + b·v̂`. With `û, v̂ ⊥ d`,
-            // `a = (dir·û)/(dir·d)` and `b = (dir·v̂)/(dir·d)`. `dir·d ≤ 0` means
-            // the ray points away from `d`.
+            // parallel to it: `dir = λ·(d + a·û + b·v̂)`. Solved as the 3x3
+            // system `[d û v̂]·(λ, λa, λb) = dir` rather than by projecting
+            // `dir` onto the axes, because a stored tangent frame is not
+            // always exactly perpendicular to its bearing (a bundle adjustment
+            // that moved the direction leaves the half-vectors where they
+            // were), and with `a`, `b` a few thousandths the perpendicular
+            // assumption's error is of their own size. `λ ≤ 0` means the ray
+            // points away from `d`; a singular frame has no answer.
             let d = self.center.coords;
-            let denom = dir.dot(&d);
-            if denom <= 1e-12 {
+            let basis = Matrix3::from_columns(&[d, self.u_axis, self.v_axis]);
+            let solved = basis.lu().solve(&dir)?;
+            let lambda = solved[0];
+            if !lambda.is_finite() || lambda <= 1e-12 {
                 return None;
             }
-            Some(
-                self.u_axis * (dir.dot(&self.u_axis) / denom)
-                    + self.v_axis * (dir.dot(&self.v_axis) / denom),
-            )
+            Some(self.u_axis * (solved[1] / lambda) + self.v_axis * (solved[2] / lambda))
         } else {
             // Finite point: intersect the ray with the patch plane and offset
             // from the centre.

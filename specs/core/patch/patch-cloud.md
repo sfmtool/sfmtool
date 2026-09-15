@@ -450,8 +450,11 @@ its nature — a `w = 0` patch is first-class throughout:
   `render_context`, and the keypoint unprojection (`anchored_at_keypoint`, which
   `seed_offset` scales into grid steps) all branch on `w`. For `w = 0` the
   keypoint is the projection of the direction, the keypoint→offset inversion is
-  angular (`a = (ray·û)/(ray·d)`), and re-centring shifts the direction within its
-  tangent frame, re-normalizing so the centre stays a unit direction.
+  angular, solved exactly as `ray = λ·(d + a·û + b·v̂)` for `(λ, a, b)` rather
+  than by projecting the ray onto the axes, since a stored tangent frame is not
+  always exactly perpendicular to its bearing and `a`, `b` are of the size of
+  that error; re-centring shifts the direction within its tangent frame,
+  re-normalizing so the centre stays a unit direction.
 - **Included by default.** Since every operation handles them, the binding
   defaults `exclude_points_at_infinity = false`, so a cloud built from a
   reconstruction carries its points at infinity. Operations that are finite by
