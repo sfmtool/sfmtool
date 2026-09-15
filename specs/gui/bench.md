@@ -19,15 +19,17 @@ activation, and every step over an item -- is `sfmtool_core::bench`
 and pure functions with no window in them.
 
 Related specs: [`track-edit.md`](track-edit.md) (the panel that edits a track on
-it), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
+it), [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image
+Detail panel, which carries the two steps that name a pixel and draws the active
+track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the Bench group is a child
 of), [`background-tasks.md`](background-tasks.md) (where an evaluation runs),
 [`action-log.md`](action-log.md) (the row each step writes), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
-(the proposal this is step 2 of, and where the searches, the overlays and the
-wire are still going).
+(the proposal this is step 2 of, and where the searches, the remaining overlays
+and the wire are still going).
 
 ---
 
@@ -111,6 +113,14 @@ means "the active item of the kind this panel edits", and the panel is what
 knows that; the steps take the label, so the question of which item is answered
 in one place rather than inside each step. `active_track_label` is what a caller
 resolves it with.
+
+**The two steps that name a pixel are invoked from the Image Detail context
+menu.** `start_bench_cluster` and `add_bench_observation` take a pixel, and the
+viewer's one way to name a pixel is a right-click in that panel, where the two
+point edits that need one already live
+([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Image Detail:
+the context menu"). Every other step names an item and is a button in the Track
+Edit panel.
 
 **Each step returns `Result<_, String>`.** The `String` is the sentence a
 refusal shows, which is core's own wording behind a clause naming what was
@@ -283,6 +293,10 @@ point's exact projection and a photograph cached for every image:
   an undo of the discard puts it back with the activation as it stood, and the
   first item is the same `Arc` throughout;
 - putting a point on the bench twice activates the track it already made;
+- the two gestures the Image Detail context menu carries -- a cluster started at
+  a pixel, then a candidate added at one in the same image -- are one version and
+  one `Bench` row each, the second sighting joining as a candidate, and an undo
+  walks them back one at a time;
 - a verdict, a stage change and an evaluation are three versions, undo retraces
   them in order and redo replays them;
 - a document edit between two bench steps is a version in its place, and undoing
@@ -312,7 +326,9 @@ plane whose numbers are known to the pixel.
 - **The searches that propose observations.** The descriptor search, the view
   sweep and the pull-in are proposed in
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).
-- **Drawing the bench in the other panels.** The 3D preview buffer, the Image
-  Detail overlay layer and the Image Browser borders are proposed in the same
-  draft.
+- **Drawing the bench in the 3D viewer and the Image Browser.** The preview
+  buffer and the thumbnail borders are proposed in the same draft. The Image
+  Detail panel does draw the active track, as its bench layer
+  ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
+  layer").
 - **The wire.** The MCP tools for the bench are proposed there too.

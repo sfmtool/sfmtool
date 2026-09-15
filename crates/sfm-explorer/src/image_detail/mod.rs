@@ -10,7 +10,10 @@
 //! - [`overlay`] — the feature-overlay draw modes, hit-testing, and tooltip.
 //! - [`mod@intrinsics`] — the intrinsics overlay layer, drawn independently of
 //!   the feature mode and composing with whichever one is active.
+//! - [`mod@bench_track`]: the bench layer, the active editable track drawn
+//!   over everything else in the bench's own colours.
 
+mod bench_track;
 mod input;
 mod intrinsics;
 mod overlay;
@@ -19,8 +22,8 @@ mod tests;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
 pub(crate) use overlay::{
-    add_observation_entry, remove_observation_entry, CreatePointPrompt, ADD_OBSERVATION_LABEL,
-    CREATE_POINT_LABEL,
+    add_observation_entry, remove_observation_entry, BenchMenu, CreatePointPrompt,
+    ADD_OBSERVATION_LABEL, CREATE_POINT_LABEL, START_CLUSTER_LABEL,
 };
 
 use crate::document::VersionSerial;
@@ -76,6 +79,16 @@ pub struct ImageDetail {
     /// which is small even for a per-image-intrinsics solve, so there is no
     /// eviction beyond [`ImageDetail::forget_recon`].
     intrinsics: HashMap<CameraRef, CameraLayer>,
+    /// The pixel the context menu was last opened at, in source-image
+    /// coordinates, for the entries that act at it.
+    ///
+    /// The menu's entries are laid out on later frames, by which time the
+    /// pointer has moved off the place the user named, so what an entry reads
+    /// is what the opening frame recorded. The two bench entries carry it back
+    /// out in their own response fields; the two point edits go through
+    /// `AppState::pending_observation_pixel`, which the Create 3D Point prompt
+    /// holds across the frames it is up for.
+    menu_pixel: Option<[f32; 2]>,
     /// Offset of image center from panel center, in panel pixels.
     pan: egui::Vec2,
     /// Zoom level. 1.0 = fit image to panel. >1.0 = zoomed in.
@@ -145,6 +158,16 @@ pub struct ImageDetailResponse {
     pub create_point: Option<([f32; 2], f32)>,
     /// Set when that prompt was dismissed without creating anything.
     pub cancel_create_point: bool,
+    /// The pixel the context menu's `Start cluster on the bench here` was
+    /// clicked for: a cluster-stage track starts there, on the node's bench.
+    pub start_bench_cluster: Option<[f32; 2]>,
+    /// The pixel the context menu's `Add observation to bench track here` was
+    /// clicked for: a candidate joins the bench's active track there.
+    pub add_bench_observation: Option<[f32; 2]>,
+    /// A mark of the bench layer was clicked: select this observation of the
+    /// active track in the Track Edit panel. The layer is on top, so a click it
+    /// catches leaves `select_point` alone.
+    pub select_bench_row: Option<usize>,
 }
 
 impl ImageDetail {
@@ -153,6 +176,7 @@ impl ImageDetail {
             loaded_image: None,
             feature_overlay: None,
             intrinsics: HashMap::new(),
+            menu_pixel: None,
             pan: egui::Vec2::ZERO,
             zoom: 1.0,
             last_display_size: None,
@@ -271,6 +295,7 @@ impl ImageDetail {
         selected_image: Option<usize>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
+        bench: BenchMenu<'_>,
         create_point_prompt: &mut Option<CreatePointPrompt>,
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
@@ -289,6 +314,9 @@ impl ImageDetail {
             open_create_point: false,
             create_point: None,
             cancel_create_point: false,
+            start_bench_cluster: None,
+            add_bench_observation: None,
+            select_bench_row: None,
         };
 
         // If no image selected, show placeholder
@@ -460,6 +488,7 @@ impl ImageDetail {
             feature_display,
             selected_point,
             hovered_point,
+            bench,
             create_point_prompt,
             image_rect,
             panel_rect,
@@ -468,11 +497,34 @@ impl ImageDetail {
             &mut response,
         );
 
+        // What the entries drawn on later frames act at. Recorded after the
+        // draw, so an entry clicked on the frame the menu opened at reads the
+        // same pixel the next frame's would.
+        if let Some(pixel) = response.context_menu_pixel {
+            self.menu_pixel = Some(pixel);
+        }
+
         // The one mark that draws over the features rather than under them.
         if let Some(camera) = &camera {
             if intrinsics_display.enabled {
                 intrinsics::draw_principal_point(&painter, camera, &view, panel_rect);
             }
+        }
+
+        // The bench layer, last and over everything: it is about the track
+        // being worked on rather than about the reconstruction, so no overlay
+        // mode turns it off and none of them draws on top of it.
+        if let Some(track) = bench.active_track {
+            bench_track::draw(
+                &painter,
+                &interact_response,
+                image_table,
+                img_idx,
+                track,
+                image_rect,
+                effective_scale,
+                &mut response,
+            );
         }
 
         response

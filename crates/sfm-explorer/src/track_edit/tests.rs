@@ -94,6 +94,15 @@ fn an_empty_bench_offers_the_ways_in_and_draws_no_rows() {
         texts.iter().any(|t| t == super::PUT_ON_BENCH_LABEL),
         "the way onto the bench is not offered: {texts:?}"
     );
+    // The other way in is a pixel, and a pixel is named in the Image Detail
+    // panel's context menu rather than here: what this panel carries is the
+    // sentence saying so, quoting that entry's own label.
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains(crate::image_detail::START_CLUSTER_LABEL)),
+        "the pixel gesture is not pointed at: {texts:?}"
+    );
 }
 
 #[test]
@@ -173,6 +182,30 @@ fn the_thresholds_paint_the_rows_and_move_no_pinned_verdict() {
         panel.rows()[1].verdict,
         pinned_before,
         "applying the bars moved the pinned verdict"
+    );
+}
+
+/// Every row draws its own rendered tile, at both stages: the surfel seen from
+/// that observation at the track stage, and the kernel's own grid at the
+/// cluster stage.
+#[test]
+fn every_row_draws_a_tile_at_either_stage() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    assert!(
+        panel.rows().iter().all(|row| row.tile),
+        "a track from a committed point draws no tile: {:?}",
+        panel.rows(),
+    );
+
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+    run_frame(&mut panel, &ctx, &state);
+    assert!(
+        panel.rows().iter().all(|row| row.tile),
+        "the cluster stage draws no tile: {:?}",
+        panel.rows(),
     );
 }
 

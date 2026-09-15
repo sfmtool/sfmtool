@@ -35,6 +35,8 @@ mod patch;
 mod prepare;
 mod table;
 
+pub(crate) use patch::render_patch_texture;
+
 #[cfg(test)]
 mod tests;
 

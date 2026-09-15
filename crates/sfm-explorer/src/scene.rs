@@ -531,6 +531,24 @@ pub fn selected_node(scene: &[SceneNode], selected: Option<ReconId>) -> Option<&
     node_by_id(scene, selected?)
 }
 
+/// One image's pose, as every core call that projects into it takes it.
+///
+/// A `SfmrImage` carries the rotation and the translation apart, and the patch
+/// kernels, the warps and the panels that project by hand all want the one
+/// value; stating the conversion once is what keeps a panel from writing a
+/// pose that differs from a kernel's by a sign.
+pub fn cam_from_world(image: &sfmtool_core::SfmrImage) -> sfmtool_core::geometry::RigidTransform {
+    let q = image.quaternion_wxyz.quaternion();
+    sfmtool_core::geometry::RigidTransform::from_wxyz_translation(
+        [q.w, q.i, q.j, q.k],
+        [
+            image.translation_xyz.x,
+            image.translation_xyz.y,
+            image.translation_xyz.z,
+        ],
+    )
+}
+
 /// A node's 3D points in the **shared world space** — its own positions put
 /// through its transform.
 ///

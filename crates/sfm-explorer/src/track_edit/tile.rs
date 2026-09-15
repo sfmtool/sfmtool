@@ -1,0 +1,118 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//! The per-observation tile the table draws: what one sighting of the track
+//! actually looks like.
+//!
+//! The tile is the column the numbers beside it are about. A ZNCC of 0.42 is a
+//! number; the tile that produced it is the thing a person can judge, and the
+//! whole reason the bench exists is that a person judges.
+//!
+//! Which picture it is follows the stage, because the two stages register
+//! different things:
+//!
+//! - At the **track stage** it is the surfel re-rendered from this
+//!   observation's own view, re-anchored on its keypoint -- the very tile the
+//!   Point Track Detail panel draws for a committed track, through that panel's
+//!   own renderer ([`crate::point_track_detail::render_patch_texture`]), so a
+//!   track on the bench and the point it came from cannot show one surface two
+//!   ways.
+//! - At the **cluster stage** there is no surface, so it is the observation's
+//!   own grid: the `R x R` samples the refinement kernel reads at the refined
+//!   position and shape, through the kernel's own sampler
+//!   (`sfmtool_core::patch::cluster_refine::sample_member_grid`), which is what
+//!   makes the picture the thing the ZNCC beside it was computed over rather
+//!   than a second opinion about it.
+
+use sfmtool_core::bench::{EditableTrack, Stage};
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
+use sfmtool_core::SfmrReconstruction;
+
+/// Pyramid depth for the cluster sampler, which mip-selects by the grid's own
+/// footprint. The same depth the bench's evaluation decodes with, so the panel
+/// and the kernel read one level.
+const PYRAMID_LEVELS: usize = 6;
+
+/// The tile for one observation, or `None` when there is nothing to render:
+/// no surfel yet at the track stage, a degenerate shape at the cluster stage,
+/// or an image whose pixels are not cached.
+pub(super) fn render(
+    ctx: &egui::Context,
+    recon: &SfmrReconstruction,
+    track: &EditableTrack,
+    observation: usize,
+    src: &ImageU8,
+    name: String,
+) -> Option<egui::TextureHandle> {
+    let row = track.observations.get(observation)?;
+    let img_idx = row.image as usize;
+    match &track.stage {
+        Stage::Track(payload) => {
+            let frame = payload.frame.as_ref()?;
+            let image = recon.image_table.images.get(img_idx)?;
+            let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
+            let keypoint = row
+                .track
+                .as_ref()
+                .and_then(|m| m.keypoint)
+                .map(|k| [f64::from(k[0]), f64::from(k[1])]);
+            Some(crate::point_track_detail::render_patch_texture(
+                ctx,
+                name,
+                frame,
+                camera,
+                &crate::scene::cam_from_world(image),
+                keypoint,
+                src,
+            ))
+        }
+        Stage::Cluster(payload) => {
+            let measurement = row.cluster.as_ref()?;
+            // The template's own geometry when one has been cut, so the tile is
+            // on the grid the ZNCC was measured on; the kernel's defaults
+            // before that, which is what the next evaluation will use.
+            let mut params = ClusterRefineParams::default();
+            if let Some(template) = payload.template.as_ref() {
+                params.radius = template.radius;
+                params.resolution = template.samples.shape()[0] as u32;
+            }
+            let pyramid = ImageU8Pyramid::build(src, PYRAMID_LEVELS);
+            let grid = sample_member_grid(
+                &pyramid,
+                measurement.best_position(),
+                measurement.shape.unwrap_or(measurement.seed_shape),
+                &params,
+            )?;
+            let resolution = params.resolution.max(2) as usize;
+            let channels = grid.len() / (resolution * resolution);
+            Some(ctx.load_texture(
+                name,
+                color_image(&grid, resolution, channels),
+                egui::TextureOptions::NEAREST,
+            ))
+        }
+    }
+}
+
+/// The sampler's interleaved `R x R x C` samples as an RGBA image.
+///
+/// The samples are the source's own 0..255 range in `f32`, so they are rounded
+/// and clamped rather than rescaled: a tile is a picture of the photograph, and
+/// stretching its levels would make two tiles of one surface look different.
+/// One channel is repeated across RGB, which is what a grey photograph is.
+fn color_image(grid: &[f32], resolution: usize, channels: usize) -> egui::ColorImage {
+    let mut rgba = Vec::with_capacity(resolution * resolution * 4);
+    for texel in grid.chunks_exact(channels.max(1)) {
+        let level = |c: usize| texel.get(c).copied().unwrap_or(texel[0]).clamp(0.0, 255.0) as u8;
+        match channels {
+            0 => rgba.extend_from_slice(&[0, 0, 0, 255]),
+            1 => {
+                let grey = level(0);
+                rgba.extend_from_slice(&[grey, grey, grey, 255]);
+            }
+            _ => rgba.extend_from_slice(&[level(0), level(1), level(2), 255]),
+        }
+    }
+    egui::ColorImage::from_rgba_unmultiplied([resolution, resolution], &rgba)
+}

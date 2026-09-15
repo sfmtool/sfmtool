@@ -4,11 +4,11 @@
 //! The observation table: the columns, one row per observation, and the
 //! three-state verdict control each row carries.
 //!
-//! The columns the Point Track Detail panel has come first -- the thumbnail,
-//! the image and its name, the reprojection error and the ray angle -- and what
-//! the bench adds follows them: the verdict, the stage's own photometric
-//! numbers, the kernel's status and where the observation came from. A reader
-//! who knows the view-only panel reads this one.
+//! The columns the Point Track Detail panel has come first -- the rendered
+//! patch tile, the image and its name, the reprojection error and the ray angle
+//! -- and what the bench adds follows them: the verdict, the stage's own
+//! photometric numbers, the kernel's status and where the observation came
+//! from. A reader who knows the view-only panel reads this one.
 //!
 //! Rows are painted at fixed x-offsets rather than laid out by egui, as the
 //! view-only panel's are, so the header and every row stay aligned whatever a
@@ -23,10 +23,12 @@ use super::{measurements, provenance_text, TrackEdit, TrackEditResponse};
 use crate::scene::{ImageRef, ReconId};
 use crate::state::AppState;
 
-/// Height of one thumbnail, and so of the tallest thing in a row.
-pub(crate) const THUMB_SIZE: f32 = 40.0;
+/// Side of one rendered tile, and so the tallest thing in a row. The size the
+/// Point Track Detail panel draws its own tiles at, because they are the same
+/// tile.
+pub(crate) const TILE_SIZE: f32 = 48.0;
 /// Height of one observation row.
-pub(crate) const ROW_HEIGHT: f32 = THUMB_SIZE + 6.0;
+pub(crate) const ROW_HEIGHT: f32 = TILE_SIZE + 6.0;
 /// Width of the verdict control.
 const VERDICT_WIDTH: f32 = 72.0;
 
@@ -46,12 +48,15 @@ pub(crate) struct RowSummary {
     pub painted: Verdict,
     /// The six measurement cells, as printed.
     pub cells: [String; 6],
+    /// Whether the row drew a rendered tile, rather than the empty frame that
+    /// stands in when there is nothing to render.
+    pub tile: bool,
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
 struct ColumnLayout {
     verdict: f32,
-    thumb: f32,
+    tile: f32,
     image: f32,
     name: f32,
     zncc: f32,
@@ -66,8 +71,8 @@ struct ColumnLayout {
 impl ColumnLayout {
     fn new() -> Self {
         let verdict = 0.0;
-        let thumb = verdict + VERDICT_WIDTH + 6.0;
-        let image = thumb + THUMB_SIZE + 8.0;
+        let tile = verdict + VERDICT_WIDTH + 6.0;
+        let image = tile + TILE_SIZE + 8.0;
         let name = image + 34.0;
         let zncc = name + 150.0;
         let shift = zncc + 54.0;
@@ -78,7 +83,7 @@ impl ColumnLayout {
         let from = status + 104.0;
         Self {
             verdict,
-            thumb,
+            tile,
             image,
             name,
             zncc,
@@ -162,6 +167,7 @@ impl TrackEdit {
                     ui,
                     recon,
                     id,
+                    state,
                     track,
                     observation,
                     stage,
@@ -174,14 +180,15 @@ impl TrackEdit {
         self.scroll_offset_y = Some(output.state.offset.y);
     }
 
-    /// One observation: its painting, its verdict control, its thumbnail and
-    /// its cells.
+    /// One observation: its painting, its verdict control, its tile and its
+    /// cells.
     #[allow(clippy::too_many_arguments)]
     fn draw_row(
         &mut self,
         ui: &mut egui::Ui,
         recon: &SfmrReconstruction,
         id: ReconId,
+        state: &AppState,
         track: &EditableTrack,
         observation: usize,
         stage: StageKind,
@@ -259,21 +266,27 @@ impl TrackEdit {
             response.set_verdict = Some((observation, next_verdict(row.verdict)));
         }
 
-        if image.index() < recon.image_table.thumbnails_y_x_rgb.shape()[0] {
-            if !self.thumbnail_textures.contains_key(&image) {
-                self.load_thumbnail(ui.ctx(), recon, image);
-            }
-            if let Some(texture) = self.thumbnail_textures.get(&image) {
-                let thumb = egui::Rect::from_min_size(
-                    egui::pos2(x0 + cols.thumb, cy - THUMB_SIZE / 2.0),
-                    egui::vec2(THUMB_SIZE, THUMB_SIZE),
-                );
+        // The tile: rendered once per observation and kept until the track or
+        // the item moves, because a warp per row per frame is a warp per row
+        // per frame. The rect is drawn whether or not there is a tile in it, so
+        // the columns beside it do not shift when one cannot be rendered.
+        let tile_rect = egui::Rect::from_min_size(
+            egui::pos2(x0 + cols.tile, cy - TILE_SIZE / 2.0),
+            egui::vec2(TILE_SIZE, TILE_SIZE),
+        );
+        let tile = self.ensure_tile(ui.ctx(), recon, track, observation, state);
+        match tile {
+            Some(texture) => {
                 ui.painter().image(
-                    texture.id(),
-                    thumb,
+                    texture,
+                    tile_rect,
                     egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
+            }
+            None => {
+                ui.painter()
+                    .rect_filled(tile_rect, 2.0, ui.visuals().faint_bg_color);
             }
         }
 
@@ -322,6 +335,7 @@ impl TrackEdit {
             pinned: row.pinned,
             painted,
             cells,
+            tile: tile.is_some(),
         });
     }
 

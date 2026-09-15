@@ -18,14 +18,14 @@
 //!
 //! Almost no state lives here. The bench is the node's, at its cursor, so what
 //! the panel owns is the slider positions, the row selection a split reads, the
-//! thumbnails it has loaded, and the painting the sliders produce -- which is
+//! tiles it has rendered, and the painting the sliders produce -- the last two
 //! cached against the track's own `Arc` rather than recomputed per frame,
-//! because the painting is `apply_thresholds` run over a copy and a copy of a
-//! track carries its consensus bitmap.
+//! because the painting is `apply_thresholds` run over a copy (and a copy of a
+//! track carries its consensus bitmap) and a tile is a warp of a
+//! full-resolution photograph.
 
 use std::collections::HashMap;
 
-use ndarray::Axis;
 use sfmtool_core::bench::{
     apply_thresholds, Bench, EditableTrack, Observation, Provenance, StageKind, Thresholds, Verdict,
 };
@@ -33,9 +33,9 @@ use sfmtool_core::SfmrReconstruction;
 
 use crate::scene::{ImageRef, ReconId, SceneNode};
 use crate::state::AppState;
-use crate::texture::thumbnail_color_image;
 
 mod table;
+mod tile;
 
 #[cfg(test)]
 mod tests;
@@ -56,10 +56,6 @@ pub struct TrackEditResponse {
     pub rename: Option<(String, String)>,
     /// *Put selected point on bench*.
     pub put_selected_point_on_bench: bool,
-    /// *Start cluster here*, at the Image Detail panel's current pixel.
-    pub start_cluster: bool,
-    /// *Add observation here*, at the same pixel, on the active track.
-    pub add_observation: bool,
     /// *Evaluate*.
     pub evaluate: bool,
     /// The *Stage* toggle, carrying the stage it asks for.
@@ -115,8 +111,18 @@ pub struct TrackEdit {
     selection_of: Option<(ReconId, String)>,
     /// A rename in progress: the item, and the text typed so far.
     renaming: Option<(String, String)>,
-    /// Thumbnail textures, keyed by image, as the view-only panel keys its own.
-    thumbnail_textures: HashMap<ImageRef, egui::TextureHandle>,
+    /// The rendered tile of each observation, by observation index.
+    ///
+    /// Keyed by the row rather than by the image, because two observations can
+    /// name one image and they are two pictures: at the cluster stage each has
+    /// its own position and shape. A tile is a warp of a full-resolution
+    /// photograph, so it is rendered once and kept; what says it is stale is
+    /// [`TrackEdit::tiles_for`].
+    tiles: HashMap<usize, Option<egui::TextureHandle>>,
+    /// The item and the exact track value [`TrackEdit::tiles`] was rendered
+    /// from: the label, and the address of the track's `Arc`. Any step on the
+    /// track gives it a new `Arc`, and every step that moves a tile is one.
+    tiles_for: Option<(String, usize)>,
     /// What the table drew last frame, in row order.
     ///
     /// Recorded unconditionally rather than under `cfg(test)`, so that what the
@@ -143,7 +149,8 @@ impl TrackEdit {
             selected_rows: Vec::new(),
             selection_of: None,
             renaming: None,
-            thumbnail_textures: HashMap::new(),
+            tiles: HashMap::new(),
+            tiles_for: None,
             rows: Vec::new(),
             scroll_offset_y: None,
         }
@@ -161,9 +168,21 @@ impl TrackEdit {
         &self.thresholds
     }
 
+    /// Select one observation row from outside the panel.
+    ///
+    /// What the Image Detail panel's bench layer reports a click on a mark
+    /// through: a mark there and a row here are one observation, so clicking
+    /// either is the one gesture. It replaces the selection rather than
+    /// extending it, which is what a plain click on a row does.
+    pub(crate) fn select_row(&mut self, id: ReconId, label: &str, observation: usize) {
+        self.selection_of = Some((id, label.to_string()));
+        self.selected_rows = vec![observation];
+    }
+
     /// Drop everything cached for a reconstruction that has left the scene.
     pub fn forget_recon(&mut self, id: ReconId) {
-        self.thumbnail_textures.retain(|image, _| image.recon != id);
+        self.tiles.clear();
+        self.tiles_for = None;
         if self.selection_of.as_ref().is_some_and(|(of, _)| *of == id) {
             self.selected_rows.clear();
             self.selection_of = None;
@@ -212,6 +231,7 @@ impl TrackEdit {
         }
         self.repaint_if_stale(&label, track);
         self.recheck_commit_if_stale(&label, track, node);
+        self.retile_if_stale(&label, track);
 
         show_header(ui, &label, track);
         self.show_toolbar(ui, state, node, &label, track, &mut response);
@@ -275,7 +295,6 @@ impl TrackEdit {
     ) {
         let id = node.id;
         let busy = state.busy_refusal(id);
-        let pixel = pixel_refusal(state, id);
         ui.horizontal_wrapped(|ui| {
             if entry(
                 ui,
@@ -339,22 +358,6 @@ impl TrackEdit {
                 "Put the selected point's track on the bench and work on it",
             ) {
                 response.put_selected_point_on_bench = true;
-            }
-            if entry(
-                ui,
-                "Start cluster here",
-                busy.clone().or_else(|| pixel.clone()),
-                "Start a cluster-stage track at the pixel named in Image Detail",
-            ) {
-                response.start_cluster = true;
-            }
-            if entry(
-                ui,
-                "Add observation here",
-                busy.clone().or(pixel),
-                "Add a candidate at the pixel named in Image Detail",
-            ) {
-                response.add_observation = true;
             }
             self.show_rename(ui, label, busy, response);
         });
@@ -462,20 +465,55 @@ impl TrackEdit {
         self.commit_refusal_for = Some(key);
     }
 
-    /// Load one thumbnail texture into the cache.
-    fn load_thumbnail(&mut self, ctx: &egui::Context, recon: &SfmrReconstruction, image: ImageRef) {
-        let color_image = thumbnail_color_image(
-            recon
-                .image_table
-                .thumbnails_y_x_rgb
-                .index_axis(Axis(0), image.index()),
-        );
-        let texture = ctx.load_texture(
-            format!("bench_thumb_{}", image.index()),
-            color_image,
-            egui::TextureOptions::LINEAR,
-        );
-        self.thumbnail_textures.insert(image, texture);
+    /// The tile one row draws, rendering it if this is the first frame that has
+    /// asked for it since the track moved.
+    ///
+    /// `None` is a real answer and is cached as one: an observation with no
+    /// surfel behind it yet, or in a photograph the node's cache has not
+    /// decoded, has no tile, and re-attempting the warp every frame would be
+    /// the cost the cache exists to avoid.
+    fn ensure_tile(
+        &mut self,
+        ctx: &egui::Context,
+        recon: &SfmrReconstruction,
+        track: &EditableTrack,
+        observation: usize,
+        state: &AppState,
+    ) -> Option<egui::TextureId> {
+        if let Some(cached) = self.tiles.get(&observation) {
+            return cached.as_ref().map(|texture| texture.id());
+        }
+        let id = self.selection_of.as_ref().map(|(id, _)| *id)?;
+        let image = ImageRef::new(id, track.observations.get(observation)?.image as usize);
+        let tile = state
+            .full_res_cache
+            .get(&image)
+            .and_then(|slot| slot.as_ref())
+            .and_then(|src| {
+                tile::render(
+                    ctx,
+                    recon,
+                    track,
+                    observation,
+                    src,
+                    format!("bench_tile_{}_{observation}", image.index()),
+                )
+            });
+        let texture_id = tile.as_ref().map(|texture| texture.id());
+        self.tiles.insert(observation, tile);
+        texture_id
+    }
+
+    /// Drop the rendered tiles when the track they were rendered from has
+    /// moved, so a row never shows a picture of a position the observation has
+    /// left.
+    fn retile_if_stale(&mut self, label: &str, track: &std::sync::Arc<EditableTrack>) {
+        let key = (label.to_string(), std::sync::Arc::as_ptr(track) as usize);
+        if self.tiles_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.tiles.clear();
+        self.tiles_for = Some(key);
     }
 }
 
@@ -549,38 +587,14 @@ fn show_empty_state(
             ) {
                 response.put_selected_point_on_bench = true;
             }
-            if entry(
-                ui,
-                "Start cluster here",
-                state.busy_refusal(id).or_else(|| pixel_refusal(state, id)),
-                "Start a track at the pixel last named in Image Detail",
-            ) {
-                response.start_cluster = true;
-            }
             ui.add_space(4.0);
-            ui.weak(
-                "To name a pixel: right-click it in the Image Detail panel, then press \
-                 Start cluster here.",
-            );
+            ui.weak(format!(
+                "Or start one from a pixel: right-click it in the Image Detail panel and \
+                 choose \"{}\".",
+                crate::image_detail::START_CLUSTER_LABEL,
+            ));
         });
     });
-}
-
-/// Why the two pixel entries cannot run, or `None`.
-///
-/// The pixel is the one the Image Detail panel's context menu was last opened
-/// at -- the same value the Create 3D Point prompt opens on -- so naming a
-/// pixel is the gesture that panel already has and this one borrows.
-fn pixel_refusal(state: &AppState, id: ReconId) -> Option<String> {
-    if state.selected_image.filter(|i| i.recon == id).is_none() {
-        return Some("No image of this reconstruction is selected.".to_string());
-    }
-    if state.pending_observation_pixel.is_none() {
-        return Some(
-            "No pixel is named yet: right-click one in the Image Detail panel first.".to_string(),
-        );
-    }
-    None
 }
 
 /// Why *Split off selected rows* cannot run, or `None`.

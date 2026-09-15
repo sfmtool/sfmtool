@@ -150,6 +150,59 @@ impl OrientedPatch {
         (xyz, self.w)
     }
 
+    /// The patch's square boundary, walked once counter-clockwise in `(s, t)`
+    /// from the `(-1, -1)` corner, with `samples_per_edge` points per edge.
+    ///
+    /// The points are homogeneous with the patch's own `w`, exactly as
+    /// [`Self::corner_homogeneous`] returns them: for a finite patch they are
+    /// world points, and for a point at infinity (`w == 0`) they are
+    /// directions, to be transformed with
+    /// [`RigidTransform::transform_point_homogeneous`] and projected as rays.
+    ///
+    /// Each edge contributes its own start corner and the interior samples
+    /// after it, and not the corner it ends on, so the result is a closed
+    /// polyline of exactly `4 * samples_per_edge` points that a caller joins
+    /// back to its first. Sampling the edges rather than drawing the four
+    /// corners is what makes the outline true under a lens: the square is
+    /// planar in the world and the projection of a straight edge is a curve
+    /// under any model with distortion in it.
+    ///
+    /// `samples_per_edge` is clamped to at least 1, which gives the four
+    /// corners.
+    ///
+    /// ```
+    /// use nalgebra::{Point3, Vector3};
+    /// use sfmtool_core::patch::cloud::OrientedPatch;
+    ///
+    /// let patch = OrientedPatch::new(
+    ///     Point3::origin(),
+    ///     Vector3::x(),
+    ///     Vector3::y(),
+    ///     [2.0, 3.0],
+    /// );
+    /// let outline = patch.boundary(4);
+    /// assert_eq!(outline.len(), 16);
+    /// assert_eq!(outline[0], Point3::new(-2.0, -3.0, 0.0));
+    /// ```
+    ///
+    /// [`RigidTransform::transform_point_homogeneous`]: crate::geometry::RigidTransform::transform_point_homogeneous
+    pub fn boundary(&self, samples_per_edge: usize) -> Vec<Point3<f64>> {
+        let n = samples_per_edge.max(1);
+        // The corners in order, so consecutive pairs are the four edges.
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let mut out = Vec::with_capacity(4 * n);
+        for edge in 0..4 {
+            let (s0, t0) = corners[edge];
+            let (s1, t1) = corners[(edge + 1) % 4];
+            for i in 0..n {
+                let f = i as f64 / n as f64;
+                let (xyz, _) = self.corner_homogeneous(s0 + (s1 - s0) * f, t0 + (t1 - t0) * f);
+                out.push(Point3::from(xyz));
+            }
+        }
+        out
+    }
+
     /// Build from a center, a normal, and an `up_hint` that pins the in-plane
     /// rotation about the normal. The result is a **finite** patch (`w == 1`).
     ///

@@ -134,6 +134,49 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
     assert_eq!(item_address(&state, id, 0), first_address);
 }
 
+/// The two gestures the Image Detail context menu carries: a cluster started at
+/// a pixel and a candidate added at one, each one version and one `Bench` row.
+///
+/// The second observation is in the **same image** as the first, which is what
+/// the menu entry's rule turns on: a second sighting in one image joins as a
+/// candidate like any other, and it is the verdict a track cannot hold twice.
+#[test]
+fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
+    let (mut state, id) = state();
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    let label = state
+        .start_bench_cluster(ImageRef::new(id, 0), [120.0, 90.0], 6.0)
+        .expect("a pixel on the sensor");
+    state
+        .add_bench_observation(&label, ImageRef::new(id, 0), [124.0, 93.0])
+        .expect("a second sighting in one image is a candidate");
+
+    assert_eq!(versions(&state, id) - before, 2);
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_eq!(track.observations.len(), 2);
+    assert_eq!(track.observations[1].image, 0, "the same image as the seed");
+    assert_eq!(track.observations[1].verdict, Verdict::Candidate);
+
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 2, "one row per step: {rows:?}");
+    assert!(rows.iter().all(|(kind, _)| *kind == Kind::Bench));
+    assert!(rows[0].1.starts_with("Started "), "{}", rows[0].1);
+    assert!(rows[1].1.starts_with("Added "), "{}", rows[1].1);
+
+    // And the undo walks them back one at a time, as every other step does.
+    state.undo(id).expect("the added observation");
+    assert_eq!(
+        state
+            .bench_track(id, &label)
+            .expect("on the bench")
+            .observations
+            .len(),
+        1,
+    );
+}
+
 #[test]
 fn putting_a_point_on_twice_activates_the_track_it_already_made() {
     let (mut state, id) = state();

@@ -105,6 +105,64 @@ fn to_world_and_normal() {
 }
 
 #[test]
+fn boundary_walks_the_square_once_and_closes() {
+    let p = OrientedPatch::new(
+        Point3::new(1.0, 2.0, 3.0),
+        Vector3::x(),
+        Vector3::y(),
+        [2.0, 4.0],
+    );
+    // One sample per edge is the four corners, in `(s, t)` order.
+    let corners = p.boundary(1);
+    assert_eq!(corners.len(), 4);
+    for (point, (s, t)) in corners
+        .iter()
+        .zip([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)])
+    {
+        assert!((point - p.to_world(s, t)).norm() < 1e-12, "{point:?}");
+    }
+
+    // Denser: every sample is on the square's boundary, the corners are still
+    // in it, and no sample repeats the one before it.
+    let outline = p.boundary(5);
+    assert_eq!(outline.len(), 20);
+    for point in &outline {
+        let d = point - p.center;
+        let (s, t) = (d.dot(&p.u_axis) / 2.0, d.dot(&p.v_axis) / 4.0);
+        assert!(
+            (s.abs() - 1.0).abs() < 1e-12 || (t.abs() - 1.0).abs() < 1e-12,
+            "({s}, {t}) is not on the boundary",
+        );
+        assert!(s.abs() <= 1.0 + 1e-12 && t.abs() <= 1.0 + 1e-12);
+    }
+    for (a, b) in outline.iter().zip(outline.iter().skip(1)) {
+        assert!((a - b).norm() > 1e-9, "a sample repeated");
+    }
+    for corner in corners {
+        assert!(outline.iter().any(|p| (p - corner).norm() < 1e-12));
+    }
+
+    // Zero is read as one: the four corners rather than nothing to draw.
+    assert_eq!(p.boundary(0).len(), 4);
+}
+
+#[test]
+fn boundary_of_a_point_at_infinity_is_the_direction_plus_the_in_plane_offsets() {
+    let direction = Point3::new(0.0, 0.0, -1.0);
+    let p = OrientedPatch::from_infinity_direction(direction, Vector3::y(), [0.1, 0.2]);
+    assert_eq!(p.w, 0.0);
+    for (point, (s, t)) in
+        p.boundary(1)
+            .iter()
+            .zip([(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)])
+    {
+        let (xyz, w) = p.corner_homogeneous(s, t);
+        assert_eq!(w, 0.0);
+        assert!((point.coords - xyz).norm() < 1e-12);
+    }
+}
+
+#[test]
 fn from_center_normal_is_orthonormal_and_preserves_normal() {
     let normal = Vector3::new(0.3, -0.5, 0.8).normalize();
     let p = OrientedPatch::from_center_normal(Point3::origin(), normal, Vector3::y(), [1.0, 1.0]);

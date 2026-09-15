@@ -62,30 +62,16 @@ impl PointTrackDetail {
         };
         let image = &recon.image_table.images[img_idx];
         let camera = &recon.image_table.cameras[image.camera_index as usize];
-        let q = image.quaternion_wxyz.quaternion();
-        let cam_from_world = RigidTransform::from_wxyz_translation(
-            [q.w, q.i, q.j, q.k],
-            [
-                image.translation_xyz.x,
-                image.translation_xyz.y,
-                image.translation_xyz.z,
-            ],
-        );
-        let frame = render_frame(frame, camera, &cam_from_world, keypoint);
-        let map = WarpMap::from_patch(&frame, camera, &cam_from_world, PATCH_RES);
-        let tile = remap_bilinear(src, &map);
-        // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
-        let (w, h) = (tile.width() as usize, tile.height() as usize);
-        let mut rgba = Vec::with_capacity(w * h * 4);
-        for px in tile.data().as_chunks::<3>().0.iter() {
-            rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
-        }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        let cam_from_world = crate::scene::cam_from_world(image);
         let point_idx = self.prepared_point.map(|p| p.index()).unwrap_or(0);
-        let texture = ctx.load_texture(
+        let texture = render_patch_texture(
+            ctx,
             format!("track_patch_{point_idx}_{img_idx}"),
-            color_image,
-            egui::TextureOptions::NEAREST,
+            frame,
+            camera,
+            &cam_from_world,
+            keypoint,
+            src,
         );
         self.rendered_patch_textures.insert(image_ref, texture);
     }
@@ -109,6 +95,38 @@ impl PointTrackDetail {
             .find(|obs| obs.image_index == img_idx)
             .map(|obs| [obs.feature_xy[0] as f64, obs.feature_xy[1] as f64])
     }
+}
+
+/// Warp one photograph through a surfel's frame into a square tile texture.
+///
+/// The frame is re-anchored on `keypoint` first ([`render_frame`]), so what the
+/// tile shows is the surface as *this* sighting sees it rather than as the
+/// point's residual leaves it. `name` is the texture's id, which the caller
+/// makes unique across whatever it keys its own cache by.
+///
+/// `pub(crate)` because the Track Edit panel draws the same tile for a track on
+/// the bench: one render, so a committed track and the editable copy of it
+/// cannot show the same surface two ways.
+pub(crate) fn render_patch_texture(
+    ctx: &egui::Context,
+    name: String,
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    keypoint: Option<[f64; 2]>,
+    src: &ImageU8,
+) -> egui::TextureHandle {
+    let frame = render_frame(frame, camera, cam_from_world, keypoint);
+    let map = WarpMap::from_patch(&frame, camera, cam_from_world, PATCH_RES);
+    let tile = remap_bilinear(src, &map);
+    // Expand 3-channel RGB (same channel count as the cached source) to RGBA.
+    let (w, h) = (tile.width() as usize, tile.height() as usize);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for px in tile.data().as_chunks::<3>().0.iter() {
+        rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+    }
+    let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+    ctx.load_texture(name, color_image, egui::TextureOptions::NEAREST)
 }
 
 /// The frame one observation's tile is rendered through: the point's patch

@@ -252,6 +252,7 @@ impl TabContext<'_> {
     /// step below needs it mutably. One gesture per frame, so the order these
     /// are read in decides nothing.
     fn show_track_edit(&mut self, ui: &mut egui::Ui) {
+        self.cache_bench_track_images();
         let response = self.track_edit.show(ui, self.state);
         let Some(id) = self.state.selected_recon else {
             return;
@@ -279,22 +280,6 @@ impl TabContext<'_> {
                 refuse(self.state, outcome);
             }
         }
-        if response.start_cluster {
-            if let (Some(image), Some(pixel)) = (
-                self.state.selected_image,
-                self.state.pending_observation_pixel,
-            ) {
-                let radius = self
-                    .state
-                    .create_point_radius
-                    .unwrap_or_else(|| self.state.create_point_default_radius(image));
-                let outcome = self
-                    .state
-                    .start_bench_cluster(image, pixel, radius)
-                    .map(|_| ());
-                refuse(self.state, outcome);
-            }
-        }
         // Everything below acts on the active track, which is what a bench
         // panel's gesture means when it names no item.
         let active = self
@@ -305,15 +290,6 @@ impl TabContext<'_> {
         let Some(label) = active else {
             return;
         };
-        if response.add_observation {
-            if let (Some(image), Some(pixel)) = (
-                self.state.selected_image,
-                self.state.pending_observation_pixel,
-            ) {
-                let outcome = self.state.add_bench_observation(&label, image, pixel);
-                refuse(self.state, outcome);
-            }
-        }
         if let Some((observation, verdict)) = response.set_verdict {
             let outcome = self
                 .state
@@ -480,6 +456,48 @@ impl TabContext<'_> {
         }
     }
 
+    /// Decode the photographs the active bench track's rows draw their tiles
+    /// from, into the node's shared full-resolution cache.
+    ///
+    /// Here rather than in the panel for the reason the Point Track Detail
+    /// panel's pre-cache is here: filling the cache needs `&mut AppState` and
+    /// the panel is handed `&AppState` while it draws. The images are the ones
+    /// that track's observations name, each decoded once for the whole viewer.
+    fn cache_bench_track_images(&mut self) {
+        let Some(id) = self.state.selected_recon else {
+            return;
+        };
+        let Some(bench) = self.state.bench(id) else {
+            return;
+        };
+        let Some(track) = crate::bench::active_track_label(bench).and_then(|l| bench.track(l))
+        else {
+            return;
+        };
+        let mut images: Vec<usize> = track
+            .observations
+            .iter()
+            .map(|o| o.image as usize)
+            .collect();
+        images.sort_unstable();
+        images.dedup();
+        for img_idx in images {
+            let AppState {
+                scene,
+                full_res_cache,
+                ..
+            } = self.state;
+            let Some(node) = crate::scene::node_by_id(scene, id) else {
+                return;
+            };
+            crate::state::ensure_full_res_cached(
+                full_res_cache,
+                node.recon(),
+                ImageRef::new(id, img_idx),
+            );
+        }
+    }
+
     /// The Image Detail tab: one image at full size with its feature and
     /// intrinsics overlays, and the selection the overlays report back.
     fn show_image_detail(&mut self, ui: &mut egui::Ui) {
@@ -493,6 +511,20 @@ impl TabContext<'_> {
             let selected_image = self.state.selected_image_in(id);
             let selected_point = self.state.selected_point_in(id);
             let hovered_point = self.state.hovered_point_in(id);
+            // What the panel is told about the node's bench: the task holding
+            // it, and its active track, which the menu's two bench entries are
+            // greyed by and the bench layer draws. Read out here, beside the
+            // selection, for the same reason -- and owned (the label a
+            // `String`, the track its own `Arc`), because the panel is handed
+            // `&mut` into the state further down the same call.
+            let bench_busy = self.state.busy_refusal(id);
+            let (bench_label, bench_track) = match self.state.bench(id) {
+                Some(bench) => match crate::bench::active_track_label(bench) {
+                    Some(label) => (Some(label.to_string()), bench.track(label).cloned()),
+                    None => (None, None),
+                },
+                None => (None, None),
+            };
             // The camera the selected image resolves to — the subject of
             // the intrinsics layer, and `None` with no image selected.
             let camera = selected_image.and_then(|idx| {
@@ -571,6 +603,10 @@ impl TabContext<'_> {
                 selected_image,
                 selected_point,
                 hovered_point,
+                crate::image_detail::BenchMenu {
+                    busy: bench_busy.as_deref(),
+                    active_track: bench_track.as_deref(),
+                },
                 &mut self.state.create_point_prompt,
                 self.gesture_events,
                 self.scroll_input,
@@ -624,6 +660,42 @@ impl TabContext<'_> {
                             .fail(crate::action_log::Kind::Edit, why);
                     }
                     self.state.create_point_prompt = None;
+                }
+            }
+            // The two bench gestures, at the pixel the menu carried out. Each
+            // is one step on the node's bench, which the Track Edit panel then
+            // shows; a refusal is one failed row, in the words the step's own
+            // gate uses.
+            if let Some(pixel) = detail_response.start_bench_cluster {
+                if let Some(image) = self.state.selected_image {
+                    // The radius the Create 3D Point prompt would offer, so a
+                    // cluster and a created point start at the same size.
+                    let radius = self
+                        .state
+                        .create_point_radius
+                        .unwrap_or_else(|| self.state.create_point_default_radius(image));
+                    if let Err(why) = self.state.start_bench_cluster(image, pixel, radius) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Bench, why);
+                    }
+                }
+            }
+            if let Some(pixel) = detail_response.add_bench_observation {
+                if let (Some(image), Some(label)) = (self.state.selected_image, &bench_label) {
+                    if let Err(why) = self.state.add_bench_observation(label, image, pixel) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Bench, why);
+                    }
+                }
+            }
+            // A click on one of the bench layer's marks selects that row in the
+            // Track Edit panel, which is the same gesture as clicking the row
+            // there: the mark and the row are one observation.
+            if let Some(observation) = detail_response.select_bench_row {
+                if let Some(label) = &bench_label {
+                    self.track_edit.select_row(id, label, observation);
                 }
             }
             if detail_response.add_observation {

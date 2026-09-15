@@ -858,15 +858,24 @@ print(report["label"])                         # the sentence the Action Log wou
   dirty test reads the document half, and the budget sums both. This is the only
   place a bench step becomes a *version*: core has no history.
 - The Track Edit panel (`track_edit/` beside `point_track_detail/`) with its
-  item tabs, header, toolbar, sliders and observation table, and the Bench child
-  in the Scene tree.
+  item tabs, header, toolbar, sliders and observation table -- including the
+  per-observation tile column, which renders the surfel through the view-only
+  panel's own renderer at the track stage and the refinement kernel's own grid
+  at the cluster stage -- and the Bench child in the Scene tree.
+- The two gestures that name a pixel, as entries in the Image Detail context
+  menu beside the two point edits that name one: *Start cluster on the bench
+  here* and *Add observation to bench track here*.
+- The Image Detail bench layer: the active track drawn over the photograph in
+  the bench's own colours, the surfel's outline sampled and projected through
+  the lens at the track stage and the observations' parallelograms at the
+  cluster stage, with a click on a mark selecting that row in Track Edit.
 - The Action Log row and version label for each step, the actor column, and the
   evaluation and the stage change as background tasks, each of which is one
   `AppState` call that decodes the images through the node's full-resolution
   cache, calls the core function, and pushes the result.
 
-**Still proposed here**: the preview buffer in the 3D viewer, the Image Detail
-overlay layer, the Image Browser borders, the per-observation tile column, the
+**Still proposed here**: the preview buffer in the 3D viewer, the Image Browser
+borders, the cluster stage's template drawn beside each member's tile, the
 searches and the pull-in with their toolbar entries and the coherence grid, and
 the wire tools.
 

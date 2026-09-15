@@ -49,6 +49,7 @@ fn frame(
             Some(image_index),
             None,
             None,
+            super::BenchMenu::default(),
             &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
@@ -347,6 +348,7 @@ fn overlay_frame(
             Some(0),
             None,
             None,
+            super::BenchMenu::default(),
             &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
@@ -356,4 +358,365 @@ fn overlay_frame(
             &mut intrinsics_display,
         );
     });
+}
+
+// ── The context menu's two bench entries ────────────────────────────────
+
+use super::overlay::{
+    add_bench_observation_entry, start_cluster_entry, ADD_BENCH_OBSERVATION_LABEL,
+};
+use super::{BenchMenu, START_CLUSTER_LABEL};
+
+/// A node busy with a task refuses every step on it, and the entries say so in
+/// that refusal's own words.
+const BUSY: &str = "bull is busy: Evaluate track is still running.";
+
+/// A track on the bench. The menu's rules read whether there is one and
+/// nothing about what is in it, so an empty one says everything they can.
+fn a_track() -> sfmtool_core::bench::EditableTrack {
+    sfmtool_core::bench::EditableTrack::empty_cluster()
+}
+
+#[test]
+fn starting_a_cluster_needs_only_a_pixel_and_a_node_that_is_not_busy() {
+    assert_eq!(start_cluster_entry(BenchMenu::default()), Ok(()));
+    assert_eq!(
+        start_cluster_entry(BenchMenu {
+            busy: Some(BUSY),
+            active_track: None,
+        }),
+        Err(BUSY.to_string()),
+    );
+}
+
+#[test]
+fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
+    let track = a_track();
+    let why = add_bench_observation_entry(BenchMenu::default())
+        .expect_err("nothing is on the bench to add to");
+    assert!(why.contains("No track is on the bench"), "{why}");
+    assert!(
+        why.contains(START_CLUSTER_LABEL),
+        "the refusal does not say how to start one: {why}",
+    );
+
+    // The image the menu is open over is nowhere in the rule: a second
+    // sighting in an image the track already holds joins as a candidate, and
+    // it is the verdict that a track cannot hold twice.
+    assert_eq!(
+        add_bench_observation_entry(BenchMenu {
+            busy: None,
+            active_track: Some(&track),
+        }),
+        Ok(()),
+    );
+    assert_eq!(
+        add_bench_observation_entry(BenchMenu {
+            busy: Some(BUSY),
+            active_track: Some(&track),
+        }),
+        Err(BUSY.to_string()),
+    );
+}
+
+/// The two bench entries are in the menu, and are in it on a `sift_files`
+/// node, where neither point edit is defined: a bench track is seeds in one
+/// image's pixels until it is committed, so what backs the node's own
+/// observations does not decide it.
+#[test]
+fn the_context_menu_offers_the_two_bench_entries_beside_the_point_edits() {
+    let track = a_track();
+    let texts = context_menu_texts(BenchMenu {
+        busy: None,
+        active_track: Some(&track),
+    });
+    for label in [START_CLUSTER_LABEL, ADD_BENCH_OBSERVATION_LABEL] {
+        assert!(
+            texts.iter().any(|t| t == label),
+            "{label} is not in the menu: {texts:?}",
+        );
+    }
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == super::overlay::NOT_EMBEDDED_PATCHES),
+        "the fixture is meant to be a node the two point edits are absent on: {texts:?}",
+    );
+
+    // Greyed rather than absent: an entry with nothing on the bench still
+    // names itself, and says why it cannot run on hover.
+    let texts = context_menu_texts(BenchMenu::default());
+    assert!(
+        texts.iter().any(|t| t == ADD_BENCH_OBSERVATION_LABEL),
+        "the greyed entry left the menu: {texts:?}",
+    );
+}
+
+/// The texts the panel paints with its context menu open: one frame to load the
+/// image and prepare the overlay, one that right-clicks the middle of it, and
+/// one more, because the menu's entries are laid out on a later frame.
+fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
+    let node = demo_node("/runs/menu.sfmr");
+    let count = node.recon().point_set.max_track_feature_index[0] as usize + 1;
+    let sift = crate::state::CachedSiftFeatures {
+        positions_xy: (0..count).map(|i| [40.0 + i as f32, 30.0]).collect(),
+        affine_shapes: vec![[[6.0, 0.0], [0.0, 6.0]]; count],
+        read_count: count,
+    };
+    let image = pixels(1920, 1080);
+    let display = FeatureDisplaySettings::default();
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+
+    let at = egui::pos2(PANEL.x / 2.0, PANEL.y / 2.0);
+    let click = vec![
+        egui::Event::PointerMoved(at),
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        },
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        },
+    ];
+
+    let mut texts = Vec::new();
+    for events in [Vec::new(), click, Vec::new()] {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            events,
+            ..Default::default()
+        };
+        texts = crate::test_support::painted_texts(&ctx, input, |ui| {
+            detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(0),
+                None,
+                None,
+                bench,
+                &mut None,
+                &[],
+                &crate::platform::ScrollInput::default(),
+                Some(&sift),
+                Some(&image),
+                &display,
+                &mut intrinsics_display,
+            );
+        });
+    }
+    texts
+}
+
+// ── The bench layer ─────────────────────────────────────────────────────
+
+/// A node of [`projected_embedded_demo`] and the bench track its point 2 makes:
+/// three observations, in images 0, 1 and 2, each at that point's exact
+/// projection, with the stored patch as the surfel's frame.
+fn bench_track_fixture() -> (SceneNode, sfmtool_core::bench::EditableTrack) {
+    use sfmtool_core::bench::{create_track, Bench, CreateTrackOptions};
+
+    let node = SceneNode::demo(crate::state::edits::tests::projected_embedded_demo(12));
+    let (bench, report) = create_track(
+        &Bench::new(),
+        node.edited(),
+        2,
+        &CreateTrackOptions {
+            version: 0,
+            label: Some("bench-track".to_string()),
+        },
+    )
+    .expect("point 2 is a live point with a track");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+    (node, track)
+}
+
+/// Every path and line the frame painted in one of the bench's own colours.
+///
+/// The colour is what says a shape is the layer's: the overlays draw in greens,
+/// greys and the colormaps, and nothing else in the panel draws in violet.
+fn bench_shapes(
+    node: &SceneNode,
+    image_index: usize,
+    bench: BenchMenu<'_>,
+) -> Vec<Vec<egui::Pos2>> {
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let display = FeatureDisplaySettings::default();
+    let image = pixels(640, 480);
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+        ..Default::default()
+    };
+    let mut found = Vec::new();
+    // Two frames: the first loads the image and prepares the overlay, and the
+    // layer draws over what is on screen.
+    for _ in 0..2 {
+        found.clear();
+        let mut output = ctx.run_ui(input(), |ui| {
+            detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(image_index),
+                None,
+                None,
+                bench,
+                &mut None,
+                &[],
+                &crate::platform::ScrollInput::default(),
+                None,
+                Some(&image),
+                &display,
+                &mut intrinsics_display,
+            );
+        });
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            collect_bench_paths(&clipped.shape, &mut found);
+        }
+    }
+    found
+}
+
+fn collect_bench_paths(shape: &egui::Shape, out: &mut Vec<Vec<egui::Pos2>>) {
+    match shape {
+        egui::Shape::Path(path) if is_bench_color(&path.stroke.color) => {
+            out.push(path.points.clone());
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_bench_paths(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_bench_color(color: &egui::epaint::ColorMode) -> bool {
+    matches!(
+        color,
+        egui::epaint::ColorMode::Solid(solid)
+            if [
+                super::bench_track::IN_COLOR,
+                super::bench_track::CANDIDATE_COLOR,
+                super::bench_track::OUT_COLOR,
+            ]
+            .contains(solid)
+    )
+}
+
+/// Where the panel puts one source pixel, for a frame drawn at the fixture's
+/// panel size with the view unmoved. The panel fits the image and centres it,
+/// which is the whole of the mapping at zoom 1.
+fn to_panel(image: &sfmtool_core::camera::remap::ImageU8, pixel: [f64; 2]) -> egui::Pos2 {
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let scale = (PANEL.x / w).min(PANEL.y / h);
+    let origin = egui::pos2(
+        PANEL.x / 2.0 - w * scale / 2.0,
+        PANEL.y / 2.0 - h * scale / 2.0,
+    );
+    egui::pos2(
+        origin.x + pixel[0] as f32 * scale,
+        origin.y + pixel[1] as f32 * scale,
+    )
+}
+
+/// The surfel's outline is drawn where the frame's corners really project, and
+/// it is a sampled curve rather than the four corners joined up.
+#[test]
+fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
+    use sfmtool_core::geometry::RigidTransform;
+
+    let (node, track) = bench_track_fixture();
+    let paths = bench_shapes(
+        &node,
+        0,
+        BenchMenu {
+            busy: None,
+            active_track: Some(&track),
+        },
+    );
+    assert!(!paths.is_empty(), "the layer drew nothing");
+    let outline = paths
+        .iter()
+        .max_by_key(|path| path.len())
+        .expect("a path was drawn");
+    assert!(
+        outline.len() > 4,
+        "the outline is the four corners rather than a sampled curve: {outline:?}",
+    );
+
+    // The corners, projected here rather than through the layer's own code.
+    let frame = track
+        .track()
+        .and_then(|payload| payload.frame.as_ref())
+        .expect("a track from a point carries the stored patch as its frame");
+    let table = &node.edited().base.image_table;
+    let image = &table.images[0];
+    let camera = &table.cameras[image.camera_index as usize];
+    let q = image.quaternion_wxyz.quaternion();
+    let pose = RigidTransform::from_wxyz_translation(
+        [q.w, q.i, q.j, q.k],
+        [
+            image.translation_xyz.x,
+            image.translation_xyz.y,
+            image.translation_xyz.z,
+        ],
+    );
+    let photograph = pixels(640, 480);
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let (xyz, w) = frame.corner_homogeneous(s, t);
+        let p = pose.transform_point_homogeneous(xyz, w);
+        let (u, v) = camera
+            .ray_to_pixel([p.x, p.y, p.z])
+            .expect("the demo's patch corners are in front of the camera");
+        let expected = to_panel(&photograph, [u, v]);
+        let nearest = outline
+            .iter()
+            .map(|point| (*point - expected).length())
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest < 0.01,
+            "the outline misses the corner ({s}, {t}) at {expected:?} by {nearest}",
+        );
+    }
+}
+
+/// The layer is the *active* track's, and only in the images that track
+/// observes: an empty bench and a photograph outside the track both draw
+/// nothing.
+#[test]
+fn the_bench_layer_draws_nothing_without_a_track_or_outside_it() {
+    let (node, track) = bench_track_fixture();
+    assert!(
+        bench_shapes(&node, 0, BenchMenu::default()).is_empty(),
+        "the layer drew with nothing on the bench",
+    );
+    let seen: Vec<u32> = track.observations.iter().map(|o| o.image).collect();
+    let unseen = (0..node.edited().image_count())
+        .find(|i| !seen.contains(&(*i as u32)))
+        .expect("the fixture's track does not span every image");
+    assert!(
+        bench_shapes(
+            &node,
+            unseen,
+            BenchMenu {
+                busy: None,
+                active_track: Some(&track),
+            },
+        )
+        .is_empty(),
+        "the layer drew in an image the track does not observe",
+    );
 }

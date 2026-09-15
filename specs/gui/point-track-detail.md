@@ -278,6 +278,12 @@ position or pose is off, not a bad match. The stored geometric frame is used
 unchanged when the reconstruction has no keypoints (`sift_files`, which never
 reaches this column) or when the keypoint's ray cannot meet the patch.
 
+The render itself is `render_patch_texture` in
+[point_track_detail/patch.rs](../../crates/sfm-explorer/src/point_track_detail/patch.rs),
+and the **Track Edit** panel calls it for a track on the bench
+([track-edit.md](track-edit.md)): one renderer, so a committed track and the
+editable copy of it cannot show the same surface two ways.
+
 **Shared full-resolution image cache**: the source pixels come from
 `AppState::full_res_cache`, a CPU-side cache of decoded full-res images (RGB
 `ImageU8`, keyed by image index) shared with the Image Detail panel — which

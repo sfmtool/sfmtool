@@ -106,6 +106,20 @@ impl OrientedPatch {
     /// direction. This is what rendering projects (see `WarpMap::from_patch`).
     pub fn corner_homogeneous(&self, s: f64, t: f64) -> (Vector3<f64>, f64);
 
+    /// The square boundary, walked once counter-clockwise in `(s, t)` from the
+    /// `(-1, -1)` corner, with `samples_per_edge` points per edge (clamped to at
+    /// least 1, which gives the four corners). The points are homogeneous with
+    /// the patch's own `w`, exactly as `corner_homogeneous` returns them, and
+    /// each edge contributes its start corner and the samples after it but not
+    /// the corner it ends on, so the result is a closed polyline of
+    /// `4 · samples_per_edge` points that a caller joins back to its first.
+    /// Sampling the edges rather than drawing the corners is what makes a
+    /// projected outline true: the square is planar in the world, and the
+    /// projection of a straight edge is a curve under any model with distortion
+    /// in it. The viewer's bench layer draws with it
+    /// (`specs/gui/multi-panel-image-browser.md` § "The bench layer").
+    pub fn boundary(&self, samples_per_edge: usize) -> Vec<Point3<f64>>;
+
     /// Build a **finite** patch (`w = 1`) from a center, a normal, and an
     /// `up_hint` used to pin the in-plane rotation: `v_axis` (the "up" axis) is
     /// `up_hint` projected onto the plane (Gram-Schmidt) and normalized, and

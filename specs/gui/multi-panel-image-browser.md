@@ -426,6 +426,52 @@ rendered interactively via egui rather than baked into an output image.
 > unchanged. See [camera-intrinsics.md](camera-intrinsics.md) § "Image
 > Detail: the Intrinsics overlay layer"._
 
+#### The bench layer
+
+The active track of the node's **bench** ([`bench.md`](bench.md)) is drawn on
+this panel as a second layer, independent of the mode above in the same way the
+intrinsics layer is, and **last**: it is the one thing here that is not about
+the reconstruction, so no mode turns it off and nothing draws on top of it. It
+is drawn only in the images that track observes, and only for the *active*
+item: the bench holds several and this panel shows the one being worked on.
+
+The colours are the bench's own, one violet per verdict (`in`, `candidate`,
+`out`), used nowhere else in the panel, so a mark on the bench is never read as
+committed structure; the strokes are thicker than a feature ellipse's.
+
+What is drawn is the track's own geometry rather than a symbol for it, and
+differs by stage:
+
+- At the **track stage**, the surfel's square boundary sampled and each sample
+  pushed through the camera's own forward projection, drawn as a closed
+  polyline. The outline is therefore the curve a distorting lens really maps
+  that square to, rather than the quadrilateral through its four corners:
+  `OrientedPatch::boundary` supplies the samples
+  ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)), eight per
+  edge and more when the projection is large. A sample behind the camera or
+  outside the lens model's domain **breaks** the polyline there, so an outline
+  that leaves the model's field is drawn as the arcs that are defined rather
+  than closed across a chord that means nothing. Beside it, each observation's
+  own keypoint as a filled dot, and for a candidate the segment from that dot to
+  the surfel's own projection: the gap is the *Shift* column, drawn.
+- At the **cluster stage** there is no geometry, so each observation in this
+  image contributes the parallelogram its refined 2x2 affine shape maps the
+  template's square to, at the refined position, with the seed's own
+  parallelogram dashed behind it. How far the two are apart is how far the
+  refinement moved and how much it turned.
+
+Clicking a mark selects that observation's row in the Track Edit panel
+([`track-edit.md`](track-edit.md)): the mark and the row are one observation, so
+clicking either is the one gesture. The layer is on top, so a click it catches
+does not also select a feature underneath.
+
+The layer is [image_detail/bench_track.rs](../../crates/sfm-explorer/src/image_detail/bench_track.rs).
+Like the selection, what the panel is told about the bench is passed in by the
+dock rather than read by the panel: one value carrying the task holding the node
+and the active track, which both this layer and the menu's two bench entries
+read, so what is offered and what is drawn cannot disagree about which track is
+active.
+
 #### Feature Filtering
 
 Features in `.sift` files are sorted by decreasing size (largest first). The Image Detail
@@ -674,6 +720,16 @@ to this image at that pixel
 from track`, which takes the selected point's observation in this image out of
 its track ([`edits/remove-observation.md`](edits/remove-observation.md)).
 
+Under a separator come the two entries that act on the node's **bench**
+([`bench.md`](bench.md)) rather than on the reconstruction: `Start cluster on
+the bench here`, which puts a cluster-stage track on the bench seeded at the
+clicked pixel with the radius the Create 3D Point prompt would offer, and `Add
+observation to bench track here`, which adds a candidate sighting at that pixel
+to the bench's active track. Both are edited afterwards in the Track Edit panel
+([`track-edit.md`](track-edit.md)), and the commit there is what reaches the
+reconstruction. This is the viewer's only way to name a pixel, so it is where
+every gesture that needs one lives.
+
 Creating a point needs nothing but a pixel on the sensor, so its entry is never
 greyed; its trailing ellipsis is the promise it keeps, opening a small prompt at
 the click for the patch radius, with a preview circle of that radius drawn on
@@ -684,6 +740,15 @@ reconstruction, where an observation is a `.sift` feature and a clicked pixel is
 not one. Removing an observation is offered there as well, under that line, and
 names no pixel: it is greyed when no point is selected or when this image does
 not observe it.
+
+The two bench entries are offered whatever backs the node's observations, for
+the same reason: a bench track is seeds in one image's pixels until it is
+committed. Starting a cluster needs nothing but a pixel and a node no background
+task is holding; adding to the bench track is greyed, saying so, until a track
+is on the bench. An image the active track already holds a sighting in is not a
+refusal -- a second one joins as a candidate and is scored like any other, and
+it is the `in` verdict a track cannot hold twice
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)).
 
 The pixel is recorded on the frame the menu opens, in source-image coordinates
 through the same `panel_to_image` transform the feature hit-testing uses: the

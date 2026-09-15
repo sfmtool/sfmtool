@@ -9,6 +9,7 @@ use super::{DisplayFeature, ImageDetail, ImageDetailResponse};
 use crate::colormap;
 use crate::state::{FeatureDisplaySettings, OverlayMode};
 use kiddo::SquaredEuclidean;
+use sfmtool_core::bench::EditableTrack;
 use sfmtool_core::EditedReconstruction;
 
 /// The context-menu entry's label, and what the Point Track Detail panel's hint
@@ -24,6 +25,18 @@ pub(crate) const CREATE_POINT_LABEL: &str = "Create 3D Point here...";
 /// the entry names a row of the selected point's track, and the pixel the menu
 /// was opened at says nothing about which.
 pub(crate) const REMOVE_OBSERVATION_LABEL: &str = "Remove observation from track";
+
+/// The start-a-cluster entry's label, and what the Track Edit panel's empty
+/// state quotes so the two cannot drift.
+///
+/// "On the bench" rather than the bare verb: nothing this entry does reaches
+/// the reconstruction, and the two entries above it do.
+pub(crate) const START_CLUSTER_LABEL: &str = "Start cluster on the bench here";
+
+/// The add-a-bench-observation entry's label. "Bench track" rather than
+/// "track": the row joins the bench's **active** track, which is not the
+/// selected point's, and the entry two above it is the one that grows that.
+pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench track here";
 
 /// What a `sift_files` node's context menu says in place of the two entries
 /// that need a patch. Removing an observation is offered there as well: taking
@@ -125,6 +138,61 @@ pub(crate) fn remove_observation_entry(
     Ok(())
 }
 
+/// What the panel is told about the node's bench.
+///
+/// The panel is handed a reconstruction value and a selection and holds nothing
+/// else, so the two things the bench costs it are passed in: the dock reads
+/// them off `AppState` beside the selection. Both the menu's two bench entries
+/// and the layer that draws the active track
+/// ([`mod@super::bench_track`]) read this one value, so what is offered and
+/// what is drawn cannot disagree about which track is the active one.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct BenchMenu<'a> {
+    /// Why no step on this node can run -- a background task is holding it --
+    /// or `None` when one can.
+    pub busy: Option<&'a str>,
+    /// The bench's active track, or `None` when no track is on the bench. A
+    /// gesture that names no item means the active one.
+    pub active_track: Option<&'a EditableTrack>,
+}
+
+/// Whether the menu's start-a-cluster entry can run, and why not when it is
+/// greyed.
+///
+/// A pixel on a photograph of the node is the whole input, and the menu is only
+/// ever drawn over one, so the only thing that stops it is the node being busy.
+/// There is no `None` arm and no `sift_files` arm: a cluster is a seed in one
+/// image's pixels, which is defined whatever the node's observations are backed
+/// by.
+pub(crate) fn start_cluster_entry(bench: BenchMenu<'_>) -> Result<(), String> {
+    match bench.busy {
+        Some(why) => Err(why.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Whether the menu's add-to-the-bench-track entry can run, and why not when it
+/// is greyed.
+///
+/// What it needs beyond the pixel is a track to add to, which is the bench's
+/// active one. An image the track already holds an observation in is **not** a
+/// refusal: a second sighting in one image joins as a candidate and is scored
+/// like any other, and what a track cannot do is hold two `in` observations of
+/// one image, which is a verdict rather than this gesture
+/// (`sfmtool_core::bench::add_observation`).
+pub(crate) fn add_bench_observation_entry(bench: BenchMenu<'_>) -> Result<(), String> {
+    if let Some(why) = bench.busy {
+        return Err(why.to_string());
+    }
+    if bench.active_track.is_none() {
+        return Err(format!(
+            "No track is on the bench: start one with \"{START_CLUSTER_LABEL}\", \
+             or put the selected point on the bench in the Track Edit panel."
+        ));
+    }
+    Ok(())
+}
+
 impl ImageDetail {
     /// Draw feature overlays for the current image, run click hit-testing and
     /// hover reporting, and render the hover tooltip. Populates
@@ -139,6 +207,7 @@ impl ImageDetail {
         feature_display: &FeatureDisplaySettings,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
+        bench: BenchMenu<'_>,
         create_point_prompt: &mut Option<CreatePointPrompt>,
         image_rect: egui::Rect,
         panel_rect: egui::Rect,
@@ -390,6 +459,44 @@ impl ImageDetail {
                 };
             if clicked {
                 response.remove_observation = true;
+                ui.close();
+            }
+            // ── The bench's two entries ──
+            //
+            // Under a separator, because nothing below it reaches the
+            // reconstruction: each is a step on the node's bench
+            // (`crate::bench`), and the commit in the Track Edit panel is what
+            // crosses back. They are offered whatever backs an observation, for
+            // the reason the remove entry is: a bench track is seeds in one
+            // image's pixels until it is committed.
+            //
+            // The pixel is the one the menu was opened at, carried out in the
+            // response rather than read back off the app state, so a bench
+            // gesture is the click that made it.
+            ui.separator();
+            let pixel = response.context_menu_pixel.or(self.menu_pixel);
+            let button = egui::Button::new(START_CLUSTER_LABEL);
+            let clicked = match start_cluster_entry(bench) {
+                Ok(()) => ui.add(button).clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.start_bench_cluster = pixel;
+                ui.close();
+            }
+            let button = egui::Button::new(ADD_BENCH_OBSERVATION_LABEL);
+            let clicked = match add_bench_observation_entry(bench) {
+                Ok(()) => ui.add(button).clicked(),
+                Err(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.add_bench_observation = pixel;
                 ui.close();
             }
         });
