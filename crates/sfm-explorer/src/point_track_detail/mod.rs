@@ -110,6 +110,11 @@ pub struct PointTrackDetail {
 pub struct PointTrackDetailResponse {
     /// If Some, the user clicked a row — select this image.
     pub select_image: Option<usize>,
+    /// The clicked row's feature, in that image's own pixels: the place the
+    /// Image Detail panel is asked to bring into view along with the image.
+    /// Set on the same gestures as `select_image`, because a row names an
+    /// observation and the image is only half of it.
+    pub reveal_feature: Option<[f32; 2]>,
     /// If Some, the user double-clicked a row — enter camera view for this image.
     pub request_camera_view: Option<usize>,
     /// Image index currently under the pointer (for cross-panel hover).
@@ -167,6 +172,7 @@ impl PointTrackDetail {
     ) -> PointTrackDetailResponse {
         let mut response = PointTrackDetailResponse {
             select_image: None,
+            reveal_feature: None,
             request_camera_view: None,
             hovered_image: None,
             has_pointer: false,

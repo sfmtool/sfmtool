@@ -243,6 +243,10 @@ impl TrackEdit {
         }
         if row_response.clicked() {
             response.select_image = Some(image.index());
+            // With the image, where in it this observation sits, so the Image
+            // Detail panel can bring it into view: the same position its bench
+            // layer draws the mark at.
+            response.reveal_feature = crate::bench::observation_pixel(row);
             let extend = ui.input(|i| i.modifiers.command || i.modifiers.shift);
             self.toggle_row(observation, extend);
         }

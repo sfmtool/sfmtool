@@ -34,6 +34,21 @@ fn frame(
     image: &ImageU8,
     panel: egui::Vec2,
 ) {
+    reveal_frame(detail, ctx, node, image_index, image, panel, None);
+}
+
+/// The same frame, carrying a reveal request for a pixel of `image_index`:
+/// what the dock hands the panel on the frame after a row click elsewhere named
+/// a feature.
+fn reveal_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    image_index: usize,
+    image: &ImageU8,
+    panel: egui::Vec2,
+    reveal: Option<[f32; 2]>,
+) {
     let feature_display = FeatureDisplaySettings::default();
     let mut intrinsics_display = IntrinsicsDisplaySettings::default();
     let input = egui::RawInput {
@@ -47,6 +62,7 @@ fn frame(
             node.id,
             node.history.current_version().serial,
             Some(image_index),
+            reveal,
             None,
             None,
             super::BenchMenu::default(),
@@ -201,6 +217,126 @@ fn a_view_reset_forgets_the_extent_it_was_measured_against() {
     assert_eq!(detail.pan, egui::Vec2::ZERO);
 }
 
+// ── Revealing a feature ─────────────────────────────────────────────────
+//
+// A row click in the Point Track Detail or Track Edit panel selects an image
+// *and* names a feature in it. Zoomed in, that feature can be nowhere on
+// screen, so the panel is asked to bring it into view: by panning, never by
+// zooming, and only when it has to.
+
+/// The source image these tests reveal pixels of: big enough that a zoom of 4
+/// shows only a part of it in [`PANEL`].
+const SOURCE: egui::Vec2 = egui::Vec2::new(400.0, 300.0);
+
+/// Where `pixel` of [`SOURCE`] sits relative to the panel centre, in panel
+/// pixels, for the view the last frame left behind. Zero is dead centre.
+fn offset_of(detail: &ImageDetail, pixel: [f32; 2]) -> egui::Vec2 {
+    let display = detail
+        .last_display_size
+        .expect("a frame that drew an image records its extent");
+    let scale = display.x / SOURCE.x;
+    detail.pan - display / 2.0 + egui::vec2(pixel[0], pixel[1]) * scale
+}
+
+/// As [`assert_close`], to a tolerance these panel-pixel magnitudes can hold:
+/// the quantities here are differences of numbers in the thousands, where an
+/// `f32` has no 1e-4 to give.
+fn assert_near(actual: egui::Vec2, expected: egui::Vec2, what: &str) {
+    assert!(
+        (actual.x - expected.x).abs() < 0.05 && (actual.y - expected.y).abs() < 0.05,
+        "{what}: {actual:?} != {expected:?}",
+    );
+}
+
+#[test]
+fn revealing_a_feature_out_of_view_centres_it_and_leaves_the_zoom_alone() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    // Zoomed in on the middle of the image; the feature is up in the corner,
+    // several panel-widths away.
+    detail.zoom = 4.0;
+    let feature = [10.0, 10.0];
+    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some(feature));
+
+    assert_eq!(detail.zoom, 4.0, "a reveal zoomed");
+    assert_near(offset_of(&detail, feature), egui::Vec2::ZERO, "not centred");
+}
+
+#[test]
+fn revealing_a_feature_already_in_view_moves_nothing() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    // A view off the image's own centre, and a feature a little way off the
+    // *panel's* centre in it: 30 px across and 25 down, well inside the margin.
+    detail.zoom = 4.0;
+    detail.pan = egui::vec2(300.0, -200.0);
+    let feature = [170.0, 175.0];
+    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some(feature));
+
+    assert_eq!(
+        detail.pan,
+        egui::vec2(300.0, -200.0),
+        "a feature on screen moved the view",
+    );
+}
+
+#[test]
+fn revealing_a_feature_at_fit_zoom_moves_nothing() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    // The very corner, which the margin would call out of view; but at fit
+    // zoom the whole image is on screen and there is nothing to bring into it.
+    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some([0.0, 0.0]));
+
+    assert_eq!(detail.zoom, 1.0);
+    assert_eq!(detail.pan, egui::Vec2::ZERO, "a fitted image was panned");
+}
+
+#[test]
+fn revealing_a_corner_feature_still_obeys_the_pan_clamp() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    // A panel small enough that the pan limit bites before the corner reaches
+    // the centre: the limit is `(display + panel) / 2 - PAN_MARGIN`, and
+    // centring a corner asks for `display / 2`.
+    let panel = egui::vec2(80.0, 60.0);
+    detail.zoom = 4.0;
+    reveal_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &image,
+        panel,
+        Some([SOURCE.x, SOURCE.y]),
+    );
+
+    let display = detail.last_display_size.expect("a frame drew");
+    let limit = egui::vec2(
+        (display.x + panel.x) / 2.0 - 50.0,
+        (display.y + panel.y) / 2.0 - 50.0,
+    );
+    assert!(
+        detail.pan.x >= -limit.x - 1e-3 && detail.pan.y >= -limit.y - 1e-3,
+        "the reveal panned past the clamp: {:?} vs {limit:?}",
+        detail.pan,
+    );
+    // Clamped, not ignored: it went as far as it is allowed to.
+    assert_near(detail.pan, -limit, "the reveal stopped short of the clamp");
+}
+
 // ── Reading through the overlay ─────────────────────────────────────────
 
 /// The embedded-features walk over a version that has deleted and added a
@@ -346,6 +482,7 @@ fn overlay_frame(
             node.id,
             node.history.current_version().serial,
             Some(0),
+            None,
             None,
             None,
             super::BenchMenu::default(),
@@ -502,6 +639,7 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
                 Some(0),
                 None,
                 None,
+                None,
                 bench,
                 &mut None,
                 &[],
@@ -569,6 +707,7 @@ fn bench_shapes(
                 node.id,
                 node.history.current_version().serial,
                 Some(image_index),
+                None,
                 None,
                 None,
                 bench,

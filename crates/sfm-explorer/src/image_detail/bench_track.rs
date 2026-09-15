@@ -209,17 +209,8 @@ fn draw_track_stage(
 
     for (index, observation) in here {
         let color = color_of(observation.verdict);
-        let at = observation
-            .track
-            .as_ref()
-            .and_then(|m| m.keypoint)
-            .map(|k| to_panel([k[0] as f64, k[1] as f64]))
-            .or_else(|| {
-                observation
-                    .cluster
-                    .as_ref()
-                    .map(|m| to_panel(m.best_position()))
-            });
+        let at = crate::bench::observation_pixel(observation)
+            .map(|p| to_panel([f64::from(p[0]), f64::from(p[1])]));
         let Some(at) = at else {
             continue;
         };

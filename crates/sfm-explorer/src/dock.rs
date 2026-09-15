@@ -324,7 +324,11 @@ impl TabContext<'_> {
             }
         }
         if let Some(image) = response.select_image {
-            self.state.select_image(Some(ImageRef::new(id, image)));
+            let image = ImageRef::new(id, image);
+            match response.reveal_feature {
+                Some(pixel) => self.state.reveal_in_image(image, pixel),
+                None => self.state.select_image(Some(image)),
+            }
         }
         if response.has_pointer {
             self.state.hovered_image = response.hovered_image.map(|i| ImageRef::new(id, i));
@@ -501,6 +505,14 @@ impl TabContext<'_> {
     /// The Image Detail tab: one image at full size with its feature and
     /// intrinsics overlays, and the selection the overlays report back.
     fn show_image_detail(&mut self, ui: &mut egui::Ui) {
+        // Before the node is fetched, because taking the request needs the
+        // state mutably and the node borrows the scene out of it for the rest
+        // of this method. Taken rather than read: it asks for one pan, on the
+        // frame the panel shows the image the row click named.
+        let reveal = self
+            .state
+            .selected_image
+            .and_then(|image| self.state.take_reveal(image));
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
             let recon = node.recon();
@@ -601,6 +613,7 @@ impl TabContext<'_> {
                 id,
                 node.history.current_version().serial,
                 selected_image,
+                reveal,
                 selected_point,
                 hovered_point,
                 crate::image_detail::BenchMenu {
@@ -795,7 +808,7 @@ impl TabContext<'_> {
             // done with, since the setter needs the state mutably.
             let new_selection = track_response
                 .select_image
-                .map(|img_idx| ImageRef::new(id, img_idx));
+                .map(|img_idx| (ImageRef::new(id, img_idx), track_response.reveal_feature));
             let requested_view = track_response
                 .request_camera_view
                 .map(|img_idx| ImageRef::new(id, img_idx));
@@ -824,8 +837,14 @@ impl TabContext<'_> {
                         .fail(crate::action_log::Kind::Edit, why);
                 }
             }
-            if let Some(image) = new_selection {
-                self.state.select_image(Some(image));
+            // The row names an observation, so the selection carries the
+            // feature's pixel with it and the Image Detail panel brings it into
+            // view when the image arrives zoomed in on somewhere else.
+            if let Some((image, pixel)) = new_selection {
+                match pixel {
+                    Some(pixel) => self.state.reveal_in_image(image, pixel),
+                    None => self.state.select_image(Some(image)),
+                }
             }
             // After the node's borrow, because ending a held camera move needs
             // the state mutably.

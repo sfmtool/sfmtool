@@ -186,6 +186,16 @@ measured. Clicking a row selects its image, as the view-only panel's rows do,
 and takes the row into the split selection; Ctrl-click or Shift-click extends
 that selection. Hovering a row sets the cross-panel hover.
 
+A row is an observation, so the click names a place in that image too: it
+**reveals** the observation, and the Image Detail panel pans to it if its
+current view is not showing it, leaving the zoom where it is
+([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Revealing a
+feature named by another panel"). The pixel is the one that panel's bench layer
+draws the observation's mark at -- the track stage's keypoint, else the cluster
+stage's refined position or its seed -- read through the one function both
+callers use, so the mark and the view cannot disagree about where the
+observation is.
+
 The verdict control is the one real widget in a row: the row rect is registered
 first and the control after it, so a click that lands on the control cycles the
 verdict and one anywhere else on the row selects the image.
@@ -239,7 +249,9 @@ index order; a verdict showing under the same observation index, pinned; the
 sliders painting the rows, leaving a pinned verdict where it is, and the
 painting matching what applying the bars then produces; the cells following the
 stage the track is in; every row drawing its own rendered tile at both stages;
-every item named in the tabs; and the sliders keeping where they were left.
+every item named in the tabs; the sliders keeping where they were left; and a
+row click reporting both the image it selects and the observation's pixel to
+reveal in it.
 
 The Panels menu entry and the tab's presence are covered by the layout test that
 walks every tab. There is no windowed `ui_basic` test, for the reason the

@@ -44,6 +44,10 @@ use intrinsics::View;
 const MAX_ZOOM: f32 = 32.0;
 /// Minimum overlap in pixels between image and panel when panning.
 const PAN_MARGIN: f32 = 50.0;
+/// How far in from the panel's edge a revealed pixel still counts as out of
+/// view, as a fraction of the panel's size per axis. See
+/// [`ImageDetail::reveal_pixel`].
+const REVEAL_MARGIN: f32 = 0.05;
 
 /// Prepared feature overlay state for the current image in the detail panel.
 struct FeatureOverlayState {
@@ -276,6 +280,57 @@ impl ImageDetail {
         self.pan = self.pan * ratio + cursor_rel * (1.0 - ratio);
     }
 
+    /// Bring `pixel`, a place in the displayed image's own source pixels, into
+    /// view by panning so it sits at the centre of the panel.
+    ///
+    /// The request comes from a panel whose rows are *observations*: clicking
+    /// one selects the image, and at a zoomed-in view the feature that row is
+    /// about can be nowhere on screen, which makes the selection look like it
+    /// did nothing. So the panel is asked where the feature is, and moves only
+    /// when it has to.
+    ///
+    /// Three things it deliberately does not do:
+    ///
+    /// - **It does not zoom.** The zoom is the magnification the user chose to
+    ///   inspect at, and a reveal is a statement about position.
+    /// - **It does nothing at fit zoom**, where the whole image is on screen
+    ///   and every pixel of it is already in view. The margin below would
+    ///   otherwise make an edge feature "out of view" and slide a fitted image
+    ///   off-centre for it.
+    /// - **It does nothing when the pixel is already comfortably in view**, so
+    ///   walking down a track's rows does not jerk the image about for
+    ///   features that are all in the same corner. "Comfortably" is the middle
+    ///   `1 - 2 * REVEAL_MARGIN` of the panel per axis: a feature a few pixels
+    ///   inside the edge is on screen but not *visible* in any useful sense,
+    ///   half of its neighbourhood cut off.
+    ///
+    /// `scale` is the panel pixels one source pixel spans
+    /// (`base_scale * zoom`), so `display_size / 2 - pixel * scale` is the
+    /// `pan` that puts `pixel` at the panel centre. The result is clamped by
+    /// [`ImageDetail::clamp_pan`] like any other pan, which is what keeps a
+    /// feature in the very corner of a large image from pushing the image off
+    /// the panel; such a pixel ends off-centre but on screen.
+    fn reveal_pixel(
+        &mut self,
+        pixel: [f32; 2],
+        scale: f32,
+        display_size: egui::Vec2,
+        panel_size: egui::Vec2,
+    ) {
+        if self.zoom <= 1.0 {
+            return;
+        }
+        let at = egui::vec2(pixel[0], pixel[1]) * scale;
+        // Where the pixel sits relative to the panel centre, in panel pixels.
+        let offset = self.pan - display_size / 2.0 + at;
+        let inside = panel_size * (0.5 - REVEAL_MARGIN);
+        if offset.x.abs() <= inside.x && offset.y.abs() <= inside.y {
+            return;
+        }
+        self.pan = display_size / 2.0 - at;
+        self.clamp_pan(display_size, panel_size);
+    }
+
     /// Clamp pan so the image overlaps the panel by at least PAN_MARGIN pixels.
     fn clamp_pan(&mut self, display_size: egui::Vec2, panel_size: egui::Vec2) {
         let max_pan_x = (display_size.x + panel_size.x) / 2.0 - PAN_MARGIN;
@@ -293,6 +348,9 @@ impl ImageDetail {
         recon_id: ReconId,
         version: VersionSerial,
         selected_image: Option<usize>,
+        // A place in `selected_image` to bring into view on this frame, in
+        // that image's own source pixels. See [`ImageDetail::reveal_pixel`].
+        reveal: Option<[f32; 2]>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
         bench: BenchMenu<'_>,
@@ -399,6 +457,14 @@ impl ImageDetail {
         // across a panel resize — all of which reach here as a change of extent.
         self.rescale_view(display_size);
         self.clamp_pan(display_size, panel_size);
+
+        // A row click elsewhere named a feature in this image; bring it into
+        // view if the current view is not showing it. After the rescale and
+        // the clamp, because both are statements about the view this frame
+        // starts from and the test is whether *that* view holds the pixel.
+        if let Some(pixel) = reveal {
+            self.reveal_pixel(pixel, effective_scale, display_size, panel_size);
+        }
 
         // Image rect with pan offset
         let image_center = panel_center + self.pan;

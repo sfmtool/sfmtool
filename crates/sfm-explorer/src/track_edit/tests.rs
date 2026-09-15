@@ -44,8 +44,19 @@ fn state() -> (AppState, ReconId) {
 
 /// Drive one frame of the panel and hand back what it reported.
 fn run_frame(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> TrackEditResponse {
+    run_frame_with(panel, ctx, state, Vec::new())
+}
+
+/// The same frame, with `events` delivered to egui.
+fn run_frame_with(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &AppState,
+    events: Vec<egui::Event>,
+) -> TrackEditResponse {
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        events,
         ..Default::default()
     };
     let mut response = None;
@@ -53,6 +64,50 @@ fn run_frame(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState) -> Tr
         response = Some(panel.show(ui, state));
     });
     response.expect("the panel ran")
+}
+
+/// Park the pointer at `pos` for two frames, clicking there on the second when
+/// `click`, and hand back the last frame's response. Two frames are required:
+/// egui resolves hover and clicks against the rects the previous pass
+/// registered, so a single frame reports no interaction.
+fn at_pointer(
+    panel: &mut TrackEdit,
+    ctx: &egui::Context,
+    state: &AppState,
+    pos: egui::Pos2,
+    click: bool,
+) -> TrackEditResponse {
+    let mut response = None;
+    for frame in 0..2 {
+        let mut events = vec![egui::Event::PointerMoved(pos)];
+        if click && frame == 1 {
+            for pressed in [true, false] {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        response = Some(run_frame_with(panel, ctx, state, events));
+    }
+    response.expect("two frames ran")
+}
+
+/// The y at which the row for `image` answers the pointer, found by walking
+/// down the panel: what sits above the table is the tabs, the header, the
+/// toolbar and the sliders, and a hard-coded offset would go stale the moment
+/// one of them gains a line.
+fn row_y(panel: &mut TrackEdit, ctx: &egui::Context, state: &AppState, image: usize) -> f32 {
+    for step in 0..(VIEWPORT.y as usize / 8) {
+        let y = step as f32 * 8.0;
+        let response = at_pointer(panel, ctx, state, egui::pos2(400.0, y), false);
+        if response.hovered_image == Some(image) {
+            return y;
+        }
+    }
+    panic!("no row of the table answered for image {image}");
 }
 
 /// Put [`POINT`] on the bench and draw one frame over it.
@@ -266,6 +321,25 @@ fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
             "{label} is not named anywhere: {texts:?}"
         );
     }
+}
+
+/// A row is an *observation*, so clicking one names both an image and a place
+/// in it: the response carries the pixel the Image Detail panel's bench layer
+/// draws that observation's mark at, so the two cannot disagree about where the
+/// view should land.
+#[test]
+fn clicking_a_row_selects_its_image_and_reveals_the_observation() {
+    let (state, id, label, mut panel, ctx) = on_the_bench();
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let expected = crate::bench::observation_pixel(&track.observations[1])
+        .expect("a track from a committed point carries its keypoints");
+
+    // The second row, whose observation is in image 1.
+    let y = row_y(&mut panel, &ctx, &state, 1);
+    let response = at_pointer(&mut panel, &ctx, &state, egui::pos2(400.0, y + 8.0), true);
+
+    assert_eq!(response.select_image, Some(1));
+    assert_eq!(response.reveal_feature, Some(expected));
 }
 
 #[test]

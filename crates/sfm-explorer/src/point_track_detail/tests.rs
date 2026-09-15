@@ -593,12 +593,17 @@ fn clicking_a_row_selects_its_image_and_double_clicking_enters_camera_view() {
     let single = show_at_pointer(&mut panel, &ctx, &recon, Some(0), pos, 1);
     assert_eq!(single.select_image, Some(1));
     assert_eq!(single.request_camera_view, None);
+    // The row names an observation, so the click carries the feature's own
+    // pixel out with the image: the Image Detail panel brings it into view.
+    let feature = panel.observations[1].feature_xy;
+    assert_eq!(single.reveal_feature, Some(feature));
 
     let mut panel = PointTrackDetail::new();
     let ctx = egui::Context::default();
     let double = show_at_pointer(&mut panel, &ctx, &recon, Some(0), pos, 2);
     assert_eq!(double.select_image, Some(1));
     assert_eq!(double.request_camera_view, Some(1));
+    assert_eq!(double.reveal_feature, Some(feature));
 }
 
 // ── Go to Point entry points ────────────────────────────────────────────

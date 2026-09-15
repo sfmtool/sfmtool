@@ -227,12 +227,16 @@ impl PointTrackDetail {
             }
         });
 
-        // Handle click/double-click
+        // Handle click/double-click. Either carries the observation's own
+        // feature with the image, so the Image Detail panel can bring it into
+        // view when the image arrives zoomed in on somewhere else.
         if row_response.double_clicked() {
             response.request_camera_view = Some(obs_image_index);
             response.select_image = Some(obs_image_index);
+            response.reveal_feature = Some(obs_feature_xy);
         } else if row_response.clicked() {
             response.select_image = Some(obs_image_index);
+            response.reveal_feature = Some(obs_feature_xy);
         }
 
         // Draw row content at fixed column offsets.

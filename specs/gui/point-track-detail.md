@@ -347,6 +347,17 @@ to:
 This is the primary navigation flow: select a point, see its track, click an
 observation to inspect the full image.
 
+A row is an *observation*, so the click names a place in that image as well as
+the image itself: it **reveals the feature**. The row's feature pixel rides
+along with the selection in `reveal_feature`, and the Image Detail panel pans
+(never zooms) to put it at the centre of the view when its current view is not
+already showing it. Zoomed in on one corner of a frame, the plain selection
+would otherwise land on a part of the image the row is not about. The rule and
+the state it travels through are
+[multi-panel-image-browser.md](multi-panel-image-browser.md) §
+"Revealing a feature named by another panel"; the Track Edit panel's rows use
+the same path.
+
 #### Double-Click on Row
 
 Double-clicking enters camera view mode for that image (same behavior as
@@ -387,8 +398,8 @@ model:
 
 | Event from Point Track Detail | Effect on Other Panels |
 |-------------------------------|------------------------|
-| Row clicked | Sets `selected_image` |
-| Row double-clicked | Sets `selected_image` + enters camera view |
+| Row clicked | Sets `selected_image`, and reveals the row's feature in Image Detail |
+| Row double-clicked | Sets `selected_image` + reveals the feature + enters camera view |
 | Row hovered | Sets `hovered_image` |
 | Pointer leaves panel | Clears `hovered_image` |
 | Go to Point button clicked | Opens the Go to Point dialog (`state.goto_point`) |
@@ -459,6 +470,9 @@ ensures SIFT data is cached for all observing images.
 pub struct PointTrackDetailResponse {
     /// If Some, the user clicked a row — select this image.
     pub select_image: Option<usize>,
+    /// The clicked row's feature, in that image's own pixels: the place the
+    /// Image Detail panel is asked to bring into view along with the image.
+    pub reveal_feature: Option<[f32; 2]>,
     /// If Some, the user double-clicked a row — enter camera view for this image.
     pub request_camera_view: Option<usize>,
     /// Image index currently under the pointer (for cross-panel hover).

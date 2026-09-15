@@ -823,6 +823,62 @@ input handling and `last_display_size` is recorded *after* it, so a zoom gesture
 within a frame is never mistaken for a change of extent. `reset_view` clears
 `last_display_size` for the same reason — a fit view has nothing to carry.
 
+### Revealing a feature named by another panel
+
+A row in the Point Track Detail panel and a row in the Track Edit panel are both
+*observations*: each names an image **and** a place in it. Clicking one selects
+the image, and this panel then shows it at whatever view was left behind, which
+by the persistence above can be a corner of the frame the feature is nowhere
+near. So the selection carries the feature's pixel with it, and the panel brings
+that pixel into view.
+
+The request sits beside the selection rather than in either panel:
+`AppState::reveal: Option<(ImageRef, [f32; 2])>`, in the named image's own
+source pixels. `AppState::reveal_in_image` writes it (selecting the image
+through `select_image` as it goes, so the coupling rules and the Action Log row
+are the ones every selection gets), and the dock takes it with
+`AppState::take_reveal` on the frame this panel shows that image, handing it to
+`ImageDetail::show`. Both panels report the pixel in their response as
+`reveal_feature` and the dock turns either into that one call, so the rule below
+has one implementation instead of one per panel. It is *taken* rather than read:
+it asks for a single pan, and a request left standing would re-centre the view
+on every later frame.
+
+`select_image` clears the field, which is what makes every other way of
+selecting an image reveal nothing: the Image Browser, the Scene tree, a frustum
+click and `,` / `.` name a photograph and not a place in one, and the view they
+arrive at is exactly the one the persistence rule carries over.
+
+What the panel does with the pixel, after the rescale and the pan clamp that
+open every frame (so the test is against the view this frame actually starts
+from):
+
+- **At fit zoom, nothing.** The whole image is on screen, so there is nothing to
+  bring into it, and the margin below would otherwise slide a fitted image
+  off-centre for a feature near its edge.
+- **When the pixel is already inside the middle `1 - 2 * REVEAL_MARGIN` of the
+  panel per axis, nothing.** Walking down a track's rows must not jerk the image
+  about for features that are all in one corner of the view. The margin is 5% of
+  the panel per axis: a feature a few pixels inside the panel edge is on screen
+  but not visible in any useful sense, half its neighbourhood cut off.
+- **Otherwise pan so the pixel is at the panel centre**: `pan = display_size / 2
+  - pixel * effective_scale`, clamped by the same pan limits as any other pan.
+  Centring a pixel of the image asks for a `pan` of at most `display_size / 2`,
+  which the limit `(display_size + panel_size) / 2 - 50` allows for any panel
+  wider than 100 px, so the clamp bites only in a very small panel; there a
+  corner feature ends on screen but off centre.
+
+The **zoom is never touched**. It is the magnification the user chose to inspect
+at, and a reveal is a statement about position.
+
+Implemented by `ImageDetail::reveal_pixel`
+([image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs)), and
+covered headlessly in
+[image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs): a
+feature out of view ends centred with the zoom unchanged, one already in view
+leaves the pan alone, a fit-zoom reveal moves nothing, and a corner feature in a
+panel small enough for the limit to bite stops at the clamp.
+
 ## Navigation minibar
 
 A thin navigation minibar below the thumbnail strip that provides

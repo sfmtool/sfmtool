@@ -71,6 +71,10 @@ pub struct TrackEditResponse {
     pub set_verdict: Option<(usize, Verdict)>,
     /// A row was clicked -- select this image, as the view-only panel does.
     pub select_image: Option<usize>,
+    /// The clicked row's observation, in that image's own pixels: the place the
+    /// Image Detail panel is asked to bring into view along with the image.
+    /// `None` for an observation nothing has placed yet.
+    pub reveal_feature: Option<[f32; 2]>,
     /// The image under the pointer, for cross-panel hover.
     pub hovered_image: Option<usize>,
     /// Whether the pointer is inside the panel.

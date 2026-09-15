@@ -435,6 +435,21 @@ pub struct AppState {
     /// Currently selected 3D point.
     pub selected_point: Option<PointRef>,
 
+    /// A place in an image the Image Detail panel is asked to bring into view:
+    /// the image, and the pixel in its own source coordinates.
+    ///
+    /// Set beside the image selection by the gestures that name a *feature*
+    /// rather than a photograph (a row click in Point Track Detail or in
+    /// Track Edit), and taken by the dock on the frame the Image Detail panel
+    /// shows that image. It lives here, with the selection, so that the two
+    /// panels ask for one thing through one path rather than each teaching the
+    /// detail panel its own way to scroll.
+    ///
+    /// Every other way of selecting an image leaves it `None`, because
+    /// [`AppState::select_image`] clears it: a selection carries a reveal only
+    /// when the gesture that made it named a pixel.
+    pub reveal: Option<(ImageRef, [f32; 2])>,
+
     /// Transient hover state: image under cursor (from GPU pick or browser).
     /// Updated every frame; cleared when pointer leaves the source panel.
     pub hovered_image: Option<ImageRef>,
@@ -716,6 +731,7 @@ impl AppState {
             selected_image: None,
             selected_camera: None,
             selected_point: None,
+            reveal: None,
             hovered_image: None,
             hovered_point: None,
             feature_display: FeatureDisplaySettings::default(),
@@ -850,6 +866,7 @@ impl AppState {
         self.selected_image = None;
         self.selected_camera = None;
         self.selected_point = None;
+        self.reveal = None;
         self.hovered_image = None;
         self.hovered_point = None;
         self.sift_cache.clear();
@@ -874,6 +891,7 @@ impl AppState {
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
+        self.reveal = self.reveal.filter(|(image, _)| image.recon != id);
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
     }
@@ -956,6 +974,12 @@ impl AppState {
         let moved = self.selected_image != image;
         let had_one = self.selected_image.is_some();
         self.selected_image = image;
+        // A reveal belongs to the gesture that asked for it, and this is every
+        // other gesture: clearing here is what makes "selecting an image any
+        // other way moves nothing in the detail panel" a property of the
+        // single door rather than of each caller.
+        // [`AppState::reveal_in_image`] sets it again after calling through.
+        self.reveal = None;
         let Some(image) = image else {
             if moved && had_one {
                 self.action_log.record(Kind::Selection, "Deselected image");
@@ -972,6 +996,35 @@ impl AppState {
                 self.label_of(image.recon)
             );
             self.action_log.record_run(Kind::Selection, "image", text);
+        }
+    }
+
+    /// Select `image` and ask the Image Detail panel to bring `pixel`, a
+    /// place in that image's own source pixels, into view with it.
+    ///
+    /// What a row click in Point Track Detail or Track Edit calls: the row is
+    /// an *observation*, so the image is only half of what it names, and at a
+    /// zoomed-in view the other half can sit off-screen. The selection itself
+    /// is [`AppState::select_image`]'s, so the coupling rules and the Action
+    /// Log row are the ones every other selection gets; what is added is the
+    /// pixel, which the dock hands the panel on the frame it shows that image.
+    pub fn reveal_in_image(&mut self, image: ImageRef, pixel: [f32; 2]) {
+        self.select_image(Some(image));
+        self.reveal = Some((image, pixel));
+    }
+
+    /// Take the pending reveal when it names `image`, leaving `None` behind.
+    ///
+    /// Taken rather than read: the pan it asks for is a one-off, and a request
+    /// left standing would re-centre the view on every later frame, undoing
+    /// whatever the user panned to next.
+    pub(crate) fn take_reveal(&mut self, image: ImageRef) -> Option<[f32; 2]> {
+        match self.reveal {
+            Some((of, pixel)) if of == image => {
+                self.reveal = None;
+                Some(pixel)
+            }
+            _ => None,
         }
     }
 

@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    ObservationSeed, StageKind, Thresholds, Verdict,
+    Observation, ObservationSeed, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::EditedReconstruction;
 
@@ -52,6 +52,23 @@ mod tests;
 /// rather than inside each step.
 pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
     bench.active_label(sfmtool_core::bench::ItemKind::Track)
+}
+
+/// Where an observation currently is, in its image's own pixels: the keypoint a
+/// track-stage measurement carries, else the cluster stage's refined position
+/// or the seed it started from, else nothing.
+///
+/// One rule in one place, because two panels draw the same answer: the Image
+/// Detail bench layer puts its mark there, and a Track Edit row click asks that
+/// panel to reveal it. A mark and a row are one observation, so they cannot be
+/// allowed to disagree about where it is. The same order the evaluation's own
+/// seeding uses -- the measured position wins over the seed.
+pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
+    if let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) {
+        return Some(keypoint);
+    }
+    let position = observation.cluster.as_ref()?.best_position();
+    Some([position[0] as f32, position[1] as f32])
 }
 
 impl AppState {
