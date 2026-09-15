@@ -728,9 +728,13 @@ pub(super) fn draw_tooltip(
 
 /// Draw an oriented ellipse from a 2×2 affine shape matrix.
 ///
-/// The affine matrix A maps the unit circle to the ellipse: p = A @ [cos(t), sin(t)]^T.
-/// We decompose via SVD to get semi-axis lengths and rotation angle, following the
-/// same approach as `sift_file.py:draw_sift_features()`.
+/// The affine matrix A maps the unit circle to the ellipse: p = A @ [cos(t), sin(t)]^T,
+/// and that is exactly what is drawn. A decomposition into axis lengths and one
+/// rotation angle is not: the singular values give the axes' lengths, but the
+/// major axis lies along the left singular vector, which for a sheared or
+/// anisotropic shape (a patch frame projected into an oblique view) is not the
+/// first column's direction. Only a similarity, a detected SIFT shape, has the
+/// two agree.
 fn draw_feature_ellipse(
     painter: &egui::Painter,
     center: egui::Pos2,
@@ -739,53 +743,49 @@ fn draw_feature_ellipse(
     color: egui::Color32,
     thickness: f32,
 ) {
-    // SVD of 2x2 matrix: A = U * diag(s) * V^T
-    // Semi-axis lengths are the singular values.
-    // Rotation angle is atan2(a21, a11) (COLMAP convention).
-    let a11 = affine[0][0];
-    let a12 = affine[0][1];
-    let a21 = affine[1][0];
-    let a22 = affine[1][1];
+    let Some(points) = ellipse_points(center, affine, scale) else {
+        return;
+    };
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(thickness, color),
+    ));
+}
 
-    // Compute singular values via the characteristic equation of A^T * A
+/// The closed polyline of `affine` applied to the unit circle, at `center` and
+/// scaled to panel pixels, or `None` for a shape too thin to draw: the smaller
+/// singular value under a tenth of a source pixel.
+pub(crate) fn ellipse_points(
+    center: egui::Pos2,
+    affine: &[[f32; 2]; 2],
+    scale: f32,
+) -> Option<Vec<egui::Pos2>> {
+    let [[a11, a12], [a21, a22]] = *affine;
+    // The singular values, for the degeneracy test only.
     let ata00 = a11 * a11 + a21 * a21;
     let ata01 = a11 * a12 + a21 * a22;
     let ata11 = a12 * a12 + a22 * a22;
-
     let trace = ata00 + ata11;
     let det = ata00 * ata11 - ata01 * ata01;
     let disc = ((trace * trace / 4.0 - det).max(0.0)).sqrt();
     let s1 = ((trace / 2.0 + disc).max(0.0)).sqrt();
     let s2 = ((trace / 2.0 - disc).max(0.0)).sqrt();
-
-    // Rotation angle from the first column of the affine matrix
-    let angle = a21.atan2(a11);
-
-    // Skip degenerate ellipses
     if s1 < 0.1 || s2 < 0.1 {
-        return;
+        return None;
     }
 
-    // Sample points around the ellipse
     let n = 32;
-    let cos_a = angle.cos();
-    let sin_a = angle.sin();
-    let points: Vec<egui::Pos2> = (0..=n)
-        .map(|i| {
-            let t = (i as f32) * std::f32::consts::TAU / (n as f32);
-            let ex = s1 * t.cos();
-            let ey = s2 * t.sin();
-            // Rotate and scale to panel coordinates
-            let rx = cos_a * ex - sin_a * ey;
-            let ry = sin_a * ex + cos_a * ey;
-            egui::pos2(center.x + rx * scale, center.y + ry * scale)
-        })
-        .collect();
-
-    painter.add(egui::Shape::line(
-        points,
-        egui::Stroke::new(thickness, color),
-    ));
+    Some(
+        (0..=n)
+            .map(|i| {
+                let t = (i as f32) * std::f32::consts::TAU / (n as f32);
+                let (c, s) = (t.cos(), t.sin());
+                let ex = a11 * c + a12 * s;
+                let ey = a21 * c + a22 * s;
+                egui::pos2(center.x + ex * scale, center.y + ey * scale)
+            })
+            .collect(),
+    )
 }
 
 /// Find the nearest tracked feature to a position in image pixel coordinates.

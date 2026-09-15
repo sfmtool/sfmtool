@@ -18,6 +18,34 @@
 use sfmtool_core::camera::remap::ImageU8;
 
 use super::ImageDetail;
+
+/// A feature ellipse is the affine applied to the unit circle, so a sheared
+/// shape draws with its major axis along the left singular vector and not along
+/// the first column: the two agree only for a similarity.
+#[test]
+fn a_feature_ellipse_is_the_affine_applied_to_the_unit_circle() {
+    let center = egui::pos2(100.0, 100.0);
+    // A pure shear: the first column points along +x, the ellipse's major axis
+    // does not.
+    let affine = [[10.0_f32, 8.0], [0.0, 10.0]];
+    let points = super::overlay::ellipse_points(center, &affine, 1.0).expect("a drawable shape");
+    for (i, p) in points.iter().enumerate() {
+        let t = (i as f32) * std::f32::consts::TAU / 32.0;
+        let (c, s) = (t.cos(), t.sin());
+        let expected = egui::pos2(100.0 + 10.0 * c + 8.0 * s, 100.0 + 10.0 * s);
+        assert!((p.x - expected.x).abs() < 1e-3 && (p.y - expected.y).abs() < 1e-3);
+    }
+    // The point farthest from the centre is not on the first column's line.
+    let far = points
+        .iter()
+        .max_by(|a, b| a.distance(center).partial_cmp(&b.distance(center)).unwrap())
+        .unwrap();
+    assert!(
+        (far.y - center.y).abs() > 1.0,
+        "the major axis leans off +x: {far:?}"
+    );
+    assert!(super::overlay::ellipse_points(center, &[[0.05, 0.0], [0.0, 5.0]], 1.0).is_none());
+}
 use crate::scene::SceneNode;
 use crate::state::{FeatureDisplaySettings, IntrinsicsDisplaySettings};
 

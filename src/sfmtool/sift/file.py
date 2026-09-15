@@ -856,24 +856,15 @@ def draw_sift_features(
         center_x, center_y = float(pos[0]), float(pos[1])
         center = (int(round(center_x)), int(round(center_y)))
 
-        # SVD to get ellipse parameters
-        _U, s, _Vt = np.linalg.svd(affine_matrix)
-        axis_a = float(s[0])
-        axis_b = float(s[1])
-
-        angle_rad = compute_orientation(affine_matrix)
-        angle_deg = np.degrees(angle_rad)
-
-        cv2.ellipse(
-            image,
-            center,
-            (int(round(axis_a)), int(round(axis_b))),
-            angle_deg,
-            0,
-            360,
-            (0, 255, 0),  # green in BGR
-            1,
-        )
+        # The affine applied to the unit circle, drawn as it is. Axis lengths
+        # plus one angle would misplace the major axis of a sheared or
+        # anisotropic shape: it lies along the left singular vector, which is
+        # the first column's direction only for a similarity.
+        t = np.linspace(0.0, 2.0 * np.pi, 65)
+        circle = np.stack([np.cos(t), np.sin(t)])
+        ring = np.asarray(affine_matrix, dtype=float) @ circle
+        pts = np.rint(ring.T + [center_x, center_y]).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(image, [pts], True, (0, 255, 0), 1)  # green in BGR
         cv2.circle(image, center, 2, (0, 0, 255), -1)  # red center
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
