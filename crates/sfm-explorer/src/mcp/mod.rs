@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps thirty-nine of the
-//!   forty tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps fifty-three of the
+//!   fifty-four tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -43,6 +43,7 @@ use crate::scene::{CameraRef, ImageRef, PointRef, ReconId};
 use crate::state::AppState;
 use crate::viewer_3d::Viewer3D;
 
+mod bench;
 mod display;
 mod edit;
 mod frame;
@@ -241,6 +242,87 @@ pub(crate) enum Command {
         reconstruction_label: String,
         release_focal: bool,
     },
+    /// One node's bench: the items, their kinds, origins, stages and counts,
+    /// and which is active.
+    GetBench {
+        reconstruction_label: String,
+    },
+    /// One track on it, with every observation's provenance, verdict and
+    /// measurements.
+    GetBenchTrack {
+        reconstruction_label: String,
+        /// `None` is the active track, which is what a bench panel's gesture
+        /// means when it names no item.
+        track: Option<String>,
+    },
+    /// Start a cluster-stage track from a place in one camera image.
+    CreateBenchCluster {
+        reconstruction_label: String,
+        camera_image: CameraImageSel,
+        seed: crate::bench::Seed,
+    },
+    /// Put a point of the reconstruction on the bench as a track-stage track.
+    CreateBenchTrack {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+    },
+    ActivateBenchItem {
+        reconstruction_label: String,
+        item: String,
+    },
+    RenameBenchItem {
+        reconstruction_label: String,
+        item: String,
+        /// The label it should take.
+        label: String,
+    },
+    DiscardBenchItem {
+        reconstruction_label: String,
+        item: String,
+    },
+    AddBenchTrackObservation {
+        reconstruction_label: String,
+        track: Option<String>,
+        camera_image: CameraImageSel,
+        seed: crate::bench::Seed,
+    },
+    SetBenchTrackVerdict {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation's position in the track's list, which is stable for
+        /// the life of the track.
+        observation: usize,
+        verdict: sfmtool_core::bench::Verdict,
+    },
+    /// Set the track's bars and paint the proposed verdicts onto its unpinned
+    /// observations, which is the one gesture the panel's button is.
+    ApplyBenchTrackThresholds {
+        reconstruction_label: String,
+        track: Option<String>,
+        thresholds: ThresholdChange,
+    },
+    /// Move the named observations onto a second track beside this one.
+    SplitBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        observations: Vec<usize>,
+    },
+    /// Write the track into the node's reconstruction.
+    CommitBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+    },
+    /// Measure every observation at the stage the track is in, on a worker.
+    EvaluateBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+    },
+    /// Move the track between its two representations, on a worker.
+    SetBenchTrackStage {
+        reconstruction_label: String,
+        track: Option<String>,
+        stage: sfmtool_core::bench::StageKind,
+    },
     /// What the background operation is doing, or what the last one did.
     ///
     /// Names no operation, for the reason [`Command::CancelBackgroundTask`] does
@@ -343,6 +425,45 @@ pub(crate) struct IntrinsicsChange {
     pub(crate) grid_cols: Option<usize>,
 }
 
+/// An `apply_bench_track_thresholds` request: the bars the painting judges an
+/// observation against, with every bar a call did not name left where the track
+/// has it.
+///
+/// Left where the track has it rather than reset to the default, because the
+/// bars are the track's own state and a call that moves one bar has said
+/// nothing about the other three. The panel's sliders are the same statement
+/// made with a hand, and they start from the same place.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ThresholdChange {
+    pub(crate) min_zncc: Option<f64>,
+    pub(crate) max_shift_px: Option<f64>,
+    pub(crate) max_keypoint_uncertainty: Option<f64>,
+    pub(crate) min_relative_zncc: Option<f64>,
+}
+
+impl ThresholdChange {
+    /// `thresholds` with the bars this call named moved.
+    pub(super) fn applied_to(
+        &self,
+        thresholds: &sfmtool_core::bench::Thresholds,
+    ) -> sfmtool_core::bench::Thresholds {
+        let mut next = thresholds.clone();
+        if let Some(value) = self.min_zncc {
+            next.min_zncc = value;
+        }
+        if let Some(value) = self.max_shift_px {
+            next.max_shift_px = value;
+        }
+        if let Some(value) = self.max_keypoint_uncertainty {
+            next.max_keypoint_uncertainty = value;
+        }
+        if let Some(value) = self.min_relative_zncc {
+            next.min_relative_zncc = value;
+        }
+        next
+    }
+}
+
 /// The five things `set_view` can be asked for.
 ///
 /// One enum rather than a bag of optional fields, because these are *intents*
@@ -416,7 +537,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other thirty-nine answer with JSON, and squeezing an image through a JSON
+/// the other fifty-three answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -433,7 +554,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the thirty-nine tools that speak only JSON.
+/// The answer of the fifty-three tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -540,8 +661,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes thirty-nine of the
-/// forty tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes fifty-three of the
+/// fifty-four tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -741,6 +862,122 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
         } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
+        Command::GetBench {
+            reconstruction_label,
+        } => done(bench::get_bench(state, &reconstruction_label)),
+        Command::GetBenchTrack {
+            reconstruction_label,
+            track,
+        } => done(bench::get_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+        )),
+        Command::CreateBenchCluster {
+            reconstruction_label,
+            camera_image,
+            seed,
+        } => done(bench::create_bench_cluster(
+            state,
+            &reconstruction_label,
+            &camera_image,
+            &seed,
+        )),
+        Command::CreateBenchTrack {
+            reconstruction_label,
+            point,
+        } => done(bench::create_bench_track(
+            state,
+            &reconstruction_label,
+            &point,
+        )),
+        Command::ActivateBenchItem {
+            reconstruction_label,
+            item,
+        } => done(bench::activate_bench_item(
+            state,
+            &reconstruction_label,
+            &item,
+        )),
+        Command::RenameBenchItem {
+            reconstruction_label,
+            item,
+            label,
+        } => done(bench::rename_bench_item(
+            state,
+            &reconstruction_label,
+            &item,
+            &label,
+        )),
+        Command::DiscardBenchItem {
+            reconstruction_label,
+            item,
+        } => done(bench::discard_bench_item(
+            state,
+            &reconstruction_label,
+            &item,
+        )),
+        Command::AddBenchTrackObservation {
+            reconstruction_label,
+            track,
+            camera_image,
+            seed,
+        } => done(bench::add_bench_track_observation(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            &camera_image,
+            &seed,
+        )),
+        Command::SetBenchTrackVerdict {
+            reconstruction_label,
+            track,
+            observation,
+            verdict,
+        } => done(bench::set_bench_track_verdict(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            verdict,
+        )),
+        Command::ApplyBenchTrackThresholds {
+            reconstruction_label,
+            track,
+            thresholds,
+        } => done(bench::apply_bench_track_thresholds(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            &thresholds,
+        )),
+        Command::SplitBenchTrack {
+            reconstruction_label,
+            track,
+            observations,
+        } => done(bench::split_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            &observations,
+        )),
+        Command::CommitBenchTrack {
+            reconstruction_label,
+            track,
+        } => done(bench::commit_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+        )),
+        Command::EvaluateBenchTrack {
+            reconstruction_label,
+            track,
+        } => bench::evaluate_bench_track(state, &reconstruction_label, track.as_deref()),
+        Command::SetBenchTrackStage {
+            reconstruction_label,
+            track,
+            stage,
+        } => bench::set_bench_track_stage(state, &reconstruction_label, track.as_deref(), stage),
         Command::GetBackgroundTask => done(read::get_background_task(state)),
         Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {
@@ -1237,6 +1474,20 @@ impl Command {
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
+            Command::GetBench { .. } => "get_bench",
+            Command::GetBenchTrack { .. } => "get_bench_track",
+            Command::CreateBenchCluster { .. } => "create_bench_cluster",
+            Command::CreateBenchTrack { .. } => "create_bench_track",
+            Command::ActivateBenchItem { .. } => "activate_bench_item",
+            Command::RenameBenchItem { .. } => "rename_bench_item",
+            Command::DiscardBenchItem { .. } => "discard_bench_item",
+            Command::AddBenchTrackObservation { .. } => "add_bench_track_observation",
+            Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
+            Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
+            Command::SplitBenchTrack { .. } => "split_bench_track",
+            Command::CommitBenchTrack { .. } => "commit_bench_track",
+            Command::EvaluateBenchTrack { .. } => "evaluate_bench_track",
+            Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
@@ -1283,6 +1534,13 @@ impl Command {
                 ..
             }
             | Command::BundleAdjust {
+                reconstruction_label,
+                ..
+            }
+            // The one bench step that writes the reconstruction. Every other
+            // one changes the bench beside it, which is not the value a lock
+            // is held over.
+            | Command::CommitBenchTrack {
                 reconstruction_label,
                 ..
             } => Some(reconstruction_label),
@@ -1332,6 +1590,14 @@ impl Command {
             | Command::JumpToVersion {
                 reconstruction_label,
                 ..
+            }
+            // A commit writes a point where its origin was, and a replaced
+            // point takes a new index, so the panels' cached tables are a
+            // statement about a value the node no longer holds -- which is the
+            // drop the window makes around the same call.
+            | Command::CommitBenchTrack {
+                reconstruction_label,
+                ..
             } => Some(reconstruction_label),
             _ => None,
         }
@@ -1369,6 +1635,8 @@ impl Command {
             | Command::GetTimingDetail
             | Command::GetHistory { .. }
             | Command::GetBackgroundTask
+            | Command::GetBench { .. }
+            | Command::GetBenchTrack { .. }
             | Command::Screenshot { .. } => Kind::Query(self.tool_name()),
             Command::OpenReconstruction { .. }
             | Command::CloseReconstruction { .. }
@@ -1386,7 +1654,23 @@ impl Command {
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
             | Command::BundleAdjust { .. }
+            // The one bench step whose row is an `Edit`, because it is one
+            // (`specs/gui/edits/commit-track.md`).
+            | Command::CommitBenchTrack { .. }
             | Command::CancelBackgroundTask => Kind::Edit,
+            // Every other bench step writes the bench beside the
+            // reconstruction, which is the kind the panel's own refusals carry.
+            Command::CreateBenchCluster { .. }
+            | Command::CreateBenchTrack { .. }
+            | Command::ActivateBenchItem { .. }
+            | Command::RenameBenchItem { .. }
+            | Command::DiscardBenchItem { .. }
+            | Command::AddBenchTrackObservation { .. }
+            | Command::SetBenchTrackVerdict { .. }
+            | Command::ApplyBenchTrackThresholds { .. }
+            | Command::SplitBenchTrack { .. }
+            | Command::EvaluateBenchTrack { .. }
+            | Command::SetBenchTrackStage { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }
@@ -1469,6 +1753,16 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         Command::GetHistory {
             reconstruction_label,
         } => format!("get_history {reconstruction_label}"),
+        Command::GetBench {
+            reconstruction_label,
+        } => format!("get_bench {reconstruction_label}"),
+        Command::GetBenchTrack {
+            reconstruction_label,
+            track,
+        } => format!(
+            "get_bench_track {reconstruction_label} {}",
+            track.as_deref().unwrap_or("(the active track)")
+        ),
         Command::Screenshot {
             panel,
             hud,

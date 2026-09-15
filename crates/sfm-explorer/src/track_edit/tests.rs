@@ -298,7 +298,13 @@ fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
         .put_point_on_bench(PointRef::new(id, POINT as usize))
         .expect("a live point");
     let second = state
-        .start_bench_cluster(ImageRef::new(id, 0), [120.0, 90.0], 6.0)
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+        )
         .expect("a pixel on the sensor");
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();

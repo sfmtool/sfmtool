@@ -371,7 +371,7 @@ pub(super) fn background_reply(
 // ── What an edit and a cursor move answer with ──────────────────────────
 
 /// Run one edit and report the version it pushed.
-fn edited(
+pub(super) fn edited(
     state: &mut AppState,
     id: ReconId,
     edit: impl FnOnce(&mut AppState) -> Result<(), String>,
@@ -399,7 +399,7 @@ fn moved(
 /// the newest entry it wrote, and a background operation kept its own
 /// ([`AppState::last_background_task`]) rather than trusting that nothing was
 /// recorded in the minutes it was running.
-fn version_reply(state: &AppState, id: ReconId, report: Option<String>) -> JsonReply {
+pub(super) fn version_reply(state: &AppState, id: ReconId, report: Option<String>) -> JsonReply {
     let node = state
         .node(id)
         .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;

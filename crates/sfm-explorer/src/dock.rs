@@ -687,7 +687,11 @@ impl TabContext<'_> {
                         .state
                         .create_point_radius
                         .unwrap_or_else(|| self.state.create_point_default_radius(image));
-                    if let Err(why) = self.state.start_bench_cluster(image, pixel, radius) {
+                    let seed = crate::bench::Seed::Pixel {
+                        pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
+                        radius_px: Some(f64::from(radius)),
+                    };
+                    if let Err(why) = self.state.start_bench_cluster(image, &seed) {
                         self.state
                             .action_log
                             .fail(crate::action_log::Kind::Bench, why);
@@ -696,7 +700,13 @@ impl TabContext<'_> {
             }
             if let Some(pixel) = detail_response.add_bench_observation {
                 if let (Some(image), Some(label)) = (self.state.selected_image, &bench_label) {
-                    if let Err(why) = self.state.add_bench_observation(label, image, pixel) {
+                    // No shape: the track is worked at the scale its reference
+                    // already has, and a pixel says nothing about that.
+                    let seed = crate::bench::Seed::Pixel {
+                        pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
+                        radius_px: None,
+                    };
+                    if let Err(why) = self.state.add_bench_observation(label, image, &seed) {
                         self.state
                             .action_log
                             .fail(crate::action_log::Kind::Bench, why);

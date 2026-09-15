@@ -3553,6 +3553,77 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
         ("bundle_adjust", json!({ "reconstruction_label": "alpha" })),
+        ("get_bench", json!({ "reconstruction_label": "alpha" })),
+        (
+            "get_bench_track",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "create_bench_cluster",
+            json!({
+                "reconstruction_label": "alpha",
+                "camera_image": 0,
+                "pixel": [142.0, 197.5],
+                "radius_px": 7.5,
+            }),
+        ),
+        (
+            "create_bench_track",
+            json!({ "reconstruction_label": "alpha", "point": 0 }),
+        ),
+        (
+            "activate_bench_item",
+            json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
+        ),
+        (
+            "rename_bench_item",
+            json!({
+                "reconstruction_label": "alpha",
+                "item": "IMG_0042@142,198",
+                "label": "bull-nose",
+            }),
+        ),
+        (
+            "discard_bench_item",
+            json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
+        ),
+        (
+            "add_bench_track_observation",
+            json!({
+                "reconstruction_label": "alpha",
+                "track": "bull-nose",
+                "camera_image": 0,
+                "pixel": [142.0, 197.5],
+            }),
+        ),
+        (
+            "set_bench_track_verdict",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "verdict": "in",
+            }),
+        ),
+        (
+            "apply_bench_track_thresholds",
+            json!({ "reconstruction_label": "alpha", "min_zncc": 0.8 }),
+        ),
+        (
+            "split_bench_track",
+            json!({ "reconstruction_label": "alpha", "observations": [1] }),
+        ),
+        (
+            "commit_bench_track",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "evaluate_bench_track",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "set_bench_track_stage",
+            json!({ "reconstruction_label": "alpha", "stage": "track" }),
+        ),
         ("get_background_task", json!({})),
         ("cancel_background_task", json!({})),
         ("screenshot", json!({})),
@@ -3748,19 +3819,21 @@ fn only_the_reads_are_annotated_read_only() {
             "get_window_layout",
             "get_image_detail_display",
             "get_history",
+            "get_bench",
+            "get_bench_track",
             "get_background_task",
             "screenshot",
         ]
     );
-    // Eleven reads, twenty-seven writes, the one that writes a file, and the
+    // Thirteen reads, thirty-nine writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 40, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 54, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        27
+        39
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -5576,4 +5649,647 @@ fn get_action_log_reports_what_a_drawn_action_cost() {
         (0.0..60_000.0).contains(&took),
         "a plausible number of milliseconds, got {took}",
     );
+}
+
+// ── The bench ───────────────────────────────────────────────────────────
+//
+// One fixture again: a node whose keypoints are each point's exact projection,
+// with a textured photograph cached for every image, so the two steps that read
+// pixels have something to register against. What these assert is the boundary
+// -- that each tool is the `AppState` call the panel makes, that an observation
+// index survives the steps that follow it, and that a refusal is the bench's own
+// sentence -- while what each step *does* to a track is asserted in
+// `bench::tests` and in core's own tests over a plane whose numbers are known.
+
+/// A scene holding one bench-capable node, `run_a`, selected, with a photograph
+/// cached for every image.
+///
+/// The photograph is a pattern rather than a flat field, and its periods are a
+/// few pixels and differ between the axes, for the reason `bench::tests` gives:
+/// a field with nothing in it hands the correlation kernels no tile to register,
+/// and the refusal would be the fixture's rather than the code's.
+fn benchable() -> (AppState, Viewer3D) {
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(
+        std::path::Path::new("/runs/run_a.sfmr"),
+        crate::state::edits::tests::projected_embedded_demo(12),
+    ));
+    let id = state.scene[0].id;
+    state.select_recon(id);
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    let (w, h) = (camera.width, camera.height);
+    for image in 0..state.scene[0].image_count() {
+        let data: Vec<u8> = (0..(w * h * 3))
+            .map(|i| {
+                let p = i / 3;
+                ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
+            })
+            .collect();
+        state.full_res_cache.insert(
+            crate::scene::ImageRef::new(id, image),
+            Some(sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data)),
+        );
+    }
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    state.window = Some(FakeWindow::default().info());
+    (state, viewer)
+}
+
+/// The point the bench tests put on the bench: it observes images 0, 1 and 2 at
+/// their exact projections, which is what makes a triangulation of it well
+/// conditioned.
+const BENCH_POINT: u32 = 2;
+
+/// Put [`BENCH_POINT`] on the bench through the wire and give back its label.
+#[track_caller]
+fn on_the_bench(state: &mut AppState, viewer: &mut Viewer3D) -> String {
+    let reply = call(
+        state,
+        viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": "run_a", "point": BENCH_POINT }),
+    );
+    reply["item"]
+        .as_str()
+        .expect("a create names the item it made")
+        .to_string()
+}
+
+/// Start a bench tool that goes to a worker, let it finish, and answer it the
+/// way the readback phase does -- which is what [`adjusted`] does for the
+/// adjustment, and for the same reason.
+#[track_caller]
+fn worked(state: &mut AppState, viewer: &mut Viewer3D, name: &str, arguments: Value) -> Value {
+    let map = arguments.as_object().cloned().expect("an object");
+    let command = tools::parse(name, Some(&map)).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let pending = match agent(state, viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("{name} must defer to a worker"),
+    };
+    state.finish_background_task();
+    match super::edit::background_reply(state, &pending).expect("the operation finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    }
+}
+
+/// The three pixel steps in order: a cluster started at a pixel, an observation
+/// added at another, and a verdict on it -- each one version, and the verdict
+/// visible under the index the add reported.
+#[test]
+fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
+    let (mut state, mut viewer) = benchable();
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let item = made["item"].as_str().expect("the new item").to_string();
+    assert_eq!(made["cursor"], made["serial"], "{made}");
+    assert!(
+        made["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Started {item}")),
+        "{made}"
+    );
+
+    let added = call(
+        &mut state,
+        &mut viewer,
+        "add_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 1,
+            "pixel": [124.0, 93.0],
+        }),
+    );
+    // Named no track, so it landed on the active one, which is the cluster the
+    // create just made.
+    assert_eq!(added["item"], json!(item), "{added}");
+    let observation = added["observation"].as_u64().expect("the index it took");
+    assert_eq!(observation, 1, "{added}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": observation,
+            "verdict": "out",
+        }),
+    );
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(track["item"], json!(item), "{track}");
+    assert_eq!(track["stage"], json!("cluster"), "{track}");
+    assert_eq!(track["active"], json!(true), "{track}");
+    let rows = track["observations"].as_array().expect("the observations");
+    assert_eq!(rows.len(), 2, "{track}");
+    assert_eq!(rows[0]["verdict"], json!("in"), "{track}");
+    assert_eq!(rows[0]["provenance"]["kind"], json!("pixel"), "{track}");
+    // The verdict is under the index the add reported, which is the claim: an
+    // index an agent is holding goes on naming the observation it named.
+    assert_eq!(rows[1]["observation"], json!(observation), "{track}");
+    assert_eq!(rows[1]["verdict"], json!("out"), "{track}");
+    assert_eq!(rows[1]["pinned"], json!(true), "{track}");
+    assert_eq!(rows[1]["camera_image"], json!(1), "{track}");
+    assert_eq!(
+        rows[1]["cluster"]["seed_pixel"],
+        json!([124.0, 93.0]),
+        "{track}"
+    );
+
+    // And every step was a version of the node, walked back one at a time.
+    assert_eq!(version_count(&state), 4);
+}
+
+/// A seed carrying an affine shape puts that shape on the observation, which is
+/// what a caller holding a detector's keypoint frame has to be able to state.
+#[test]
+fn a_cluster_seeded_with_an_affine_keeps_the_shape_it_was_given() {
+    let (mut state, mut viewer) = benchable();
+    let shape = json!([[7.1, -0.4], [0.4, 7.1]]);
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "affine": shape,
+        }),
+    );
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        track["observations"][0]["cluster"]["seed_shape"], shape,
+        "{track}"
+    );
+}
+
+/// The three seed forms are alternatives, and a call that mixes them is refused
+/// rather than having one of them silently win.
+#[test]
+fn the_seed_forms_are_exclusive() {
+    let (mut state, mut viewer) = benchable();
+    let both = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "feature": 4,
+        }),
+    );
+    assert!(both.0.contains("carries its own position"), "{both}");
+
+    let sized_twice = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+            "affine": [[7.1, 0.0], [0.0, 7.1]],
+        }),
+    );
+    assert!(
+        sized_twice.0.contains("how large the patch is"),
+        "{sized_twice}"
+    );
+
+    let nowhere = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0 }),
+    );
+    assert!(
+        nowhere.0.contains("needs somewhere to seed from"),
+        "{nowhere}"
+    );
+}
+
+/// A feature seed is read out of the image's `.sift` file, so a node that has
+/// none is refused naming the image rather than seeding from nothing.
+#[test]
+fn a_feature_seed_on_a_node_with_no_sift_file_is_refused() {
+    let (mut state, mut viewer) = benchable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({ "reconstruction_label": "run_a", "camera_image": 0, "feature": 4 }),
+    );
+    assert!(error.0.contains(".sift"), "{error}");
+    assert_eq!(version_count(&state), 1, "a refusal pushed a version");
+}
+
+/// A point put on the bench is an item `get_bench` lists, active, at the track
+/// stage, seated on the point it came from.
+#[test]
+fn create_bench_track_lists_the_item_on_get_bench() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["active"]["track"], json!(item), "{bench}");
+    let items = bench["items"].as_array().expect("the items");
+    assert_eq!(items.len(), 1, "{bench}");
+    assert_eq!(items[0]["item"], json!(item), "{bench}");
+    assert_eq!(items[0]["kind"], json!("track"), "{bench}");
+    assert_eq!(items[0]["active"], json!(true), "{bench}");
+    assert_eq!(items[0]["stage"], json!("track"), "{bench}");
+    assert_eq!(items[0]["origin"]["point"], json!(BENCH_POINT), "{bench}");
+    assert_eq!(items[0]["counts"]["in"], json!(3), "{bench}");
+
+    // And the track's own table says the same, with a row per observation.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let rows = track["observations"].as_array().expect("the observations");
+    assert_eq!(rows.len(), 3, "{track}");
+    assert_eq!(rows[0]["provenance"]["kind"], json!("origin"), "{track}");
+    assert!(rows[0]["track"]["keypoint"].is_array(), "{track}");
+    assert!(track["thresholds"]["min_zncc"].is_number(), "{track}");
+}
+
+/// A split answers with the label the half that came off took, and leaves two
+/// items on the bench.
+#[test]
+fn split_answers_with_the_new_items_label() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "split_bench_track",
+        json!({ "reconstruction_label": "run_a", "observations": [2] }),
+    );
+    let made = reply["item"].as_str().expect("the new item").to_string();
+    assert_ne!(made, item, "{reply}");
+    assert_eq!(reply["split_from"], json!(item), "{reply}");
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let items = bench["items"].as_array().expect("the items");
+    assert_eq!(items.len(), 2, "{bench}");
+    let split = items
+        .iter()
+        .find(|entry| entry["item"] == json!(made))
+        .expect("the half that came off");
+    assert_eq!(split["counts"]["observations"], json!(1), "{bench}");
+    // It comes off at the cluster stage: a split questions the position fitted
+    // to both halves, so it is not carried onto the new one.
+    assert_eq!(split["stage"], json!("cluster"), "{bench}");
+}
+
+/// The thresholds and the painting they produce are one step, and the bars a
+/// call did not name stay where the track has them.
+#[test]
+fn apply_bench_track_thresholds_moves_the_bars_it_names() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let before = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    )["thresholds"]
+        .clone();
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "min_zncc": 0.42 }),
+    );
+    assert_eq!(reply["thresholds"]["min_zncc"], json!(0.42), "{reply}");
+    assert_eq!(
+        reply["thresholds"]["max_shift_px"], before["max_shift_px"],
+        "an unnamed bar moved: {reply}"
+    );
+    assert!(
+        reply["report"]
+            .as_str()
+            .expect("a report")
+            .contains("Applied the thresholds"),
+        "{reply}"
+    );
+    let after = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(after["thresholds"]["min_zncc"], json!(0.42), "{after}");
+}
+
+/// A commit answers with the version it pushed and the sentence it recorded,
+/// and an undo takes it back -- the bench steps being versions of the node like
+/// any other, which is why there is no bench undo.
+#[test]
+fn commit_answers_with_a_version_an_undo_takes_back() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let points = state.scene[0].point_count();
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert_eq!(reply["item"], json!(item), "{reply}");
+    assert_eq!(reply["dirty"], json!(true), "{reply}");
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.starts_with("Committed track:"), "{report}");
+    assert_eq!(version_count(&state), 3);
+    assert_eq!(state.scene[0].point_count(), points, "{report}");
+    // It is an `Edit` row and the agent's, as every other commit's is.
+    let last = rows(&state).pop().expect("one row per step");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(
+        state.scene[0]
+            .edited()
+            .point(BENCH_POINT)
+            .is_some_and(|point| point.observations().len() == 3),
+        "the undo did not restore the point the commit replaced"
+    );
+}
+
+/// The three item steps: a rename hands back the new label, an activation moves
+/// which item a call that names none acts on, and a discard empties the bench.
+#[test]
+fn rename_activate_and_discard_answer_with_the_item_they_acted_on() {
+    let (mut state, mut viewer) = benchable();
+    let first = on_the_bench(&mut state, &mut viewer);
+    let second = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    )["item"]
+        .as_str()
+        .expect("the new item")
+        .to_string();
+
+    let renamed = call(
+        &mut state,
+        &mut viewer,
+        "rename_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": second, "label": "bull-nose" }),
+    );
+    assert_eq!(renamed["item"], json!("bull-nose"), "{renamed}");
+    let gone = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": second }),
+    );
+    assert!(gone.0.contains("Nothing on the bench is called"), "{gone}");
+
+    call(
+        &mut state,
+        &mut viewer,
+        "activate_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": first }),
+    );
+    let active = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(active["item"], json!(first), "{active}");
+
+    for item in [first.as_str(), "bull-nose"] {
+        call(
+            &mut state,
+            &mut viewer,
+            "discard_bench_item",
+            json!({ "reconstruction_label": "run_a", "item": item }),
+        );
+    }
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(bench["items"].as_array().expect("an array").len(), 0);
+    assert_eq!(bench["active"]["track"], Value::Null, "{bench}");
+}
+
+/// Every refusal is the bench's own sentence and pushes no version.
+#[test]
+fn the_bench_refuses_in_its_own_words() {
+    let (mut state, mut viewer) = benchable();
+
+    // With nothing on the bench there is no active track to act on, and the
+    // refusal says how to get one.
+    let empty = refused_call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(empty.0.contains("create_bench_track"), "{empty}");
+
+    let item = on_the_bench(&mut state, &mut viewer);
+    let unknown = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a",
+            "track": "nothing-is-called-this",
+            "observation": 0,
+            "verdict": "out",
+        }),
+    );
+    assert!(
+        unknown.0.contains("Nothing on the bench is called"),
+        "{unknown}"
+    );
+
+    let past_the_end = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 9, "verdict": "out" }),
+    );
+    assert!(
+        past_the_end.0.contains("no observation 9"),
+        "{past_the_end}"
+    );
+
+    // A cluster cannot be committed: there is no position to write.
+    call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let cluster = refused_call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(cluster.0.contains("cluster"), "{cluster}");
+
+    let before = version_count(&state);
+    let discarded = refused_call(
+        &mut state,
+        &mut viewer,
+        "discard_bench_item",
+        json!({ "reconstruction_label": "run_a", "item": "nothing-is-called-this" }),
+    );
+    assert!(
+        discarded.0.contains("nothing on the bench is called"),
+        "{discarded}"
+    );
+    assert_eq!(version_count(&state), before, "a refusal pushed a version");
+    // The item that is there is untouched by any of it.
+    assert!(state.bench_track(state.scene[0].id, &item).is_some());
+}
+
+/// The two steps that read photographs go to a worker and report through the
+/// same two-level reply `bundle_adjust` uses.
+#[test]
+fn evaluate_and_set_stage_run_as_background_tasks() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let staged = worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "cluster" }),
+    );
+    assert!(
+        staged["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Set {item} to the cluster stage")),
+        "{staged}"
+    );
+    assert_eq!(
+        call(
+            &mut state,
+            &mut viewer,
+            "get_bench_track",
+            json!({ "reconstruction_label": "run_a" }),
+        )["stage"],
+        json!("cluster")
+    );
+
+    let evaluated = worked(
+        &mut state,
+        &mut viewer,
+        "evaluate_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert!(
+        evaluated["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Evaluated {item}")),
+        "{evaluated}"
+    );
+
+    // The operation is the one an agent polls for, under the name the panel
+    // shows it as.
+    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(task["running"], json!(false), "{task}");
+    assert_eq!(task["operation"], json!("Evaluate track"), "{task}");
+    assert_eq!(task["reconstruction_label"], json!("run_a"), "{task}");
+
+    // And the measurements are on the wire, under the observation indexes they
+    // were computed for.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(
+        track["observations"][0]["cluster"]["zncc"].is_number(),
+        "the evaluation measured nothing: {track}"
+    );
+}
+
+/// Setting the stage a track is already at changes nothing: no task, no
+/// version, and the version the node stands at as the answer.
+#[test]
+fn setting_the_stage_a_track_is_already_at_starts_nothing() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "track" }),
+    );
+    assert_eq!(version_count(&state), before, "{reply}");
+    assert!(state.background_task().is_none());
+    assert_eq!(reply["report"], Value::Null, "{reply}");
 }

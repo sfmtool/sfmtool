@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    Observation, ObservationSeed, StageKind, Thresholds, Verdict,
+    Observation, ObservationSeed, Provenance, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::EditedReconstruction;
 
@@ -42,6 +42,56 @@ use crate::state::AppState;
 
 #[cfg(test)]
 mod tests;
+
+/// Where a seed's position and shape come from.
+///
+/// One enum for the two steps that seed an observation, because a caller
+/// arrives holding one of three things and the step should not care which: a
+/// pixel with nothing else, a pixel with a size or a shape read at it, or a
+/// `.sift` feature, which carries its own position and its own keypoint frame.
+///
+/// [`Seed::Pixel`] with no radius is "I have no shape to give you, use the one
+/// you have": the viewer's own patch radius for that image when a cluster is
+/// being started, and the track's reference shape when an observation is being
+/// added to one. That is what a right-click in the Image Detail panel means,
+/// and it is why the two cases are one variant rather than two.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Seed {
+    /// A pixel someone pointed at, with the patch's half-width in that image's
+    /// own pixels where the caller named one.
+    Pixel {
+        /// Where, in source-image px.
+        pixel: [f64; 2],
+        /// The patch's half-width in px, or `None` for the shape the step
+        /// already has.
+        radius_px: Option<f64>,
+    },
+    /// A pixel with the affine shape read at it: the detector's canonical
+    /// keypoint frame mapped onto this image's pixels, which is the convention
+    /// [`sfmtool_core::bench::ClusterMeasurement::seed_shape`] states.
+    Affine {
+        /// Where, in source-image px.
+        pixel: [f64; 2],
+        /// Keypoint-frame units to this image's pixels.
+        shape: [[f64; 2]; 2],
+    },
+    /// A `.sift` feature of the image, by its index in that file.
+    Feature {
+        /// The feature's index in its image's `.sift` file.
+        feature: u32,
+    },
+}
+
+/// A [`Seed`] with its `.sift` row read, if it named one.
+struct SeededAt {
+    /// Where the observation goes, in source-image px.
+    pixel: [f64; 2],
+    /// The keypoint-frame shape the caller supplied, or `None` for the step's
+    /// own.
+    shape: Option<[[f64; 2]; 2]>,
+    /// The feature it came from, which is what the provenance records.
+    feature: Option<u32>,
+}
 
 /// What the viewer calls the item a gesture names when the caller named none:
 /// the active track of the node's bench.
@@ -127,22 +177,29 @@ impl AppState {
         Ok(report.label)
     }
 
-    /// Start a cluster-stage track on `image`'s node from a pixel, with a patch
-    /// of `radius_px`, and make it the active track.
+    /// Start a cluster-stage track on `image`'s node from `seed`, and make it
+    /// the active track.
     ///
     /// The gesture behind it is the one Create 3D Point uses: the pixel is
-    /// where the Image Detail panel's context menu was last opened, and the
-    /// radius is the one that panel offers for a created point, so a cluster
-    /// and a created point are started at the same place at the same size.
+    /// where the Image Detail panel's context menu was last opened, and a seed
+    /// that names no shape takes the radius that panel offers for a created
+    /// point, so a cluster and a created point are started at the same place at
+    /// the same size.
     pub(crate) fn start_bench_cluster(
         &mut self,
         image: ImageRef,
-        pixel: [f32; 2],
-        radius_px: f32,
+        seed: &Seed,
     ) -> Result<String, String> {
         if let Some(why) = self.busy_refusal(image.recon) {
             return Err(why);
         }
+        let seeded = self.seeded_at(image, seed)?;
+        let shape = match seeded.shape {
+            Some(shape) => shape,
+            None => ClusterSeed::shape_from_radius_px(f64::from(
+                self.create_point_default_radius(image),
+            )),
+        };
         let index = self.node_index(image.recon)?;
         let node = &self.scene[index];
         let name = node
@@ -156,12 +213,13 @@ impl AppState {
             || crate::resect::basename(&name).to_string(),
             |(s, _)| s.to_string(),
         );
-        let seed = ClusterSeed::from_pixel(
-            image.image,
-            stem,
-            [f64::from(pixel[0]), f64::from(pixel[1])],
-            f64::from(radius_px),
-        );
+        let seed = ClusterSeed {
+            image: image.image,
+            image_stem: stem,
+            pixel: seeded.pixel,
+            shape,
+            feature: seeded.feature,
+        };
         let bench = Arc::clone(node.history.current_bench());
         let (next, report) = bench::create_cluster(&bench, &seed)
             .map_err(|e| format!("Cannot start a track there: {e}"))?;
@@ -170,18 +228,29 @@ impl AppState {
         Ok(report.label)
     }
 
-    /// Add a candidate observation of the track called `label` at `pixel` in
-    /// `image`.
+    /// Add a candidate observation of the track called `label` in `image`, at
+    /// the place `seed` names.
+    ///
+    /// A seed with no shape of its own is added at the track's own scale, which
+    /// is what the core step does with an [`ObservationSeed`] carrying none.
     pub(crate) fn add_bench_observation(
         &mut self,
         label: &str,
         image: ImageRef,
-        pixel: [f32; 2],
+        seed: &Seed,
     ) -> Result<(), String> {
+        let seeded = self.seeded_at(image, seed)?;
         let (index, bench, track) = self.bench_step_target(image.recon, label)?;
         let name = self.image_name(image);
-        let seed =
-            ObservationSeed::at_pixel(image.image, [f64::from(pixel[0]), f64::from(pixel[1])]);
+        let seed = ObservationSeed {
+            image: image.image,
+            pixel: seeded.pixel,
+            shape: seeded.shape,
+            provenance: match seeded.feature {
+                Some(feature) => Provenance::Descriptor { feature },
+                None => Provenance::Pixel,
+            },
+        };
         let (next, _report) = bench::add_observation(&track, &seed)
             .map_err(|e| format!("Cannot add that observation: {e}"))?;
         let bench = install(&bench, label, next)?;
@@ -589,6 +658,82 @@ impl AppState {
                 .ok_or_else(|| format!("Nothing on the bench is called {label}."))?,
         );
         Ok((index, bench, track))
+    }
+
+    /// Where a seed puts an observation, with its `.sift` row read when it
+    /// named one.
+    ///
+    /// The one place a feature index becomes a position and a shape, so the
+    /// menu's pixel gesture and a caller holding a feature reach the same two
+    /// numbers by the same route.
+    fn seeded_at(&mut self, image: ImageRef, seed: &Seed) -> Result<SeededAt, String> {
+        match *seed {
+            Seed::Pixel { pixel, radius_px } => Ok(SeededAt {
+                pixel,
+                shape: radius_px.map(ClusterSeed::shape_from_radius_px),
+                feature: None,
+            }),
+            Seed::Affine { pixel, shape } => Ok(SeededAt {
+                pixel,
+                shape: Some(shape),
+                feature: None,
+            }),
+            Seed::Feature { feature } => {
+                let (pixel, shape) = self.sift_feature(image, feature)?;
+                Ok(SeededAt {
+                    pixel,
+                    shape: Some(shape),
+                    feature: Some(feature),
+                })
+            }
+        }
+    }
+
+    /// Where one `.sift` feature sits and what keypoint frame it carries, read
+    /// through the viewer's own feature cache.
+    ///
+    /// The cache the Image Detail overlay draws its ellipses from
+    /// ([`crate::state::ensure_sift_cached`]), so a feature seeded here is the
+    /// mark the person is looking at rather than a second reading of the file.
+    /// The stored affine is already the cluster stage's own convention -- the
+    /// detector's canonical keypoint frame mapped onto this image's pixels --
+    /// so it is passed on as it stands.
+    fn sift_feature(
+        &mut self,
+        image: ImageRef,
+        feature: u32,
+    ) -> Result<([f64; 2], [[f64; 2]; 2]), String> {
+        let wanted = feature as usize;
+        let name = self.image_name(image);
+        // The cache is `&mut` while the reconstruction it reads from is `&`,
+        // which is why the read is a free function over the two.
+        let AppState {
+            scene, sift_cache, ..
+        } = self;
+        let node = crate::scene::node_by_id(scene, image.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let cached = crate::state::ensure_sift_cached(
+            sift_cache,
+            node.recon(),
+            image,
+            wanted + 1,
+            &sfmtool_core::progress::Progress::none(),
+        )
+        .ok_or_else(|| format!("No .sift file could be read for {name}."))?;
+        let pixel = *cached.positions_xy.get(wanted).ok_or_else(|| {
+            format!(
+                "{name} has {} .sift features; there is no feature {feature}.",
+                cached.positions_xy.len()
+            )
+        })?;
+        let shape = cached.affine_shapes[wanted];
+        Ok((
+            [f64::from(pixel[0]), f64::from(pixel[1])],
+            [
+                [f64::from(shape[0][0]), f64::from(shape[0][1])],
+                [f64::from(shape[1][0]), f64::from(shape[1][1])],
+            ],
+        ))
     }
 
     /// Where `id` sits in the scene.

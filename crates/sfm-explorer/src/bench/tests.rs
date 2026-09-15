@@ -76,6 +76,13 @@ fn item_address(state: &AppState, id: ReconId, position: usize) -> usize {
     }
 }
 
+/// The seed the Image Detail context menu makes: a pixel, with the radius the
+/// Create 3D Point prompt would offer where the gesture starts a cluster and
+/// none where it adds to one.
+fn pixel_seed(pixel: [f64; 2], radius_px: Option<f64>) -> crate::bench::Seed {
+    crate::bench::Seed::Pixel { pixel, radius_px }
+}
+
 /// Put [`POINT`] on the bench and give back the label it took.
 fn put_on_bench(state: &mut AppState, id: ReconId) -> String {
     state
@@ -102,7 +109,7 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
     let first_address = item_address(&state, id, 0);
 
     let second = state
-        .start_bench_cluster(ImageRef::new(id, 0), [120.0, 90.0], 6.0)
+        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
         .expect("a pixel on the sensor");
     assert_eq!(bench(&state, id).len(), 2);
     assert_eq!(
@@ -154,10 +161,14 @@ fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
     let before = versions(&state, id);
 
     let label = state
-        .start_bench_cluster(ImageRef::new(id, 0), [120.0, 90.0], 6.0)
+        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
         .expect("a pixel on the sensor");
     state
-        .add_bench_observation(&label, ImageRef::new(id, 0), [124.0, 93.0])
+        .add_bench_observation(
+            &label,
+            ImageRef::new(id, 0),
+            &pixel_seed([124.0, 93.0], None),
+        )
         .expect("a second sighting in one image is a candidate");
 
     assert_eq!(versions(&state, id) - before, 2);
@@ -189,7 +200,7 @@ fn putting_a_point_on_twice_activates_the_track_it_already_made() {
     let (mut state, id) = state();
     let first = put_on_bench(&mut state, id);
     state
-        .start_bench_cluster(ImageRef::new(id, 0), [120.0, 90.0], 6.0)
+        .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
         .expect("a pixel on the sensor");
     let before = versions(&state, id);
 

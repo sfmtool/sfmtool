@@ -260,6 +260,32 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
         },
         ToolSpec {
+            name: "get_bench",
+            description: "The bench beside one reconstruction: every item on it by label, with \
+                          its kind, the stage it is at, the point it came from where it came \
+                          from one, its observation and verdict counts, and which item of each \
+                          kind is active. The bench is a place beside the reconstruction rather \
+                          than part of it — nothing on it is saved, and a commit is how it \
+                          reaches the file.",
+            kind: Read,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
+            name: "get_bench_track",
+            description: "One track on the bench, as its Track Edit table: the stage, the point \
+                          it came from, the thresholds, and every observation with what put it \
+                          there, the verdict on it and whatever each stage has measured about \
+                          it. An observation is addressed by its position in the list, which is \
+                          stable for the life of the track — observations are appended and never \
+                          renumbered, so an index read here still names the same observation \
+                          after a verdict or an evaluation.",
+            kind: Read,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
             name: "open_reconstruction",
             description: "Load an .sfmr file into the scene as a new reconstruction, and select \
                           it. Opening a path that is already open adds a second node for it, \
@@ -832,6 +858,270 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "create_bench_cluster",
+            description: "Start a cluster-stage track on the bench from a place in one camera \
+                          image, and make it the active track. A cluster is a set of image \
+                          patches that register onto one template, with no geometry behind them: \
+                          it wants more observations and an evaluation, and set_bench_track_stage \
+                          \"track\" is what triangulates it. Seed it with a pixel (and a \
+                          radius_px or an affine shape for the patch), or with a .sift feature, \
+                          which carries its own position and shape. The reply names the item the \
+                          rest of the bench tools take.",
+            kind: Write,
+            schema: object(
+                &seed_properties(),
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "create_bench_track",
+            description: "Put one 3D point of the reconstruction on the bench as a track-stage \
+                          track, and make it the active track, so its observations can be judged \
+                          one at a time and the result committed back over the point. Putting on \
+                          a point a track already came from activates that track rather than \
+                          putting a second one on. The reply names the item.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("point", point_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "activate_bench_item",
+            description: "Make one item on the bench the active one of its kind, which is the \
+                          item the Track Edit panel shows and the item a bench tool acts on when \
+                          it names none.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("item", bench_item_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "rename_bench_item",
+            description: "Give one item on the bench a label of your own, which is what names it \
+                          in every later call, in the Scene tree and in each Action Log row. The \
+                          reply carries the new label. A label another item already holds is \
+                          refused.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("item", bench_item_schema()),
+                    (
+                        "label",
+                        json!({
+                            "type": "string",
+                            "description":
+                                "The label the item should take. Unique on this bench, and \
+                                 something other than whitespace.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "discard_bench_item",
+            description: "Take one item off the bench. It is a version like any other step, so \
+                          undo puts the item back where it was and active as it was; nothing of \
+                          the reconstruction is touched, since nothing on the bench is part of \
+                          it.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("item", bench_item_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "add_bench_track_observation",
+            description: "Add one candidate observation of a bench track, in a camera image, at \
+                          the place the seed names — a pixel, a pixel with a radius_px or an \
+                          affine shape, or a .sift feature. It joins as a candidate and unpinned: \
+                          something proposed it and nobody has ruled on it. A second observation \
+                          in an image the track already sees is allowed and is measured like any \
+                          other; what it cannot do is be turned in while the other is. The reply \
+                          names the index it took.",
+            kind: Write,
+            schema: object(
+                &{
+                    let mut optional = seed_properties();
+                    optional.push(("track", bench_track_schema()));
+                    optional
+                },
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("camera_image", camera_image_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "set_bench_track_verdict",
+            description: "Rule on one observation of a bench track by hand: in, out, or back to \
+                          candidate. A verdict set this way is pinned, which is what leaves it \
+                          alone when the thresholds are applied. A track cannot see one image \
+                          twice, so turning an observation in while another observation of the \
+                          same image is in is refused. Setting the verdict an observation already \
+                          has changes nothing and pushes no version.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    (
+                        "verdict",
+                        json!({
+                            "type": "string",
+                            "enum": ["in", "out", "candidate"],
+                            "description":
+                                "in: the observation belongs to the track, and a commit writes \
+                                 it. out: it was refused, and stays in the list so the refusal \
+                                 is visible. candidate: proposed and not ruled on.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "apply_bench_track_thresholds",
+            description: "Set a bench track's bars and turn them into verdicts in one step: \
+                          every unpinned observation is judged against them and takes the verdict \
+                          they propose, and an observation ruled on by hand is left alone. A bar \
+                          the call does not name stays where the track has it. The reply's report \
+                          says how many were turned in, turned out, left pinned and left \
+                          unmeasured.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("track", bench_track_schema()),
+                    (
+                        "min_zncc",
+                        threshold_schema(
+                            "The ZNCC an observation has to reach: the achieved template ZNCC at \
+                             the cluster stage, the leave-one-out ZNCC at the track stage.",
+                        ),
+                    ),
+                    (
+                        "max_shift_px",
+                        threshold_schema(
+                            "How far an observation may sit from its seed (cluster stage) or \
+                             from the surfel's projection (track stage), in source-image px.",
+                        ),
+                    ),
+                    (
+                        "max_keypoint_uncertainty",
+                        threshold_schema(
+                            "The largest tile localizability sigma_pos an observation may carry, \
+                             in template-grid px.",
+                        ),
+                    ),
+                    (
+                        "min_relative_zncc",
+                        threshold_schema(
+                            "The fraction of the track's own self-agreement a candidate's ZNCC \
+                             has to reach.",
+                        ),
+                    ),
+                ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "split_bench_track",
+            description: "Move the named observations off a bench track onto a second track \
+                          beside it, whatever their verdicts were, and answer with the label the \
+                          new item took. The half that comes off arrives at the cluster stage: a \
+                          split questions the 3D hypothesis fitted to both halves, so carrying it \
+                          onto the new half would state it as fact. Splitting off every \
+                          observation, or none, is refused.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "observations",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "integer", "minimum": 0 },
+                            "description":
+                                "Which observations to take off, by their positions in \
+                                 get_bench_track's list.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "commit_bench_track",
+            description: "Write a bench track into the reconstruction as one version: its in \
+                          observations become the track of a point, over the point it came from \
+                          where it came from one and as a new point otherwise. Refused for a \
+                          track still at the cluster stage, for one with fewer than two in \
+                          observations, and on a reconstruction whose observations are .sift \
+                          feature indexes rather than inline keypoints — each in the bench's own \
+                          words. The track stays on the bench, seated on the point it wrote.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "evaluate_bench_track",
+            description: "Measure every observation of a bench track at the stage the track is \
+                          in — the refinement against the template at the cluster stage, the \
+                          localizer, the triangulation and the leave-one-out agreement at the \
+                          track stage — and read the numbers back with get_bench_track. It runs \
+                          on a worker thread, so an evaluation that is still going after 200 ms \
+                          replies with running: true and an operation_id to poll with \
+                          get_background_task instead of the version it pushed. Needs the \
+                          photographs, which are decoded on demand.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "set_bench_track_stage",
+            description: "Move a bench track between its two representations. \"track\" \
+                          triangulates the in observations, fits a surfel to them and localizes \
+                          each keypoint against it, which is what a commit needs; \"cluster\" \
+                          drops the geometry and leaves the patches registering onto one \
+                          template, which is what questioning a wrong position looks like. Runs \
+                          on a worker thread and answers as evaluate_bench_track does. Setting \
+                          the stage a track is already at changes nothing.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "stage",
+                        json!({
+                            "type": "string",
+                            "enum": ["cluster", "track"],
+                            "description": "Which representation the track should be in.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "get_background_task",
             description: "What the viewer is busy with: the operation, the reconstruction it is \
                           running on, how long it has been going, how far along it is, the stage \
@@ -985,6 +1275,104 @@ fn camera_image_schema() -> Value {
             { "type": "string" },
         ],
     })
+}
+
+/// An item on the bench, by its label.
+///
+/// A label and not an index: an item is named by its label everywhere -- in the
+/// Scene tree, on the panel's tabs and in every Action Log row -- and the
+/// bench's own refusal for one that names nothing is in those terms.
+fn bench_item_schema() -> Value {
+    json!({
+        "type": "string",
+        "description":
+            "Which item on the bench, by the label get_bench reports. A label is minted from \
+             what the item was made from — a point id, or an image and a pixel — until \
+             rename_bench_item gives it one of your own.",
+    })
+}
+
+/// The track a bench tool acts on, which is optional: a call that names none
+/// acts on the active track, as a gesture in the Track Edit panel does.
+fn bench_track_schema() -> Value {
+    json!({
+        "type": "string",
+        "description":
+            "Which track on the bench, by its label. Omit for the active track, which is what \
+             the Track Edit panel is showing and what a create or an activate last made active.",
+    })
+}
+
+/// One observation of a bench track, by its position in the track's list.
+fn observation_schema() -> Value {
+    json!({
+        "type": "integer",
+        "minimum": 0,
+        "description":
+            "Which observation, by its position in get_bench_track's observations list. \
+             Observations are appended and never renumbered, so the position is stable for the \
+             life of the track.",
+    })
+}
+
+/// One bar of the threshold painting: a number, or absent to leave the bar
+/// where the track has it.
+fn threshold_schema(description: &str) -> Value {
+    json!({ "type": "number", "description": description })
+}
+
+/// The seed forms `create_bench_cluster` and `add_bench_track_observation`
+/// share, as optional properties.
+///
+/// Optional rather than required because the three forms are alternatives and a
+/// schema cannot say "one of these"; which combinations are a seed at all is
+/// settled in [`parse_seed`], which sees what the call named.
+fn seed_properties() -> Vec<(&'static str, Value)> {
+    vec![
+        ("pixel", pixel_schema()),
+        (
+            "radius_px",
+            json!({
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "description":
+                    "The patch's half-width at that pixel, in this image's own pixels. With \
+                     create_bench_cluster, omit for the radius the viewer's own Create 3D Point \
+                     prompt would offer; with add_bench_track_observation, omit for the scale \
+                     the track already works at.",
+            }),
+        ),
+        (
+            "affine",
+            json!({
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "items": { "type": "number" },
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description":
+                    "The affine shape at that pixel, as [[a11, a12], [a21, a22]]: the detector's \
+                     canonical keypoint frame mapped onto this image's pixels, which is what a \
+                     .sift feature's shape is. A shape is a scale rather than a size, so it is \
+                     read over the cluster's own radius.",
+            }),
+        ),
+        (
+            "feature",
+            json!({
+                "type": "integer",
+                "minimum": 0,
+                "description":
+                    "Seed from a .sift feature of this camera image instead, by its index in \
+                     that file. It carries its own position and its own shape, so pixel, \
+                     radius_px and affine are not accepted with it.",
+            }),
+        ),
+    ]
 }
 
 fn point_schema() -> Value {
@@ -1525,6 +1913,139 @@ pub(crate) fn parse(
                 release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
             }
         }
+        "get_bench" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::GetBench {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "get_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track"])?;
+            Command::GetBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+            }
+        }
+        "create_bench_cluster" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "camera_image",
+                "pixel",
+                "radius_px",
+                "affine",
+                "feature",
+            ])?;
+            Command::CreateBenchCluster {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                camera_image: args.camera_image("camera_image")?,
+                seed: parse_seed(&args)?,
+            }
+        }
+        "create_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "point"])?;
+            Command::CreateBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                point: args.point("point")?,
+            }
+        }
+        "activate_bench_item" => {
+            args.reject_unknown(&["reconstruction_label", "item"])?;
+            Command::ActivateBenchItem {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                item: args.required_string("item")?,
+            }
+        }
+        "rename_bench_item" => {
+            args.reject_unknown(&["reconstruction_label", "item", "label"])?;
+            Command::RenameBenchItem {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                item: args.required_string("item")?,
+                label: args.required_string("label")?,
+            }
+        }
+        "discard_bench_item" => {
+            args.reject_unknown(&["reconstruction_label", "item"])?;
+            Command::DiscardBenchItem {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                item: args.required_string("item")?,
+            }
+        }
+        "add_bench_track_observation" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "track",
+                "camera_image",
+                "pixel",
+                "radius_px",
+                "affine",
+                "feature",
+            ])?;
+            Command::AddBenchTrackObservation {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                camera_image: args.camera_image("camera_image")?,
+                seed: parse_seed(&args)?,
+            }
+        }
+        "set_bench_track_verdict" => {
+            args.reject_unknown(&["reconstruction_label", "track", "observation", "verdict"])?;
+            Command::SetBenchTrackVerdict {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observation: args.required_usize("observation")?,
+                verdict: args.verdict("verdict")?,
+            }
+        }
+        "apply_bench_track_thresholds" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "track",
+                "min_zncc",
+                "max_shift_px",
+                "max_keypoint_uncertainty",
+                "min_relative_zncc",
+            ])?;
+            Command::ApplyBenchTrackThresholds {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                thresholds: super::ThresholdChange {
+                    min_zncc: args.optional_f64("min_zncc")?,
+                    max_shift_px: args.optional_f64("max_shift_px")?,
+                    max_keypoint_uncertainty: args.optional_f64("max_keypoint_uncertainty")?,
+                    min_relative_zncc: args.optional_f64("min_relative_zncc")?,
+                },
+            }
+        }
+        "split_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track", "observations"])?;
+            Command::SplitBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observations: args.observations("observations")?,
+            }
+        }
+        "commit_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track"])?;
+            Command::CommitBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+            }
+        }
+        "evaluate_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track"])?;
+            Command::EvaluateBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+            }
+        }
+        "set_bench_track_stage" => {
+            args.reject_unknown(&["reconstruction_label", "track", "stage"])?;
+            Command::SetBenchTrackStage {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                stage: args.stage("stage")?,
+            }
+        }
         "get_background_task" => {
             args.reject_unknown(&[])?;
             Command::GetBackgroundTask
@@ -1566,6 +2087,52 @@ pub(crate) fn parse(
         }
     };
     Ok(command)
+}
+
+/// The three seed forms the two bench creates share, told apart by which field
+/// is present.
+///
+/// A `.sift` feature carries its own position and its own keypoint frame, so a
+/// call that named one has said everything there is to say about where the
+/// observation goes: a pixel or a shape alongside it would be a second answer
+/// to a question already answered, and is refused rather than silently losing
+/// to one or the other. A pixel takes at most one statement of size, since an
+/// affine shape already says how large the patch is.
+fn parse_seed(args: &Args) -> Result<crate::bench::Seed, ToolError> {
+    let present = |key: &str| args.map.contains_key(key);
+    if let Some(feature) = args.optional_u32("feature")? {
+        let with: Vec<&str> = ["pixel", "radius_px", "affine"]
+            .into_iter()
+            .filter(|key| present(key))
+            .collect();
+        if !with.is_empty() {
+            return Err(args.error(format!(
+                "was given {} with feature — a .sift feature carries its own position and its \
+                 own shape.",
+                with.join(" and ")
+            )));
+        }
+        return Ok(crate::bench::Seed::Feature { feature });
+    }
+    let Some(pixel) = args.optional_numbers::<2>("pixel")? else {
+        return Err(args.error(
+            "needs somewhere to seed from: a pixel, a pixel with radius_px or affine, or a \
+             feature.",
+        ));
+    };
+    if present("radius_px") && present("affine") {
+        return Err(args.error(
+            "was given both radius_px and affine — an affine shape already says how large the \
+             patch is.",
+        ));
+    }
+    if let Some(shape) = args.optional_affine("affine")? {
+        return Ok(crate::bench::Seed::Affine { pixel, shape });
+    }
+    Ok(crate::bench::Seed::Pixel {
+        pixel,
+        radius_px: args.radius("radius_px")?.map(f64::from),
+    })
 }
 
 /// `set_view`'s five forms, told apart by which field is present.
@@ -1981,6 +2548,92 @@ impl Args<'_> {
                 "wants {key} to be a radius greater than zero, or absent for the median radius \
                  the image's own patches project to."
             ))),
+        }
+    }
+
+    /// A `.sift` feature index, which is a `u32` because that is what a
+    /// feature index is everywhere below this.
+    fn optional_u32(&self, key: &str) -> Result<Option<u32>, ToolError> {
+        match self.optional_u64(key)? {
+            None => Ok(None),
+            Some(index) => u32::try_from(index)
+                .map(Some)
+                .map_err(|_| self.wrong_type(key, "a feature index", &json!(index))),
+        }
+    }
+
+    /// A 2x2 affine shape, row by row.
+    fn optional_affine(&self, key: &str) -> Result<Option<[[f64; 2]; 2]>, ToolError> {
+        let expected = "a 2x2 array of numbers";
+        let value = match self.map.get(key) {
+            None | Some(Value::Null) => return Ok(None),
+            Some(value) => value,
+        };
+        let rows = value
+            .as_array()
+            .filter(|rows| rows.len() == 2)
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        let mut shape = [[0.0; 2]; 2];
+        for (out, row) in shape.iter_mut().zip(rows) {
+            let row = row
+                .as_array()
+                .filter(|row| row.len() == 2)
+                .ok_or_else(|| self.wrong_type(key, expected, value))?;
+            for (slot, element) in out.iter_mut().zip(row) {
+                *slot = element
+                    .as_f64()
+                    .filter(|n| n.is_finite())
+                    .ok_or_else(|| self.wrong_type(key, expected, value))?;
+            }
+        }
+        Ok(Some(shape))
+    }
+
+    /// The observations a split names, by their positions in the track's list.
+    fn observations(&self, key: &str) -> Result<Vec<usize>, ToolError> {
+        let expected = "an array of observation indexes";
+        let value = self
+            .map
+            .get(key)
+            .ok_or_else(|| self.error(format!("needs {key}: {expected}.")))?;
+        let array = value
+            .as_array()
+            .ok_or_else(|| self.wrong_type(key, expected, value))?;
+        array
+            .iter()
+            .map(|element| {
+                element
+                    .as_u64()
+                    .map(|index| index as usize)
+                    .ok_or_else(|| self.wrong_type(key, expected, value))
+            })
+            .collect()
+    }
+
+    /// A verdict, in the three words the bench spells them with.
+    fn verdict(&self, key: &str) -> Result<sfmtool_core::bench::Verdict, ToolError> {
+        use sfmtool_core::bench::Verdict;
+        match self.optional_string(key)?.as_deref() {
+            Some("in") => Ok(Verdict::In),
+            Some("out") => Ok(Verdict::Out),
+            Some("candidate") => Ok(Verdict::Candidate),
+            Some(other) => Err(self.error(format!(
+                "does not know the verdict {other:?} — the verdicts are in, out and candidate."
+            ))),
+            None => Err(self.error(format!("needs {key} — one of in, out and candidate."))),
+        }
+    }
+
+    /// A stage, in the two words the bench spells them with.
+    fn stage(&self, key: &str) -> Result<sfmtool_core::bench::StageKind, ToolError> {
+        use sfmtool_core::bench::StageKind;
+        match self.optional_string(key)?.as_deref() {
+            Some("cluster") => Ok(StageKind::Cluster),
+            Some("track") => Ok(StageKind::Track),
+            Some(other) => Err(self.error(format!(
+                "does not know the stage {other:?} — the stages are cluster and track."
+            ))),
+            None => Err(self.error(format!("needs {key} — cluster or track."))),
         }
     }
 

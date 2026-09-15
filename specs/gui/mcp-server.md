@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Forty tools. Eleven read, twenty-seven write, one that writes a file, and one
-that closes the loop by handing back a picture.
+Fifty-four tools. Thirteen read, thirty-nine write, one that writes a file, and
+one that closes the loop by handing back a picture.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -142,11 +142,25 @@ that closes the loop by handing back a picture.
 | `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `cancel_background` | write | Stop the operation running on a worker, when it can be stopped |
+| `get_bench` | read | One reconstruction's bench: every item on it, and which is active |
+| `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
+| `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
+| `create_bench_track` | write | Put a 3D point on the bench as a track-stage track |
+| `activate_bench_item` | write | Make one item the active one of its kind |
+| `rename_bench_item` | write | Give one item a label of your own |
+| `discard_bench_item` | write | Take one item off the bench |
+| `add_bench_track_observation` | write | Add a candidate observation of a bench track, in one camera image |
+| `set_bench_track_verdict` | write | Rule on one observation by hand: in, out, or candidate |
+| `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose |
+| `split_bench_track` | write | Move some observations onto a second track beside this one |
+| `commit_bench_track` | write | Write a bench track into the reconstruction |
+| `evaluate_bench_track` | write | Measure every observation at the track's own stage, on a worker thread |
+| `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the eleven reads and `screenshot` carry
-`readOnlyHint: true`, the twenty-seven writes `destructiveHint: false` (none of
+Every tool is annotated: the thirteen reads and `screenshot` carry
+`readOnlyHint: true`, the thirty-nine writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1862,11 +1876,43 @@ the adjustment polls between rounds and between iterations, and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Only this operation runs on a worker so far.** Every other edit is still
-synchronous on the GUI thread, and a reconstruction large enough to take more
-than the apply timeout will still time out the call while the work goes on and
-finishes. An agent that gets a timeout from one of those should read
-`get_history` rather than retry, since the version may well have been pushed.
+**Three operations run on a worker**: this one, and the bench's
+`evaluate_bench_track` and `set_bench_track_stage`, which answer through the
+same two-level reply. Every other edit is still synchronous on the GUI thread,
+and a reconstruction large enough to take more than the apply timeout will still
+time out the call while the work goes on and finishes. An agent that gets a
+timeout from one of those should read `get_history` rather than retry, since the
+version may well have been pushed.
+
+### The bench family
+
+Fifteen tools that read and work the **bench** beside a node
+([bench.md](bench.md)): the place where a track is held and judged before it is
+written into the reconstruction. Every one of them is one `AppState` call from
+`crate::bench` -- the same call the Track Edit panel's button or the Image
+Detail menu entry makes -- so an agent's verdict, split or commit is a version
+in the history the human is looking at, undoable by either of them.
+
+They are documented in [bench.md](bench.md) § "The wire", which is where the
+bench's own vocabulary is: what an item is, what a stage is, and what a verdict
+means. What this surface adds is the three things every tool family here adds.
+
+**An item is named by its label**, exactly as a node is by
+`reconstruction_label`. The bench tools take `item`; the track tools take
+`track`, and **a call that names no track acts on the active one**, which is
+what a gesture in the Track Edit panel means when it names no item. A label that
+names nothing on the bench is refused naming it.
+
+**Every step answers as an edit answers**, with the version it pushed and the
+sentence the Action Log recorded, plus the `item` it acted on -- a create and a
+split naming what they made, a rename naming the label the item now holds. So
+`undo`, `redo` and `jump_to_version` need no bench variant: the history they
+walk already holds the bench steps, and `get_history` lists them among the rest.
+
+**A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
+IMG_0042@142,198: the track is at the cluster stage; upgrade it before
+committing"*, *"Cannot set that verdict: image 4 already has observation 1 in;
+turn it out first"*, *"Nothing on the bench is called bull-nose."*
 
 ## Addressing
 
@@ -2665,8 +2711,24 @@ where a test hands no host over.
   guessing at a dialog. The notice it reads is written where the process is
   written, so it is empty before an operation, says what is running during it,
   and is empty again afterwards.
-- **The catalog is forty tools**, eleven of them reads and one of them the
-  `Save` kind that carries `destructiveHint: true`;
+- **The bench family, over a node whose keypoints are each point's exact
+  projection with a textured photograph cached for every image**: a cluster
+  started at a pixel, an observation added at another and a verdict on it are
+  three versions, and `get_bench_track` shows the verdict under the index the
+  add reported; an affine seed keeps the shape it was given; the three seed
+  forms are exclusive and a feature seed on a node with no `.sift` file is
+  refused naming the file; a point put on the bench is an item `get_bench`
+  lists, active, at the track stage, seated on that point; a split answers with
+  the label the half that came off took and that half is at the cluster stage; a
+  thresholds call moves the bars it names and leaves the rest; a commit answers
+  with a version, writes one `Edit` row as `Mcp`, and `undo` takes it back; a
+  rename answers with the new label and the old one then names nothing; each
+  refusal is the bench's own sentence and pushes no version; and the two steps
+  that read photographs defer to a worker, land their version, and are what
+  `get_background_task` reports afterwards, with the measurements reaching the
+  wire under the observation indexes they were computed for.
+- **The catalog is fifty-four tools**, thirteen of them reads and one of them
+  the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
   advertises `panel_name`, `hud` and `max_dimension`.

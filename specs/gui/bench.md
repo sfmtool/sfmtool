@@ -26,10 +26,11 @@ the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the Bench group is a child
 of), [`background-tasks.md`](background-tasks.md) (where an evaluation runs),
-[`action-log.md`](action-log.md) (the row each step writes), and
+[`action-log.md`](action-log.md) (the row each step writes),
+[`mcp-server.md`](mcp-server.md) (the surface § "The wire" is a family of), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
-(the proposal this is step 2 of, and where the searches, the remaining overlays
-and the wire are still going).
+(the proposal this is step 2 of, and where the searches and the remaining
+overlays are still going).
 
 ---
 
@@ -40,6 +41,17 @@ The bench half of the history is in
 `AppState` method in [bench.rs](../../crates/sfm-explorer/src/bench.rs).
 
 ```rust
+/// Where a seed's position and shape come from.
+pub(crate) enum Seed {
+    /// A pixel, with the patch's half-width in that image's own pixels where
+    /// the caller named one.
+    Pixel { pixel: [f64; 2], radius_px: Option<f64> },
+    /// A pixel with the keypoint-frame affine shape read at it.
+    Affine { pixel: [f64; 2], shape: [[f64; 2]; 2] },
+    /// A `.sift` feature, which carries its own position and shape.
+    Feature { feature: u32 },
+}
+
 pub struct Version {
     pub serial: VersionSerial,
     pub label: String,
@@ -77,10 +89,10 @@ impl AppState {
         -> Option<&Arc<EditableTrack>>;
 
     pub(crate) fn put_point_on_bench(&mut self, point: PointRef) -> Result<String, String>;
-    pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, pixel: [f32; 2],
-                                      radius_px: f32) -> Result<String, String>;
+    pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, seed: &Seed)
+        -> Result<String, String>;
     pub(crate) fn add_bench_observation(&mut self, label: &str, image: ImageRef,
-                                        pixel: [f32; 2]) -> Result<(), String>;
+                                        seed: &Seed) -> Result<(), String>;
     pub(crate) fn set_bench_verdict(&mut self, id: ReconId, label: &str,
                                     observation: usize, verdict: Verdict) -> Result<(), String>;
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
@@ -114,8 +126,20 @@ knows that; the steps take the label, so the question of which item is answered
 in one place rather than inside each step. `active_track_label` is what a caller
 resolves it with.
 
+**One `Seed` for the two steps that place an observation.** A caller arrives
+holding one of three things -- a pixel, a pixel with a size or a shape read at
+it, or a `.sift` feature, which carries both -- and the step should not care
+which. `Seed::Pixel` with no radius means "I have no shape to give you, use the
+one you have": the radius the Create 3D Point prompt would offer when a cluster
+is being started, and the track's reference shape when an observation is being
+added to one, which is what a right-click means. A `Seed::Feature` is read
+through `AppState::sift_cache`, the cache the Image Detail overlay draws its
+ellipses from, so a feature seeded here is the mark the person is looking at;
+its stored affine is already the cluster stage's own convention and is passed on
+as it stands.
+
 **The two steps that name a pixel are invoked from the Image Detail context
-menu.** `start_bench_cluster` and `add_bench_observation` take a pixel, and the
+menu.** `start_bench_cluster` and `add_bench_observation` take a seed, and the
 viewer's one way to name a pixel is a right-click in that panel, where the two
 point edits that need one already live
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Image Detail:
@@ -283,6 +307,78 @@ the dock reads the label off the bench at that position before calling the step.
 
 ---
 
+## The wire
+
+An agent gets the same bench a human does, through fifteen MCP tools
+([mcp-server.md](mcp-server.md) § "The bench family"), in
+[mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
+the `AppState` methods above**, which is the whole of what makes an agent's
+verdict, split or commit a version in the history the human is looking at.
+
+Every tool takes `reconstruction_label`. The item tools take `item`; the track
+tools take `track`, and **a call that names no track acts on the active one**,
+resolved with `active_track_label`, which is what a gesture in the Track Edit
+panel means when it names no item.
+
+```jsonc
+// The two creates are named by the stage they make, and where the first
+// observation comes from is a parameter.
+// create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4,
+//                        "pixel": [142.0, 197.5], "radius_px": 7.5 }
+// create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4,
+//                        "pixel": [142.0, 197.5], "affine": [[7.1, -0.4], [0.4, 7.1]] }
+// create_bench_cluster { "reconstruction_label": "bull", "camera_image": 4, "feature": 847 }
+// create_bench_track   { "reconstruction_label": "bull", "point": 1207 }
+//
+// The list.
+// get_bench            { "reconstruction_label": "bull" }
+// activate_bench_item  { "reconstruction_label": "bull", "item": "IMG_0042@142,198" }
+// rename_bench_item    { "reconstruction_label": "bull", "item": "IMG_0042@142,198",
+//                        "label": "bull-nose" }
+// discard_bench_item   { "reconstruction_label": "bull", "item": "bull-nose" }
+//
+// One track on it. "track" omitted means the active track.
+// get_bench_track              { "reconstruction_label": "bull" }
+// add_bench_track_observation  { "reconstruction_label": "bull", "track": "bull-nose",
+//                                "camera_image": 7, "pixel": [88.5, 210.0] }
+// set_bench_track_verdict      { "reconstruction_label": "bull", "observation": 3,
+//                                "verdict": "in" }
+// apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
+// evaluate_bench_track         { "reconstruction_label": "bull" }
+// set_bench_track_stage        { "reconstruction_label": "bull", "stage": "track" }
+// split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
+// commit_bench_track           { "reconstruction_label": "bull" }
+```
+
+**The two reads have no panel gesture behind them**, because a panel shows what
+they answer. `get_bench` is the Bench group as JSON: each item's label, kind,
+stage, origin and counts, and the active label per kind. `get_bench_track` is
+the Track Edit table: the stage and its data, the origin, the thresholds, and
+every observation with its provenance, verdict and both stages' measurements
+where they exist. **An observation is addressed by its position in that list**,
+which is stable for the life of the track, so an index an agent is holding after
+a verdict or an evaluation still names the same observation. The template's
+samples and the consensus bitmap are reported as present or absent rather than
+sent: they are pictures, and that surface is not a data channel.
+
+**Every step answers as an edit answers**, with the version it pushed and the
+sentence the Action Log recorded, plus the `item` it acted on. A create and a
+split name what they made, a rename names the label the item now holds, and an
+added observation names the index it took. So `undo`, `redo` and
+`jump_to_version` need no bench variant: the history they walk already holds the
+bench steps.
+
+**The two steps that read photographs answer in two levels**, as the bundle
+adjustment does: with the version they pushed when they finish inside the reply
+window, and with `running: true` and an `operation_id` to poll
+`get_background_task` with when they do not. A step that finds nothing to do
+starts no task and answers with the version the node stands at.
+
+**A refusal is the step's own sentence and pushes nothing.** The wire wraps
+nothing: what an agent reads is the sentence the panel's status line would show.
+
+---
+
 ## Testing
 
 [bench/tests.rs](../../crates/sfm-explorer/src/bench/tests.rs), headless, over
@@ -314,6 +410,14 @@ point's exact projection and a photograph cached for every image:
 The steps themselves are core's and are tested there, over a synthetic textured
 plane whose numbers are known to the pixel.
 
+The wire is tested in
+[mcp/tests.rs](../../crates/sfm-explorer/src/mcp/tests.rs), over the same
+fixture with a label on the node, for what the boundary owes: each tool being
+the `AppState` call the panel makes, an observation index surviving the steps
+that follow it, a refusal arriving as the step's own sentence, and the two
+photometric steps deferring to a worker and landing their version
+([mcp-server.md](mcp-server.md) § "Testing").
+
 ---
 
 ## Non-goals
@@ -331,4 +435,7 @@ plane whose numbers are known to the pixel.
   Detail panel does draw the active track, as its bench layer
   ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
   layer").
-- **The wire.** The MCP tools for the bench are proposed there too.
+- **Wire tools for the searches.** The three tools that would drive a descriptor
+  search, a view sweep and a pull-in wait on the core steps behind them, and are
+  proposed in the same draft. The fifteen tools for the steps that exist are
+  § "The wire".

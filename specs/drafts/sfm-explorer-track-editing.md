@@ -675,6 +675,17 @@ out from the rest:
 
 ## Part 8: the wire
 
+**Built**, for every tool whose step exists, and filed as
+[`../gui/bench.md`](../gui/bench.md) § "The wire" and
+[`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family": the two
+creates with all three seed forms, the three item tools, the two reads, and the
+seven steps on a track (`add_bench_track_observation`,
+`set_bench_track_verdict`, `apply_bench_track_thresholds`,
+`evaluate_bench_track`, `set_bench_track_stage`, `split_bench_track` and
+`commit_bench_track`). **Still proposed here** are the three whose core steps
+are not built: `search_bench_track_descriptors`, `sweep_bench_track_views` and
+`pull_into_bench_track`, which arrive with the steps below that build them.
+
 An agent gets the same bench a human does, through tools that are each one
 `AppState` call, on the GUI thread at the same point in the frame as every
 other tool ([`../gui/mcp-server.md`](../gui/mcp-server.md) § "Threading"). An
@@ -873,11 +884,14 @@ print(report["label"])                         # the sentence the Action Log wou
   evaluation and the stage change as background tasks, each of which is one
   `AppState` call that decodes the images through the node's full-resolution
   cache, calls the core function, and pushes the result.
+- The wire, in `mcp/bench.rs`: fifteen tools that are each one of those
+  `AppState` calls, with the two reads that have no panel gesture behind them
+  because a panel shows what they answer.
 
 **Still proposed here**: the preview buffer in the 3D viewer, the Image Browser
-borders, the cluster stage's template drawn beside each member's tile, the
-searches and the pull-in with their toolbar entries and the coherence grid, and
-the wire tools.
+borders, the cluster stage's template drawn beside each member's tile, and the
+searches and the pull-in with their toolbar entries, their coherence grid and
+their three wire tools.
 
 **No second SIFT cache.** The viewer already holds each image's keypoints
 (positions and affine shapes, never descriptors) in `AppState::sift_cache`, and
@@ -1069,5 +1083,10 @@ covered by the existing layout test that walks every tab.
 4. The view sweep with the keypoint-search switch.
 5. Pull-in from a point and from the bench, the coherence grid, and the merging
    commit. *Split off selected observations* arrived with step 2.
-6. The wire.
+6. **Done**, for the tools whose steps exist: the two creates, the three item
+   tools, the two reads and the seven steps on a track. Filed as
+   [`../gui/bench.md`](../gui/bench.md) § "The wire" and
+   [`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family". What
+   remains of the wire is the three tools for the searches, which arrive with
+   the steps above that build them.
 7. The `.matches` opener, if step 2's cluster stage earns it.

@@ -134,6 +134,7 @@ impl App {
             self.image_detail.forget_recon(id);
             self.point_track_detail.forget_recon(id);
             self.intrinsics_detail.forget_recon(id);
+            self.track_edit.forget_recon(id);
         }
         for (outcome, reply) in applied.outcomes.into_iter().zip(replies) {
             match outcome {
