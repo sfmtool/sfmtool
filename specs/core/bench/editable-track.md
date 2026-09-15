@@ -285,12 +285,12 @@ spells `duplicate_image`.
 ## The two stages
 
 **The cluster stage** is a `.matches` cluster with its cluster-patches section,
-in memory: a **reference** observation, a template cut around it, and per
-observation a seed (a position and a 2x2 affine shape in that image's pixels),
-the refined absolute position and shape, the achieved ZNCC, the shift from the
-seed, the observation's own tile localizability and a status in the
-`member_status` legend. No pose, no position, no normal. It is what a track is
-when it starts from a pixel or from a search hit. The template is `Option`
+in memory: a **reference** observation, a **radius**, a template cut around the
+reference, and per observation a seed (a position and a 2x2 affine shape in that
+image's pixels), the refined absolute position and shape, the achieved ZNCC, the
+shift from the seed, the observation's own tile localizability and a status in
+the `member_status` legend. No pose, no position, no normal. It is what a track
+is when it starts from a pixel or from a search hit. The template is `Option`
 because cutting it reads the reference's pixels: a track carries one once an
 evaluation has run, and none before that.
 
@@ -302,10 +302,42 @@ leave-one-out ZNCC, its reprojection error, its ray angle and its tile
 localizability. It is what a track is when put on the bench from a committed
 point.
 
-The affine shape a cluster seed carries is the same `S` the `.matches`
-cluster-patches section stores: the map from the detector's canonical unit frame
-onto that image's pixels, so its column norms are the sighting's image-space
-extent.
+### The cluster stage's units
+
+The affine shape a cluster observation carries, seeded or refined, is the same
+`S` the `.matches` cluster-patches section stores: the map from the detector's
+canonical **keypoint frame** onto that image's pixels. It is a scale and not a
+size. What makes it a size is the cluster's **radius**: the patch is the square
+`[-radius, radius]` of keypoint-frame units, so a sighting's pixel half-width
+along a column is `radius * ||column||`, and a shape read without the radius
+says nothing about how large the patch is.
+
+The radius lives on the cluster payload, and it is the one place the size is
+written down:
+
+- **An evaluation runs the refinement kernel at it**, in place of the radius in
+  the kernel parameters it is otherwise handed. A round run at another radius
+  would register a different square from the one the person put on the bench, so
+  a seed's meaning cannot change under it.
+- **A seed named in pixels is divided by it.** `ClusterSeed::from_pixel` takes a
+  half-width in source-image pixels, exactly as creating a point from a pixel
+  does, and stores `radius_px / radius` per unit, so the patch spans the pixels
+  that were asked for. A `.sift` feature's own shape is already in these units
+  and is stored as it is.
+- **Both stage transitions convert through it.** The `.sfmr` rule for a
+  keypoint's shape states a patch's half-axes in pixels, so a downgrade divides
+  the projected columns by the radius and an upgrade multiplies the reference's
+  by it before framing the surfel. A track taken down and put back up is the
+  size it was.
+- **Everything that draws reads it**: the bench layer's parallelogram in the
+  Image Detail panel and the Track Edit panel's tile. A cluster carries its
+  radius from the moment it is started, so a seed is drawn at the size it was
+  named before anything has read a photograph, and an evaluation that finds the
+  same scale leaves the outline where it is.
+
+The template carries no radius of its own. Two copies of one number could
+disagree, and a template that disagreed with the seeds it was cut from would be
+a cut of a square nothing else was measured over.
 
 ## The steps
 
@@ -328,16 +360,22 @@ back.
 
 `create_cluster` puts a new cluster-stage track on the bench with one
 observation, which is also its reference and is `in`. The seed is a pixel with a
-radius (`ClusterSeed::from_pixel`, for the patch every detector missed, where
-nothing says how large the patch is so the caller names it) or a `.sift` feature
-with its own position and shape (`ClusterSeed::from_feature`). The seed's image
-stem is carried because the label is minted from it.
+half-width in pixels (`ClusterSeed::from_pixel`, for the patch every detector
+missed, where nothing says how large the patch is so the caller names it) or a
+`.sift` feature with its own position and shape (`ClusterSeed::from_feature`).
+The cluster takes the default radius, which is the refinement kernel's own, and
+a pixel seed's shape is sized against that radius, so the patch spans the pixels
+the gesture asked for. The seed's image stem is carried because the label is
+minted from it.
 
 ### Growing and judging
 
 `add_observation` appends a `candidate`, unpinned, with a cluster seed at the
 named pixel. The shape defaults to the reference observation's own, so a pixel
-gesture on a track that already has a scale needs no radius prompt.
+gesture on a track that already has a scale needs no radius prompt and lands at
+that track's size. With no reference to copy it is the identity, which is one
+pixel to the keypoint-frame unit: a patch of `[-radius, radius]` pixels, and
+what a track with nothing to say about its own scale is worth.
 
 `set_verdict` sets one verdict **by hand** and pins it. `apply_thresholds`
 paints the proposed verdicts from the stored measurements onto the unpinned
@@ -387,10 +425,12 @@ through its borrowed-pyramid entry. The kernel picks the reference -- its
 largest-scale usable member -- cuts the template there and warps every other
 seed onto it; what lands in each observation's slot is the refined position and
 shape, the achieved ZNCC, the drift from the seed, the observation's own tile
-localizability and the kernel's `member_status`. The payload's reference is set
-to where the kernel cut, and `ClusterPayload::template` to the reference's own
-tile on the template grid, sampled by the kernel's own sampler. No pose is read,
-so a cluster evaluates on a node whose images have none.
+localizability and the kernel's `member_status`. The kernel runs at the
+cluster's own radius rather than the one in the evaluation's options, so the
+square it registers is the square the seeds were written against. The payload's
+reference is set to where the kernel cut, and `ClusterPayload::template` to the
+reference's own tile on the template grid, sampled by the kernel's own sampler.
+No pose is read, so a cluster evaluates on a node whose images have none.
 
 The tile localizability is scored at each observation's **seed** geometry, which
 is where the kernel's own gate scores it, so the column and a
@@ -443,8 +483,8 @@ toggle straight to it and push no version for a step that did not happen.
 1. **Triangulate** the `in` observations' refined cluster positions through
    their cameras.
 2. **Frame** the patch at that position: the in-plane axes and half-extents are
-   what the reference observation's affine shape unprojects to on the plane at
-   the triangulated depth
+   what the reference observation's affine shape, scaled by the cluster's
+   radius, unprojects to on the plane at the triangulated depth
    ([`OrientedPatch::from_affine_shape_at_depth`](../patch/patch-cloud.md)), and
    the normal is the mean viewing direction, which is how `to_embedded_patches`
    frames a surfel from the views that see it. The reference is the cluster's
@@ -462,7 +502,9 @@ observation is re-seeded at its keypoint with the affine shape the format
 derives by projecting the frame at that observation's anchor
 ([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md)
 § "Deriving keypoint shape, scale, and orientation", the inverse of the framing
-the upgrade does, so the two directions state one relationship). The reference
+the upgrade does, so the two directions state one relationship), divided by the
+new cluster's radius because that rule's columns are pixel half-axes and a
+cluster seed is per keypoint-frame unit. The reference
 becomes the `in` observation with the largest projected patch scale, which is
 the one showing the most of the patch, and the position, the frame and the
 bitmap are dropped, and the track-stage measurements with them, since each was
@@ -581,6 +623,10 @@ class whose observations cross as dicts, with each stage's measurements under
 it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`,
 `"candidate"`; `"origin"`, `"descriptor"`, `"sweep"`, `"pixel"`, `"point"`).
 Refusals are `ValueError` carrying the core sentence.
+
+`create_cluster` takes either `radius_px`, a half-width in that image's pixels,
+or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
+cluster's radius those units are read over, and is `None` at the track stage.
 
 `apply_thresholds` takes each bar as a keyword and moves only the ones given, so
 a script can differ from the pipeline's default in one number without restating

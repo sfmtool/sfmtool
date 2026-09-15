@@ -113,11 +113,11 @@ pub(super) fn draw(
             );
         }
         Stage::Cluster(payload) => {
-            let radius = payload
-                .template
-                .as_ref()
-                .map_or(1.0, |template| template.radius);
-            draw_cluster_stage(painter, &here, radius, &to_panel, &mut marks);
+            // The cluster's own radius, which it carries from the moment it is
+            // started: a seed draws at the size it was named before anything
+            // has evaluated it, and an evaluation that finds the same scale
+            // leaves the outline where it is.
+            draw_cluster_stage(painter, &here, payload.radius, &to_panel, &mut marks);
         }
     }
 
@@ -236,6 +236,10 @@ fn draw_track_stage(
 
 /// The cluster stage: per observation, the template's square under the refined
 /// shape, with the seed's own square dashed behind it.
+///
+/// `radius` is the cluster's template half-width in keypoint-frame units, which
+/// is the only thing that says how large these shapes are: a shape maps one
+/// such unit to pixels and the patch is `[-radius, radius]` of them.
 fn draw_cluster_stage(
     painter: &egui::Painter,
     here: &[(usize, &Observation)],

@@ -81,14 +81,21 @@ impl std::fmt::Display for Verdict {
 pub struct ClusterMeasurement {
     /// Where the seed put the observation, in that image's pixels.
     pub seed_position: [f64; 2],
-    /// The seed's affine shape: the detector's canonical unit frame mapped onto
-    /// this image's pixels, the same `S` the `.matches` cluster-patches section
-    /// stores.
+    /// The seed's affine shape: the detector's canonical **keypoint frame**
+    /// mapped onto this image's pixels, the same `S` the `.matches`
+    /// cluster-patches section stores.
+    ///
+    /// A shape is a scale and not a size on its own. The patch is the square
+    /// `[-r, r]^2` of keypoint-frame units, where `r` is
+    /// [`ClusterPayload::radius`], so the sighting's pixel half-width along a
+    /// column is `r * ||column||` and a shape read without that radius says
+    /// nothing about how large the patch is.
     pub seed_shape: [[f64; 2]; 2],
     /// Where the refinement put the observation, in that image's pixels.
     pub position: Option<[f64; 2]>,
     /// The refined absolute affine shape, in the same convention as
-    /// [`Self::seed_shape`].
+    /// [`Self::seed_shape`]: keypoint frame to pixels, over the same
+    /// `[-r, r]^2` square.
     pub shape: Option<[[f64; 2]; 2]>,
     /// The windowed ZNCC the refinement achieved against the template.
     pub zncc: Option<f64>,
@@ -207,9 +214,37 @@ pub struct ClusterPayload {
     /// Which observation the template is cut around, as an index into
     /// [`EditableTrack::observations`].
     pub reference: usize,
+    /// The template's half-width, in keypoint-frame units: the patch every
+    /// observation's shape is read over is the square `[-radius, radius]^2` of
+    /// those units.
+    ///
+    /// **This is the cluster's one scale.** The seed and refined shapes in
+    /// [`ClusterMeasurement`] are maps from keypoint-frame units to pixels and
+    /// carry no size of their own, so what says how large the patches are is
+    /// this number and nothing else. An evaluation runs the refinement kernel
+    /// at exactly this radius rather than at
+    /// [`ClusterRefineParams::radius`](crate::patch::cluster_refine::ClusterRefineParams::radius),
+    /// so the meaning of a seed cannot change under it; everything drawn --
+    /// the overlay's parallelogram, the Track Edit tile -- is read at it too.
+    pub radius: f64,
     /// The cut itself. `None` until an evaluation cuts it, because the cut is a
     /// function of the reference's pixels and the bench holds no photographs.
     pub template: Option<ClusterTemplate>,
+}
+
+impl Default for ClusterPayload {
+    /// A cluster cut around observation 0, at the refinement kernel's own
+    /// template radius, with no template yet.
+    ///
+    /// The radius is read from the kernel's parameter type rather than written
+    /// out again, so a bench cluster and a batch pass start from one scale.
+    fn default() -> Self {
+        Self {
+            reference: 0,
+            radius: ClusterRefineParams::default().radius,
+            template: None,
+        }
+    }
 }
 
 /// The template the cluster stage registers its observations onto.
@@ -219,12 +254,14 @@ pub struct ClusterPayload {
 /// correlation the cascade runs z-normalizes it inside the kernel, over the
 /// window and without the pixels that window drops, so what is kept here is the
 /// picture rather than the kernel's working copy of it.
+///
+/// The cut's half-width is [`ClusterPayload::radius`] and is not repeated here:
+/// one number says how large the cluster's patches are, and a template that
+/// carried a second copy of it could disagree with the seeds it was cut from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterTemplate {
     /// The `(resolution, resolution, channels)` samples.
     pub samples: Array3<f32>,
-    /// The half-width the cut used, in the reference's keypoint-frame units.
-    pub radius: f64,
 }
 
 /// The track stage's own data: an `embedded_patches` point that is not in the
@@ -367,10 +404,7 @@ impl EditableTrack {
     pub fn empty_cluster() -> Self {
         Self {
             observations: Vec::new(),
-            stage: Stage::Cluster(ClusterPayload {
-                reference: 0,
-                template: None,
-            }),
+            stage: Stage::Cluster(ClusterPayload::default()),
             origin: None,
             thresholds: Thresholds::default(),
         }

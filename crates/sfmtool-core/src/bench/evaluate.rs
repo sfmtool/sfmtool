@@ -58,6 +58,15 @@ use super::track::{
 #[derive(Debug, Clone, Default)]
 pub struct EvaluateOptions {
     /// The cluster stage's refinement kernel.
+    ///
+    /// Its
+    /// [`radius`](crate::patch::cluster_refine::ClusterRefineParams::radius) is
+    /// the one field an evaluation does **not** take from here: the template's
+    /// half-width is
+    /// [`ClusterPayload::radius`](super::track::ClusterPayload::radius),
+    /// because it is what every one of the track's shapes was written against
+    /// and a round run at another radius would be measuring a different square
+    /// from the one the person put on the bench.
     pub cluster: ClusterRefineParams,
     /// The track stage's discrete localization kernel.
     pub localize: KeypointLocalizeParams,
@@ -185,7 +194,11 @@ impl std::fmt::Display for EvaluateReport {
 /// member), cuts the template there, and warps every other seed onto it. What
 /// lands in each observation's slot is the refined position and shape, the
 /// achieved ZNCC, the drift from the seed, the observation's own tile
-/// localizability and the kernel's `member_status`. No pose is read.
+/// localizability and the kernel's `member_status`. No pose is read. The
+/// template's half-width is the cluster's own
+/// [`ClusterPayload::radius`](super::track::ClusterPayload::radius) rather than
+/// the one in `options`, so the square the round registers is the square the
+/// seeds were written against.
 ///
 /// **At the track stage** the track's surfel is registered into every view by
 /// the two kernels the embed pass and `add_observation` chain, an `out`
@@ -289,6 +302,12 @@ fn evaluate_cluster(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
+    // The cluster's own radius, not the options': the seeds were written
+    // against it, so it is what says which square is being registered.
+    let params = ClusterRefineParams {
+        radius: payload.radius,
+        ..options.cluster.clone()
+    };
     let mut next = track.clone();
     let mut members: Vec<usize> = Vec::new();
     // The per-image feature tables the kernel reads its seeds out of. The bench
@@ -343,7 +362,7 @@ fn evaluate_cluster(
             &[0, members.len() as u32],
             &member_images,
             &member_features,
-            &options.cluster,
+            &params,
             None,
         );
         progress_note!(phase, "{} observations", members.len());
@@ -405,7 +424,7 @@ fn evaluate_cluster(
                 images[observation.image as usize].pyramid,
                 measurement.seed_position,
                 measurement.seed_shape,
-                &options.cluster,
+                &params,
             );
             next.observations[i]
                 .cluster
@@ -426,18 +445,18 @@ fn evaluate_cluster(
             images[observation.image as usize].pyramid,
             measurement.seed_position,
             measurement.seed_shape,
-            &options.cluster,
+            &params,
         )?;
-        let resolution = options.cluster.resolution.max(2) as usize;
+        let resolution = params.resolution.max(2) as usize;
         let channels = grid.len() / (resolution * resolution);
         Some(ClusterTemplate {
             samples: Array3::from_shape_vec((resolution, resolution, channels), grid)
                 .expect("the sampler fills every grid cell of every channel"),
-            radius: options.cluster.radius,
         })
     });
     next.stage = Stage::Cluster(ClusterPayload {
         reference: reference.unwrap_or(payload.reference),
+        radius: payload.radius,
         template,
     });
 

@@ -124,6 +124,13 @@ impl std::fmt::Display for StageReport {
 /// observations were right and whose 3D hypothesis was the problem: the cluster
 /// kernel then judges the observations on appearance alone.
 ///
+/// Both directions go through the cluster's
+/// [`radius`](super::track::ClusterPayload::radius): the format's rule states a
+/// patch's half-axes in pixels while a cluster shape is per keypoint-frame unit
+/// over `[-radius, radius]`, so a downgrade divides the projected columns by it
+/// and an upgrade multiplies the reference's by it. A track taken down and put
+/// back up is therefore the size it was.
+///
 /// `images` is one [`ProjectedImage`] per image of `edited`, as every
 /// photometric step takes them; a downgrade reads none of them, because
 /// projecting a frame needs poses and lenses rather than pixels.
@@ -252,11 +259,19 @@ fn upgrade(
         .expect("the reference was picked among the observations that carry a seed");
     let view = &images[observation.image as usize];
     let depth = (triangulation.point - view.cam_from_world.inverse_translation_origin()).norm();
+    // A cluster shape maps keypoint-frame units to pixels and the patch is
+    // `[-radius, radius]` of them, while the framing rule reads a shape whose
+    // columns are the patch's own pixel half-axes. The radius is what carries
+    // between the two conventions, and it is the cluster's own.
+    let shape = scaled(
+        measurement.shape.unwrap_or(measurement.seed_shape),
+        payload.radius,
+    );
     let framed = OrientedPatch::from_affine_shape_at_depth(
         view.camera,
         view.cam_from_world,
         measurement.best_position(),
-        measurement.shape.unwrap_or(measurement.seed_shape),
+        shape,
         depth,
     )
     .ok_or(StageError::NoReference)?;
@@ -316,6 +331,17 @@ fn upgrade_reference(
         .map(|(i, _)| i)
 }
 
+/// Scale both columns of an affine shape, which is how a patch's pixel
+/// half-axes and a keypoint-frame shape convert into each other: the patch is
+/// `[-radius, radius]` keypoint-frame units across, so its half-axes are
+/// `radius` times the shape's columns.
+fn scaled(shape: [[f64; 2]; 2], by: f64) -> [[f64; 2]; 2] {
+    [
+        [shape[0][0] * by, shape[0][1] * by],
+        [shape[1][0] * by, shape[1][1] * by],
+    ]
+}
+
 /// Track to cluster: re-seed every observation from its keypoint and the shape
 /// the frame projects to there, and drop the 3D with the measurements made
 /// against it.
@@ -341,6 +367,13 @@ fn downgrade(
     // has there. The shape is the format's own rule for deriving a keypoint's
     // shape from a patch frame, which is the inverse of the framing the upgrade
     // does, so the two directions state one relationship.
+    //
+    // That rule's columns are the patch's projected pixel half-axes, and a
+    // cluster seed is a keypoint-frame shape read over `[-radius, radius]`, so
+    // each column is divided by the radius the new cluster takes. Without that
+    // the patch would arrive at the cluster stage `radius` times the size the
+    // surfel really has, and the next evaluation would register that square.
+    let cluster = ClusterPayload::default();
     let mut next = track.clone();
     let mut seeded: Vec<Option<(usize, f64)>> = Vec::new();
     for (i, observation) in track.observations.iter().enumerate() {
@@ -366,10 +399,13 @@ fn downgrade(
             seeded.push(None);
             continue;
         };
-        let shape = [
-            [f64::from(shape[0][0]), f64::from(shape[0][1])],
-            [f64::from(shape[1][0]), f64::from(shape[1][1])],
-        ];
+        let shape = scaled(
+            [
+                [f64::from(shape[0][0]), f64::from(shape[0][1])],
+                [f64::from(shape[1][0]), f64::from(shape[1][1])],
+            ],
+            1.0 / cluster.radius,
+        );
         let det = shape[0][0] * shape[1][1] - shape[0][1] * shape[1][0];
         if !det.is_finite() || det == 0.0 {
             seeded.push(None);
@@ -400,7 +436,7 @@ fn downgrade(
         reference,
         // A template is a cut around a particular reference in a particular
         // image, and this one has just been picked: the next evaluation cuts it.
-        template: None,
+        ..cluster
     });
     Ok((next, reference))
 }

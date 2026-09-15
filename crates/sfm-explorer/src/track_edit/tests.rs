@@ -33,7 +33,10 @@ fn state() -> (AppState, ReconId) {
     let (w, h) = (camera.width, camera.height);
     for image in 0..state.scene[0].image_count() {
         let data: Vec<u8> = (0..(w * h * 3))
-            .map(|i| ((i / 3) % 37 * 7 + (i / 3 / w) % 11 * 13) as u8)
+            .map(|i| {
+                let p = i / 3;
+                ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
+            })
             .collect();
         state
             .full_res_cache

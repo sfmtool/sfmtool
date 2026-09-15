@@ -40,9 +40,16 @@ fn state() -> (AppState, ReconId) {
     for image in 0..state.scene[0].image_count() {
         // A pattern rather than a constant: a flat field gives the correlation
         // kernels nothing to register against, and a refusal would be the
-        // fixture's rather than the code's.
+        // fixture's rather than the code's. Its periods are a few pixels and
+        // they differ between the axes, because the patch of the demo's frames
+        // is only a few pixels across: a pattern coarser than the template
+        // hands the localizability gate a one-dimensional tile, and every
+        // member is refused before anything fits it.
         let data: Vec<u8> = (0..(w * h * 3))
-            .map(|i| ((i / 3) % 37 * 7 + (i / 3 / w) % 11 * 13) as u8)
+            .map(|i| {
+                let p = i / 3;
+                ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
+            })
             .collect();
         state
             .full_res_cache

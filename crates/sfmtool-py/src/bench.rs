@@ -98,6 +98,10 @@ fn provenance_to_dict<'py>(py: Python<'py>, p: Provenance) -> PyResult<Bound<'py
 /// A 2x2 affine shape as the `(2, 2)` array Python reads it as: row `r` is the
 /// image of the detector frame's `r`-th axis, which is the layout the
 /// `.matches` cluster-patches section stores.
+///
+/// The shape is per keypoint-frame unit and the patch is `[-radius, radius]` of
+/// them at the track's `radius`, so a caller that wants a size in pixels
+/// multiplies a column's norm by that.
 fn shape_array(shape: [[f64; 2]; 2]) -> Array2<f64> {
     Array2::from_shape_vec((2, 2), shape.concat()).expect("four values in a 2x2")
 }
@@ -232,6 +236,18 @@ impl PyEditableTrack {
     #[getter]
     fn reference(&self) -> Option<usize> {
         Some(self.inner.cluster()?.reference)
+    }
+
+    /// The cluster stage's template half-width in keypoint-frame units, or
+    /// ``None`` at the track stage.
+    ///
+    /// This is the cluster's one scale: every ``seed_shape`` and ``shape`` on
+    /// its observations maps one keypoint-frame unit to that image's pixels and
+    /// the patch is the square ``[-radius, radius]`` of them, so a sighting's
+    /// pixel half-width along a column is ``radius * norm(column)``.
+    #[getter]
+    fn radius(&self) -> Option<f64> {
+        Some(self.inner.cluster()?.radius)
     }
 
     /// The bars the threshold painting judges against.
@@ -435,9 +451,13 @@ fn create_track(
 ///
 /// `image_stem` is what the label is minted from: a hand-placed seed is labelled
 /// ``<stem>@<x>,<y>`` and a ``.sift`` feature ``<stem>#<feature>``. Either
-/// `radius_px` (an isotropic seed around a pixel nobody detected) or `shape` (a
-/// ``2x2`` affine shape, the map from the detector's canonical unit frame onto
-/// this image's pixels) says how large the patch is.
+/// `radius_px` (an isotropic seed around a pixel nobody detected, in
+/// source-image pixels from the pixel to the patch's edge) or `shape` (a
+/// ``2x2`` affine shape, the map from the detector's canonical **keypoint
+/// frame** onto this image's pixels) says how large the patch is. A shape is
+/// read over the square ``[-radius, radius]`` of keypoint-frame units, where
+/// ``radius`` is the new track's :attr:`EditableTrack.radius`, so a
+/// `radius_px` becomes the shape ``radius_px / radius`` times the identity.
 ///
 /// The template is left uncut: cutting it reads the reference's pixels, and this
 /// step reads no photograph. Returns ``(Bench, EditableTrack)``.
@@ -454,7 +474,7 @@ fn create_cluster(
 ) -> PyResult<(PyBench, PyEditableTrack)> {
     let shape = match (shape, radius_px) {
         (Some(shape), _) => shape,
-        (None, Some(r)) => [[r, 0.0], [0.0, r]],
+        (None, Some(r)) => ClusterSeed::shape_from_radius_px(r),
         (None, None) => {
             return Err(PyValueError::new_err(
                 "a cluster seed needs a 'radius_px' or a 2x2 'shape': nothing in a \
@@ -483,8 +503,10 @@ fn create_cluster(
 /// is scored like any other; what it cannot do is be turned ``in`` while the
 /// other is.
 ///
-/// `shape` defaults to the reference observation's own, so a pixel gesture on a
-/// track that already has a scale needs no radius. `provenance` is one of
+/// `shape` is in the cluster stage's own convention (keypoint-frame units to
+/// pixels, over ``[-radius, radius]``) and defaults to the reference
+/// observation's own, so a pixel gesture on a track that already has a scale
+/// needs no radius. `provenance` is one of
 /// ``origin``, ``descriptor`` (with `feature`), ``sweep``, ``pixel`` or
 /// ``point`` (with `point`, which a commit then absorbs).
 ///

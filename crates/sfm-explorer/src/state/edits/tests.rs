@@ -527,6 +527,11 @@ fn embedded_state() -> AppState {
 ///
 /// Built here rather than through `to_embedded_patches`, which reads the `.sift`
 /// companions the demo value has no files for.
+/// The in-plane half-extent of the patch frame the two demo fixtures carry, in
+/// world units. At the demo's focal of 1000 and its cameras' distance of
+/// roughly 5, it projects to a few pixels.
+pub(crate) const PATCH_HALF_EXTENT: f32 = 0.02;
+
 pub(crate) fn embedded_demo(points: usize) -> SfmrReconstruction {
     use ndarray::Array2;
     use sfmtool_core::ObservationSource;
@@ -544,8 +549,8 @@ pub(crate) fn embedded_demo(points: usize) -> SfmrReconstruction {
     let mut u = Array2::<f32>::zeros((p, 3));
     let mut v = Array2::<f32>::zeros((p, 3));
     for i in 0..p {
-        u[[i, 0]] = 0.02;
-        v[[i, 1]] = 0.02;
+        u[[i, 0]] = PATCH_HALF_EXTENT;
+        v[[i, 1]] = PATCH_HALF_EXTENT;
     }
     recon.point_set.patch_u_halfvec_xyz = Some(u);
     recon.point_set.patch_v_halfvec_xyz = Some(v);
@@ -761,8 +766,16 @@ fn a_node_with_no_patch_frames_falls_back_to_the_named_radius() {
 /// The projections are what make the re-triangulation well-conditioned, and the
 /// three lengths are the three outcomes: point 0 is deleted by the edit, point 1
 /// becomes a bearing, point 2 stays finite and is re-solved.
+///
+/// Each patch frame is turned to face the cameras that observe it, the way
+/// `to_embedded_patches` frames one. [`embedded_demo`]'s world-axis-aligned
+/// frame is seen nearly edge-on from most of the demo's ring of cameras, and
+/// its two columns then project almost parallel -- a footprint a few tenths of
+/// a pixel across in one direction, which no photometric kernel can register
+/// and which would make a refusal here the fixture's rather than the code's.
 pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     use ndarray::Array2;
+    use sfmtool_core::patch::cloud::{mean_viewing_normal, OrientedPatch};
     use sfmtool_core::{ObservationSource, TrackObservation};
 
     let mut recon = embedded_demo(points);
@@ -785,6 +798,30 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
         keypoints[[row, 0]] = x as f32;
         keypoints[[row, 1]] = y as f32;
     }
+    // The frames, turned toward the cameras each point is seen from.
+    let half = f64::from(PATCH_HALF_EXTENT);
+    let mut u = Array2::<f32>::zeros((points, 3));
+    let mut v = Array2::<f32>::zeros((points, 3));
+    for p in 0..points {
+        let position = recon.point_set.points[p].position;
+        let centers: Vec<_> = (0..=(p % 3))
+            .map(|image| recon.image_table.images[image].camera_center())
+            .collect();
+        let normal = mean_viewing_normal(&position, &centers);
+        let patch = OrientedPatch::from_center_normal(
+            position,
+            normal,
+            nalgebra::Vector3::z(),
+            [half, half],
+        );
+        for c in 0..3 {
+            u[[p, c]] = (patch.u_axis[c] * half) as f32;
+            v[[p, c]] = (patch.v_axis[c] * half) as f32;
+        }
+    }
+    recon.point_set.patch_u_halfvec_xyz = Some(u);
+    recon.point_set.patch_v_halfvec_xyz = Some(v);
+
     let images = recon.image_count();
     recon.point_set.observation_counts = (0..points).map(|p| (p % 3) as u32 + 1).collect();
     recon.point_set.tracks = tracks;

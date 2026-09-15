@@ -90,6 +90,16 @@ class TestTheBench:
         assert track.reference == 0
         assert track.origin is None
 
+    def test_a_radius_in_pixels_is_the_size_the_patch_spans(self):
+        """The shape is per keypoint-frame unit; the radius is what sizes it."""
+        _, track = create_cluster(Bench(), 4, "IMG_0042", (142.0, 197.5), radius_px=7.5)
+        shape = np.asarray(track.observation(0)["cluster"]["seed_shape"])
+        # A column's pixel half-width is the radius times its norm, which is
+        # the half-width the call asked for.
+        np.testing.assert_allclose(
+            track.radius * np.linalg.norm(shape, axis=0), [7.5, 7.5]
+        )
+
     def test_a_cluster_from_a_feature_is_labelled_by_its_index(self):
         _, track = create_cluster(
             Bench(),
@@ -294,9 +304,15 @@ class TestEvaluating:
             seed = after["cluster"]["seed_position"]
             np.testing.assert_allclose(seed, keypoint, atol=1e-5)
             # The shape is the frame projected into that image, so it spans an
-            # area.
+            # area, and it is per keypoint-frame unit: read over the cluster's
+            # radius it is the patch's own footprint in that photograph, which
+            # fits inside it, rather than the radius times that, which would
+            # not.
             shape = np.asarray(after["cluster"]["seed_shape"])
             assert abs(np.linalg.det(shape)) > 0.0
+            half_widths = cluster.radius * np.linalg.norm(shape, axis=0)
+            height, width = images[after["image"]].shape[:2]
+            assert np.all(half_widths <= max(height, width)), half_widths
             # What the track stage measured went with the stage.
             assert "track" not in after
 
@@ -360,7 +376,9 @@ class TestEvaluating:
             seen[0],
             "IMG_0000",
             tuple(float(v) for v in keypoints[0]),
-            radius_px=3.0,
+            # A half-width in pixels, so a patch of 36 px across: a template of
+            # a few pixels has too little of the photograph in it to localize.
+            radius_px=18.0,
         )
         track, added = add_observation(
             track, seen[1], tuple(float(v) for v in keypoints[1])

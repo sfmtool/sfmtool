@@ -859,3 +859,52 @@ fn the_bench_layer_draws_nothing_without_a_track_or_outside_it() {
         "the layer drew in an image the track does not observe",
     );
 }
+
+/// A cluster started from a pixel is drawn at the size that gesture asked for,
+/// before anything has evaluated it.
+///
+/// The seed's shape is in keypoint-frame units and the cluster's radius is what
+/// turns them into pixels, so a layer that read the shape without the radius
+/// would draw the square several times over.
+#[test]
+fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
+    use sfmtool_core::bench::{create_cluster, Bench, ClusterSeed};
+
+    let node = SceneNode::demo(crate::state::edits::tests::projected_embedded_demo(12));
+    let pixel = [320.0, 240.0];
+    let radius_px = 24.0;
+    let (bench, report) = create_cluster(
+        &Bench::new(),
+        &ClusterSeed::from_pixel(0, "image_0", pixel, radius_px),
+    )
+    .expect("a usable seed");
+    let track = (**bench.track(&report.label).expect("just put on")).clone();
+
+    let paths = bench_shapes(
+        &node,
+        0,
+        BenchMenu {
+            busy: None,
+            active_track: Some(&track),
+        },
+    );
+    let outline = paths
+        .iter()
+        .find(|path| path.len() == 4)
+        .expect("the seed's square was drawn");
+    let photograph = pixels(640, 480);
+    for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let expected = to_panel(
+            &photograph,
+            [pixel[0] + s * radius_px, pixel[1] + t * radius_px],
+        );
+        let nearest = outline
+            .iter()
+            .map(|point| (*point - expected).length())
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            nearest < 0.01,
+            "the seed's corner ({s}, {t}) should be at {expected:?}, nearest drawn is {nearest} away",
+        );
+    }
+}

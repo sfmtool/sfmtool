@@ -235,10 +235,10 @@ fn default_point_label(edited: &EditedReconstruction, point: u32) -> String {
 /// The one observation a cluster-stage track starts with.
 ///
 /// The affine shape is the seed's own frame: the map from the detector's
-/// canonical unit frame onto this image's pixels, the same `S` the `.matches`
-/// cluster-patches section stores. A pixel someone pointed at has no detector
-/// behind it, so [`Self::from_pixel`] makes one from a radius; a `.sift`
-/// feature carries its own.
+/// canonical **keypoint frame** onto this image's pixels, the same `S` the
+/// `.matches` cluster-patches section stores. A pixel someone pointed at has no
+/// detector behind it, so [`Self::from_pixel`] makes one from a radius in
+/// pixels; a `.sift` feature carries its own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClusterSeed {
     /// The image, as an index into the node's image table.
@@ -247,18 +247,38 @@ pub struct ClusterSeed {
     pub image_stem: String,
     /// Where in it, in source-image px.
     pub pixel: [f64; 2],
-    /// The affine shape at that pixel.
+    /// The affine shape at that pixel: keypoint-frame units to this image's
+    /// pixels, read over the square `[-r, r]^2` where `r` is the
+    /// [`ClusterPayload::radius`] the cluster takes. So the seed's pixel
+    /// half-width along a column is `r * ||column||`, and a shape without that
+    /// radius says nothing about how large the patch is.
     pub shape: [[f64; 2]; 2],
     /// The `.sift` feature this seed is, when it is one.
     pub feature: Option<u32>,
 }
 
 impl ClusterSeed {
-    /// A seed at a pixel someone pointed at, with an isotropic shape of
-    /// `radius_px`.
+    /// The isotropic keypoint-frame shape whose patch is `radius_px` pixels
+    /// across its half-width, for the cluster a [`create_cluster`] makes.
+    ///
+    /// The template spans `[-r, r]^2` keypoint-frame units at
+    /// `ClusterPayload::default().radius`, so one keypoint-frame unit has to be
+    /// `radius_px / r` pixels for the patch to be the size that was asked for.
+    /// The division is here, and the multiplication is in the kernel and in
+    /// everything that draws, so a person naming a radius in pixels and a
+    /// kernel reading a shape never mean two different squares.
+    pub fn shape_from_radius_px(radius_px: f64) -> [[f64; 2]; 2] {
+        let unit = radius_px / ClusterPayload::default().radius;
+        [[unit, 0.0], [0.0, unit]]
+    }
+
+    /// A seed at a pixel someone pointed at, whose patch is `radius_px` pixels
+    /// from the pixel to the edge.
     ///
     /// Nothing in a pixel says how large the patch around it is, so the caller
-    /// names it, exactly as creating a point from a pixel does.
+    /// names it, exactly as creating a point from a pixel does, and in the same
+    /// units: source-image pixels. The shape it becomes is
+    /// [`Self::shape_from_radius_px`].
     pub fn from_pixel(
         image: u32,
         image_stem: impl Into<String>,
@@ -269,7 +289,7 @@ impl ClusterSeed {
             image,
             image_stem: image_stem.into(),
             pixel,
-            shape: [[radius_px, 0.0], [0.0, radius_px]],
+            shape: Self::shape_from_radius_px(radius_px),
             feature: None,
         }
     }
@@ -339,6 +359,10 @@ impl std::error::Error for CreateClusterError {}
 /// cluster is the set of images that register onto it. The template is left
 /// uncut, because cutting it reads the reference's pixels and this step reads
 /// no photograph.
+///
+/// The cluster takes the default [`ClusterPayload::radius`], which is the
+/// radius [`ClusterSeed::from_pixel`] sized its shape against, so a seed named
+/// in pixels arrives on the bench at the size it was named.
 pub fn create_cluster(
     bench: &Bench,
     seed: &ClusterSeed,
@@ -360,10 +384,7 @@ pub fn create_cluster(
 
     let track = EditableTrack {
         observations: vec![observation],
-        stage: Stage::Cluster(ClusterPayload {
-            reference: 0,
-            template: None,
-        }),
+        stage: Stage::Cluster(ClusterPayload::default()),
         origin: None,
         thresholds: Thresholds::default(),
     };
@@ -432,9 +453,13 @@ pub struct ObservationSeed {
     pub image: u32,
     /// Where in it, in source-image px.
     pub pixel: [f64; 2],
-    /// The affine shape at that pixel, when the caller has one. A pixel gesture
-    /// on a track that already has a reference has none: the evaluation derives
-    /// it from the reference's own shape.
+    /// The affine shape at that pixel, when the caller has one, in the cluster
+    /// stage's own convention: keypoint-frame units to that image's pixels,
+    /// read over `[-r, r]^2` at the track's [`ClusterPayload::radius`].
+    ///
+    /// A pixel gesture on a track that already has a reference has none:
+    /// [`add_observation`] takes the reference's own shape, which is the scale
+    /// the track already works at.
     pub shape: Option<[[f64; 2]; 2]>,
     /// What put it there.
     pub provenance: Provenance,
@@ -473,8 +498,14 @@ pub struct AddObservationReport {
 /// The seed lands in the cluster slot, which is where a seed means something:
 /// a position and a shape in one image's pixels, with no geometry behind them.
 /// The shape defaults to the reference observation's own when the track has a
-/// reference with a seed, and to the identity otherwise, so a pixel gesture on
-/// a track that already has a scale needs no radius prompt.
+/// reference with a seed, so a pixel gesture on a track that already has a
+/// scale needs no radius prompt and lands at that track's size.
+///
+/// With no reference to copy the shape is the identity, which is one pixel to
+/// the keypoint-frame unit: a patch of `[-r, r]` **pixels** at the track's
+/// [`ClusterPayload::radius`]. That is the cluster stage's convention like any
+/// other shape, and it is what a track with nothing to say about its own scale
+/// is worth.
 pub fn add_observation(
     track: &EditableTrack,
     seed: &ObservationSeed,

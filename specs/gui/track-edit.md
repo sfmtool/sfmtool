@@ -168,8 +168,12 @@ on its keypoint, by the Point Track Detail panel's own renderer, so a track on
 the bench and the point it came from cannot show one surface two ways; at the
 cluster stage the `R x R` grid the refinement kernel samples
 (`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that
-observation's refined position and shape, on the template's own radius and
-resolution once one has been cut. A row with nothing to render -- no surfel yet,
+observation's refined position and shape, over the cluster's own radius
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "The cluster stage's units") and on the template's resolution once one has
+been cut. The radius is the cluster's from the start, so the tile is the square
+the person asked for before an evaluation and the square the ZNCC beside it was
+measured over after one. A row with nothing to render -- no surfel yet,
 or a photograph the node's cache has not decoded -- draws an empty frame of the
 same size, so the columns beside it never shift.
 
@@ -232,7 +236,10 @@ it is taken. The radius a new cluster's patch takes is the one the Create 3D
 Point prompt would offer ([`edits/create-point.md`](edits/create-point.md)): the
 radius the last created point was given, or the size the node's own patches
 project to in that image, so a cluster and a created point are started at the
-same place at the same size.
+same place at the same size. It is a half-width in that image's pixels, and the
+cluster stage's own units are keypoint-frame ones, so the step converts it
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "The cluster stage's units").
 
 ---
 

@@ -17,7 +17,7 @@ use nalgebra::Point3;
 use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::cluster_refine::MemberStatus;
+use crate::patch::cluster_refine::{sample_member_grid, ClusterRefineParams, MemberStatus};
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalization};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::progress::Progress;
@@ -31,6 +31,12 @@ use super::*;
 
 /// The bitmap edge the column fixture is built with.
 const BITMAP_R: usize = 8;
+
+/// The half-width, in source-image px, the hand-placed cluster tests ask for.
+/// Around the size the fixture's own patch projects to (`0.12` world at depth
+/// `4.0` through a focal of `160` is `4.8` px), so the template covers a piece
+/// of plane the scene's texture actually varies over.
+const PIXEL_SEED_RADIUS_PX: f64 = 5.0;
 
 /// The fixture wrapped as a version, with the optional columns a full commit
 /// has to fill in.
@@ -1068,6 +1074,27 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         let det = seed.seed_shape[0][0] * seed.seed_shape[1][1]
             - seed.seed_shape[0][1] * seed.seed_shape[1][0];
         assert!(det.abs() > 0.0, "the projected shape spans an area");
+        // And it spans what the surfel really covers there: the format's rule
+        // states the patch's half-axes in pixels, and the seed states the same
+        // footprint per keypoint-frame unit over the cluster's own radius.
+        let projected = edited
+            .base
+            .observation_affine_shape(0, observation.image as usize, keypoint)
+            .expect("the fixture's frame projects into every image");
+        let expected = [
+            f64::from(projected[0][0]).hypot(f64::from(projected[1][0])),
+            f64::from(projected[0][1]).hypot(f64::from(projected[1][1])),
+        ];
+        let extents = column_extents_px(
+            seed.seed_shape,
+            cluster.cluster().expect("a cluster").radius,
+        );
+        for (got, want) in extents.iter().zip(&expected) {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "the seed spans {got} px where the frame projects to {want}",
+            );
+        }
         // The 3D is gone, and so is what was measured against it.
         assert!(observation.track.is_none());
     }
@@ -1101,13 +1128,99 @@ fn setting_the_stage_a_track_is_already_at_changes_nothing() {
     assert_eq!(same, track);
 }
 
+/// How far each column of a cluster shape reaches, in that image's pixels: the
+/// patch is `[-radius, radius]` keypoint-frame units, so a column's pixel
+/// half-width is `radius` times its norm. This is the arithmetic the overlay,
+/// the tile and the kernel's sampler all do.
+fn column_extents_px(shape: [[f64; 2]; 2], radius: f64) -> [f64; 2] {
+    [
+        radius * (shape[0][0].powi(2) + shape[1][0].powi(2)).sqrt(),
+        radius * (shape[0][1].powi(2) + shape[1][1].powi(2)).sqrt(),
+    ]
+}
+
+/// A cluster started from a pixel is the size the gesture asked for, and stays
+/// it: the seed's square spans the named half-width in pixels before anything
+/// has read a photograph, the grid the kernel samples is that square, and a
+/// refinement that finds the same piece of plane hands back a shape of the same
+/// scale rather than one several times larger.
+#[test]
+fn a_pixel_cluster_spans_the_radius_it_was_asked_for() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let radius_px = PIXEL_SEED_RADIUS_PX;
+    let seed = ClusterSeed::from_pixel(0, "image_0", scene.project(0, WORLD), radius_px);
+    let (bench, created) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
+    let track = track_of(&bench, &created.label);
+
+    let payload = track.cluster().expect("the cluster stage");
+    let measurement = track.observations[0]
+        .cluster
+        .as_ref()
+        .expect("the seed is the one observation");
+    for extent in column_extents_px(measurement.seed_shape, payload.radius) {
+        assert!(
+            (extent - radius_px).abs() < 1e-9,
+            "the seed spans {extent} px where {radius_px} was asked for",
+        );
+    }
+
+    // The grid the kernel reads is that square: its samples are centred in
+    // cells of `2 * radius / resolution`, so the outermost centre sits half a
+    // cell inside the edge and no sample is outside it.
+    let params = ClusterRefineParams {
+        radius: payload.radius,
+        ..ClusterRefineParams::default()
+    };
+    let half_cell = radius_px / f64::from(params.resolution.max(2));
+    let outermost = radius_px - half_cell;
+    assert!(
+        sample_member_grid(
+            scene.views()[0].pyramid,
+            measurement.seed_position,
+            measurement.seed_shape,
+            &params,
+        )
+        .is_some(),
+        "the seed's own square is inside the photograph",
+    );
+    assert!(
+        outermost > 0.0 && outermost < radius_px,
+        "the sampled grid spans up to {outermost} px, inside the {radius_px} px square",
+    );
+
+    // A second sighting of the same surface, and the round that registers them.
+    let (track, added) = add_observation(
+        &track,
+        &ObservationSeed::at_pixel(1, scene.project(1, WORLD)),
+    )
+    .expect("a finite pixel");
+    let (track, _) = set_verdict(&track, added.observation, Verdict::In).expect("a live row");
+    let (refined, report) = evaluate_over(&scene, &edited, &track).expect("a cluster of two");
+    let payload = refined.cluster().expect("the cluster stage");
+    assert_eq!(payload.radius, ClusterPayload::default().radius);
+    let reference = report.reference.expect("a reference was cut");
+    let fitted = refined.observations[reference]
+        .cluster
+        .as_ref()
+        .expect("a cluster slot")
+        .shape
+        .expect("the reference is always fitted");
+    for extent in column_extents_px(fitted, payload.radius) {
+        assert!(
+            (extent - radius_px).abs() < 0.05 * radius_px,
+            "the refined reference spans {extent} px where the seed spans {radius_px}",
+        );
+    }
+}
+
 #[test]
 fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
 
     // Two sightings of the same piece of plane, both pointed at by hand.
-    let seed = ClusterSeed::from_pixel(0, "image_0", scene.project(0, WORLD), 2.0);
+    let seed = ClusterSeed::from_pixel(0, "image_0", scene.project(0, WORLD), PIXEL_SEED_RADIUS_PX);
     let (bench, created) = create_cluster(&Bench::new(), &seed).expect("a usable seed");
     let track = track_of(&bench, &created.label);
     let (track, added) = add_observation(
@@ -1124,7 +1237,7 @@ fn a_cluster_from_a_pixel_refines_upgrades_and_commits_onto_the_plane() {
     let payload = refined.cluster().expect("the cluster stage");
     assert_eq!(payload.reference, reference);
     let template = payload.template.as_ref().expect("a template was cut");
-    assert_eq!(template.radius, EvaluateOptions::default().cluster.radius);
+    assert_eq!(payload.radius, ClusterPayload::default().radius);
     assert!(template.samples.iter().any(|&v| v > 0.0));
     for observation in &refined.observations {
         let m = observation.cluster.as_ref().expect("a cluster slot");

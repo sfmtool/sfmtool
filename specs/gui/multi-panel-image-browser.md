@@ -458,7 +458,11 @@ differs by stage:
   image contributes the parallelogram its refined 2x2 affine shape maps the
   template's square to, at the refined position, with the seed's own
   parallelogram dashed behind it. How far the two are apart is how far the
-  refinement moved and how much it turned.
+  refinement moved and how much it turned. The square is `[-radius, radius]` at
+  the cluster's own radius, which it carries from the moment it is started
+  ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+  § "The cluster stage's units"), so a seed clicked at a radius in pixels is
+  drawn at that many pixels before anything has evaluated it.
 
 Clicking a mark selects that observation's row in the Track Edit panel
 ([`track-edit.md`](track-edit.md)): the mark and the row are one observation, so

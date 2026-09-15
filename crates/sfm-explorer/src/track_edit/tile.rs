@@ -69,12 +69,17 @@ pub(super) fn render(
         }
         Stage::Cluster(payload) => {
             let measurement = row.cluster.as_ref()?;
-            // The template's own geometry when one has been cut, so the tile is
-            // on the grid the ZNCC was measured on; the kernel's defaults
-            // before that, which is what the next evaluation will use.
-            let mut params = ClusterRefineParams::default();
+            // The cluster's own radius, always: it is what every one of its
+            // shapes is written against, so the tile is the square the person
+            // asked for before an evaluation and the square the ZNCC was
+            // measured over after one. The grid is the template's when one has
+            // been cut, and the kernel's default -- what the next evaluation
+            // will use -- before that.
+            let mut params = ClusterRefineParams {
+                radius: payload.radius,
+                ..ClusterRefineParams::default()
+            };
             if let Some(template) = payload.template.as_ref() {
-                params.radius = template.radius;
                 params.resolution = template.samples.shape()[0] as u32;
             }
             let pyramid = ImageU8Pyramid::build(src, PYRAMID_LEVELS);
