@@ -168,7 +168,23 @@ fn draw_track_stage(
 
     // The surfel's outline, and where its centre lands: both are `None` for a
     // track nothing has triangulated yet, which still has observations to mark.
-    let outline = match (frame, view) {
+    // The outline is drawn through the frame re-anchored on this image's
+    // keypoint, as the tile is rendered: the sighting is where the patch sits
+    // in this photograph, and the geometric projection is where the 3D says it
+    // should, which the centre dot and the shift segment show separately.
+    let anchor = here
+        .iter()
+        .find(|(_, o)| o.verdict == strongest)
+        .and_then(|(_, o)| o.track.as_ref().and_then(|m| m.keypoint))
+        .map(|k| [f64::from(k[0]), f64::from(k[1])]);
+    let anchored = match (frame, view, anchor) {
+        (Some(frame), Some((camera, pose)), Some(keypoint)) => {
+            frame.anchored_at_keypoint(camera, pose, keypoint)
+        }
+        _ => None,
+    };
+    let drawn = anchored.as_ref().or(frame);
+    let outline = match (drawn, view) {
         (Some(frame), Some((camera, pose))) => {
             project_outline(frame, camera, pose).map(|(runs, closed)| {
                 let panel: Vec<Vec<Pos2>> = runs

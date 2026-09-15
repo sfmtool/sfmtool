@@ -444,7 +444,10 @@ differs by stage:
 
 - At the **track stage**, the surfel's square boundary sampled and each sample
   pushed through the camera's own forward projection, drawn as a closed
-  polyline. The outline is therefore the curve a distorting lens really maps
+  polyline. The frame is first re-anchored on this image's keypoint
+  (`OrientedPatch::anchored_at_keypoint`), as the tile in Track Edit is
+  rendered, so the outline sits where the sighting is in this photograph; the
+  surfel's own projection is the centre dot the shift segment runs to. The outline is therefore the curve a distorting lens really maps
   that square to, rather than the quadrilateral through its four corners:
   `OrientedPatch::boundary` supplies the samples
   ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)), eight per

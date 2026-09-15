@@ -675,6 +675,18 @@ fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
         ],
     );
     let photograph = pixels(640, 480);
+    // The outline is the frame re-anchored on this image's keypoint, as the
+    // tile is rendered, so the corners are the anchored frame's.
+    let keypoint = track
+        .observations
+        .iter()
+        .find(|o| o.image == 0)
+        .and_then(|o| o.track.as_ref())
+        .and_then(|m| m.keypoint)
+        .map(|k| [f64::from(k[0]), f64::from(k[1])])
+        .expect("a track from a point carries its keypoints");
+    let anchored = frame.anchored_at_keypoint(camera, &pose, keypoint);
+    let frame = anchored.as_ref().unwrap_or(frame);
     for (s, t) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
         let (xyz, w) = frame.corner_homogeneous(s, t);
         let p = pose.transform_point_homogeneous(xyz, w);
