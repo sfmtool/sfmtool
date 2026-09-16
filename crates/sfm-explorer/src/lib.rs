@@ -579,6 +579,21 @@ impl ApplicationHandler<UserEvent> for App {
                 #[cfg(not(target_os = "windows"))]
                 let restored: Option<[WindowEvent; 2]> = None;
 
+                // And every click that *is* passed through as a contact ends
+                // with egui-winit forgetting where the pointer is, which costs
+                // every plain `ScrollArea` its wheel and its trackpad pan until
+                // the mouse next moves. See
+                // `platform::windows::restore_pointer_after_click`. The
+                // rewritten events above need none of this: dropping the
+                // `Touch` drops the `PointerGone` with it.
+                #[cfg(target_os = "windows")]
+                let restored_pointer = restored
+                    .is_none()
+                    .then(|| platform::windows::restore_pointer_after_click(&event))
+                    .flatten();
+                #[cfg(not(target_os = "windows"))]
+                let restored_pointer: Option<WindowEvent> = None;
+
                 let mut repaint = false;
                 match restored.as_ref() {
                     Some(events) => {
@@ -589,6 +604,9 @@ impl ApplicationHandler<UserEvent> for App {
                     None => {
                         repaint = egui_winit_state.on_window_event(window, &event).repaint;
                     }
+                }
+                if let Some(moved) = restored_pointer.as_ref() {
+                    repaint |= egui_winit_state.on_window_event(window, moved).repaint;
                 }
                 if repaint {
                     window.request_redraw();

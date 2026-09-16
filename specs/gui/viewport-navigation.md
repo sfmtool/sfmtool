@@ -788,6 +788,31 @@ cursor position — are written only when it returns `Some`. The one thing a
 non-mouse press still updates is `LAST_MOUSE_DOWN_BUTTON`, which it *clears*, so
 that a touch never inherits the button of the last real click.
 
+#### A click must not take the pointer away from egui
+
+The panels that have no gesture handling of their own are scrolled by the wheel
+event `platform::gesture_scroll_events` synthesizes, and egui delivers a wheel
+to whichever `ScrollArea` its own pointer position is inside: `interact_pos`,
+not the tracked cursor above. That position does not survive a click. With
+`EnableMouseInPointer(true)` a click reaches winit as a `Touch`, and `egui-winit`
+ends a touch the way a finger leaving a touch screen ends one: it forgets its
+pointer position and pushes `Event::PointerGone`, so that nothing is left
+hovered. egui clears `interact_pos` on the frame after that, and until the
+pointer moves again no scroll area in the app takes a scroll: neither a wheel
+notch nor a two-finger pan. The panels that read DM events themselves are
+unaffected, since they route by `platform::pointer_in_rect`.
+
+`platform::windows::restore_pointer_after_click` closes that gap: a contact that
+ends is followed into egui by a `CursorMoved` carrying the tracked cursor
+position, which puts the pointer back where it never stopped being. The tracked
+position rather than the contact's own location, for the reason above (a
+touchpad contact's location is the finger on the pad), and so egui's hover and
+the position gestures are routed by stay the same one. Before any mouse pointer
+message has placed the cursor there is nothing to restore and the contact is
+left alone, which is also what a machine whose only pointer is a touch screen
+wants. The secondary and middle contacts need none of this: rewriting them into
+`MouseInput` drops the `Touch`, and the `PointerGone` with it.
+
 #### Why Early DM Manager Creation Matters
 
 When `CoCreateInstance(DirectManipulationManager)` is called **before** winit's `EventLoop`

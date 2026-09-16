@@ -126,3 +126,54 @@ fn a_touch_or_touchpad_contact_is_not_the_mouse() {
         );
     }
 }
+
+/// The bug this exists for: on Windows every click arrives as a contact, and
+/// `egui-winit` ends a contact by forgetting where the pointer is
+/// (`Event::PointerGone`), which costs `egui::ScrollArea` the `interact_pos`
+/// it takes a scroll by. A click on a Track Edit row or a Scene tree camera
+/// left that list dead to the wheel and to a two-finger pan until the mouse was
+/// moved. The release is followed back into egui by the cursor position the
+/// window procedure tracks, so the pointer never goes anywhere.
+#[test]
+fn a_contact_that_ends_puts_the_pointer_back_where_the_cursor_is() {
+    let cursor = PhysicalPosition::new(640.0, 360.0);
+    for phase in [TouchPhase::Ended, TouchPhase::Cancelled] {
+        let moved = restore_pointer_after_click_at(&touch(phase), Some(cursor))
+            .expect("a contact that ended restores the pointer");
+        assert!(
+            matches!(
+                moved,
+                WindowEvent::CursorMoved { position, .. } if position == cursor
+            ),
+            "{phase:?} did not restore the cursor position: {moved:?}"
+        );
+    }
+}
+
+/// The contact's own location is not the cursor: for a touchpad contact it is
+/// the finger on the pad, which is why the tracked mouse position is what the
+/// pointer is put back to. A press or a move needs no restoring: `egui-winit`
+/// positions the pointer from both of those itself.
+#[test]
+fn only_the_end_of_a_contact_restores_the_pointer() {
+    for phase in [TouchPhase::Started, TouchPhase::Moved] {
+        assert!(restore_pointer_after_click_at(
+            &touch(phase),
+            Some(PhysicalPosition::new(1.0, 2.0))
+        )
+        .is_none());
+    }
+    assert!(restore_pointer_after_click_at(
+        &WindowEvent::CloseRequested,
+        Some(PhysicalPosition::new(1.0, 2.0)),
+    )
+    .is_none());
+}
+
+/// With no mouse position on record there is nothing to restore, and the
+/// contact keeps the path it travels today, which is what a machine whose only
+/// pointer is a touch screen wants.
+#[test]
+fn a_contact_that_ends_with_no_cursor_on_record_is_left_alone() {
+    assert!(restore_pointer_after_click_at(&touch(TouchPhase::Ended), None).is_none());
+}

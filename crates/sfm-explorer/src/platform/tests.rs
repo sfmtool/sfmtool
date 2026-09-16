@@ -108,19 +108,21 @@ fn the_injected_events_are_not_read_a_second_time_as_trackpad_scroll() {
         assert!(!scroll.has_mouse_wheel(), "a pan is not a wheel notch");
     });
 }
-/// Drive a pan through real egui frames and report how far a scroll area
-/// under the pointer moved along `axis` (0 = X, 1 = Y).
+
+/// Where the pointer is put in these tests: near the top-left corner of the
+/// content, so it counts as hovering either scroll area: the horizontal one
+/// shrinks to a single row of labels, and anything further down would miss it.
+const TEST_POINTER: egui::Pos2 = egui::pos2(50.0, 12.0);
+
+/// Drive one frame's worth of events each through real egui and report how far
+/// a scroll area moved along `axis` (0 = X, 1 = Y) by the last of them.
 ///
 /// The scroll area sits inside a panel, as every one of the app's does:
 /// egui resolves "is the pointer over this rect" against the layers a panel
 /// or area registers, and a scroll area built straight on the root `Ui` is
 /// on no layer at all and never reads the wheel.
-fn scroll_offset_after_pan(pan: GestureEvent, axis: usize) -> f32 {
+fn scroll_offset_over_frames(axis: usize, frames: Vec<Vec<egui::Event>>) -> f32 {
     let ctx = egui::Context::default();
-    // Near the top-left corner of the content, so the pointer counts as
-    // hovering either area: the horizontal one shrinks to a single row of
-    // labels, and anything further down would miss it.
-    let pointer = egui::pos2(50.0, 12.0);
     let mut offset = 0.0;
     let mut frame = |time: f64, events: Vec<egui::Event>| {
         let input = egui::RawInput {
@@ -159,25 +161,30 @@ fn scroll_offset_after_pan(pan: GestureEvent, axis: usize) -> f32 {
                 .offset[axis];
         });
     };
-    let with_pointer = |extra: Vec<egui::Event>| {
-        let mut events = vec![egui::Event::PointerMoved(pointer)];
-        events.extend(extra);
-        events
-    };
-
-    // The first frame places the pointer and builds the area; the second
-    // carries the gesture, which egui applies to the area it now knows is
-    // hovered. egui spreads a wheel delta over the frames that follow, so
-    // the rest are what let it land.
-    frame(0.0, with_pointer(Vec::new()));
-    frame(
-        1.0 / 60.0,
-        with_pointer(gesture_scroll_events(&[pan], egui::Modifiers::default())),
-    );
-    for step in 2..40 {
-        frame(step as f64 / 60.0, with_pointer(Vec::new()));
+    for (step, events) in frames.into_iter().enumerate() {
+        frame(step as f64 / 60.0, events);
     }
     offset
+}
+
+/// The frames a gesture needs after the one that carries it: egui spreads a
+/// wheel delta over the frames that follow, so these are what let it land.
+fn settling_frames() -> Vec<Vec<egui::Event>> {
+    (0..38).map(|_| Vec::new()).collect()
+}
+
+/// Drive a pan through real egui frames with the pointer already over the
+/// scroll area, and report how far the area moved along `axis`.
+fn scroll_offset_after_pan(pan: GestureEvent, axis: usize) -> f32 {
+    // The first frame places the pointer and builds the area; the second
+    // carries the gesture, which egui applies to the area it now knows is
+    // hovered.
+    let mut frames = vec![
+        vec![egui::Event::PointerMoved(TEST_POINTER)],
+        gesture_scroll_events(&[pan], egui::Modifiers::default()),
+    ];
+    frames.extend(settling_frames());
+    scroll_offset_over_frames(axis, frames)
 }
 
 /// End to end through real egui frames: a scroll area under the pointer
@@ -206,5 +213,56 @@ fn a_horizontal_pan_scrolls_the_way_the_image_strip_does() {
     assert!(
         (offset - 60.0).abs() < 1.0,
         "the scroll area moved {offset}, not the +60 the image strip would"
+    );
+}
+
+/// Drive a click and then a pan through real egui frames, and report how far
+/// the scroll area moved. `restore_pointer` says whether the release is
+/// followed by the `CursorMoved`
+/// [`windows::restore_pointer_after_click`](super::windows::restore_pointer_after_click)
+/// produces; without it the frames are what a Windows click really delivers.
+fn scroll_offset_after_click_and_pan(restore_pointer: bool) -> f32 {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: TEST_POINTER,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    // `egui-winit` ends a contact by forgetting where the pointer is, and on
+    // Windows every click arrives as one.
+    let mut click = vec![button(true), button(false), egui::Event::PointerGone];
+    if restore_pointer {
+        click.push(egui::Event::PointerMoved(TEST_POINTER));
+    }
+    let mut frames = vec![
+        vec![egui::Event::PointerMoved(TEST_POINTER)],
+        click,
+        // The pan carries no pointer event of its own: DirectManipulation has
+        // the contacts, so nothing moves the cursor during a two-finger scroll.
+        gesture_scroll_events(
+            &[GestureEvent::Pan { dx: 0.0, dy: -60.0 }],
+            egui::Modifiers::default(),
+        ),
+    ];
+    frames.extend(settling_frames());
+    scroll_offset_over_frames(1, frames)
+}
+
+/// The bug this exists for: clicking a row in the Track Edit list, or a camera
+/// in the Scene tree, stopped the touchpad from scrolling that list until the
+/// mouse was moved. A Windows click reaches egui as a contact, `egui-winit`
+/// ends it with `PointerGone`, and from the next frame egui has no
+/// `interact_pos`, which is the first thing `ScrollArea` asks for before it
+/// will take a scroll, so the pan this module injects landed nowhere.
+#[test]
+fn a_pan_after_a_click_scrolls_because_the_pointer_was_put_back() {
+    assert!(
+        scroll_offset_after_click_and_pan(false) < 1.0,
+        "the bug: with the pointer gone the pan reaches no scroll area"
+    );
+    let offset = scroll_offset_after_click_and_pan(true);
+    assert!(
+        (offset - 60.0).abs() < 1.0,
+        "the pan moved the area {offset}, not the 60 points of the gesture"
     );
 }

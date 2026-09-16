@@ -8,7 +8,7 @@
 //! hardware-accelerated gesture recognition with inertia support.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use windows::core::implement;
@@ -30,6 +30,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{SC_KEYMENU, WM_SYSCOMMAND};
+use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, TouchPhase, WindowEvent};
 
 use super::GestureEvent;
@@ -71,6 +72,14 @@ static LAST_MOUSE_DOWN_BUTTON: AtomicU8 = AtomicU8::new(0);
 /// These are always up-to-date even when egui's hover state goes stale after clicks.
 static POINTER_CLIENT_X: AtomicI32 = AtomicI32::new(0);
 static POINTER_CLIENT_Y: AtomicI32 = AtomicI32::new(0);
+
+/// Whether [`POINTER_CLIENT_X`] / [`POINTER_CLIENT_Y`] have ever been written.
+///
+/// Until a mouse pointer message has arrived they are the origin rather than a
+/// position, and [`restore_pointer_after_click`] has nothing to put the pointer
+/// back to; on a machine with no mouse at all that stays true for the whole
+/// session, which is what a genuine touch screen wants.
+static POINTER_CLIENT_SEEN: AtomicBool = AtomicBool::new(false);
 
 /// Returns the current mouse button state as a bitmask.
 pub fn mouse_button_state() -> u8 {
@@ -177,6 +186,66 @@ pub fn pointer_client_pos() -> (i32, i32) {
         POINTER_CLIENT_X.load(Ordering::Relaxed),
         POINTER_CLIENT_Y.load(Ordering::Relaxed),
     )
+}
+
+/// [`pointer_client_pos`] as a winit position, or `None` before any mouse
+/// pointer message has placed the cursor.
+fn tracked_cursor_pos() -> Option<PhysicalPosition<f64>> {
+    if !POINTER_CLIENT_SEEN.load(Ordering::Relaxed) {
+        return None;
+    }
+    let (x, y) = pointer_client_pos();
+    Some(PhysicalPosition::new(x as f64, y as f64))
+}
+
+/// Put egui's pointer back where the cursor is, after a contact that ended:
+/// the `CursorMoved` to feed *after* the event, or `None` to leave it alone.
+///
+/// `EnableMouseInPointer(true)` (see [`restore_mouse_button_from`]) turns every
+/// mouse button into a `WM_POINTER*` message, and winit renders those as
+/// [`WindowEvent::Touch`]. `egui-winit` then ends the contact the way a finger
+/// leaving a touch screen ends one: it forgets its pointer position and pushes
+/// `Event::PointerGone`, so that nothing is left hovered. On this window that
+/// fires at the end of **every** click, and the cursor has not gone anywhere.
+///
+/// What egui loses with it is `hover_pos` and, from the next frame,
+/// `interact_pos`, and `interact_pos` is what `egui::ScrollArea` consults
+/// before it will take a scroll. So from the frame after a click until the
+/// pointer moves again, no scroll area scrolls: not under the wheel, and not
+/// under a two-finger pan, which reaches those panels only as the wheel event
+/// [`super::gesture_scroll_events`] synthesizes for them. Clicking a Track Edit
+/// row or a Scene tree camera left that list dead to the touchpad until the
+/// mouse was nudged. The panels that read [`GestureEvent`]s themselves were
+/// never affected, because they route gestures by
+/// [`super::pointer_in_rect`] rather than by egui's hover.
+///
+/// The position carried back is [`pointer_client_pos`], the real cursor,
+/// tracked from mouse pointer messages only, rather than the contact's own
+/// location, which for a touchpad contact is the finger on the pad (see
+/// [`mouse_buttons_from`]). That also makes egui's hover and the position
+/// gestures are routed by the same one again.
+fn restore_pointer_after_click_at(
+    event: &WindowEvent,
+    cursor: Option<PhysicalPosition<f64>>,
+) -> Option<WindowEvent> {
+    let WindowEvent::Touch(touch) = event else {
+        return None;
+    };
+    // Only the two phases egui-winit answers with `PointerGone`. A press or a
+    // move leaves its pointer position exactly where it should be.
+    if !matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+        return None;
+    }
+    Some(WindowEvent::CursorMoved {
+        device_id: touch.device_id,
+        position: cursor?,
+    })
+}
+
+/// [`restore_pointer_after_click_at`] against the cursor position the window
+/// procedure has tracked.
+pub fn restore_pointer_after_click(event: &WindowEvent) -> Option<WindowEvent> {
+    restore_pointer_after_click_at(event, tracked_cursor_pos())
 }
 
 // Helper to extract pointer ID from WPARAM
@@ -724,6 +793,7 @@ unsafe extern "system" fn subclass_wndproc(
                 let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
                 POINTER_CLIENT_X.store(pt.x, Ordering::Relaxed);
                 POINTER_CLIENT_Y.store(pt.y, Ordering::Relaxed);
+                POINTER_CLIENT_SEEN.store(true, Ordering::Relaxed);
             }
 
             // Remember which button a *mouse* press carried, so the `Touch`
