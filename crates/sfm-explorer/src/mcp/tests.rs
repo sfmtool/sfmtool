@@ -3644,6 +3644,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha" }),
         ),
         (
+            "fit_bench_track",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
             "set_bench_track_stage",
             json!({ "reconstruction_label": "alpha", "stage": "track" }),
         ),
@@ -3849,15 +3853,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty writes, the one that writes a file, and the one
+    // Fourteen reads, forty-one writes, the one that writes a file, and the one
     // that hands back a picture.
-    assert_eq!(catalog.len(), 56, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 57, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        40
+        41
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -6314,10 +6318,10 @@ fn the_bench_refuses_in_its_own_words() {
     assert!(state.bench_track(state.scene[0].id, &item).is_some());
 }
 
-/// The two steps that read photographs go to a worker and report through the
+/// The three steps that read photographs go to a worker and report through the
 /// same two-level reply `bundle_adjust` uses.
 #[test]
-fn evaluate_and_set_stage_run_as_background_tasks() {
+fn evaluate_fit_and_set_stage_run_as_background_tasks() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
 
@@ -6376,6 +6380,50 @@ fn evaluate_and_set_stage_run_as_background_tasks() {
     assert!(
         track["observations"][0]["cluster"]["zncc"].is_number(),
         "the evaluation measured nothing: {track}"
+    );
+
+    // The fit is its own step, under its own operation name, and it ends by
+    // reading its result: the track stage's two distances are both on the wire
+    // afterwards.
+    let staged = worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "track" }),
+    );
+    assert!(staged["report"].is_string(), "{staged}");
+    let fitted = worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item, "search_px": 8.0 }),
+    );
+    assert!(
+        fitted["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Fitted {item}")),
+        "{fitted}"
+    );
+    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(task["operation"], json!("Fit track"), "{task}");
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let measured = &track["observations"][0]["track"];
+    for column in ["seed_shift_px", "projection_offset_px"] {
+        assert!(
+            measured[column].is_number(),
+            "{column} is not on the wire: {track}"
+        );
+    }
+    assert!(
+        measured["reason"].is_null(),
+        "a measured row carries no reason: {track}"
     );
 }
 
@@ -7150,10 +7198,11 @@ fn a_stage_change_the_track_rules_out_is_refused_before_the_worker() {
     assert_eq!(version_count(&state), before, "a refusal pushed a version");
 }
 
-/// The same for an evaluation of a track-stage track with nothing to register
-/// against.
+/// The same for a fit of a track-stage track with nothing to register against
+/// -- and, beside it, the reading of that very track, which is **not** refused:
+/// one sighting is something to report, and only moving it needs a consensus.
 #[test]
-fn an_evaluation_the_track_rules_out_is_refused_before_the_worker() {
+fn a_fit_the_track_rules_out_is_refused_before_the_worker() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     leave_one_in(&mut state, &mut viewer);
@@ -7162,20 +7211,32 @@ fn an_evaluation_the_track_rules_out_is_refused_before_the_worker() {
     let refusal = refused_call(
         &mut state,
         &mut viewer,
-        "evaluate_bench_track",
+        "fit_bench_track",
         json!({ "reconstruction_label": "run_a" }),
     );
     assert_eq!(
         refusal.0,
-        format!(
-            "Cannot evaluate {item}: 1 observations are in, and the track stage needs two or more"
-        )
+        format!("Cannot fit {item}: 1 observations are in, and the track stage needs two or more")
     );
     assert!(
         state.background_task().is_none(),
         "a refusal started a task"
     );
     assert_eq!(version_count(&state), before, "a refusal pushed a version");
+
+    let read = worked(
+        &mut state,
+        &mut viewer,
+        "evaluate_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(
+        read["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Evaluated {item}")),
+        "a reading of one sighting is a measurement, not a refusal: {read}"
+    );
 }
 
 // ── What a commit names ─────────────────────────────────────────────────

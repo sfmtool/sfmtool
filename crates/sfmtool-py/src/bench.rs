@@ -25,10 +25,10 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
-    create_track as core_create_track, evaluate as core_evaluate, set_stage as core_set_stage,
-    set_verdict as core_set_verdict, split as core_split, Bench, BenchItem, ClusterSeed,
-    CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport, ItemKind, Observation,
-    ObservationSeed, Provenance, StageKind, Verdict,
+    create_track as core_create_track, evaluate as core_evaluate, fit as core_fit,
+    set_stage as core_set_stage, set_verdict as core_set_verdict, split as core_split, Bench,
+    BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport,
+    FitOptions, FitReport, ItemKind, Observation, ObservationSeed, Provenance, StageKind, Verdict,
 };
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress::Progress;
@@ -148,7 +148,8 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
         }
         for (key, value) in [
             ("zncc", m.zncc),
-            ("shift_px", m.shift_px),
+            ("seed_shift_px", m.seed_shift_px),
+            ("projection_offset_px", m.projection_offset_px),
             ("reprojection_error", m.reprojection_error),
             ("ray_angle_deg", m.ray_angle_deg),
             ("localizability", m.localizability),
@@ -156,6 +157,11 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             if let Some(value) = value {
                 t.set_item(key, value)?;
             }
+        }
+        // Present exactly when there is no score, and the sentence is the one
+        // the panel shows in its Status cell.
+        if let Some(reason) = m.reason {
+            t.set_item("reason", reason.to_string())?;
         }
         d.set_item("track", t)?;
     }
@@ -664,6 +670,40 @@ fn evaluate_report_dict<'py>(
     Ok(d)
 }
 
+/// The dict form of one fit's report, the reading it ended with inside it.
+fn fit_report_dict<'py>(py: Python<'py>, report: &FitReport) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("placed", report.placed)?;
+    if let Some(p) = report.position {
+        d.set_item("position", PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
+    }
+    if let Some(condition_number) = report.condition_number {
+        d.set_item("condition_number", condition_number)?;
+    }
+    d.set_item("evaluate", evaluate_report_dict(py, &report.evaluate)?)?;
+    Ok(d)
+}
+
+/// The reading options a call runs with: the defaults, with the caller's own
+/// search radius where one was named.
+fn evaluate_options(search_px: Option<f64>) -> EvaluateOptions {
+    let mut options = EvaluateOptions::default();
+    if let Some(search_px) = search_px {
+        options.search_px = search_px;
+    }
+    options
+}
+
+/// The fit options a call runs with. The reading the fit ends with takes the
+/// same search radius, so a fit and an `evaluate` of its result are stated in
+/// one set of terms.
+fn fit_options(search_px: Option<f64>) -> FitOptions {
+    FitOptions {
+        evaluate: evaluate_options(search_px),
+        ..FitOptions::default()
+    }
+}
+
 /// The stage `word` names.
 fn parse_stage(word: &str) -> PyResult<StageKind> {
     match word {
@@ -675,10 +715,16 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
     }
 }
 
-/// Fill the measurement slots of every observation of `track`, whatever its
-/// verdict, at the stage it is in, and leave every verdict where it is. An
-/// ``out`` observation is scored the way a candidate is, against the ``in``
-/// set and never as part of it.
+/// Read `track` as it stands: fill the measurement slots of every observation,
+/// whatever its verdict, at the stage it is in, and **move nothing else**. The
+/// position, the frame, the bitmap, every keypoint and every verdict come back
+/// exactly as they went in. An ``out`` observation is scored the way a
+/// candidate is.
+///
+/// Nothing is dropped. The kernels run with their per-view gates off and the
+/// consensus-basis cap lifted, because a gate is a decision and this makes
+/// none; an observation that cannot be read at all comes back with a ``reason``
+/// sentence instead of a blank row.
 ///
 /// At the **cluster stage** the seeds are an in-memory ``.matches`` cluster and
 /// the refinement kernel is run over it: the kernel picks the reference, cuts
@@ -687,12 +733,16 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// seed, its own tile localizability and the kernel's ``member_status``. No
 /// pose is read.
 ///
-/// At the **track stage** the track's surfel is registered into every ``in``
-/// and ``candidate`` view by the same two kernels ``add_observation`` chains,
-/// the ``in`` results are re-triangulated and the consensus bitmap is fused
-/// over them; each observation gets the keypoint, the leave-one-out ZNCC, the
-/// drift from the surfel's projection, the reprojection error, the ray angle
-/// and its tile localizability.
+/// At the **track stage** one round of the localizer scores every observation
+/// against the leave-one-out consensus of the others, at the pixel it already
+/// sits at: each gets that ZNCC, ``seed_shift_px`` (how far the correlation
+/// peak sits from the observation itself), ``projection_offset_px`` (how far
+/// the observation sits from the point's projection -- the number that says how
+/// far the *point* is off), the reprojection error, the ray angle and its tile
+/// localizability.
+///
+/// `search_px` is how far from each observation the peak is looked for, in
+/// patch-grid px; the default is the localizer's own search radius.
 ///
 /// Nothing here decides anything: the thresholds propose and
 /// :func:`apply_thresholds` applies the proposal.
@@ -700,13 +750,15 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// Returns ``(EditableTrack, report)``. The report carries ``stage``,
 /// ``measured`` and ``unmeasured``; ``reference`` at the cluster stage; and
 /// ``position`` and ``condition_number`` at the track stage. Raises
-/// ``ValueError`` with the reason when the evaluation is refused.
+/// ``ValueError`` with the reason when the reading is refused.
 #[pyfunction]
+#[pyo3(signature = (track, edited, images, *, search_px = None))]
 fn evaluate(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
+    search_px: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -715,11 +767,58 @@ fn evaluate(
         &track.inner,
         &edited.inner,
         &views,
-        &EvaluateOptions::default(),
+        &evaluate_options(search_px),
         &Progress::none(),
     )
     .map_err(refused)?;
     let d = evaluate_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Fit `track` at the stage it is in: the step that **moves** it.
+///
+/// At the **track stage** the surfel is localized into every view, refined to
+/// sub-pixel, the ``in`` results are re-triangulated, the frame is re-centred
+/// there and the consensus bitmap is fused over them; the keypoints, the
+/// position, the frame and the bitmap are written. At the **cluster stage** a
+/// fit is the refinement, which is what a reading is too: a cluster has no
+/// geometry behind it to move.
+///
+/// A fit ends by evaluating its own result, so every number in the observations'
+/// slots and in the report is that reading's and :func:`evaluate` called after
+/// it agrees to the last digit.
+///
+/// Returns ``(EditableTrack, report)``. The report carries ``placed`` (how many
+/// observations the kernels moved), ``position`` and ``condition_number`` at
+/// the track stage, and ``evaluate``: the reading's own report. Raises
+/// ``ValueError`` with the reason when the fit is refused -- a track stage with
+/// fewer than two ``in`` observations among them, which a reading permits.
+#[pyfunction]
+#[pyo3(signature = (track, edited, images, *, search_px = None))]
+fn fit(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    images: &Bound<'_, PyAny>,
+    search_px: Option<f64>,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let posed = PosedViews::from_reconstruction(&edited.inner.base);
+    let pyramids = resolve_pyramids(&posed, images)?;
+    let views = views_of(&posed, &pyramids);
+    let (next, report) = core_fit(
+        &track.inner,
+        &edited.inner,
+        &views,
+        &fit_options(search_px),
+        &Progress::none(),
+    )
+    .map_err(refused)?;
+    let d = fit_report_dict(py, &report)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),
@@ -733,8 +832,8 @@ fn evaluate(
 /// **Up**, cluster to track: the ``in`` observations' refined cluster positions
 /// are triangulated, the patch is framed at that position from the reference
 /// observation's affine shape at the triangulated depth, and the track-stage
-/// evaluation then runs over it. The cluster-stage measurements are dropped
-/// with the stage.
+/// fit then runs over it. The cluster-stage measurements are dropped with the
+/// stage.
 ///
 /// **Down**, track to cluster: always possible and lossy on purpose. The
 /// reference becomes the ``in`` observation with the largest projected patch
@@ -746,7 +845,7 @@ fn evaluate(
 /// ``changed`` false, and the caller pushes no version for it.
 ///
 /// Returns ``(EditableTrack, report)``, whose report carries ``from``, ``to``,
-/// ``changed``, the upgrade's ``evaluate`` report and the downgrade's
+/// ``changed``, the upgrade's ``fit`` report and the downgrade's
 /// ``reference``.
 #[pyfunction]
 fn set_stage(
@@ -765,7 +864,7 @@ fn set_stage(
         &edited.inner,
         &views,
         stage,
-        &EvaluateOptions::default(),
+        &FitOptions::default(),
         &Progress::none(),
     )
     .map_err(refused)?;
@@ -773,8 +872,8 @@ fn set_stage(
     d.set_item("from", report.from.to_string())?;
     d.set_item("to", report.to.to_string())?;
     d.set_item("changed", report.changed)?;
-    if let Some(evaluated) = &report.evaluate {
-        d.set_item("evaluate", evaluate_report_dict(py, evaluated)?)?;
+    if let Some(fitted) = &report.fit {
+        d.set_item("fit", fit_report_dict(py, fitted)?)?;
     }
     if let Some(reference) = report.reference {
         d.set_item("reference", reference)?;
@@ -870,6 +969,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
     m.add_function(wrap_pyfunction!(apply_thresholds, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate, m)?)?;
+    m.add_function(wrap_pyfunction!(fit, m)?)?;
     m.add_function(wrap_pyfunction!(set_stage, m)?)?;
     m.add_function(wrap_pyfunction!(split, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;

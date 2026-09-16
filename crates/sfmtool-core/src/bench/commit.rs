@@ -134,10 +134,9 @@ impl std::fmt::Display for CommitError {
             CommitError::TooFewObservations(n) => {
                 write!(f, "{n} observations are in, and a point needs two or more")
             }
-            CommitError::NoPosition => write!(
-                f,
-                "the track has no position; evaluate it before committing"
-            ),
+            CommitError::NoPosition => {
+                write!(f, "the track has no position; fit it before committing")
+            }
             CommitError::NoFrame => write!(
                 f,
                 "the reconstruction stores a patch frame per point and the track has none"
@@ -190,7 +189,7 @@ impl From<EditError> for CommitError {
 /// `out` observation pulled from a point leaves that point alone.
 ///
 /// Nothing here triangulates. The track commits with the position it carries,
-/// and a track that carries none refuses naming the evaluation as the step that
+/// and a track that carries none refuses naming the fit as the step that
 /// is missing, so the record that is written is one the numbers on screen
 /// describe.
 ///

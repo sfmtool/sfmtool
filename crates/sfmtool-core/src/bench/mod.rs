@@ -15,19 +15,22 @@
 //! that keeps both can undo by pointing at the one it had, and a refusal leaves
 //! nothing half-applied.
 //!
-//! The two steps that read photographs are [`evaluate`](evaluate::evaluate),
-//! which fills a track's measurement slots at whichever stage it is in, and
-//! [`set_stage`](stage::set_stage()), which moves it between the two. Both take
-//! the decoded views as a named input, one per image, so decoding and caching
-//! stay the caller's. Each also publishes the half of its validation that
-//! reads no photograph -- [`evaluate_preconditions`] and
-//! [`set_stage_preconditions`] -- so a caller
-//! that would decode a dozen images first can refuse in front of that work
-//! instead of behind it. The step itself calls its own, so the two answers
-//! cannot drift.
+//! The three steps that read photographs are [`evaluate`](evaluate::evaluate),
+//! which fills a track's measurement slots at whichever stage it is in and
+//! moves nothing; [`fit`](fit::fit), which localizes, re-triangulates and
+//! writes the geometry, and then evaluates its own result; and
+//! [`set_stage`](stage::set_stage()), which moves a track between the two
+//! stages. All three take the decoded views as a named input, one per image, so
+//! decoding and caching stay the caller's. Each also publishes the half of its
+//! validation that reads no photograph -- [`evaluate_preconditions`],
+//! [`fit_preconditions`] and [`set_stage_preconditions`] -- so a caller that
+//! would decode a dozen images first can refuse in front of that work instead
+//! of behind it. The step itself calls its own, so the two answers cannot
+//! drift.
 
 pub mod commit;
 pub mod evaluate;
+pub mod fit;
 pub mod stage;
 pub mod steps;
 pub mod track;
@@ -40,8 +43,10 @@ use std::sync::Arc;
 
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
-    evaluate, evaluate_preconditions, EvaluateError, EvaluateOptions, EvaluateReport,
+    evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,
+    EvaluateReport,
 };
+pub use fit::{fit, fit_preconditions, FitError, FitOptions, FitReport};
 pub use stage::{set_stage, set_stage_preconditions, StageError, StageReport};
 pub use steps::{
     add_observation, apply_thresholds, create_cluster, create_track, set_verdict, split,
@@ -51,7 +56,7 @@ pub use steps::{
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,
-    Provenance, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Verdict,
+    Provenance, Stage, StageKind, Thresholds, TrackMeasurement, TrackPayload, Unmeasured, Verdict,
 };
 
 /// One thing on the bench.

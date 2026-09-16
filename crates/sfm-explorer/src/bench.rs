@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    Observation, ObservationSeed, Provenance, StageKind, Thresholds, Verdict,
+    FitOptions, Observation, ObservationSeed, Provenance, StageKind, Thresholds, Verdict,
 };
 use sfmtool_core::EditedReconstruction;
 
@@ -131,6 +131,25 @@ pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
 /// panel to reveal it. A mark and a row are one observation, so they cannot be
 /// allowed to disagree about where it is. The same order the evaluation's own
 /// seeding uses -- the measured position wins over the seed.
+/// The reading options a bench step runs with: core's own, with the caller's
+/// search radius where one was named.
+///
+/// The panel's *Search* control and the wire's `search_px` argument both land
+/// here, and a fit passes the same value through to the reading it ends with,
+/// so every number on screen was measured in one window.
+fn evaluate_options(search_px: Option<f64>) -> EvaluateOptions {
+    let mut options = EvaluateOptions::default();
+    if let Some(search_px) = search_px {
+        options.search_px = search_px;
+    }
+    options
+}
+
+/// The default the panel's *Search* control starts at, which is core's own.
+pub(crate) fn default_search_px() -> f64 {
+    EvaluateOptions::default().search_px
+}
+
 pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
     if let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) {
         return Some(keypoint);
@@ -499,8 +518,12 @@ impl AppState {
         })
     }
 
-    /// Measure the track called `label` at the stage it is in, on a worker
-    /// thread.
+    /// Read the track called `label` at the stage it is in, on a worker thread.
+    ///
+    /// A reading moves nothing: the position, the frame and every keypoint come
+    /// back as they were, and what the version carries is what each observation
+    /// now says about itself. `search_px` is how far from each observation the
+    /// correlation peak is looked for; `None` takes the reading's own default.
     ///
     /// The photographs the kernels read are decoded **on that worker**: the
     /// file reads and the pyramid builds are seconds of work, and a step that
@@ -518,8 +541,13 @@ impl AppState {
     /// nothing to register against is refused in the caller's own hand -- a
     /// menu that greys, a status line, a tool error -- rather than starting a
     /// task whose only act is to decode a dozen images and then fail.
-    pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String> {
-        let outcome = self.begin_bench_evaluate(id, label);
+    pub(crate) fn start_bench_evaluate(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_evaluate(id, label, search_px);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
@@ -528,12 +556,54 @@ impl AppState {
 
     /// The evaluation up to the moment the worker has it, so that everything
     /// this can refuse is refused before a photograph is read.
-    fn begin_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+    fn begin_bench_evaluate(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<(), String> {
         let (_, _, track) = self.bench_step_target(id, label)?;
         bench::evaluate_preconditions(&track)
             .map_err(|e| format!("Cannot evaluate {label}: {e}"))?;
-        let job = self.bench_evaluate_job(id, label)?;
+        let job = self.bench_evaluate_job(id, label, search_px)?;
         self.start_background_task(Operation::BENCH_EVALUATE, id, job)
+    }
+
+    /// Fit the track called `label` at the stage it is in, on a worker thread.
+    ///
+    /// The step that **moves** the track: at the track stage it localizes every
+    /// sighting against the surfel, re-triangulates the `in` ones, re-centres
+    /// the frame and fuses the consensus, and then reads the result back so the
+    /// numbers it leaves behind are the ones *Evaluate* would report.
+    ///
+    /// **What the track alone decides is decided here**, through
+    /// [`sfmtool_core::bench::fit_preconditions`], which carries the two-`in`
+    /// rule a reading does not have.
+    pub(crate) fn start_bench_fit(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_fit(id, label, search_px);
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Bench, message.clone());
+        }
+        outcome
+    }
+
+    /// The fit up to the moment the worker has it, so that everything this can
+    /// refuse is refused before a photograph is read.
+    fn begin_bench_fit(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<(), String> {
+        let (_, _, track) = self.bench_step_target(id, label)?;
+        bench::fit_preconditions(&track).map_err(|e| format!("Cannot fit {label}: {e}"))?;
+        let job = self.bench_fit_job(id, label, search_px)?;
+        self.start_background_task(Operation::BENCH_FIT, id, job)
     }
 
     /// Put the track called `label` into `stage`, on a worker thread.
@@ -583,28 +653,59 @@ impl AppState {
 
     /// The evaluation itself, as a function of the `Progress` it reports
     /// through.
-    fn bench_evaluate_job(&mut self, id: ReconId, label: &str) -> Result<Job, String> {
+    fn bench_evaluate_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<Job, String> {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
+        let options = evaluate_options(search_px);
         Ok(Box::new(move |progress| {
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
                 Err(e) => return Finished::Failed(format!("Cannot evaluate {label}: {e}")),
             };
             let views = decoded.views();
-            match bench::evaluate(
-                &track,
-                &edited,
-                &views,
-                &EvaluateOptions::default(),
-                progress,
-            ) {
+            match bench::evaluate(&track, &edited, &views, &options, progress) {
                 Err(e) => Finished::Failed(format!("Cannot evaluate {label}: {e}")),
                 Ok((measured, report)) => Finished::BenchTrack {
                     version_label: format!("Evaluated {label}"),
                     text: format!("Evaluated {label}: {report}"),
                     label,
                     track: Box::new(measured),
+                },
+            }
+        }))
+    }
+
+    /// The fit itself, as a function of the `Progress` it reports through.
+    fn bench_fit_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        search_px: Option<f64>,
+    ) -> Result<Job, String> {
+        let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
+        let label = label.to_string();
+        let options = FitOptions {
+            evaluate: evaluate_options(search_px),
+            ..FitOptions::default()
+        };
+        Ok(Box::new(move |progress| {
+            let decoded = match sources.decode(progress) {
+                Ok(decoded) => decoded,
+                Err(e) => return Finished::Failed(format!("Cannot fit {label}: {e}")),
+            };
+            let views = decoded.views();
+            match bench::fit(&track, &edited, &views, &options, progress) {
+                Err(e) => Finished::Failed(format!("Cannot fit {label}: {e}")),
+                Ok((fitted, report)) => Finished::BenchTrack {
+                    version_label: format!("Fitted {label}"),
+                    text: format!("Fitted {label}: {report}"),
+                    label,
+                    track: Box::new(fitted),
                 },
             }
         }))
@@ -631,7 +732,7 @@ impl AppState {
                 &edited,
                 &views,
                 stage,
-                &EvaluateOptions::default(),
+                &FitOptions::default(),
                 progress,
             ) {
                 Err(e) => Finished::Failed(format!("Cannot set the stage of {label}: {e}")),

@@ -1205,17 +1205,49 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "evaluate_bench_track",
-            description: "Measure every observation of a bench track at the stage the track is \
-                          in — the refinement against the template at the cluster stage, the \
-                          localizer, the triangulation and the leave-one-out agreement at the \
-                          track stage — and read the numbers back with get_bench_track. It runs \
-                          on a worker thread, so an evaluation that is still going after 200 ms \
-                          replies with running: true and an operation_id to poll with \
-                          get_background_task instead of the version it pushed. Needs the \
-                          photographs, which are decoded on demand.",
+            description: "Read every observation of a bench track at the stage the track is in \
+                          and MOVE NOTHING — the position, the frame and every keypoint come \
+                          back as they were. It is the refinement against the template at the \
+                          cluster stage, and at the track stage one round of the localizer at \
+                          the pixels the observations already sit at: each gets its \
+                          leave-one-out ZNCC, seed_shift_px (how far the correlation peak sits \
+                          from the observation), projection_offset_px (how far the observation \
+                          sits from the point's projection — the number that says the point is \
+                          off, not the sighting), the reprojection error, the ray angle and its \
+                          tile localizability. No gate drops a row: an observation that cannot \
+                          be read carries a reason sentence instead of a score. Read the \
+                          numbers back with get_bench_track. It runs on a worker thread, so a \
+                          reading still going after 200 ms replies with running: true and an \
+                          operation_id to poll with get_background_task instead of the version \
+                          it pushed. Needs the photographs, which are decoded on demand.",
             kind: Write,
             schema: object(
-                &[("track", bench_track_schema())],
+                &[
+                    ("track", bench_track_schema()),
+                    ("search_px", search_px_schema()),
+                ],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "fit_bench_track",
+            description: "Fit a bench track at the stage it is in — the step that MOVES it. At \
+                          the track stage it localizes every sighting against the surfel, \
+                          refines each to sub-pixel, re-triangulates the in ones, re-centres \
+                          the frame there and re-fuses the consensus bitmap; at the cluster \
+                          stage it is the refinement, which is what a reading is too. Nothing \
+                          is dropped by a gate: a sighting that does not belong is turned out \
+                          with set_bench_track_verdict or by the thresholds, not deleted from \
+                          the evidence. The fit ends by evaluating its own result, so the \
+                          numbers it leaves behind are the ones evaluate_bench_track reports. \
+                          Refused for a track stage with fewer than two in observations, which \
+                          a reading permits. Answers as evaluate_bench_track does.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("track", bench_track_schema()),
+                    ("search_px", search_px_schema()),
+                ],
                 &[("reconstruction_label", edited_label_schema())],
             ),
         },
@@ -1423,6 +1455,17 @@ fn bench_track_schema() -> Value {
         "description":
             "Which track on the bench, by its label. Omit for the active track, which is what \
              the Track Edit panel is showing and what a create or an activate last made active.",
+    })
+}
+
+/// How far around each observation a reading looks for its correlation peak.
+fn search_px_schema() -> Value {
+    json!({
+        "type": "number",
+        "description":
+            "How far from each observation's own pixel the correlation peak is looked for, in \
+             patch-grid px. Omit for the reading's own radius. A wider window finds a feature \
+             the sighting sits further from, and says so in seed_shift_px.",
     })
 }
 
@@ -2166,10 +2209,19 @@ pub(crate) fn parse(
             }
         }
         "evaluate_bench_track" => {
-            args.reject_unknown(&["reconstruction_label", "track"])?;
+            args.reject_unknown(&["reconstruction_label", "track", "search_px"])?;
             Command::EvaluateBenchTrack {
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 track: args.optional_string("track")?,
+                search_px: args.optional_f64("search_px")?,
+            }
+        }
+        "fit_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track", "search_px"])?;
+            Command::FitBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                search_px: args.optional_f64("search_px")?,
             }
         }
         "set_bench_track_stage" => {

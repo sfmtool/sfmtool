@@ -48,8 +48,8 @@ pub(crate) struct RowSummary {
     pub pinned: bool,
     /// What the thresholds propose for it, which is what the row is painted by.
     pub painted: Verdict,
-    /// The six measurement cells, as printed.
-    pub cells: [String; 6],
+    /// The seven measurement cells, as printed.
+    pub cells: [String; 7],
     /// Whether the row drew a rendered tile, rather than the empty frame that
     /// stands in when there is nothing to render.
     pub tile: bool,
@@ -63,6 +63,7 @@ pub(super) struct ColumnLayout {
     name: f32,
     zncc: f32,
     shift: f32,
+    offset: f32,
     sigma: f32,
     error: f32,
     angle: f32,
@@ -76,13 +77,16 @@ impl ColumnLayout {
         let tile = verdict + VERDICT_WIDTH + 6.0;
         let image = tile + TILE_SIZE + 8.0;
         let name = image + 34.0;
-        let zncc = name + 150.0;
+        let zncc = name + 130.0;
         let shift = zncc + 54.0;
-        let sigma = shift + 54.0;
+        let offset = shift + 62.0;
+        let sigma = offset + 62.0;
         let error = sigma + 56.0;
         let angle = error + 54.0;
         let status = angle + 54.0;
-        let from = status + 104.0;
+        // The status cell holds a sentence at the track stage -- the reason a
+        // row was not read -- so it is given room for one and elided to it.
+        let from = status + 190.0;
         Self {
             verdict,
             tile,
@@ -90,6 +94,7 @@ impl ColumnLayout {
             name,
             zncc,
             shift,
+            offset,
             sigma,
             error,
             angle,
@@ -99,13 +104,14 @@ impl ColumnLayout {
     }
 
     /// The header's cells, each at the offset its column is drawn at.
-    pub(super) fn headers(&self) -> [(f32, &'static str); 10] {
+    pub(super) fn headers(&self) -> [(f32, &'static str); 11] {
         [
             (self.verdict, "Verdict"),
             (self.image, "Img"),
             (self.name, "Name"),
             (self.zncc, "ZNCC"),
-            (self.shift, "Shift"),
+            (self.shift, "Seed sh."),
+            (self.offset, "Proj. off"),
             (self.sigma, "\u{3c3}_pos"),
             (self.error, "Error"),
             (self.angle, "Angle"),
@@ -328,16 +334,27 @@ impl TrackEdit {
         for (x, cell) in [
             cols.zncc,
             cols.shift,
+            cols.offset,
             cols.sigma,
             cols.error,
             cols.angle,
-            cols.status,
         ]
         .into_iter()
         .zip(cells.iter())
         {
             text(x, cell, text_color);
         }
+        // The status cell is a sentence rather than a number at the track
+        // stage, so it is elided to its column the way the image name is.
+        let status = crate::elide::middle(&cells[6], cols.from - cols.status - 8.0, |value| {
+            ui.ctx().fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(value.to_owned(), font.clone(), text_color)
+                    .rect
+                    .width()
+            })
+        });
+        text(cols.status, &status, text_color);
         text(cols.from, &provenance_text(row.provenance), weak);
 
         self.rows.push(RowSummary {

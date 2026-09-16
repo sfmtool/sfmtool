@@ -25,7 +25,8 @@ track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
 it), [`scene-graph.md`](scene-graph.md) (the tree the Bench group is a child
-of), [`background-tasks.md`](background-tasks.md) (where an evaluation runs),
+of), [`background-tasks.md`](background-tasks.md) (where a reading and a fit
+run),
 [`action-log.md`](action-log.md) (the row each step writes),
 [`mcp-server.md`](mcp-server.md) (the surface § "The wire" is a family of), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
@@ -107,7 +108,13 @@ impl AppState {
     /// replaced where it replaced one.
     pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
         -> Result<Committed, String>;
-    pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// Read the track where it sits, moving nothing. `search_px` is how far
+    /// around each observation the correlation peak is looked for.
+    pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str,
+                                       search_px: Option<f64>) -> Result<(), String>;
+    /// Move it: localize, re-triangulate, re-fuse, then read the result back.
+    pub(crate) fn start_bench_fit(&mut self, id: ReconId, label: &str,
+                                  search_px: Option<f64>) -> Result<(), String>;
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
         -> Result<(), String>;
 }
@@ -162,18 +169,19 @@ commit wrote" is not a question the value can be asked once the version has
 landed -- a replacement takes the index it replaced, and a creation takes
 whatever index the overlay had free.
 
-**The two steps that read photographs return as soon as the worker is running.**
+**The three steps that read photographs return as soon as the worker is running.**
 They are `start_`-prefixed for that reason, and what they answer is whether the
 operation could *begin*. The report lands frames or seconds later, through the
 background machinery. What they refuse in the call is everything the track alone
-decides (§ "The two steps that read photographs").
+decides (§ "The three steps that read photographs").
 
 ### Example
 
 ```rust
 let label = state.put_point_on_bench(PointRef::new(id, 1207))?;   // one version
 state.set_bench_verdict(id, &label, 3, Verdict::Out)?;            // one version
-state.start_bench_evaluate(id, &label)?;                          // a task
+state.start_bench_evaluate(id, &label, None)?;                    // a task: measures, moves nothing
+state.start_bench_fit(id, &label, None)?;                         // a task: moves it, then measures
 // ... the report lands, which is one more version ...
 state.commit_bench_track(id, &label)?;                            // one version, both halves
 ```
@@ -237,7 +245,8 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
-| Evaluate | `Evaluated IMG_0042@142,198` |
+| Evaluate | `Evaluated IMG_0042@142,198: measured 4 of 5 observations at (x, y, z)` |
+| Fit | `Fitted IMG_0042@142,198: placed 4, measured 4 of 5 observations at (x, y, z)` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
 | Activate | `Made IMG_0042@142,198 the active track` |
@@ -271,20 +280,22 @@ cursor.
 
 ---
 
-## The two steps that read photographs
+## The three steps that read photographs
 
-An evaluation and a stage change run as **background tasks**
-([`background-tasks.md`](background-tasks.md)), under `Evaluate track` and `Set
-track stage`. Neither is cancellable: the patch kernels they run take the
-`Progress` for their phases and never ask whether they should stop, and the
-declaration is held to that by the background tests.
+A reading, a fit and a stage change run as **background tasks**
+([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
+track` and `Set track stage`. None of them is cancellable: the patch kernels
+they run take the `Progress` for their phases and never ask whether they should
+stop, and the declaration is held to that by the background tests.
 
 **What the track alone decides is decided before the task starts.** Core
 publishes the half of each step's own validation that reads no photograph --
-`bench::evaluate_preconditions` and `bench::set_stage_preconditions`
+`bench::evaluate_preconditions`, `bench::fit_preconditions` and
+`bench::set_stage_preconditions`
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)) -- and
-`start_bench_evaluate` and `start_bench_stage` ask it before they build a job.
-So a track with fewer than two `in` observations, or one being taken down to the
+`start_bench_evaluate`, `start_bench_fit` and `start_bench_stage` ask it before
+they build a job. So a track being fitted with fewer than two `in` observations
+(which a *reading* of the same track permits), or one being taken down to the
 cluster stage with no frame or no position, is a refusal of the **gesture**: a
 sentence in the caller's own hand, no task, no version. The step itself calls
 the same function first, so the two answers cannot drift. What is left for the
@@ -379,6 +390,7 @@ panel means when it names no item.
 //                                "verdict": "in" }
 // apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
 // evaluate_bench_track         { "reconstruction_label": "bull" }
+// fit_bench_track           { "reconstruction_label": "bull" }
 // set_bench_track_stage        { "reconstruction_label": "bull", "stage": "track" }
 // split_bench_track            { "reconstruction_label": "bull", "observations": [3, 5, 8] }
 // commit_bench_track           { "reconstruction_label": "bull" }
@@ -389,8 +401,10 @@ they answer. `get_bench` is the Bench group as JSON: each item's label, kind,
 stage, origin and counts, and the active label per kind. `get_bench_track` is
 the Track Edit table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict and both stages' measurements
-where they exist. **An observation is addressed by its position in that list**,
-which is stable for the life of the track, so an index an agent is holding after
+where they exist -- at the track stage, the two distances (`seed_shift_px` and
+`projection_offset_px`) and, for a row the reading could not score, the `reason`
+sentence in place of a ZNCC. **An observation is addressed by its position in
+that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or an evaluation still names the same observation. The template's
 samples and the consensus bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
@@ -408,11 +422,11 @@ through the counts for whichever row is new. So `undo`, `redo` and
 `jump_to_version` need no bench variant: the history they walk already holds the
 bench steps.
 
-**The two steps that read photographs answer in two levels**, as the bundle
+**The three steps that read photographs answer in two levels**, as the bundle
 adjustment does: with the version they pushed when they finish inside the reply
 window, and with `running: true` and an `operation_id` to poll
 `get_background_task` with when they do not. The deferral is taken before a
-single photograph has been read (§ "The two steps that read photographs"), so
+single photograph has been read (§ "The three steps that read photographs"), so
 the window is measured against the operation rather than spent on the decode in
 front of it. A step that finds nothing to do starts no task and answers with the
 version the node stands at, and a step the **track** rules out starts no task
@@ -439,7 +453,7 @@ point's exact projection and a photograph cached for every image:
   a pixel, then a candidate added at one in the same image -- are one version and
   one `Bench` row each, the second sighting joining as a candidate, and an undo
   walks them back one at a time;
-- a verdict, a stage change and an evaluation are three versions, undo retraces
+- a verdict, a stage change and a reading are three versions, undo retraces
   them in order and redo replays them;
 - a document edit between two bench steps is a version in its place, and undoing
   it leaves the bench alone;

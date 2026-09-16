@@ -21,6 +21,7 @@ from sfmtool._sfmtool.bench import (
     create_cluster,
     create_track,
     evaluate,
+    fit,
     set_stage,
     set_verdict,
     split,
@@ -61,12 +62,18 @@ def images(embedded):
 
 @pytest.fixture
 def long_track_point(embedded):
-    """A point of the fixture whose track has three or more observations."""
-    counts = embedded.observation_counts
-    candidates = np.flatnonzero(np.asarray(counts) >= 3)
-    if candidates.size == 0:
+    """The point of the fixture whose track is the longest it has.
+
+    The longest rather than the first one over a bar: a point many photographs
+    saw is the specimen every step here is interesting on, and the fixture's
+    shortest tracks carry patch frames whose tiles run off the photographs they
+    would be read in, which is a fact about ``to_embedded_patches`` on a
+    17-image toy solve rather than about the steps under test.
+    """
+    counts = np.asarray(embedded.observation_counts)
+    if counts.size == 0 or counts.max() < 3:
         pytest.skip("the fixture holds no track of three observations")
-    return int(candidates[0])
+    return int(np.argmax(counts))
 
 
 class TestTheBench:
@@ -249,7 +256,7 @@ class TestTheEditableTrack:
 
 
 class TestEvaluating:
-    """The one step that reads photographs, at both stages."""
+    """Reading a track, and the fit that moves it, at both stages."""
 
     def test_an_evaluation_measures_the_track_and_moves_no_verdict(
         self, edited, images, long_track_point
@@ -260,15 +267,9 @@ class TestEvaluating:
         assert report["stage"] == "track"
         assert report["measured"] + report["unmeasured"] == track.observation_count
         assert "reference" not in report
-        # How many sightings register is the fixture's business: these frames
-        # are the cheap ``to_embedded_patches`` baseline, never photometrically
-        # adapted, and whether a borderline one registers differs between
-        # platforms. What this test is about is the call's shape and what lands
-        # in the slots, so the position is checked only when a fit produced one.
-        if report["measured"]:
-            assert len(report["position"]) == 3
-            assert report["condition_number"] > 0.0
-            np.testing.assert_allclose(measured.position, report["position"])
+        # The reading is made against the track as it stands, so the position it
+        # reports is the one the track already carried.
+        np.testing.assert_allclose(report["position"], track.position)
 
         # The verdicts are the person's, and an evaluation is not the person.
         assert measured.verdict_counts == track.verdict_counts
@@ -281,11 +282,101 @@ class TestEvaluating:
         for entry in placed:
             assert len(entry["keypoint"]) == 2
             # Where the position puts the sighting is measured for every row
-            # that has a pixel at all, fitted this round or not.
+            # that has a pixel at all, scored this round or not.
             assert entry["reprojection_error"] >= 0.0
             assert entry["ray_angle_deg"] >= 0.0
-            assert entry.get("shift_px", 0.0) >= 0.0
+            assert entry.get("seed_shift_px", 0.0) >= 0.0
+            assert entry.get("projection_offset_px", 0.0) >= 0.0
             assert entry.get("localizability", 1.0) > 0.0
+
+    def test_an_evaluation_moves_nothing(self, edited, images, long_track_point):
+        """A reading writes measurements and no geometry.
+
+        The position, the frame's colour and confidence, and every keypoint come
+        back exactly as they went in: what a reading changes is what each row
+        says about itself.
+        """
+        _, track = create_track(Bench(), edited, long_track_point)
+        read, _ = evaluate(track, edited, images)
+
+        np.testing.assert_array_equal(read.position, track.position)
+        assert read.stage == track.stage
+        assert read.observation_count == track.observation_count
+        for before, after in zip(track.observations, read.observations):
+            np.testing.assert_array_equal(
+                after["track"]["keypoint"], before["track"]["keypoint"]
+            )
+            assert after["verdict"] == before["verdict"]
+
+    def test_an_evaluation_measures_every_observation_whatever_its_verdict(
+        self, edited, images, long_track_point
+    ):
+        """An ``out`` row and a candidate are read like every other row.
+
+        Nothing is dropped by a gate, so a refusal stands beside the number it
+        would have been judged on and a slider can propose taking it back.
+        """
+        _, track = create_track(Bench(), edited, long_track_point)
+        track, _ = set_verdict(track, 1, "out")
+        seen = {int(o["image"]) for o in track.observations}
+        free = next(i for i in range(len(images)) if i not in seen)
+        record = edited.point(long_track_point)
+        pixel = tuple(float(v) for v in np.asarray(record["keypoints_xy"])[0])
+        track, added = add_observation(track, free, pixel)
+
+        read, report = evaluate(track, edited, images)
+        assert report["measured"] + report["unmeasured"] == track.observation_count
+        # Every row carries a track-stage slot, and every one that carries no
+        # score says why in a sentence rather than coming back blank.
+        for observation in read.observations:
+            entry = observation["track"]
+            assert ("zncc" in entry) != ("reason" in entry)
+            if "reason" in entry:
+                assert entry["reason"]
+        out_row = read.observation(1)["track"]
+        assert out_row.get("projection_offset_px", 0.0) >= 0.0
+        assert read.verdict_counts == track.verdict_counts
+        assert added["observation"] == track.observation_count - 1
+
+    def test_a_row_with_nowhere_to_look_is_reported_with_a_reason(
+        self, edited, images, long_track_point
+    ):
+        """A sighting pointed off the sensor is named, not silently dropped."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        seen = {int(o["image"]) for o in track.observations}
+        free = next(i for i in range(len(images)) if i not in seen)
+        track, added = add_observation(track, free, (1.0e5, 1.0e5))
+
+        read, report = evaluate(track, edited, images)
+        entry = read.observation(added["observation"])["track"]
+        assert "zncc" not in entry
+        assert entry["reason"] == "it sits off the photograph"
+        assert report["unmeasured"] >= 1
+
+    def test_a_fit_moves_the_track_and_an_evaluation_of_it_agrees(
+        self, edited, images, long_track_point
+    ):
+        """A fit ends by reading its own result, so the two never disagree."""
+        _, track = create_track(Bench(), edited, long_track_point)
+        fitted, report = fit(track, edited, images)
+
+        assert report["placed"] >= 2
+        assert len(report["position"]) == 3
+        assert report["condition_number"] > 0.0
+        assert report["evaluate"]["stage"] == "track"
+        np.testing.assert_allclose(fitted.position, report["position"])
+
+        # Reading the fitted track again gives the same numbers, to the digit.
+        read, again = evaluate(fitted, edited, images)
+        assert (again["measured"], again["unmeasured"]) == (
+            report["evaluate"]["measured"],
+            report["evaluate"]["unmeasured"],
+        )
+        for before, after in zip(fitted.observations, read.observations):
+            assert before["track"].get("zncc") == after["track"].get("zncc")
+            assert before["track"].get("seed_shift_px") == after["track"].get(
+                "seed_shift_px"
+            )
 
     def test_a_downgrade_re_seeds_every_sighting_and_drops_the_geometry(
         self, edited, images, long_track_point
@@ -324,7 +415,9 @@ class TestEvaluating:
         again, report = set_stage(cluster, edited, images, "track")
 
         assert again.stage == "track"
-        assert report["evaluate"]["stage"] == "track"
+        # The upgrade is a fit, and a fit ends by reading its own result.
+        assert report["fit"]["evaluate"]["stage"] == "track"
+        assert report["fit"]["placed"] >= 2
         moved = np.linalg.norm(np.asarray(again.position) - np.asarray(track.position))
         extent = np.linalg.norm(np.asarray(edited.point(long_track_point)["position"]))
         assert moved < 0.05 * max(extent, 1.0), f"the round trip moved {moved}"
@@ -339,7 +432,7 @@ class TestEvaluating:
         same, report = set_stage(track, edited, images, "track")
         assert not report["changed"]
         assert (report["from"], report["to"]) == ("track", "track")
-        assert "evaluate" not in report
+        assert "fit" not in report
         assert same.observation_count == track.observation_count
 
     def test_an_unknown_stage_is_refused_by_name(
@@ -349,14 +442,18 @@ class TestEvaluating:
         with pytest.raises(ValueError, match="unknown stage"):
             set_stage(track, edited, images, "surfel")
 
-    def test_a_track_stage_evaluation_of_one_sighting_is_refused(
+    def test_a_track_stage_fit_of_one_sighting_is_refused(
         self, edited, images, long_track_point
     ):
+        """A fit needs a consensus; a reading of the same track does not."""
         _, track = create_track(Bench(), edited, long_track_point)
         for i in range(1, track.observation_count):
             track, _ = set_verdict(track, i, "out")
         with pytest.raises(ValueError, match="needs two or more"):
-            evaluate(track, edited, images)
+            fit(track, edited, images)
+        read, report = evaluate(track, edited, images)
+        assert report["measured"] + report["unmeasured"] == track.observation_count
+        assert read.observation_count == track.observation_count
 
     def test_a_cluster_from_pixels_refines_upgrades_and_commits(
         self, edited, images, long_track_point

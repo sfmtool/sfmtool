@@ -22,8 +22,8 @@ panel, which carries the two gestures that name a pixel and draws the active
 track as its bench layer),
 [`../core/bench/editable-track.md`](../core/bench/editable-track.md) (the value
 it shows and every step it calls), [`panel-layout.md`](panel-layout.md) (its tab
-and its home), [`background-tasks.md`](background-tasks.md) (where Evaluate and
-the stage change run), and
+and its home), [`background-tasks.md`](background-tasks.md) (where Evaluate, Fit
+and the stage change run), and
 [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md)
 (the searches and the remaining overlays still to come).
 
@@ -54,7 +54,8 @@ pub struct TrackEditResponse {
     pub discard: Option<String>,
     pub rename: Option<(String, String)>,
     pub put_selected_point_on_bench: bool,
-    pub evaluate: bool,
+    pub evaluate: Option<f64>,   // the search radius the control stands at
+    pub fit: Option<f64>,        // the same, for the reading a fit ends with
     pub set_stage: Option<StageKind>,
     pub apply_thresholds: Option<Thresholds>,
     pub split: Option<Vec<usize>>,
@@ -128,13 +129,24 @@ triangulation's condition number, or the sentence saying nothing has
 triangulated it yet.
 
 **The toolbar**, in two rows. The first acts on the active track: *Evaluate*,
-the *Stage* toggle (which names the stage it would move to), *Apply thresholds*,
-*Split off N rows*, *Commit* and *Discard*. The second is the way in and the
+*Fit*, the *Stage* toggle (which names the stage it would move to), *Apply
+thresholds*, *Split off N rows*, *Commit* and *Discard*. The second is the way in and the
 rename: *Put selected point on bench* and *Rename*. Each entry is enabled or
 greyed with a hover text naming
 what is missing, in the style of the Image Detail menu entries -- and the
 Commit button's refusal is the core commit's own sentence, asked of the very
 track the button would commit, so the button and the step cannot disagree.
+
+**Evaluate and Fit are two buttons because they are two questions.**
+*Evaluate* measures every observation where it sits and **moves nothing** -- no
+keypoint, no position, no frame -- so a person asking whether a track is right
+gets an answer that does not change the thing being asked about, and nothing is
+dropped from the table by a kernel's gate. *Fit* is the step that moves it:
+localize, re-triangulate, re-fuse, and then read the result back, which is why
+the numbers after a fit are the numbers *Evaluate* would report. *Fit* greys
+with `fit_preconditions`' own sentence -- a track stage with fewer than two `in`
+observations among them -- while *Evaluate* stays available for exactly that
+track, because one sighting is something to report.
 
 **The thresholds**: four sliders, one per bar of `Thresholds` -- minimum ZNCC,
 maximum shift, maximum keypoint uncertainty, minimum relative ZNCC -- so there
@@ -145,6 +157,14 @@ bars and is applied in the same step. Moving a slider repaints the table and
 changes nothing about the track; *Apply thresholds* is what turns the painting
 into verdicts, in one version carrying both the bars and the painting, since the
 sliders are the panel's until the button is pressed.
+
+**Beside them, one control that is not a threshold**: *search px*, how far from
+each observation's own pixel the next reading looks for its correlation peak, in
+patch-grid px, starting at `EvaluateOptions::default`'s own radius. It stands
+apart from the sliders because it is an input to the measurement rather than a
+bar the painting judges by: moving it repaints nothing and changes no number
+until *Evaluate* or *Fit* runs, and both carry it, so a fit's numbers and a
+reading's are measured in one window.
 
 **The sliders stand where the active track's own bars are.** A track carries the
 thresholds it was last applied, and that is what the panel shows: seeded from
@@ -165,20 +185,32 @@ says which column each number is in.
 | Verdict | a three-state control, clicked to cycle `in` / `out` / `candidate`; a dot marks a verdict set by hand | same |
 | Tile | the observation's own grid: the `R x R` samples the refinement kernel reads at the refined position and shape | the surfel re-rendered from this observation, re-anchored on its keypoint -- the tile Point Track Detail draws |
 | Img, Name | as Point Track Detail | as Point Track Detail |
-| ZNCC | against the reference template | leave-one-out against the consensus |
-| Shift | from the seed, px | from the surfel's projection, px |
+| ZNCC | against the reference template | leave-one-out against the consensus, at the correlation peak within *search px* of the observation |
+| Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
+| Proj. off | absent | how far the observation's keypoint sits from the point's projection, px |
 | σ_pos | the observation's own tile localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `localized` where the fit scored it, `not localized` where the evaluation reached it and the fit did not place it, `not evaluated` where nothing has |
+| Status | the kernel's `member_status` | `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which is what says the
 difference between a number a round produced and a round that has not been run.
-The Status column says which of those a row is by what was measured rather than
-by the ZNCC alone: an evaluation that reaches an observation the fit does not
-place leaves it its keypoint and scores it for everything the position says
-about it, and calling that row `not evaluated` would read as though the numbers
-beside it came from nowhere.
+
+**The two distances are two columns because they are two questions.** *Seed sh.*
+is the sighting's own evidence -- the correlation would rather sit this far from
+where the observation is -- and is what the `max shift px` bar paints on.
+*Proj. off* is a statement about the **point**: a mis-triangulated track shows a
+column of large offsets beside a column of near-zero shifts, which is the
+picture that says the position is what is wrong and the sightings are not. One
+column could not say that, and anchoring the shift at the projection would turn
+out the very observations that would pull the point back.
+
+**The Status cell names the refusal.** A reading drops nothing, so a row without
+a ZNCC always has one of core's `Unmeasured` reasons behind it, and the cell
+prints that sentence -- `it sits off the photograph`, `its ray grazes the patch`,
+`nothing to correlate against` -- elided to its column, in place of a bare "not
+localized" that says only that something happened. `not evaluated` is for the
+row nothing has read at all.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is the thing a person can judge, which is the whole

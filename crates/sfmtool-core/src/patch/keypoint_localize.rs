@@ -975,7 +975,13 @@ pub fn localize_patch_keypoints_with_basis(
             .filter(|z| z.is_finite())
             .collect();
         let med = median_in_place(&mut live_loo);
-        let bar = if med.is_finite() {
+        // `min_relative_zncc <= 0` (or non-finite) disables the relative bar
+        // exactly, the way `min_absolute_zncc` and the member-localizability
+        // `tau` do. Without that, `0.0` would still bar a view whose
+        // leave-one-out ZNCC is *negative*, which is the one case a caller that
+        // asked for no gate most wants reported: a reading of a track shows the
+        // anti-correlated sighting with its number instead of deleting it.
+        let bar = if med.is_finite() && params.min_relative_zncc > 0.0 {
             params.min_relative_zncc * med
         } else {
             f64::NEG_INFINITY
@@ -1374,6 +1380,50 @@ fn register_tail(
     });
 }
 
+/// Where `keypoint` sits relative to the point's own projection, in **patch-grid
+/// px** on the `params.resolution` grid: the offset
+/// [`localize_patch_keypoints`] would seed that view's search at.
+///
+/// Published because the seed offset is what decides how wide a search window
+/// has to be. The kernel clips the integer part of a seed beyond
+/// [`KeypointLocalizeParams::search`] back onto that bound, so a caller that
+/// means to read a view *where its observation actually sits* -- the bench's
+/// evaluation -- asks this first and widens `search` to cover the furthest
+/// answer. `None` on the same refusals the seeding itself makes: a ray parallel
+/// to the plane, a hit behind the camera, a ray pointing away from a direction
+/// patch, or a degenerate patch with no extent.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::patch::keypoint_localize::{keypoint_grid_offset, KeypointLocalizeParams};
+/// # fn run(
+/// #     patch: &sfmtool_core::patch::cloud::OrientedPatch,
+/// #     view: &sfmtool_core::patch::normal_refine::ProjectedImage<'_>,
+/// #     keypoint: [f64; 2],
+/// # ) {
+/// let mut params = KeypointLocalizeParams::default();
+/// if let Some(off) = keypoint_grid_offset(patch, view, keypoint, &params) {
+///     params.search += off[0].hypot(off[1]);   // reach the seed, then search
+/// }
+/// # }
+/// ```
+pub fn keypoint_grid_offset(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    keypoint: [f64; 2],
+    params: &KeypointLocalizeParams,
+) -> Option<[f64; 2]> {
+    let resolution = f64::from(params.resolution.max(2));
+    seed_offset(
+        patch,
+        view,
+        keypoint,
+        2.0 * patch.half_extent[0] / resolution,
+        2.0 * patch.half_extent[1] / resolution,
+    )
+}
+
 /// Unproject a starting keypoint onto the patch plane and express the in-plane
 /// offset of its hit point (from the patch centre) in patch-grid px.
 ///
@@ -1385,6 +1435,9 @@ fn register_tail(
 /// pointing away from a direction patch), and on a degenerate patch whose zero
 /// extent makes `wpp` zero: seeding at the projection (`acc = 0`) beats
 /// propagating a NaN/inf offset.
+///
+/// [`keypoint_grid_offset`] is the same question in a caller's terms: a params'
+/// own grid resolution rather than a `wpp` pair.
 pub(super) fn seed_offset(
     patch: &OrientedPatch,
     view: &ProjectedImage<'_>,

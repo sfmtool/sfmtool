@@ -323,10 +323,22 @@ pub(crate) enum Command {
         reconstruction_label: String,
         track: Option<String>,
     },
-    /// Measure every observation at the stage the track is in, on a worker.
+    /// Read every observation at the stage the track is in, on a worker,
+    /// moving nothing.
     EvaluateBenchTrack {
         reconstruction_label: String,
         track: Option<String>,
+        /// How far around each observation the correlation peak is looked for,
+        /// in patch-grid px, or `None` for the reading own default.
+        search_px: Option<f64>,
+    },
+    /// Fit the track at the stage it is in, on a worker: the step that moves
+    /// it, and which ends by reading its own result.
+    FitBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The search radius the reading a fit ends with runs at.
+        search_px: Option<f64>,
     },
     /// Move the track between its two representations, on a worker.
     SetBenchTrackStage {
@@ -1031,7 +1043,13 @@ pub(crate) fn apply_with_window(
         Command::EvaluateBenchTrack {
             reconstruction_label,
             track,
-        } => bench::evaluate_bench_track(state, &reconstruction_label, track.as_deref()),
+            search_px,
+        } => bench::evaluate_bench_track(state, &reconstruction_label, track.as_deref(), search_px),
+        Command::FitBenchTrack {
+            reconstruction_label,
+            track,
+            search_px,
+        } => bench::fit_bench_track(state, &reconstruction_label, track.as_deref(), search_px),
         Command::SetBenchTrackStage {
             reconstruction_label,
             track,
@@ -1548,6 +1566,7 @@ impl Command {
             Command::SplitBenchTrack { .. } => "split_bench_track",
             Command::CommitBenchTrack { .. } => "commit_bench_track",
             Command::EvaluateBenchTrack { .. } => "evaluate_bench_track",
+            Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
@@ -1732,6 +1751,7 @@ impl Command {
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }
             | Command::EvaluateBenchTrack { .. }
+            | Command::FitBenchTrack { .. }
             | Command::SetBenchTrackStage { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }

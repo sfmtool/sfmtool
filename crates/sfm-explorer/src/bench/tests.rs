@@ -231,7 +231,7 @@ fn a_verdict_a_stage_change_and_an_evaluation_are_three_versions_undo_retraces_t
         .expect("a track with a frame downgrades");
     state.finish_background_task();
     state
-        .start_bench_evaluate(id, &label)
+        .start_bench_evaluate(id, &label, None)
         .expect("a cluster evaluates over its seeds");
     state.finish_background_task();
 
@@ -463,7 +463,7 @@ fn a_photometric_step_decodes_on_the_worker() {
     let before = versions(&state, id);
 
     state
-        .start_bench_evaluate(id, &label)
+        .start_bench_evaluate(id, &label, None)
         .expect("the task started");
     assert!(
         state.background_task().is_some(),

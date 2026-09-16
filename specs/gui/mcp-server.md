@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Fifty-six tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- forty
+Fifty-seven tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- forty-one
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -157,13 +157,14 @@ write, and one writes a file.
 | `apply_bench_track_thresholds` | write | Set a track's bars and paint the verdicts they propose |
 | `split_bench_track` | write | Move some observations onto a second track beside this one |
 | `commit_bench_track` | write | Write a bench track into the reconstruction |
-| `evaluate_bench_track` | write | Measure every observation at the track's own stage, on a worker thread |
+| `evaluate_bench_track` | write | Read every observation where it sits, moving nothing, on a worker thread |
+| `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
-Every tool is annotated: the thirteen reads and `screenshot` carry
-`readOnlyHint: true`, the thirty-nine writes `destructiveHint: false` (none of
+Every tool is annotated: the fourteen reads and `screenshot` carry
+`readOnlyHint: true`, the forty-one writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1993,9 +1994,9 @@ the adjustment polls between rounds and between iterations, and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Three operations run on a worker**: this one, and the bench's
-`evaluate_bench_track` and `set_bench_track_stage`, which answer through the
-same two-level reply. Every other edit is still synchronous on the GUI thread,
+**Four operations run on a worker**: this one, and the bench's
+`evaluate_bench_track`, `fit_bench_track` and `set_bench_track_stage`, which
+answer through the same two-level reply. Every other edit is still synchronous on the GUI thread,
 and a reconstruction large enough to take more than the apply timeout will still
 time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
@@ -2003,7 +2004,7 @@ version may well have been pushed.
 
 ### The bench family
 
-Fourteen tools that read and work the **bench** beside a node
+Fifteen tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2030,12 +2031,22 @@ need no bench variant: the history they walk already holds the bench steps, and
 **A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
 IMG_0042@142,198: the track is at the cluster stage; upgrade it before
 committing"*, *"Cannot set that verdict: image 4 already has observation 1 in;
-turn it out first"*, *"Nothing on the bench is called bull-nose."* The two steps
-that read photographs refuse **inline** for everything the track alone decides
--- *"Cannot set the stage of IMG_0042@142,198: 1 observations are in, and the
-track stage needs two or more"* -- rather than starting a task that would decode
-a dozen images before saying so ([bench.md](bench.md) § "The two steps that read
+turn it out first"*, *"Nothing on the bench is called bull-nose."* The three
+steps that read photographs refuse **inline** for everything the track alone
+decides -- *"Cannot fit IMG_0042@142,198: 1 observations are in, and the track
+stage needs two or more"* -- rather than starting a task that would decode a
+dozen images before saying so ([bench.md](bench.md) § "The three steps that read
 photographs").
+
+**Reading and fitting are two tools.** `evaluate_bench_track` measures every
+observation where it sits and moves nothing -- no keypoint, no position, no
+frame -- and drops nothing: a row it could not read carries a `reason` sentence
+in place of a score, which is what an agent looking at a suspect track needs.
+`fit_bench_track` is the step that moves it, and it ends by reading its own
+result, so `get_bench_track` after a fit answers in the reading's terms. Both
+take `search_px`, how far from each observation's own pixel the correlation peak
+is looked for. A fit of a track-stage track with fewer than two `in`
+observations is refused where a reading of the same track is not.
 
 ## Addressing
 
@@ -2437,7 +2448,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes fifty-five of the fifty-six tools testable in a headless
+/// makes fifty-six of the fifty-seven tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -2900,7 +2911,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is fifty-six tools**, fifteen of them reads and one of them
+- **The catalog is fifty-seven tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

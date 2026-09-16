@@ -131,21 +131,85 @@ impl ClusterMeasurement {
     }
 }
 
+/// Why an observation carries no measurement at the track stage.
+///
+/// An evaluation drops nothing: it turns off the localizer's own gates and its
+/// consensus-basis cap, so every observation it can read comes back with a
+/// number. What is left is the observation it cannot read at all, and this says
+/// which of those it was, in one short sentence, so a row without a ZNCC never
+/// reads as an unexplained refusal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Unmeasured {
+    /// Nothing says where the observation sits in its photograph: it carries
+    /// neither a keypoint nor a cluster seed.
+    NoSeed,
+    /// Where it sits is off its photograph's sensor, so there is no tile to cut
+    /// around it.
+    OffSensor,
+    /// The track's point does not project into this view, so there is no anchor
+    /// to render a tile about.
+    NoProjection,
+    /// The view's ray runs near-parallel to the patch plane, where nothing pins
+    /// an in-plane position.
+    Grazing {
+        /// `|d_hat . n_hat|`, the cosine the grazing cutoff judges.
+        cosine: f64,
+    },
+    /// Fewer than two observations of its round could be read together, so
+    /// there was no consensus to correlate this one against.
+    NoConsensus,
+    /// The correlation could not be scored: the tile around the observation
+    /// runs off the photograph, or no channel of it carries texture.
+    Unscorable,
+}
+
+impl std::fmt::Display for Unmeasured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unmeasured::NoSeed => write!(f, "nothing says where it sits"),
+            Unmeasured::OffSensor => write!(f, "it sits off the photograph"),
+            Unmeasured::NoProjection => write!(f, "the point misses this view"),
+            Unmeasured::Grazing { cosine } => write!(f, "its ray grazes the patch ({cosine:.2})"),
+            Unmeasured::NoConsensus => write!(f, "nothing to correlate against"),
+            Unmeasured::Unscorable => write!(f, "its tile could not be scored"),
+        }
+    }
+}
+
 /// What the track stage has measured about one observation.
 ///
 /// A track put on the bench from a committed point arrives with
 /// [`Self::keypoint`] and [`Self::zncc`] read off the stored columns; the rest
 /// is what an evaluation computes.
+///
+/// The two distances are different questions, and both are here because a
+/// person reading a row has to tell them apart: [`Self::seed_shift_px`] is
+/// about the **observation** -- how far the correlation peak sits from where
+/// the sighting is -- and [`Self::projection_offset_px`] is about the
+/// **point** -- how far the sighting sits from where the position puts it. A
+/// mis-triangulated point gives every row a large offset while the shifts stay
+/// at zero.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TrackMeasurement {
     /// Where the localizer put the observation, in that image's pixels. This is
     /// the pixel a commit writes.
+    ///
+    /// An evaluation never writes it: it reads the track as it stands, and this
+    /// pixel is the thing it reads.
     pub keypoint: Option<[f32; 2]>,
-    /// The leave-one-out ZNCC against the consensus of the other `in`
-    /// observations.
+    /// The leave-one-out ZNCC against the consensus of the round's other
+    /// observations, at the correlation peak within the search radius of this
+    /// observation's own keypoint. With [`Self::seed_shift_px`] near zero it is
+    /// the agreement at the keypoint itself.
     pub zncc: Option<f64>,
-    /// How far the keypoint sits from the surfel's projection, in px.
-    pub shift_px: Option<f64>,
+    /// How far that correlation peak sits from the observation's own keypoint,
+    /// in source-image px: the observation's own evidence, and what
+    /// [`Thresholds::max_shift_px`] paints on.
+    pub seed_shift_px: Option<f64>,
+    /// How far the observation's keypoint sits from the point's projection, in
+    /// source-image px: the number that says how far the **point** is off,
+    /// rather than the sighting.
+    pub projection_offset_px: Option<f64>,
     /// The reprojection error against the triangulated position, in px.
     pub reprojection_error: Option<f64>,
     /// The angle between this observation's own ray and the direction from its
@@ -156,6 +220,10 @@ pub struct TrackMeasurement {
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
     pub localizability: Option<f64>,
+    /// Why there is no ZNCC, when there is none: an evaluation that could not
+    /// read an observation says which of its refusals it was rather than
+    /// leaving the row blank.
+    pub reason: Option<Unmeasured>,
 }
 
 /// One observation of an editable track: an image, a place in it, what has been
@@ -348,8 +416,14 @@ pub struct Thresholds {
     /// The ZNCC an observation has to reach: the achieved template ZNCC at the
     /// cluster stage, the leave-one-out ZNCC at the track stage.
     pub min_zncc: f64,
-    /// How far an observation may sit from its seed (cluster) or from the
-    /// surfel's projection (track), in source-image px.
+    /// How far the correlation peak may sit from where the observation sits, in
+    /// source-image px: [`ClusterMeasurement::shift_px`] at the cluster stage
+    /// and [`TrackMeasurement::seed_shift_px`] at the track stage.
+    ///
+    /// Both are the observation's **own** evidence. The bar is deliberately not
+    /// judged on [`TrackMeasurement::projection_offset_px`], which is a verdict
+    /// on the point rather than on the sighting: a mis-triangulated point would
+    /// otherwise turn out every observation of the track that would fix it.
     pub max_shift_px: f64,
     /// The largest tile localizability sigma_pos an observation may have, in
     /// grid px.

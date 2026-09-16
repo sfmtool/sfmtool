@@ -5,7 +5,7 @@
 //!
 //! `specs/core/bench/editable-track.md` is the design. [`set_stage`] is the one
 //! operation, in both directions: **up** from a set of image patches to a
-//! surfel at a position, which triangulates and frames and then evaluates; and
+//! surfel at a position, which triangulates, frames and then fits; and
 //! **down** from the surfel back to the patches, which projects the frame
 //! through each observation's camera and throws the 3D away on purpose.
 //!
@@ -21,7 +21,7 @@ use crate::progress::Progress;
 use crate::reconstruction::data::{patch_affine_shape, Point3D};
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::{evaluate_track, EvaluateError, EvaluateOptions, EvaluateReport};
+use super::fit::{fit_track, triangulate_in_seeds, FitError, FitOptions, FitReport};
 use super::track::{
     ClusterMeasurement, ClusterPayload, EditableTrack, Stage, StageKind, TrackPayload, Verdict,
 };
@@ -29,8 +29,8 @@ use super::track::{
 /// Why a stage could not be set. Every variant names what did not hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StageError {
-    /// The upgrade's own work, or the evaluation that follows it, was refused.
-    Evaluate(EvaluateError),
+    /// The upgrade's own work, or the reading that follows it, was refused.
+    Fit(FitError),
     /// A downgrade needs the frame it projects into each observation's camera,
     /// and the track carries none.
     NoFrame,
@@ -45,7 +45,7 @@ pub enum StageError {
 impl std::fmt::Display for StageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StageError::Evaluate(e) => write!(f, "{e}"),
+            StageError::Fit(e) => write!(f, "{e}"),
             StageError::NoFrame => write!(
                 f,
                 "the track carries no patch frame, so there is nothing to project \
@@ -66,9 +66,9 @@ impl std::fmt::Display for StageError {
 
 impl std::error::Error for StageError {}
 
-impl From<EvaluateError> for StageError {
-    fn from(e: EvaluateError) -> Self {
-        StageError::Evaluate(e)
+impl From<FitError> for StageError {
+    fn from(e: FitError) -> Self {
+        StageError::Fit(e)
     }
 }
 
@@ -82,9 +82,9 @@ pub struct StageReport {
     /// Whether anything happened. Setting the stage a track is already at is
     /// reported rather than refused, and the caller pushes no version for it.
     pub changed: bool,
-    /// The evaluation the upgrade ran, which is the track stage's own
-    /// measurement pass.
-    pub evaluate: Option<EvaluateReport>,
+    /// The fit the upgrade ran, which is the track stage's own localization,
+    /// triangulation and fuse, with its reading of the result inside it.
+    pub fit: Option<FitReport>,
     /// At a downgrade, the observation the cluster is now cut around.
     pub reference: Option<usize>,
 }
@@ -102,7 +102,7 @@ impl StageReport {
         if !self.changed {
             return String::new();
         }
-        match (&self.evaluate, self.reference) {
+        match (&self.fit, self.reference) {
             (Some(report), _) => format!(": {report}"),
             (None, Some(reference)) => format!(", cut around observation {reference}"),
             (None, None) => String::new(),
@@ -125,7 +125,7 @@ impl std::fmt::Display for StageReport {
 /// are triangulated; the patch is framed at that position from the reference
 /// observation's affine shape, projected back through its camera at the
 /// triangulated depth, with the mean viewing direction as the normal; and the
-/// track-stage evaluation then localizes and refines every `in` and
+/// track-stage fit then localizes and refines every `in` and
 /// `candidate` observation against that surfel, re-triangulates the `in`
 /// results and fuses the consensus. The cluster-stage measurements are
 /// dropped: they describe a registration against a reference and a template
@@ -154,7 +154,7 @@ impl std::fmt::Display for StageReport {
 /// # Example
 ///
 /// ```no_run
-/// # use sfmtool_core::bench::{set_stage, EvaluateOptions, StageKind};
+/// # use sfmtool_core::bench::{set_stage, FitOptions, StageKind};
 /// # use sfmtool_core::progress::Progress;
 /// # use sfmtool_core::EditedReconstruction;
 /// # fn run(
@@ -167,7 +167,7 @@ impl std::fmt::Display for StageReport {
 ///     edited,
 ///     images,
 ///     StageKind::Track,
-///     &EvaluateOptions::default(),
+///     &FitOptions::default(),
 ///     &Progress::none(),
 /// )?;
 /// assert_eq!(upgraded.stage_kind(), StageKind::Track);
@@ -180,7 +180,7 @@ pub fn set_stage(
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
     stage: StageKind,
-    options: &EvaluateOptions,
+    options: &FitOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, StageReport), StageError> {
     set_stage_preconditions(track, stage)?;
@@ -192,7 +192,7 @@ pub fn set_stage(
                 from,
                 to: stage,
                 changed: false,
-                evaluate: None,
+                fit: None,
                 reference: None,
             },
         ));
@@ -206,7 +206,7 @@ pub fn set_stage(
                     from,
                     to: stage,
                     changed: true,
-                    evaluate: Some(report),
+                    fit: Some(report),
                     reference: None,
                 },
             ))
@@ -219,7 +219,7 @@ pub fn set_stage(
                     from,
                     to: stage,
                     changed: true,
-                    evaluate: None,
+                    fit: None,
                     reference: Some(reference),
                 },
             ))
@@ -263,7 +263,7 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
         StageKind::Track => {
             let ins = track.in_observations().len();
             if ins < 2 {
-                return Err(EvaluateError::TooFewObservations(ins).into());
+                return Err(FitError::TooFewObservations(ins).into());
             }
             Ok(())
         }
@@ -282,18 +282,18 @@ pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Resul
     }
 }
 
-/// Cluster to track: triangulate, frame, then run the track stage's own
-/// evaluation over the result.
+/// Cluster to track: triangulate, frame, then run the track stage's own fit
+/// over the result.
 fn upgrade(
     track: &EditableTrack,
     edited: &EditedReconstruction,
     images: &[ProjectedImage<'_>],
-    options: &EvaluateOptions,
+    options: &FitOptions,
     progress: &Progress<'_>,
-) -> Result<(EditableTrack, EvaluateReport), StageError> {
+) -> Result<(EditableTrack, FitReport), StageError> {
     let expected = edited.image_count();
     if images.len() < expected {
-        return Err(EvaluateError::ViewsMissing {
+        return Err(FitError::ViewsMissing {
             got: images.len(),
             expected,
         }
@@ -309,7 +309,7 @@ fn upgrade(
     for &i in &ins {
         let image = track.observations[i].image;
         if image as usize >= images.len() {
-            return Err(EvaluateError::NoView { image }.into());
+            return Err(FitError::NoView { image }.into());
         }
     }
 
@@ -318,7 +318,7 @@ fn upgrade(
         stage: Stage::Track(TrackPayload::default()),
         ..track.clone()
     };
-    let triangulation = super::evaluate::triangulate_in_seeds(&seeded, images)?;
+    let triangulation = triangulate_in_seeds(&seeded, images)?;
 
     // 2. The surfel: the reference observation's own shape, unprojected onto
     //    the plane at the depth it stands, turned to face the views that see it.
@@ -362,9 +362,9 @@ fn upgrade(
         framed.half_extent,
     );
 
-    // 3-4. Localize, refine, re-triangulate and fuse: the track stage's own
-    //      evaluation, over seeds that are the cluster's refined positions.
-    let (mut next, report) = evaluate_track(&seeded, edited, images, &frame, options, progress)?;
+    // 3-4. Localize, refine, re-triangulate, fuse and read back: the track
+    //      stage's own fit, over seeds that are the cluster's refined positions.
+    let (mut next, report) = fit_track(&seeded, edited, images, &frame, options, progress)?;
     // A cluster measurement is a registration against a reference and a
     // template the track no longer has, so it goes with the stage.
     for observation in &mut next.observations {
@@ -467,8 +467,8 @@ fn downgrade(
         };
         let Some(shape) = patch_affine_shape(&point, u, v, table, image, keypoint) else {
             // The frame does not project into this image: the seed keeps
-            // whatever the observation already carried, and the next evaluation
-            // reports it as unevaluated.
+            // whatever the observation already carried, and the next reading
+            // reports it as unmeasured.
             seeded.push(None);
             continue;
         };

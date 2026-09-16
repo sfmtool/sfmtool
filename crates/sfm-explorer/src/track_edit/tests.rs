@@ -271,25 +271,58 @@ fn every_row_draws_a_tile_at_either_stage() {
 #[test]
 fn the_cells_follow_the_stage_the_track_is_in() {
     let (mut state, id, label, mut panel, ctx) = on_the_bench();
-    // At the track stage the reprojection error and the ray angle have columns;
-    // at the cluster stage there is no geometry behind an observation and the
-    // two are absent.
-    assert_eq!(panel.rows()[0].cells[3], "-", "nothing has measured it yet");
+    // The seven cells are ZNCC, seed shift, projection offset, sigma_pos,
+    // reprojection error, ray angle, status. At the track stage the last three
+    // and the projection offset have numbers behind them; at the cluster stage
+    // there is no geometry behind an observation and they are absent.
+    assert_eq!(panel.rows()[0].cells[4], "-", "nothing has measured it yet");
 
     state
         .start_bench_stage(id, &label, StageKind::Cluster)
         .expect("a track with a frame downgrades");
     state.finish_background_task();
     state
-        .start_bench_evaluate(id, &label)
+        .start_bench_evaluate(id, &label, None)
         .expect("a cluster evaluates over its seeds");
     state.finish_background_task();
     run_frame(&mut panel, &ctx, &state);
 
     let rows = panel.rows();
     assert_ne!(rows[0].cells[0], "-", "the ZNCC column is unmeasured");
-    assert_eq!(rows[0].cells[3], "-", "a cluster has no reprojection error");
-    assert_eq!(rows[0].cells[4], "-", "a cluster has no ray angle");
+    assert_eq!(rows[0].cells[2], "-", "a cluster has no point to project");
+    assert_eq!(rows[0].cells[4], "-", "a cluster has no reprojection error");
+    assert_eq!(rows[0].cells[5], "-", "a cluster has no ray angle");
+}
+
+/// Reading and moving are two gestures, so the toolbar offers two buttons, and
+/// the search radius they carry is a control of its own beside the threshold
+/// sliders -- an input to the next reading rather than a bar the painting
+/// judges by.
+#[test]
+fn the_toolbar_offers_the_reading_and_the_fit_with_a_search_radius() {
+    let (state, _, _, mut panel, ctx) = on_the_bench();
+    assert_eq!(
+        panel.search_px(),
+        crate::bench::default_search_px(),
+        "the control starts where core's own reading does"
+    );
+
+    let texts = crate::test_support::painted_texts(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    for label in ["Evaluate", "Fit", "search px"] {
+        assert!(
+            texts.iter().any(|t| t == label),
+            "{label} is not in the toolbar: {texts:?}"
+        );
+    }
 }
 
 #[test]

@@ -84,7 +84,9 @@ pub struct KeypointLocalizeParams {
     ///
     /// This is a **consensus** question, so the two-view floor can restore a view
     /// that fails only this bar (see [`min_absolute_zncc`](Self::min_absolute_zncc)
-    /// for the gate it cannot restore).
+    /// for the gate it cannot restore). `0.0` (or a non-finite value) disables it
+    /// exactly, as the two absolute gates do, so a caller reading a point rather
+    /// than fitting it keeps even the anti-correlated view and its number.
     pub min_relative_zncc: f64,
     /// Drop a view whose leave-one-out ZNCC is finite and **below this absolute
     /// floor**, however many views remain. The relative bar alone is decorative on

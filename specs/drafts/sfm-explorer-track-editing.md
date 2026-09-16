@@ -329,7 +329,12 @@ that is missing.
 ## Part 4: evaluation
 
 An evaluation is a pure function from one editable track plus the node's value
-plus the decoded images to a report. Installing the report is one version: the
+plus the decoded images to a report. (As built, this part is two steps: a
+an `evaluate` that reads the track where it sits and moves nothing, and a `fit`
+that localizes, re-triangulates and re-fuses and then reads its own result --
+see [`../core/bench/editable-track.md`](../core/bench/editable-track.md). What
+is said below about a report landing on the observations it measured holds for
+both.) Installing the report is one version: the
 bench at the cursor with the report's measurements written onto that track's
 observations, the document half unchanged. Nothing in an evaluation writes the
 document.
@@ -607,7 +612,7 @@ the position, the condition number, the max pair angle and the consensus's own
 localizability, which is the same header the view-only panel draws plus the
 stage.
 
-**Toolbar.** *Evaluate*, a *Stage* toggle between `cluster` and `track`, *Sweep views* at the
+**Toolbar.** *Evaluate*, *Fit*, a *Stage* toggle between `cluster` and `track`, *Sweep views* at the
 track stage, *Search descriptors*, *Pull in selected*, *Pull in from bench...*,
 *Split off selected observations*, *Commit*, and *Discard*. No confirmation on
 discarding, because it is a version and undo puts the item back. Each is greyed
@@ -626,10 +631,10 @@ so a reader who knows that panel reads this one, then what the bench adds:
 | Tile | the reference template warped onto this observation | the surfel re-rendered from this observation at its keypoint, the view-only panel's tile |
 | Thumbnail, Image, Name | as Point Track Detail | as Point Track Detail |
 | ZNCC | against the reference | leave-one-out against the consensus |
-| Shift | from the seed, px | from the projection, px |
+| Seed sh., Proj. off | from the seed, px | the peak's move from the sighting, and the sighting's distance from the projection |
 | σ_pos | the observation's own tile | the same |
 | Error, Angle | absent | as Point Track Detail |
-| Status | the `member_status` word | the localizer's verdict, or `not evaluated` |
+| Status | the `member_status` word | `localized`, the reading's reason sentence, or `not evaluated` |
 | From | provenance | provenance |
 
 Rows are grouped `in`, then candidates by score, then `out`, each group
@@ -679,10 +684,10 @@ out from the rest:
 [`../gui/bench.md`](../gui/bench.md) § "The wire" and
 [`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family": the two
 creates with all three seed forms, the three item tools, the two reads, and the
-seven steps on a track (`add_bench_track_observation`,
+eight steps on a track (`add_bench_track_observation`,
 `set_bench_track_verdict`, `apply_bench_track_thresholds`,
-`evaluate_bench_track`, `set_bench_track_stage`, `split_bench_track` and
-`commit_bench_track`). **Still proposed here** are the three whose core steps
+`evaluate_bench_track`, `fit_bench_track`, `set_bench_track_stage`,
+`split_bench_track` and `commit_bench_track`). **Still proposed here** are the three whose core steps
 are not built: `search_bench_track_descriptors`, `sweep_bench_track_views` and
 `pull_into_bench_track`, which arrive with the steps below that build them.
 
@@ -720,6 +725,7 @@ variant, since the history they walk already holds the bench steps, and
 // search_bench_track_descriptors { "track": "bull-nose", "observation": 0, "alpha": 0.8 }
 // sweep_bench_track_views        { "track": "bull-nose", "keypoint_search": true, "max_shift_px": 3.0 }
 // evaluate_bench_track           { "track": "bull-nose" }
+// fit_bench_track               { "track": "bull-nose" }
 // set_bench_track_stage          { "track": "bull-nose", "stage": "track" }
 // set_bench_track_stage          { "track": "bull-nose", "stage": "cluster" }
 // pull_into_bench_track          { "track": "bull-nose", "point": 1301 }   // or "from_track": "…"

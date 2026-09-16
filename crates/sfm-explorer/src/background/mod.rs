@@ -90,8 +90,7 @@ impl Operation {
         kind: Kind::Edit,
     };
 
-    /// One bench track measured at the stage it is in
-    /// (`specs/gui/track-edit.md`).
+    /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
     ///
     /// Not cancellable: the patch kernels it runs take the `Progress` for their
     /// phases and never ask whether they should stop, and an operation that
@@ -102,9 +101,17 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One bench track fitted: localized, re-triangulated, fused, and read back.
+    /// Not cancellable, for the reason [`Operation::BENCH_EVALUATE`] is not.
+    pub(crate) const BENCH_FIT: Operation = Operation {
+        name: "Fit track",
+        cancellable: false,
+        kind: Kind::Bench,
+    };
+
     /// One bench track moved between the cluster and the track stage. Not
     /// cancellable, for the reason [`Operation::BENCH_EVALUATE`] is not: an
-    /// upgrade is that evaluation with a triangulation in front of it.
+    /// upgrade is a fit with a triangulation in front of it.
     pub(crate) const BENCH_SET_STAGE: Operation = Operation {
         name: "Set track stage",
         cancellable: false,
@@ -118,9 +125,10 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 3] = [
+    pub(crate) const ALL: [Operation; 4] = [
         Operation::BUNDLE_ADJUST,
         Operation::BENCH_EVALUATE,
+        Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
     ];
 }

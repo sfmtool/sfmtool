@@ -421,7 +421,7 @@ fn scored_track(zncc: [f64; 2]) -> EditableTrack {
         observation.verdict = Verdict::Candidate;
         let measurement = observation.track.as_mut().expect("a track slot");
         measurement.zncc = Some(score);
-        measurement.shift_px = Some(0.5);
+        measurement.seed_shift_px = Some(0.5);
         measurement.localizability = Some(0.1);
     }
     track
@@ -767,7 +767,7 @@ fn a_track_with_one_observation_in_refuses_to_commit() {
 }
 
 #[test]
-fn a_track_with_no_position_refuses_and_names_the_evaluation() {
+fn a_track_with_no_position_refuses_and_names_the_fit() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -779,7 +779,7 @@ fn a_track_with_no_position_refuses_and_names_the_evaluation() {
     assert_eq!(err, CommitError::NoPosition);
     assert_eq!(
         err.to_string(),
-        "the track has no position; evaluate it before committing"
+        "the track has no position; fit it before committing"
     );
 }
 
@@ -882,7 +882,7 @@ fn fit_directly(
     seeds: &[Option<[f64; 2]>],
 ) -> (KeypointLocalization, KeypointRefinement) {
     let views = scene.views();
-    let options = EvaluateOptions::default();
+    let options = FitOptions::default();
     let localized =
         localize_patch_keypoints(frame, &views, view_set, Some(seeds), &options.localize);
     let refined = refine_patch_keypoints(
@@ -916,6 +916,21 @@ fn evaluate_over(
     )
 }
 
+/// Fit `track` over `scene` with the default kernel parameters.
+fn fit_over(
+    scene: &Scene,
+    edited: &EditedReconstruction,
+    track: &EditableTrack,
+) -> Result<(EditableTrack, FitReport), FitError> {
+    fit(
+        track,
+        edited,
+        &scene.views(),
+        &FitOptions::default(),
+        &Progress::none(),
+    )
+}
+
 /// Put `track` into `stage` over `scene` with the default kernel parameters.
 fn stage_over(
     scene: &Scene,
@@ -928,13 +943,13 @@ fn stage_over(
         edited,
         &scene.views(),
         stage,
-        &EvaluateOptions::default(),
+        &FitOptions::default(),
         &Progress::none(),
     )
 }
 
 #[test]
-fn a_track_from_a_point_evaluates_to_the_kernels_own_numbers() {
+fn a_track_from_a_point_fits_to_the_kernels_own_numbers() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
@@ -950,13 +965,17 @@ fn a_track_from_a_point_evaluates_to_the_kernels_own_numbers() {
         })
         .collect();
 
-    let (measured, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
-    assert_eq!(report.stage, StageKind::Track);
-    assert_eq!((report.measured, report.unmeasured), (2, 0));
+    let (measured, report) = fit_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!(report.evaluate.stage, StageKind::Track);
+    assert_eq!(report.placed, 2);
+    assert_eq!(
+        (report.evaluate.measured, report.evaluate.unmeasured),
+        (2, 0)
+    );
 
     // The same two kernels, called straight on the same frame and seeds.
     let (localized, refined) = fit_directly(&scene, &frame, &[0, 1], &seeds);
-    for (slot, &image) in localized.views.iter().enumerate() {
+    for &image in &localized.views {
         let at = refined
             .views
             .iter()
@@ -972,7 +991,12 @@ fn a_track_from_a_point_evaluates_to_the_kernels_own_numbers() {
             Some([expected[0] as f32, expected[1] as f32]),
             "image {image}"
         );
-        assert_eq!(m.zncc, Some(localized.loo_zncc[slot]), "image {image}");
+        // The numbers beside the pixel are the reading the fit ends with, not
+        // the fit's own working values: pressing Fit and then Evaluate gives
+        // one account of the track and not two.
+        assert!(m.zncc.expect("a score") > 0.5, "image {image}");
+        assert_eq!(m.reason, None);
+        assert!(m.seed_shift_px.expect("a peak") < 1.0);
         assert!(m.localizability.expect("a scored tile") > 0.0);
         assert!(m.reprojection_error.expect("a residual") < 1.0);
     }
@@ -1052,20 +1076,88 @@ fn a_candidate_on_the_plane_scores_and_one_nowhere_is_not_evaluated() {
         "the third camera sees the same patch: {:?}",
         scored.zncc
     );
-    assert!(scored.shift_px.expect("a drift") < 3.0);
+    assert!(scored.seed_shift_px.expect("a drift") < 3.0);
 
     // The same gesture, pointed at nothing: the pixel is off the sensor, so no
-    // round places it and the row stays unmeasured.
+    // round reads it -- and the row says which refusal that was rather than
+    // coming back blank.
     let (nowhere, added) =
         add_observation(&track, &ObservationSeed::at_pixel(2, [10_000.0, 10_000.0]))
             .expect("a finite pixel");
     let at = added.observation;
     let (nowhere, report) = evaluate_over(&scene, &edited, &nowhere).expect("two observations in");
     assert_eq!((report.measured, report.unmeasured), (2, 1));
-    let unscored = nowhere.observations[at].track.as_ref();
-    assert!(
-        unscored.is_none_or(|m| m.zncc.is_none()),
-        "nothing registered there"
+    let unscored = nowhere.observations[at]
+        .track
+        .as_ref()
+        .expect("every row is written, measured or not");
+    assert!(unscored.zncc.is_none(), "nothing registered there");
+    assert_eq!(unscored.reason, Some(Unmeasured::OffSensor));
+    assert_eq!(
+        unscored.reason.expect("a reason").to_string(),
+        "it sits off the photograph"
+    );
+}
+
+/// An evaluation is a reading: the position, the frame and every keypoint come
+/// back exactly as they went in, and what changes is what each row says about
+/// itself.
+#[test]
+fn an_evaluation_moves_nothing_it_reads() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (read, report) = evaluate_over(&scene, &edited, &track).expect("a framed track");
+    assert_eq!((report.measured, report.unmeasured), (2, 0));
+    assert_eq!(report.position, track.track().expect("the stage").position);
+    assert_eq!(read.stage_kind(), StageKind::Track);
+    let before = track.track().expect("the track stage");
+    let after = read.track().expect("the track stage");
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.frame, before.frame);
+    assert_eq!(after.bitmap, before.bitmap);
+    assert_eq!(after.condition_number, before.condition_number);
+    for (was, now) in track.observations.iter().zip(&read.observations) {
+        let (was, now) = (
+            was.track.as_ref().expect("a track slot"),
+            now.track.as_ref().expect("a track slot"),
+        );
+        assert_eq!(now.keypoint, was.keypoint, "a reading moves no keypoint");
+        assert!(now.seed_shift_px.expect("a peak") < 1.5);
+        assert!(now.projection_offset_px.expect("an offset") < 1.5);
+        assert_eq!(now.reason, None);
+    }
+    assert_eq!(read.verdict_counts(), track.verdict_counts());
+}
+
+/// A reading has no minimum: one sighting alone is read as one sighting with
+/// nothing to correlate against, which is a measurement rather than a refusal.
+#[test]
+fn an_evaluation_of_one_sighting_reports_it_rather_than_refusing() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (track, _) = set_verdict(&track_of(&bench, &label), 1, Verdict::Out).expect("a live row");
+
+    assert_eq!(evaluate_preconditions(&track), Ok(()));
+    let (read, report) = evaluate_over(&scene, &edited, &track).expect("a framed track");
+    // The `out` row sits in an image of its own, so the two are read together
+    // and both come back scored: what one sighting alone cannot do is *fit*.
+    assert_eq!(report.measured + report.unmeasured, 2);
+    let (alone, _) = set_verdict(&read, 1, Verdict::Candidate).expect("a live row");
+    let mut alone = alone;
+    alone.observations.truncate(1);
+    let (alone, report) = evaluate_over(&scene, &edited, &alone).expect("a framed track");
+    assert_eq!((report.measured, report.unmeasured), (0, 1));
+    assert_eq!(
+        alone.observations[0]
+            .track
+            .as_ref()
+            .expect("a track slot")
+            .reason,
+        Some(Unmeasured::NoConsensus)
     );
 }
 
@@ -1128,8 +1220,8 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         stage_over(&scene, &edited, &cluster, StageKind::Track).expect("two observations in");
     assert_eq!(again.stage_kind(), StageKind::Track);
     let position = report
-        .evaluate
-        .expect("an upgrade evaluates")
+        .fit
+        .expect("an upgrade fits")
         .position
         .expect("a triangulation");
     assert!(
@@ -1380,14 +1472,14 @@ fn an_evaluation_with_fewer_views_than_images_is_refused() {
 }
 
 #[test]
-fn a_track_stage_evaluation_of_one_sighting_is_refused() {
+fn a_track_stage_fit_of_one_sighting_is_refused() {
     let scene = Scene::new();
     let edited = edited_with_columns(&scene, WORLD);
     let (bench, label) = bench_with_point(&edited, 0);
     let (track, _) = set_verdict(&track_of(&bench, &label), 1, Verdict::Out).expect("a live row");
     assert_eq!(
-        evaluate_over(&scene, &edited, &track).expect_err("one sighting fixes no point"),
-        EvaluateError::TooFewObservations(1)
+        fit_over(&scene, &edited, &track).expect_err("one sighting fixes no point"),
+        FitError::TooFewObservations(1)
     );
 }
 
@@ -1402,34 +1494,38 @@ fn the_preconditions_are_the_steps_own_refusals() {
     let whole = track_of(&bench, &label);
     let (one_in, _) = set_verdict(&whole, 1, Verdict::Out).expect("a live row");
 
-    // One sighting: neither the track-stage evaluation nor the upgrade to it
-    // has a consensus to register against.
+    // One sighting: neither the track-stage fit nor the upgrade to it has a
+    // consensus to register against. A *reading* of the same track is not
+    // refused -- it reports the sighting -- which is the whole difference
+    // between the two steps.
     assert_eq!(
-        evaluate_preconditions(&one_in).expect_err("one sighting fixes no point"),
-        EvaluateError::TooFewObservations(1)
+        fit_preconditions(&one_in).expect_err("one sighting fixes no point"),
+        FitError::TooFewObservations(1)
     );
     assert_eq!(
-        evaluate_over(&scene, &edited, &one_in).expect_err("the step agrees"),
-        EvaluateError::TooFewObservations(1)
+        fit_over(&scene, &edited, &one_in).expect_err("the step agrees"),
+        FitError::TooFewObservations(1)
     );
+    assert_eq!(evaluate_preconditions(&one_in), Ok(()));
     let (cluster, _) =
         stage_over(&scene, &edited, &whole, StageKind::Cluster).expect("a framed track goes down");
     let (one_in_cluster, _) = set_verdict(&cluster, 1, Verdict::Out).expect("a live row");
     assert_eq!(
         set_stage_preconditions(&one_in_cluster, StageKind::Track)
             .expect_err("one sighting triangulates nothing"),
-        StageError::Evaluate(EvaluateError::TooFewObservations(1))
+        StageError::Fit(FitError::TooFewObservations(1))
     );
     assert_eq!(
         stage_over(&scene, &edited, &one_in_cluster, StageKind::Track)
             .expect_err("the step agrees"),
-        StageError::Evaluate(EvaluateError::TooFewObservations(1))
+        StageError::Fit(FitError::TooFewObservations(1))
     );
 
     // A whole track at the stage it is asked for is the change that does
     // nothing, which is not a refusal.
     assert_eq!(set_stage_preconditions(&whole, StageKind::Track), Ok(()));
     assert_eq!(evaluate_preconditions(&whole), Ok(()));
+    assert_eq!(fit_preconditions(&whole), Ok(()));
 
     // A downgrade wants the frame it projects and the position it stands at.
     let mut frameless = whole.clone();
@@ -1478,6 +1574,10 @@ fn a_track_with_no_frame_has_nothing_to_register_against() {
     assert_eq!(
         evaluate_over(&scene, &edited, &track).expect_err("there is no surfel"),
         EvaluateError::NoFrame
+    );
+    assert_eq!(
+        fit_over(&scene, &edited, &track).expect_err("there is no surfel"),
+        FitError::NoFrame
     );
     assert_eq!(
         stage_over(&scene, &edited, &track, StageKind::Cluster)

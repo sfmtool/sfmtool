@@ -56,8 +56,12 @@ pub struct TrackEditResponse {
     pub rename: Option<(String, String)>,
     /// *Put selected point on bench*.
     pub put_selected_point_on_bench: bool,
-    /// *Evaluate*.
-    pub evaluate: bool,
+    /// *Evaluate*, carrying the search radius the control stands at: the
+    /// reading moves nothing, so the one thing it needs from the panel is how
+    /// far around each observation to look.
+    pub evaluate: Option<f64>,
+    /// *Fit*, carrying the same search radius for the reading it ends with.
+    pub fit: Option<f64>,
     /// The *Stage* toggle, carrying the stage it asks for.
     pub set_stage: Option<StageKind>,
     /// *Apply thresholds*, carrying the bars the sliders stand at.
@@ -142,6 +146,12 @@ pub struct TrackEdit {
     /// Recorded unconditionally rather than under `cfg(test)`, so that what the
     /// tests read is the very table the app draws.
     rows: Vec<RowSummary>,
+    /// How far around each observation the next reading looks for its
+    /// correlation peak, in patch-grid px. Panel state beside the sliders, and
+    /// what *Evaluate* and *Fit* carry: it is an input to the measurement
+    /// rather than a bar the painting judges by, so moving it repaints nothing
+    /// and changes no number until the next reading runs.
+    search_px: f64,
     /// Tracked vertical scroll offset.
     scroll_offset_y: Option<f32>,
 }
@@ -167,6 +177,7 @@ impl TrackEdit {
             tiles: HashMap::new(),
             tiles_for: None,
             rows: Vec::new(),
+            search_px: crate::bench::default_search_px(),
             scroll_offset_y: None,
         }
     }
@@ -181,6 +192,12 @@ impl TrackEdit {
     #[cfg(test)]
     pub(crate) fn thresholds(&self) -> &Thresholds {
         &self.thresholds
+    }
+
+    /// Where the search control stands, in patch-grid px.
+    #[cfg(test)]
+    pub(crate) fn search_px(&self) -> f64 {
+        self.search_px
     }
 
     /// Select one observation row from outside the panel.
@@ -317,9 +334,24 @@ impl TrackEdit {
                 ui,
                 "Evaluate",
                 busy.clone(),
-                "Measure every observation at the track's own stage",
+                "Measure every observation where it sits, moving nothing: no gate \
+                 drops a row, and a row that cannot be read says why",
             ) {
-                response.evaluate = true;
+                response.evaluate = Some(self.search_px);
+            }
+            let fit_refusal = busy.clone().or_else(|| {
+                sfmtool_core::bench::fit_preconditions(track)
+                    .err()
+                    .map(|why| why.to_string())
+            });
+            if entry(
+                ui,
+                "Fit",
+                fit_refusal,
+                "Localize every sighting against the surfel, re-triangulate the \
+                 in ones and re-fuse: this one moves the track",
+            ) {
+                response.fit = Some(self.search_px);
             }
             let (next, stage_label) = match track.stage_kind() {
                 StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{2192} track"),
@@ -436,6 +468,19 @@ impl TrackEdit {
                 egui::Slider::new(&mut self.thresholds.min_relative_zncc, 0.0..=1.0)
                     .text("min relative ZNCC")
                     .max_decimals(2),
+            );
+            // Not a threshold: this one is an input to the next reading rather
+            // than a bar the painting judges by, which is why it stands apart
+            // and why moving it repaints nothing.
+            ui.separator();
+            ui.add(
+                egui::Slider::new(&mut self.search_px, 1.0..=24.0)
+                    .text("search px")
+                    .max_decimals(1),
+            )
+            .on_hover_text(
+                "How far around each observation Evaluate looks for the correlation \
+                 peak, in patch-grid px",
             );
         });
     }
@@ -675,8 +720,18 @@ fn provenance_text(provenance: Provenance) -> String {
 }
 
 /// The measurements one observation shows at `stage`, as the table prints them:
-/// ZNCC, shift, localizability, reprojection error, ray angle, status.
-fn measurements(observation: &Observation, stage: StageKind) -> [String; 6] {
+/// ZNCC, seed shift, projection offset, localizability, reprojection error, ray
+/// angle, status.
+///
+/// The two distances are two questions and get two columns. **Seed shift** is
+/// how far the correlation peak sits from the observation itself -- the
+/// sighting's own evidence, and what the `max shift px` bar paints on. **Proj.
+/// offset** is how far the observation sits from the point's projection, which
+/// is a statement about the *point*: a mis-triangulated track shows a column of
+/// large offsets beside a column of zero shifts, and one number could not say
+/// that. The cluster stage has one of them -- the drift from its seed -- and
+/// prints `-` for the other.
+fn measurements(observation: &Observation, stage: StageKind) -> [String; 7] {
     let number = |value: Option<f64>, digits: usize| match value {
         Some(v) if v.is_finite() => format!("{v:.digits$}"),
         Some(_) => "NaN".to_string(),
@@ -688,6 +743,7 @@ fn measurements(observation: &Observation, stage: StageKind) -> [String; 6] {
             [
                 number(m.and_then(|m| m.zncc), 3),
                 number(m.and_then(|m| m.shift_px), 2),
+                "-".to_string(),
                 number(m.and_then(|m| m.localizability), 3),
                 "-".to_string(),
                 "-".to_string(),
@@ -699,21 +755,22 @@ fn measurements(observation: &Observation, stage: StageKind) -> [String; 6] {
             let m = observation.track.as_ref();
             [
                 number(m.and_then(|m| m.zncc), 3),
-                number(m.and_then(|m| m.shift_px), 2),
+                number(m.and_then(|m| m.seed_shift_px), 2),
+                number(m.and_then(|m| m.projection_offset_px), 2),
                 number(m.and_then(|m| m.localizability), 3),
                 number(m.and_then(|m| m.reprojection_error), 2),
                 number(m.and_then(|m| m.ray_angle_deg), 2),
-                // Named by what was measured rather than by the ZNCC alone: a
-                // row the evaluation reached but the fit did not place keeps
-                // its keypoint and is scored for everything the position says
-                // about it, and calling that "not evaluated" reads as though
-                // the numbers beside it came from nowhere.
+                // A row without a score says which of the reading's refusals it
+                // was, in the evaluation's own sentence. An evaluation drops
+                // nothing, so "no ZNCC" always has one of those answers behind
+                // it, and a row that has never been read says that instead.
                 match m {
                     Some(m) if m.zncc.is_some() => "localized".to_string(),
-                    Some(m) if m.keypoint.is_some() || m.reprojection_error.is_some() => {
-                        "not localized".to_string()
-                    }
-                    _ => "not evaluated".to_string(),
+                    Some(m) => match m.reason {
+                        Some(reason) => reason.to_string(),
+                        None => "not evaluated".to_string(),
+                    },
+                    None => "not evaluated".to_string(),
                 },
             ]
         }

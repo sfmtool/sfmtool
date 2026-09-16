@@ -342,18 +342,37 @@ fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed
     })
 }
 
-/// `evaluate_bench_track`: every observation measured at the stage the track is
-/// in, on a worker thread.
+/// `evaluate_bench_track`: every observation read at the stage the track is in,
+/// on a worker thread, with nothing moved.
 pub(super) fn evaluate_bench_track(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
+    search_px: Option<f64>,
 ) -> Outcome {
     let (id, item) = match target(state, label, named) {
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
-    match state.start_bench_evaluate(id, &item) {
+    match state.start_bench_evaluate(id, &item, search_px) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(()) => started(state, id),
+    }
+}
+
+/// `fit_bench_track`: the track localized, re-triangulated, re-fused and read
+/// back, on a worker thread.
+pub(super) fn fit_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    search_px: Option<f64>,
+) -> Outcome {
+    let (id, item) = match target(state, label, named) {
+        Ok(target) => target,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    match state.start_bench_fit(id, &item, search_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
         Ok(()) => started(state, id),
     }
@@ -585,8 +604,15 @@ fn cluster_measurement(observation: &Observation) -> Value {
     })
 }
 
-/// The track stage's slot: where the localizer put the observation, and how
-/// well it agrees with the rest.
+/// The track stage's slot: where the observation sits, how well it agrees with
+/// the rest, and -- when it could not be read at all -- why.
+///
+/// The two distances answer different questions and are both reported.
+/// `seed_shift_px` is how far the correlation peak sits from the observation
+/// itself, which is the sighting's own evidence; `projection_offset_px` is how
+/// far the observation sits from the point's projection, which is a statement
+/// about the point. A track whose position is wrong shows large offsets beside
+/// zero shifts.
 fn track_measurement(observation: &Observation) -> Value {
     let Some(measured) = observation.track.as_ref() else {
         return Value::Null;
@@ -594,10 +620,12 @@ fn track_measurement(observation: &Observation) -> Value {
     json!({
         "keypoint": measured.keypoint,
         "zncc": finite(measured.zncc),
-        "shift_px": finite(measured.shift_px),
+        "seed_shift_px": finite(measured.seed_shift_px),
+        "projection_offset_px": finite(measured.projection_offset_px),
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
         "localizability": finite(measured.localizability),
+        "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }
 

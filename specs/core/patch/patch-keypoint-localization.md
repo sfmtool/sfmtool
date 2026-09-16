@@ -230,7 +230,7 @@ existing patch machinery:
 | `max_iters` | 5 | max congealing rounds (stops early at convergence) |
 | `search` | 6 px | max total per-view drift from the projection (patch-grid px), bounds runaway; also the context-tile margin |
 | `max_shift_px` | ~3 | drop a view whose keypoint sits more than this from the point's projection (source-image px) |
-| `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it) |
+| `min_relative_zncc` | ~0.7 | drop a view whose LOO ZNCC falls below this fraction of the views' median LOO ZNCC (relative — the two-view floor can restore it); `0` disables |
 | `min_absolute_zncc` | 0.5 | drop a view whose LOO ZNCC is finite and below this absolute floor, however many views remain; `0` disables |
 | `max_member_keypoint_uncertainty` | 0.35 | drop a view whose own tile scores `σ_pos` above this `τ` (patch-grid px, the [patch-localizability](patch-localizability.md) scorer); `0` disables |
 | `min_grazing_cos` | 0.1 | pre-filter a view whose ray is near-parallel to the plane (`|d̂·n̂|` below this) |
@@ -267,8 +267,12 @@ the views' median. Only the last of those is subject to the two-view
 leave-one-out floor: when it would leave fewer than two, the two best-agreeing
 views *that cleared the absolute gates* are kept, so the result can carry one view
 or none and the caller's `min_views` cull removes the point. Setting
-`min_absolute_zncc` or `max_member_keypoint_uncertainty` to `0` disables that gate
-exactly. Grazing views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
+`min_absolute_zncc`, `max_member_keypoint_uncertainty` or `min_relative_zncc` to
+`0` (or a non-finite value) disables that gate exactly -- the relative bar reads
+`0` as "off" rather than as a bar at zero, so a caller that asked for no gate
+keeps even the anti-correlated view and its number, which is what a *reading* of
+a track rather than a fit of one needs
+([`../bench/editable-track.md`](../bench/editable-track.md)). Grazing views (`|d̂·n̂| < min_grazing_cos`) are pre-filtered. The view set is deduped
 order-preserving, and seeds default to the point's own projection (`acc = 0`); a
 supplied starting keypoint is unprojected onto the plane to initialize `acc`. The
 render → z-normalize → robust-consensus primitives are shared with `normal_refine`
@@ -279,3 +283,12 @@ starting-keypoint seed is a per-view `Option` parallel to the view set
 binding as `starting_keypoints={point_index: [[x, y] | None, ...]}`): `None` for
 one view seeds that view at its projection while its siblings keep their explicit
 seeds, and an all-`None` list is bit-identical to supplying no seeds.
+
+**A seed beyond `search` is clipped onto that bound**, because the accumulator it
+initializes is the one the rounds clip. A caller that means to read a view *where
+its observation actually sits* therefore asks `keypoint_grid_offset(patch, view,
+keypoint, params)` -- the same offset the seeding computes, in patch-grid px on
+the params' own grid -- and widens `search` to cover the furthest answer before it
+calls. That is what the bench's reading does
+([`../bench/editable-track.md`](../bench/editable-track.md)); the alternative is
+a measurement made at a pixel the sighting is not at.

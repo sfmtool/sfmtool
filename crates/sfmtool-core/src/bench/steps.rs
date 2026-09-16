@@ -20,7 +20,7 @@ use crate::patch::cloud::OrientedPatch;
 use crate::progress::Progress;
 use crate::reconstruction::edited::EditedReconstruction;
 
-use super::evaluate::EvaluateOptions;
+use super::fit::FitOptions;
 use super::stage::{set_stage, StageError};
 use super::track::{
     ClusterPayload, EditableTrack, Observation, Origin, Provenance, Stage, StageKind, Thresholds,
@@ -702,6 +702,15 @@ fn score(observation: &Observation, stage: StageKind) -> f64 {
 /// proposes `out` rather than reading as unmeasured: the difference matters,
 /// because an observation that was measured and failed is a refusal the person
 /// should see.
+///
+/// The distance the `max_shift_px` bar is judged on is the observation's **own**
+/// evidence at either stage -- the drift from its seed at the cluster stage, and
+/// [`TrackMeasurement::seed_shift_px`](super::track::TrackMeasurement::seed_shift_px),
+/// how far the correlation peak sits from where the sighting is, at the track
+/// stage. The other track-stage distance,
+/// [`projection_offset_px`](super::track::TrackMeasurement::projection_offset_px),
+/// is a verdict on the point: judging sightings by it would turn out the very
+/// observations that would move a mis-triangulated point back.
 fn proposed_verdict(
     observation: &Observation,
     stage: StageKind,
@@ -714,7 +723,7 @@ fn proposed_verdict(
         }
         StageKind::Track => {
             let m = observation.track.as_ref()?;
-            (m.zncc?, m.shift_px, m.localizability)
+            (m.zncc?, m.seed_shift_px, m.localizability)
         }
     };
     let passes = !zncc.is_nan()
@@ -863,7 +872,7 @@ pub fn split(
             edited,
             &[],
             StageKind::Cluster,
-            &EvaluateOptions::default(),
+            &FitOptions::default(),
             &Progress::none(),
         )
         .map_err(SplitError::Downgrade)?;
