@@ -3488,6 +3488,11 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
         ("get_timing_detail", json!({})),
         ("get_window_layout", json!({})),
         ("get_image_detail_display", json!({})),
+        ("get_image_detail_view", json!({})),
+        (
+            "set_image_detail_view",
+            json!({ "reconstruction_label": "alpha", "pixel": [142.0, 197.5], "zoom": 4.0 }),
+        ),
         ("get_history", json!({ "reconstruction_label": "alpha" })),
         ("open_reconstruction", json!({ "path": "scene.sfmr" })),
         (
@@ -3836,6 +3841,7 @@ fn only_the_reads_are_annotated_read_only() {
             "get_timing_detail",
             "get_window_layout",
             "get_image_detail_display",
+            "get_image_detail_view",
             "get_history",
             "get_bench",
             "get_bench_track",
@@ -3843,15 +3849,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Thirteen reads, thirty-nine writes, the one that writes a file, and the
-    // one that hands back a picture.
-    assert_eq!(catalog.len(), 54, "the catalog has grown or shrunk");
+    // Fourteen reads, forty writes, the one that writes a file, and the one
+    // that hands back a picture.
+    assert_eq!(catalog.len(), 56, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        39
+        40
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -6569,4 +6575,851 @@ fn a_slow_evaluate_answers_with_a_handle_naming_it() {
         Err(e) => assert!(e.0.contains(&format!("Cannot evaluate {item}")), "{e}"),
         Ok(_) => panic!("the fixture's photographs are not on disk"),
     }
+}
+
+// ── The Image Detail panel's view ───────────────────────────────────────
+//
+// The panel's own geometry is the frame's, and these run without one, so the
+// reading a drawn frame would have published is seeded directly -- which is
+// exactly what the dock does with `ImageDetailResponse::view`. What is under
+// test here is the boundary: that each target resolves to the right place in
+// the right photograph, that the reply reports where the view landed rather
+// than what the call asked for, and that a refusal names the fix. Where the
+// arithmetic itself lands is `image_detail::view`'s, and `image_detail::tests`
+// drives it through real frames.
+
+/// The panel body these tests measure against, in points. Its aspect ratio
+/// (4:3) differs from the demo photograph's (16:9), so the fit is settled by
+/// the width and the letterboxed axis is a real one.
+const VIEW_PANEL: [f32; 2] = [800.0, 600.0];
+
+/// The demo photograph's size, which is its lens's.
+const VIEW_IMAGE: [f32; 2] = [1920.0, 1080.0];
+
+/// `alpha` with image 0 selected and the Image Detail panel standing at
+/// `zoom`, centred, as a frame that drew it would have left things.
+fn looking_at(zoom: f32) -> (AppState, Viewer3D) {
+    let (mut state, viewer) = two_reconstructions();
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(image));
+    state.image_detail_view = Some(crate::image_detail::ViewGeometry {
+        image,
+        image_size: VIEW_IMAGE,
+        panel_size: VIEW_PANEL,
+        pan: [0.0, 0.0],
+        zoom,
+    });
+    (state, viewer)
+}
+
+/// The image pixel at the centre of the panel, which is what every target
+/// aims: the centre of the reported visible rectangle.
+#[track_caller]
+fn view_centre(reply: &Value) -> [f64; 2] {
+    let view = &reply["image_detail_view"];
+    let rect = view["visible_rect_px"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a visible rectangle: {reply}"));
+    let at = |i: usize| rect[i].as_f64().expect("a number");
+    [(at(0) + at(2)) / 2.0, (at(1) + at(3)) / 2.0]
+}
+
+/// The reported visible rectangle's extent in image pixels.
+#[track_caller]
+fn view_extent(reply: &Value) -> [f64; 2] {
+    let rect = reply["image_detail_view"]["visible_rect_px"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a visible rectangle: {reply}"));
+    let at = |i: usize| rect[i].as_f64().expect("a number");
+    [at(2) - at(0), at(3) - at(1)]
+}
+
+#[track_caller]
+fn assert_about(actual: [f64; 2], expected: [f64; 2], what: &str) {
+    assert!(
+        (actual[0] - expected[0]).abs() < 0.05 && (actual[1] - expected[1]).abs() < 0.05,
+        "{what}: {actual:?} != {expected:?}"
+    );
+}
+
+/// A pixel, a point's observation and a feature all mean "put this place at the
+/// centre of the panel", and the reply says so in the one field that can be
+/// checked against the request.
+#[test]
+fn a_pixel_target_centres_the_pixel_and_reports_the_zoom_it_took() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [300.0, 200.0], "zoom": 4.0 }),
+    );
+    assert_about(
+        view_centre(&reply),
+        [300.0, 200.0],
+        "the pixel is off centre",
+    );
+    assert_eq!(reply["image_detail_view"]["zoom"], json!(4.0), "{reply}");
+    assert_eq!(
+        reply["image_detail_view"]["camera_image"],
+        json!(0),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["image_detail_view"]["image_size_px"],
+        json!([1920.0, 1080.0]),
+        "{reply}"
+    );
+    assert_eq!(
+        reply["image_detail_view"]["panel_size_points"],
+        json!([800.0, 600.0]),
+        "{reply}"
+    );
+}
+
+/// A rectangle settles its own zoom: it ends exactly as wide as the panel on
+/// the axis that binds, and no narrower on the other.
+#[test]
+fn a_rect_target_fits_the_rectangle_to_the_panel() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    // 400 x 150, wider in proportion than the 4:3 panel, so the width binds.
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "rect": [100.0, 100.0, 500.0, 250.0] }),
+    );
+    assert_about(
+        view_centre(&reply),
+        [300.0, 175.0],
+        "the rect is off centre",
+    );
+    let [width, height] = view_extent(&reply);
+    assert!(
+        (width - 400.0).abs() < 0.05,
+        "the binding axis does not fill the panel: {reply}"
+    );
+    assert!(
+        height >= 150.0 - 0.05,
+        "the rectangle does not fit: {reply}"
+    );
+    // The zoom the fit implies: the panel spans 400 px where fitted it spans
+    // the whole 1920.
+    let fit = (VIEW_PANEL[0] / VIEW_IMAGE[0]).min(VIEW_PANEL[1] / VIEW_IMAGE[1]);
+    let expected = f64::from((VIEW_PANEL[0] / 400.0) / fit);
+    let zoom = reply["image_detail_view"]["zoom"].as_f64().expect("a zoom");
+    assert!((zoom - expected).abs() < 1e-3, "{zoom} != {expected}");
+}
+
+/// A corner-to-corner rectangle given the other way round is the rectangle the
+/// caller drew, not an empty one.
+#[test]
+fn a_rect_named_from_its_far_corner_frames_the_same_region() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let forwards = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "rect": [100.0, 100.0, 500.0, 250.0] }),
+    );
+    let backwards = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "rect": [500.0, 250.0, 100.0, 100.0] }),
+    );
+    assert_eq!(forwards, backwards, "the corners' order changed the view");
+}
+
+/// `fit` is what `Z` and a double-click do: the whole photograph, centred.
+#[test]
+fn a_fit_target_shows_the_whole_photograph() {
+    let (mut state, mut viewer) = looking_at(8.0);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "fit": true }),
+    );
+    assert_eq!(reply["image_detail_view"]["zoom"], json!(1.0), "{reply}");
+    assert_about(view_centre(&reply), [960.0, 540.0], "the fit is off centre");
+}
+
+/// A point target is looked for in the photograph being looked at, and lands on
+/// the pixel `get_point` reports for that row of its track.
+#[test]
+fn a_point_target_centres_that_point_s_observation() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let point = call(&mut state, &mut viewer, "get_point", json!({ "point": 0 }));
+    let row = point["track"]
+        .as_array()
+        .expect("a track")
+        .iter()
+        .find(|row| row["camera_image_index"] == json!(0))
+        .expect("the demo tracks observe every image")
+        .clone();
+    let xy = row["xy"].as_array().expect("a pixel");
+    let expected = [
+        xy[0].as_f64().expect("a number"),
+        xy[1].as_f64().expect("a number"),
+    ];
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "point": 0, "zoom": 6.0 }),
+    );
+    assert_about(
+        view_centre(&reply),
+        expected,
+        "the observation is off centre",
+    );
+}
+
+/// A feature target reads the same cache the panel's own overlay draws its
+/// ellipses from, so what an agent centres is the mark it is looking at.
+#[test]
+fn a_feature_target_centres_that_feature() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.sift_cache.insert(
+        image,
+        crate::state::CachedSiftFeatures {
+            positions_xy: vec![[10.0, 20.0], [640.0, 480.0]],
+            affine_shapes: vec![[[1.0, 0.0], [0.0, 1.0]]; 2],
+            read_count: 2,
+        },
+    );
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "feature": 1, "zoom": 3.0 }),
+    );
+    assert_about(
+        view_centre(&reply),
+        [640.0, 480.0],
+        "the feature is off centre",
+    );
+
+    let past_the_end = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "feature": 7 }),
+    );
+    // Out of range, one way or the other: this fixture has no `.sift` file on
+    // disk, so the index past the end of the cache is refused by the read that
+    // would have gone looking for it. Either way the refusal names the
+    // photograph, which is what an agent needs to act on it.
+    assert!(
+        past_the_end.0.contains("images/A_000.jpg"),
+        "{past_the_end}"
+    );
+}
+
+/// A zoom past the panel's own range is clamped, and the reply says where it
+/// landed rather than echoing what was asked for.
+#[test]
+fn a_zoom_past_the_panel_s_range_comes_back_clamped() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [100.0, 100.0], "zoom": 500.0 }),
+    );
+    assert_eq!(
+        reply["image_detail_view"]["zoom"],
+        json!(f64::from(crate::image_detail::MAX_ZOOM)),
+        "{reply}"
+    );
+    let floored = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [100.0, 100.0], "zoom": 0.25 }),
+    );
+    assert_eq!(
+        floored["image_detail_view"]["zoom"],
+        json!(1.0),
+        "{floored}"
+    );
+}
+
+/// The tool's own description carries the closest the panel goes, and the panel
+/// owns that number.
+#[test]
+fn the_view_tool_advertises_the_panel_s_own_zoom_limit() {
+    let catalog = tools::catalog();
+    let spec = catalog
+        .iter()
+        .find(|spec| spec.name == "set_image_detail_view")
+        .expect("the tool is in the catalog");
+    let limit = format!("{:.1}", crate::image_detail::MAX_ZOOM);
+    let zoom = spec.schema["properties"]["zoom"]["description"]
+        .as_str()
+        .expect("the zoom argument is described");
+    assert!(
+        zoom.contains(&limit),
+        "the zoom argument does not name the panel's own limit {limit}: {zoom}"
+    );
+}
+
+/// Every way of asking for nothing, or for two things at once, or for
+/// something that is not there.
+#[test]
+fn the_view_tool_refuses_in_its_own_words() {
+    let (mut state, mut viewer) = looking_at(1.0);
+
+    let nothing = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "zoom": 2.0 }),
+    );
+    assert!(nothing.0.contains("no place to look"), "{nothing}");
+
+    let both = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "pixel": [10.0, 10.0], "fit": true }),
+    );
+    assert!(both.0.contains("2 places to look"), "{both}");
+
+    // A rect settles its own zoom, so one beside it is a contradiction.
+    let zoomed_rect = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "rect": [0.0, 0.0, 10.0, 10.0], "zoom": 2.0 }),
+    );
+    assert!(zoomed_rect.0.contains("settles its own"), "{zoomed_rect}");
+
+    let flat = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "rect": [10.0, 10.0, 10.0, 90.0] }),
+    );
+    assert!(flat.0.contains("frames nothing"), "{flat}");
+
+    // A track named with no bench observation to find in it.
+    let stray = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "fit": true, "track": "bull-nose" }),
+    );
+    assert!(stray.0.contains("bench_observation"), "{stray}");
+
+    // Nothing selected, and nothing named.
+    call(&mut state, &mut viewer, "clear_selection", json!({}));
+    let unselected = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "fit": true }),
+    );
+    assert!(unselected.0.contains("select_camera_image"), "{unselected}");
+}
+
+/// A point with no observation in the photograph being looked at is refused by
+/// name, rather than the panel quietly moving to some other image.
+#[test]
+fn a_point_not_in_this_photograph_is_refused_rather_than_followed() {
+    let (mut state, mut viewer) = looking_at(1.0);
+    // A point of the demo whose track does not reach image 0. Found rather
+    // than assumed: the demo's tracks are subsets of its camera ring, and
+    // which point misses which image is the fixture's business.
+    let missing = (0..40)
+        .map(|index| {
+            (
+                index,
+                call(
+                    &mut state,
+                    &mut viewer,
+                    "get_point",
+                    json!({ "point": index }),
+                ),
+            )
+        })
+        .find(|(_, point)| {
+            !point["track"]
+                .as_array()
+                .expect("a track")
+                .iter()
+                .any(|row| row["camera_image_index"] == json!(0))
+        })
+        .map(|(index, _)| index)
+        .expect("some demo point misses image 0");
+
+    let refusal = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "point": missing }),
+    );
+    assert!(
+        refusal
+            .0
+            .contains(&format!("no observation of point {missing}")),
+        "{refusal}"
+    );
+    assert!(refusal.0.contains("get_point"), "{refusal}");
+    // And the photograph was not changed for it.
+    assert_eq!(state.selected_image.map(|image| image.index()), Some(0));
+}
+
+/// Before the panel has drawn anything there is no panel to fit a view to, and
+/// the two tools say so in the two ways they can: nulls, and a refusal naming
+/// the call that fixes it.
+#[test]
+fn a_panel_that_has_never_drawn_reports_nothing_and_refuses() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let view = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
+    assert_eq!(
+        view["image_detail_view"]["camera_image"],
+        Value::Null,
+        "{view}"
+    );
+    assert_eq!(view["image_detail_view"]["zoom"], Value::Null, "{view}");
+
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(image));
+    let refusal = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "fit": true }),
+    );
+    assert!(refusal.0.contains("show_panel"), "{refusal}");
+}
+
+/// `get_image_detail_view` answers from the panel's own last frame, which is
+/// what a screenshot of it would show -- not from the selection, which a tool
+/// may have moved since.
+#[test]
+fn get_image_detail_view_reports_the_panel_s_last_frame() {
+    let (mut state, mut viewer) = looking_at(4.0);
+    let before = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
+    assert_eq!(before["image_detail_view"]["zoom"], json!(4.0), "{before}");
+    assert_eq!(
+        before["image_detail_view"]["camera_image_name"],
+        json!("images/A_000.jpg"),
+        "{before}"
+    );
+
+    // A selection the panel has not drawn yet does not move the reading.
+    call(
+        &mut state,
+        &mut viewer,
+        "select_camera_image",
+        json!({ "camera_image": 5 }),
+    );
+    let after = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
+    assert_eq!(after, before, "the reading followed the selection");
+}
+
+/// A bench observation names its own photograph, so walking a track's sightings
+/// takes one argument.
+#[test]
+fn a_bench_observation_target_selects_its_own_camera_image() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let image = track["observations"][1]["camera_image"]
+        .as_u64()
+        .expect("an image index");
+    // The panel is standing on some *other* photograph, so the target has to
+    // move the selection for the view to mean anything.
+    let first = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(first));
+    let size = {
+        let camera = &state.scene[0].recon().image_table.cameras[0];
+        [camera.width as f32, camera.height as f32]
+    };
+    state.image_detail_view = Some(crate::image_detail::ViewGeometry {
+        image: first,
+        image_size: size,
+        panel_size: VIEW_PANEL,
+        pan: [0.0, 0.0],
+        zoom: 1.0,
+    });
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "reconstruction_label": "run_a", "bench_observation": 1, "track": item }),
+    );
+    assert_eq!(
+        reply["image_detail_view"]["camera_image"],
+        json!(image),
+        "{reply}"
+    );
+    assert_eq!(
+        state.selected_image.map(|image| image.index() as u64),
+        Some(image),
+        "the target did not select its own photograph"
+    );
+
+    let past_the_end = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_image_detail_view",
+        json!({ "reconstruction_label": "run_a", "bench_observation": 99 }),
+    );
+    assert!(
+        past_the_end.0.contains("no observation 99"),
+        "{past_the_end}"
+    );
+}
+
+// ── What the two photometric steps refuse before they start ─────────────
+
+/// Turn every observation of the active track out but the first.
+#[track_caller]
+fn leave_one_in(state: &mut AppState, viewer: &mut Viewer3D) {
+    let track = call(
+        state,
+        viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let rows = track["observations"].as_array().expect("the rows").len();
+    for observation in 1..rows {
+        call(
+            state,
+            viewer,
+            "set_bench_track_verdict",
+            json!({
+                "reconstruction_label": "run_a",
+                "observation": observation,
+                "verdict": "out",
+            }),
+        );
+    }
+}
+
+/// A stage change the track alone rules out is refused **inline**, before a
+/// photograph is read: no deferral, no operation, no version.
+///
+/// The failure this pins down is a refusal that cost a decode: the step used to
+/// answer `running: true`, hand the task a dozen images to read, and fail it a
+/// second later with a sentence that was knowable before anything started.
+#[test]
+fn a_stage_change_the_track_rules_out_is_refused_before_the_worker() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "cluster" }),
+    );
+    leave_one_in(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    // `refused_call` panics on a deferral, so this is also the assertion that
+    // nothing went to a worker.
+    let refusal = refused_call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "track" }),
+    );
+    assert_eq!(
+        refusal.0,
+        format!(
+            "Cannot set the stage of {item}: 1 observations are in, and the track stage needs \
+             two or more"
+        )
+    );
+    assert!(
+        state.background_task().is_none(),
+        "a refusal started a task"
+    );
+    assert_eq!(version_count(&state), before, "a refusal pushed a version");
+}
+
+/// The same for an evaluation of a track-stage track with nothing to register
+/// against.
+#[test]
+fn an_evaluation_the_track_rules_out_is_refused_before_the_worker() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    leave_one_in(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let refusal = refused_call(
+        &mut state,
+        &mut viewer,
+        "evaluate_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        refusal.0,
+        format!(
+            "Cannot evaluate {item}: 1 observations are in, and the track stage needs two or more"
+        )
+    );
+    assert!(
+        state.background_task().is_none(),
+        "a refusal started a task"
+    );
+    assert_eq!(version_count(&state), before, "a refusal pushed a version");
+}
+
+// ── What a commit names ─────────────────────────────────────────────────
+
+/// A commit names the point it wrote, by index and by the id a later call can
+/// address it with, so an agent can `get_point` it without hunting through the
+/// counts for whichever row is new.
+#[test]
+fn a_commit_names_the_point_it_wrote() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let index = reply["point"]["index"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the commit named no point: {reply}"));
+    let id = reply["point"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the commit minted no id: {reply}"))
+        .to_string();
+    // This track came off a point, so the commit replaced that point rather
+    // than creating one, and the reply says which.
+    assert_eq!(reply["point"]["replaced"], json!(BENCH_POINT), "{reply}");
+
+    // Both handles resolve, which is the whole of what naming it is for.
+    let by_index = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": index }),
+    );
+    assert_eq!(by_index["id"], json!(id), "{by_index}");
+    let by_id = call(&mut state, &mut viewer, "get_point", json!({ "point": id }));
+    assert_eq!(by_id["index"], json!(index), "{by_id}");
+}
+
+// ── The hash a version's point ids are minted from ──────────────────────
+
+/// `get_scene`'s `content_hash` is the hash the version's point ids carry, so
+/// an agent holding the field and an agent holding an id read off a point are
+/// holding the same digits -- and an edit that mints a new one moves it.
+///
+/// The failure this pins down is a field that never moved: it reported the
+/// *base*'s hash, which a point edit leaves exactly where it was, while the
+/// point that edit created was already being named by the edit's own.
+#[test]
+fn the_scene_s_content_hash_is_the_hash_its_point_ids_carry() {
+    let (mut state, mut viewer) = benchable();
+    let hash_of = |state: &mut AppState, viewer: &mut Viewer3D| -> String {
+        call(state, viewer, "get_scene", json!({}))["scene"][0]["content_hash"]
+            .as_str()
+            .expect("a content hash")
+            .to_string()
+    };
+    let before = hash_of(&mut state, &mut viewer);
+    assert_eq!(before.len(), 8, "a content hash is the id's eight digits");
+
+    // A point the reconstruction had no row for: it is named by the hash of
+    // the edit that made it, and that is what the node now reports.
+    call(
+        &mut state,
+        &mut viewer,
+        "create_point",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let after = hash_of(&mut state, &mut viewer);
+    assert_ne!(
+        after, before,
+        "an edit that minted a new hash did not move it"
+    );
+
+    let selected = call(&mut state, &mut viewer, "get_scene", json!({}))["selection"]["point"]
+        ["id"]
+        .as_str()
+        .expect("the created point is selected")
+        .to_string();
+    assert!(
+        selected.starts_with(&format!("pt3d_{after}_")),
+        "{selected} is not named by the hash get_scene reports ({after})"
+    );
+
+    // And an undo takes the node back to the hash it had, so the field tracks
+    // the version rather than accumulating.
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(hash_of(&mut state, &mut viewer), before);
+}
+
+// ── What a cursor move does to the selection ────────────────────────────
+
+/// Undo, redo and a jump are steps through a node's history, not statements
+/// about what the person is looking at: the photograph on screen stays on
+/// screen, and so does the point.
+///
+/// The failure this pins down is Image Detail going to "No image selected" on
+/// every step of a run of bench steps, none of which touches the image table.
+#[test]
+fn a_history_move_keeps_the_photograph_and_the_point_selected() {
+    let (mut state, mut viewer) = benchable();
+    call(
+        &mut state,
+        &mut viewer,
+        "select_camera_image",
+        json!({ "camera_image": 3 }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    let item = on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": 1, "verdict": "out" }),
+    );
+
+    let selection = |state: &mut AppState, viewer: &mut Viewer3D| -> Value {
+        call(state, viewer, "get_scene", json!({}))["selection"].clone()
+    };
+    let standing = selection(&mut state, &mut viewer);
+    assert_eq!(standing["camera_image"]["index"], json!(3), "{standing}");
+
+    for step in ["undo", "undo", "redo", "redo"] {
+        call(
+            &mut state,
+            &mut viewer,
+            step,
+            json!({ "reconstruction_label": "run_a" }),
+        );
+        let now = selection(&mut state, &mut viewer);
+        assert_eq!(
+            now["camera_image"], standing["camera_image"],
+            "{step} dropped the photograph"
+        );
+        assert_eq!(
+            now["point"]["index"], standing["point"]["index"],
+            "{step} dropped the point"
+        );
+    }
+
+    // And a jump, which walks several steps at once.
+    let history = call(
+        &mut state,
+        &mut viewer,
+        "get_history",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let first = history["versions"][0]["serial"]
+        .as_str()
+        .expect("a serial")
+        .to_string();
+    call(
+        &mut state,
+        &mut viewer,
+        "jump_to_version",
+        json!({ "reconstruction_label": "run_a", "serial": first }),
+    );
+    let jumped = selection(&mut state, &mut viewer);
+    assert_eq!(
+        jumped["camera_image"], standing["camera_image"],
+        "a jump dropped the photograph"
+    );
+    let _ = item;
+}
+
+/// The one move that *can* take the photograph away takes it away: undoing a
+/// `delete_camera_image` puts the image back under a different index, and
+/// redoing the delete leaves nothing to show.
+#[test]
+fn a_move_across_a_deleted_camera_image_follows_it_by_name() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let name = call(
+        &mut state,
+        &mut viewer,
+        "get_camera_image",
+        json!({ "camera_image": 5 }),
+    )["name"]
+        .as_str()
+        .expect("a name")
+        .to_string();
+    call(
+        &mut state,
+        &mut viewer,
+        "select_camera_image",
+        json!({ "camera_image": 5 }),
+    );
+    // Deleting an earlier image renumbers the one being looked at.
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "alpha", "camera_image": 1 }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "alpha" }),
+    );
+    let back =
+        call(&mut state, &mut viewer, "get_scene", json!({}))["selection"]["camera_image"].clone();
+    assert_eq!(
+        back["name"],
+        json!(name),
+        "the undo did not put the selection back on the same photograph"
+    );
+    assert_eq!(back["index"], json!(5), "{back}");
+
+    // Deleting the selected photograph itself leaves nothing to show, so the
+    // selection clears -- and an undo does not resurrect it, because a
+    // selection is not part of a version.
+    call(
+        &mut state,
+        &mut viewer,
+        "delete_camera_image",
+        json!({ "reconstruction_label": "alpha", "camera_image": 5 }),
+    );
+    let gone =
+        call(&mut state, &mut viewer, "get_scene", json!({}))["selection"]["camera_image"].clone();
+    assert_eq!(gone, Value::Null, "the deleted photograph stayed selected");
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "alpha" }),
+    );
+    let after =
+        call(&mut state, &mut viewer, "get_scene", json!({}))["selection"]["camera_image"].clone();
+    assert_eq!(after, Value::Null, "{after}");
 }

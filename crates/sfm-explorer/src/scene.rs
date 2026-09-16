@@ -665,6 +665,30 @@ pub fn hash_prefix(node: &SceneNode) -> String {
     crate::point_ids::base_hash_prefix(node.edited()).unwrap_or_else(|| "00000000".to_string())
 }
 
+/// The hash the point ids of the version at `node`'s cursor are minted from.
+///
+/// [`crate::point_ids::mint`]'s choice read for the *version* rather than for
+/// one point. A version whose edit brought points into existence names those
+/// points by that edit's own content hash -- a point no base holds has no base
+/// row to be named by -- and every other version names its points by the hash
+/// of the base it is showing. So the id a caller reads off a point of this
+/// version and the hash reported for the version itself are built from the same
+/// digits, which is what lets an agent that has the hash write the id.
+///
+/// This is what `get_scene` reports as a reconstruction's `content_hash`, and
+/// it is why that field is not simply [`hash_prefix`]: a point edit leaves the
+/// base alone, so the base's hash says nothing about the edit, while the hash
+/// the edit minted its points under is a function of the base **and** of what
+/// was added to it.
+pub fn version_hash_prefix(node: &SceneNode) -> String {
+    let serial = node.history.current_version().serial;
+    node.history
+        .created_by(serial)
+        .and_then(|created| created.hash.get(..crate::point_ids::HASH_PREFIX_LEN))
+        .map(str::to_string)
+        .unwrap_or_else(|| hash_prefix(node))
+}
+
 /// The copyable point id the Point Track panel shows, `pt3d_<hash>_<index>`.
 ///
 /// Minted by [`crate::point_ids::mint`], so it names the content the point is on

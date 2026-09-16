@@ -247,6 +247,19 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             schema: object(&[], &[]),
         },
         ToolSpec {
+            name: "get_image_detail_view",
+            description: "Where the Image Detail panel is looking: the camera image on screen, \
+                          the zoom (1.0 is the whole photograph fitted to the panel), the \
+                          rectangle of the photograph the panel shows in its own pixels, the \
+                          panel's size in points and the photograph's size in pixels. This is \
+                          what the last drawn frame settled on, so it is what a screenshot of \
+                          the panel would show — a select_camera_image sent a moment ago is not \
+                          in it until the next frame. Every field is null before the panel has \
+                          drawn a photograph at all.",
+            kind: Read,
+            schema: object(&[], &[]),
+        },
+        ToolSpec {
             name: "get_history",
             description: "One reconstruction's versions, oldest first: every edit anyone has \
                           made to it this session, with the sentence the edit recorded as each \
@@ -508,6 +521,116 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                         ),
                     ),
                     ("intrinsics", super::display::intrinsics_schema()),
+                ],
+                &[],
+            ),
+        },
+        ToolSpec {
+            name: "set_image_detail_view",
+            description: "Point the Image Detail panel at one place in one photograph — the 2D \
+                          counterpart of set_view, and the tool to call before a screenshot of \
+                          the image_detail panel. Exactly one target per call: pixel centres a \
+                          place, rect fits a region, point centres a 3D point's observation in \
+                          the photograph being looked at, feature centres a .sift feature of it, \
+                          bench_observation centres one sighting of a bench track (and selects \
+                          the camera image it is in), and fit shows the whole photograph. zoom \
+                          is absolute, 1.0 being the fit, and applies to every target but rect \
+                          and fit, which settle their own; it is clamped to the panel's range \
+                          and the reply says where it landed. The reply is get_image_detail_view's \
+                          document for the view that will be applied on the next frame.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("reconstruction_label", reconstruction_label_schema()),
+                    (
+                        "camera_image",
+                        json!({
+                            "type": ["integer", "string"],
+                            "description":
+                                "The camera image to look at, by index or by its .sfmr relative \
+                                 path. Selected first, as select_camera_image would. Omitted, \
+                                 the target's own camera image is used where it names one \
+                                 (bench_observation), and the selected one otherwise.",
+                        }),
+                    ),
+                    (
+                        "pixel",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description":
+                                "[x, y] in the photograph's own pixels, brought to the centre of \
+                                 the panel.",
+                        }),
+                    ),
+                    (
+                        "rect",
+                        json!({
+                            "type": "array",
+                            "items": { "type": "number" },
+                            "minItems": 4,
+                            "maxItems": 4,
+                            "description":
+                                "[x0, y0, x1, y1] in the photograph's own pixels: zoom so this \
+                                 rectangle fills the panel, centred. It settles its own zoom, so \
+                                 a zoom argument beside it is refused.",
+                        }),
+                    ),
+                    (
+                        "point",
+                        json!({
+                            "type": ["integer", "string"],
+                            "description":
+                                "A 3D point, by index or by a pt3d_<hash>_<index> id: centre its \
+                                 observation in the camera image being looked at. Refused when \
+                                 its track holds no sighting there — this never chooses the \
+                                 camera image for you.",
+                        }),
+                    ),
+                    (
+                        "feature",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description":
+                                "A .sift feature of the camera image being looked at, by its \
+                                 index in that file: centre it. Read through the same cache the \
+                                 panel draws its ellipses from.",
+                        }),
+                    ),
+                    (
+                        "bench_observation",
+                        json!({
+                            "type": "integer",
+                            "minimum": 0,
+                            "description":
+                                "One observation of a bench track, by its position in \
+                                 get_bench_track's list: centre where it sits, and select the \
+                                 camera image it is a sighting in.",
+                        }),
+                    ),
+                    ("track", bench_track_schema()),
+                    (
+                        "fit",
+                        flag(
+                            "True for the whole photograph: zoom 1.0, centred — what Z and a \
+                             double-click in the panel do. It settles its own zoom, so a zoom \
+                             argument beside it is refused.",
+                        ),
+                    ),
+                    (
+                        "zoom",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description":
+                                "Absolute magnification, 1.0 being the whole photograph fitted to \
+                                 the panel and 32.0 the closest the panel goes. Clamped to that \
+                                 range, and the reply reports the zoom that was applied.",
+                        }),
+                    ),
                 ],
                 &[],
             ),
@@ -1755,6 +1878,17 @@ pub(crate) fn parse(
         "set_image_detail_display" => Command::SetImageDetailDisplay {
             change: super::display::parse_change(&args)?,
         },
+        "get_image_detail_view" => {
+            args.reject_unknown(&[])?;
+            Command::GetImageDetailView
+        }
+        // The one-target rule, the zoom's range and the targets that refuse a
+        // zoom are all settled here, before a `Command` exists: what is left
+        // for the tool body is resolving the handles, which is the part that
+        // needs the scene.
+        "set_image_detail_view" => Command::SetImageDetailView {
+            request: super::display::parse_view(&args)?,
+        },
         "get_timing_detail" => {
             args.reject_unknown(&[])?;
             Command::GetTimingDetail
@@ -2468,7 +2602,7 @@ impl Args<'_> {
         Ok(actors)
     }
 
-    fn optional_f64(&self, key: &str) -> Result<Option<f64>, ToolError> {
+    pub(super) fn optional_f64(&self, key: &str) -> Result<Option<f64>, ToolError> {
         match self.map.get(key) {
             None | Some(Value::Null) => Ok(None),
             Some(value) => value
@@ -2497,7 +2631,10 @@ impl Args<'_> {
             .ok_or_else(|| self.error(format!("needs {key}.")))
     }
 
-    fn optional_numbers<const N: usize>(&self, key: &str) -> Result<Option<[f64; N]>, ToolError> {
+    pub(super) fn optional_numbers<const N: usize>(
+        &self,
+        key: &str,
+    ) -> Result<Option<[f64; N]>, ToolError> {
         let value = match self.map.get(key) {
             None | Some(Value::Null) => return Ok(None),
             Some(value) => value,
@@ -2527,7 +2664,7 @@ impl Args<'_> {
     /// `f32` because that is what a `.sfmr` keypoint is and what every edit
     /// below this takes; the wire's number is `f64` and narrows here rather
     /// than in each tool body.
-    fn pixel(&self, key: &str) -> Result<[f32; 2], ToolError> {
+    pub(super) fn pixel(&self, key: &str) -> Result<[f32; 2], ToolError> {
         let [x, y] = self
             .optional_numbers::<2>(key)?
             .ok_or_else(|| self.error(format!("needs {key}: a pixel [x, y].")))?;
@@ -2651,7 +2788,7 @@ impl Args<'_> {
     }
 
     /// A camera image argument, in either of its two spellings.
-    fn camera_image(&self, key: &str) -> Result<CameraImageSel, ToolError> {
+    pub(super) fn camera_image(&self, key: &str) -> Result<CameraImageSel, ToolError> {
         match self.map.get(key) {
             Some(Value::String(name)) => Ok(CameraImageSel::Name(name.clone())),
             Some(value) if value.as_u64().is_some() => Ok(CameraImageSel::Index(
@@ -2671,7 +2808,7 @@ impl Args<'_> {
     /// naturally send; everything else goes to
     /// [`parse_point_query`], whose error messages already show both accepted
     /// shapes.
-    fn point(&self, key: &str) -> Result<PointQuery, ToolError> {
+    pub(super) fn point(&self, key: &str) -> Result<PointQuery, ToolError> {
         match self.map.get(key) {
             Some(value) if value.as_u64().is_some() => Ok(PointQuery::Index(
                 value.as_u64().expect("just checked") as usize,

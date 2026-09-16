@@ -542,6 +542,32 @@ fn warm_track_sift_cache(state: &mut AppState, point: crate::scene::PointRef) {
     }
 }
 
+/// Where `point`'s observation in `image` sits, in that image's own pixels, or
+/// `None` when its track holds no sighting there.
+///
+/// The same reading [`get_point`] reports each row of a track at, so a pixel a
+/// caller asks the Image Detail panel to look at is the pixel that tool named.
+pub(super) fn point_observation_xy(
+    state: &AppState,
+    point: crate::scene::PointRef,
+    image: ImageRef,
+) -> Option<[f32; 2]> {
+    let node = state.node(point.recon)?;
+    let view = node.edited().point(point.point)?;
+    let feature_indexes = view.feature_indexes();
+    let k = view
+        .observations()
+        .iter()
+        .position(|observation| observation.image_index as usize == image.index())?;
+    Some(observation_xy(
+        state,
+        point.recon,
+        image.index(),
+        feature_indexes.map(|f| f[k] as usize),
+        view.keypoint_xy(k),
+    ))
+}
+
 /// The pixel one observation sits at, from whichever source this
 /// reconstruction stores it in.
 ///

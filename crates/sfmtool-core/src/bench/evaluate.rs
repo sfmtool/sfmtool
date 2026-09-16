@@ -244,6 +244,7 @@ pub fn evaluate(
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, EvaluateReport), EvaluateError> {
     check_views(edited, images)?;
+    evaluate_preconditions(track)?;
     match &track.stage {
         Stage::Cluster(payload) => evaluate_cluster(track, payload, images, options, progress),
         Stage::Track(payload) => {
@@ -252,6 +253,48 @@ pub fn evaluate(
             evaluate_track(track, edited, images, &frame, options, progress)
         }
     }
+}
+
+/// Whether `track` can be evaluated at the stage it stands in, judged on the
+/// track alone.
+///
+/// The half of [`evaluate`]'s validation that reads no photograph: whether the
+/// track stage has a surfel to register against, and whether enough
+/// observations are `in` for the consensus it registers against to exist. A
+/// caller that runs the evaluation somewhere expensive -- on a worker, after
+/// decoding a dozen images -- asks this first and refuses in front of the
+/// decode, which is a refusal the person who asked for it sees immediately
+/// rather than a task that fails a second later.
+///
+/// [`evaluate`] calls it before anything else it does with the track, so the
+/// two cannot come to disagree about what is refused; what is left to
+/// [`evaluate`] is everything that needs the views, which is the rest.
+///
+/// The cluster stage has no such condition: it registers each seed against a
+/// template cut from the photographs, so what it can do is a question about
+/// the pixels and not about the track.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{evaluate_preconditions, EditableTrack};
+/// # fn run(track: &EditableTrack) -> Result<(), Box<dyn std::error::Error>> {
+/// evaluate_preconditions(track)?;   // refuse here, before a photograph is read
+/// # Ok(())
+/// # }
+/// ```
+pub fn evaluate_preconditions(track: &EditableTrack) -> Result<(), EvaluateError> {
+    let Stage::Track(payload) = &track.stage else {
+        return Ok(());
+    };
+    if payload.frame.is_none() {
+        return Err(EvaluateError::NoFrame);
+    }
+    let ins = track.in_observations().len();
+    if ins < 2 {
+        return Err(EvaluateError::TooFewObservations(ins));
+    }
+    Ok(())
 }
 
 /// Every image of `edited` has a decoded view, and there are at least as many
@@ -544,10 +587,9 @@ pub(super) fn evaluate_track(
             return Err(EvaluateError::NoView { image });
         }
     }
+    // The `in` count is [`evaluate_preconditions`]'s, checked before the
+    // caller spent anything on the views.
     let ins = track.in_observations();
-    if ins.len() < 2 {
-        return Err(EvaluateError::TooFewObservations(ins.len()));
-    }
 
     // ── The rounds ──
     //

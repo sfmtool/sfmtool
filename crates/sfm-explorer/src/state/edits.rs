@@ -592,6 +592,10 @@ impl AppState {
 
         let label = node.label.clone();
         let text = format!("Deleted image {name} from {label}");
+        // Read before the new base is installed, so the photograph on screen
+        // can be found again in it. Deleting the selected image itself leaves
+        // no such photograph, and the selection clears.
+        let carried = self.selected_image_name(image.recon);
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");
@@ -603,11 +607,13 @@ impl AppState {
         };
         let parent = version_before(node, serial);
         self.follow_selection_forward(image.recon);
-        // Every image index at or past the deleted one moved, so an image,
-        // camera or cached texture named by one of them is now a statement
-        // about a different image. The node keeps its identity; what it held
-        // about images does not.
+        // Every image index at or past the deleted one moved, so a cached
+        // texture named by one of them is now a statement about a different
+        // image. The node keeps its identity; what it held about images does
+        // not -- and the selection follows the *photograph* rather than the
+        // index, which is what an index that moved cannot do for itself.
         self.forget_images_of(image.recon);
+        self.follow_image_selection(image.recon, carried.as_deref());
         self.action_log.record_done(
             Kind::Edit,
             started,
@@ -1068,6 +1074,10 @@ impl AppState {
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
+        // Read before the step: it names the photograph in the version the
+        // cursor is leaving, and what it is for is finding that photograph
+        // again in the one it lands on.
+        let carried = self.selected_image_name(id);
         let step = collector.phase("undo");
         let node = &mut self.scene[index];
         let undone_label = node.history.current_version().label.clone();
@@ -1081,6 +1091,7 @@ impl AppState {
         {
             let _phase = step.phase("selection follow");
             self.follow_selection_backward(id, undone);
+            self.follow_image_selection(id, carried.as_deref());
         }
         {
             let _phase = step.phase("forget images");
@@ -1108,6 +1119,7 @@ impl AppState {
         let Some(index) = self.scene.iter().position(|n| n.id == id) else {
             return Err("That reconstruction is no longer loaded.".to_string());
         };
+        let carried = self.selected_image_name(id);
         let step = collector.phase("redo");
         let node = &mut self.scene[index];
         let stepped = {
@@ -1121,6 +1133,7 @@ impl AppState {
         {
             let _phase = step.phase("selection follow");
             self.follow_selection_forward(id);
+            self.follow_image_selection(id, carried.as_deref());
         }
         {
             let _phase = step.phase("forget images");
@@ -1177,6 +1190,7 @@ impl AppState {
                 node.label
             ));
         }
+        let carried = self.selected_image_name(id);
         let step = collector.phase("go to");
         while self.scene[index].history.cursor() != target {
             let node = &mut self.scene[index];
@@ -1194,6 +1208,11 @@ impl AppState {
             } else {
                 self.follow_selection_forward(id);
             }
+            // Per step rather than once at the end, so the stage's row counts
+            // the steps like every other stage's. The name is the one the jump
+            // started from at each of them, so what decides is the version the
+            // walk comes to rest on.
+            self.follow_image_selection(id, carried.as_deref());
         }
         let node = &self.scene[index];
         let label = node.history.current_version().label.clone();
@@ -1347,20 +1366,83 @@ impl AppState {
         })
     }
 
-    /// Drop everything this state holds that is keyed by an image of `id`, and
-    /// clear the image and camera selections in it.
+    /// Drop everything this state holds that is keyed by an image of `id`.
     ///
     /// What a bulk edit owes: it renumbers the image table, so a cached decode
-    /// or a selected index would silently become a statement about a different
-    /// image. The panels' own texture caches are dropped by the caller, which
-    /// is where they are reachable.
+    /// would silently become a statement about a different image. The panels'
+    /// own texture caches are dropped by the caller, which is where they are
+    /// reachable. Hover goes with them -- it is a statement about where a
+    /// pointer was over a value that has just been replaced.
+    ///
+    /// The image **selection** is not dropped here. A cursor move carries it
+    /// across with [`AppState::selected_image_name`] and
+    /// [`AppState::follow_image_selection`], which is what keeps a run of bench
+    /// steps from emptying the Image Detail panel between them.
     fn forget_images_of(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
         self.full_res_cache.retain(|image, _| image.recon != id);
-        self.selected_image = self.selected_image.filter(|i| i.recon != id);
-        self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
+    }
+
+    /// The `.sfmr` name of the image selected in `id`, read **before** a cursor
+    /// move.
+    ///
+    /// A name rather than an index, for the reason the wire addresses images by
+    /// one: an index is a coordinate in a particular version's image table, and
+    /// a move that crosses a `delete_camera_image` crosses a renumbering of
+    /// that table. The name is what the two versions agree on.
+    fn selected_image_name(&self, id: ReconId) -> Option<String> {
+        let image = self.selected_image.filter(|i| i.recon == id)?;
+        let node = self.node(id)?;
+        node.recon()
+            .image_table
+            .images
+            .get(image.index())
+            .map(|image| image.name.clone())
+    }
+
+    /// Put the image selection back on the photograph `name` names in the
+    /// version now at `id`'s cursor, and re-derive the lens from it.
+    ///
+    /// The other half of a cursor move's selection follow: the point half is
+    /// [`AppState::follow_selection_forward`], and this is the image half.
+    /// Undo, redo and a jump are steps through a node's *history* and not
+    /// statements about what the person is looking at, so the photograph on
+    /// screen stays on screen -- which for a bench step, an adjustment or a
+    /// point edit is every time, none of them touching the image table. Only a
+    /// move across a `delete_camera_image` can take the image away, and then
+    /// the selection clears because there is nothing left to show.
+    ///
+    /// Written to the fields rather than through [`AppState::select_image`]:
+    /// the photograph did not change, so a "Selected image" row in the Action
+    /// Log would be a second event where there was one.
+    fn follow_image_selection(&mut self, id: ReconId, name: Option<&str>) {
+        let index = name.and_then(|name| {
+            let node = self.node(id)?;
+            node.recon()
+                .image_table
+                .images
+                .iter()
+                .position(|image| image.name == name)
+        });
+        let Some(index) = index else {
+            self.selected_image = self.selected_image.filter(|i| i.recon != id);
+            // An intrinsics record has no name to be followed by, so what
+            // carries a lens selected on its own is its index still being one
+            // the version at the cursor has.
+            let cameras = self
+                .node(id)
+                .map(|node| node.recon().image_table.cameras.len())
+                .unwrap_or(0);
+            self.selected_camera = self
+                .selected_camera
+                .filter(|camera| camera.recon != id || camera.index() < cameras);
+            return;
+        };
+        let image = ImageRef::new(id, index);
+        self.selected_image = Some(image);
+        self.selected_camera = self.camera_of(image);
     }
 }
 

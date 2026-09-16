@@ -8,6 +8,7 @@ use egui_dock::DockState;
 use crate::action_log::{ActionLog, Kind};
 use crate::dock::Tab;
 use crate::goto_point::{self, GotoPointDialog};
+use crate::image_detail::{Look, ViewGeometry};
 use crate::layout::Layout;
 use crate::scene::{node_by_id, unique_label, CameraRef, ImageRef, PointRef, ReconId, SceneNode};
 use crate::scene_renderer::{
@@ -436,20 +437,31 @@ pub struct AppState {
     /// Currently selected 3D point.
     pub selected_point: Option<PointRef>,
 
-    /// A place in an image the Image Detail panel is asked to bring into view:
-    /// the image, and the pixel in its own source coordinates.
+    /// Where the Image Detail panel is being asked to look: the image, and the
+    /// request in that image's own source coordinates.
     ///
     /// Set beside the image selection by the gestures that name a *feature*
-    /// rather than a photograph (a row click in Point Track Detail or in
-    /// Track Edit), and taken by the dock on the frame the Image Detail panel
-    /// shows that image. It lives here, with the selection, so that the two
-    /// panels ask for one thing through one path rather than each teaching the
-    /// detail panel its own way to scroll.
+    /// rather than a photograph (a row click in Point Track Detail or in Track
+    /// Edit), and by the wire's `set_image_detail_view`; taken by the dock on
+    /// the frame the Image Detail panel shows that image. It lives here, with
+    /// the selection, so that every caller asks for one thing through one path
+    /// rather than each teaching the detail panel its own way to scroll.
     ///
     /// Every other way of selecting an image leaves it `None`, because
-    /// [`AppState::select_image`] clears it: a selection carries a reveal only
-    /// when the gesture that made it named a pixel.
-    pub reveal: Option<(ImageRef, [f32; 2])>,
+    /// [`AppState::select_image`] clears it: a selection carries a look only
+    /// when the gesture that made it named a place.
+    pub(crate) look: Option<(ImageRef, Look)>,
+
+    /// What the Image Detail panel was looking at on the last frame it drew an
+    /// image, as that panel published it.
+    ///
+    /// Written by the dock from `ImageDetailResponse::view` and read by the
+    /// wire's `get_image_detail_view` / `set_image_detail_view`, which have no
+    /// other way to know how big the panel's body is or what fit means in it.
+    /// `None` before the panel has drawn an image at all -- a fresh session, a
+    /// closed panel -- which the two tools report and refuse on respectively,
+    /// because a view arithmetic with no frame to do it in would be a guess.
+    pub(crate) image_detail_view: Option<ViewGeometry>,
 
     /// Transient hover state: image under cursor (from GPU pick or browser).
     /// Updated every frame; cleared when pointer leaves the source panel.
@@ -738,7 +750,8 @@ impl AppState {
             selected_image: None,
             selected_camera: None,
             selected_point: None,
-            reveal: None,
+            look: None,
+            image_detail_view: None,
             hovered_image: None,
             hovered_point: None,
             feature_display: FeatureDisplaySettings::default(),
@@ -873,7 +886,8 @@ impl AppState {
         self.selected_image = None;
         self.selected_camera = None;
         self.selected_point = None;
-        self.reveal = None;
+        self.look = None;
+        self.image_detail_view = None;
         self.hovered_image = None;
         self.hovered_point = None;
         self.sift_cache.clear();
@@ -898,7 +912,8 @@ impl AppState {
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
-        self.reveal = self.reveal.filter(|(image, _)| image.recon != id);
+        self.look = self.look.filter(|(image, _)| image.recon != id);
+        self.image_detail_view = self.image_detail_view.filter(|view| view.image.recon != id);
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
     }
@@ -981,12 +996,12 @@ impl AppState {
         let moved = self.selected_image != image;
         let had_one = self.selected_image.is_some();
         self.selected_image = image;
-        // A reveal belongs to the gesture that asked for it, and this is every
+        // A look belongs to the gesture that asked for it, and this is every
         // other gesture: clearing here is what makes "selecting an image any
         // other way moves nothing in the detail panel" a property of the
         // single door rather than of each caller.
-        // [`AppState::reveal_in_image`] sets it again after calling through.
-        self.reveal = None;
+        // [`AppState::look_at_in_image`] sets it again after calling through.
+        self.look = None;
         let Some(image) = image else {
             if moved && had_one {
                 self.action_log.record(Kind::Selection, "Deselected image");
@@ -1016,20 +1031,34 @@ impl AppState {
     /// Log row are the ones every other selection gets; what is added is the
     /// pixel, which the dock hands the panel on the frame it shows that image.
     pub fn reveal_in_image(&mut self, image: ImageRef, pixel: [f32; 2]) {
-        self.select_image(Some(image));
-        self.reveal = Some((image, pixel));
+        self.look_at_in_image(image, Look::Reveal { pixel });
     }
 
-    /// Take the pending reveal when it names `image`, leaving `None` behind.
+    /// Select `image` and ask the Image Detail panel to look at what `look`
+    /// names when it next shows it.
     ///
-    /// Taken rather than read: the pan it asks for is a one-off, and a request
-    /// left standing would re-centre the view on every later frame, undoing
+    /// The general form [`AppState::reveal_in_image`] is the row click's case
+    /// of, and what the wire's `set_image_detail_view` calls. The selection is
+    /// [`AppState::select_image`]'s either way, so the coupling rules and the
+    /// Action Log row are the ones every other selection gets -- and a call
+    /// naming the image already selected moves nothing and records nothing,
+    /// which is what makes "look at this pixel of the photograph I am already
+    /// on" one event rather than two.
+    pub(crate) fn look_at_in_image(&mut self, image: ImageRef, look: Look) {
+        self.select_image(Some(image));
+        self.look = Some((image, look));
+    }
+
+    /// Take the pending look when it names `image`, leaving `None` behind.
+    ///
+    /// Taken rather than read: the view it asks for is a one-off, and a request
+    /// left standing would re-frame the panel on every later frame, undoing
     /// whatever the user panned to next.
-    pub(crate) fn take_reveal(&mut self, image: ImageRef) -> Option<[f32; 2]> {
-        match self.reveal {
-            Some((of, pixel)) if of == image => {
-                self.reveal = None;
-                Some(pixel)
+    pub(crate) fn take_look(&mut self, image: ImageRef) -> Option<Look> {
+        match self.look {
+            Some((of, look)) if of == image => {
+                self.look = None;
+                Some(look)
             }
             _ => None,
         }

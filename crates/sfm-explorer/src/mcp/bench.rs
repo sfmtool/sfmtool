@@ -298,14 +298,48 @@ pub(super) fn split_bench_track(
 /// Action Log recorded -- because it is one: the commit is the single bench
 /// step that changes both halves of the version
 /// (`specs/gui/edits/commit-track.md`).
+///
+/// **And it names the point it wrote**, by index and by the portable id minted
+/// for it in the version that now stands, so the next call can be a `get_point`
+/// rather than a search through the counts for whichever row is new. The index
+/// is the reply's, not the sentence's: a commit that replaces takes the index
+/// it replaced and a commit that creates takes one past the end, and neither is
+/// derivable from what the Action Log row says.
 pub(super) fn commit_bench_track(
     state: &mut AppState,
     label: &str,
     named: Option<&str>,
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
-    let reply = edit::edited(state, id, |state| state.commit_bench_track(id, &item))?;
-    Ok(with_item(reply, &item))
+    let mut committed = None;
+    let reply = edit::edited(state, id, |state| {
+        state.commit_bench_track(id, &item).map(|written| {
+            committed = Some(written);
+        })
+    })?;
+    let written = committed.expect("a commit that succeeded named its point");
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "point", point_written(state, id, written));
+    Ok(reply)
+}
+
+/// The point a commit wrote, as the reply names it: the index it took, the id a
+/// later call can address it by, and the index it replaced where it replaced
+/// one.
+///
+/// The id is [`crate::scene::point_id`]'s, which is the id the Point Track
+/// panel shows for the same row and the id `get_point` and `select_point` take
+/// back -- a created point carries the commit's own edit hash, since there is no
+/// base row to name it by.
+fn point_written(state: &AppState, id: ReconId, written: crate::bench::Committed) -> Value {
+    let point_id = state
+        .node(id)
+        .map(|node| crate::scene::point_id(node, written.point as usize));
+    json!({
+        "index": written.point,
+        "id": point_id,
+        "replaced": written.replaced,
+    })
 }
 
 /// `evaluate_bench_track`: every observation measured at the stage the track is
@@ -361,6 +395,56 @@ fn started(state: &AppState, id: ReconId) -> Outcome {
         label: task.label.clone(),
         started: task.started,
     }))
+}
+
+/// Where one observation of a bench track sits: the camera image it is a
+/// sighting in, and the place in that image's own pixels.
+///
+/// What `set_image_detail_view`'s `bench_observation` target resolves to. The
+/// pixel is [`crate::bench::observation_pixel`]'s, the one rule the Image
+/// Detail panel's own mark and the Track Edit row click already share, so a
+/// caller that asked to look at an observation is looking at the mark drawn for
+/// it rather than at a second reading of where it is.
+pub(super) fn observation_place(
+    state: &AppState,
+    label_of_node: ReconId,
+    named: Option<&str>,
+    observation: usize,
+) -> Result<(crate::scene::ImageRef, [f32; 2]), ToolError> {
+    let bench = state
+        .bench(label_of_node)
+        .ok_or_else(|| ToolError::new("That reconstruction is no longer loaded."))?;
+    let item = match named {
+        Some(item) => item.to_string(),
+        None => crate::bench::active_track_label(bench)
+            .map(str::to_string)
+            .ok_or_else(|| {
+                ToolError::new(format!(
+                    "No track is active on {}'s bench. Name one with track, or put one on with \
+                     create_bench_track or create_bench_cluster.",
+                    node_label(state, label_of_node)
+                ))
+            })?,
+    };
+    let track = bench
+        .track(&item)
+        .ok_or_else(|| no_such_item(bench, &item))?;
+    let row = track.observations.get(observation).ok_or_else(|| {
+        ToolError::new(format!(
+            "{item} has {} observations; there is no observation {observation}.",
+            track.observations.len()
+        ))
+    })?;
+    let pixel = crate::bench::observation_pixel(row).ok_or_else(|| {
+        ToolError::new(format!(
+            "Observation {observation} of {item} has no place in its image yet -- nothing has \
+             measured it and it carries no seed. evaluate_bench_track measures it."
+        ))
+    })?;
+    Ok((
+        crate::scene::ImageRef::new(label_of_node, row.image as usize),
+        pixel,
+    ))
 }
 
 // ── Resolution ──────────────────────────────────────────────────────────

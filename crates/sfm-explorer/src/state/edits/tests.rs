@@ -1491,3 +1491,69 @@ fn creating_a_point_names_the_decode_the_spawn_and_the_push() {
     );
     assert_timed_from_the_work(&mut state.action_log);
 }
+
+// ── What a cursor move does to the image selection ──────────────────────
+
+/// A cursor move carries the photograph on screen with it.
+///
+/// Undo, redo and a jump are steps through the node's *history*; none of them
+/// says anything about what the person is looking at, and a point edit does not
+/// touch the image table at all. The one thing that can take the photograph
+/// away is a move across an edit that deleted it, and the selection follows by
+/// **name**, so an image renumbered by such a move is found again rather than
+/// silently swapped for its neighbour.
+#[test]
+fn a_cursor_move_keeps_the_photograph_that_is_on_screen() {
+    let mut state = state();
+    let id = node(&state);
+    state.select_image(Some(ImageRef::new(id, 3)));
+    let camera = state.selected_camera;
+
+    state
+        .delete_point(PointRef::new(id, 7))
+        .expect("a live point");
+    state.undo(id).expect("the point edit");
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 3)));
+    assert_eq!(state.selected_camera, camera, "the lens went with it");
+
+    state.redo(id).expect("the redo tail");
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 3)));
+
+    let first = state.scene[0].history.versions()[0].serial;
+    state.jump_to_version(id, first).expect("a live version");
+    assert_eq!(state.selected_image, Some(ImageRef::new(id, 3)));
+}
+
+/// The one move that can take the photograph away: undoing a delete of an
+/// *earlier* image renumbers the one on screen, and the selection follows the
+/// photograph rather than the index it used to hold.
+#[test]
+fn a_cursor_move_across_a_deleted_image_follows_the_photograph() {
+    let mut state = state();
+    let id = node(&state);
+    let name = state.image_name(ImageRef::new(id, 5));
+    state.select_image(Some(ImageRef::new(id, 5)));
+
+    state
+        .delete_image(ImageRef::new(id, 1))
+        .expect("a live image");
+    assert_eq!(
+        state.selected_image,
+        Some(ImageRef::new(id, 4)),
+        "the delete did not move the selection down with the table"
+    );
+    assert_eq!(state.image_name(ImageRef::new(id, 4)), name);
+
+    state.undo(id).expect("the delete");
+    assert_eq!(
+        state.selected_image,
+        Some(ImageRef::new(id, 5)),
+        "the undo did not put the selection back on the same photograph"
+    );
+
+    // And deleting the photograph on screen leaves nothing to show.
+    state
+        .delete_image(ImageRef::new(id, 5))
+        .expect("a live image");
+    assert_eq!(state.selected_image, None);
+}

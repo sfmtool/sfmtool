@@ -19,7 +19,12 @@
 //! which fills a track's measurement slots at whichever stage it is in, and
 //! [`set_stage`](stage::set_stage()), which moves it between the two. Both take
 //! the decoded views as a named input, one per image, so decoding and caching
-//! stay the caller's.
+//! stay the caller's. Each also publishes the half of its validation that
+//! reads no photograph -- [`evaluate_preconditions`] and
+//! [`set_stage_preconditions`] -- so a caller
+//! that would decode a dozen images first can refuse in front of that work
+//! instead of behind it. The step itself calls its own, so the two answers
+//! cannot drift.
 
 pub mod commit;
 pub mod evaluate;
@@ -34,8 +39,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use commit::{commit, CommitError, CommitReport};
-pub use evaluate::{evaluate, EvaluateError, EvaluateOptions, EvaluateReport};
-pub use stage::{set_stage, StageError, StageReport};
+pub use evaluate::{
+    evaluate, evaluate_preconditions, EvaluateError, EvaluateOptions, EvaluateReport,
+};
+pub use stage::{set_stage, set_stage_preconditions, StageError, StageReport};
 pub use steps::{
     add_observation, apply_thresholds, create_cluster, create_track, set_verdict, split,
     AddObservationReport, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,

@@ -126,7 +126,15 @@ pub fn split(
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError>;
 
-// The steps that read photographs.
+// The steps that read photographs, and the half of each one's validation that
+// does not.
+pub fn evaluate_preconditions(track: &EditableTrack) -> Result<(), EvaluateError>;
+
+pub fn set_stage_preconditions(
+    track: &EditableTrack,
+    stage: StageKind,
+) -> Result<(), StageError>;
+
 pub fn evaluate(
     track: &EditableTrack,
     edited: &EditedReconstruction,
@@ -217,6 +225,21 @@ has decided and `pinned` is whether they decided it by hand. Without the second,
 a threshold slider would either be unable to propose anything or would silently
 overwrite a judgement, and the whole difference between the bench and the batch
 pipeline is that here the numbers are shown and the person decides.
+
+**Each photometric step publishes its photograph-free refusals.** A caller that
+runs `evaluate` or `set_stage` somewhere expensive -- on a worker, after
+decoding a dozen images -- wants the refusals that were knowable from the track
+alone *before* that work, not behind it. So the conditions that need no pixels
+are their own functions: whether the track stage has a surfel to register
+against and enough `in` observations for the consensus it registers against
+(`evaluate_preconditions`), and whether an upgrade has two sightings to
+triangulate from or a downgrade has the frame and the position it projects
+(`set_stage_preconditions`). Setting the stage a track is already at is not
+among them -- that is the change that does nothing, reported as
+`StageReport::changed = false`. Each step calls its own before anything else, so
+the answer a caller gets in advance and the answer the step would have given
+cannot drift, and the conditions that *do* need the views stay inside the step
+where the views are.
 
 **The commit reports an index map.** `map` is the `PointMap` the write made --
 the pair `replaced -> point`, or the created index, chained with a `Removed` of
@@ -690,8 +713,10 @@ triangulating back to within a pixel's worth of where the point was; a candidate
 placed on the plane clearing the bar and one placed off every image coming back
 unmeasured; a pinned `out` scored by an evaluation and left `out`; a cluster started from
 two pixels refining, upgrading and committing a point onto the planted surface;
-setting the current stage reporting `changed` false; and each refusal naming
-what did not hold.
+setting the current stage reporting `changed` false; each refusal naming what
+did not hold; and the two precondition functions giving the step's own answer
+when they are asked alone, which is what makes them safe to ask in front of a
+decode.
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same surface through the bindings, over the 17-image seoul_bull solve
 converted to `embedded_patches`.

@@ -82,6 +82,24 @@ pub(crate) enum Seed {
     },
 }
 
+/// The point a commit wrote, in the version the commit produced.
+///
+/// One row is the whole of what a commit adds to the reconstruction, and the
+/// two callers both need to name it: the panel selects it, and the wire reports
+/// its index and the portable id minted for it. Carried back from the step
+/// rather than looked up afterwards, because "the point this commit wrote" is
+/// not a question the value can be asked once the version has landed -- a
+/// replacement takes the index it replaced, and a creation takes whatever index
+/// the overlay had free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Committed {
+    /// The index the written point holds in the new version.
+    pub(crate) point: u32,
+    /// The index it replaced, now deleted, or `None` where the commit created a
+    /// point instead.
+    pub(crate) replaced: Option<u32>,
+}
+
 /// A [`Seed`] with its `.sift` row read, if it named one.
 struct SeededAt {
     /// Where the observation goes, in source-image px.
@@ -420,7 +438,16 @@ impl AppState {
     /// from, and any number of edits may have moved it since; the version
     /// graph's own walk is what says where it is now, and an origin that names
     /// nothing leaves the commit creating a point rather than replacing one.
-    pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+    ///
+    /// What comes back is the point it wrote ([`Committed`]), because the whole
+    /// of what a commit produces is one row of the reconstruction and a caller
+    /// that cannot name it has to go looking for it. The panel selects it; the
+    /// wire reports its index and its id.
+    pub(crate) fn commit_bench_track(
+        &mut self,
+        id: ReconId,
+        label: &str,
+    ) -> Result<Committed, String> {
         if let Some(why) = self.busy_refusal(id) {
             return Err(why);
         }
@@ -466,7 +493,10 @@ impl AppState {
         self.follow_selection_forward(id);
         self.action_log
             .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
-        Ok(())
+        Ok(Committed {
+            point: report.point,
+            replaced: report.replaced,
+        })
     }
 
     /// Measure the track called `label` at the stage it is in, on a worker
@@ -481,21 +511,42 @@ impl AppState {
     /// a path for each one it does not -- with a clone of the value at the
     /// cursor and a clone of the track, so the worker holds no reference into
     /// the scene.
+    ///
+    /// **What the track alone decides is decided here**, through
+    /// [`sfmtool_core::bench::evaluate_preconditions`], which is the half of
+    /// the step's own validation that reads no photograph. So a track with
+    /// nothing to register against is refused in the caller's own hand -- a
+    /// menu that greys, a status line, a tool error -- rather than starting a
+    /// task whose only act is to decode a dozen images and then fail.
     pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String> {
-        let outcome = match self.bench_evaluate_job(id, label) {
-            Ok(job) => self.start_background_task(Operation::BENCH_EVALUATE, id, job),
-            Err(message) => Err(message),
-        };
+        let outcome = self.begin_bench_evaluate(id, label);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
         outcome
     }
 
+    /// The evaluation up to the moment the worker has it, so that everything
+    /// this can refuse is refused before a photograph is read.
+    fn begin_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String> {
+        let (_, _, track) = self.bench_step_target(id, label)?;
+        bench::evaluate_preconditions(&track)
+            .map_err(|e| format!("Cannot evaluate {label}: {e}"))?;
+        let job = self.bench_evaluate_job(id, label)?;
+        self.start_background_task(Operation::BENCH_EVALUATE, id, job)
+    }
+
     /// Put the track called `label` into `stage`, on a worker thread.
     ///
     /// Setting the stage a track is already at changes nothing, so it starts no
     /// task and pushes no version.
+    ///
+    /// **What the track alone decides is decided here**, through
+    /// [`sfmtool_core::bench::set_stage_preconditions`]: too few `in`
+    /// observations to triangulate from, or a downgrade of a track carrying no
+    /// frame or no position. Those are refusals of the gesture, in the
+    /// caller's own hand, rather than a task that decodes a dozen photographs
+    /// and then fails for a reason that was knowable before it started.
     pub(crate) fn start_bench_stage(
         &mut self,
         id: ReconId,
@@ -508,14 +559,26 @@ impl AppState {
         {
             return Ok(());
         }
-        let outcome = match self.bench_stage_job(id, label, stage) {
-            Ok(job) => self.start_background_task(Operation::BENCH_SET_STAGE, id, job),
-            Err(message) => Err(message),
-        };
+        let outcome = self.begin_bench_stage(id, label, stage);
         if let Err(message) = &outcome {
             self.action_log.fail(Kind::Bench, message.clone());
         }
         outcome
+    }
+
+    /// The stage change up to the moment the worker has it, so that everything
+    /// this can refuse is refused before a photograph is read.
+    fn begin_bench_stage(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        stage: StageKind,
+    ) -> Result<(), String> {
+        let (_, _, track) = self.bench_step_target(id, label)?;
+        bench::set_stage_preconditions(&track, stage)
+            .map_err(|e| format!("Cannot set the stage of {label}: {e}"))?;
+        let job = self.bench_stage_job(id, label, stage)?;
+        self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
     }
 
     /// The evaluation itself, as a function of the `Progress` it reports
@@ -714,7 +777,7 @@ impl AppState {
     /// The stored affine is already the cluster stage's own convention -- the
     /// detector's canonical keypoint frame mapped onto this image's pixels --
     /// so it is passed on as it stands.
-    fn sift_feature(
+    pub(crate) fn sift_feature(
         &mut self,
         image: ImageRef,
         feature: u32,

@@ -103,7 +103,10 @@ impl AppState {
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     pub(crate) fn rename_bench_item(&mut self, id: ReconId, label: &str, to: &str)
         -> Result<(), String>;
-    pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// The point the commit wrote: the index it took, and the index it
+    /// replaced where it replaced one.
+    pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
+        -> Result<Committed, String>;
     pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     pub(crate) fn start_bench_stage(&mut self, id: ReconId, label: &str, stage: StageKind)
         -> Result<(), String>;
@@ -151,10 +154,19 @@ refusal shows, which is core's own wording behind a clause naming what was
 being done. The caller is a menu entry or a button that has to say in one line
 why nothing happened.
 
+**The commit hands back the point it wrote.** One row of the reconstruction is
+the whole of what it produces, and both callers have to name it: the panel
+selects it, and the wire reports its index and its portable id. It comes back
+from the step rather than being looked up afterwards, because "the point this
+commit wrote" is not a question the value can be asked once the version has
+landed -- a replacement takes the index it replaced, and a creation takes
+whatever index the overlay had free.
+
 **The two steps that read photographs return as soon as the worker is running.**
 They are `start_`-prefixed for that reason, and what they answer is whether the
 operation could *begin*. The report lands frames or seconds later, through the
-background machinery.
+background machinery. What they refuse in the call is everything the track alone
+decides (§ "The two steps that read photographs").
 
 ### Example
 
@@ -267,6 +279,17 @@ track stage`. Neither is cancellable: the patch kernels they run take the
 `Progress` for their phases and never ask whether they should stop, and the
 declaration is held to that by the background tests.
 
+**What the track alone decides is decided before the task starts.** Core
+publishes the half of each step's own validation that reads no photograph --
+`bench::evaluate_preconditions` and `bench::set_stage_preconditions`
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)) -- and
+`start_bench_evaluate` and `start_bench_stage` ask it before they build a job.
+So a track with fewer than two `in` observations, or one being taken down to the
+cluster stage with no frame or no position, is a refusal of the **gesture**: a
+sentence in the caller's own hand, no task, no version. The step itself calls
+the same function first, so the two answers cannot drift. What is left for the
+task is everything that needs the pixels, which is the rest.
+
 **The photographs are decoded on the worker**, along with the kernel work that
 reads them: the file reads and the pyramid builds are seconds of work in their
 own right, and a step that did them on the GUI thread would freeze the frame --
@@ -375,7 +398,13 @@ sent: they are pictures, and that surface is not a data channel.
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
 split name what they made, a rename names the label the item now holds, and an
-added observation names the index it took. So `undo`, `redo` and
+added observation names the index it took. **A commit names the point it
+wrote** -- `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced":
+1207 } }` -- because one row of the reconstruction is the whole of what a commit
+produces, and neither index is derivable from the sentence: a commit that
+replaces takes the index it replaced, and one that creates takes whatever index
+the overlay had free. So the next call is a `get_point` rather than a search
+through the counts for whichever row is new. So `undo`, `redo` and
 `jump_to_version` need no bench variant: the history they walk already holds the
 bench steps.
 
@@ -386,7 +415,10 @@ window, and with `running: true` and an `operation_id` to poll
 single photograph has been read (§ "The two steps that read photographs"), so
 the window is measured against the operation rather than spent on the decode in
 front of it. A step that finds nothing to do starts no task and answers with the
-version the node stands at.
+version the node stands at, and a step the **track** rules out starts no task
+either: it is a tool error in the step's own sentence, arriving in the call
+rather than through a task the agent would have had to poll to learn that
+nothing was ever going to happen.
 
 **A refusal is the step's own sentence and pushes nothing.** The wire wraps
 nothing: what an agent reads is the sentence the panel's status line would show.
@@ -422,7 +454,10 @@ point's exact projection and a photograph cached for every image:
   is discarded with one row and no version;
 - a photometric step whose photographs are neither cached nor readable **starts
   its task all the same**, and the refusal comes home through it, which is what
-  says the decode is the worker's.
+  says the decode is the worker's;
+- a photometric step the **track** rules out starts no task, pushes no version
+  and writes one failed row in its own sentence, which is what says a refusal
+  costs no decode.
 
 The steps themselves are core's and are tested there, over a synthetic textured
 plane whose numbers are known to the pixel.

@@ -67,7 +67,10 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
     json!({
         "label": node.label,
         "path": node.path.as_ref().map(|p| p.display().to_string()),
-        "content_hash": scene::hash_prefix(node),
+        // The hash the version's own point ids are minted from
+        // (`scene::version_hash_prefix`), so an agent holding this field and an
+        // agent holding an id read off a point are holding the same digits.
+        "content_hash": scene::version_hash_prefix(node),
         "counts": {
             "points": node.point_count(),
             // Read the way `scene::visible_stats` reads it, so this number and

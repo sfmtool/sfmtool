@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps fifty-three of the
-//!   fifty-four tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps fifty-five of the
+//!   fifty-six tools under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -145,6 +145,17 @@ pub(crate) enum Command {
     /// which is what makes a refusal atomic without a rollback.
     SetImageDetailDisplay {
         change: ImageDetailDisplayChange,
+    },
+    /// Where the Image Detail panel is looking: the photograph, the zoom, and
+    /// the rectangle of it on screen.
+    GetImageDetailView,
+    /// Point the Image Detail panel at one place in one photograph.
+    ///
+    /// The 2D counterpart of [`Command::SetView`], and one target per call for
+    /// the same reason: "centre this pixel" and "fit this rectangle" are
+    /// different questions, and a call carrying both would have no answer.
+    SetImageDetailView {
+        request: ImageDetailViewRequest,
     },
     /// Whether the operations to come record their finer stages.
     GetTimingDetail,
@@ -412,6 +423,52 @@ pub(crate) struct ImageDetailDisplayChange {
     pub(crate) intrinsics: IntrinsicsChange,
 }
 
+/// A `set_image_detail_view` request: which photograph to look at, the one
+/// thing to look at in it, and how close.
+///
+/// The photograph is doubly implied on purpose. A call that names one selects
+/// it; a call that names none looks in the one already selected -- except where
+/// the target itself names a photograph, which `bench_observation` does, and
+/// then that is the one selected. So an agent walking a bench track's
+/// observations names only the observation.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ImageDetailViewRequest {
+    pub(crate) reconstruction_label: Option<String>,
+    pub(crate) camera_image: Option<CameraImageSel>,
+    pub(crate) target: ImageDetailTarget,
+    /// The magnification to look at the target at, where the target takes one.
+    /// Absolute, with 1.0 the fit; clamped to the panel's range, and the reply
+    /// says where it landed.
+    pub(crate) zoom: Option<f32>,
+}
+
+/// The one thing a `set_image_detail_view` call asks to look at.
+///
+/// An enum rather than optional fields, as [`ViewCommand`] is: these are
+/// intents with different arithmetic behind them, and a call carrying two of
+/// them has asked two questions.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ImageDetailTarget {
+    /// A place in the photograph's own pixels, brought to the panel centre.
+    Pixel([f32; 2]),
+    /// A rectangle of the photograph, `[x0, y0, x1, y1]` in its own pixels,
+    /// fitted to the panel. The one target that settles the zoom itself.
+    Rect([f32; 4]),
+    /// A 3D point, at its observation in the photograph being looked at.
+    Point(crate::goto_point::PointQuery),
+    /// A `.sift` feature of that photograph, by its index in the file.
+    Feature(u32),
+    /// One observation of a bench track, which names its own photograph.
+    BenchObservation {
+        /// `None` is the active track, as everywhere else on the bench.
+        track: Option<String>,
+        /// Its position in the track's observation list.
+        observation: usize,
+    },
+    /// The whole photograph: zoom 1, centred.
+    Fit,
+}
+
 /// The `intrinsics` sub-block of an [`ImageDetailDisplayChange`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct IntrinsicsChange {
@@ -537,7 +594,7 @@ impl std::fmt::Display for ToolError {
 /// What a tool produced.
 ///
 /// Two shapes rather than one, because `screenshot` answers with a picture and
-/// the other fifty-three answer with JSON, and squeezing an image through a JSON
+/// the other fifty-five answer with JSON, and squeezing an image through a JSON
 /// field would mean a magic key that the transport has to know to look for.
 pub(crate) enum ToolOutput {
     Json(Value),
@@ -554,7 +611,7 @@ pub(crate) enum ToolOutput {
 /// A tool's answer: what it produced, or a message for `isError: true`.
 pub(crate) type Reply = Result<ToolOutput, ToolError>;
 
-/// The answer of the fifty-three tools that speak only JSON.
+/// The answer of the fifty-five tools that speak only JSON.
 ///
 /// Widened to a [`Reply`] at the [`apply_with_window`] dispatch, so nothing below it has to
 /// name the shape it is not.
@@ -661,8 +718,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes fifty-three of the
-/// fifty-four tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes fifty-five of the
+/// fifty-six tools testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
@@ -751,6 +808,8 @@ pub(crate) fn apply_with_window(
         } => done(write::set_solo(state, reconstruction_label.as_deref())),
         Command::GetImageDetailDisplay => done(display::get(state)),
         Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
+        Command::GetImageDetailView => done(display::get_view(state)),
+        Command::SetImageDetailView { request } => done(display::set_view(state, &request)),
         Command::GetTimingDetail => done(display::get_timing_detail(state)),
         Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),
@@ -1454,6 +1513,8 @@ impl Command {
             Command::SetSolo { .. } => "set_solo",
             Command::GetImageDetailDisplay => "get_image_detail_display",
             Command::SetImageDetailDisplay { .. } => "set_image_detail_display",
+            Command::GetImageDetailView => "get_image_detail_view",
+            Command::SetImageDetailView { .. } => "set_image_detail_view",
             Command::GetTimingDetail => "get_timing_detail",
             Command::SetTimingDetail { .. } => "set_timing_detail",
             Command::SetView { .. } => "set_view",
@@ -1632,6 +1693,7 @@ impl Command {
             | Command::GetActionLog { .. }
             | Command::GetWindowLayout
             | Command::GetImageDetailDisplay
+            | Command::GetImageDetailView
             | Command::GetTimingDetail
             | Command::GetHistory { .. }
             | Command::GetBackgroundTask
@@ -1680,9 +1742,12 @@ impl Command {
             // The kind the HUD's own controls record under: the Image Detail
             // toolbar is the same sort of thing on a different panel, and the
             // Action Log toolbar's timing checkbox on a third.
-            Command::SetImageDetailDisplay { .. } | Command::SetTimingDetail { .. } => {
-                Kind::Display
-            }
+            // The panel's view is a panel control like the rest of them: the
+            // zoom and the pan are what its own wheel and drag move, and
+            // nothing about them reaches the reconstruction.
+            Command::SetImageDetailDisplay { .. }
+            | Command::SetImageDetailView { .. }
+            | Command::SetTimingDetail { .. } => Kind::Display,
             Command::SetView { .. } => Kind::View,
             Command::ShowPanel { .. } | Command::HidePanel { .. } => Kind::Layout,
             // One call, two portions, and a refusal has to be filed somewhere:
@@ -1749,6 +1814,7 @@ pub(crate) fn query_text(state: &AppState, viewer: &Viewer3D, command: &Command)
         Command::GetWindowLayout => "get_window_layout".to_string(),
         Command::GetBackgroundTask => "get_background_task".to_string(),
         Command::GetImageDetailDisplay => "get_image_detail_display".to_string(),
+        Command::GetImageDetailView => "get_image_detail_view".to_string(),
         Command::GetTimingDetail => "get_timing_detail".to_string(),
         Command::GetHistory {
             reconstruction_label,

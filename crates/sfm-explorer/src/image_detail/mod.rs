@@ -12,6 +12,9 @@
 //!   the feature mode and composing with whichever one is active.
 //! - [`mod@bench_track`]: the bench layer, the active editable track drawn
 //!   over everything else in the bench's own colours.
+//! - [`mod@view`] -- what the pan and the zoom mean, as a pure function over the
+//!   frame's geometry, so the row-click reveal and the wire's
+//!   `set_image_detail_view` are one computation.
 
 mod bench_track;
 mod input;
@@ -19,12 +22,14 @@ mod intrinsics;
 mod overlay;
 #[cfg(test)]
 mod tests;
+mod view;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
 pub(crate) use overlay::{
     add_observation_entry, remove_observation_entry, BenchMenu, CreatePointPrompt,
     ADD_OBSERVATION_LABEL, CREATE_POINT_LABEL, START_CLUSTER_LABEL,
 };
+pub(crate) use view::{look_at, Look, ViewGeometry};
 
 use crate::document::VersionSerial;
 use crate::platform::{GestureEvent, ScrollInput};
@@ -41,12 +46,12 @@ use std::collections::HashMap;
 use intrinsics::View;
 
 /// Maximum zoom level (32× = pixel-level inspection).
-const MAX_ZOOM: f32 = 32.0;
+pub(crate) const MAX_ZOOM: f32 = 32.0;
 /// Minimum overlap in pixels between image and panel when panning.
 const PAN_MARGIN: f32 = 50.0;
 /// How far in from the panel's edge a revealed pixel still counts as out of
 /// view, as a fraction of the panel's size per axis. See
-/// [`ImageDetail::reveal_pixel`].
+/// [`view::Look::Reveal`].
 const REVEAL_MARGIN: f32 = 0.05;
 
 /// Prepared feature overlay state for the current image in the detail panel.
@@ -172,6 +177,14 @@ pub struct ImageDetailResponse {
     /// active track in the Track Edit panel. The layer is on top, so a click it
     /// catches leaves `select_point` alone.
     pub select_bench_row: Option<usize>,
+    /// What the panel ended this frame looking at, or `None` on a frame that
+    /// drew no image.
+    ///
+    /// Published rather than asked for: the panel is the only thing that knows
+    /// how big its body is, and it knows that only while it is drawing. The
+    /// dock puts it on `AppState`, where the wire's view tools read it
+    /// ([`mod@view`]).
+    pub view: Option<ViewGeometry>,
 }
 
 impl ImageDetail {
@@ -280,55 +293,35 @@ impl ImageDetail {
         self.pan = self.pan * ratio + cursor_rel * (1.0 - ratio);
     }
 
-    /// Bring `pixel`, a place in the displayed image's own source pixels, into
-    /// view by panning so it sits at the centre of the panel.
+    /// Point the view at what `look` names, in the frame `geometry` describes.
     ///
-    /// The request comes from a panel whose rows are *observations*: clicking
-    /// one selects the image, and at a zoomed-in view the feature that row is
-    /// about can be nowhere on screen, which makes the selection look like it
-    /// did nothing. So the panel is asked where the feature is, and moves only
-    /// when it has to.
-    ///
-    /// Three things it deliberately does not do:
-    ///
-    /// - **It does not zoom.** The zoom is the magnification the user chose to
-    ///   inspect at, and a reveal is a statement about position.
-    /// - **It does nothing at fit zoom**, where the whole image is on screen
-    ///   and every pixel of it is already in view. The margin below would
-    ///   otherwise make an edge feature "out of view" and slide a fitted image
-    ///   off-centre for it.
-    /// - **It does nothing when the pixel is already comfortably in view**, so
-    ///   walking down a track's rows does not jerk the image about for
-    ///   features that are all in the same corner. "Comfortably" is the middle
-    ///   `1 - 2 * REVEAL_MARGIN` of the panel per axis: a feature a few pixels
-    ///   inside the edge is on screen but not *visible* in any useful sense,
-    ///   half of its neighbourhood cut off.
-    ///
-    /// `scale` is the panel pixels one source pixel spans
-    /// (`base_scale * zoom`), so `display_size / 2 - pixel * scale` is the
-    /// `pan` that puts `pixel` at the panel centre. The result is clamped by
-    /// [`ImageDetail::clamp_pan`] like any other pan, which is what keeps a
-    /// feature in the very corner of a large image from pushing the image off
-    /// the panel; such a pixel ends off-centre but on screen.
-    fn reveal_pixel(
-        &mut self,
-        pixel: [f32; 2],
-        scale: f32,
-        display_size: egui::Vec2,
+    /// The one door a request from outside the panel comes through: the
+    /// row-click reveal from Point Track Detail and Track Edit, and the wire's
+    /// `set_image_detail_view`. What each request *means* is
+    /// [`view::look_at`]'s, a pure function over the geometry, so a pixel an
+    /// agent asked to be centred lands exactly where a reveal of the same pixel
+    /// would put it; what is here is only the writing of the answer back onto
+    /// the fields.
+    fn look(&mut self, look: &Look, geometry: ViewGeometry) {
+        let next = view::look_at(geometry, look);
+        self.pan = egui::vec2(next.pan[0], next.pan[1]);
+        self.zoom = next.zoom;
+    }
+
+    /// The view and the frame it is held in, as [`mod@view`] states them.
+    fn geometry(
+        &self,
+        image: ImageRef,
+        image_size: egui::Vec2,
         panel_size: egui::Vec2,
-    ) {
-        if self.zoom <= 1.0 {
-            return;
+    ) -> ViewGeometry {
+        ViewGeometry {
+            image,
+            image_size: [image_size.x, image_size.y],
+            panel_size: [panel_size.x, panel_size.y],
+            pan: [self.pan.x, self.pan.y],
+            zoom: self.zoom,
         }
-        let at = egui::vec2(pixel[0], pixel[1]) * scale;
-        // Where the pixel sits relative to the panel centre, in panel pixels.
-        let offset = self.pan - display_size / 2.0 + at;
-        let inside = panel_size * (0.5 - REVEAL_MARGIN);
-        if offset.x.abs() <= inside.x && offset.y.abs() <= inside.y {
-            return;
-        }
-        self.pan = display_size / 2.0 - at;
-        self.clamp_pan(display_size, panel_size);
     }
 
     /// Clamp pan so the image overlaps the panel by at least PAN_MARGIN pixels.
@@ -348,9 +341,9 @@ impl ImageDetail {
         recon_id: ReconId,
         version: VersionSerial,
         selected_image: Option<usize>,
-        // A place in `selected_image` to bring into view on this frame, in
-        // that image's own source pixels. See [`ImageDetail::reveal_pixel`].
-        reveal: Option<[f32; 2]>,
+        // Where a caller has asked the panel to look on this frame, in
+        // `selected_image`'s own source pixels. See [`ImageDetail::look`].
+        look: Option<Look>,
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
         bench: BenchMenu<'_>,
@@ -375,6 +368,7 @@ impl ImageDetail {
             start_bench_cluster: None,
             add_bench_observation: None,
             select_bench_row: None,
+            view: None,
         };
 
         // If no image selected, show placeholder
@@ -458,13 +452,18 @@ impl ImageDetail {
         self.rescale_view(display_size);
         self.clamp_pan(display_size, panel_size);
 
-        // A row click elsewhere named a feature in this image; bring it into
-        // view if the current view is not showing it. After the rescale and
-        // the clamp, because both are statements about the view this frame
-        // starts from and the test is whether *that* view holds the pixel.
-        if let Some(pixel) = reveal {
-            self.reveal_pixel(pixel, effective_scale, display_size, panel_size);
+        // A row click elsewhere named a feature in this image, or a tool asked
+        // for a place, a rectangle or the whole frame; look there. After the
+        // rescale and the clamp, because both are statements about the view
+        // this frame starts from and a reveal's test is whether *that* view
+        // holds the pixel.
+        if let Some(look) = look {
+            self.look(&look, self.geometry(image_ref, tex_size, panel_size));
         }
+
+        // Re-derived, because a look that named a zoom moved it.
+        let effective_scale = base_scale * self.zoom;
+        let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
 
         // Image rect with pan offset
         let image_center = panel_center + self.pan;
@@ -506,6 +505,9 @@ impl ImageDetail {
         let display_size = egui::vec2(tex_size.x * effective_scale, tex_size.y * effective_scale);
         // The extent `pan` is now measured against, for the next frame's rescale.
         self.last_display_size = Some(display_size);
+        // And the view this frame settled on, for the wire, which has no other
+        // way to know how big this panel's body is.
+        response.view = Some(self.geometry(image_ref, tex_size, panel_size));
         let image_center = panel_center + self.pan;
         let image_rect = egui::Rect::from_center_size(image_center, display_size);
 

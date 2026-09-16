@@ -559,3 +559,48 @@ fn a_report_for_an_item_that_is_gone_is_discarded_with_one_row() {
     );
     assert_eq!(rows[0].0, Kind::Bench);
 }
+
+/// What the track alone decides is decided **before** the worker, so a step
+/// that was never going to happen costs no decode and refuses in the caller's
+/// own hand.
+///
+/// The mirror of [`a_photometric_step_decodes_on_the_worker`]: that one says a
+/// question about the photographs belongs to the task, and this one says a
+/// question about the track does not.
+#[test]
+fn a_photometric_step_refuses_what_the_track_alone_decides() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    // Down to the cluster stage, then all but one sighting turned out: the
+    // upgrade back has nothing to triangulate from.
+    state
+        .start_bench_stage(id, &label, StageKind::Cluster)
+        .expect("the task started");
+    state.finish_background_task();
+    for observation in 1..3 {
+        state
+            .set_bench_verdict(id, &label, observation, Verdict::Out)
+            .expect("a live observation");
+    }
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    let refusal = state
+        .start_bench_stage(id, &label, StageKind::Track)
+        .expect_err("one sighting triangulates nothing");
+    assert_eq!(
+        refusal,
+        format!(
+            "Cannot set the stage of {label}: 1 observations are in, and the track stage needs \
+             two or more"
+        )
+    );
+    assert!(
+        state.background_task().is_none(),
+        "a refusal started a task"
+    );
+    assert_eq!(versions(&state, id), before, "a refusal pushed a version");
+    // One row, in the refusal's own words, which is what the panel's status
+    // line shows.
+    assert_eq!(rows(&state), vec![(Kind::Bench, refusal)]);
+}

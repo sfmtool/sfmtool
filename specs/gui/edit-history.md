@@ -162,9 +162,23 @@ An undo does not restore a selection the edit cleared. The map says where an
 index went, not what the user was looking at, and inventing the second from the
 first would be a guess.
 
-**The image and camera selections** do not follow a map, because there is not
-one for them: a bulk edit renumbers the image table wholesale, so they are
-cleared, along with the caches keyed by them
+**The image selection** follows no map, because there is not one for it -- but
+it does follow the *photograph*. A cursor move is a step through the node's
+history and not a statement about what the person is looking at, so the image on
+screen stays on screen: the move reads the selected image's `.sfmr` name before
+it steps, and puts the selection back on the image of that name in the version
+it lands on. For every edit that leaves the image table alone -- a point edit, a
+bench step, an adjustment -- that is the same index it started at; across an
+edit that renumbered the table it is the index the same photograph now holds;
+and where the version it lands on has no image of that name, which only a
+`delete_camera_image` can produce, the selection clears because there is nothing
+left to show. The camera selection is re-derived from the image that was kept,
+as `AppState::select_image` derives it; a lens selected on its own, with no
+image, is kept while its index is still one the version has.
+
+`delete_camera_image` itself carries the selection the same way, which is what
+moves it down with its own renumbering rather than dropping it. The caches keyed
+by an image index *are* dropped, by all four
 ([document-model.md](document-model.md), "What a bulk edit owes the rest of the
 viewer").
 
@@ -282,9 +296,9 @@ check runs over the whole span before the cursor moves, so a refusal leaves the
 cursor where it was.
 
 What a bulk edit owes the rest of the viewer is owed here too: the walk may pass
-a version whose base renumbered the image table, so the image and camera
-selections and the caches keyed by them are dropped, exactly as an undo drops
-them.
+a version whose base renumbered the image table, so the caches keyed by an image
+index are dropped, exactly as an undo drops them, and the image selection is
+found again by name in the version the walk comes to rest on.
 
 ## The Action Log
 
@@ -339,7 +353,10 @@ the scan a row map comes from.
 `crates/sfm-explorer/src/state/edits/tests.rs` covers what follows: a surviving
 selection keeping its index across a point edit, a deleted selection clearing,
 a selection following the renumbering of an image deletion onto the same point
-and coming back through the undo, and the three log texts. The jump is there
+and coming back through the undo, the photograph on screen staying on screen
+across an undo, a redo and a jump, that photograph being found again by name
+across the renumbering an image deletion makes and its undo, and a deleted
+photograph clearing the selection, and the three log texts. The jump is there
 too: a jump back landing where a run of undos would have, a jump forward
 returning to the version it came from, the selection arriving at the same index
 a run of undos leaves it at across a point edit and a renumbering, one log entry

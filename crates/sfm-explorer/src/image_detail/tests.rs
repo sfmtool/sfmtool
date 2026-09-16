@@ -62,20 +62,20 @@ fn frame(
     image: &ImageU8,
     panel: egui::Vec2,
 ) {
-    reveal_frame(detail, ctx, node, image_index, image, panel, None);
+    look_frame(detail, ctx, node, image_index, image, panel, None);
 }
 
-/// The same frame, carrying a reveal request for a pixel of `image_index`:
-/// what the dock hands the panel on the frame after a row click elsewhere named
-/// a feature.
-fn reveal_frame(
+/// The same frame, carrying a look request for a place in `image_index`: what
+/// the dock hands the panel on the frame after a row click elsewhere named a
+/// feature, or after a tool asked for a view.
+fn look_frame(
     detail: &mut ImageDetail,
     ctx: &egui::Context,
     node: &SceneNode,
     image_index: usize,
     image: &ImageU8,
     panel: egui::Vec2,
-    reveal: Option<[f32; 2]>,
+    look: Option<super::Look>,
 ) {
     let feature_display = FeatureDisplaySettings::default();
     let mut intrinsics_display = IntrinsicsDisplaySettings::default();
@@ -90,7 +90,7 @@ fn reveal_frame(
             node.id,
             node.history.current_version().serial,
             Some(image_index),
-            reveal,
+            look,
             None,
             None,
             super::BenchMenu::default(),
@@ -256,6 +256,12 @@ fn a_view_reset_forgets_the_extent_it_was_measured_against() {
 /// shows only a part of it in [`PANEL`].
 const SOURCE: egui::Vec2 = egui::Vec2::new(400.0, 300.0);
 
+/// The row click's request: bring `pixel` into view, without touching the
+/// zoom.
+fn reveal(pixel: [f32; 2]) -> Option<super::Look> {
+    Some(super::Look::Reveal { pixel })
+}
+
 /// Where `pixel` of [`SOURCE`] sits relative to the panel centre, in panel
 /// pixels, for the view the last frame left behind. Zero is dead centre.
 fn offset_of(detail: &ImageDetail, pixel: [f32; 2]) -> egui::Vec2 {
@@ -287,7 +293,7 @@ fn revealing_a_feature_out_of_view_centres_it_and_leaves_the_zoom_alone() {
     // several panel-widths away.
     detail.zoom = 4.0;
     let feature = [10.0, 10.0];
-    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some(feature));
+    look_frame(&mut detail, &ctx, &node, 0, &image, PANEL, reveal(feature));
 
     assert_eq!(detail.zoom, 4.0, "a reveal zoomed");
     assert_near(offset_of(&detail, feature), egui::Vec2::ZERO, "not centred");
@@ -305,7 +311,7 @@ fn revealing_a_feature_already_in_view_moves_nothing() {
     detail.zoom = 4.0;
     detail.pan = egui::vec2(300.0, -200.0);
     let feature = [170.0, 175.0];
-    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some(feature));
+    look_frame(&mut detail, &ctx, &node, 0, &image, PANEL, reveal(feature));
 
     assert_eq!(
         detail.pan,
@@ -323,7 +329,15 @@ fn revealing_a_feature_at_fit_zoom_moves_nothing() {
 
     // The very corner, which the margin would call out of view; but at fit
     // zoom the whole image is on screen and there is nothing to bring into it.
-    reveal_frame(&mut detail, &ctx, &node, 0, &image, PANEL, Some([0.0, 0.0]));
+    look_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &image,
+        PANEL,
+        reveal([0.0, 0.0]),
+    );
 
     assert_eq!(detail.zoom, 1.0);
     assert_eq!(detail.pan, egui::Vec2::ZERO, "a fitted image was panned");
@@ -341,14 +355,14 @@ fn revealing_a_corner_feature_still_obeys_the_pan_clamp() {
     // centring a corner asks for `display / 2`.
     let panel = egui::vec2(80.0, 60.0);
     detail.zoom = 4.0;
-    reveal_frame(
+    look_frame(
         &mut detail,
         &ctx,
         &node,
         0,
         &image,
         panel,
-        Some([SOURCE.x, SOURCE.y]),
+        reveal([SOURCE.x, SOURCE.y]),
     );
 
     let display = detail.last_display_size.expect("a frame drew");
@@ -947,4 +961,153 @@ fn the_bench_layer_draws_a_pixel_cluster_at_the_radius_it_was_started_with() {
             "the seed's corner ({s}, {t}) should be at {expected:?}, nearest drawn is {nearest} away",
         );
     }
+}
+
+/// The same frame, giving back what the panel published about the view it
+/// ended on -- which is what the dock puts on `AppState` for the wire's view
+/// tools to read.
+fn published_frame(
+    detail: &mut ImageDetail,
+    ctx: &egui::Context,
+    node: &SceneNode,
+    image_index: usize,
+    image: &ImageU8,
+    panel: egui::Vec2,
+    look: Option<super::Look>,
+) -> super::ViewGeometry {
+    let feature_display = FeatureDisplaySettings::default();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, panel)),
+        ..Default::default()
+    };
+    let mut published = None;
+    crate::test_support::run_frame_headless(ctx, input, |ui| {
+        let response = detail.show(
+            ui,
+            node.edited(),
+            node.id,
+            node.history.current_version().serial,
+            Some(image_index),
+            look,
+            None,
+            None,
+            super::BenchMenu::default(),
+            &mut None,
+            &[],
+            &crate::platform::ScrollInput::default(),
+            None,
+            Some(image),
+            &feature_display,
+            &mut intrinsics_display,
+        );
+        published = response.view;
+    });
+    published.expect("a frame that drew an image publishes its view")
+}
+
+/// The centre of a published view's visible rectangle, in image pixels: the
+/// place the panel is looking at, which is what every look aims.
+fn looked_at(view: super::ViewGeometry) -> [f32; 2] {
+    let [x0, y0, x1, y1] = view.visible_rect();
+    [(x0 + x1) / 2.0, (y0 + y1) / 2.0]
+}
+
+/// The reveal and the wire's own look are one function: a row click centres
+/// the pixel without touching the zoom, and the panel publishes a view whose
+/// visible rectangle is centred on it -- which is what
+/// `get_image_detail_view` reports.
+#[test]
+fn the_published_view_is_centred_on_what_the_look_named() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    detail.zoom = 4.0;
+    let feature = [10.0, 10.0];
+    let revealed = published_frame(&mut detail, &ctx, &node, 0, &image, PANEL, reveal(feature));
+    let at = looked_at(revealed);
+    assert!(
+        (at[0] - feature[0]).abs() < 0.05 && (at[1] - feature[1]).abs() < 0.05,
+        "the published view is not centred on the revealed pixel: {at:?}"
+    );
+    assert_eq!(revealed.zoom, 4.0, "a reveal zoomed");
+    assert_eq!(
+        revealed.image_size,
+        [SOURCE.x, SOURCE.y],
+        "the published image size is not the photograph's"
+    );
+    assert_eq!(
+        revealed.panel_size,
+        [PANEL.x, PANEL.y],
+        "the published panel size is not the panel's"
+    );
+}
+
+/// The wire's forms go through the same door: a pixel with a zoom, a rectangle
+/// fitted to the panel, and the whole photograph.
+#[test]
+fn a_look_at_a_pixel_a_rect_and_the_whole_photograph_all_land() {
+    let node = demo_node("/runs/demo.sfmr");
+    let image = pixels(SOURCE.x as u32, SOURCE.y as u32);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+
+    let pixel = published_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &image,
+        PANEL,
+        Some(super::Look::Pixel {
+            pixel: [300.0, 200.0],
+            zoom: Some(8.0),
+        }),
+    );
+    assert_eq!(pixel.zoom, 8.0);
+    let at = looked_at(pixel);
+    assert!(
+        (at[0] - 300.0).abs() < 0.05 && (at[1] - 200.0).abs() < 0.05,
+        "the pixel is off centre: {at:?}"
+    );
+
+    let rect = published_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &image,
+        PANEL,
+        Some(super::Look::Rect([100.0, 100.0, 300.0, 200.0])),
+    );
+    let [x0, y0, x1, y1] = rect.visible_rect();
+    assert!(
+        x1 - x0 >= 200.0 - 0.05 && y1 - y0 >= 100.0 - 0.05,
+        "the rectangle does not fit: {:?}",
+        rect.visible_rect()
+    );
+    let at = looked_at(rect);
+    assert!(
+        (at[0] - 200.0).abs() < 0.05 && (at[1] - 150.0).abs() < 0.05,
+        "the rectangle is off centre: {at:?}"
+    );
+
+    let fitted = published_frame(
+        &mut detail,
+        &ctx,
+        &node,
+        0,
+        &image,
+        PANEL,
+        Some(super::Look::Fit),
+    );
+    assert_eq!(fitted.zoom, 1.0);
+    assert_eq!(fitted.pan, [0.0, 0.0]);
+    let at = looked_at(fitted);
+    assert!(
+        (at[0] - SOURCE.x / 2.0).abs() < 0.05 && (at[1] - SOURCE.y / 2.0).abs() < 0.05,
+        "the whole photograph is off centre: {at:?}"
+    );
 }

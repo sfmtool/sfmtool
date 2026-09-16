@@ -41,7 +41,12 @@
 use serde_json::{json, Value};
 
 use super::tools::Args;
-use super::{ImageDetailDisplayChange, IntrinsicsChange, JsonReply, ToolError};
+use super::{
+    resolve_camera_image, resolve_reconstruction, ImageDetailDisplayChange, ImageDetailTarget,
+    ImageDetailViewRequest, IntrinsicsChange, JsonReply, ToolError,
+};
+use crate::image_detail::{Look, ViewGeometry};
+use crate::scene::{ImageRef, ReconId};
 use crate::state::{
     record_image_detail_changes, AppState, FeatureDisplaySettings, ImageDetailDisplay,
     IntrinsicsDisplaySettings, OverlayMode,
@@ -323,6 +328,328 @@ fn ladder<T: std::fmt::Display>(values: &[T]) -> String {
         .map(|value| value.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// ── The Image Detail panel's view ───────────────────────────────────────
+
+/// `get_image_detail_view`: where the panel is looking, no arguments.
+///
+/// The **panel's** reading and not the selection's: it is what the last frame
+/// that drew a photograph settled on, so a `select_camera_image` sent a moment
+/// ago is not in it yet. That is the honest answer to "what is on screen", and
+/// it is the reading a `screenshot` of the panel would show.
+///
+/// Every field is `null` before the panel has drawn an image at all -- a fresh
+/// session, a panel that was never opened, no camera image selected -- because
+/// what fit means, and therefore what the zoom and the visible rectangle mean,
+/// is settled by a panel size that does not exist yet.
+pub(super) fn get_view(state: &AppState) -> JsonReply {
+    Ok(json!({ "image_detail_view": view_document(state, state.image_detail_view) }))
+}
+
+/// `set_image_detail_view`: point the panel at one place in one photograph.
+///
+/// Three steps, in this order, because each can refuse and a refusal should
+/// change nothing: the call's node, photograph and target are resolved into a
+/// pixel or a rectangle; the view that produces is computed against the panel's
+/// own geometry; and only then is the request left for the panel to apply on
+/// its next frame. The reply is the computed view in the same shape
+/// [`get_view`] answers in, so the caller reads where it landed -- including a
+/// zoom the panel's range clamped -- rather than the numbers it sent.
+///
+/// The arithmetic is [`crate::image_detail::look_at`]'s, the same function the
+/// panel itself runs a frame later, so what this reply says and what the panel
+/// does are one computation rather than two that could disagree.
+pub(super) fn set_view(state: &mut AppState, request: &ImageDetailViewRequest) -> JsonReply {
+    let id = resolve_reconstruction(state, request.reconstruction_label.as_deref())?;
+    let (image, look) = resolve_target(state, id, request)?;
+    let geometry = geometry_for(state, image)?;
+    let landed = crate::image_detail::look_at(geometry, &look);
+    state.look_at_in_image(image, look);
+    Ok(json!({ "image_detail_view": view_document(state, Some(landed)) }))
+}
+
+/// The photograph a call is about, and the look it is asking for in it.
+///
+/// Where the photograph comes from is the order the request's own doc states:
+/// the one the call named, else the one the target names, else the one already
+/// selected. Only `bench_observation` names one -- a `point` is *looked for* in
+/// the photograph being looked at, and says so when it is not there.
+fn resolve_target(
+    state: &mut AppState,
+    id: ReconId,
+    request: &ImageDetailViewRequest,
+) -> Result<(ImageRef, Look), ToolError> {
+    let named = match &request.camera_image {
+        Some(selector) => Some(resolve_camera_image(state, id, selector)?),
+        None => None,
+    };
+    let zoom = request.zoom;
+    match &request.target {
+        ImageDetailTarget::Fit => Ok((selected_image(state, id, named)?, Look::Fit)),
+        ImageDetailTarget::Pixel(pixel) => Ok((
+            selected_image(state, id, named)?,
+            Look::Pixel {
+                pixel: *pixel,
+                zoom,
+            },
+        )),
+        ImageDetailTarget::Rect(rect) => Ok((selected_image(state, id, named)?, Look::Rect(*rect))),
+        ImageDetailTarget::Point(query) => {
+            let image = selected_image(state, id, named)?;
+            let point = super::resolve_point_in(state, id, query)?;
+            let pixel =
+                super::read::point_observation_xy(state, point, image).ok_or_else(|| {
+                    ToolError::new(format!(
+                        "{} has no observation of point {} -- there is nothing of it to look at in \
+                     that photograph. get_point lists the camera images its track holds.",
+                        state.image_name(image),
+                        point.index(),
+                    ))
+                })?;
+            Ok((image, Look::Pixel { pixel, zoom }))
+        }
+        ImageDetailTarget::Feature(feature) => {
+            let image = selected_image(state, id, named)?;
+            // Through the cache the panel's own overlay draws from, so the mark
+            // an agent asked to be centred is the mark it is looking at.
+            let (pixel, _) = state
+                .sift_feature(image, *feature)
+                .map_err(ToolError::new)?;
+            Ok((
+                image,
+                Look::Pixel {
+                    pixel: [pixel[0] as f32, pixel[1] as f32],
+                    zoom,
+                },
+            ))
+        }
+        ImageDetailTarget::BenchObservation { track, observation } => {
+            let (image, pixel) =
+                super::bench::observation_place(state, id, track.as_deref(), *observation)?;
+            // The photograph the observation names, unless the call named one
+            // itself -- which is how an agent asks "where would this sighting
+            // be in *that* image".
+            Ok((named.unwrap_or(image), Look::Pixel { pixel, zoom }))
+        }
+    }
+}
+
+/// The photograph a call that named none is about: the one selected in `id`.
+fn selected_image(
+    state: &AppState,
+    id: ReconId,
+    named: Option<ImageRef>,
+) -> Result<ImageRef, ToolError> {
+    if let Some(image) = named {
+        return Ok(image);
+    }
+    state
+        .selected_image
+        .filter(|image| image.recon == id)
+        .ok_or_else(|| {
+            ToolError::new(
+                "No camera image is selected, so there is no photograph to look at. Name one \
+                 with camera_image, or send select_camera_image first.",
+            )
+        })
+}
+
+/// The frame a look is computed in: the panel's size as it last drew, and
+/// `image`'s own size.
+///
+/// The panel size can only come from the panel -- nothing else in the process
+/// knows how big its body is -- so a call arriving before it has drawn a
+/// photograph is refused rather than answered against a guess. The image size
+/// is the lens's, which is what the panel's texture is, and is known without
+/// decoding anything; where the panel is already showing this photograph its
+/// own measurement is used instead, since that is the number the frame will
+/// actually use.
+fn geometry_for(state: &AppState, image: ImageRef) -> Result<ViewGeometry, ToolError> {
+    let standing = state.image_detail_view.ok_or_else(|| {
+        ToolError::new(
+            "The Image Detail panel has not drawn a photograph yet, so there is no panel to fit \
+             a view to. Send show_panel { \"panel_name\": \"image_detail\" } and select a camera \
+             image first.",
+        )
+    })?;
+    if standing.image == image {
+        return Ok(standing);
+    }
+    let image_size = image_size_px(state, image).ok_or_else(|| {
+        ToolError::new("That camera image is no longer in this version of the reconstruction.")
+    })?;
+    Ok(ViewGeometry {
+        image,
+        image_size,
+        ..standing
+    })
+}
+
+/// `image`'s size in its own pixels, from the lens it was shot through.
+fn image_size_px(state: &AppState, image: ImageRef) -> Option<[f32; 2]> {
+    let node = state.node(image.recon)?;
+    let table = &node.recon().image_table;
+    let camera = table
+        .cameras
+        .get(table.images.get(image.index())?.camera_index as usize)?;
+    Some([camera.width as f32, camera.height as f32])
+}
+
+/// The document both view tools answer with.
+///
+/// `visible_rect_px` is **not** clipped to the photograph: at fit zoom the
+/// letterboxed axis runs past both edges, and the useful invariant is that the
+/// rectangle's centre is the image pixel at the centre of the panel, which is
+/// what every target aims. `panel_size_points` is in egui points rather than
+/// pixels, which is what the panel lays out in; `screenshot` is where physical
+/// pixels are.
+fn view_document(state: &AppState, view: Option<ViewGeometry>) -> Value {
+    let Some(view) = view else {
+        return json!({
+            "reconstruction_label": Value::Null,
+            "camera_image": Value::Null,
+            "camera_image_name": Value::Null,
+            "zoom": Value::Null,
+            "visible_rect_px": Value::Null,
+            "panel_size_points": Value::Null,
+            "image_size_px": Value::Null,
+        });
+    };
+    json!({
+        "reconstruction_label": super::render::label_of(state, view.image.recon),
+        "camera_image": view.image.index(),
+        "camera_image_name": state.image_name(view.image),
+        "zoom": f64::from(view.zoom),
+        "visible_rect_px": view.visible_rect().map(f64::from),
+        "panel_size_points": view.panel_size.map(f64::from),
+        "image_size_px": view.image_size.map(f64::from),
+    })
+}
+
+/// Everything `set_image_detail_view` takes, and the whole of what it refuses
+/// before a `Command` exists.
+///
+/// The one-target rule is here rather than in [`set_view`] for the reason the
+/// display parse holds its vocabularies: a call that named two places has asked
+/// two questions, and answering half of it would be worse than turning it away.
+pub(super) fn parse_view(args: &Args) -> Result<ImageDetailViewRequest, ToolError> {
+    args.reject_unknown(&[
+        "reconstruction_label",
+        "camera_image",
+        "pixel",
+        "rect",
+        "point",
+        "feature",
+        "bench_observation",
+        "track",
+        "fit",
+        "zoom",
+    ])?;
+    let target = parse_target(args)?;
+    let zoom: Option<f32> = match args.optional_f64("zoom")? {
+        None => None,
+        Some(zoom) => {
+            if !matches!(
+                target,
+                ImageDetailTarget::Pixel(_)
+                    | ImageDetailTarget::Point(_)
+                    | ImageDetailTarget::Feature(_)
+                    | ImageDetailTarget::BenchObservation { .. }
+            ) {
+                return Err(args.error(
+                    "was given a zoom with a target that settles its own: rect fits what it was \
+                     given, and fit is the whole photograph.",
+                ));
+            }
+            if !zoom.is_finite() || zoom <= 0.0 {
+                return Err(args.error(format!(
+                    "wants zoom to be a magnification above zero, 1.0 being the fit -- got {zoom}."
+                )));
+            }
+            Some(zoom as f32)
+        }
+    };
+    if args.get("track").is_some() && !matches!(target, ImageDetailTarget::BenchObservation { .. })
+    {
+        return Err(args.error("names a track without a bench_observation to find in it."));
+    }
+    let camera_image = match args.get("camera_image") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(args.camera_image("camera_image")?),
+    };
+    Ok(ImageDetailViewRequest {
+        reconstruction_label: args.optional_string("reconstruction_label")?,
+        camera_image,
+        target,
+        zoom,
+    })
+}
+
+/// The one target a call named, or the refusal for none and for more than one.
+fn parse_target(args: &Args) -> Result<ImageDetailTarget, ToolError> {
+    let mut found: Vec<(&str, ImageDetailTarget)> = Vec::new();
+    if args.get("pixel").is_some() {
+        found.push(("pixel", ImageDetailTarget::Pixel(args.pixel("pixel")?)));
+    }
+    if args.get("rect").is_some() {
+        found.push(("rect", ImageDetailTarget::Rect(parse_rect(args)?)));
+    }
+    if args.get("point").is_some() {
+        found.push(("point", ImageDetailTarget::Point(args.point("point")?)));
+    }
+    if args.get("feature").is_some() {
+        let feature = args.required_usize("feature")?;
+        let feature = u32::try_from(feature)
+            .map_err(|_| args.error(format!("was given a feature index of {feature}.")))?;
+        found.push(("feature", ImageDetailTarget::Feature(feature)));
+    }
+    if args.get("bench_observation").is_some() {
+        found.push((
+            "bench_observation",
+            ImageDetailTarget::BenchObservation {
+                track: args.optional_string("track")?,
+                observation: args.required_usize("bench_observation")?,
+            },
+        ));
+    }
+    // `fit: false` names no target: it is the absence of the request, not a
+    // request for something else.
+    if args.optional_bool("fit")? == Some(true) {
+        found.push(("fit", ImageDetailTarget::Fit));
+    }
+    match found.len() {
+        1 => Ok(found.pop().expect("one").1),
+        0 => Err(args.error(
+            "was given no place to look -- pass one of pixel, rect, point, feature, \
+             bench_observation or fit.",
+        )),
+        _ => {
+            let names: Vec<&str> = found.iter().map(|(name, _)| *name).collect();
+            Err(args.error(format!(
+                "was given {} places to look at once ({}) -- a call names one.",
+                names.len(),
+                names.join(", ")
+            )))
+        }
+    }
+}
+
+/// A `rect` argument: four finite numbers in image pixels, spanning something.
+///
+/// A rectangle of no area is refused rather than fitted: it names a line or a
+/// point, and the magnification that "fills the panel" with one is unbounded.
+/// `pixel` with a `zoom` is what a caller asking for that means.
+fn parse_rect(args: &Args) -> Result<[f32; 4], ToolError> {
+    let [x0, y0, x1, y1] = args
+        .optional_numbers::<4>("rect")?
+        .ok_or_else(|| args.error("needs rect: [x0, y0, x1, y1] in image pixels."))?;
+    if (x1 - x0).abs() <= 0.0 || (y1 - y0).abs() <= 0.0 {
+        return Err(args.error(format!(
+            "was given a rect of no area ({x0}, {y0})-({x1}, {y1}), which frames nothing."
+        )));
+    }
+    Ok([x0 as f32, y0 as f32, x1 as f32, y1 as f32])
 }
 
 // ── Detailed timing ─────────────────────────────────────────────────────

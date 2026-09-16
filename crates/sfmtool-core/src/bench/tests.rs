@@ -1391,6 +1391,65 @@ fn a_track_stage_evaluation_of_one_sighting_is_refused() {
     );
 }
 
+/// The photograph-free half of each step's validation, asked on its own: it
+/// gives the step's own answer, so a caller that asks before decoding refuses
+/// in the same words the step would have.
+#[test]
+fn the_preconditions_are_the_steps_own_refusals() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let whole = track_of(&bench, &label);
+    let (one_in, _) = set_verdict(&whole, 1, Verdict::Out).expect("a live row");
+
+    // One sighting: neither the track-stage evaluation nor the upgrade to it
+    // has a consensus to register against.
+    assert_eq!(
+        evaluate_preconditions(&one_in).expect_err("one sighting fixes no point"),
+        EvaluateError::TooFewObservations(1)
+    );
+    assert_eq!(
+        evaluate_over(&scene, &edited, &one_in).expect_err("the step agrees"),
+        EvaluateError::TooFewObservations(1)
+    );
+    let (cluster, _) =
+        stage_over(&scene, &edited, &whole, StageKind::Cluster).expect("a framed track goes down");
+    let (one_in_cluster, _) = set_verdict(&cluster, 1, Verdict::Out).expect("a live row");
+    assert_eq!(
+        set_stage_preconditions(&one_in_cluster, StageKind::Track)
+            .expect_err("one sighting triangulates nothing"),
+        StageError::Evaluate(EvaluateError::TooFewObservations(1))
+    );
+    assert_eq!(
+        stage_over(&scene, &edited, &one_in_cluster, StageKind::Track)
+            .expect_err("the step agrees"),
+        StageError::Evaluate(EvaluateError::TooFewObservations(1))
+    );
+
+    // A whole track at the stage it is asked for is the change that does
+    // nothing, which is not a refusal.
+    assert_eq!(set_stage_preconditions(&whole, StageKind::Track), Ok(()));
+    assert_eq!(evaluate_preconditions(&whole), Ok(()));
+
+    // A downgrade wants the frame it projects and the position it stands at.
+    let mut frameless = whole.clone();
+    if let Stage::Track(payload) = &mut frameless.stage {
+        payload.frame = None;
+    }
+    assert_eq!(
+        set_stage_preconditions(&frameless, StageKind::Cluster),
+        Err(StageError::NoFrame)
+    );
+    let mut placeless = whole.clone();
+    if let Stage::Track(payload) = &mut placeless.stage {
+        payload.position = None;
+    }
+    assert_eq!(
+        set_stage_preconditions(&placeless, StageKind::Cluster),
+        Err(StageError::NoPosition)
+    );
+}
+
 #[test]
 fn an_observation_naming_an_image_with_no_view_is_refused() {
     let scene = Scene::new();

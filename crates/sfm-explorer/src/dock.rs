@@ -314,13 +314,14 @@ impl TabContext<'_> {
             let _ = self.state.start_bench_stage(id, &label, stage);
         }
         if response.commit {
-            let outcome = self.state.commit_bench_track(id, &label);
-            if let Err(why) = outcome {
-                self.state.action_log.fail(Kind::Edit, why);
-            } else {
-                // The commit gave the node a new version, so what the panels
-                // cached about its points describes a value it no longer holds.
-                self.forget_recon(id);
+            match self.state.commit_bench_track(id, &label) {
+                Err(why) => self.state.action_log.fail(Kind::Edit, why),
+                Ok(_) => {
+                    // The commit gave the node a new version, so what the
+                    // panels cached about its points describes a value it no
+                    // longer holds.
+                    self.forget_recon(id);
+                }
             }
         }
         if let Some(image) = response.select_image {
@@ -507,12 +508,12 @@ impl TabContext<'_> {
     fn show_image_detail(&mut self, ui: &mut egui::Ui) {
         // Before the node is fetched, because taking the request needs the
         // state mutably and the node borrows the scene out of it for the rest
-        // of this method. Taken rather than read: it asks for one pan, on the
-        // frame the panel shows the image the row click named.
-        let reveal = self
+        // of this method. Taken rather than read: it asks for one view, on the
+        // frame the panel shows the image the request named.
+        let look = self
             .state
             .selected_image
-            .and_then(|image| self.state.take_reveal(image));
+            .and_then(|image| self.state.take_look(image));
         let node = selected_node(&self.state.scene, self.state.selected_recon);
         if let Some(node) = node {
             let recon = node.recon();
@@ -613,7 +614,7 @@ impl TabContext<'_> {
                 id,
                 node.history.current_version().serial,
                 selected_image,
-                reveal,
+                look,
                 selected_point,
                 hovered_point,
                 crate::image_detail::BenchMenu {
@@ -633,6 +634,14 @@ impl TabContext<'_> {
                 &self.state.intrinsics_display,
             );
             crate::state::record_image_detail_changes(&mut self.state.action_log, &before, &after);
+            // What the panel ended the frame looking at, for the wire's view
+            // tools: the panel is the only thing that knows how big its body
+            // is. A frame that drew no image publishes nothing and leaves the
+            // last reading standing, which is the reading a view tool should
+            // still be answering from.
+            if let Some(view) = detail_response.view {
+                self.state.image_detail_view = Some(view);
+            }
             if let Some(point_idx) = detail_response.select_point {
                 // Through the setter rather than the field: the point
                 // is inside the selected reconstruction already, so the

@@ -830,6 +830,78 @@ input handling and `last_display_size` is recorded *after* it, so a zoom gesture
 within a frame is never mistaken for a change of extent. `reset_view` clears
 `last_display_size` for the same reason — a fit view has nothing to carry.
 
+### Looking at a place: the one function every request goes through
+
+Three things ask this panel to look somewhere: a row click in another panel
+(below), the wire's `set_image_detail_view`
+([mcp-server.md](mcp-server.md) § "The Image Detail view"), and the panel's own
+`Z` / double-click fit. What each of them *means* is one pure function over the
+frame's geometry, in
+[image_detail/view.rs](../../crates/sfm-explorer/src/image_detail/view.rs), so
+two callers asking for the same place land in the same pixel:
+
+```rust
+/// What the panel was looking at on the frame it last drew: the view, and the
+/// frame it is held in. Both halves, because neither is meaningful alone.
+pub(crate) struct ViewGeometry {
+    pub(crate) image: ImageRef,
+    pub(crate) image_size: [f32; 2],   // the photograph's own pixels
+    pub(crate) panel_size: [f32; 2],   // the panel body, in points
+    pub(crate) pan: [f32; 2],          // image centre off panel centre, in points
+    pub(crate) zoom: f32,              // 1.0 = fitted
+}
+
+impl ViewGeometry {
+    /// Panel points one source pixel spans at zoom 1, and at the standing zoom.
+    pub(crate) fn fit_scale(&self) -> f32;
+    pub(crate) fn scale(&self) -> f32;
+    pub(crate) fn display_size(&self) -> [f32; 2];
+    /// The rectangle of the photograph the panel shows, `[x0, y0, x1, y1]`.
+    pub(crate) fn visible_rect(&self) -> [f32; 4];
+}
+
+/// Where a caller is asking the panel to look.
+pub(crate) enum Look {
+    Reveal { pixel: [f32; 2] },
+    Pixel { pixel: [f32; 2], zoom: Option<f32> },
+    Rect([f32; 4]),
+    Fit,
+}
+
+/// The view `look` settles on, starting from `view`. Only `pan` and `zoom`
+/// move.
+pub(crate) fn look_at(view: ViewGeometry, look: &Look) -> ViewGeometry;
+```
+
+- **`Pixel`** puts that place at the panel centre, at the zoom it names or at
+  the standing one.
+- **`Rect`** zooms so the rectangle fills the panel on its tighter axis and
+  centres it; given its far corner first it frames the same region.
+- **`Fit`** is `Z`: zoom 1.0, pan zero.
+- **`Reveal`** is the row click's rule, below.
+
+Every outcome obeys the two limits a hand obeys: the zoom is clamped to
+`[1, MAX_ZOOM]` and the pan to the rule that keeps `PAN_MARGIN` points of the
+image on the panel. `visible_rect` is **not** clipped to the photograph -- at
+fit zoom the letterboxed axis runs past both edges -- because the invariant
+worth having is that its centre is the image pixel at the centre of the panel,
+which is what every `Look` aims.
+
+**The geometry is published, not asked for.** The panel is the only thing that
+knows how big its body is, and it knows that only while it is drawing, so each
+frame that draws a photograph reports its `ViewGeometry` in
+`ImageDetailResponse::view` and the dock puts it on
+`AppState::image_detail_view`. That is what the wire's two view tools read; a
+frame that drew no photograph publishes nothing and leaves the last reading
+standing, and before any frame has drawn there is no reading at all.
+
+**A request travels beside the selection**, as `AppState::look:
+Option<(ImageRef, Look)>`, written by `AppState::look_at_in_image` (which
+selects the image through `select_image` as it goes) and *taken* by the dock
+with `AppState::take_look` on the frame this panel shows that image. Taken
+rather than read: it asks for a single view, and a request left standing would
+re-frame the panel on every later frame.
+
 ### Revealing a feature named by another panel
 
 A row in the Point Track Detail panel and a row in the Track Edit panel are both
@@ -840,16 +912,13 @@ near. So the selection carries the feature's pixel with it, and the panel brings
 that pixel into view.
 
 The request sits beside the selection rather than in either panel:
-`AppState::reveal: Option<(ImageRef, [f32; 2])>`, in the named image's own
-source pixels. `AppState::reveal_in_image` writes it (selecting the image
-through `select_image` as it goes, so the coupling rules and the Action Log row
-are the ones every selection gets), and the dock takes it with
-`AppState::take_reveal` on the frame this panel shows that image, handing it to
-`ImageDetail::show`. Both panels report the pixel in their response as
-`reveal_feature` and the dock turns either into that one call, so the rule below
-has one implementation instead of one per panel. It is *taken* rather than read:
-it asks for a single pan, and a request left standing would re-centre the view
-on every later frame.
+`AppState::reveal_in_image` writes a `Look::Reveal` into `AppState::look`
+(selecting the image through `select_image` as it goes, so the coupling rules
+and the Action Log row are the ones every selection gets), and the dock takes it
+on the frame this panel shows that image, handing it to `ImageDetail::show`.
+Both panels report the pixel in their response as `reveal_feature` and the dock
+turns either into that one call, so the rule below has one implementation
+instead of one per panel.
 
 `select_image` clears the field, which is what makes every other way of
 selecting an image reveal nothing: the Image Browser, the Scene tree, a frustum
@@ -876,15 +945,21 @@ from):
   corner feature ends on screen but off centre.
 
 The **zoom is never touched**. It is the magnification the user chose to inspect
-at, and a reveal is a statement about position.
+at, and a reveal is a statement about position. That is the whole of what makes
+`Look::Reveal` a separate variant rather than a `Look::Pixel` with no zoom: the
+two refusals above.
 
-Implemented by `ImageDetail::reveal_pixel`
+Implemented as `Look::Reveal` in
+[image_detail/view.rs](../../crates/sfm-explorer/src/image_detail/view.rs) and
+applied by `ImageDetail::look`
 ([image_detail/mod.rs](../../crates/sfm-explorer/src/image_detail/mod.rs)), and
 covered headlessly in
 [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs): a
 feature out of view ends centred with the zoom unchanged, one already in view
-leaves the pan alone, a fit-zoom reveal moves nothing, and a corner feature in a
-panel small enough for the limit to bite stops at the clamp.
+leaves the pan alone, a fit-zoom reveal moves nothing, a corner feature in a
+panel small enough for the limit to bite stops at the clamp, and the view the
+frame publishes is centred on the pixel the look named -- which is the reading
+`get_image_detail_view` answers with.
 
 ## Navigation minibar
 

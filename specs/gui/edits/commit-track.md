@@ -93,6 +93,19 @@ version the commit was computed *from*, by the index the point held there: the
 version's own map is what carries that index forward to wherever the cursor
 later rests.
 
+### What the step hands back
+
+`AppState::commit_bench_track` answers with the point it wrote -- the index it
+took, and the index it replaced where it replaced one. One row of the
+reconstruction is the whole of what a commit adds, and neither index can be
+recovered afterwards: a replacement takes the index it replaced, a creation
+takes whatever index the overlay had free, and the sentence below states neither
+as a number a caller can use. The panel selects that point; the wire reports it
+as `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced": 1207 } }`,
+the id being the one the Point Track panel shows and `get_point` takes back, so
+an agent's next call names the row rather than hunting for it
+([`../bench.md`](../bench.md) § "The wire").
+
 ### The label
 
 Core's `CommitReport::label`, which needs the name the caller knows the node by:
@@ -131,6 +144,11 @@ the selection follows the replacement, and an undo restores the pair -- the
 point the commit replaced back, and the track still on the bench; a commit's row
 is an `Edit` where every other bench step's is a `Bench`; and a commit is what
 makes a node dirty where a run of bench steps does not.
+
+Wire ([mcp/tests.rs](../../../crates/sfm-explorer/src/mcp/tests.rs), headless):
+the point a commit names resolves both ways -- `get_point` by the index gives
+the id the reply carried, and `get_point` by that id gives the index -- and a
+commit onto an origin reports the index it replaced.
 
 ---
 

@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Fifty-four tools. Fourteen read -- thirteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- thirty-nine
+Fifty-six tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- forty
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -116,6 +116,7 @@ write, and one writes a file.
 | `set_timing_detail` | write | Record the detailed stages of an operation, or stop |
 | `get_window_layout` | read | The window's placement and the panel arrangement as one document, the live window block, and each panel's open state |
 | `get_image_detail_display` | read | The Image Detail panel's controls — the feature overlay and its filters, and the intrinsics layer — as one document |
+| `get_image_detail_view` | read | Where that panel is looking: the photograph, the zoom, and the rectangle of it on screen |
 | `get_history` | read | One reconstruction's versions, its cursor, and what a save would find |
 | `get_background_task` | read | What the viewer is busy with, how far along it is and what it has spent its time on, or what the last operation cost |
 | `open_reconstruction` | write | Load an `.sfmr` into the scene as a new node, always appending |
@@ -128,6 +129,7 @@ write, and one writes a file.
 | `set_reconstruction_display` | write | One reconstruction's eyes, tint, interactivity |
 | `set_solo` | write | Draw only one reconstruction, or end the solo |
 | `set_image_detail_display` | write | Change any of the Image Detail panel's controls, leaving the rest alone |
+| `set_image_detail_view` | write | Point that panel at a pixel, a rectangle, a point's observation, a feature, a bench observation, or the whole photograph |
 | `set_view` | write | Frame the scene, look through a camera image, or set the viewport camera outright |
 | `set_window_layout` | write | Apply a window layout document: the window portion, the panel portion, or both |
 | `show_panel` | write | Open a panel at its home position, or raise it if it is open |
@@ -369,7 +371,7 @@ addressable. No arguments.
     {
       "label": "seoul_bull",              // the handle everything else takes
       "path": "C:/work/seoul_bull.sfmr",  // null for demo and derived ones
-      "content_hash": "a1b2c3d4",         // 8-hex prefix, as in point ids
+      "content_hash": "a1b2c3d4",         // the hash this version's point ids are minted from
       "counts": { "points": 4210, "points_at_infinity": 0, "camera_images": 17,
                   "camera_intrinsics": 1, "observations": 19844 },
       "display": { "visible": true, "drawn": true, "interactive": true,
@@ -811,6 +813,108 @@ the panel will show when `show_panel` opens it. Nothing here selects an image �
 the panel shows the selected camera image of the selected reconstruction, as it
 always has, and `select_camera_image` is how the agent chooses which
 photograph the overlay is drawn on.
+
+### The Image Detail view
+
+`set_image_detail_display` decides what is drawn on the photograph;
+`get_image_detail_view` and `set_image_detail_view` decide **where the panel is
+looking at it**. They are to the Image Detail panel what the view block and
+`set_view` are to the 3D viewport, and they exist for the same reason: an agent
+that can only fit the whole photograph cannot look at a feature, and a
+`screenshot` of a 4000-pixel frame scaled into a panel shows nothing a
+reprojection error is visible in.
+
+`get_image_detail_view` takes no arguments and returns the document both tools
+answer with:
+
+```jsonc
+{
+  "image_detail_view": {
+    "reconstruction_label": "bull",
+    "camera_image": 4,
+    "camera_image_name": "images/IMG_0042.jpg",
+    "zoom": 6.0,                              // 1.0 fits the photograph to the panel
+    "visible_rect_px": [128.0, 96.0, 448.0, 336.0],   // of the photograph, in its own pixels
+    "panel_size_points": [800.0, 600.0],
+    "image_size_px": [1920.0, 1080.0]
+  }
+}
+```
+
+**It reports the panel's own last frame**, not the selection: a
+`select_camera_image` sent a moment ago is not in it until the panel has drawn
+again, which is the honest answer to "what is on screen" and the reading a
+`screenshot` of the panel would show. Every field is `null` before the panel has
+drawn a photograph at all -- a fresh session, a panel never opened, no camera
+image selected -- because what "fitted" means is settled by a panel size that
+does not exist yet.
+
+**`visible_rect_px` is not clipped to the photograph.** At fit zoom the
+letterboxed axis runs past both edges and a pan that pushed the image partly off
+the panel runs past one. What is always true is that the rectangle's **centre**
+is the image pixel at the centre of the panel, which is what every target below
+aims -- so a caller checking where it landed compares that centre with what it
+asked for.
+
+`set_image_detail_view` takes **exactly one** target, and refuses none and more
+than one. `reconstruction_label` and `camera_image` are optional either side of
+it: a call that names a camera image selects it first, a call that names none
+uses the one the target names where the target names one, and the selected one
+otherwise.
+
+```jsonc
+// A place in the photograph, at the magnification to look at it with.
+// set_image_detail_view { "pixel": [142.0, 197.5], "zoom": 8.0 }
+//
+// A region of it, fitted to the panel. It settles its own zoom.
+// set_image_detail_view { "rect": [100.0, 100.0, 500.0, 250.0] }
+//
+// A 3D point's observation in the photograph being looked at.
+// set_image_detail_view { "point": "pt3d_a1b2c3d4_1207", "zoom": 12.0 }
+//
+// A .sift feature of it, by its index in that file.
+// set_image_detail_view { "camera_image": 4, "feature": 847, "zoom": 12.0 }
+//
+// One sighting of a bench track, which names its own photograph.
+// set_image_detail_view { "reconstruction_label": "bull", "track": "bull-nose",
+//                         "bench_observation": 3, "zoom": 8.0 }
+//
+// The whole photograph, which is what Z and a double-click do.
+// set_image_detail_view { "fit": true }
+```
+
+- **`pixel`**, **`point`**, **`feature`** and **`bench_observation`** all mean
+  "put this place at the centre of the panel", and all take the optional
+  `zoom`. **`rect`** and **`fit`** settle their own, so a `zoom` beside either
+  is refused rather than silently dropped.
+- **`zoom` is absolute**, 1.0 being the fit and 32.0 the closest the panel goes.
+  It is clamped to that range and **the reply reports the zoom that was
+  applied**, so a caller that asked for 500 reads back 32 rather than assuming
+  it got what it sent.
+- **`point` never chooses the photograph for you.** It is looked for in the one
+  being looked at, and a track that holds no sighting there is a refusal naming
+  `get_point`, which lists the camera images the track does hold. A point
+  target that moved the selection would answer a question the caller did not
+  ask.
+- **`bench_observation` does**, because a sighting *is* a place in a particular
+  photograph; so walking a track's observations takes one argument per step.
+  Where it sits is `bench::observation_pixel`'s, the same rule the panel's own
+  bench mark and the Track Edit row click share
+  ([bench.md](bench.md)).
+
+The reply is the same document `get_image_detail_view` returns, for the view
+that **will be applied on the next frame**: the arithmetic is the panel's own
+`look_at` ([multi-panel-image-browser.md](multi-panel-image-browser.md) §
+"Looking at a place"), run here against the geometry the panel published, so
+what the reply says and what the panel does are one computation rather than two
+that could disagree.
+
+Everything a call can be refused for is refused before anything moves: no
+target or two, a `zoom` with a target that settles its own, a rectangle of no
+area, a point with no sighting in this photograph, a feature index the file does
+not have, no camera image selected and none named, and -- the one that is about
+the window rather than the call -- a panel that has never drawn a photograph, so
+there is no panel size to fit a view to. That last one names `show_panel`.
 
 ### The view block
 
@@ -1918,14 +2022,20 @@ names nothing on the bench is refused naming it.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on -- a create and a
-split naming what they made, a rename naming the label the item now holds. So
-`undo`, `redo` and `jump_to_version` need no bench variant: the history they
-walk already holds the bench steps, and `get_history` lists them among the rest.
+split naming what they made, a rename naming the label the item now holds, and
+the commit naming the point it wrote. So `undo`, `redo` and `jump_to_version`
+need no bench variant: the history they walk already holds the bench steps, and
+`get_history` lists them among the rest.
 
 **A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
 IMG_0042@142,198: the track is at the cluster stage; upgrade it before
 committing"*, *"Cannot set that verdict: image 4 already has observation 1 in;
-turn it out first"*, *"Nothing on the bench is called bull-nose."*
+turn it out first"*, *"Nothing on the bench is called bull-nose."* The two steps
+that read photographs refuse **inline** for everything the track alone decides
+-- *"Cannot set the stage of IMG_0042@142,198: 1 observations are in, and the
+track stage needs two or more"* -- rather than starting a task that would decode
+a dozen images before saying so ([bench.md](bench.md) § "The two steps that read
+photographs").
 
 ## Addressing
 
@@ -1945,9 +2055,20 @@ and the only reconstruction handle the wire carries in either direction. The
 `ReconId` stays inside the process.
 
 To tell whether the data under a label changed, an agent compares
-`content_hash`, which `get_scene` reports for every reconstruction. That
-identifies the *contents*, which is the question worth asking: a different file,
-or an edit that changed the value, changes it.
+`content_hash`, which `get_scene` reports for every reconstruction. It is **the
+hash the version's own point ids are minted from**, which is what makes it
+usable in both directions: an agent holding the field and an agent holding an id
+read off a point of that version are holding the same eight digits, so the field
+can be compared *and* an id can be written from it.
+
+Which hash that is follows the id minting ([goto-point.md](goto-point.md)). A
+version whose edit brought points into existence names those points by that
+edit's own content hash -- a point no base holds has no base row to be named by
+-- and that hash is a function of the base **and** of what was added to it, so
+it is a genuine statement about the edit. Every other version names its points
+by the hash of the base it is showing. A point edit that adds nothing therefore
+leaves the field where it was, because it leaves every id where it was; only a
+hash that some id actually carries ever appears here.
 
 **Camera images are addressed by index or by name**, and `list_camera_images`
 returns both. The name is the `.sfmr` relative path and is what appears in every
@@ -2316,7 +2437,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes fifty-three of the fifty-four tools testable in a headless
+/// makes fifty-five of the fifty-six tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -2579,6 +2700,23 @@ where a test hands no host over.
   `Context::run_ui` frame that presses `I` over the panel records
   `Intrinsics off` as `User`, and a frame that changes nothing records nothing —
   the differ, not the widget, decides.
+- **Every `set_image_detail_view` target lands where it was aimed**, checked
+  against the one thing the reply and the request can be compared on: the centre
+  of `visible_rect_px`. A pixel, a point's observation and a feature each end at
+  the panel centre; a rectangle ends filling the panel on its binding axis, and
+  the same rectangle given from its far corner frames the same region; `fit` ends
+  at zoom 1 on the middle of the photograph. A `bench_observation` ends on the
+  photograph that sighting is in and moves the selection there. A zoom outside
+  the panel's range comes back clamped, and the `zoom` argument's own description
+  carries `MAX_ZOOM`, read off the panel. Each refusal is exercised: no target,
+  two, a `zoom` beside a target that settles its own, a `track` with no
+  `bench_observation`, a rectangle of no area, a point whose track has no
+  sighting in the photograph being looked at (which leaves the selection where it
+  was), an observation index past the end, and no camera image selected -- and,
+  with no frame ever drawn, `get_image_detail_view` answering in nulls while
+  `set_image_detail_view` refuses naming `show_panel`. `get_image_detail_view`
+  reports the panel's last frame and does **not** follow a selection the panel
+  has not drawn yet.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
@@ -2741,9 +2879,20 @@ where a test hands no host over.
   `get_background_task` reports afterwards, with the measurements reaching the
   wire under the observation indexes they were computed for. A stage change
   states its stage **once**; an evaluation on a node with nothing decoded still
-  defers, and past the reply window answers with the handle; and the point a
-  commit replaced is reachable by the very index `get_scene` reports as the
-  selection, which is above that node's point count.
+  defers, and past the reply window answers with the handle; a step the **track**
+  rules out refuses inline in the step's own sentence, starting no task and
+  pushing no version; and the point a commit replaced is reachable by the very
+  index `get_scene` reports as the selection, which is above that node's point
+  count, and by the index and id the commit's own reply names it with.
+- **`content_hash` is the hash the version's point ids carry**: an edit that
+  creates a point moves it, the created point's id is built from the eight
+  digits it reports, and an undo takes it back to where it was.
+- **A cursor move keeps the photograph and the point selected**: a run of undos
+  and redos across bench steps leaves `selection.camera_image` and
+  `selection.point` exactly where they were, and so does a jump. Across a
+  `delete_camera_image` the selection follows the photograph by name -- back to
+  the index it held before the renumbering -- and a delete of the photograph
+  being looked at clears it, which an undo does not undo.
 - **The counts are the version's**: a commit that writes one observation fewer
   than the point it replaces moves `get_scene`'s `observations` by one, and an
   undo moves it back.
@@ -2751,7 +2900,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is fifty-four tools**, fourteen of them reads and one of them
+- **The catalog is fifty-six tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

@@ -183,6 +183,7 @@ pub fn set_stage(
     options: &EvaluateOptions,
     progress: &Progress<'_>,
 ) -> Result<(EditableTrack, StageReport), StageError> {
+    set_stage_preconditions(track, stage)?;
     let from = track.stage_kind();
     if from == stage {
         return Ok((
@@ -226,6 +227,61 @@ pub fn set_stage(
     }
 }
 
+/// Whether `track` can be put into `stage`, judged on the track alone.
+///
+/// The half of [`set_stage`]'s validation that reads no photograph. An upgrade
+/// needs two `in` observations to triangulate from; a downgrade needs the frame
+/// it projects into each observation's camera and the position that frame
+/// stands at. Setting the stage a track is already at is not a refusal -- it is
+/// the change that does nothing, which [`set_stage`] reports as
+/// `changed: false`.
+///
+/// A caller that runs the change somewhere expensive -- on a worker, after
+/// decoding a dozen images -- asks this first, so a track that was never going
+/// to move is refused in front of the decode rather than a second later through
+/// a failed task. [`set_stage`] calls it before anything else, so the two
+/// cannot come to disagree about what is refused.
+///
+/// The downgrade's third refusal, [`StageError::NoReference`], is not here: it
+/// depends on where the frame projects in each observation's camera, which is a
+/// question about the reconstruction rather than about the track.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::bench::{set_stage_preconditions, EditableTrack, StageKind};
+/// # fn run(track: &EditableTrack) -> Result<(), Box<dyn std::error::Error>> {
+/// set_stage_preconditions(track, StageKind::Track)?;   // refuse before the decode
+/// # Ok(())
+/// # }
+/// ```
+pub fn set_stage_preconditions(track: &EditableTrack, stage: StageKind) -> Result<(), StageError> {
+    if track.stage_kind() == stage {
+        return Ok(());
+    }
+    match stage {
+        StageKind::Track => {
+            let ins = track.in_observations().len();
+            if ins < 2 {
+                return Err(EvaluateError::TooFewObservations(ins).into());
+            }
+            Ok(())
+        }
+        StageKind::Cluster => {
+            let payload = track
+                .track()
+                .expect("the stages differ, so this one is the track stage");
+            if payload.frame.is_none() {
+                return Err(StageError::NoFrame);
+            }
+            if payload.position.is_none() {
+                return Err(StageError::NoPosition);
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Cluster to track: triangulate, frame, then run the track stage's own
 /// evaluation over the result.
 fn upgrade(
@@ -247,10 +303,9 @@ fn upgrade(
         .cluster()
         .expect("the caller checked the stage")
         .clone();
+    // The `in` count is [`set_stage_preconditions`]'s, checked before the
+    // caller spent anything on the views.
     let ins = track.in_observations();
-    if ins.len() < 2 {
-        return Err(EvaluateError::TooFewObservations(ins.len()).into());
-    }
     for &i in &ins {
         let image = track.observations[i].image;
         if image as usize >= images.len() {
@@ -365,6 +420,8 @@ fn downgrade(
     track: &EditableTrack,
     edited: &EditedReconstruction,
 ) -> Result<(EditableTrack, usize), StageError> {
+    // The frame and the position are [`set_stage_preconditions`]'s, checked
+    // before the caller spent anything on the views.
     let payload = track.track().expect("the caller checked the stage");
     let frame = payload.frame.as_ref().ok_or(StageError::NoFrame)?;
     let position = payload.position.ok_or(StageError::NoPosition)?;
