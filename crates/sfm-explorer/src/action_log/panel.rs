@@ -344,6 +344,9 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
             &entry.took.map(ActionLog::format_took).unwrap_or_default(),
             weak,
         );
+        // Cut to the row, but with no tooltip of its own: the row's tooltip
+        // below already carries the whole text, and a truncated `Label` would
+        // stack a second copy over it once the pointer is on the text itself.
         ui.add(
             egui::Label::new(
                 egui::RichText::new(&entry.text)
@@ -351,6 +354,7 @@ fn show_row(ui: &mut egui::Ui, log: &ActionLog, entry: &Entry, row_height: f32) 
                     .color(text_color),
             )
             .truncate()
+            .show_tooltip_when_elided(false)
             .selectable(false),
         );
         toggle_rect.union(time_rect)

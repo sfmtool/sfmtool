@@ -2030,3 +2030,48 @@ fn a_refusal_with_the_action_log_already_in_front_moves_nothing() {
     );
     assert_eq!(texts(&state.action_log), [REFUSAL]);
 }
+
+/// A row too wide for the panel says the whole of itself once, not twice.
+///
+/// The row's tooltip carries the entry's time, kind and text. A truncated
+/// `Label` puts its elided text in a tooltip of its own, so the text label
+/// has that switched off: with both, the pointer on the text itself stacked
+/// two tooltips, the same sentence in two typefaces.
+#[test]
+fn a_truncated_row_shows_one_tooltip_rather_than_two() {
+    let mut log = log();
+    let long = "Cannot set the stage of dino_dog_toy_44@532,2898: 1 observations are in, and the track stage needs two or more, which is a sentence no six-hundred-point panel can hold";
+    log.record_at(at(0.0), Kind::Bench, None, true, long);
+
+    let ctx = egui::Context::default();
+    ctx.all_styles_mut(|style| {
+        style.interaction.tooltip_delay = 0.0;
+        style.interaction.tooltip_grace_time = 0.0;
+    });
+    let first = painted_shapes(&ctx, &mut log, input());
+    let (_, at_row) = first
+        .iter()
+        .find(|(text, _, _)| text.contains("Cannot set the stage"))
+        .map(|(_, color, pos)| (*color, *pos))
+        .unwrap_or_else(|| panic!("the row was not painted: {first:?}"));
+    // Well to the right along the text, where the truncated label's own
+    // tooltip used to join the row's.
+    let over = at_row + egui::vec2(200.0, 4.0);
+    let mut hovering = input();
+    hovering.events = vec![egui::Event::PointerMoved(over)];
+    painted_shapes(&ctx, &mut log, hovering);
+    // A second frame with the pointer at rest, which is when egui puts a
+    // tooltip up.
+    let hovered = painted_shapes(&ctx, &mut log, input());
+
+    // The row's galley carries the whole string however few glyphs it drew,
+    // so the row counts once and each tooltip once more.
+    let copies = hovered
+        .iter()
+        .filter(|(text, _, _)| text.contains("Cannot set the stage"))
+        .count();
+    assert_eq!(
+        copies, 2,
+        "the row and one tooltip make two; {copies} means a second tooltip: {hovered:?}",
+    );
+}
