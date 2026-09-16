@@ -16,7 +16,7 @@ expansion) happens in Rust; see ``specs/core/features/track-cluster-matching.md`
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import numpy as np
 
@@ -52,7 +52,7 @@ def cluster_match(
     alpha: float = 0.8,
     min_size: int = 2,
     preset: str = "accurate",
-    max_feature_count: Optional[int] = None,
+    max_feature_count: int | None = None,
 ) -> tuple[ClusterSet, PairArrays]:
     """Run the background-floor matcher over every image's SIFT descriptors.
 

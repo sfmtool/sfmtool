@@ -7,7 +7,6 @@ import re
 import textwrap
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from deadline.job_attachments.api import (
     summarize_path_list,
@@ -19,7 +18,7 @@ from ._sfmtool.reconstruction import RangeExpr
 
 def get_next_sfm_filename(
     base_path: str | Path,
-    image_paths: Optional[list[str | Path]] = None,
+    image_paths: list[str | Path] | None = None,
     operation: str = "solve",
 ) -> Path:
     """Generate the next .sfmr filename with date prefix, operation, and image descriptor.

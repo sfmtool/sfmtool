@@ -10,8 +10,8 @@ pyramids. The output is consumable directly by `ns-train`.
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import cv2
 import numpy as np
@@ -198,7 +198,7 @@ def export_to_nerfstudio(
     num_downscales: int = 3,
     jpeg_quality: int = 95,
     include_colmap: bool = False,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> dict:
     """Write a complete nerfstudio dataset directory derived from `recon`.
 

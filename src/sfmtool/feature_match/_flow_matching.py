@@ -21,7 +21,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -160,7 +159,7 @@ def _load_gray(path: Path) -> np.ndarray:
 
 
 def _load_features(
-    sift_path: Path, max_feature_count: Optional[int]
+    sift_path: Path, max_feature_count: int | None
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load SIFT positions and descriptors from a .sift file."""
     with SiftReader(sift_path) as reader:
@@ -175,8 +174,8 @@ def flow_match_sequential(
     preset: str = "default",
     descriptor_threshold: float = 250.0,
     window_size: int = 5,
-    max_feature_count: Optional[int] = None,
-    trace_path: Optional[Path] = None,
+    max_feature_count: int | None = None,
+    trace_path: Path | None = None,
 ) -> dict[tuple[int, int], np.ndarray]:
     """Match features across a sequence of images using optical flow.
 

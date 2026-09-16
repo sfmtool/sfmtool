@@ -1445,6 +1445,10 @@ from, and one of them uses a class-level mutable stash**
 - Risk: low — caught immediately by import errors.
 
 **Five modules still use `typing.Optional` where the other 147 use `X | None`**
+
+> _Status (2026-09-15): Done — Replaced all 8 `Optional[...]` annotations with
+> PEP 604 unions and moved `Callable` to `collections.abc`._
+
 - Location: `feature_match/_cluster_matching.py:19`, `feature_match/_flow_matching.py:24`,
   `_sfmr_naming.py:10`, `_to_nerfstudio.py:14`, `_workspace.py:6`
 - Problem: **8 `Optional[...]` uses across 5 of 152 modules**; every other module uses

@@ -3,7 +3,6 @@
 
 import json
 from pathlib import Path
-from typing import Optional
 
 
 def init_workspace(
@@ -80,7 +79,7 @@ def init_workspace(
     return workspace_config
 
 
-def find_workspace_for_path(path: Path) -> Optional[Path]:
+def find_workspace_for_path(path: Path) -> Path | None:
     """
     Find the workspace directory by searching upward for .sfm-workspace.json.
 
@@ -109,7 +108,7 @@ def find_workspace_for_path(path: Path) -> Optional[Path]:
         current = parent
 
 
-def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Optional[Path]:
+def find_sfmr_by_content_hash(workspace: Path, hash_prefix: str) -> Path | None:
     """First .sfmr under `workspace` whose content hash starts with `hash_prefix`.
 
     Search order follows the sfmtool-sfmr-format spec: the conventional ``sfmr/``
