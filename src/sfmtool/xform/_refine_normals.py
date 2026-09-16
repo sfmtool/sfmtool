@@ -29,6 +29,7 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
+from ._patch_params import validate_patch_params
 
 # Confidence (the peakedness of Φ at the optimum) is normalized to roughly
 # [0, 1] by the core routine; below this it is reported — but not acted on — as
@@ -37,8 +38,6 @@ from ._images import load_workspace_images
 _LOW_CONFIDENCE_THRESHOLD = 0.1
 
 _OBJECTIVES = ("robust", "mean")
-_WINDOWS = ("gaussian_disk", "gaussian", "uniform")
-_SAMPLERS = ("bilinear", "bilinear_mip", "anisotropic")
 _CACHES = ("off", "fronto")
 _QUALITIES = ("none", "coarse", "fine")
 
@@ -120,12 +119,7 @@ class RefineNormalsTransform:
             raise ValueError(
                 f"search_robust_iters must be >= 0 or None, got {search_robust_iters}"
             )
-        if window not in _WINDOWS:
-            raise ValueError(f"window must be one of {_WINDOWS}, got {window!r}")
-        if window_sigma <= 0:
-            raise ValueError(f"window_sigma must be positive, got {window_sigma}")
-        if sampler not in _SAMPLERS:
-            raise ValueError(f"sampler must be one of {_SAMPLERS}, got {sampler!r}")
+        validate_patch_params(window=window, window_sigma=window_sigma, sampler=sampler)
         if not 0.0 <= min_valid_fraction <= 1.0:
             raise ValueError(
                 f"min_valid_fraction must be in [0, 1], got {min_valid_fraction}"

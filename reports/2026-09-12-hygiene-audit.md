@@ -1390,6 +1390,10 @@ contradict themselves**
 
 **Three `xform` transform modules each redeclare the same enum whitelist and its
 validation**
+
+> _Status (2026-09-15): Done — shared patch window and sampler validation now
+> lives in `xform/_patch_params.py` and all three transforms use it._
+
 - Location: `_WINDOWS` / `_SAMPLERS` defined identically at
   `src/sfmtool/xform/_localize_keypoints.py:33–34`, `_refine_keypoints.py:31–32`,
   `_refine_normals.py:40–41`; the matching validation block at `_refine_keypoints.py:76–84`,

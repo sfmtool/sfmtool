@@ -27,9 +27,8 @@ import numpy as np
 
 from .._sfmtool.reconstruction import SfmrReconstruction
 from ._images import load_workspace_images
+from ._patch_params import validate_patch_params
 
-_WINDOWS = ("gaussian_disk", "gaussian", "uniform")
-_SAMPLERS = ("bilinear", "bilinear_mip", "anisotropic")
 _CONSENSUS_REFRESH = ("per_sweep", "per_move")
 
 
@@ -74,12 +73,7 @@ class RefineKeypointsTransform:
     ):
         if resolution < 2:
             raise ValueError(f"resolution must be >= 2, got {resolution}")
-        if window not in _WINDOWS:
-            raise ValueError(f"window must be one of {_WINDOWS}, got {window!r}")
-        if window_sigma <= 0:
-            raise ValueError(f"window_sigma must be positive, got {window_sigma}")
-        if sampler not in _SAMPLERS:
-            raise ValueError(f"sampler must be one of {_SAMPLERS}, got {sampler!r}")
+        validate_patch_params(window=window, window_sigma=window_sigma, sampler=sampler)
         if robust_iters < 1:
             raise ValueError(f"robust_iters must be >= 1, got {robust_iters}")
         if max_outer_sweeps < 1:

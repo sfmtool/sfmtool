@@ -25,7 +25,7 @@ from sfmtool._patch_compaction import compact_to_embedded_patches
 from sfmtool._progress import _poll_progress, _timed_step
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import ImagePyramidSet, PatchCloud
-from sfmtool.xform._refine_normals import _SAMPLERS
+from sfmtool.xform._patch_params import _SAMPLERS
 
 
 def _refine_subpixel(
