@@ -253,10 +253,35 @@ impl TabContext<'_> {
     /// are read in decides nothing.
     fn show_track_edit(&mut self, ui: &mut egui::Ui) {
         self.cache_bench_track_images();
+        // The default index, opened on sight: a `.kdf` opens without decoding a
+        // tree or a descriptor block, and a session that finds the file the
+        // last one built is a session that can search. The look is remembered,
+        // so a workspace with no index is not stat-ed once a frame.
+        if let Some(id) = self.state.selected_recon {
+            self.state.open_default_descriptor_index(id);
+        }
         let response = self.track_edit.show(ui, self.state);
         let Some(id) = self.state.selected_recon else {
             return;
         };
+        if response.open_descriptor_index {
+            // The chooser lives here rather than in the panel, so the panel
+            // stays a pure egui function a headless frame can run: it reports
+            // the *gesture*, and the file it needs is found out here.
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Descriptor index", &["kdf"])
+                .pick_file()
+            {
+                if let Err(why) = self.state.open_descriptor_index(id, Some(path)) {
+                    self.state.action_log.fail(Kind::Bench, why);
+                }
+            }
+        }
+        if response.build_descriptor_index {
+            // A refusal to begin is logged by the starter, in the words its own
+            // gate uses.
+            let _ = self.state.start_build_descriptor_index(id, None);
+        }
         let refuse = |state: &mut AppState, outcome: Result<(), String>| {
             if let Err(why) = outcome {
                 state.action_log.fail(Kind::Bench, why);
@@ -315,6 +340,11 @@ impl TabContext<'_> {
         }
         if let Some(stage) = response.set_stage {
             let _ = self.state.start_bench_stage(id, &label, stage);
+        }
+        if let Some(observation) = response.search_descriptors {
+            let _ = self
+                .state
+                .start_bench_descriptor_search(id, &label, observation, None, None);
         }
         if response.commit {
             match self.state.commit_bench_track(id, &label) {

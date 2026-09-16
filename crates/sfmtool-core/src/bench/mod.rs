@@ -15,6 +15,11 @@
 //! that keeps both can undo by pointing at the one it had, and a refusal leaves
 //! nothing half-applied.
 //!
+//! One step reads neither the reconstruction nor a photograph but a file of its
+//! own: [`search_descriptors`], which asks a
+//! descriptor index which other photographs hold the patch around one
+//! observation and adds each as a candidate.
+//!
 //! The three steps that read photographs are [`evaluate`](evaluate::evaluate),
 //! which fills a track's measurement slots at whichever stage it is in and
 //! moves nothing; [`fit`](fit::fit), which localizes, re-triangulates and
@@ -31,6 +36,7 @@
 pub mod commit;
 pub mod evaluate;
 pub mod fit;
+pub mod search;
 pub mod stage;
 pub mod steps;
 pub mod track;
@@ -47,6 +53,10 @@ pub use evaluate::{
     EvaluateReport,
 };
 pub use fit::{fit, fit_preconditions, FitError, FitOptions, FitReport};
+pub use search::{
+    search_descriptors, Found, SearchError, SearchMatch, SearchOptions, SearchReport,
+    DEFAULT_RADIUS_PX,
+};
 pub use stage::{set_stage, set_stage_preconditions, StageError, StageReport};
 pub use steps::{
     add_observation, apply_thresholds, create_cluster, create_track, set_verdict, split,

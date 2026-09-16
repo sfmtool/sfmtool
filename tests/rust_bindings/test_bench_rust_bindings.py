@@ -642,6 +642,164 @@ class TestCommitting:
             add_observation(track, 0, (1.0, 1.0), provenance="point")
 
 
+@pytest.fixture(scope="module")
+def descriptor_index(embedded, tmp_path_factory):
+    """A `.kdf` over the fixture's own `.sift` files, and those keypoints.
+
+    One corpus image row per reconstruction image, in the reconstruction's own
+    order, which is what lets a match name a reconstruction image directly.
+    """
+    import json
+    from pathlib import Path
+
+    from sfmtool._sfmtool.spatial import KdForest, LazyKdForest, write_kdf
+    from sfmtool.sift.file import SiftReader, get_sift_path_for_image
+
+    workspace = Path(embedded.workspace_dir)
+    names = list(embedded.image_names)
+    descriptors, positions, shapes, image_of, feature_of = [], [], [], [], []
+    keypoints = {}
+    for index, name in enumerate(names):
+        reader = SiftReader(get_sift_path_for_image(workspace / name))
+        rows = np.asarray(reader.read_descriptors())
+        xy, affine = reader.read_positions_and_shapes()
+        reader.close()
+        xy = np.asarray(xy, dtype=np.float32)
+        affine = np.asarray(affine, dtype=np.float32)
+        keypoints[index] = (xy, affine)
+        descriptors.append(rows)
+        positions.append(xy)
+        shapes.append(affine)
+        image_of.append(np.full(len(rows), index, dtype=np.uint32))
+        feature_of.append(np.arange(len(rows), dtype=np.uint32))
+
+    config = json.loads((workspace / ".sfm-workspace.json").read_text())
+    sources = {
+        "workspace": {
+            "absolute_path": str(workspace),
+            "relative_path": ".",
+            "contents": {
+                "feature_tool": config["feature_tool"],
+                "feature_type": config["feature_type"],
+                "feature_options": json.dumps(config["feature_options"]),
+                "feature_prefix_dir": config["feature_prefix_dir"],
+            },
+        },
+        "image_names": names,
+        "feature_tool_hashes": [bytes(16)] * len(names),
+        "sift_content_hashes": [bytes(16)] * len(names),
+        "image_indexes": np.concatenate(image_of).tolist(),
+        "image_feature_indexes": np.concatenate(feature_of).tolist(),
+        "positions": np.vstack(positions),
+        "affine_shapes": np.vstack(shapes),
+    }
+    forest = KdForest(np.vstack(descriptors), num_trees=4, leaf_size=16, seed=5)
+    path = tmp_path_factory.mktemp("bench_index") / "index.kdf"
+    write_kdf(forest, str(path), sources=sources)
+    return LazyKdForest(str(path)), keypoints
+
+
+class TestTheDescriptorSearch:
+    """`search_descriptors` over a real index of the fixture's own capture."""
+
+    def test_the_search_reports_the_images_it_found_and_seeds_each_one(
+        self, edited, descriptor_index, long_track_point
+    ):
+        forest, keypoints = descriptor_index
+        _, track = create_track(Bench(), edited, long_track_point)
+        image = track.observations[0]["image"]
+        xy, affine = keypoints[image]
+        held = {o["image"] for o in track.observations}
+
+        grown, report = bench_module.search_descriptors(
+            track, 0, xy, affine, forest, radius_px=40.0, min_inliers=6
+        )
+        assert set(report) == {
+            "observation",
+            "observation_count",
+            "image",
+            "center",
+            "constellation",
+            "added",
+            "already_in_track",
+            "sentence",
+            "matches",
+        }
+        assert report["observation"] == 0
+        assert report["observation_count"] == track.observation_count
+        assert report["image"] == image
+        assert report["constellation"] > 0
+        assert report["sentence"].startswith("Searched from observation 0 of")
+        # The searched image is never a candidate of its own search.
+        assert all(m["image"] != image for m in report["matches"])
+        assert report["added"] + report["already_in_track"] == len(report["matches"])
+        # Nothing is mutated in place: the step hands back the next value,
+        # and what it added is exactly what the report says it added.
+        assert grown.observation_count == track.observation_count + report["added"]
+
+        for match in report["matches"]:
+            assert set(match) >= {
+                "image",
+                "inliers",
+                "correspondences",
+                "affine",
+                "pixel",
+                "found",
+            }
+            assert match["affine"].shape == (2, 3)
+            assert match["inliers"] >= 6
+            assert match["inliers"] <= match["correspondences"]
+            if match["image"] in held:
+                assert match["found"] == "already_in_track"
+            else:
+                assert match["found"] == "added"
+                added = grown.observations[match["observation"]]
+                assert added["image"] == match["image"]
+                assert added["verdict"] == "candidate"
+                assert added["provenance"] == {
+                    "kind": "search",
+                    "inliers": match["inliers"],
+                }
+                # The seed is where the report says the warp put it.
+                np.testing.assert_allclose(
+                    added["cluster"]["seed_position"], match["pixel"], atol=1e-9
+                )
+
+    def test_a_bar_no_image_reaches_leaves_the_track_alone(
+        self, edited, descriptor_index, long_track_point
+    ):
+        forest, keypoints = descriptor_index
+        _, track = create_track(Bench(), edited, long_track_point)
+        xy, affine = keypoints[track.observations[0]["image"]]
+        grown, report = bench_module.search_descriptors(
+            track, 0, xy, affine, forest, radius_px=40.0, min_inliers=10_000
+        )
+        assert report["matches"] == []
+        assert report["added"] == 0
+        assert grown.observation_count == track.observation_count
+
+    def test_an_observation_past_the_end_is_refused(
+        self, edited, descriptor_index, long_track_point
+    ):
+        forest, keypoints = descriptor_index
+        _, track = create_track(Bench(), edited, long_track_point)
+        xy, affine = keypoints[track.observations[0]["image"]]
+        with pytest.raises(ValueError, match="past the"):
+            bench_module.search_descriptors(track, 999, xy, affine, forest)
+
+    def test_a_search_provenance_needs_its_inlier_count(self, edited, long_track_point):
+        _, track = create_track(Bench(), edited, long_track_point)
+        with pytest.raises(ValueError, match="needs the 'inliers'"):
+            add_observation(track, 0, (1.0, 1.0), provenance="search")
+        grown, report = add_observation(
+            track, 0, (1.0, 1.0), provenance="search", inliers=11
+        )
+        assert grown.observations[report["observation"]]["provenance"] == {
+            "kind": "search",
+            "inliers": 11,
+        }
+
+
 def test_the_module_reports_its_public_location():
     assert bench_module.__name__ == "sfmtool.bench"
     assert Bench.__module__ == "sfmtool.bench"

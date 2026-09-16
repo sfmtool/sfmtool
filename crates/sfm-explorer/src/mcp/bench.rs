@@ -70,7 +70,33 @@ pub(super) fn get_bench(state: &AppState, label: &str) -> JsonReply {
         // to; null where the bench holds none of that kind.
         "active": { "track": active },
         "items": items,
+        // The index a descriptor search would query, reported here rather than
+        // on the track because it is the node's: every track's search goes
+        // through the same file.
+        "descriptor_index": descriptor_index(state, id),
     }))
+}
+
+/// The descriptor index beside a node, as every reply that names one states it.
+///
+/// `open` is the fact a caller acts on; `path` is the file, which is the
+/// default path even when nothing is open, so an agent can see where a build
+/// would put one.
+fn descriptor_index(state: &AppState, id: ReconId) -> Value {
+    match state.descriptor_index(id) {
+        Some(index) => json!({
+            "open": true,
+            "path": index.path.display().to_string(),
+            "feature_count": index.feature_count(),
+        }),
+        None => json!({
+            "open": false,
+            "path": state
+                .default_descriptor_index_path(id)
+                .map(|path| path.display().to_string()),
+            "feature_count": Value::Null,
+        }),
+    }
 }
 
 /// `get_bench_track`: one track's table, which is the Track Edit panel's own
@@ -400,12 +426,88 @@ pub(super) fn set_bench_track_stage(
     }
 }
 
+/// `search_bench_track_descriptors`: the images that hold the patch around one
+/// observation, each added as a candidate, on a worker thread.
+pub(super) fn search_bench_track_descriptors(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    radius_px: Option<f64>,
+    min_inliers: Option<usize>,
+) -> Outcome {
+    let (id, item) = match target(state, label, named) {
+        Ok(target) => target,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    match state.start_bench_descriptor_search(id, &item, observation, radius_px, min_inliers) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(()) => started(state, id),
+    }
+}
+
+/// `open_descriptor_index`: the `.kdf` a search queries, adopted for one node.
+///
+/// Not an edit and not a version: the index is a file beside the workspace and
+/// a handle on it, and nothing about the reconstruction or the bench moves. So
+/// the reply is the index itself rather than a version, and there is nothing
+/// for `undo` to take back.
+pub(super) fn open_descriptor_index(
+    state: &mut AppState,
+    label: &str,
+    path: Option<&str>,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    state
+        .open_descriptor_index(id, path.map(std::path::PathBuf::from))
+        .map_err(ToolError::new)?;
+    Ok(json!({
+        "reconstruction_label": node_label(state, id),
+        "descriptor_index": descriptor_index(state, id),
+    }))
+}
+
+/// `build_descriptor_index`: every `.sift` file of the node indexed, written
+/// and opened, on a worker thread.
+pub(super) fn build_descriptor_index(
+    state: &mut AppState,
+    label: &str,
+    path: Option<&str>,
+) -> Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return Outcome::Done(Err(error)),
+    };
+    match state.start_build_descriptor_index(id, path.map(std::path::PathBuf::from)) {
+        Err(message) => Outcome::Done(Err(ToolError::new(message))),
+        Ok(()) => started_or(state, id, |state| {
+            Ok(json!({
+                "reconstruction_label": node_label(state, id),
+                "descriptor_index": descriptor_index(state, id),
+            }))
+        }),
+    }
+}
+
 /// The answer of a step that may have gone to a worker: the deferral that the
 /// frame turns into a result or a handle, or the standing version where the
 /// step found nothing to do and started nothing.
 fn started(state: &AppState, id: ReconId) -> Outcome {
+    started_or(state, id, |state| edit::version_reply(state, id, None))
+}
+
+/// [`started`] with the answer a step that started nothing gives.
+///
+/// The fallback differs by step: a bench step that found nothing to do answers
+/// with the version the node stands at, and a step that touches no version
+/// answers with what it is about.
+fn started_or(
+    state: &AppState,
+    id: ReconId,
+    fallback: impl FnOnce(&AppState) -> JsonReply,
+) -> Outcome {
     let Some(task) = state.background_task() else {
-        return super::done(edit::version_reply(state, id, None));
+        return super::done(fallback(state));
     };
     Outcome::Deferred(Deferred::Background(BackgroundReply {
         operation_id: task.id,
@@ -580,6 +682,7 @@ fn provenance(provenance: Provenance) -> Value {
     match provenance {
         Provenance::Origin => json!({ "kind": "origin" }),
         Provenance::Descriptor { feature } => json!({ "kind": "descriptor", "feature": feature }),
+        Provenance::Search { inliers } => json!({ "kind": "search", "inliers": inliers }),
         Provenance::Sweep => json!({ "kind": "sweep" }),
         Provenance::Pixel => json!({ "kind": "pixel" }),
         Provenance::Point { point } => json!({ "kind": "point", "point": point }),

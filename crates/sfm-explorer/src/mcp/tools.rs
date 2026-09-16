@@ -1277,6 +1277,107 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "search_bench_track_descriptors",
+            description: "Ask the node's descriptor index which OTHER photographs hold the patch \
+                          around one observation of a bench track, and add each as a candidate. \
+                          It is a constellation query, not a lookup of one descriptor: the \
+                          detected keypoints within radius_px of the observation are looked up in \
+                          the index, the hits are grouped by image, and an image whose hits agree \
+                          on a single affine warp with at least min_inliers of them is found. That \
+                          warp applied to the observation's own pixel and shape is the seed the \
+                          new candidate takes, so it arrives where and at the size the warp says \
+                          the patch is — evaluate_bench_track is what then scores it. An image the \
+                          track already has an observation in is left alone whatever its verdict, \
+                          and so is the searched image itself. Needs an index: open_descriptor_index \
+                          or build_descriptor_index first, and get_bench reports whether one is \
+                          open. Runs on a worker thread and answers as evaluate_bench_track does.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("track", bench_track_schema()),
+                    (
+                        "radius_px",
+                        json!({
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description":
+                                "The constellation's radius around the observation, in the \
+                                 searched image's own pixels. Omit for the radius that holds \
+                                 about fifty of that image's keypoints, which is the size the \
+                                 query is worth asking at: the affine is a first-order \
+                                 approximation about the patch centre, so a wider patch buys \
+                                 recall and loses the accuracy of the warp.",
+                        }),
+                    ),
+                    (
+                        "min_inliers",
+                        json!({
+                            "type": "integer",
+                            "minimum": 3,
+                            "description":
+                                "Fewest agreeing correspondences an image needs to be found. \
+                                 Omit for the query's own bar.",
+                        }),
+                    ),
+                ],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "open_descriptor_index",
+            description: "Adopt a .kdf descriptor index for one reconstruction, which is what \
+                          search_bench_track_descriptors queries. Omit path for the default, \
+                          which is index.kdf in the directory the node's .sift files live in. \
+                          The index has to be over THIS reconstruction's images in THIS \
+                          reconstruction's order — a match names a corpus image and the \
+                          candidate it becomes names a reconstruction image — and one that is \
+                          not is refused naming the first image it disagrees on. Nothing about \
+                          the reconstruction or the bench moves, so this pushes no version and \
+                          undo has nothing to take back. The viewer opens the default index on \
+                          its own when the file is there; this is for one somewhere else.",
+            kind: Write,
+            schema: object(
+                &[(
+                    "path",
+                    json!({
+                        "type": "string",
+                        "description":
+                            "The .kdf to open. Omit for the default path, which get_bench \
+                             reports under descriptor_index.",
+                    }),
+                )],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
+            name: "build_descriptor_index",
+            description: "Build a descriptor index over every .sift file of one reconstruction, \
+                          write it and open it. The corpus carries one image-table row per image \
+                          of the node, in the node's own order, including images with no .sift \
+                          file, which is what lets a search name node images directly. Omit path \
+                          for the default, beside the .sift files. Refused when no .sift file of \
+                          the node can be found. Reading every descriptor of a capture takes a \
+                          while, so it runs on a worker thread and answers as \
+                          evaluate_bench_track does.",
+            kind: Write,
+            schema: object(
+                &[(
+                    "path",
+                    json!({
+                        "type": "string",
+                        "description":
+                            "Where to write the .kdf. Omit for the default path, which \
+                             get_bench reports under descriptor_index. An existing file there \
+                             is replaced.",
+                    }),
+                )],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
             name: "get_background_task",
             description: "What the viewer is busy with: the operation, the reconstruction it is \
                           running on, how long it has been going, how far along it is, the stage \
@@ -2230,6 +2331,36 @@ pub(crate) fn parse(
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 track: args.optional_string("track")?,
                 stage: args.stage("stage")?,
+            }
+        }
+        "search_bench_track_descriptors" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "track",
+                "observation",
+                "radius_px",
+                "min_inliers",
+            ])?;
+            Command::SearchBenchTrackDescriptors {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observation: args.required_usize("observation")?,
+                radius_px: args.optional_f64("radius_px")?,
+                min_inliers: args.optional_usize("min_inliers")?,
+            }
+        }
+        "open_descriptor_index" => {
+            args.reject_unknown(&["reconstruction_label", "path"])?;
+            Command::OpenDescriptorIndex {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                path: args.optional_string("path")?,
+            }
+        }
+        "build_descriptor_index" => {
+            args.reject_unknown(&["reconstruction_label", "path"])?;
+            Command::BuildDescriptorIndex {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                path: args.optional_string("path")?,
             }
         }
         "get_background_task" => {

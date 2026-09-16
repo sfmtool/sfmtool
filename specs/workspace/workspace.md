@@ -155,6 +155,7 @@ my_project/
 ├── frames/features/sift-colmap-d124.../  # Extracted features (auto-created)
 │   ├── scene_0001.jpg.sift
 │   ├── scene_0002.jpg.sift
+│   ├── index.kdf                     # Descriptor index (built on request)
 │   └── ...
 ├── photos/features/sift-colmap-d124.../  # Features for photos (auto-created)
 │   ├── DSC_0001.JPG.sift
@@ -196,6 +197,37 @@ This convention means:
 - Multiple image directories within one workspace each get their own feature subdirectory
 - Features stay close to their source images in the filesystem
 - Different feature configurations coexist without conflict
+
+### The Descriptor Index
+
+A capture's descriptors can be indexed into one
+[`.kdf` file](../formats/kdf-file-format.md), so that a patch of one photograph
+can be looked for in every other one
+([the constellation query](../core/features/kdf-constellation-query.md)). That
+index is called `index.kdf` and it lives **in the feature directory it indexes**,
+beside the `.sift` files it was built from:
+
+```
+frames/features/sift-sfmtool-d1245b460906df27ee4730273e0aba41/index.kdf
+```
+
+Beside them rather than at the workspace root because an index is a statement
+about one set of `.sift` files: a workspace whose feature settings change gets a
+second feature directory (§ "Feature Prefix Directory"), and an index written to
+the root would silently describe whichever extraction happened to come first.
+Under this convention the two coexist exactly as the extractions do, and
+deleting an extraction deletes its index with it.
+
+An image's feature directory is `{image_parent}/{feature_prefix_dir}`, so a
+capture whose images sit in several directories has several. The index goes in
+the **first image's**: it is an index over the whole capture whichever of them
+holds it, and a rule that answered differently per image would leave a second
+session looking somewhere else.
+
+The file is optional and nothing creates it as part of `sfm ws init` or `sfm
+sift`. The SfM Explorer's Track Edit panel opens it when it is there and offers
+to build one when it is not
+([`../gui/track-edit.md`](../gui/track-edit.md) § "The descriptor index").
 
 ## Workspace Discovery
 

@@ -781,31 +781,72 @@ where
             &read
         }
     };
-    let mut rows = keypoints.within(center, radius);
-
-    let mut feature_ids = Vec::new();
-    let descriptors;
-    match image.image_index {
-        Some(indexed) => {
-            let map = sources.image_feature_ids(indexed)?;
-            rows.retain(|row| map.contains_key(row));
-            feature_ids = rows.iter().map(|row| map[row]).collect();
-            descriptors = None;
-        }
-        None => descriptors = Some(read_sift_rows(image.sift_path, &rows)?),
+    if let Some(indexed) = image.image_index {
+        return constellation_from_keypoints(
+            index, sources, keypoints, indexed, center, radius, params,
+        );
     }
 
+    let rows = keypoints.within(center, radius);
+    let descriptors = read_sift_rows(image.sift_path, &rows)?;
     let positions: Vec<[f32; 2]> = rows
         .iter()
         .map(|&row| keypoints.positions[row as usize])
         .collect();
     let query = Constellation {
         positions: &positions,
-        descriptors: match &descriptors {
-            Some(vectors) => ConstellationDescriptors::Vectors(vectors),
-            None => ConstellationDescriptors::FeatureIds(&feature_ids),
-        },
-        image_index: image.image_index,
+        descriptors: ConstellationDescriptors::Vectors(&descriptors),
+        image_index: None,
+    };
+    let matches = constellation_query(index, sources, &query, params)?;
+    Ok(PatchConstellation {
+        feature_rows: rows,
+        feature_ids: Vec::new(),
+        matches,
+    })
+}
+
+/// [`constellation_query`] for a pixel and a radius in an image the corpus
+/// already indexes, whose keypoints the caller is holding.
+///
+/// The half of [`constellation_at_pixel`] that opens no `.sift` file at all: the
+/// keypoints come from the caller -- a viewer's own feature cache, a corpus of
+/// them read once -- and the descriptors come from the corpus by feature ID.
+/// This is the path a window takes, where a `.sift` read per gesture would be a
+/// second copy of what the window already has in memory.
+///
+/// `image_index` is the query image's row in the **corpus** image table, and
+/// the rows of `keypoints` are that image's `.sift` rows: the two are joined
+/// through the origin table, which is what
+/// [`FeatureSources::image_feature_ids`] resolves. Features inside the radius
+/// that the corpus does not index are dropped from the constellation, so an
+/// index built over a subset stays usable, and candidates from `image_index`
+/// itself are never reported.
+pub fn constellation_from_keypoints<I, F>(
+    index: &I,
+    sources: &F,
+    keypoints: &ImageKeypoints,
+    image_index: u32,
+    center: [f32; 2],
+    radius: f32,
+    params: &ConstellationParams,
+) -> Result<PatchConstellation, KdfError>
+where
+    I: NeighborIndex<u8> + ?Sized,
+    F: FeatureSources + ?Sized,
+{
+    let mut rows = keypoints.within(center, radius);
+    let map = sources.image_feature_ids(image_index)?;
+    rows.retain(|row| map.contains_key(row));
+    let feature_ids: Vec<u32> = rows.iter().map(|row| map[row]).collect();
+    let positions: Vec<[f32; 2]> = rows
+        .iter()
+        .map(|&row| keypoints.positions[row as usize])
+        .collect();
+    let query = Constellation {
+        positions: &positions,
+        descriptors: ConstellationDescriptors::FeatureIds(&feature_ids),
+        image_index: Some(image_index),
     };
     let matches = constellation_query(index, sources, &query, params)?;
     Ok(PatchConstellation {

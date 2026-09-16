@@ -346,6 +346,34 @@ pub(crate) enum Command {
         track: Option<String>,
         stage: sfmtool_core::bench::StageKind,
     },
+    /// Ask the node's descriptor index which other photographs hold the patch
+    /// around one observation, and add each as a candidate, on a worker.
+    SearchBenchTrackDescriptors {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// Which observation to search from, by its position in
+        /// `get_bench_track`'s list.
+        observation: usize,
+        /// The constellation's radius in the searched image's own pixels, or
+        /// `None` for the radius that holds about fifty of its keypoints.
+        radius_px: Option<f64>,
+        /// Fewest agreeing correspondences an image needs, or `None` for the
+        /// query's own bar.
+        min_inliers: Option<usize>,
+    },
+    /// Adopt a `.kdf` as the node's descriptor index.
+    OpenDescriptorIndex {
+        reconstruction_label: String,
+        /// The file, or `None` for the default path beside the node's `.sift`
+        /// files.
+        path: Option<String>,
+    },
+    /// Build a descriptor index over the node's `.sift` files, on a worker.
+    BuildDescriptorIndex {
+        reconstruction_label: String,
+        /// Where to write it, or `None` for the default path.
+        path: Option<String>,
+    },
     /// What the background operation is doing, or what the last one did.
     ///
     /// Names no operation, for the reason [`Command::CancelBackgroundTask`] does
@@ -1055,6 +1083,32 @@ pub(crate) fn apply_with_window(
             track,
             stage,
         } => bench::set_bench_track_stage(state, &reconstruction_label, track.as_deref(), stage),
+        Command::SearchBenchTrackDescriptors {
+            reconstruction_label,
+            track,
+            observation,
+            radius_px,
+            min_inliers,
+        } => bench::search_bench_track_descriptors(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            radius_px,
+            min_inliers,
+        ),
+        Command::OpenDescriptorIndex {
+            reconstruction_label,
+            path,
+        } => done(bench::open_descriptor_index(
+            state,
+            &reconstruction_label,
+            path.as_deref(),
+        )),
+        Command::BuildDescriptorIndex {
+            reconstruction_label,
+            path,
+        } => bench::build_descriptor_index(state, &reconstruction_label, path.as_deref()),
         Command::GetBackgroundTask => done(read::get_background_task(state)),
         Command::CancelBackgroundTask => done(edit::cancel_background_task(state)),
         Command::Screenshot {
@@ -1568,6 +1622,9 @@ impl Command {
             Command::EvaluateBenchTrack { .. } => "evaluate_bench_track",
             Command::FitBenchTrack { .. } => "fit_bench_track",
             Command::SetBenchTrackStage { .. } => "set_bench_track_stage",
+            Command::SearchBenchTrackDescriptors { .. } => "search_bench_track_descriptors",
+            Command::OpenDescriptorIndex { .. } => "open_descriptor_index",
+            Command::BuildDescriptorIndex { .. } => "build_descriptor_index",
             Command::GetBackgroundTask => "get_background_task",
             Command::CancelBackgroundTask => "cancel_background_task",
             Command::Screenshot { .. } => "screenshot",
@@ -1752,7 +1809,13 @@ impl Command {
             | Command::SplitBenchTrack { .. }
             | Command::EvaluateBenchTrack { .. }
             | Command::FitBenchTrack { .. }
-            | Command::SetBenchTrackStage { .. } => Kind::Bench,
+            | Command::SetBenchTrackStage { .. }
+            | Command::SearchBenchTrackDescriptors { .. }
+            // The two that are about the index rather than about a track:
+            // nothing on the bench moves, and the row belongs beside the search
+            // that will use them.
+            | Command::OpenDescriptorIndex { .. }
+            | Command::BuildDescriptorIndex { .. } => Kind::Bench,
             Command::SelectReconstruction { .. }
             | Command::SelectCameraImage { .. }
             | Command::SelectCameraIntrinsics { .. }

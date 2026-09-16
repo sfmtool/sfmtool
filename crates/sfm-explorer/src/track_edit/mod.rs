@@ -70,6 +70,15 @@ pub struct TrackEditResponse {
     pub split: Option<Vec<usize>>,
     /// *Commit*.
     pub commit: bool,
+    /// The Descriptor index row's *Open...*, which asks the dock for a file
+    /// chooser. The panel names no path: a chooser is not an egui widget, so it
+    /// lives where the other file questions do.
+    pub open_descriptor_index: bool,
+    /// The Descriptor index row's *Build*.
+    pub build_descriptor_index: bool,
+    /// A row's *Search for matching features*, carrying the observation it was
+    /// opened on.
+    pub search_descriptors: Option<usize>,
     /// A verdict control was clicked: the observation, and the verdict it
     /// cycled to.
     pub set_verdict: Option<(usize, Verdict)>,
@@ -146,6 +155,15 @@ pub struct TrackEdit {
     /// Recorded unconditionally rather than under `cfg(test)`, so that what the
     /// tests read is the very table the app draws.
     rows: Vec<RowSummary>,
+    /// Why the selected node's descriptor index cannot be built, or `None`
+    /// when it can, as of the node it was last asked about.
+    ///
+    /// Cached rather than asked per frame: the question stats a `.sift` path
+    /// per image of the capture, and what it is a function of -- which files
+    /// sit beside the workspace -- is not something the viewer changes. The
+    /// busy half of the refusal is asked every frame, in front of this, because
+    /// that one is free and does move.
+    build_refusal: Option<(ReconId, Option<String>)>,
     /// How far around each observation the next reading looks for its
     /// correlation peak, in patch-grid px. Panel state beside the sliders, and
     /// what *Evaluate* and *Fit* carry: it is an input to the measurement
@@ -177,6 +195,7 @@ impl TrackEdit {
             tiles: HashMap::new(),
             tiles_for: None,
             rows: Vec::new(),
+            build_refusal: None,
             search_px: crate::bench::default_search_px(),
             scroll_offset_y: None,
         }
@@ -221,6 +240,7 @@ impl TrackEdit {
         }
         self.painted_for = None;
         self.commit_refusal_for = None;
+        self.build_refusal = None;
         self.seeded_from = None;
         self.painted.clear();
         self.rows.clear();
@@ -270,6 +290,7 @@ impl TrackEdit {
         show_header(ui, &label, track);
         self.show_toolbar(ui, state, node, &label, track, &mut response);
         self.show_thresholds(ui);
+        self.show_descriptor_index(ui, state, id, &mut response);
         ui.separator();
         self.show_table(ui, node.recon(), id, state, track, &mut response);
         response
@@ -608,6 +629,82 @@ impl TrackEdit {
 /// the toolbar's own entry, quoted from one constant so the two agree.
 pub(crate) const PUT_ON_BENCH_LABEL: &str = "Put selected point on bench";
 
+/// The observation row's context-menu entry, in one constant, as the Image
+/// Detail menu's entries are: the label is quoted in a refusal and read back by
+/// a test, and three spellings of one entry would drift.
+pub(crate) const SEARCH_DESCRIPTORS_LABEL: &str = "Search for matching features";
+
+impl TrackEdit {
+    /// The **Descriptor index** row: which `.kdf` a search would query, and the
+    /// two ways to give it one.
+    ///
+    /// Above the table because it is about the node and not about a row: every
+    /// row's search goes through the same index, and a row that offered its own
+    /// file chooser would suggest otherwise. The path is the whole of the
+    /// state; the forest itself is the node's
+    /// ([`crate::descriptor_index`]).
+    fn show_descriptor_index(
+        &mut self,
+        ui: &mut egui::Ui,
+        state: &AppState,
+        id: ReconId,
+        response: &mut TrackEditResponse,
+    ) {
+        if self.build_refusal.as_ref().map(|(of, _)| *of) != Some(id) {
+            self.build_refusal = Some((id, state.descriptor_sources_refusal(id)));
+        }
+        let sources = self.build_refusal.as_ref().and_then(|(_, why)| why.clone());
+        let busy = state.busy_refusal(id);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Descriptor index");
+            match state.descriptor_index(id) {
+                Some(index) => {
+                    let path = index.path.display().to_string();
+                    let shown = crate::elide::middle(&path, INDEX_PATH_WIDTH, |value| {
+                        ui.ctx().fonts_mut(|fonts| {
+                            fonts
+                                .layout_no_wrap(
+                                    value.to_owned(),
+                                    egui::TextStyle::Body.resolve(ui.style()),
+                                    ui.visuals().weak_text_color(),
+                                )
+                                .rect
+                                .width()
+                        })
+                    });
+                    ui.weak(shown).on_hover_text(format!(
+                        "{path}
+{} descriptors",
+                        index.feature_count()
+                    ));
+                }
+                None => {
+                    ui.weak("none");
+                }
+            }
+            if entry(
+                ui,
+                "Open...",
+                busy.clone(),
+                "Search a .kdf of your own choosing",
+            ) {
+                response.open_descriptor_index = true;
+            }
+            if entry(
+                ui,
+                "Build",
+                busy.or(sources),
+                "Index every .sift file of this reconstruction and write it beside them",
+            ) {
+                response.build_descriptor_index = true;
+            }
+        });
+    }
+}
+
+/// How wide the Descriptor index row elides the path it names to.
+const INDEX_PATH_WIDTH: f32 = 280.0;
+
 /// The header: what the active track is, and what the last evaluation of it
 /// made of it.
 fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
@@ -713,6 +810,7 @@ fn provenance_text(provenance: Provenance) -> String {
     match provenance {
         Provenance::Origin => "origin".to_string(),
         Provenance::Descriptor { feature } => format!("feature {feature}"),
+        Provenance::Search { inliers } => format!("search ({inliers})"),
         Provenance::Sweep => "sweep".to_string(),
         Provenance::Pixel => "pixel".to_string(),
         Provenance::Point { point } => format!("point {point}"),

@@ -536,7 +536,7 @@ pub fn add_observation(
 
 /// The reference observation's own seed shape, when the track is a cluster with
 /// a reference that has one.
-fn reference_shape(track: &EditableTrack) -> Option<[[f64; 2]; 2]> {
+pub(super) fn reference_shape(track: &EditableTrack) -> Option<[[f64; 2]; 2]> {
     let reference = track.cluster()?.reference;
     let cluster = track.observations.get(reference)?.cluster.as_ref()?;
     Some(cluster.shape.unwrap_or(cluster.seed_shape))

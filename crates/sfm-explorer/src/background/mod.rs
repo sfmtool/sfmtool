@@ -118,6 +118,26 @@ impl Operation {
         kind: Kind::Bench,
     };
 
+    /// One bench track searched from, in a descriptor index
+    /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
+    /// index"). Not cancellable, for the reason
+    /// [`Operation::BENCH_EVALUATE`] is not: the constellation query is one
+    /// call into the forest and never asks whether it should stop.
+    pub(crate) const BENCH_SEARCH: Operation = Operation {
+        name: "Search descriptors",
+        cancellable: false,
+        kind: Kind::Bench,
+    };
+
+    /// A node's descriptor index built over its `.sift` files and written
+    /// ([`crate::descriptor_index`]). Not cancellable: the forest build and the
+    /// file write are each one call.
+    pub(crate) const BUILD_DESCRIPTOR_INDEX: Operation = Operation {
+        name: "Build descriptor index",
+        cancellable: false,
+        kind: Kind::Bench,
+    };
+
     /// Every operation that can go to the background.
     ///
     /// A list rather than a set of constants used one at a time, so the test
@@ -125,11 +145,13 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 4] = [
+    pub(crate) const ALL: [Operation; 6] = [
         Operation::BUNDLE_ADJUST,
         Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,
+        Operation::BENCH_SEARCH,
+        Operation::BUILD_DESCRIPTOR_INDEX,
     ];
 }
 
@@ -240,6 +262,20 @@ pub(crate) enum Finished {
         track: Box<sfmtool_core::bench::EditableTrack>,
         /// The version's label, as the Edit History panel lists it.
         version_label: String,
+        /// The Action Log sentence, up to the serials.
+        text: String,
+    },
+    /// A descriptor index built and reopened, for the node the task ran on.
+    ///
+    /// Not a version: the index is a file beside the workspace and a handle on
+    /// it, and nothing about the reconstruction or the bench moved. So the GUI
+    /// thread installs the handle and writes the row, and Undo has nothing to
+    /// take back.
+    DescriptorIndex {
+        /// The `.kdf` that was written.
+        path: std::path::PathBuf,
+        /// It, opened.
+        forest: Arc<sfmtool_core::features::kdforest::LazyKdForestU8>,
         /// The Action Log sentence, up to the serials.
         text: String,
     },
@@ -623,6 +659,22 @@ impl AppState {
                     }
                 }
             },
+            // The index is the node's and not the version's, so nothing is
+            // pushed: the handle is installed and the row says what was built.
+            // A node that has left the scene in the meantime leaves the file on
+            // disk, which the next session opens.
+            Finished::DescriptorIndex { path, forest, text } => {
+                match self.scene.iter().any(|n| n.id == node) {
+                    false => Err(format!(
+                        "{} of {label} finished, but it is no longer loaded.",
+                        operation.name
+                    )),
+                    true => {
+                        self.install_descriptor_index(node, path, forest);
+                        Ok(text)
+                    }
+                }
+            }
             // No elapsed in the sentence: the entry is timed from `started`
             // like the successful one, so the cost column already says how
             // long it ran, and two spellings of one number can only disagree.

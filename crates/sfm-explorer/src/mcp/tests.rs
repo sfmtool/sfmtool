@@ -3651,6 +3651,18 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             "set_bench_track_stage",
             json!({ "reconstruction_label": "alpha", "stage": "track" }),
         ),
+        (
+            "search_bench_track_descriptors",
+            json!({ "reconstruction_label": "alpha", "observation": 0 }),
+        ),
+        (
+            "open_descriptor_index",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
+            "build_descriptor_index",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
         ("get_background_task", json!({})),
         ("cancel_background_task", json!({})),
         ("screenshot", json!({})),
@@ -3853,15 +3865,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty-one writes, the one that writes a file, and the one
-    // that hands back a picture.
-    assert_eq!(catalog.len(), 57, "the catalog has grown or shrunk");
+    // Fourteen reads, forty-four writes, the one that writes a file, and the
+    // one that hands back a picture.
+    assert_eq!(catalog.len(), 60, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        41
+        44
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -7483,4 +7495,164 @@ fn a_move_across_a_deleted_camera_image_follows_it_by_name() {
     let after =
         call(&mut state, &mut viewer, "get_scene", json!({}))["selection"]["camera_image"].clone();
     assert_eq!(after, Value::Null, "{after}");
+}
+
+// ── The descriptor index and the search through it ──────────────────────
+
+/// `get_bench` reports the index a search would query, the two index tools give
+/// a node one, and the search itself is a background task an agent polls for.
+///
+/// Over the workspace fixture rather than [`benchable`]: a search needs real
+/// `.sift` files and a real `.kdf`, which is what
+/// [`crate::descriptor_index::tests::searchable`] builds.
+#[test]
+fn the_descriptor_index_and_the_search_are_on_the_wire() {
+    use crate::descriptor_index::tests as fixture;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, item) = fixture::searchable(dir.path());
+    let label = state.node(id).expect("loaded").label.clone();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": label }),
+    );
+    let index = &bench["descriptor_index"];
+    assert_eq!(index["open"], json!(true), "{bench}");
+    assert!(
+        index["path"]
+            .as_str()
+            .expect("a path")
+            .ends_with("index.kdf"),
+        "{bench}"
+    );
+    assert!(
+        index["feature_count"].as_u64().expect("a count") > 0,
+        "{bench}"
+    );
+
+    let searched = worked(
+        &mut state,
+        &mut viewer,
+        "search_bench_track_descriptors",
+        json!({ "reconstruction_label": label, "track": item, "observation": 0 }),
+    );
+    let report = searched["report"].as_str().expect("a report");
+    assert!(
+        report.contains("Searched from observation 0 of 3") && report.contains("images matched"),
+        "{searched}"
+    );
+
+    // The operation an agent polls for, under the name the panel shows.
+    let task = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(task["operation"], json!("Search descriptors"), "{task}");
+
+    // And the candidate it added is on the wire under the search's provenance.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": label, "track": item }),
+    );
+    let observations = track["observations"].as_array().expect("a list");
+    assert_eq!(observations.len(), 4, "{track}");
+    let added = observations.last().expect("the search added one");
+    assert_eq!(
+        added["camera_image"],
+        json!(fixture::FOUND_IMAGE),
+        "{track}"
+    );
+    assert_eq!(added["provenance"]["kind"], json!("search"), "{track}");
+    assert!(added["provenance"]["inliers"].is_number(), "{track}");
+
+    // Opening the same file again by path is the same index, and pushes no
+    // version: an index is a file beside the workspace, not a value.
+    let path = index["path"].as_str().expect("a path").to_string();
+    let before = state.node(id).expect("loaded").history.versions().len();
+    let opened = call(
+        &mut state,
+        &mut viewer,
+        "open_descriptor_index",
+        json!({ "reconstruction_label": label, "path": path }),
+    );
+    assert_eq!(opened["descriptor_index"]["open"], json!(true), "{opened}");
+    assert_eq!(
+        state.node(id).expect("loaded").history.versions().len(),
+        before,
+        "an index is not a version"
+    );
+}
+
+/// With no index, `get_bench` says so and still names where a build would put
+/// one, and the search is refused in the step's own sentence rather than
+/// deferring to a worker that could never answer.
+#[test]
+fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
+    use crate::descriptor_index::tests as fixture;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = fixture::state_in(dir.path());
+    let label = state.node(id).expect("loaded").label.clone();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+    let item = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": label, "point": fixture::POINT }),
+    )["item"]
+        .as_str()
+        .expect("a create names the item it made")
+        .to_string();
+
+    let bench = call(
+        &mut state,
+        &mut viewer,
+        "get_bench",
+        json!({ "reconstruction_label": label }),
+    );
+    assert_eq!(bench["descriptor_index"]["open"], json!(false), "{bench}");
+    assert!(
+        bench["descriptor_index"]["path"]
+            .as_str()
+            .expect("the default path is named even when nothing is open")
+            .ends_with("index.kdf"),
+        "{bench}"
+    );
+    assert_eq!(bench["descriptor_index"]["feature_count"], Value::Null);
+
+    let command = tools::parse(
+        "search_bench_track_descriptors",
+        Some(
+            &json!({ "reconstruction_label": label, "track": item, "observation": 0 })
+                .as_object()
+                .cloned()
+                .expect("an object"),
+        ),
+    )
+    .expect("a valid call");
+    let error = refused(&mut state, &mut viewer, command);
+    assert!(
+        error.to_string().contains("No descriptor index is open"),
+        "{error}"
+    );
+
+    // And a build over a node whose images have no `.sift` companion is refused
+    // the same way, in front of the worker.
+    let command = tools::parse(
+        "build_descriptor_index",
+        Some(
+            &json!({ "reconstruction_label": label })
+                .as_object()
+                .cloned()
+                .expect("an object"),
+        ),
+    )
+    .expect("a valid call");
+    let error = refused(&mut state, &mut viewer, command);
+    assert!(error.to_string().contains("No .sift file"), "{error}");
 }

@@ -4892,6 +4892,7 @@ dependencies = [
  "sfmtool-matches-format",
  "sfmtool-sfmr-format",
  "sfmtool-sift-format",
+ "tempfile",
  "tokio",
  "wgpu",
  "windows",

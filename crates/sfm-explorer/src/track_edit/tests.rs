@@ -536,3 +536,83 @@ fn a_heading_stands_at_the_x_offset_its_column_is_drawn_at() {
         "the Name heading no longer stands over the name column",
     );
 }
+
+// ── The descriptor index row and the row's own menu ─────────────────────
+
+/// The Descriptor index row is drawn above the table, says `none` when nothing
+/// is open, and greys *Build* on a node whose images have no `.sift` file.
+#[test]
+fn the_descriptor_index_row_says_none_and_greys_build_with_no_sift_files() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let texts = crate::test_support::painted_texts(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    for label in ["Descriptor index", "none", "Open...", "Build"] {
+        assert!(
+            texts.iter().any(|t| t == label),
+            "{label} is not in the row: {texts:?}"
+        );
+    }
+    // The demo node has no workspace on disk, so there is nothing to index and
+    // the button says so rather than offering a build that would fail.
+    let id = state.selected_recon.expect("a selected reconstruction");
+    let why = state
+        .build_descriptor_index_refusal(id)
+        .expect("a node with no .sift files has nothing to index");
+    assert!(why.contains("No .sift file"), "{why}");
+}
+
+/// Right-clicking a row opens the search entry, greyed with the sentence saying
+/// what is missing when no index is open.
+#[test]
+fn a_row_s_context_menu_offers_the_search_and_greys_it_without_an_index() {
+    let (state, id, label, mut panel, ctx) = on_the_bench();
+    let y = row_y(&mut panel, &ctx, &state, 0);
+    let at = egui::pos2(400.0, y);
+
+    // Three frames: one to register the rows, one that right-clicks, and one
+    // more, because the menu's entries are laid out on a later frame.
+    let mut texts = Vec::new();
+    for frame in 0..3 {
+        let mut events = vec![egui::Event::PointerMoved(at)];
+        if frame == 1 {
+            for pressed in [true, false] {
+                events.push(egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+        }
+        texts = crate::test_support::painted_texts(
+            &ctx,
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                panel.show(ui, &state);
+            },
+        );
+    }
+    assert!(
+        texts.iter().any(|t| t == super::SEARCH_DESCRIPTORS_LABEL),
+        "the search entry is not in the row's menu: {texts:?}"
+    );
+
+    // Greyed rather than absent, with the sentence naming the row that would
+    // give it an index.
+    let why = state
+        .bench_search_refusal(id, &label, 0)
+        .expect("no index is open on this node");
+    assert!(why.contains("Descriptor index"), "{why}");
+}

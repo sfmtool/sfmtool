@@ -560,6 +560,19 @@ pub struct AppState {
     /// Cleared when the scene changes.
     pub sift_cache: HashMap<ImageRef, CachedSiftFeatures>,
 
+    /// The descriptor index open beside each node, which a bench search
+    /// queries ([`crate::descriptor_index`]).
+    ///
+    /// One per node rather than one per panel: the index names that node's
+    /// images, and the Track Edit panel only shows which file is open.
+    ///
+    /// `None` is "looked for the default and there was none", memoized the way
+    /// a failed decode is in [`Self::full_res_cache`]: a workspace whose index
+    /// has never been built is the ordinary case, and the panel would otherwise
+    /// stat the same absent file every frame.
+    pub(crate) descriptor_indexes:
+        HashMap<ReconId, Option<crate::descriptor_index::DescriptorIndex>>,
+
     /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`).
     /// `None` = decode failed (don't retry). Shared by ImageDetail (builds its
     /// GPU texture from this) and PointTrackDetail (CPU-samples it to render
@@ -737,7 +750,14 @@ pub struct CachedSiftFeatures {
     pub positions_xy: Vec<[f32; 2]>,
     /// Affine shape matrices [[a11, a12], [a21, a22]]. Length = read_count.
     pub affine_shapes: Vec<[[f32; 2]; 2]>,
-    /// How many features were read from the file (the read_count used).
+    /// How many features a request may ask for and still be answered from
+    /// here.
+    ///
+    /// **Not** how many are in the vectors, which is their length: a read that
+    /// asked for more than the file holds got the whole file, and every later
+    /// request up to that number is satisfiable without opening it again. A
+    /// caller that wants every keypoint asks for `usize::MAX` and is answered
+    /// from the cache on its second call.
     pub read_count: usize,
 }
 
@@ -775,6 +795,7 @@ impl AppState {
             length_scale: DEFAULT_LENGTH_SCALE_MULTIPLIER * 0.03, // fallback until points loaded
             frustum_size_multiplier: DEFAULT_FRUSTUM_SIZE_MULTIPLIER,
             sift_cache: HashMap::new(),
+            descriptor_indexes: HashMap::new(),
             full_res_cache: HashMap::new(),
             pending_observation_pixel: None,
             create_point_prompt: None,
@@ -891,6 +912,7 @@ impl AppState {
         self.hovered_image = None;
         self.hovered_point = None;
         self.sift_cache.clear();
+        self.descriptor_indexes.clear();
         self.full_res_cache.clear();
         self.resect_matches.clear();
         self.resect_matches_cache = None;
@@ -908,6 +930,7 @@ impl AppState {
     /// a derived node re-points).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
+        self.forget_descriptor_index(id);
         self.full_res_cache.retain(|image, _| image.recon != id);
         self.selected_image = self.selected_image.filter(|i| i.recon != id);
         self.selected_camera = self.selected_camera.filter(|c| c.recon != id);
@@ -1370,7 +1393,10 @@ pub fn ensure_sift_cached<'a>(
         CachedSiftFeatures {
             positions_xy,
             affine_shapes,
-            read_count: n,
+            // What was asked for, not what came back: the file gave everything
+            // it has, so a later request for as much is answered from here
+            // rather than reopening a file that cannot say more.
+            read_count: read_count.max(n),
         },
     );
     cache.get(&image)

@@ -91,6 +91,12 @@ pub fn constellation_at_pixel<I, F>(index: &I, sources: &F, image: &QueryImage<'
     -> Result<PatchConstellation, KdfError>
 where I: NeighborIndex<u8> + ?Sized, F: FeatureSources + ?Sized;
 
+pub fn constellation_from_keypoints<I, F>(index: &I, sources: &F,
+    keypoints: &ImageKeypoints, image_index: u32,
+    center: [f32; 2], radius: f32, params: &ConstellationParams)
+    -> Result<PatchConstellation, KdfError>
+where I: NeighborIndex<u8> + ?Sized, F: FeatureSources + ?Sized;
+
 pub fn radius_for_feature_count(image_width: u32, image_height: u32,
     keypoint_count: usize, target: usize) -> f32;
 ```
@@ -131,6 +137,19 @@ only the handful inside the radius are then turned into descriptors: from the
 corpus by feature ID when the image is indexed, and from the `.sift` file's
 descriptor entry when it is not. In the indexed case the descriptor payload,
 which is the large part of a `.sift` file, is never decompressed.
+
+**Why there is a second entry point for a caller holding the keypoints.**
+`constellation_from_keypoints` is `constellation_at_pixel`'s indexed half with
+the file read taken out: the keypoints are the caller's and the image is one the
+corpus indexes, so nothing opens a `.sift` file at all. That is the shape a
+window needs -- it already holds every image's positions and shapes to draw them
+over the photograph, and a read per gesture would be a second copy of what is on
+screen -- and it is what the [track-editing
+bench](../bench/editable-track.md) searches through.
+`constellation_at_pixel` calls it for the indexed case, so the two cannot
+answer differently, and keeps for itself the one thing it adds: the fallback for
+an image the corpus does **not** index, whose descriptors have to come out of
+the `.sift` file because the corpus has none of them.
 
 **Choosing the constellation size.** The query takes a radius, but what governs
 the answer is how many features that radius holds, and the two are related

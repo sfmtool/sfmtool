@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Fifty-seven tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- forty-one
+Sixty tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- forty-four
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -160,11 +160,14 @@ write, and one writes a file.
 | `evaluate_bench_track` | write | Read every observation where it sits, moving nothing, on a worker thread |
 | `fit_bench_track` | write | Localize, re-triangulate and re-fuse a bench track, then read it back, on a worker thread |
 | `set_bench_track_stage` | write | Move a track between its cluster and track representations, on a worker thread |
+| `search_bench_track_descriptors` | write | Find the photographs holding the patch around one observation, and add each as a candidate, on a worker thread |
+| `open_descriptor_index` | write | Adopt a `.kdf` as one reconstruction's descriptor index |
+| `build_descriptor_index` | write | Index every `.sift` file of one reconstruction, write it and open it, on a worker thread |
 | `save_reconstruction` | write file | Write the version at the cursor to disk |
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the forty-one writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the forty-four writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -2004,7 +2007,7 @@ version may well have been pushed.
 
 ### The bench family
 
-Fifteen tools that read and work the **bench** beside a node
+Eighteen tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2047,6 +2050,23 @@ result, so `get_bench_track` after a fit answers in the reading's terms. Both
 take `search_px`, how far from each observation's own pixel the correlation peak
 is looked for. A fit of a track-stage track with fewer than two `in`
 observations is refused where a reading of the same track is not.
+
+**Three of the eighteen are about the descriptor index**, which is the node's
+rather than any track's: `open_descriptor_index` adopts a `.kdf`,
+`build_descriptor_index` makes one out of the node's `.sift` files, and
+`get_bench` reports which is open under `descriptor_index`, with the path a
+build would write to even when none is. Neither of the two pushes a version --
+an index is a file beside the workspace and a handle on it, and nothing about
+the reconstruction or the bench moves -- so `undo` has nothing to take back and
+the reply is the index rather than a version.
+
+**`search_bench_track_descriptors` is the third way an observation reaches a
+track**, beside the pixel and the point, and the only one that proposes several
+at once: it asks that index which photographs hold the patch around one
+observation and seeds a candidate in each by the affine warp the index
+recovered. It names its `observation`, because the patch it searches from is one
+sighting's and not the track's; an image the track already names is left alone
+whatever its verdict, and how many those were is in the sentence it reports.
 
 ## Addressing
 
@@ -2911,7 +2931,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is fifty-seven tools**, fifteen of them reads and one of them
+- **The catalog is sixty tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

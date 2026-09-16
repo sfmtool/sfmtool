@@ -142,6 +142,10 @@ wgpu = { version = "30", features = ["noop"] }
 # dev-dependency rather than a dependency.
 sfmtool-sfmr-format = { path = "../sfmtool-sfmr-format" }
 
+# The descriptor-index tests write a workspace's worth of `.sift` files and a
+# `.kdf` over them, and want the directory gone when the test ends.
+tempfile = "3"
+
 # UI tests drive the accessibility tree, which xa11y reads on all three desktop
 # platforms: Windows (UI Automation), macOS (AXUIElement), Linux (AT-SPI2 over
 # D-Bus). Linux is the one whose API has to be brought up rather than merely

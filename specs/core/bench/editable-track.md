@@ -33,7 +33,9 @@ and [`../reconstruction/create-point.md`](../reconstruction/create-point.md)
 [`../patch/patch-cloud.md`](../patch/patch-cloud.md) (the frame an upgrade
 builds and the shape a downgrade derives),
 [`../../formats/matches-file-format.md`](../../formats/matches-file-format.md)
-(the `member_status` legend a cluster measurement carries), and
+(the `member_status` legend a cluster measurement carries),
+[`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)
+(the query the descriptor search is one of), and
 [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md)
 (the proposal for the searches and the pull-in), and
 [`../../gui/track-edit.md`](../../gui/track-edit.md) (the panel it is edited in).
@@ -48,7 +50,9 @@ reading in
 [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the
 fit in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs), the
 stage change in
-[bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), and the
+[bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), the
+descriptor search in
+[bench/search.rs](../../../crates/sfmtool-core/src/bench/search.rs), and the
 commit in [bench/commit.rs](../../../crates/sfmtool-core/src/bench/commit.rs),
 bound as `sfmtool._sfmtool.bench`.
 
@@ -93,7 +97,8 @@ pub enum Verdict { In, Out, Candidate }
 
 pub enum Provenance {
     Origin,
-    Descriptor { feature: u32 },
+    Descriptor { feature: u32 },     // a detected keypoint, named directly
+    Search { inliers: u32 },         // an image a descriptor search found
     Sweep,
     Pixel,
     Point { point: u32 },
@@ -146,6 +151,58 @@ pub fn split(
     label: &str,
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError>;
+
+// Grow it from a descriptor index, which reads a file and no photograph.
+pub fn search_descriptors(
+    track: &EditableTrack,
+    observation: usize,
+    keypoints: &ImageKeypoints,
+    forest: &LazyKdForestU8,
+    options: &SearchOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditableTrack, SearchReport), SearchError>;
+
+pub struct SearchOptions {
+    pub constellation: ConstellationParams,  // its `min_inliers` is not read
+    pub radius_px: f32,                      // source-image px
+    pub min_inliers: usize,
+}
+pub const DEFAULT_RADIUS_PX: f32;
+
+pub struct SearchReport {
+    pub observation: usize,
+    pub observation_count: usize,
+    pub image: u32,
+    pub center: [f64; 2],
+    pub constellation: usize,        // keypoints the query asked about
+    pub matches: Vec<SearchMatch>,   // most inliers first
+}
+impl SearchReport {
+    pub fn added(&self) -> usize;
+    pub fn already_in_track(&self) -> usize;
+}
+
+pub struct SearchMatch {
+    pub image: u32,
+    pub inliers: usize,
+    pub correspondences: usize,
+    pub affine: [[f64; 3]; 2],       // searched image's px to this image's
+    pub pixel: [f64; 2],             // where the warp puts the observation
+    pub found: Found,
+}
+
+pub enum Found {
+    Added { observation: usize },
+    AlreadyInTrack { observation: usize },
+    OwnImage,
+}
+
+pub enum SearchError {
+    NoSuchObservation { observation: usize, observation_count: usize },
+    NoPlace { observation: usize },
+    NoConstellation { radius_px: f32, keypoint_count: usize },
+    Index(String),
+}
 
 // The steps that read photographs, and the half of each one's validation that
 // does not.
@@ -378,6 +435,15 @@ track has moved on still lands on the observations it measured.
 used, with exactly one exception: a commit deletes the points that `Point`
 observations were pulled from. No kernel reads it.
 
+`Descriptor` and `Search` are two kinds because they name two things.
+`Descriptor` names **one detected feature**, which the observation sits exactly
+on: it is what a cluster started on a `.sift` keypoint carries. A search's
+observation sits wherever that image's affine warp puts the pixel that was
+searched from, which is in general no feature at all; what stands behind it is
+the number of correspondences that agreed on the warp, so that is the number
+`Search` carries, and it is what ranks a search's candidates against one
+another.
+
 **A verdict** is `in`, `out` or `candidate`. `in` observations are what the
 kernels run over and what a commit writes. `out` is a sighting the person
 refused, kept in the list so a later search does not propose it again and so the
@@ -516,6 +582,64 @@ track-stage half is put down to the cluster stage by the same downgrade
 `set_stage` runs, which is why `split` takes the reconstruction: the downgrade
 projects the frame through each observation's camera. The first track keeps its
 stage, its origin and everything it was.
+
+### Searching the descriptor index
+
+`search_descriptors` is the third way an observation reaches a track, beside the
+pixel someone pointed at and the point a track was put on the bench from, and it
+is the only one that proposes several at a time. It is a **constellation query**
+([`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)),
+not a lookup of one descriptor: a pixel someone pointed at is an extremum of
+nothing, so a descriptor computed there matches nothing a detector produced for
+the same surface elsewhere. What is stable is the neighbourhood of detected
+keypoints around it, which another view of the same surface carries under a
+locally affine warp. So the keypoints within `radius_px` of the observation are
+looked up in the forest, the hits are grouped by image, and an image whose hits
+agree on a single warp with at least `min_inliers` of them is found.
+
+**The warp is what makes a found image worth anything.** Applied to the
+observation's own pixel it gives that image a seed position, and its linear part
+applied to the observation's own keypoint-frame shape gives that seed a shape,
+so a candidate arrives at the place *and* the size the warp says the patch has
+there, whether the observation searched from was a detected feature or a
+hand-placed pixel. Both are the cluster stage's own convention (§ "The cluster
+stage's units"), which is what the next evaluation reads at either stage: at the
+cluster stage the refinement registers the seed, and at the track stage the
+candidate is a row the reading measures and the thresholds propose a verdict
+for. The step sets no verdict and moves nothing that was already on the track.
+
+**Where the search runs from** is one observation, named by index, and its pixel
+is the one everything that draws an observation uses: the track stage's keypoint,
+else the cluster stage's refined position or its seed. There is no third source
+-- projecting the track's point would need the reconstruction, which this step
+does not take -- so an observation with neither is refused rather than guessed
+at. The shape falls through the same order `add_observation` does: the
+observation's own, else the cluster's reference's, else the identity.
+
+**An image the track already names is left alone**, whatever the verdict on it.
+`out` is a decision the person made and a search does not overturn it; a
+`candidate` is already on the table. Those images are reported rather than
+dropped, and the count of them is in the report's sentence, so "the search found
+nothing new" and "the search found nothing" read differently.
+
+**The corpus indexes the reconstruction's images, in its order.** A match names
+a corpus image index and the observation it becomes names a node image index,
+and this step takes no reconstruction to compare a name table against, so the
+two are stated to be one number. The caller that adopts a forest is where that
+is checked -- in the viewer, at the moment a `.kdf` is opened
+([`../../gui/track-edit.md`](../../gui/track-edit.md)).
+
+The keypoints are the caller's: nothing here opens a `.sift` file, because a
+window already holds every image's keypoints to draw them over the photograph
+and a read per gesture would be a second copy of what is on screen. The only
+file this step reads is the index, and it reads it as file I/O rather than as
+pixels, which is why it is a background task in the viewer and takes a
+`Progress` with one phase, `query index`.
+
+`SearchOptions::min_inliers` is the bar, and it is the *only* place the bar is
+written: it is what the report states a refusal against, and it is written into
+the query's own params so an image the search would discard is never fitted.
+`SearchOptions::constellation.min_inliers` is not read.
 
 ### Evaluating
 
@@ -742,6 +866,16 @@ start from the same bar and moving one is the person choosing to differ.
 | `max_keypoint_uncertainty` | `0.35` | The largest tile localizability an observation may have, in grid px. From `KeypointLocalizeParams::default`'s `max_member_keypoint_uncertainty`. |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
 
+The descriptor search has bars of its own, which are not the track's: they say
+what the *index* is asked, and nothing about them is a verdict, so they are
+`SearchOptions` and not `Thresholds`.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `radius_px` | `DEFAULT_RADIUS_PX`, 128.0 | The constellation's radius around the observation, in source-image px. The constant is what the radius rule gives a full-frame capture at fifty features; a caller that knows its frame and its keypoint count computes its own with `radius_for_feature_count`, which is what the viewer does. |
+| `min_inliers` | `8` | Fewest agreeing correspondences an image needs to be found. From `ConstellationParams::DEFAULT`. |
+| `constellation` | `ConstellationParams::DEFAULT` | The query's own tunables: `k` neighbours per keypoint, the RANSAC budget and pixel threshold, the scale change a warp may claim. Its own `min_inliers` is not read. |
+
 ## Implementation notes
 
 **A split re-seats the reference of both halves and drops both templates.** A
@@ -786,8 +920,8 @@ names and the same shape as the Rust ones; `EditableTrack` is a read-only value
 class whose observations cross as dicts, with each stage's measurements under
 `"cluster"` and `"track"` and a key present exactly when something has measured
 it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`,
-`"candidate"`; `"origin"`, `"descriptor"`, `"sweep"`, `"pixel"`, `"point"`).
-Refusals are `ValueError` carrying the core sentence.
+`"candidate"`; `"origin"`, `"descriptor"`, `"search"`, `"sweep"`, `"pixel"`,
+`"point"`). Refusals are `ValueError` carrying the core sentence.
 
 `create_cluster` takes either `radius_px`, a half-width in that image's pixels,
 or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
@@ -809,6 +943,17 @@ the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `from`, `to`, `changed`, the upgrade's `fit` report and the downgrade's
 `reference` for a stage change. An observation's `"track"` dict carries
 `reason`, the sentence, exactly when it carries no `zncc`.
+
+`search_descriptors` takes the searched image's keypoints as the two arrays a
+`.sift` read gives -- an `(N, 2)` float32 of positions and an `(N, 2, 2)` of
+affine shapes, in that file's own row order -- and an open
+`sfmtool._sfmtool.spatial.LazyKdForest`. `radius_px` and `min_inliers` are
+keywords beside the constellation query's own; its report is a dict carrying
+`observation`, `observation_count`, `image`, `center`, `constellation`, `added`,
+`already_in_track`, `sentence` and `matches`, one dict per found image with its
+`image`, `inliers`, `correspondences`, `affine`, `pixel` and `found` --
+`"added"` or `"already_in_track"` with the observation index that goes with it,
+or `"own_image"`.
 
 ```python
 from sfmtool._sfmtool import bench as bench_module
@@ -856,17 +1001,34 @@ committing a point onto the planted surface; setting the current stage reporting
 `changed` false; each refusal naming what did not hold; and the three
 precondition functions giving their step's own answer when they are asked alone,
 which is what makes them safe to ask in front of a decode.
+
+The search is tested over a corpus built in the test
+([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):
+a patch planted in three images under two warps the test states, written to a
+`.kdf` and reopened, so the seed a candidate takes is a number the assertions
+can name rather than merely something that appeared. It covers the searched
+image never being a candidate of its own search; the found image's candidate
+landing at the observation's pixel and shape under the planted warp, as a
+`candidate` with the search's own provenance and inlier count; an image the
+track already names being reported and left exactly as it was, pin and `out`
+verdict included; a bar no image reaches leaving the track untouched; and the
+three refusals -- an observation past the end, one with no place in its
+photograph, and a radius holding no indexed keypoint.
+
 [tests/rust_bindings/test_bench_rust_bindings.py](../../../tests/rust_bindings/test_bench_rust_bindings.py)
 covers the same surface through the bindings, over the 17-image seoul_bull solve
 converted to `embedded_patches`.
 
 ## Non-goals
 
-- **Searching for observations to add.** The view sweep over the images that
-  see the surfel, and the descriptor search over a `.kdf` forest, are what
-  propose candidates; both are proposed in
+- **The view sweep.** `search_descriptors` proposes candidates from a
+  descriptor index; the sweep over every image that geometrically sees the
+  surfel is a different search and is proposed in
   [`../../drafts/sfm-explorer-track-editing.md`](../../drafts/sfm-explorer-track-editing.md).
-  An evaluation scores the candidates something else put on the track.
+  An evaluation scores the candidates either of them puts on the track.
+- **Building the descriptor index.** `search_descriptors` takes an open forest;
+  making one out of a capture's `.sift` files is the viewer's
+  ([`../../gui/track-edit.md`](../../gui/track-edit.md)) or a script's.
 - **The pairwise coherence matrix.** An evaluation scores each observation
   against the others' consensus; the `k x k` matrix that shows a track made of
   two surfaces as two blocks is

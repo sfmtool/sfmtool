@@ -437,10 +437,9 @@ constellation with one correspondence, and it is the geometric consistency of
 the rest that earns the candidate a warp rather than a guess.
 
 The forest has to exist. The panel carries a **Descriptor index** row naming the
-`.kdf` it will search, with a file chooser, and a **Build** button that runs the
+`.kdf` it will search, with a file chooser and a **Build** button that runs the
 forest build over the workspace's `.sift` files as a background task and writes
-the file. Where the file goes by default is an open question; the panel
-remembers the path per workspace in the session either way. A node with no
+the file. A node with no
 workspace, or an `embedded_patches` file whose workspace has no `.sift` files,
 has no descriptor search, and the row says which.
 
@@ -896,8 +895,8 @@ print(report["label"])                         # the sentence the Action Log wou
 
 **Still proposed here**: the preview buffer in the 3D viewer, the Image Browser
 borders, the cluster stage's template drawn beside each member's tile, and the
-searches and the pull-in with their toolbar entries, their coherence grid and
-their three wire tools.
+view sweep and the pull-in with their toolbar entries, their coherence grid and
+their two wire tools.
 
 **No second SIFT cache.** The viewer already holds each image's keypoints
 (positions and affine shapes, never descriptors) in `AppState::sift_cache`, and
@@ -909,16 +908,12 @@ descriptors.
 
 Two core pieces were built ahead of the bench, and one more is needed:
 
-1. **The constellation query** is not in core yet. It exists as the benchmark
-   [`kdf_patch_localize.py`](../../scripts/kdf_patch_localize.py): the
-   per-feature forest query, the grouping of hits by image, and a three-point
-   affine RANSAC per image returning inlier counts and models. The bench needs
-   that as a core function taking the query image's keypoints inside a radius
-   of a pixel, the forest, and the RANSAC parameters, and returning per image
-   the warp, its inlier count and the correspondences, with the hit geometry
-   read from the forest's geometry corpus rather than from side tables. It
-   belongs beside the forest in `features::kdforest`, bound to Python, and is
-   what `search_bench_track_descriptors` calls (§ "Part 5").
+1. **The constellation query** is in core, beside the forest in
+   `features::kdforest` and bound to Python: the per-feature forest query, the
+   grouping of hits by image, and a three-point affine RANSAC per image
+   returning per image the warp, its inlier count and the correspondences, with
+   the hit geometry read from the forest's own corpus. See
+   [`../core/features/kdf-constellation-query.md`](../core/features/kdf-constellation-query.md).
    `describe_keypoints` (below) is **not** the search's query: a descriptor at a
    pixel nobody detected matches nothing the index holds.
 2. **Describing a keypoint that was not detected.**
@@ -1048,20 +1043,20 @@ covered by the existing layout test that walks every tab.
 
 ## Open questions
 
-- **Where a workspace's `.kdf` lives.** Nothing writes one today outside the
-  layout benchmark. The panel needs a default so *Build* has somewhere to put
-  the file and a second session finds it. A recommendation:
-  `<workspace>/<feature_prefix_dir>/index.kdf`, beside the `.sift` files it
-  indexes, recorded in `specs/workspace/`.
+- ~~**Where a workspace's `.kdf` lives.**~~ Settled: `index.kdf` in the feature
+  directory it indexes, beside the `.sift` files it was built from, recorded in
+  [`../workspace/workspace.md`](../workspace/workspace.md) § "The Descriptor
+  Index".
 - **The cluster stage's images across nodes.** A observation names an image of one
   node. A workspace with two nodes loaded over the same images could in
   principle pull observations from either, and the descriptor index is per workspace
   rather than per node. This draft holds the bench to one node and leaves the
   cross-node case for when a use turns up.
-- **Which observation's descriptor to search from** when the track has several `in`
-  observations: the selected row, the reference, or all of them with the results
-  merged. The selected row is proposed, because it is the one thing the user
-  has pointed at.
+- ~~**Which observation's descriptor to search from**~~ Settled: the search
+  names its observation, and the gesture is a context menu on that row, so the
+  question is answered by the row the person right-clicked rather than by a
+  rule. Merging the results of several observations is still open, and would be
+  a step over several reports rather than a change to this one.
 
 ## Steps
 
@@ -1084,15 +1079,24 @@ covered by the existing layout test that walks every tab.
    [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md). What remains
    of the panel is what the steps below add to it, plus the per-observation
    tile column.
-3. The constellation query in core, over the benchmark script; then the
-   descriptor index row, the build task, and the search built on it.
+3. **Done.** The constellation query in core, filed as
+   [`../core/features/kdf-constellation-query.md`](../core/features/kdf-constellation-query.md);
+   then `sfmtool_core::bench::search_descriptors` over it, the Descriptor index
+   row with its *Open...* and *Build*, and the search as a row's context-menu
+   entry. Filed as
+   [`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+   § "Searching the descriptor index",
+   [`../gui/track-edit.md`](../gui/track-edit.md) § "The descriptor index" and
+   [`../workspace/workspace.md`](../workspace/workspace.md) § "The Descriptor
+   Index", which settles where a workspace's `.kdf` lives.
 4. The view sweep with the keypoint-search switch.
 5. Pull-in from a point and from the bench, the coherence grid, and the merging
    commit. *Split off selected observations* arrived with step 2.
 6. **Done**, for the tools whose steps exist: the two creates, the three item
-   tools, the two reads and the seven steps on a track. Filed as
+   tools, the two reads, the seven steps on a track, and the descriptor search
+   with the two index tools it needs. Filed as
    [`../gui/bench.md`](../gui/bench.md) § "The wire" and
    [`../gui/mcp-server.md`](../gui/mcp-server.md) § "The bench family". What
-   remains of the wire is the three tools for the searches, which arrive with
-   the steps above that build them.
+   remains of the wire is the two tools for the sweep and the pull-in, which
+   arrive with the steps above that build them.
 7. The `.matches` opener, if step 2's cluster stage earns it.

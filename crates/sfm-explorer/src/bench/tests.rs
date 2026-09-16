@@ -604,3 +604,127 @@ fn a_photometric_step_refuses_what_the_track_alone_decides() {
     // line shows.
     assert_eq!(rows(&state), vec![(Kind::Bench, refusal)]);
 }
+
+// ── The descriptor search ───────────────────────────────────────────────
+
+/// The search is a bench step like the others: one version, one `Bench` row,
+/// and the candidates it added are in the track under the search's own
+/// provenance, at the place and the size the index's warp says.
+///
+/// The fixture is [`crate::descriptor_index::tests::searchable`]: a workspace of
+/// real `.sift` files with one patch planted in the query image and carried
+/// into two others under warps the test states, indexed into a real `.kdf`.
+#[test]
+fn a_descriptor_search_seeds_a_candidate_at_the_warped_pixel_and_shape() {
+    use crate::descriptor_index::tests as fixture;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, label) = fixture::searchable(dir.path());
+    state.action_log.clear();
+    let before = versions(&state, id);
+    let center = {
+        let track = state.bench_track(id, &label).expect("on the bench");
+        let keypoint = track.observations[0]
+            .track
+            .as_ref()
+            .and_then(|m| m.keypoint)
+            .expect("a committed track carries its keypoints");
+        [f64::from(keypoint[0]), f64::from(keypoint[1])]
+    };
+
+    state
+        .start_bench_descriptor_search(id, &label, 0, None, None)
+        .expect("an index is open and the image has keypoints");
+    assert!(state.background_task().is_some(), "the search ran inline");
+    state.finish_background_task();
+
+    assert_eq!(versions(&state, id), before + 1, "one version for the step");
+    let track = state.bench_track(id, &label).expect("still on the bench");
+    assert_eq!(
+        track.observations.len(),
+        4,
+        "the three the point had, plus the one image the search found that it did not hold"
+    );
+    let added = track.observations.last().expect("the search added one");
+    assert_eq!(added.image, fixture::FOUND_IMAGE);
+    assert_eq!(added.verdict, sfmtool_core::bench::Verdict::Candidate);
+    assert_eq!(
+        added.provenance,
+        sfmtool_core::bench::Provenance::Search {
+            inliers: fixture::PLANTED as u32
+        }
+    );
+    // The image the track already holds was found and left exactly as it was.
+    assert!(
+        track
+            .observations
+            .iter()
+            .filter(|o| o.image == fixture::HELD_IMAGE)
+            .count()
+            == 1,
+        "a search proposed a second sighting of an image the track already names"
+    );
+
+    let seed = added
+        .cluster
+        .as_ref()
+        .expect("a searched seed is a cluster seed");
+    let want = fixture::warp_to_found(center);
+    assert!(
+        (seed.seed_position[0] - want[0]).abs() < 1.0
+            && (seed.seed_position[1] - want[1]).abs() < 1.0,
+        "{:?} against {want:?}",
+        seed.seed_position
+    );
+    // The shape is the observation's own under the warp's linear part. The
+    // track came from a committed point and has no cluster seed of its own, so
+    // what is warped is the identity `add_observation` falls back to.
+    let linear = fixture::linear_of(fixture::warp_to_found);
+    for (row, want) in seed.seed_shape.iter().zip(linear.iter()) {
+        for (got, want) in row.iter().zip(want.iter()) {
+            assert!((got - want).abs() < 1e-6, "{got} against {want}");
+        }
+    }
+
+    // One row, of kind `Bench`, carrying the report's own sentence under the
+    // item's name.
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, Kind::Bench);
+    assert!(
+        rows[0].1.starts_with(&format!(
+            "{label}: Searched from observation 0 of 3: 2 images matched, 1 candidates added, \
+             1 already in the track"
+        )),
+        "{}",
+        rows[0].1
+    );
+}
+
+/// With no index open the gesture is refused in the caller's own hand, naming
+/// the row that would give it one, and starts no task.
+#[test]
+fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
+    use crate::descriptor_index::tests as fixture;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = fixture::state_in(dir.path());
+    let label = put_on_bench(&mut state, id);
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    let why = state
+        .bench_search_refusal(id, &label, 0)
+        .expect("nothing to search");
+    assert!(why.contains("No descriptor index is open"), "{why}");
+    let refusal = state
+        .start_bench_descriptor_search(id, &label, 0, None, None)
+        .expect_err("the step asks the same question the menu does");
+    assert_eq!(refusal, why);
+    assert!(
+        state.background_task().is_none(),
+        "a refusal started a task"
+    );
+    assert_eq!(versions(&state, id), before, "a refusal pushed a version");
+    assert_eq!(rows(&state), vec![(Kind::Bench, refusal)]);
+}

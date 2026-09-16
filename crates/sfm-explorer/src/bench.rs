@@ -30,8 +30,10 @@ use std::sync::Arc;
 
 use sfmtool_core::bench::{
     self, Bench, BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions,
-    FitOptions, Observation, ObservationSeed, Provenance, StageKind, Thresholds, Verdict,
+    FitOptions, Observation, ObservationSeed, Provenance, SearchOptions, StageKind, Thresholds,
+    Verdict,
 };
+use sfmtool_core::features::kdforest::ImageKeypoints;
 use sfmtool_core::EditedReconstruction;
 
 use crate::action_log::Kind;
@@ -42,6 +44,15 @@ use crate::state::AppState;
 
 #[cfg(test)]
 mod tests;
+
+/// Constellation size a search asks for when nobody names a radius.
+///
+/// Fifty, which is the size the query's own radius rule is stated at: the share
+/// of found images whose warp places the truth within a few pixels falls away
+/// sharply above it, because the affine is the first-order approximation of a
+/// homography about the patch centre and the term it drops grows with the patch
+/// (`specs/core/features/kdf-constellation-query.md`).
+const SEARCH_TARGET_FEATURES: usize = 50;
 
 /// Where a seed's position and shape come from.
 ///
@@ -211,6 +222,7 @@ impl AppState {
             .map_err(|e| format!("Cannot put that point on the bench: {e}"))?;
         let text = format!("Put point {} on the bench as {}", point.point, report.label);
         self.push_bench_step(index, next, text);
+        self.open_default_descriptor_index(point.recon);
         Ok(report.label)
     }
 
@@ -262,6 +274,10 @@ impl AppState {
             .map_err(|e| format!("Cannot start a track there: {e}"))?;
         let text = format!("Started {} on the bench", report.label);
         self.push_bench_step(index, next, text);
+        // Putting something on the bench is the moment a search becomes
+        // possible, so it is the moment to look for the index that would serve
+        // one. The look is remembered, so the second item costs nothing.
+        self.open_default_descriptor_index(image.recon);
         Ok(report.label)
     }
 
@@ -649,6 +665,200 @@ impl AppState {
             .map_err(|e| format!("Cannot set the stage of {label}: {e}"))?;
         let job = self.bench_stage_job(id, label, stage)?;
         self.start_background_task(Operation::BENCH_SET_STAGE, id, job)
+    }
+
+    /// Search the node's descriptor index from one observation of the track
+    /// called `label`, on a worker thread.
+    ///
+    /// The step that grows a track by more than one sighting at a time: the
+    /// keypoints around the observation are looked up in the index, the images
+    /// whose hits agree on a warp are found, and each one the track does not
+    /// already name becomes a candidate seeded by that warp
+    /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
+    /// index").
+    ///
+    /// **What the track, the index and the `.sift` file decide is decided
+    /// here**, in the caller's own hand: no index open, an observation with no
+    /// place in its photograph, an image whose keypoints cannot be read. The
+    /// worker is left with the forest reads, which are the part that can take a
+    /// while.
+    ///
+    /// `radius_px` is the constellation's radius in the searched image's own
+    /// pixels; `None` takes the radius that holds about fifty of that image's
+    /// keypoints, which is the size the query is worth asking at
+    /// (`specs/core/features/kdf-constellation-query.md`).
+    pub(crate) fn start_bench_descriptor_search(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+        radius_px: Option<f64>,
+        min_inliers: Option<usize>,
+    ) -> Result<(), String> {
+        let outcome = self.begin_bench_search(id, label, observation, radius_px, min_inliers);
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Bench, message.clone());
+        }
+        outcome
+    }
+
+    /// The search up to the moment the worker has it.
+    fn begin_bench_search(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+        radius_px: Option<f64>,
+        min_inliers: Option<usize>,
+    ) -> Result<(), String> {
+        let job = self.bench_search_job(id, label, observation, radius_px, min_inliers)?;
+        self.start_background_task(Operation::BENCH_SEARCH, id, job)
+    }
+
+    /// Why the search cannot run from `observation` of `label`, or `None`.
+    ///
+    /// What greys the table's context-menu entry with a sentence, and what the
+    /// step itself asks, so the menu and the step cannot disagree.
+    pub(crate) fn bench_search_refusal(
+        &self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+    ) -> Option<String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Some(why);
+        }
+        if self.descriptor_index(id).is_none() {
+            return Some(
+                "No descriptor index is open. Open or build one in the Descriptor index row \
+                 above the table."
+                    .to_string(),
+            );
+        }
+        let track = self.bench_track(id, label)?;
+        let row = track.observations.get(observation)?;
+        let node = self.node(id)?;
+        let path = node.recon().sift_path_for_image(row.image as usize);
+        if !path.is_file() {
+            return Some(format!(
+                "{} has no readable .sift file, so there are no keypoints to search from.",
+                self.image_name(ImageRef::new(id, row.image as usize))
+            ));
+        }
+        None
+    }
+
+    /// The search itself, as a function of the `Progress` it reports through.
+    ///
+    /// The searched image's keypoints are read **here**, through the viewer's
+    /// own feature cache, for the reason the draft gives: the viewer already
+    /// holds every image's positions and shapes for the overlay, and a second
+    /// reading of the same file per gesture would be a second cache. What
+    /// crosses to the worker is that keypoint set, a clone of the track, and a
+    /// clone of the forest handle -- the forest owns its own query pool and
+    /// block cache, so the clone is a handle and not a copy.
+    fn bench_search_job(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        observation: usize,
+        radius_px: Option<f64>,
+        min_inliers: Option<usize>,
+    ) -> Result<Job, String> {
+        if let Some(why) = self.bench_search_refusal(id, label, observation) {
+            return Err(why);
+        }
+        let (_, _, track) = self.bench_step_target(id, label)?;
+        let row = track
+            .observations
+            .get(observation)
+            .ok_or_else(|| format!("{label} has no observation {observation}."))?;
+        let image = ImageRef::new(id, row.image as usize);
+        let forest = Arc::clone(
+            &self
+                .descriptor_index(id)
+                .ok_or_else(|| "No descriptor index is open.".to_string())?
+                .forest,
+        );
+        let keypoints = self.image_keypoints(image)?;
+        let radius_px = match radius_px {
+            Some(radius) => radius as f32,
+            None => self.default_search_radius_px(image, keypoints.len()),
+        };
+        let options = SearchOptions {
+            radius_px,
+            min_inliers: min_inliers.unwrap_or(SearchOptions::default().min_inliers),
+            ..SearchOptions::default()
+        };
+        let track = (*track).clone();
+        let label = label.to_string();
+        Ok(Box::new(move |progress| {
+            match bench::search_descriptors(
+                &track,
+                observation,
+                &keypoints,
+                &forest,
+                &options,
+                progress,
+            ) {
+                Err(e) => Finished::Failed(format!("Cannot search {label}: {e}")),
+                Ok((grown, report)) => Finished::BenchTrack {
+                    // The report is one sentence and it is the whole of what
+                    // the step did, so the version wears it as its label and
+                    // the row is that sentence under the item's name.
+                    version_label: report.to_string(),
+                    text: format!("{label}: {report}"),
+                    label,
+                    track: Box::new(grown),
+                },
+            }
+        }))
+    }
+
+    /// Every keypoint of `image`, through the viewer's own feature cache.
+    pub(crate) fn image_keypoints(&mut self, image: ImageRef) -> Result<ImageKeypoints, String> {
+        let name = self.image_name(image);
+        let AppState {
+            scene, sift_cache, ..
+        } = self;
+        let node = crate::scene::node_by_id(scene, image.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        // The whole file: a constellation is taken from a radius of the image
+        // rather than from the first few features, so a prefix would silently
+        // search a different patch.
+        let cached = crate::state::ensure_sift_cached(
+            sift_cache,
+            node.recon(),
+            image,
+            usize::MAX,
+            &sfmtool_core::progress::Progress::none(),
+        )
+        .ok_or_else(|| format!("No .sift file could be read for {name}."))?;
+        Ok(ImageKeypoints {
+            positions: cached.positions_xy.clone(),
+            affine_shapes: cached.affine_shapes.clone(),
+        })
+    }
+
+    /// The constellation radius an image gets when nobody names one: the radius
+    /// that holds about fifty of its keypoints, read off its own sensor size
+    /// and its own keypoint count.
+    fn default_search_radius_px(&self, image: ImageRef, keypoint_count: usize) -> f32 {
+        let dimensions = self.node(image.recon).and_then(|node| {
+            let recon = node.recon();
+            let entry = recon.image_table.images.get(image.index())?;
+            let camera = recon.image_table.cameras.get(entry.camera_index as usize)?;
+            Some((camera.width, camera.height))
+        });
+        match dimensions {
+            Some((width, height)) => sfmtool_core::features::kdforest::radius_for_feature_count(
+                width,
+                height,
+                keypoint_count,
+                SEARCH_TARGET_FEATURES,
+            ),
+            None => bench::DEFAULT_RADIUS_PX,
+        }
     }
 
     /// The evaluation itself, as a function of the `Progress` it reports

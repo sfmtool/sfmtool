@@ -187,6 +187,14 @@ pub struct PyLazyKdForest {
     path: PathBuf,
 }
 
+impl PyLazyKdForest {
+    /// The forest itself, for a binding elsewhere in the crate that takes an
+    /// open index as an argument rather than calling a method on one.
+    pub(crate) fn inner(&self) -> &LazyKdForestU8 {
+        &self.inner
+    }
+}
+
 #[pymethods]
 impl PyLazyKdForest {
     /// Open a `.kdf` without decoding tree or descriptor payloads.

@@ -27,10 +27,26 @@ use crate::patch::view_selection::ViewSelectParams;
 pub enum Provenance {
     /// The committed track the item was put on the bench from.
     Origin,
-    /// A `.sift` feature a descriptor search returned.
+    /// A `.sift` feature the person or a caller named directly: the detected
+    /// keypoint a cluster was started on, or one added to a track by index.
     Descriptor {
         /// The feature's index in its image's `.sift` file.
         feature: u32,
+    },
+    /// An image a descriptor search found the patch in.
+    ///
+    /// Separate from [`Provenance::Descriptor`] because the two name different
+    /// things. A descriptor provenance names **one detected feature**, which
+    /// the observation sits exactly on. A search's observation sits wherever
+    /// the image's affine warp puts the pixel that was searched from, which is
+    /// in general no feature at all; what stands behind it is the number of
+    /// correspondences that agreed on that warp, and that is what is worth
+    /// showing beside the row.
+    Search {
+        /// Correspondences that voted for the warp this observation was placed
+        /// by. It ranks the search's candidates against one another, and it is
+        /// an admission the photometry then judges.
+        inliers: u32,
     },
     /// An image the view sweep proposed.
     Sweep,

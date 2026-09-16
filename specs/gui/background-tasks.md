@@ -10,11 +10,11 @@ it is not, and `get_background_task` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node, with an id of its own. One task runs at a time. The four
-operations are `Bundle adjust`, and the three the bench runs -- `Evaluate
-track`, `Fit track` and `Set track stage` ([bench.md](bench.md)), none of which
-is cancellable, since the patch kernels they call never ask whether they should
-stop.
+one, on one node, with an id of its own. One task runs at a time. The six
+operations are `Bundle adjust`, and the five the bench runs -- `Evaluate
+track`, `Fit track`, `Set track stage`, `Search descriptors` and `Build
+descriptor index` ([bench.md](bench.md)), none of which is cancellable, since
+the kernels and the file reads they call never ask whether they should stop.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.

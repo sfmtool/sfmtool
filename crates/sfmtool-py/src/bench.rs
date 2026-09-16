@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArrayMethods, PyReadonlyArray2, PyReadonlyArray3};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList};
@@ -26,15 +26,20 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, evaluate as core_evaluate, fit as core_fit,
-    set_stage as core_set_stage, set_verdict as core_set_verdict, split as core_split, Bench,
-    BenchItem, ClusterSeed, CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport,
-    FitOptions, FitReport, ItemKind, Observation, ObservationSeed, Provenance, StageKind, Verdict,
+    search_descriptors as core_search_descriptors, set_stage as core_set_stage,
+    set_verdict as core_set_verdict, split as core_split, Bench, BenchItem, ClusterSeed,
+    CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions, FitReport,
+    Found, ItemKind, Observation, ObservationSeed, Provenance, SearchOptions, SearchReport,
+    StageKind, Verdict, DEFAULT_RADIUS_PX,
 };
+use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress::Progress;
 
 use crate::patches::views::{resolve_pyramids, PosedViews};
 use crate::reconstruction::edited::{PyEditedReconstruction, PyPointMap};
+use crate::spatial::constellation_query::DEFAULTS as QUERY_DEFAULTS;
+use crate::spatial::kdf::PyLazyKdForest;
 
 /// Turn any core refusal into a Python `ValueError` carrying its sentence.
 fn refused<E: std::fmt::Display>(e: E) -> PyErr {
@@ -53,9 +58,14 @@ fn parse_verdict(word: &str) -> PyResult<Verdict> {
     }
 }
 
-/// The provenance `word` names, with `feature` and `point` supplying what the
-/// variant that needs one needs.
-fn parse_provenance(word: &str, feature: Option<u32>, point: Option<u32>) -> PyResult<Provenance> {
+/// The provenance `word` names, with `feature`, `inliers` and `point`
+/// supplying what the variant that needs one needs.
+fn parse_provenance(
+    word: &str,
+    feature: Option<u32>,
+    inliers: Option<u32>,
+    point: Option<u32>,
+) -> PyResult<Provenance> {
     match word {
         "origin" => Ok(Provenance::Origin),
         "sweep" => Ok(Provenance::Sweep),
@@ -65,13 +75,19 @@ fn parse_provenance(word: &str, feature: Option<u32>, point: Option<u32>) -> PyR
             .ok_or_else(|| {
                 PyValueError::new_err("a descriptor provenance needs the 'feature' it returned")
             }),
+        "search" => inliers
+            .map(|inliers| Provenance::Search { inliers })
+            .ok_or_else(|| {
+                PyValueError::new_err("a search provenance needs the 'inliers' that voted for it")
+            }),
         "point" => point
             .map(|point| Provenance::Point { point })
             .ok_or_else(|| {
                 PyValueError::new_err("a point provenance needs the 'point' it was pulled from")
             }),
         other => Err(PyValueError::new_err(format!(
-            "unknown provenance: {other:?} (expected origin|descriptor|sweep|pixel|point)"
+            "unknown provenance: {other:?} (expected \r
+             origin|descriptor|search|sweep|pixel|point)"
         ))),
     }
 }
@@ -86,6 +102,10 @@ fn provenance_to_dict<'py>(py: Python<'py>, p: Provenance) -> PyResult<Bound<'py
         Provenance::Descriptor { feature } => {
             d.set_item("kind", "descriptor")?;
             d.set_item("feature", feature)?;
+        }
+        Provenance::Search { inliers } => {
+            d.set_item("kind", "search")?;
+            d.set_item("inliers", inliers)?;
         }
         Provenance::Point { point } => {
             d.set_item("kind", "point")?;
@@ -513,12 +533,14 @@ fn create_cluster(
 /// pixels, over ``[-radius, radius]``) and defaults to the reference
 /// observation's own, so a pixel gesture on a track that already has a scale
 /// needs no radius. `provenance` is one of
-/// ``origin``, ``descriptor`` (with `feature`), ``sweep``, ``pixel`` or
-/// ``point`` (with `point`, which a commit then absorbs).
+/// ``origin``, ``descriptor`` (with `feature`), ``search`` (with `inliers`),
+/// ``sweep``, ``pixel`` or ``point`` (with `point`, which a commit then
+/// absorbs).
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
-#[pyo3(signature = (track, image, pixel, *, shape = None, provenance = "pixel", feature = None, point = None))]
+#[pyo3(signature = (track, image, pixel, *, shape = None, provenance = "pixel", feature = None,
+                    inliers = None, point = None))]
 #[allow(clippy::too_many_arguments)]
 fn add_observation(
     py: Python<'_>,
@@ -528,13 +550,14 @@ fn add_observation(
     shape: Option<[[f64; 2]; 2]>,
     provenance: &str,
     feature: Option<u32>,
+    inliers: Option<u32>,
     point: Option<u32>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let seed = ObservationSeed {
         image,
         pixel,
         shape,
-        provenance: parse_provenance(provenance, feature, point)?,
+        provenance: parse_provenance(provenance, feature, inliers, point)?,
     };
     let (next, report) = core_add_observation(&track.inner, &seed).map_err(refused)?;
     let d = PyDict::new(py);
@@ -959,6 +982,180 @@ fn commit(
     Ok((PyEditedReconstruction { inner: next }, d.unbind()))
 }
 
+/// Ask a descriptor index which other images hold the patch around one
+/// observation, and add each as a candidate.
+///
+/// This is a **constellation query**, not a lookup of one descriptor: the
+/// keypoints inside `radius_px` of the observation are looked up in `forest`,
+/// the hits are grouped by image, and an image whose hits agree on one affine
+/// warp with at least `min_inliers` of them is a candidate. The warp applied to
+/// the observation's own pixel and keypoint-frame shape is the seed the new
+/// observation takes, so a candidate arrives at the place and the size the warp
+/// says the patch has in that image.
+///
+/// Args:
+///     track: The track to search from.
+///     observation: Which of its observations, by position in the list.
+///     positions: `(N, 2)` float32 keypoint centres of the **searched image**,
+///         in its own `.sift` row order, as
+///         :meth:`SiftReader.read_positions_and_shapes` returns them. Nothing
+///         here opens a `.sift` file.
+///     affine_shapes: `(N, 2, 2)` float32 shapes for those same keypoints.
+///     forest: An open :class:`LazyKdForest` whose corpus indexes this
+///         reconstruction's images **in the same order**: a match names a
+///         corpus image index and the observation it becomes names a
+///         reconstruction image index.
+///     radius_px: The constellation's radius around the observation, in that
+///         image's pixels.
+///     min_inliers: Fewest agreeing correspondences an image needs.
+///     Remaining arguments are the constellation query's, as
+///     :meth:`LazyKdForest.constellation_query` takes them.
+///
+/// Returns:
+///     ``(EditableTrack, report)``. The report carries ``observation``,
+///     ``observation_count``, ``image``, ``center``, ``constellation`` (how
+///     many keypoints were asked about), ``added``, ``already_in_track``,
+///     ``sentence`` and ``matches``: one dict per found image with its
+///     ``image``, ``inliers``, ``correspondences``, ``affine``, ``pixel`` and
+///     ``found`` -- ``"added"`` with the index it took, ``"already_in_track"``
+///     with the observation that holds the image, or ``"own_image"``.
+///     Raises ``ValueError`` with the reason when the search is refused.
+#[pyfunction]
+#[pyo3(signature = (track, observation, positions, affine_shapes, forest, *,
+                    radius_px = DEFAULT_RADIUS_PX, min_inliers = QUERY_DEFAULTS.min_inliers,
+                    k = QUERY_DEFAULTS.k, max_leaf_checks = QUERY_DEFAULTS.max_leaf_checks,
+                    threshold_px = QUERY_DEFAULTS.threshold_px,
+                    iterations = QUERY_DEFAULTS.iterations,
+                    min_correspondences = QUERY_DEFAULTS.min_correspondences,
+                    one_hit_per_image = QUERY_DEFAULTS.one_hit_per_image,
+                    same_image_ratio = QUERY_DEFAULTS.same_image_ratio,
+                    max_scale = QUERY_DEFAULTS.max_scale, seed = QUERY_DEFAULTS.seed))]
+#[allow(clippy::too_many_arguments)]
+fn search_descriptors(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observation: usize,
+    positions: PyReadonlyArray2<'_, f32>,
+    affine_shapes: PyReadonlyArray3<'_, f32>,
+    forest: &PyLazyKdForest,
+    radius_px: f32,
+    min_inliers: usize,
+    k: usize,
+    max_leaf_checks: usize,
+    threshold_px: f64,
+    iterations: usize,
+    min_correspondences: usize,
+    one_hit_per_image: bool,
+    same_image_ratio: f32,
+    max_scale: f64,
+    seed: u64,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let keypoints = read_keypoints(&positions, &affine_shapes)?;
+    let options = SearchOptions {
+        constellation: ConstellationParams {
+            k,
+            max_leaf_checks,
+            threshold_px,
+            iterations,
+            min_correspondences,
+            one_hit_per_image,
+            same_image_ratio,
+            min_inliers,
+            max_scale,
+            seed,
+        },
+        radius_px,
+        min_inliers,
+    };
+    let (next, report) = py
+        .detach(|| {
+            core_search_descriptors(
+                &track.inner,
+                observation,
+                &keypoints,
+                forest.inner(),
+                &options,
+                &Progress::none(),
+            )
+        })
+        .map_err(refused)?;
+    let d = search_report_dict(py, &report)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// The searched image's keypoints, from the two arrays a `.sift` read gives.
+fn read_keypoints(
+    positions: &PyReadonlyArray2<'_, f32>,
+    affine_shapes: &PyReadonlyArray3<'_, f32>,
+) -> PyResult<ImageKeypoints> {
+    let positions = positions.as_array();
+    let affine_shapes = affine_shapes.as_array();
+    let n = positions.nrows();
+    if positions.ncols() != 2 || affine_shapes.shape() != [n, 2, 2] {
+        return Err(PyValueError::new_err(format!(
+            "positions must be (N, 2) and affine_shapes (N, 2, 2) for N={n}"
+        )));
+    }
+    Ok(ImageKeypoints {
+        positions: (0..n)
+            .map(|i| [positions[[i, 0]], positions[[i, 1]]])
+            .collect(),
+        affine_shapes: (0..n)
+            .map(|i| {
+                [
+                    [affine_shapes[[i, 0, 0]], affine_shapes[[i, 0, 1]]],
+                    [affine_shapes[[i, 1, 0]], affine_shapes[[i, 1, 1]]],
+                ]
+            })
+            .collect(),
+    })
+}
+
+/// The dict form of a search report, with one entry per found image.
+fn search_report_dict<'py>(py: Python<'py>, report: &SearchReport) -> PyResult<Bound<'py, PyDict>> {
+    let matches = PyList::empty(py);
+    for found in &report.matches {
+        let entry = PyDict::new(py);
+        entry.set_item("image", found.image)?;
+        entry.set_item("inliers", found.inliers)?;
+        entry.set_item("correspondences", found.correspondences)?;
+        entry.set_item(
+            "affine",
+            PyArray1::from_vec(py, found.affine.iter().flatten().copied().collect())
+                .reshape([2, 3])?,
+        )?;
+        entry.set_item("pixel", found.pixel)?;
+        match found.found {
+            Found::Added { observation } => {
+                entry.set_item("found", "added")?;
+                entry.set_item("observation", observation)?;
+            }
+            Found::AlreadyInTrack { observation } => {
+                entry.set_item("found", "already_in_track")?;
+                entry.set_item("observation", observation)?;
+            }
+            Found::OwnImage => entry.set_item("found", "own_image")?,
+        }
+        matches.append(entry)?;
+    }
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("observation_count", report.observation_count)?;
+    d.set_item("image", report.image)?;
+    d.set_item("center", report.center)?;
+    d.set_item("constellation", report.constellation)?;
+    d.set_item("added", report.added())?;
+    d.set_item("already_in_track", report.already_in_track())?;
+    d.set_item("sentence", report.to_string())?;
+    d.set_item("matches", matches)?;
+    Ok(d)
+}
+
 /// Register the bench bindings on the `sfmtool.bench` submodule.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBench>()?;
@@ -972,6 +1169,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit, m)?)?;
     m.add_function(wrap_pyfunction!(set_stage, m)?)?;
     m.add_function(wrap_pyfunction!(split, m)?)?;
+    m.add_function(wrap_pyfunction!(search_descriptors, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     Ok(())
 }

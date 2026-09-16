@@ -255,6 +255,37 @@ impl TrackEdit {
         if row_response.hovered() {
             response.hovered_image = Some(image.index());
         }
+        // The row's own menu: what a search runs *from* is one observation, so
+        // the gesture is on the row rather than in the toolbar, exactly as the
+        // two gestures that name a pixel are in the Image Detail menu rather
+        // than here. Registered on the row's rect, so a right-click anywhere in
+        // it opens the menu for that observation.
+        let label = self
+            .selection_of
+            .as_ref()
+            .map(|(_, label)| label.clone())
+            .unwrap_or_default();
+        egui::Popup::context_menu(&row_response).show(|ui| {
+            let button = egui::Button::new(super::SEARCH_DESCRIPTORS_LABEL);
+            let clicked = match state.bench_search_refusal(id, &label, observation) {
+                None => ui
+                    .add(button)
+                    .on_hover_text(
+                        "Ask the descriptor index which other photographs hold the patch \
+                         around this observation, and add each as a candidate",
+                    )
+                    .clicked(),
+                Some(why) => {
+                    ui.add_enabled(false, button).on_disabled_hover_text(why);
+                    false
+                }
+            };
+            if clicked {
+                response.search_descriptors = Some(observation);
+                ui.close();
+            }
+        });
+
         if row_response.clicked() {
             response.select_image = Some(image.index());
             // With the image, where in it this observation sits, so the Image
