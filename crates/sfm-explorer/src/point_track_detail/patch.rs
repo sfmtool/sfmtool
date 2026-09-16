@@ -105,10 +105,11 @@ impl PointTrackDetail {
 /// point's residual leaves it. `name` is the texture's id, which the caller
 /// makes unique across whatever it keys its own cache by.
 ///
-/// `pub(crate)` because the Track Edit panel draws the same tile for a track on
-/// the bench: one render, so a committed track and the editable copy of it
-/// cannot show the same surface two ways.
-pub(crate) fn render_patch_texture(
+/// The picture itself is [`patch_color_image`]'s, which is what the Track Edit
+/// panel draws its own tile through for a track on the bench: one warp, so a
+/// committed track and the editable copy of it cannot show the same surface two
+/// ways.
+pub(super) fn render_patch_texture(
     ctx: &egui::Context,
     name: String,
     frame: &OrientedPatch,
@@ -117,6 +118,22 @@ pub(crate) fn render_patch_texture(
     keypoint: Option<[f64; 2]>,
     src: &ImageU8,
 ) -> egui::TextureHandle {
+    let color_image = patch_color_image(frame, camera, cam_from_world, keypoint, src);
+    ctx.load_texture(name, color_image, egui::TextureOptions::NEAREST)
+}
+
+/// The picture [`render_patch_texture`] uploads, before it is uploaded.
+///
+/// The warp itself, with no `egui::Context` in it, so what a tile shows is
+/// testable without a texture manager -- which is what lets a headless test
+/// assert that two ways of naming the same place produce the same tile.
+pub(crate) fn patch_color_image(
+    frame: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    cam_from_world: &RigidTransform,
+    keypoint: Option<[f64; 2]>,
+    src: &ImageU8,
+) -> egui::ColorImage {
     let frame = render_frame(frame, camera, cam_from_world, keypoint);
     let map = WarpMap::from_patch(&frame, camera, cam_from_world, PATCH_RES);
     let tile = remap_bilinear(src, &map);
@@ -126,8 +143,7 @@ pub(crate) fn render_patch_texture(
     for px in tile.data().as_chunks::<3>().0.iter() {
         rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
     }
-    let color_image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-    ctx.load_texture(name, color_image, egui::TextureOptions::NEAREST)
+    egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba)
 }
 
 /// The frame one observation's tile is rendered through: the point's patch

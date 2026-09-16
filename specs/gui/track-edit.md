@@ -205,7 +205,7 @@ says which column each number is in.
 | Column | Cluster stage | Track stage |
 |---|---|---|
 | Verdict | a three-state control, clicked to cycle `in` / `out` / `candidate`; a dot marks a verdict set by hand | same |
-| Tile | the observation's own grid: the `R x R` samples the refinement kernel reads at the refined position and shape | the surfel re-rendered from this observation, re-anchored on its keypoint -- the tile Point Track Detail draws |
+| Tile | the observation's own grid: the `R x R` samples the refinement kernel reads where it sits, at its shape | the surfel re-rendered from this observation, re-anchored where it sits -- the tile Point Track Detail draws |
 | Img, Name | as Point Track Detail | as Point Track Detail |
 | ZNCC | against the reference template | leave-one-out against the consensus, at the correlation peak within *search px* of the observation |
 | Seed sh. | how far the refinement moved off the seed, px | how far that peak sits from the observation's own keypoint, px |
@@ -239,18 +239,29 @@ picture that produced it is the thing a person can judge, which is the whole
 reason the bench exists. So each row draws what its stage registers, through
 the code that registers it rather than a second rendering of the same idea: at
 the track stage the surfel warped into this observation's view and re-anchored
-on its keypoint, by the Point Track Detail panel's own renderer, so a track on
-the bench and the point it came from cannot show one surface two ways; at the
-cluster stage the `R x R` grid the refinement kernel samples
-(`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that
-observation's refined position and shape, over the cluster's own radius
+where the observation sits, by the Point Track Detail panel's own warp, so a
+track on the bench and the point it came from cannot show one surface two ways;
+at the cluster stage the `R x R` grid the refinement kernel samples
+(`sfmtool_core::patch::cluster_refine::sample_member_grid`) at that same place
+and its shape, over the cluster's own radius
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "The cluster stage's units") and on the template's resolution once one has
 been cut. The radius is the cluster's from the start, so the tile is the square
 the person asked for before an evaluation and the square the ZNCC beside it was
-measured over after one. A row with nothing to render -- no surfel yet,
-or a photograph the node's cache has not decoded -- draws an empty frame of the
-same size, so the columns beside it never shift.
+measured over after one. A row with nothing to render -- no surfel yet, nothing
+saying where the observation sits, or a photograph the node's cache has not
+decoded -- draws an empty frame of the same size, so the columns beside it never
+shift.
+
+**Where the observation sits is the one rule**, at either stage: the keypoint a
+reading wrote, else the refined cluster position, else the seed it was proposed
+at (`crate::bench::observation_site`, which is also what the mark, the reveal
+and the wire read). A candidate a descriptor search has just added carries only
+that seed, and the tile is the whole of what says whether the search found the
+right surface -- so it is cut around the seed rather than left blank or, at the
+track stage, cut around wherever the bare projection of the point happens to
+land in a photograph nothing has yet tied it to. Nothing has to be evaluated for
+a fresh row to show its patch.
 
 The photographs are the node's own full-resolution cache, decoded once for the
 whole viewer, and the dock fills it for the active track's images before the
@@ -271,9 +282,9 @@ current view is not showing it, leaving the zoom where it is
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Revealing a
 feature named by another panel"). The pixel is the one that panel's bench layer
 draws the observation's mark at -- the track stage's keypoint, else the cluster
-stage's refined position or its seed -- read through the one function both
-callers use, so the mark and the view cannot disagree about where the
-observation is.
+stage's refined position or its seed -- read through the one function every
+caller uses, so the mark, the tile, the view and what the wire reports cannot
+disagree about where the observation is.
 
 The verdict control is the one real widget in a row: the row rect is registered
 first and the control after it, so a click that lands on the control cycles the
@@ -382,7 +393,10 @@ greyed with its own sentence when no index is open; a row per observation in
 index order; a verdict showing under the same observation index, pinned; the
 sliders painting the rows, leaving a pinned verdict where it is, and the
 painting matching what applying the bars then produces; the cells following the
-stage the track is in; every row drawing its own rendered tile at both stages;
+stage the track is in; every row drawing its own rendered tile at both stages; a
+candidate a descriptor search has just added drawing its tile cut around the seed
+the warp gave it rather than around the point's own projection, with nothing
+evaluated;
 every item named in the tabs; the sliders keeping where they were left,
 following the active track's own bars when a step moves them, and re-seating
 when another item becomes active; and a row click reporting both the image it

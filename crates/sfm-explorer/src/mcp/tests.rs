@@ -118,8 +118,8 @@ fn deferred_screenshot(
         Outcome::Deferred(super::Deferred::Screenshot {
             source, caption, ..
         }) => (source, caption),
-        Outcome::Deferred(super::Deferred::Background(_)) => {
-            panic!("expected a screenshot's deferral, got a background operation's")
+        Outcome::Deferred(_) => {
+            panic!("expected a screenshot's deferral, got another tool's")
         }
         Outcome::Done(Ok(_)) => panic!("a screenshot must defer, not answer in the frame"),
         Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
@@ -5939,6 +5939,52 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     assert_eq!(version_count(&state), 4);
 }
 
+/// Every observation says where it sits, whether or not anything has read it.
+///
+/// A candidate added to a track-stage track -- by the wire here, by a
+/// descriptor search in the panel -- carries a seed and no keypoint until a
+/// reading is run, and `pixel` is that one answer: the keypoint where there is
+/// one, the seed where there is not. So an agent can look at a fresh candidate
+/// without first evaluating the track, and it is looking at the place the
+/// panel's own mark and tile are drawn at
+/// ([`crate::bench::observation_site`]).
+#[test]
+fn every_observation_reports_where_it_sits_read_or_not() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let added = call(
+        &mut state,
+        &mut viewer,
+        "add_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 3,
+            "pixel": [130.5, 95.25],
+        }),
+    );
+    let candidate = added["observation"].as_u64().expect("the index it took") as usize;
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let rows = track["observations"].as_array().expect("the observations");
+    assert_eq!(rows[candidate]["track"], Value::Null, "{track}");
+    assert_eq!(
+        rows[candidate]["pixel"],
+        json!([130.5, 95.25]),
+        "a fresh candidate does not say where it sits: {track}"
+    );
+    // And an observation a reading has written reports that keypoint, which is
+    // the other half of the one rule.
+    assert_eq!(
+        rows[0]["pixel"], rows[0]["track"]["keypoint"],
+        "a read observation reports something other than its keypoint: {track}"
+    );
+}
+
 /// A seed carrying an affine shape puts that shape on the observation, which is
 /// what a caller holding a detector's keypoint frame has to be able to state.
 #[test]
@@ -7033,11 +7079,61 @@ fn a_point_not_in_this_photograph_is_refused_rather_than_followed() {
     assert_eq!(state.selected_image.map(|image| image.index()), Some(0));
 }
 
-/// Before the panel has drawn anything there is no panel to fit a view to, and
-/// the two tools say so in the two ways they can: nulls, and a refusal naming
-/// the call that fixes it.
+/// One frame of the Image Detail panel, as the dock runs one: the standing
+/// request taken and applied in a panel of [`VIEW_PANEL`] points, and the
+/// reading published on `AppState`. That publication is the whole of what a
+/// deferred view call waits for.
+fn panel_draws(state: &mut AppState, image: crate::scene::ImageRef) {
+    let mut geometry = crate::image_detail::ViewGeometry {
+        image,
+        image_size: VIEW_IMAGE,
+        panel_size: VIEW_PANEL,
+        pan: [0.0, 0.0],
+        zoom: 1.0,
+    };
+    if let Some(look) = state.take_look(image) {
+        geometry = crate::image_detail::look_at(geometry, &look);
+    }
+    state.image_detail_view = Some(geometry);
+}
+
+/// The wait a view call left behind, or a panic saying it did not wait.
+#[track_caller]
+fn deferred_view(
+    state: &mut AppState,
+    viewer: &mut Viewer3D,
+    arguments: Value,
+) -> super::PendingView {
+    let map = arguments
+        .as_object()
+        .cloned()
+        .expect("test arguments are an object");
+    let command = tools::parse("set_image_detail_view", Some(&map))
+        .unwrap_or_else(|e| panic!("set_image_detail_view: {e}"));
+    match agent(state, viewer, command) {
+        Outcome::Deferred(super::Deferred::ImageDetailView(pending)) => pending,
+        Outcome::Deferred(_) => panic!("expected the view's deferral, got another tool's"),
+        Outcome::Done(Ok(_)) => panic!("expected the call to wait for a drawn frame"),
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+    }
+}
+
+/// What a waiting call is answered with, once a frame has drawn.
+#[track_caller]
+fn view_reply(state: &AppState, pending: &super::PendingView) -> Value {
+    match super::display::pending_view_reply(state, pending).expect("the frame answered it") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    }
+}
+
+/// Before the panel has drawn anything there is no frame to do the arithmetic
+/// in, so the read reports nulls and the write **waits** rather than refusing:
+/// the look is standing, and the reply is the reading of the frame that applies
+/// it.
 #[test]
-fn a_panel_that_has_never_drawn_reports_nothing_and_refuses() {
+fn a_panel_that_has_never_drawn_reports_nothing_and_waits_for_a_frame() {
     let (mut state, mut viewer) = two_reconstructions();
     let view = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
     assert_eq!(
@@ -7049,13 +7145,144 @@ fn a_panel_that_has_never_drawn_reports_nothing_and_refuses() {
 
     let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
     state.select_image(Some(image));
+    let pending = deferred_view(
+        &mut state,
+        &mut viewer,
+        json!({ "pixel": [300.0, 200.0], "zoom": 4.0 }),
+    );
+    assert_eq!(pending.image, image);
+    assert!(
+        super::display::pending_view_reply(&state, &pending).is_none(),
+        "answered before any frame had drawn"
+    );
+
+    panel_draws(&mut state, image);
+    let landed = view_reply(&state, &pending);
+    assert_eq!(landed["image_detail_view"]["zoom"], json!(4.0), "{landed}");
+    assert_about(
+        view_centre(&landed),
+        [300.0, 200.0],
+        "the pixel is off centre",
+    );
+}
+
+/// A frame that never comes is not waited on for ever: a photograph the
+/// workspace no longer holds draws nothing however long it is given, so the
+/// wait has a deadline and the answer past it says what did not happen.
+#[test]
+fn a_view_the_panel_never_draws_is_given_up_on() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(image));
+    let mut pending = deferred_view(&mut state, &mut viewer, json!({ "fit": true }));
+    pending.started = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    let refusal = match super::display::pending_view_reply(&state, &pending)
+        .expect("the deadline answers it")
+    {
+        Err(refusal) => refusal,
+        Ok(_) => panic!("a frame that never drew has no view to report"),
+    };
+    assert!(refusal.0.contains("has not drawn"), "{refusal}");
+    assert!(
+        refusal.0.contains(&state.image_name(image)),
+        "the refusal does not name the photograph: {refusal}"
+    );
+}
+
+/// A sighting *is* a place in a particular photograph, so a
+/// `bench_observation` needs no selection and no open panel: the tool selects
+/// the image, opens the panel if it was closed, and the look lands on the first
+/// frame that draws it.
+#[test]
+fn a_bench_observation_target_selects_its_photograph_with_none_selected() {
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    state.hide_panel(Tab::ImageDetail);
+    assert_eq!(state.selected_image, None, "the fixture selected an image");
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let row = &track["observations"][1];
+    let pixel = row["pixel"].as_array().expect("where it sits").clone();
+    let at = |i: usize| pixel[i].as_f64().expect("a number");
+    let image = row["camera_image"].as_u64().expect("its photograph") as usize;
+
+    let pending = deferred_view(
+        &mut state,
+        &mut viewer,
+        json!({ "reconstruction_label": "run_a", "bench_observation": 1, "zoom": 6.0 }),
+    );
+    assert_eq!(
+        state.selected_image.map(|image| image.index()),
+        Some(image),
+        "the call did not select the photograph its target named"
+    );
+    assert!(
+        state.panel_is_in_front(Tab::ImageDetail),
+        "the call left the panel where nothing would draw it"
+    );
+
+    panel_draws(&mut state, pending.image);
+    let landed = view_reply(&state, &pending);
+    assert_eq!(landed["image_detail_view"]["zoom"], json!(6.0), "{landed}");
+    assert_eq!(
+        landed["image_detail_view"]["camera_image"],
+        json!(image),
+        "{landed}"
+    );
+    assert_about(
+        view_centre(&landed),
+        [at(0), at(1)],
+        "the observation is off centre",
+    );
+}
+
+/// `camera_image` names the photograph just as directly, so a `pixel` target
+/// beside one also needs nothing selected.
+#[test]
+fn a_pixel_target_naming_a_camera_image_needs_no_selection() {
+    let (mut state, mut viewer) = two_reconstructions();
+    call(&mut state, &mut viewer, "clear_selection", json!({}));
+    let pending = deferred_view(
+        &mut state,
+        &mut viewer,
+        json!({ "camera_image": 3, "pixel": [640.0, 480.0], "zoom": 8.0 }),
+    );
+    assert_eq!(state.selected_image.map(|image| image.index()), Some(3));
+
+    panel_draws(&mut state, pending.image);
+    let landed = view_reply(&state, &pending);
+    assert_eq!(
+        landed["image_detail_view"]["camera_image"],
+        json!(3),
+        "{landed}"
+    );
+    assert_about(
+        view_centre(&landed),
+        [640.0, 480.0],
+        "the pixel is off centre",
+    );
+}
+
+/// What is left to refuse: a target that names no photograph, with none
+/// selected. The sentence says both ways out of it.
+#[test]
+fn a_pixel_target_with_no_photograph_named_or_selected_is_refused() {
+    let (mut state, mut viewer) = two_reconstructions();
+    call(&mut state, &mut viewer, "clear_selection", json!({}));
     let refusal = refused_call(
         &mut state,
         &mut viewer,
         "set_image_detail_view",
-        json!({ "fit": true }),
+        json!({ "pixel": [10.0, 20.0], "zoom": 4.0 }),
     );
-    assert!(refusal.0.contains("show_panel"), "{refusal}");
+    assert!(refusal.0.contains("camera_image"), "{refusal}");
+    assert!(refusal.0.contains("select_camera_image"), "{refusal}");
+    assert_eq!(state.look, None, "a refused call left a request standing");
 }
 
 /// `get_image_detail_view` answers from the panel's own last frame, which is

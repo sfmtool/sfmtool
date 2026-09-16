@@ -42,9 +42,11 @@ use serde_json::{json, Value};
 
 use super::tools::Args;
 use super::{
-    resolve_camera_image, resolve_reconstruction, ImageDetailDisplayChange, ImageDetailTarget,
-    ImageDetailViewRequest, IntrinsicsChange, JsonReply, ToolError,
+    resolve_camera_image, resolve_reconstruction, Deferred, ImageDetailDisplayChange,
+    ImageDetailTarget, ImageDetailViewRequest, IntrinsicsChange, JsonReply, Outcome, PendingView,
+    Reply, ToolError, ToolOutput,
 };
+use crate::dock::Tab;
 use crate::image_detail::{Look, ViewGeometry};
 use crate::scene::{ImageRef, ReconId};
 use crate::state::{
@@ -351,23 +353,103 @@ pub(super) fn get_view(state: &AppState) -> JsonReply {
 ///
 /// Three steps, in this order, because each can refuse and a refusal should
 /// change nothing: the call's node, photograph and target are resolved into a
-/// pixel or a rectangle; the view that produces is computed against the panel's
-/// own geometry; and only then is the request left for the panel to apply on
-/// its next frame. The reply is the computed view in the same shape
-/// [`get_view`] answers in, so the caller reads where it landed -- including a
-/// zoom the panel's range clamped -- rather than the numbers it sent.
+/// pixel or a rectangle; the panel is brought to where the call can be seen --
+/// the photograph selected, the panel surfaced if it was closed or behind
+/// another tab; and the request is left for the panel to apply on the frame it
+/// draws that photograph. The
+/// reply is where the view landed in the same shape [`get_view`] answers in, so
+/// the caller reads the applied view -- including a zoom the panel's range
+/// clamped -- rather than the numbers it sent.
 ///
-/// The arithmetic is [`crate::image_detail::look_at`]'s, the same function the
-/// panel itself runs a frame later, so what this reply says and what the panel
-/// does are one computation rather than two that could disagree.
-pub(super) fn set_view(state: &mut AppState, request: &ImageDetailViewRequest) -> JsonReply {
+/// **The call selects the photograph it is about.** A `bench_observation` and a
+/// `point` name their own, a `camera_image` argument names one outright, and
+/// [`AppState::look_at_in_image`] selects whichever it is as the row click in
+/// Track Edit does. So the only thing left to refuse is a call that names no
+/// photograph with none selected.
+///
+/// **The panel's size is the panel's to say**, so a call arriving before it has
+/// drawn one has no frame to compute a view in and cannot answer in its own
+/// frame. It defers instead of refusing ([`super::PendingView`]): the look is
+/// standing, the panel applies it on the frame it draws the photograph, and the
+/// reply is the reading that frame publishes. Where a reading already stands,
+/// the answer is in this frame, through
+/// [`crate::image_detail::look_at`] -- the same function the panel itself runs
+/// a frame later, so what the reply says and what the panel does are one
+/// computation rather than two that could disagree.
+pub(super) fn set_view(state: &mut AppState, request: &ImageDetailViewRequest) -> Outcome {
+    match apply_view(state, request) {
+        Ok(outcome) => outcome,
+        Err(refusal) => super::done(Err(refusal)),
+    }
+}
+
+/// [`set_view`]'s body, with its refusals as a `Result` so every one of them is
+/// a `?` and none of them can be reached after the state has moved.
+fn apply_view(
+    state: &mut AppState,
+    request: &ImageDetailViewRequest,
+) -> Result<Outcome, ToolError> {
     let id = resolve_reconstruction(state, request.reconstruction_label.as_deref())?;
     let (image, look) = resolve_target(state, id, request)?;
-    let geometry = geometry_for(state, image)?;
-    let landed = crate::image_detail::look_at(geometry, &look);
+    let standing = geometry_for(state, image)?;
     state.look_at_in_image(image, look);
-    Ok(json!({ "image_detail_view": view_document(state, Some(landed)) }))
+    // A view of a panel nobody can see is a view nobody asked for -- and a
+    // panel docked behind another tab draws nothing, so there would also be no
+    // frame to answer from. Surfaced only when it is not already in front,
+    // because `show_panel` records a row of its own and an agent walking a
+    // track's observations should leave one `Raised` line and not one per step.
+    if !state.panel_is_in_front(Tab::ImageDetail) {
+        state.show_panel(Tab::ImageDetail);
+    }
+    let Some(geometry) = standing else {
+        return Ok(Outcome::Deferred(Deferred::ImageDetailView(PendingView {
+            image,
+            started: std::time::Instant::now(),
+        })));
+    };
+    let landed = crate::image_detail::look_at(geometry, &look);
+    Ok(super::done(Ok(
+        json!({ "image_detail_view": view_document(state, Some(landed)) }),
+    )))
 }
+
+/// Whether the frame just drawn answered a waiting `set_image_detail_view`, and
+/// with what.
+///
+/// `None` while the panel has still not drawn that photograph, which puts the
+/// call back in the queue for the next frame. The deadline is what keeps a
+/// caller from waiting on a frame that is never going to come: a photograph the
+/// workspace no longer holds draws nothing however long it is given, and an
+/// `embedded_patches` node has no photographs at all.
+pub(super) fn pending_view_reply(state: &AppState, pending: &super::PendingView) -> Option<Reply> {
+    if let Some(view) = state
+        .image_detail_view
+        .filter(|view| view.image == pending.image)
+    {
+        return Some(Ok(ToolOutput::Json(
+            json!({ "image_detail_view": view_document(state, Some(view)) }),
+        )));
+    }
+    if pending.started.elapsed() < DRAWS_WITHIN {
+        return None;
+    }
+    Some(Err(ToolError::new(format!(
+        "The Image Detail panel has not drawn {} since the call, so there is no view to report. \
+         The look is standing and the panel will apply it on the frame it does draw it; a \
+         photograph the workspace no longer holds never will. get_image_detail_view says what \
+         the panel is looking at now.",
+        state.image_name(pending.image),
+    ))))
+}
+
+/// How long a view request waits for the panel to draw the photograph.
+///
+/// The panel draws in the very frame the call is applied in -- the drain runs
+/// before the egui pass, and the decode is on this thread -- so this is not a
+/// budget for the work but a bound on a frame that is never coming: a closed
+/// window, or a photograph that cannot be read. Half a second is a dozen frames
+/// of slack and still short of a wait anyone would sit through.
+const DRAWS_WITHIN: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The photograph a call is about, and the look it is asking for in it.
 ///
@@ -459,31 +541,28 @@ fn selected_image(
 /// `image`'s own size.
 ///
 /// The panel size can only come from the panel -- nothing else in the process
-/// knows how big its body is -- so a call arriving before it has drawn a
-/// photograph is refused rather than answered against a guess. The image size
-/// is the lens's, which is what the panel's texture is, and is known without
-/// decoding anything; where the panel is already showing this photograph its
-/// own measurement is used instead, since that is the number the frame will
-/// actually use.
-fn geometry_for(state: &AppState, image: ImageRef) -> Result<ViewGeometry, ToolError> {
-    let standing = state.image_detail_view.ok_or_else(|| {
-        ToolError::new(
-            "The Image Detail panel has not drawn a photograph yet, so there is no panel to fit \
-             a view to. Send show_panel { \"panel_name\": \"image_detail\" } and select a camera \
-             image first.",
-        )
-    })?;
-    if standing.image == image {
-        return Ok(standing);
-    }
+/// knows how big its body is -- so `None` is "there is no frame to do the
+/// arithmetic in yet", which is what a call before the panel's first drawn
+/// photograph gets, and what makes that call wait for a frame rather than be
+/// answered against a guess. The image size is the lens's, which is what the
+/// panel's texture is, and is known without decoding anything; where the panel
+/// is already showing this photograph its own measurement is used instead,
+/// since that is the number the frame will actually use.
+fn geometry_for(state: &AppState, image: ImageRef) -> Result<Option<ViewGeometry>, ToolError> {
     let image_size = image_size_px(state, image).ok_or_else(|| {
         ToolError::new("That camera image is no longer in this version of the reconstruction.")
     })?;
-    Ok(ViewGeometry {
+    let Some(standing) = state.image_detail_view else {
+        return Ok(None);
+    };
+    if standing.image == image {
+        return Ok(Some(standing));
+    }
+    Ok(Some(ViewGeometry {
         image,
         image_size,
         ..standing
-    })
+    }))
 }
 
 /// `image`'s size in its own pixels, from the lens it was shot through.

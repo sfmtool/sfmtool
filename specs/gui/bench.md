@@ -434,14 +434,28 @@ panel means when it names no item.
 they answer. `get_bench` is the Bench group as JSON: each item's label, kind,
 stage, origin and counts, and the active label per kind. `get_bench_track` is
 the Track Edit table: the stage and its data, the origin, the thresholds, and
-every observation with its provenance, verdict and both stages' measurements
-where they exist -- at the track stage, the two distances (`seed_shift_px` and
-`projection_offset_px`) and, for a row the reading could not score, the `reason`
-sentence in place of a ZNCC. **An observation is addressed by its position in
+every observation with its provenance, verdict, `pixel` and both stages'
+measurements where they exist -- at the track stage, the two distances
+(`seed_shift_px` and `projection_offset_px`) and, for a row the reading could
+not score, the `reason` sentence in place of a ZNCC. **An observation is
+addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or an evaluation still names the same observation. The template's
 samples and the consensus bitmap are reported as present or absent rather than
 sent: they are pictures, and that surface is not a data channel.
+
+**`pixel` is where the observation sits, whatever said so**: the keypoint a
+reading wrote, else the refined cluster position, else the seed the step that
+proposed it left. It is a field of its own rather than something a caller
+assembles out of the two measurement blocks, because that one answer is what
+every reader of a sighting wants and a candidate a descriptor search has just
+added has no keypoint at all -- an agent would otherwise have to know which slot
+to fall back to before it could look at one. It is `crate::bench::observation_site`'s
+rule, so the number an agent reads here is the pixel the Image Detail panel
+marks, the place the Track Edit row click reveals, the centre of the tile that
+row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`
+only for an observation nothing says the place of, which is the state core's
+`Unmeasured::NoSeed` names.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a

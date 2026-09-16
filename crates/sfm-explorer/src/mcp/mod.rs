@@ -665,9 +665,10 @@ pub(crate) enum Outcome {
 
 /// A command whose answer cannot exist yet.
 ///
-/// Two tools are in here, waiting on different things. `App` holds them until
-/// the readback phase and answers them there, where the `wgpu::Device` already
-/// is -- which is what keeps [`apply_with_window`] free of a GPU handle.
+/// Three tools are in here, waiting on different things. `App` holds them until
+/// the readback phase and answers them there, after the frame they were waiting
+/// on has been drawn and presented -- which is also where the `wgpu::Device`
+/// already is, and so what keeps [`apply_with_window`] free of a GPU handle.
 pub(crate) enum Deferred {
     Screenshot {
         /// Which pixels to read once the frame has been presented.
@@ -681,6 +682,25 @@ pub(crate) enum Deferred {
     /// A background operation this call started, whose answer is either its
     /// result or a handle, whichever the clock reaches first.
     Background(BackgroundReply),
+    /// A view request the Image Detail panel has not drawn yet, whose answer is
+    /// the view the frame that draws it settles on.
+    ImageDetailView(PendingView),
+}
+
+/// A `set_image_detail_view` call waiting for the panel to draw the photograph
+/// it named.
+///
+/// The look is already standing on `AppState` and the panel applies it on the
+/// frame it draws that photograph; what is waited for is the *reading*, since
+/// the panel is the only thing that knows how big its body is and therefore
+/// what fit means in it. As with [`BackgroundReply`], nothing blocks and no
+/// frame is held: each frame asks [`display::pending_view_reply`] whether the
+/// answer is there yet.
+pub(crate) struct PendingView {
+    /// The photograph whose frame the reply is waiting on.
+    pub(crate) image: ImageRef,
+    /// When the call was made, which the deadline is measured from.
+    pub(crate) started: std::time::Instant,
 }
 
 /// A tool call waiting on the operation it started.
@@ -849,7 +869,7 @@ pub(crate) fn apply_with_window(
         Command::GetImageDetailDisplay => done(display::get(state)),
         Command::SetImageDetailDisplay { change } => done(display::set(state, &change)),
         Command::GetImageDetailView => done(display::get_view(state)),
-        Command::SetImageDetailView { request } => done(display::set_view(state, &request)),
+        Command::SetImageDetailView { request } => display::set_view(state, &request),
         Command::GetTimingDetail => done(display::get_timing_detail(state)),
         Command::SetTimingDetail { enabled } => done(display::set_timing_detail(state, enabled)),
         Command::SetView { view } => done(view::set_view(state, viewer, view)),

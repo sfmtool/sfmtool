@@ -36,7 +36,7 @@ mod patch;
 mod prepare;
 mod table;
 
-pub(crate) use patch::render_patch_texture;
+pub(crate) use patch::patch_color_image;
 
 #[cfg(test)]
 mod tests;

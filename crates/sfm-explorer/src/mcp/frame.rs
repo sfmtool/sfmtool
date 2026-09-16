@@ -266,6 +266,18 @@ impl App {
                         None => waiting.push((Deferred::Background(pending), reply)),
                     }
                 }
+                // After the egui pass, so the geometry this reads is the one
+                // the frame that has just drawn published: a call that opened
+                // the panel and moved the selection is answered by its own
+                // frame rather than by the next one.
+                Deferred::ImageDetailView(pending) => {
+                    match super::display::pending_view_reply(&self.state, &pending) {
+                        Some(answer) => {
+                            let _ = reply.send(answer);
+                        }
+                        None => waiting.push((Deferred::ImageDetailView(pending), reply)),
+                    }
+                }
             }
         }
         let still_waiting = !waiting.is_empty();
@@ -354,7 +366,7 @@ impl App {
 fn reads_the_surface((deferred, _): &(Deferred, tokio::sync::oneshot::Sender<Reply>)) -> bool {
     match deferred {
         Deferred::Screenshot { source, .. } => !matches!(source, ScreenshotSource::ViewportRender),
-        Deferred::Background(_) => false,
+        Deferred::Background(_) | Deferred::ImageDetailView(_) => false,
     }
 }
 

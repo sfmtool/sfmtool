@@ -902,23 +902,47 @@ otherwise.
   ask.
 - **`bench_observation` does**, because a sighting *is* a place in a particular
   photograph; so walking a track's observations takes one argument per step.
-  Where it sits is `bench::observation_pixel`'s, the same rule the panel's own
-  bench mark and the Track Edit row click share
+  Where it sits is `bench::observation_site`'s, the same rule the panel's own
+  bench mark, the Track Edit row click and `get_bench_track`'s `pixel` share
   ([bench.md](bench.md)).
 
-The reply is the same document `get_image_detail_view` returns, for the view
-that **will be applied on the next frame**: the arithmetic is the panel's own
-`look_at` ([multi-panel-image-browser.md](multi-panel-image-browser.md) §
-"Looking at a place"), run here against the geometry the panel published, so
-what the reply says and what the panel does are one computation rather than two
-that could disagree.
+**The call brings the panel to where its answer can be seen.** The photograph
+is selected -- through `AppState::look_at_in_image`, which is the row click's
+own path, so the Action Log row and the selection couplings are the ones every
+other selection gets -- and the Image Detail panel is surfaced with
+`show_panel`: opened where it was closed, raised where it was docked behind
+another tab, since a panel that is not the front tab of its group draws nothing
+and there would be no frame to answer from either. Surfaced only where it is not
+already in front, because `show_panel` records a row of its own and an agent
+walking a track's observations should leave one `Raised` line rather than one
+per step. So a target that names a photograph needs neither a
+`select_camera_image` nor a `show_panel` before it, and the only thing left to
+refuse is a target that names none with none selected.
 
-Everything a call can be refused for is refused before anything moves: no
+The reply is the same document `get_image_detail_view` returns, for the view
+the panel applies: the arithmetic is the panel's own `look_at`
+([multi-panel-image-browser.md](multi-panel-image-browser.md) § "Looking at a
+place"), run here against the geometry the panel published, so what the reply
+says and what the panel does are one computation rather than two that could
+disagree.
+
+**A call that arrives before the panel has published a geometry waits for the
+frame that does.** The panel is the only thing that knows how big its body is,
+so there is nothing to do the arithmetic in yet -- but the request itself
+travels beside the selection and the panel applies it on the frame it draws that
+photograph, so what is missing is the *reading* and not the view. The call
+therefore defers (`Deferred::ImageDetailView`), exactly as a screenshot defers
+for a frame that has not been rendered, and the frame that draws the photograph
+answers it with what it published. Waiting is bounded: a photograph the
+workspace no longer holds draws nothing however long it is given, so past half a
+second the answer is a refusal saying the panel has not drawn it and that the
+look is still standing.
+
+Everything else a call can be refused for is refused before anything moves: no
 target or two, a `zoom` with a target that settles its own, a rectangle of no
 area, a point with no sighting in this photograph, a feature index the file does
-not have, no camera image selected and none named, and -- the one that is about
-the window rather than the call -- a panel that has never drawn a photograph, so
-there is no panel size to fit a view to. That last one names `show_panel`.
+not have, and no camera image selected and none named -- which names both
+`camera_image` and `select_camera_image`.
 
 ### The view block
 
@@ -2431,9 +2455,15 @@ pub(crate) enum Outcome {
     Deferred(Deferred),
 }
 
-/// A command whose answer cannot exist until this frame has been rendered.
+/// A command whose answer cannot exist yet.
 pub(crate) enum Deferred {
     Screenshot { source: ScreenshotSource, max_dimension: Option<u32>, caption: String },
+    /// A background operation, answered with its result or with a handle,
+    /// whichever the clock reaches first (§ "The bench family").
+    Background(BackgroundReply),
+    /// A view the Image Detail panel has not drawn yet, answered with the
+    /// reading the frame that draws it publishes (§ "The Image Detail view").
+    ImageDetailView(PendingView),
 }
 
 /// Which pixels a deferred screenshot reads.
@@ -2743,11 +2773,20 @@ where a test hands no host over.
   two, a `zoom` beside a target that settles its own, a `track` with no
   `bench_observation`, a rectangle of no area, a point whose track has no
   sighting in the photograph being looked at (which leaves the selection where it
-  was), an observation index past the end, and no camera image selected -- and,
-  with no frame ever drawn, `get_image_detail_view` answering in nulls while
-  `set_image_detail_view` refuses naming `show_panel`. `get_image_detail_view`
-  reports the panel's last frame and does **not** follow a selection the panel
-  has not drawn yet.
+  was), an observation index past the end, and a target naming no photograph
+  with none selected, whose sentence names both `camera_image` and
+  `select_camera_image` and which leaves no request standing.
+  `get_image_detail_view` reports the panel's last frame and does **not** follow
+  a selection the panel has not drawn yet.
+- **A view of a photograph the panel has not drawn waits for the frame that
+  draws it.** With no frame ever drawn, `get_image_detail_view` answers in
+  nulls while `set_image_detail_view` defers; a frame seeded as the dock seeds
+  one -- the standing request taken, `look_at` run in a panel of a stated size,
+  the reading published -- answers it with where it landed. A
+  `bench_observation` and a `pixel` beside a `camera_image` both get there with
+  nothing selected and the panel hidden, selecting the photograph and surfacing
+  the panel on the way. Past the deadline, a wait nothing has drawn is answered
+  with the refusal naming the photograph.
 - **`get_window_layout` returns the file**: its `window_layout`, parsed back
   through `WindowLayout::from_json`, equals `state.window_layout()`; the `window`
   block beside it is the live one with `monitors`, current first; `panels` has
@@ -2897,7 +2936,10 @@ where a test hands no host over.
   projection with a textured photograph cached for every image**: a cluster
   started at a pixel, an observation added at another and a verdict on it are
   three versions, and `get_bench_track` shows the verdict under the index the
-  add reported; an affine seed keeps the shape it was given; the three seed
+  add reported; an observation reports where it sits whether or not anything has
+  read it -- the seed for a candidate the wire has just added, the keypoint for
+  an observation a reading wrote; an affine seed keeps the shape it was given;
+  the three seed
   forms are exclusive and a feature seed on a node with no `.sift` file is
   refused naming the file; a point put on the bench is an item `get_bench`
   lists, active, at the track stage, seated on that point; a split answers with

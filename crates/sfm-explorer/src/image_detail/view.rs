@@ -26,7 +26,9 @@
 //!   drawing, so it writes the frame's geometry into
 //!   [`AppState::image_detail_view`](crate::state::AppState::image_detail_view)
 //!   and the wire reads it back. A view tool arriving before the panel has ever
-//!   drawn therefore has nothing to measure against, and says so.
+//!   drawn therefore has nothing to measure against: it leaves its [`Look`]
+//!   standing, which the panel applies when it draws, and waits for that frame
+//!   to publish the reading its reply is.
 
 use crate::scene::ImageRef;
 

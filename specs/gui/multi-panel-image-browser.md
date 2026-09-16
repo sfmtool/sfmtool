@@ -893,7 +893,11 @@ frame that draws a photograph reports its `ViewGeometry` in
 `ImageDetailResponse::view` and the dock puts it on
 `AppState::image_detail_view`. That is what the wire's two view tools read; a
 frame that drew no photograph publishes nothing and leaves the last reading
-standing, and before any frame has drawn there is no reading at all.
+standing, and before any frame has drawn there is no reading at all. A view tool
+arriving then has nothing to measure against, so it leaves its request standing
+and waits for the frame that draws the photograph to publish one
+([mcp-server.md](mcp-server.md) § "The Image Detail view"): what is missing is
+the reading, not the view.
 
 **A request travels beside the selection**, as `AppState::look:
 Option<(ImageRef, Look)>`, written by `AppState::look_at_in_image` (which

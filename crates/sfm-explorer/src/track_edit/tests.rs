@@ -29,9 +29,21 @@ fn state() -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(projected_embedded_demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");
-    let camera = &state.scene[0].recon().image_table.cameras[0];
+    cache_photographs(&mut state, id);
+    (state, id)
+}
+
+/// A textured photograph in the node's cache for every one of its images, which
+/// is what the tiles are warped out of.
+///
+/// A pattern rather than a flat field, with short periods that differ between
+/// the axes, so two tiles cut at two places are two different pictures.
+fn cache_photographs(state: &mut AppState, id: ReconId) {
+    let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
+    let camera = &node.recon().image_table.cameras[0];
     let (w, h) = (camera.width, camera.height);
-    for image in 0..state.scene[0].image_count() {
+    let images = node.image_count();
+    for image in 0..images {
         let data: Vec<u8> = (0..(w * h * 3))
             .map(|i| {
                 let p = i / 3;
@@ -43,7 +55,6 @@ fn state() -> (AppState, ReconId) {
             Some(std::sync::Arc::new(ImageU8::new(w, h, 3, data))),
         );
     }
-    (state, id)
 }
 
 /// Drive one frame of the panel and hand back what it reported.
@@ -265,6 +276,81 @@ fn every_row_draws_a_tile_at_either_stage() {
         panel.rows().iter().all(|row| row.tile),
         "the cluster stage draws no tile: {:?}",
         panel.rows(),
+    );
+}
+
+/// A candidate a descriptor search has just added carries no keypoint -- only
+/// the seed the index's warp gave it -- and its tile is cut around **that**,
+/// which is the whole of what says whether the search found the right surface.
+/// Before this, the row drew the surfel wherever the bare projection of the
+/// point happened to land in a photograph nothing had yet tied it to.
+#[test]
+fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
+    use sfmtool_core::bench::Stage;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id, label) = crate::descriptor_index::tests::searchable(dir.path());
+    cache_photographs(&mut state, id);
+    state
+        .start_bench_descriptor_search(id, &label, 0, None, None)
+        .expect("an index is open and the image has keypoints");
+    state.finish_background_task();
+
+    let track = state
+        .bench_track(id, &label)
+        .expect("still on the bench")
+        .clone();
+    let candidate = track.observations.len() - 1;
+    let row = &track.observations[candidate];
+    assert!(
+        matches!(
+            row.provenance,
+            sfmtool_core::bench::Provenance::Search { .. }
+        ),
+        "the search added no candidate: {:?}",
+        row.provenance
+    );
+    assert!(
+        row.track.is_none(),
+        "the candidate arrived already read, so this proves nothing"
+    );
+    let seed = row.cluster.as_ref().expect("a searched seed").seed_position;
+    let image = ImageRef::new(id, row.image as usize);
+    let src = state
+        .full_res_cache
+        .get(&image)
+        .and_then(|slot| slot.clone())
+        .expect("a cached photograph");
+
+    let node = crate::scene::node_by_id(&state.scene, id).expect("loaded");
+    let recon = node.recon();
+    let drawn = super::tile::image(recon, &track, candidate, &src).expect("a tile");
+
+    // The surfel cut around where the observation sits, which is the same
+    // picture the row draws once a reading has written that pixel as its
+    // keypoint: where an observation is, is one question however it is
+    // answered.
+    let frame = match &track.stage {
+        Stage::Track(payload) => payload.frame.clone().expect("a fitted surfel"),
+        Stage::Cluster(_) => panic!("a track put on from a point is at the track stage"),
+    };
+    let sfmr_image = &recon.image_table.images[row.image as usize];
+    let camera = &recon.image_table.cameras[sfmr_image.camera_index as usize];
+    let cam_from_world = crate::scene::cam_from_world(sfmr_image);
+    let at_the_seed = crate::point_track_detail::patch_color_image(
+        &frame,
+        camera,
+        &cam_from_world,
+        Some(seed),
+        &src,
+    );
+    assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
+
+    let at_the_projection =
+        crate::point_track_detail::patch_color_image(&frame, camera, &cam_from_world, None, &src);
+    assert_ne!(
+        drawn, at_the_projection,
+        "the tile is the point's own projection rather than the sighting's place"
     );
 }
 

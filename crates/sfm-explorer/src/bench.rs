@@ -133,15 +133,6 @@ pub(crate) fn active_track_label(bench: &Bench) -> Option<&str> {
     bench.active_label(sfmtool_core::bench::ItemKind::Track)
 }
 
-/// Where an observation currently is, in its image's own pixels: the keypoint a
-/// track-stage measurement carries, else the cluster stage's refined position
-/// or the seed it started from, else nothing.
-///
-/// One rule in one place, because two panels draw the same answer: the Image
-/// Detail bench layer puts its mark there, and a Track Edit row click asks that
-/// panel to reveal it. A mark and a row are one observation, so they cannot be
-/// allowed to disagree about where it is. The same order the evaluation's own
-/// seeding uses -- the measured position wins over the seed.
 /// The reading options a bench step runs with: core's own, with the caller's
 /// search radius where one was named.
 ///
@@ -161,12 +152,51 @@ pub(crate) fn default_search_px() -> f64 {
     EvaluateOptions::default().search_px
 }
 
-pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
+/// Where one observation sits, and with what shape.
+///
+/// One rule in one place, because everything that draws or names a sighting
+/// draws the same answer: the Image Detail bench layer puts its mark there, a
+/// Track Edit row click asks that panel to reveal it, the Track Edit tile is
+/// cut around it, and the wire reports it. A mark, a row, a tile and a reply
+/// are one observation, so they cannot be allowed to disagree about where it
+/// is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ObservationSite {
+    /// Where, in that image's own pixels.
+    pub(crate) pixel: [f64; 2],
+    /// The affine shape read at it -- keypoint-frame units to this image's
+    /// pixels -- where the cluster slot carries one. `None` for an observation
+    /// that has only a track-stage keypoint, whose shape is the surfel's.
+    pub(crate) shape: Option<[[f64; 2]; 2]>,
+}
+
+/// Where an observation currently is: the keypoint a track-stage measurement
+/// carries, else the cluster stage's refined position or the seed it started
+/// from, else nothing.
+///
+/// The same order the evaluation's own seeding uses
+/// (`sfmtool_core::bench::evaluate`) -- the measured position wins over the
+/// seed -- so a fresh candidate, which has only a seed, is drawn and reported
+/// where the step that proposed it put it rather than nowhere.
+pub(crate) fn observation_site(observation: &Observation) -> Option<ObservationSite> {
+    let cluster = observation.cluster.as_ref();
+    let shape = cluster.map(|m| m.shape.unwrap_or(m.seed_shape));
     if let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) {
-        return Some(keypoint);
+        return Some(ObservationSite {
+            pixel: [f64::from(keypoint[0]), f64::from(keypoint[1])],
+            shape,
+        });
     }
-    let position = observation.cluster.as_ref()?.best_position();
-    Some([position[0] as f32, position[1] as f32])
+    Some(ObservationSite {
+        pixel: cluster?.best_position(),
+        shape,
+    })
+}
+
+/// [`observation_site`]'s pixel, in the panel's own `f32`.
+pub(crate) fn observation_pixel(observation: &Observation) -> Option<[f32; 2]> {
+    let site = observation_site(observation)?;
+    Some([site.pixel[0] as f32, site.pixel[1] as f32])
 }
 
 impl AppState {

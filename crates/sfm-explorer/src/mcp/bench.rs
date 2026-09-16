@@ -129,6 +129,7 @@ pub(super) fn get_bench_track(state: &AppState, label: &str, named: Option<&str>
                 "provenance": provenance(observation.provenance),
                 "verdict": observation.verdict.to_string(),
                 "pinned": observation.pinned,
+                "pixel": observation_pixel(observation),
                 "cluster": cluster_measurement(observation),
                 "track": track_measurement(observation),
             })
@@ -686,6 +687,23 @@ fn provenance(provenance: Provenance) -> Value {
         Provenance::Sweep => json!({ "kind": "sweep" }),
         Provenance::Pixel => json!({ "kind": "pixel" }),
         Provenance::Point { point } => json!({ "kind": "point", "point": point }),
+    }
+}
+
+/// Where the observation sits, whatever said so.
+///
+/// [`crate::bench::observation_site`]'s rule, which is the panel's: the
+/// keypoint a reading wrote, else the refined cluster position, else the seed
+/// the step that proposed it left. It is a top level field rather than
+/// something a caller assembles out of the two measurement blocks below,
+/// because every reader of this surface wants the one answer those blocks are
+/// read for -- a candidate a search has just added has no keypoint at all, and
+/// an agent should not have to know which slot to fall back to before it can
+/// look at one.
+fn observation_pixel(observation: &Observation) -> Value {
+    match crate::bench::observation_site(observation) {
+        Some(site) => json!(site.pixel),
+        None => Value::Null,
     }
 }
 

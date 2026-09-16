@@ -287,8 +287,13 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             name: "get_bench_track",
             description: "One track on the bench, as its Track Edit table: the stage, the point \
                           it came from, the thresholds, and every observation with what put it \
-                          there, the verdict on it and whatever each stage has measured about \
-                          it. An observation is addressed by its position in the list, which is \
+                          there, the verdict on it, where it sits and whatever each stage has \
+                          measured about it. An observation's pixel is where it sits whether or \
+                          not anything has read it: the keypoint a reading wrote, else the \
+                          refined cluster position, else the seed it was proposed at. So a \
+                          candidate a search has just added says where it is without being \
+                          evaluated first. An observation is addressed by its position in the \
+                          list, which is \
                           stable for the life of the track — observations are appended and never \
                           renumbered, so an index read here still names the same observation \
                           after a verdict or an evaluation.",
@@ -536,8 +541,10 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           the camera image it is in), and fit shows the whole photograph. zoom \
                           is absolute, 1.0 being the fit, and applies to every target but rect \
                           and fit, which settle their own; it is clamped to the panel's range \
-                          and the reply says where it landed. The reply is get_image_detail_view's \
-                          document for the view that will be applied on the next frame.",
+                          and the reply says where it landed. The panel is opened if it was \
+                          closed, and a call that arrives before it has drawn a photograph is \
+                          answered once it has. The reply is get_image_detail_view's document \
+                          for the view the panel applies.",
             kind: Write,
             schema: object(
                 &[

@@ -12,17 +12,25 @@
 //! different things:
 //!
 //! - At the **track stage** it is the surfel re-rendered from this
-//!   observation's own view, re-anchored on its keypoint -- the very tile the
-//!   Point Track Detail panel draws for a committed track, through that panel's
-//!   own renderer ([`crate::point_track_detail::render_patch_texture`]), so a
-//!   track on the bench and the point it came from cannot show one surface two
-//!   ways.
+//!   observation's own view, re-anchored where the observation sits -- the very
+//!   tile the Point Track Detail panel draws for a committed track, through
+//!   that panel's own renderer
+//!   ([`crate::point_track_detail::patch_color_image`]), so a track on the
+//!   bench and the point it came from cannot show one surface two ways.
 //! - At the **cluster stage** there is no surface, so it is the observation's
-//!   own grid: the `R x R` samples the refinement kernel reads at the refined
-//!   position and shape, through the kernel's own sampler
+//!   own grid: the `R x R` samples the refinement kernel reads at that place
+//!   and its shape, through the kernel's own sampler
 //!   (`sfmtool_core::patch::cluster_refine::sample_member_grid`), which is what
 //!   makes the picture the thing the ZNCC beside it was computed over rather
 //!   than a second opinion about it.
+//!
+//! **Where the observation sits is [`crate::bench::observation_site`]'s**, at
+//! either stage: the keypoint a reading wrote, else the refined cluster
+//! position, else the seed the step that proposed it left. A candidate a
+//! descriptor search has just added has only that seed, and the tile is the
+//! whole of what says whether the search found the right surface -- so it is
+//! cut around the seed rather than left blank, or, at the track stage, cut
+//! around wherever the bare projection of the point happens to land.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
@@ -34,9 +42,8 @@ use sfmtool_core::SfmrReconstruction;
 /// and the kernel read one level.
 const PYRAMID_LEVELS: usize = 6;
 
-/// The tile for one observation, or `None` when there is nothing to render:
-/// no surfel yet at the track stage, a degenerate shape at the cluster stage,
-/// or an image whose pixels are not cached.
+/// The tile for one observation, uploaded, or `None` when [`image()`] had
+/// nothing to render.
 pub(super) fn render(
     ctx: &egui::Context,
     recon: &SfmrReconstruction,
@@ -45,30 +52,40 @@ pub(super) fn render(
     src: &ImageU8,
     name: String,
 ) -> Option<egui::TextureHandle> {
+    let tile = image(recon, track, observation, src)?;
+    Some(ctx.load_texture(name, tile, egui::TextureOptions::NEAREST))
+}
+
+/// The picture one row draws, or `None` when there is nothing to render: no
+/// surfel yet at the track stage, nothing saying where the observation sits, or
+/// a degenerate shape at the cluster stage.
+///
+/// Pure, so a headless test can ask what a row shows rather than only whether
+/// it showed something. `src` is the observation's own photograph, which the
+/// caller reads out of the node's full-resolution cache.
+pub(super) fn image(
+    recon: &SfmrReconstruction,
+    track: &EditableTrack,
+    observation: usize,
+    src: &ImageU8,
+) -> Option<egui::ColorImage> {
     let row = track.observations.get(observation)?;
+    let site = crate::bench::observation_site(row)?;
     let img_idx = row.image as usize;
     match &track.stage {
         Stage::Track(payload) => {
             let frame = payload.frame.as_ref()?;
             let image = recon.image_table.images.get(img_idx)?;
             let camera = recon.image_table.cameras.get(image.camera_index as usize)?;
-            let keypoint = row
-                .track
-                .as_ref()
-                .and_then(|m| m.keypoint)
-                .map(|k| [f64::from(k[0]), f64::from(k[1])]);
-            Some(crate::point_track_detail::render_patch_texture(
-                ctx,
-                name,
+            Some(crate::point_track_detail::patch_color_image(
                 frame,
                 camera,
                 &crate::scene::cam_from_world(image),
-                keypoint,
+                Some(site.pixel),
                 src,
             ))
         }
         Stage::Cluster(payload) => {
-            let measurement = row.cluster.as_ref()?;
             // The cluster's own radius, always: it is what every one of its
             // shapes is written against, so the tile is the square the person
             // asked for before an evaluation and the square the ZNCC was
@@ -83,19 +100,10 @@ pub(super) fn render(
                 params.resolution = template.samples.shape()[0] as u32;
             }
             let pyramid = ImageU8Pyramid::build(src, PYRAMID_LEVELS);
-            let grid = sample_member_grid(
-                &pyramid,
-                measurement.best_position(),
-                measurement.shape.unwrap_or(measurement.seed_shape),
-                &params,
-            )?;
+            let grid = sample_member_grid(&pyramid, site.pixel, site.shape?, &params)?;
             let resolution = params.resolution.max(2) as usize;
             let channels = grid.len() / (resolution * resolution);
-            Some(ctx.load_texture(
-                name,
-                color_image(&grid, resolution, channels),
-                egui::TextureOptions::NEAREST,
-            ))
+            Some(color_image(&grid, resolution, channels))
         }
     }
 }

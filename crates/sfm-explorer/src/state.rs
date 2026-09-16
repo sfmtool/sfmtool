@@ -459,8 +459,9 @@ pub struct AppState {
     /// wire's `get_image_detail_view` / `set_image_detail_view`, which have no
     /// other way to know how big the panel's body is or what fit means in it.
     /// `None` before the panel has drawn an image at all -- a fresh session, a
-    /// closed panel -- which the two tools report and refuse on respectively,
-    /// because a view arithmetic with no frame to do it in would be a guess.
+    /// closed panel -- which `get_image_detail_view` reports as nulls and
+    /// `set_image_detail_view` waits for, because a view arithmetic with no
+    /// frame to do it in would be a guess.
     pub(crate) image_detail_view: Option<ViewGeometry>,
 
     /// Transient hover state: image under cursor (from GPU pick or browser).
