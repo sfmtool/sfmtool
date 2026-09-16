@@ -153,6 +153,13 @@ fn the_observation_count_follows_every_point_edit() {
         edited.observation_count(),
         stored - deleted + 2 * brought - replaced
     );
+    // Deleting an addition takes back the track it brought.
+    let addition = base.point_count() as u32;
+    edited.delete_point(addition).unwrap();
+    assert_eq!(
+        edited.observation_count(),
+        stored - deleted + brought - replaced
+    );
     // The materialised value agrees, which is the answer with no overlay in it.
     let (mat, _) = edited.materialize();
     assert_eq!(mat.point_set.tracks.len(), edited.observation_count());
