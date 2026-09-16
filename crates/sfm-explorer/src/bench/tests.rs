@@ -51,9 +51,10 @@ fn state() -> (AppState, ReconId) {
                 ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
             })
             .collect();
-        state
-            .full_res_cache
-            .insert(ImageRef::new(id, image), Some(ImageU8::new(w, h, 3, data)));
+        state.full_res_cache.insert(
+            ImageRef::new(id, image),
+            Some(Arc::new(ImageU8::new(w, h, 3, data))),
+        );
     }
     (state, id)
 }
@@ -444,6 +445,40 @@ fn a_run_of_bench_steps_over_a_clean_value_is_clean_and_a_commit_is_dirty() {
 
     state.undo(id).expect("the commit");
     assert!(!state.is_dirty(id), "undoing the commit left it dirty");
+}
+
+/// The photographs a photometric step reads are decoded **on the worker**.
+///
+/// Asserted by the one thing a headless test can see of it: a node with
+/// nothing decoded and no readable photographs starts the task all the same,
+/// and the refusal comes home through it. Decoding here would have refused the
+/// gesture instead -- and would have spent the seconds of the read on the GUI
+/// thread before the task it defers to had begun.
+#[test]
+fn a_photometric_step_decodes_on_the_worker() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.full_res_cache.clear();
+    state.action_log.clear();
+    let before = versions(&state, id);
+
+    state
+        .start_bench_evaluate(id, &label)
+        .expect("the task started");
+    assert!(
+        state.background_task().is_some(),
+        "the step read the photographs here instead of deferring"
+    );
+    state.finish_background_task();
+
+    assert_eq!(
+        versions(&state, id),
+        before,
+        "a refused evaluation pushed a version"
+    );
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].1.contains("Cannot read"), "{rows:?}");
 }
 
 // ── A report that comes home late ───────────────────────────────────────

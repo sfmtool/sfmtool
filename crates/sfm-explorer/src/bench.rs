@@ -472,13 +472,15 @@ impl AppState {
     /// Measure the track called `label` at the stage it is in, on a worker
     /// thread.
     ///
-    /// The photographs the kernels read are decoded here, on the GUI thread,
-    /// through the node's own full-resolution cache -- the same cache
-    /// `add_observation` decodes through, so an image a panel has already shown
-    /// is not read twice and nothing else in the viewer holds a second copy of
-    /// it. What crosses to the worker is those decoded pyramids, a clone of the
-    /// value at the cursor and a clone of the track, so the worker holds no
-    /// reference into the scene.
+    /// The photographs the kernels read are decoded **on that worker**: the
+    /// file reads and the pyramid builds are seconds of work, and a step that
+    /// did them here would hold the frame -- and the wire's reply window --
+    /// for the whole of it before the task it defers to had begun. What
+    /// crosses to the worker is [`crate::state::edits::ViewSources`] -- a
+    /// shared clone of each photograph the node's own cache already holds, and
+    /// a path for each one it does not -- with a clone of the value at the
+    /// cursor and a clone of the track, so the worker holds no reference into
+    /// the scene.
     pub(crate) fn start_bench_evaluate(&mut self, id: ReconId, label: &str) -> Result<(), String> {
         let outcome = match self.bench_evaluate_job(id, label) {
             Ok(job) => self.start_background_task(Operation::BENCH_EVALUATE, id, job),
@@ -519,9 +521,13 @@ impl AppState {
     /// The evaluation itself, as a function of the `Progress` it reports
     /// through.
     fn bench_evaluate_job(&mut self, id: ReconId, label: &str) -> Result<Job, String> {
-        let (edited, track, decoded) = self.bench_photometric_inputs(id, label)?;
+        let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
         Ok(Box::new(move |progress| {
+            let decoded = match sources.decode(progress) {
+                Ok(decoded) => decoded,
+                Err(e) => return Finished::Failed(format!("Cannot evaluate {label}: {e}")),
+            };
             let views = decoded.views();
             match bench::evaluate(
                 &track,
@@ -549,9 +555,13 @@ impl AppState {
         label: &str,
         stage: StageKind,
     ) -> Result<Job, String> {
-        let (edited, track, decoded) = self.bench_photometric_inputs(id, label)?;
+        let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
         Ok(Box::new(move |progress| {
+            let decoded = match sources.decode(progress) {
+                Ok(decoded) => decoded,
+                Err(e) => return Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
+            };
             let views = decoded.views();
             match bench::set_stage(
                 &track,
@@ -562,22 +572,28 @@ impl AppState {
                 progress,
             ) {
                 Err(e) => Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
-                Ok((staged, report)) => Finished::BenchTrack {
-                    version_label: format!("Set {label} to the {stage} stage"),
-                    text: format!("Set {label} to the {stage} stage: {report}"),
-                    label,
-                    track: Box::new(staged),
-                },
+                Ok((staged, report)) => {
+                    // The stage phrase is written once, here, and what core
+                    // adds is the clause that follows it: a report printed
+                    // whole would state the stage a second time.
+                    let version_label = format!("Set {label} to the {stage} stage");
+                    Finished::BenchTrack {
+                        text: format!("{version_label}{}", report.detail()),
+                        version_label,
+                        label,
+                        track: Box::new(staged),
+                    }
+                }
             }
         }))
     }
 
     /// What a photometric bench step needs: the value at the cursor, the track,
-    /// and one decoded view per image of the node.
+    /// and where one view per image of the node is to come from.
     ///
-    /// The images decoded are the ones the track's observations name. Every
-    /// other entry is a one-pixel placeholder, which no kernel samples, because
-    /// the kernels index the view slice by image index.
+    /// The images the worker will decode are the ones the track's observations
+    /// name. Every other entry becomes a one-pixel placeholder, which no kernel
+    /// samples, because the kernels index the view slice by image index.
     fn bench_photometric_inputs(
         &mut self,
         id: ReconId,
@@ -586,7 +602,7 @@ impl AppState {
         (
             EditedReconstruction,
             EditableTrack,
-            crate::state::edits::DecodedViews,
+            crate::state::edits::ViewSources,
         ),
         String,
     > {
@@ -609,8 +625,8 @@ impl AppState {
             .collect();
         needed.sort_unstable();
         needed.dedup();
-        let decoded = self.decode_views_for(id, &needed)?;
-        Ok((edited, track, decoded))
+        let sources = self.view_sources_for(id, &needed)?;
+        Ok((edited, track, sources))
     }
 
     /// Where `track`'s origin point sits in the version at `node`'s cursor, or

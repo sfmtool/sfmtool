@@ -411,6 +411,32 @@ impl EditedReconstruction {
         self.base.point_count() + self.added.point_count() - self.deleted_points.len()
     }
 
+    /// How many observations this version holds: the base's and the additions',
+    /// less every observation of a point the version has deleted.
+    ///
+    /// The count a version reports rather than the base's `tracks.len()`: a
+    /// point edit adds and removes whole tracks, so a reader that asks the base
+    /// is told what the file held before the session started. Linear in the
+    /// deleted set, which is the number of hand edits a version stands on
+    /// rather than anything that scales with the scene.
+    pub fn observation_count(&self) -> usize {
+        let base_count = self.base.point_count();
+        let live = self.base.point_set.tracks.len() + self.added.tracks.len();
+        live - self
+            .deleted_points
+            .iter()
+            .map(|&index| {
+                let i = index as usize;
+                let (set, local) = if i < base_count {
+                    (&self.base.point_set, i)
+                } else {
+                    (&self.added, i - base_count)
+                };
+                set.observations_for_point(local).len()
+            })
+            .sum::<usize>()
+    }
+
     /// How many images: the base's, always. An image edit is not an overlay
     /// edit.
     pub fn image_count(&self) -> usize {

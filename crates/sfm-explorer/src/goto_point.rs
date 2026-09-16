@@ -94,9 +94,13 @@ pub fn parse_point_query(input: &str) -> Result<PointQuery, String> {
 /// whichever loaded node carries that content hash, which is what lets a pasted
 /// ID select a *different* reconstruction than the one in front of you.
 ///
-/// The index is bounds-checked here rather than left to the panels: a selection
-/// that points past the end of its own reconstruction would show as an empty
-/// Point Track panel with nothing to say why.
+/// The index is checked here rather than left to the panels: a selection that
+/// names no point of its own reconstruction would show as an empty Point Track
+/// panel with nothing to say why. The check is **against the version's own
+/// index space** and not against its point count -- a deletion leaves the
+/// indexes above it where they were and a replacement hands out one past the
+/// end, so a live point's index can sit above that count and an index below it
+/// can name nothing. What is refused is an index that names no live point.
 pub fn resolve_point_query(
     scene: &[SceneNode],
     selected: Option<ReconId>,
@@ -109,10 +113,12 @@ pub fn resolve_point_query(
             let node = selected_node(scene, selected).ok_or_else(|| {
                 "No reconstruction is loaded — use File ▸ Open first.".to_string()
             })?;
-            let count = node.point_count();
-            if *index >= count {
+            let live = u32::try_from(*index)
+                .ok()
+                .is_some_and(|i| node.edited().point(i).is_some());
+            if !live {
                 return Err(format!(
-                    "{} has {count} points — index {index} is out of range.",
+                    "{} has no point {index} — that index names no live point.",
                     node.label
                 ));
             }

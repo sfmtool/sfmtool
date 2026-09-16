@@ -89,17 +89,33 @@ pub struct StageReport {
     pub reference: Option<usize>,
 }
 
+impl StageReport {
+    /// What the change did beyond moving the stage: the clause that follows the
+    /// stage phrase, its own separator included, and empty where there is
+    /// nothing more to say.
+    ///
+    /// Split out of [`Display`](std::fmt::Display) so that a caller writing the
+    /// stage phrase in its own words -- the viewer's Action Log row names the
+    /// item, which core cannot -- adds this to its sentence rather than
+    /// appending a report that states the stage a second time.
+    pub fn detail(&self) -> String {
+        if !self.changed {
+            return String::new();
+        }
+        match (&self.evaluate, self.reference) {
+            (Some(report), _) => format!(": {report}"),
+            (None, Some(reference)) => format!(", cut around observation {reference}"),
+            (None, None) => String::new(),
+        }
+    }
+}
+
 impl std::fmt::Display for StageReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if !self.changed {
             return write!(f, "already at the {} stage", self.to);
         }
-        write!(f, "set to the {} stage", self.to)?;
-        match (&self.evaluate, self.reference) {
-            (Some(report), _) => write!(f, ": {report}"),
-            (None, Some(reference)) => write!(f, ", cut around observation {reference}"),
-            (None, None) => Ok(()),
-        }
+        write!(f, "set to the {} stage{}", self.to, self.detail())
     }
 }
 

@@ -212,7 +212,7 @@ fn project_center(
 fn full_res_images(
     recon: &SfmrReconstruction,
     indices: &[usize],
-) -> HashMap<ImageRef, Option<ImageU8>> {
+) -> HashMap<ImageRef, Option<std::sync::Arc<ImageU8>>> {
     let camera = &recon.image_table.cameras[0];
     let (w, h) = (camera.width, camera.height);
     indices
@@ -220,7 +220,12 @@ fn full_res_images(
         .map(|&i| {
             (
                 image(i),
-                Some(ImageU8::new(w, h, 3, vec![180u8; (w * h * 3) as usize])),
+                Some(std::sync::Arc::new(ImageU8::new(
+                    w,
+                    h,
+                    3,
+                    vec![180u8; (w * h * 3) as usize],
+                ))),
             )
         })
         .collect()
@@ -248,7 +253,7 @@ fn run_frame(
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
     sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
-    full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
+    full_res_cache: &HashMap<ImageRef, Option<std::sync::Arc<ImageU8>>>,
     events: Vec<egui::Event>,
 ) -> PointTrackDetailResponse {
     let input = egui::RawInput {

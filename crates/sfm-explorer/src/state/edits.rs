@@ -58,6 +58,80 @@ pub(crate) struct DecodedViews {
     pyramids: Vec<ImageU8Pyramid>,
 }
 
+/// Where one photometric step's photographs are to come from, before any of
+/// them has been decoded.
+///
+/// What crosses to a **worker**: the poses and the cameras, which are cheap,
+/// and per image either the decoded pixels the viewer already holds -- shared
+/// rather than copied, which is what the cache's `Arc` is for -- or the path to
+/// read them from. So the GUI thread starts a photometric step in the time it
+/// takes to clone a handful of `Arc`s, and the file reads and the pyramid
+/// builds, which are the seconds in it, happen where every other second of that
+/// step already happens.
+///
+/// A photograph the worker reads is dropped with the task rather than put in
+/// the cache: the cache is `AppState`'s and the worker cannot reach it, and the
+/// panels fill it for what they draw.
+pub(crate) struct ViewSources {
+    cameras: Vec<CameraIntrinsics>,
+    poses: Vec<RigidTransform>,
+    sources: Vec<ViewSource>,
+}
+
+/// Where one image's pixels come from.
+enum ViewSource {
+    /// Already decoded, shared with whatever else holds it.
+    Decoded(Arc<ImageU8>),
+    /// To be read from this path, with the image's name for the refusal.
+    Read(std::path::PathBuf, String),
+    /// An image the step does not read: a one-pixel placeholder, which no
+    /// kernel samples.
+    Unused,
+}
+
+impl ViewSources {
+    /// Decode what has not been decoded and build the pyramids, reporting
+    /// through `progress`.
+    ///
+    /// The refusal a file that cannot be read produces is the caller's own
+    /// sentence, arriving from the worker rather than from the gesture: the
+    /// step cannot know before it starts which photographs are readable, and a
+    /// step that answered that question first would be the wait this type
+    /// exists to remove.
+    pub(crate) fn decode(
+        self,
+        progress: &sfmtool_core::progress::Progress<'_>,
+    ) -> Result<DecodedViews, String> {
+        let mut phase = progress.phase("decode images");
+        let placeholder = ImageU8::new(1, 1, 3, vec![0u8; 3]);
+        let mut pyramids = Vec::with_capacity(self.sources.len());
+        let mut read = 0usize;
+        for source in self.sources {
+            let decoded = match source {
+                ViewSource::Decoded(image) => Some(image),
+                ViewSource::Read(path, name) => {
+                    read += 1;
+                    Some(Arc::new(
+                        crate::state::decode_full_res(&path)
+                            .ok_or(format!("Cannot read {name}."))?,
+                    ))
+                }
+                ViewSource::Unused => None,
+            };
+            pyramids.push(ImageU8Pyramid::build(
+                decoded.as_deref().unwrap_or(&placeholder),
+                PYRAMID_LEVELS,
+            ));
+        }
+        progress_note!(phase, "{read} read from disk");
+        Ok(DecodedViews {
+            cameras: self.cameras,
+            poses: self.poses,
+            pyramids,
+        })
+    }
+}
+
 impl DecodedViews {
     /// The borrowed form a patch kernel takes.
     pub(crate) fn views(&self) -> Vec<ProjectedImage<'_>> {
@@ -1185,6 +1259,11 @@ impl AppState {
     /// `needed` gets a one-pixel placeholder, which nothing samples. Decoding
     /// goes through the node's full-resolution cache, so an image the panels
     /// have already shown is not read twice.
+    ///
+    /// For a **synchronous** edit, which is the caller that can afford to read
+    /// files on the GUI thread because the kernel behind it is milliseconds of
+    /// work. A step that goes to a worker takes [`AppState::view_sources_for`]
+    /// instead and decodes there.
     pub(crate) fn decode_views_for(
         &mut self,
         id: ReconId,
@@ -1211,11 +1290,32 @@ impl AppState {
                 return Err(format!("Cannot read {name}."));
             }
         }
-        let recon = self.scene[index].recon();
-        let placeholder = ImageU8::new(1, 1, 3, vec![0u8; 3]);
+        // Every image `needed` names is in the cache after the loop above, so
+        // the sources below are the same ones a background step hands its
+        // worker and this decodes none of them a second time. One pyramid
+        // loop, shared, rather than a synchronous copy of it.
+        self.view_sources_for(id, needed)?
+            .decode(&sfmtool_core::progress::Progress::none())
+    }
+
+    /// Where a **background** step's photographs are to come from: what the
+    /// cache already holds for the images `needed` names, and the path to
+    /// everything else.
+    ///
+    /// Nothing is decoded and nothing is read here, which is the point: this
+    /// runs on the GUI thread and [`ViewSources::decode`] runs on the worker.
+    pub(crate) fn view_sources_for(
+        &self,
+        id: ReconId,
+        needed: &[usize],
+    ) -> Result<ViewSources, String> {
+        let node = self
+            .node(id)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let recon = node.recon();
         let mut cameras = Vec::with_capacity(recon.image_count());
         let mut poses = Vec::with_capacity(recon.image_count());
-        let mut pyramids = Vec::with_capacity(recon.image_count());
+        let mut sources = Vec::with_capacity(recon.image_count());
         for (i, im) in recon.image_table.images.iter().enumerate() {
             cameras.push(recon.image_table.cameras[im.camera_index as usize].clone());
             let q = im.quaternion_wxyz;
@@ -1227,18 +1327,23 @@ impl AppState {
                     im.translation_xyz.z,
                 ],
             ));
-            let source = needed
-                .contains(&i)
-                .then(|| self.full_res_cache.get(&ImageRef::new(id, i)))
-                .flatten()
-                .and_then(|slot| slot.as_ref())
-                .unwrap_or(&placeholder);
-            pyramids.push(ImageU8Pyramid::build(source, PYRAMID_LEVELS));
+            sources.push(if !needed.contains(&i) {
+                ViewSource::Unused
+            } else {
+                match self
+                    .full_res_cache
+                    .get(&ImageRef::new(id, i))
+                    .and_then(|slot| slot.as_ref())
+                {
+                    Some(image) => ViewSource::Decoded(Arc::clone(image)),
+                    None => ViewSource::Read(recon.workspace_dir.join(&im.name), im.name.clone()),
+                }
+            });
         }
-        Ok(DecodedViews {
+        Ok(ViewSources {
             cameras,
             poses,
-            pyramids,
+            sources,
         })
     }
 

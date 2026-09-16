@@ -100,8 +100,9 @@ place.
 
 ## The tool surface
 
-Fifty-four tools. Thirteen read, thirty-nine write, one that writes a file, and
-one that closes the loop by handing back a picture.
+Fifty-four tools. Fourteen read -- thirteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- thirty-nine
+write, and one writes a file.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -241,12 +242,12 @@ handful of "pane". A panel has one handle, its name, so the argument spells
 both: **`panel_name`**, by the rule below that makes a reconstruction's
 argument `reconstruction_label`.
 
-The eight names are the layout file's, and there is no second spelling of them
-anywhere: `scene`, `viewer_3d`, `image_browser`, `image_detail`, `point_track`,
-`camera_intrinsics`, `action_log`, `edit_history` (`Tab::wire_name`). An unknown name is
-refused with a message listing all eight (`Tab::all_wire_names`). `Tab` stays
-the Rust name — it is `egui_dock`'s word for the thing in a node, and the code
-is not the wire.
+The ten names are the layout file's, and there is no second spelling of them
+anywhere: `scene`, `background_task`, `viewer_3d`, `image_browser`,
+`image_detail`, `point_track`, `camera_intrinsics`, `track_edit`, `action_log`,
+`edit_history` (`Tab::wire_name`). An unknown name is refused with a message
+listing all ten (`Tab::all_wire_names`). `Tab` stays the Rust name — it is
+`egui_dock`'s word for the thing in a node, and the code is not the wire.
 
 **`window_layout`** is the whole document — the window's placement and the panel
 arrangement — and **`layout`** is its panel section, so the fields holding them
@@ -417,7 +418,11 @@ JSON, and no tool here returns bulk arrays — that is what the `.sfmr` file and
 `sfm inspect` are for. The agent reads the file for the data and asks the
 viewer for the *state*. `points_at_infinity` is read the way
 `scene::visible_stats` reads it, so this number and the one in the viewport's
-stats overlay are the same number.
+stats overlay are the same number. **Every count is the version's**, read
+through the overlay and not off the base: a deleted point takes its whole track
+out of `observations` and a committed one brings its own in, so an agent that
+edits and reads back sees its own edit in the counts rather than what the file
+held when it was opened.
 
 **`window` is carried here as well as by `get_window_layout`**, everything but
 the monitor list (§ "The window block"). "Can the human see this window, and how
@@ -543,6 +548,14 @@ parser, one set of error messages, and a point id copied out of the Point Track
 panel by a human pastes straight into a tool call. A bare JSON integer is
 accepted as the index form, since that is what a caller reading an index out of
 a track will naturally send.
+
+**A bare index is resolved against the version's own index space**, which is not
+its point count. A version hands out indexes and never reuses them, so a
+deletion leaves a hole and a replacement — what a committed bench track makes
+of the point it came from — takes an index one past the end: the point
+`get_scene` reports as the selection can sit above `counts.points`, and an index
+below it can name nothing. So what is refused is an index that names no live
+point, and the refusal says that rather than quoting a count.
 
 ### `open_reconstruction` / `close_reconstruction`
 
@@ -1886,7 +1899,7 @@ version may well have been pushed.
 
 ### The bench family
 
-Fifteen tools that read and work the **bench** beside a node
+Fourteen tools that read and work the **bench** beside a node
 ([bench.md](bench.md)): the place where a track is held and judged before it is
 written into the reconstruction. Every one of them is one `AppState` call from
 `crate::bench` -- the same call the Track Edit panel's button or the Image
@@ -2303,7 +2316,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes thirty-five of the thirty-six tools testable in a headless
+/// makes fifty-three of the fifty-four tools testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -2424,9 +2437,9 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Thirty-six tools are cheap
-to re-fetch; a stale list is not cheap to debug. `cache_scope` is `private`:
-there are no authorization contexts to share a result across.
+relaunch would call tools the new binary does not have. Fifty-four tools are
+cheap to re-fetch; a stale list is not cheap to debug. `cache_scope` is
+`private`: there are no authorization contexts to share a result across.
 
 [rmcp]: https://crates.io/crates/rmcp
 
@@ -2726,8 +2739,19 @@ where a test hands no host over.
   refusal is the bench's own sentence and pushes no version; and the two steps
   that read photographs defer to a worker, land their version, and are what
   `get_background_task` reports afterwards, with the measurements reaching the
-  wire under the observation indexes they were computed for.
-- **The catalog is fifty-four tools**, thirteen of them reads and one of them
+  wire under the observation indexes they were computed for. A stage change
+  states its stage **once**; an evaluation on a node with nothing decoded still
+  defers, and past the reply window answers with the handle; and the point a
+  commit replaced is reachable by the very index `get_scene` reports as the
+  selection, which is above that node's point count.
+- **The counts are the version's**: a commit that writes one observation fewer
+  than the point it replaces moves `get_scene`'s `observations` by one, and an
+  undo moves it back.
+- **The spec's own counts are read back**: the tool count, the number of reads
+  and the panel list in the prose above are asserted against `catalog()` and
+  `Tab::ALL`, because a number written out in words is the first thing to go
+  stale.
+- **The catalog is fifty-four tools**, fourteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

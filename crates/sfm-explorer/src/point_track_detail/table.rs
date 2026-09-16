@@ -9,6 +9,7 @@
 //! those offsets are computed.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ndarray::Axis;
 use sfmtool_core::camera::remap::ImageU8;
@@ -111,7 +112,7 @@ impl PointTrackDetail {
         recon: &SfmrReconstruction,
         recon_id: ReconId,
         hovered_image: Option<usize>,
-        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
         response: &mut PointTrackDetailResponse,
@@ -162,7 +163,7 @@ impl PointTrackDetail {
         recon_id: ReconId,
         obs_i: usize,
         hovered_image: Option<usize>,
-        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
         cols: &ColumnLayout,
         response: &mut PointTrackDetailResponse,
     ) {

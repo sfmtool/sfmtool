@@ -636,7 +636,9 @@ pub(crate) fn creatable_state() -> (AppState, ReconId) {
         .collect::<Vec<u8>>();
     state.full_res_cache.insert(
         ImageRef::new(id, CREATE_IMAGE),
-        Some(sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data)),
+        Some(Arc::new(sfmtool_core::camera::remap::ImageU8::new(
+            w, h, 3, data,
+        ))),
     );
     (state, id)
 }

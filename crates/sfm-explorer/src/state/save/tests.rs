@@ -423,11 +423,13 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
     let (w, h) = (camera.width, camera.height);
     state.full_res_cache.insert(
         crate::scene::ImageRef::new(id, 0),
-        Some(sfmtool_core::camera::remap::ImageU8::new(
-            w,
-            h,
-            3,
-            (0..(w * h * 3)).map(|i| (i % 251) as u8).collect(),
+        Some(std::sync::Arc::new(
+            sfmtool_core::camera::remap::ImageU8::new(
+                w,
+                h,
+                3,
+                (0..(w * h * 3)).map(|i| (i % 251) as u8).collect(),
+            ),
         )),
     );
     state

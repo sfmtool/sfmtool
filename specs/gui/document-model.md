@@ -130,7 +130,11 @@ reference every time, and that identity is what the upload path keys on.
 `point_count`, `image_count` and `infinity_point_count` are the counts the
 viewer *shows* -- the Scene panel's row, the viewport's stats overlay, the MCP
 scene reply -- and they read the overlay rather than the base, in O(1) or in the
-size of the edit. Nothing on a frame path materialises: the counts are
+size of the edit. So does the observation count beside them,
+`EditedReconstruction::observation_count`: an edit adds and removes whole
+tracks, so a count taken off the base would report what the file held when it
+was opened and not what this version holds. Nothing on a frame path
+materialises: the counts are
 subtraction, and every per-frame read is per-point or per-image.
 
 ### Why the value is not simply a reconstruction

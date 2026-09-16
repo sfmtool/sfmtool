@@ -1432,38 +1432,56 @@ fn an_unknown_label_names_what_is_loaded() {
 }
 
 #[test]
-fn every_ref_taking_tool_refuses_an_out_of_range_index() {
+fn every_ref_taking_tool_refuses_an_index_that_names_nothing() {
     let (mut state, mut viewer) = two_reconstructions();
-    for command in [
-        Command::GetCameraImage {
-            reconstruction_label: None,
-            camera_image: super::CameraImageSel::Index(99),
-        },
-        Command::SelectCameraImage {
-            reconstruction_label: None,
-            camera_image: super::CameraImageSel::Index(99),
-        },
-        Command::GetCameraIntrinsics {
-            reconstruction_label: None,
-            camera_intrinsics_index: 99,
-        },
-        Command::SelectCameraIntrinsics {
-            reconstruction_label: None,
-            camera_intrinsics_index: 99,
-        },
-        Command::GetPoint {
-            point: crate::goto_point::PointQuery::Index(9_999),
-        },
-        Command::SelectPoint {
-            point: crate::goto_point::PointQuery::Index(9_999),
-        },
+    // The image and camera tables are dense and are refused by their count; a
+    // point index is a place in a version's own index space, which an edit
+    // leaves holes in, so what it is refused by is naming no live point.
+    for (command, expected) in [
+        (
+            Command::GetCameraImage {
+                reconstruction_label: None,
+                camera_image: super::CameraImageSel::Index(99),
+            },
+            "out of range",
+        ),
+        (
+            Command::SelectCameraImage {
+                reconstruction_label: None,
+                camera_image: super::CameraImageSel::Index(99),
+            },
+            "out of range",
+        ),
+        (
+            Command::GetCameraIntrinsics {
+                reconstruction_label: None,
+                camera_intrinsics_index: 99,
+            },
+            "out of range",
+        ),
+        (
+            Command::SelectCameraIntrinsics {
+                reconstruction_label: None,
+                camera_intrinsics_index: 99,
+            },
+            "out of range",
+        ),
+        (
+            Command::GetPoint {
+                point: crate::goto_point::PointQuery::Index(9_999),
+            },
+            "no point 9999",
+        ),
+        (
+            Command::SelectPoint {
+                point: crate::goto_point::PointQuery::Index(9_999),
+            },
+            "no point 9999",
+        ),
     ] {
         let described = format!("{command:?}");
         let error = refused(&mut state, &mut viewer, command);
-        assert!(
-            error.0.contains("out of range"),
-            "{described} said {error:?}"
-        );
+        assert!(error.0.contains(expected), "{described} said {error:?}");
     }
 }
 
@@ -3845,6 +3863,84 @@ fn only_the_reads_are_annotated_read_only() {
     assert_eq!(saves, ["save_reconstruction"]);
 }
 
+/// The spec's prose carries counts the code owns, and a count written out in
+/// words is the first thing to go stale: the panel list said eight while the
+/// viewer had ten for two releases, and the tool count has been three
+/// different numbers. So the sentences that carry one are read back here,
+/// against the catalog and the tab list themselves.
+#[test]
+fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
+    let spec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/gui/mcp-server.md"),
+    )
+    .expect("specs/gui/mcp-server.md is in the repo beside the crate");
+    let prose = spec.to_lowercase();
+    let catalog = tools::catalog();
+
+    let total = format!("{} tools", spelled(catalog.len()));
+    assert!(
+        prose.contains(&total),
+        "the spec never says {total:?}: § \"The tool surface\" and § \"Testing\" carry the count"
+    );
+    let reads = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Read)
+        .count();
+    let reads_sentence = format!("{} of them reads", spelled(reads));
+    assert!(
+        prose.contains(&reads_sentence),
+        "the spec never says {reads_sentence:?}"
+    );
+
+    let panels = format!(
+        "the {} names are the layout file's",
+        spelled(Tab::ALL.len())
+    );
+    assert!(prose.contains(&panels), "the spec never says {panels:?}");
+    for tab in Tab::ALL {
+        let name = format!("`{}`", tab.wire_name());
+        assert!(
+            spec.contains(&name),
+            "{name} is a panel on the wire and is in no sentence of the spec"
+        );
+    }
+}
+
+/// A small number as the spec's prose spells it: `54` is `fifty-four`.
+fn spelled(n: usize) -> String {
+    const UNITS: [&str; 20] = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    const TENS: [&str; 10] = [
+        "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    match n {
+        0..=19 => UNITS[n].to_string(),
+        20..=99 if n.is_multiple_of(10) => TENS[n / 10].to_string(),
+        20..=99 => format!("{}-{}", TENS[n / 10], UNITS[n % 10]),
+        _ => panic!("no word for {n}: the spec would not spell it out either"),
+    }
+}
+
 /// The two halves of the layout surface advertise the document they share.
 #[test]
 fn set_window_layout_advertises_the_document() {
@@ -4202,8 +4298,8 @@ fn editable() -> (AppState, Viewer3D) {
         let data: Vec<u8> = (0..(width * height * 3)).map(|i| (i % 251) as u8).collect();
         state.full_res_cache.insert(
             crate::scene::ImageRef::new(id, index),
-            Some(sfmtool_core::camera::remap::ImageU8::new(
-                width, height, 3, data,
+            Some(std::sync::Arc::new(
+                sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
             )),
         );
     }
@@ -5687,7 +5783,9 @@ fn benchable() -> (AppState, Viewer3D) {
             .collect();
         state.full_res_cache.insert(
             crate::scene::ImageRef::new(id, image),
-            Some(sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data)),
+            Some(std::sync::Arc::new(
+                sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
+            )),
         );
     }
     let mut viewer = Viewer3D::new();
@@ -6292,4 +6390,183 @@ fn setting_the_stage_a_track_is_already_at_starts_nothing() {
     assert_eq!(version_count(&state), before, "{reply}");
     assert!(state.background_task().is_none());
     assert_eq!(reply["report"], Value::Null, "{reply}");
+}
+
+/// A commit that replaces a point hands the replacement an index one past the
+/// end of the version it came from, and that index is a handle like any other:
+/// what `get_scene` reports as the selection is what `get_point` and
+/// `select_point` take back.
+#[test]
+fn a_committed_replacement_is_reachable_by_the_index_get_scene_reports() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+
+    let scene = call(&mut state, &mut viewer, "get_scene", json!({}));
+    let selected = &scene["selection"]["point"];
+    let index = selected["index"].as_u64().expect("a selected point");
+    assert!(
+        index
+            >= scene["scene"][0]["counts"]["points"]
+                .as_u64()
+                .expect("a count"),
+        "the fixture no longer exercises a sparse index: {scene}"
+    );
+
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": index }),
+    );
+    assert_eq!(point["index"], json!(index), "{point}");
+    assert_eq!(point["id"], selected["id"], "{point}");
+    // And the selection tool takes it too, which is the other half of the
+    // handle being a handle.
+    call(
+        &mut state,
+        &mut viewer,
+        "select_point",
+        json!({ "point": index }),
+    );
+}
+
+/// `get_scene`'s observation count is the version's and not the file's: a
+/// commit that replaces a thirty-observation track with a two-observation one
+/// moves it by twenty-eight.
+#[test]
+fn the_observation_count_follows_the_version() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let observations = |state: &mut AppState, viewer: &mut Viewer3D| -> u64 {
+        call(state, viewer, "get_scene", json!({}))["scene"][0]["counts"]["observations"]
+            .as_u64()
+            .expect("a count")
+    };
+    let before = observations(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let rows = track["observations"].as_array().expect("the rows").len();
+    assert!(rows > 2, "the fixture needs a row to turn out: {track}");
+
+    // One sighting refused, so the track commits with one fewer than the point
+    // it replaces.
+    call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({ "reconstruction_label": "run_a", "observation": rows - 1, "verdict": "out" }),
+    );
+    call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+
+    assert_eq!(
+        observations(&mut state, &mut viewer),
+        before - 1,
+        "the count did not follow the commit"
+    );
+    // And an undo takes the observation back with the version.
+    call(
+        &mut state,
+        &mut viewer,
+        "undo",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(observations(&mut state, &mut viewer), before);
+}
+
+/// The stage change's sentence is written once. The report used to carry the
+/// stage phrase twice -- the viewer's, then core's report printed whole behind
+/// it -- which is the one thing an agent reads to find out what happened.
+#[test]
+fn the_stage_report_states_the_stage_once() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let staged = worked(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_stage",
+        json!({ "reconstruction_label": "run_a", "stage": "cluster" }),
+    );
+    let report = staged["report"].as_str().expect("a report");
+    assert_eq!(
+        report.matches("stage").count(),
+        1,
+        "the stage is stated twice: {report}"
+    );
+    assert!(
+        report.starts_with(&format!("Set {item} to the cluster stage")),
+        "{report}"
+    );
+    // The Action Log row is that sentence, up to the serials.
+    let last = rows(&state).pop().expect("one row per step");
+    assert!(last.2.starts_with(report), "{last:?} against {report}");
+}
+
+/// The two steps that read photographs decode **on the worker**: a node whose
+/// photographs are neither decoded nor readable starts the task all the same,
+/// and the reply is the handle the frame hands back once the window has passed.
+#[test]
+fn a_slow_evaluate_answers_with_a_handle_naming_it() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    // Nothing decoded: the evaluation has every photograph to read, which is
+    // the work that must not happen before the deferral.
+    state.full_res_cache.clear();
+
+    let arguments = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("evaluate_bench_track", Some(&arguments)).expect("a valid call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("evaluate must defer to a worker"),
+    };
+    assert_eq!(pending.operation_name, "Evaluate track");
+
+    // Past the window with the operation still the one running -- nothing has
+    // drained its reports -- which is the handle case.
+    let operation_id = pending.operation_id;
+    let past = super::BackgroundReply {
+        started: std::time::Instant::now() - super::REPLY_DIRECTLY_WITHIN,
+        ..pending
+    };
+    let reply = match super::edit::background_reply(&state, &past).expect("past the window") {
+        Ok(ToolOutput::Json(value)) => value,
+        _ => panic!("a handle is JSON"),
+    };
+    assert_eq!(reply["running"], json!(true), "{reply}");
+    assert_eq!(reply["operation"], json!("Evaluate track"), "{reply}");
+    assert_eq!(reply["operation_id"], json!(operation_id), "{reply}");
+    assert_eq!(reply["reconstruction_label"], json!("run_a"), "{reply}");
+
+    // The photographs the worker could not read are its refusal and not the
+    // gesture's: the step began either way.
+    state.finish_background_task();
+    match super::edit::background_reply(&state, &past).expect("the operation finished") {
+        Err(e) => assert!(e.0.contains(&format!("Cannot evaluate {item}")), "{e}"),
+        Ok(_) => panic!("the fixture's photographs are not on disk"),
+    }
 }

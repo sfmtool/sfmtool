@@ -21,6 +21,7 @@
 //! MCP surface reports them, so none of the three owns them.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::patch::cloud::OrientedPatch;
@@ -166,7 +167,7 @@ impl PointTrackDetail {
         selected_point: Option<usize>,
         hovered_image: Option<usize>,
         sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
-        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
     ) -> PointTrackDetailResponse {

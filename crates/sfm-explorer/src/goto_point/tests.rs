@@ -139,15 +139,34 @@ fn a_bare_index_lands_in_the_selected_reconstruction() {
 }
 
 #[test]
-fn a_bare_index_past_the_end_reports_the_point_count() {
+fn a_bare_index_that_names_no_point_says_so() {
     let (state, ..) = two_nodes();
 
     let error = go_to(&state, "40").expect_err("node a holds 40 points, so 40 is one past");
-    assert!(error.contains("40 points"), "got {error:?}");
+    assert!(error.contains("no point 40"), "got {error:?}");
     assert!(
         error.contains('a'),
         "the label should name the node: {error:?}"
     );
+    // The count is not the question a sparse index space can be asked.
+    assert!(!error.contains("40 points"), "got {error:?}");
+}
+
+/// A bare index is a place in the version's own index space, which an edit
+/// leaves holes in: a deletion takes one index out and moves none of the rest,
+/// so the last index is still live while the node's point count says it is one
+/// past the end.
+#[test]
+fn a_bare_index_resolves_against_the_version_and_not_the_count() {
+    let (mut state, a, _) = two_nodes();
+    state
+        .delete_point(PointRef::new(a, 0))
+        .expect("a live point");
+    assert_eq!(state.scene[0].point_count(), 39);
+
+    assert_eq!(go_to(&state, "39"), Ok(PointRef::new(a, 39)));
+    let error = go_to(&state, "0").expect_err("point 0 was deleted");
+    assert!(error.contains("no point 0"), "got {error:?}");
 }
 
 #[test]

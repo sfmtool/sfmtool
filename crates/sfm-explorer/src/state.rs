@@ -19,6 +19,7 @@ use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub(crate) mod edits;
 mod ops;
@@ -551,7 +552,13 @@ pub struct AppState {
     /// `None` = decode failed (don't retry). Shared by ImageDetail (builds its
     /// GPU texture from this) and PointTrackDetail (CPU-samples it to render
     /// per-observation patch tiles). Cleared when the scene changes.
-    pub full_res_cache: HashMap<ImageRef, Option<ImageU8>>,
+    ///
+    /// Behind an [`Arc`] because a photograph is megabytes and one of them is
+    /// wanted on a **worker**: a background step that reads pixels
+    /// ([`crate::bench`]) takes a clone of what is already decoded here rather
+    /// than a copy of it, so the viewer holds one copy of each photograph
+    /// however many tasks are looking at it.
+    pub full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8>>>,
 
     /// The pixel the Image Detail context menu was opened at, in source-image
     /// coordinates, held between the right-click that opens the menu and the
@@ -1350,28 +1357,39 @@ pub fn ensure_sift_cached<'a>(
 /// Images are decoded to 3-channel RGB [`ImageU8`]. A failed decode is memoized
 /// as `None` so missing files aren't re-opened every frame.
 pub fn ensure_full_res_cached<'a>(
-    cache: &'a mut HashMap<ImageRef, Option<ImageU8>>,
+    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8>>>,
     recon: &SfmrReconstruction,
     image: ImageRef,
 ) -> Option<&'a ImageU8> {
     cache
         .entry(image)
         .or_insert_with(|| {
-            recon.image_table.images.get(image.index()).and_then(|im| {
-                let path = recon.workspace_dir.join(&im.name);
-                match image::open(&path) {
-                    Ok(dyn_image) => {
-                        let rgb = dyn_image.to_rgb8();
-                        Some(ImageU8::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to load full-res image {}: {}", path.display(), e);
-                        None
-                    }
-                }
-            })
+            recon
+                .image_table
+                .images
+                .get(image.index())
+                .and_then(|im| decode_full_res(&recon.workspace_dir.join(&im.name)).map(Arc::new))
         })
-        .as_ref()
+        .as_deref()
+}
+
+/// One photograph read off disk as 3-channel RGB, or `None` with the reason
+/// logged.
+///
+/// The one decode in the viewer, so that a worker reading a photograph the
+/// cache has not got ([`crate::state::edits::ViewSources`]) reads it exactly as
+/// the GUI thread would have.
+pub fn decode_full_res(path: &std::path::Path) -> Option<ImageU8> {
+    match image::open(path) {
+        Ok(dyn_image) => {
+            let rgb = dyn_image.to_rgb8();
+            Some(ImageU8::new(rgb.width(), rgb.height(), 3, rgb.into_raw()))
+        }
+        Err(e) => {
+            log::warn!("Failed to load full-res image {}: {}", path.display(), e);
+            None
+        }
+    }
 }
 
 #[cfg(test)]

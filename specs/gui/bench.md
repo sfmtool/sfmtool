@@ -267,14 +267,25 @@ track stage`. Neither is cancellable: the patch kernels they run take the
 `Progress` for their phases and never ask whether they should stop, and the
 declaration is held to that by the background tests.
 
-**The photographs are decoded on the GUI thread, through the node's own
-full-resolution cache**, before the worker starts -- the same cache
-`add_observation` decodes through, so an image a panel has already shown is not
-read twice and nothing in the viewer holds a second copy of it. What crosses to
-the worker is those decoded pyramids, a clone of the value at the cursor and a
-clone of the track, so the worker holds no reference into the scene. The images
-decoded are the ones the track's observations name; every other entry of the
-view slice is a one-pixel placeholder, which no kernel samples.
+**The photographs are decoded on the worker**, along with the kernel work that
+reads them: the file reads and the pyramid builds are seconds of work in their
+own right, and a step that did them on the GUI thread would freeze the frame --
+and hold the wire's reply window shut -- for all of it before the task it defers
+to had begun. So what the gesture does here is clone a handful of
+handles: `ViewSources` carries the node's cameras and poses, a **shared** clone
+of each photograph the node's own full-resolution cache already holds, and a
+path for each one it does not, and `ViewSources::decode` turns that into the
+pyramids on the worker, under a `decode images` phase. A photograph the viewer
+had is therefore not decoded a second time and not copied; one the worker reads
+itself is dropped with the task, because the cache is the GUI thread's and the
+panels fill it for what they draw. A photograph that cannot be read is the
+worker's refusal, arriving as the task's failed row rather than as a refusal of
+the gesture -- which is honest: whether a file is readable is not a question the
+gesture can answer without doing the read. Beside those views the worker gets a
+clone of the value at the cursor and a clone of the track, so it holds no
+reference into the scene. The images it decodes are the ones the track's
+observations name; every other entry of the view slice is a one-pixel
+placeholder, which no kernel samples.
 
 **A report lands on the observations it measured.** Observations are appended
 and never renumbered and a measurement is keyed by observation index, so a
@@ -309,7 +320,7 @@ the dock reads the label off the bench at that position before calling the step.
 
 ## The wire
 
-An agent gets the same bench a human does, through fifteen MCP tools
+An agent gets the same bench a human does, through fourteen MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -371,8 +382,11 @@ bench steps.
 **The two steps that read photographs answer in two levels**, as the bundle
 adjustment does: with the version they pushed when they finish inside the reply
 window, and with `running: true` and an `operation_id` to poll
-`get_background_task` with when they do not. A step that finds nothing to do
-starts no task and answers with the version the node stands at.
+`get_background_task` with when they do not. The deferral is taken before a
+single photograph has been read (§ "The two steps that read photographs"), so
+the window is measured against the operation rather than spent on the decode in
+front of it. A step that finds nothing to do starts no task and answers with the
+version the node stands at.
 
 **A refusal is the step's own sentence and pushes nothing.** The wire wraps
 nothing: what an agent reads is the sentence the panel's status line would show.
@@ -405,7 +419,10 @@ point's exact projection and a photograph cached for every image:
 - a run of bench steps over a clean value is clean, a commit is dirty, and
   undoing the commit is clean again;
 - a report lands on the item it measured, and one for an item that is not there
-  is discarded with one row and no version.
+  is discarded with one row and no version;
+- a photometric step whose photographs are neither cached nor readable **starts
+  its task all the same**, and the refusal comes home through it, which is what
+  says the decode is the worker's.
 
 The steps themselves are core's and are tested there, over a synthetic textured
 plane whose numbers are known to the pixel.
@@ -437,5 +454,5 @@ photometric steps deferring to a worker and landing their version
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The fifteen tools for the steps that exist are
+  proposed in the same draft. The fourteen tools for the steps that exist are
   § "The wire".

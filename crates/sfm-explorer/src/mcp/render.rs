@@ -76,7 +76,11 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
             "points_at_infinity": node.infinity_point_count(),
             "camera_images": node.image_count(),
             "camera_intrinsics": recon.image_table.cameras.len(),
-            "observations": recon.point_set.tracks.len(),
+            // Through the overlay, as `points` is: a deleted point takes its
+            // whole track with it and a committed one brings its own, so the
+            // base's count is what the file held before the session started
+            // rather than what this version holds.
+            "observations": node.edited().observation_count(),
         },
         "display": {
             "visible": node.visible,

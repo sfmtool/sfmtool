@@ -13,6 +13,7 @@
 //! per-row tiles.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use nalgebra::Vector3;
 use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
@@ -47,7 +48,7 @@ impl PointTrackDetail {
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
         image_ref: ImageRef,
-        full_res_cache: &HashMap<ImageRef, Option<ImageU8>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
     ) {
         if self.rendered_patch_textures.contains_key(&image_ref) {
             return;
@@ -57,7 +58,7 @@ impl PointTrackDetail {
         let Some(frame) = self.patch_frame.as_ref() else {
             return;
         };
-        let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_ref()) else {
+        let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_deref()) else {
             return;
         };
         let image = &recon.image_table.images[img_idx];

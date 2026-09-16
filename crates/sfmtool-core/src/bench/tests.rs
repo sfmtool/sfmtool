@@ -818,6 +818,30 @@ fn a_kept_observation_with_no_keypoint_refuses_by_name() {
     );
 }
 
+/// The `error` column is the mean of what the last evaluation measured, not a
+/// zero standing in for "a bench track has no error".
+#[test]
+fn the_committed_error_is_the_mean_of_the_measured_reprojections() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    for (i, expected) in track.in_observations().into_iter().zip([0.2, 0.6]) {
+        track.observations[i]
+            .track
+            .as_mut()
+            .expect("a track-stage slot")
+            .reprojection_error = Some(expected);
+    }
+    let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
+    let written = next.point(report.point).expect("just written");
+    assert!(
+        (written.point().error - 0.4).abs() < 1e-6,
+        "wrote {}",
+        written.point().error
+    );
+}
+
 #[test]
 fn the_committed_colour_is_the_consensus_bitmap_centre() {
     let scene = Scene::new();
@@ -1112,6 +1136,26 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         (position - WORLD).norm() < 0.05,
         "the round trip landed at {position}"
     );
+}
+
+/// A stage change's sentence states the stage once, whether it is read whole
+/// or composed by a caller that has written the stage phrase itself.
+#[test]
+fn a_stage_report_states_the_stage_once() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (_, report) = stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a downgrade");
+
+    let whole = report.to_string();
+    assert_eq!(whole.matches("stage").count(), 1, "{whole}");
+    assert!(whole.starts_with("set to the cluster stage"), "{whole}");
+    // What a caller writing its own stage phrase adds: the clause and nothing
+    // that names the stage again.
+    let detail = report.detail();
+    assert!(!detail.contains("stage"), "{detail:?}");
+    assert_eq!(format!("set to the cluster stage{detail}"), whole);
 }
 
 #[test]

@@ -38,9 +38,10 @@ fn state() -> (AppState, ReconId) {
                 ((p % w) % 9 * 14 + (p / w) % 7 * 18) as u8
             })
             .collect();
-        state
-            .full_res_cache
-            .insert(ImageRef::new(id, image), Some(ImageU8::new(w, h, 3, data)));
+        state.full_res_cache.insert(
+            ImageRef::new(id, image),
+            Some(std::sync::Arc::new(ImageU8::new(w, h, 3, data))),
+        );
     }
     (state, id)
 }
@@ -360,4 +361,73 @@ fn the_sliders_keep_where_they_were_left() {
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds().min_zncc, 0.5);
+}
+
+/// The sliders show the **active track's** bars, whoever moved them: a step
+/// taken over the wire moves the track's, and the panel that paints the rows by
+/// them has to be showing the same numbers or it proposes a rule the track does
+/// not hold.
+#[test]
+fn the_sliders_follow_the_active_track_s_own_thresholds() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    // Dragged somewhere of the person's own first: what a step on the track
+    // replaces is exactly that.
+    panel.thresholds.min_zncc = 0.5;
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds().min_zncc, 0.5, "a drag did not survive");
+
+    let bars = Thresholds {
+        min_zncc: 0.94,
+        min_relative_zncc: 0.62,
+        ..Thresholds::default()
+    };
+    state
+        .apply_bench_thresholds(id, &label, &bars)
+        .expect("on the bench");
+    run_frame(&mut panel, &ctx, &state);
+
+    let track = state.bench_track(id, &label).expect("on the bench");
+    assert_eq!(panel.thresholds(), &track.thresholds);
+    assert_eq!(panel.thresholds().min_zncc, 0.94);
+    // And the painting is the track's rule rather than the slider's old one.
+    assert_eq!(
+        panel.painted,
+        sfmtool_core::bench::apply_thresholds(track)
+            .0
+            .observations
+            .iter()
+            .map(|o| o.verdict)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A second track has its own bars, so making it active moves the sliders.
+#[test]
+fn a_change_of_active_track_reseats_the_sliders() {
+    let (mut state, id, first, mut panel, ctx) = on_the_bench();
+    state
+        .apply_bench_thresholds(
+            id,
+            &first,
+            &Thresholds {
+                min_zncc: 0.94,
+                ..Thresholds::default()
+            },
+        )
+        .expect("on the bench");
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds().min_zncc, 0.94);
+
+    let second = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+        )
+        .expect("a pixel on the sensor");
+    assert_ne!(second, first);
+    run_frame(&mut panel, &ctx, &state);
+    assert_eq!(panel.thresholds(), &Thresholds::default());
 }

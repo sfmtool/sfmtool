@@ -289,7 +289,7 @@ pub fn commit(
             position,
             w: frame.map_or(1.0, |patch| patch.w),
             color: bitmap_color(payload),
-            error: 0.0,
+            error: mean_reprojection_error(track, &kept),
             normal,
         },
         observations,
@@ -387,6 +387,28 @@ fn bitmap_color(payload: &TrackPayload) -> [u8; 3] {
         *out = bitmap[[row, col, channel]];
     }
     color
+}
+
+/// The `error` column of the committed point: the mean of what the last
+/// evaluation measured at each `in` observation.
+///
+/// The column is a mean pixel reprojection error and the track stage has
+/// measured exactly that, against the position the commit is about to write, so
+/// the number is there to be carried across rather than left at zero. Zero is
+/// what a point with nothing measured gets, which is the same thing
+/// `recompute_point_errors` leaves on a point no observation could be scored
+/// for.
+fn mean_reprojection_error(track: &EditableTrack, kept: &[usize]) -> f32 {
+    let measured: Vec<f64> = kept
+        .iter()
+        .filter_map(|&i| track.observations[i].track.as_ref())
+        .filter_map(|m| m.reprojection_error)
+        .filter(|e| e.is_finite())
+        .collect();
+    if measured.is_empty() {
+        return 0.0;
+    }
+    (measured.iter().sum::<f64>() / measured.len() as f64) as f32
 }
 
 /// A world half-vector as the column's `f32` triple.

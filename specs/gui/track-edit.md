@@ -136,11 +136,24 @@ what is missing, in the style of the Image Detail menu entries -- and the
 Commit button's refusal is the core commit's own sentence, asked of the very
 track the button would commit, so the button and the step cannot disagree.
 
-**The thresholds**: three sliders -- minimum ZNCC, maximum shift, maximum
-keypoint uncertainty -- which are exactly the bars the painting reads. Moving
-one repaints the table and changes nothing about the track; *Apply thresholds*
-is what turns the painting into verdicts, in one version carrying both the bars
-and the painting, since the sliders are the panel's until the button is pressed.
+**The thresholds**: four sliders, one per bar of `Thresholds` -- minimum ZNCC,
+maximum shift, maximum keypoint uncertainty, minimum relative ZNCC -- so there
+is no bar only the wire can move. The first three are the bars the painting
+reads; the fourth is the fraction of the track's own self-agreement a sweep
+candidate is scored by, carried with the others because it is one of the track's
+bars and is applied in the same step. Moving a slider repaints the table and
+changes nothing about the track; *Apply thresholds* is what turns the painting
+into verdicts, in one version carrying both the bars and the painting, since the
+sliders are the panel's until the button is pressed.
+
+**The sliders stand where the active track's own bars are.** A track carries the
+thresholds it was last applied, and that is what the panel shows: seeded from
+the track when the active item changes and again whenever a step moves that
+track's bars -- *Apply thresholds* here, `apply_bench_track_thresholds` over the
+wire, an undo of either. What is *not* re-seeded is a drag in progress, because
+a drag moves the panel's copy and leaves the track's where it is. Sliders that
+said something other than the track's bars would paint the table by a rule the
+track does not hold, and hand that rule to the next press of the button.
 
 **The observation table**, one row per observation in index order:
 
@@ -153,11 +166,16 @@ and the painting, since the sliders are the panel's until the button is pressed.
 | Shift | from the seed, px | from the surfel's projection, px |
 | σ_pos | the observation's own tile localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `localized`, or `not evaluated` |
+| Status | the kernel's `member_status` | `localized` where the fit scored it, `not localized` where the evaluation reached it and the fit did not place it, `not evaluated` where nothing has |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which is what says the
 difference between a number a round produced and a round that has not been run.
+The Status column says which of those a row is by what was measured rather than
+by the ZNCC alone: an evaluation that reaches an observation the fit does not
+place leaves it its keypoint and scores it for everything the position says
+about it, and calling that row `not evaluated` would read as though the numbers
+beside it came from nowhere.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is the thing a person can judge, which is the whole
@@ -256,9 +274,10 @@ index order; a verdict showing under the same observation index, pinned; the
 sliders painting the rows, leaving a pinned verdict where it is, and the
 painting matching what applying the bars then produces; the cells following the
 stage the track is in; every row drawing its own rendered tile at both stages;
-every item named in the tabs; the sliders keeping where they were left; and a
-row click reporting both the image it selects and the observation's pixel to
-reveal in it.
+every item named in the tabs; the sliders keeping where they were left,
+following the active track's own bars when a step moves them, and re-seating
+when another item becomes active; and a row click reporting both the image it
+selects and the observation's pixel to reveal in it.
 
 The Panels menu entry and the tab's presence are covered by the layout test that
 walks every tab. There is no windowed `ui_basic` test, for the reason the

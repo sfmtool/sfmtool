@@ -126,6 +126,38 @@ fn a_fresh_overlay_is_its_base() {
     }
 }
 
+/// The observation count is the version's, not the base's: an edit adds and
+/// removes whole tracks, and a reader asking the base would be told what the
+/// file held.
+#[test]
+fn the_observation_count_follows_every_point_edit() {
+    let base = Arc::new(fixture(6));
+    let mut edited = EditedReconstruction::new(Arc::clone(&base));
+    let stored = base.point_set.tracks.len();
+    assert_eq!(edited.observation_count(), stored);
+
+    let deleted = edited.point(0).unwrap().observations().len();
+    edited.delete_point(0).unwrap();
+    assert_eq!(edited.observation_count(), stored - deleted);
+
+    // An addition brings its own track, and a replacement brings its own and
+    // takes the replaced point's.
+    let added = new_record(5, 8);
+    let brought = added.observations.len();
+    edited.add_point(added).unwrap();
+    assert_eq!(edited.observation_count(), stored - deleted + brought);
+
+    let replaced = edited.point(3).unwrap().observations().len();
+    edited.replace_point(3, new_record(7, 8)).unwrap();
+    assert_eq!(
+        edited.observation_count(),
+        stored - deleted + 2 * brought - replaced
+    );
+    // The materialised value agrees, which is the answer with no overlay in it.
+    let (mat, _) = edited.materialize();
+    assert_eq!(mat.point_set.tracks.len(), edited.observation_count());
+}
+
 #[test]
 fn point_edits_leave_the_base_arc_alone() {
     let base = Arc::new(fixture(6));

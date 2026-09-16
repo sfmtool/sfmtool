@@ -167,6 +167,14 @@ pub struct StageReport {
     pub reference: Option<usize>,          // the downgrade's
 }
 
+impl StageReport {
+    /// What the change did beyond moving the stage, as the clause that follows
+    /// the stage phrase, its own separator included: a caller that writes that
+    /// phrase in its own words adds this rather than printing the whole report
+    /// behind its own sentence and stating the stage twice.
+    pub fn detail(&self) -> String;
+}
+
 // The one step that writes the reconstruction.
 pub fn commit(
     edited: &EditedReconstruction,
@@ -526,7 +534,10 @@ hypothesis is what goes.
 ordinary point edit. It builds a `PointRecord` from the track-stage payload and
 the `in` observations: the position the track carries, the frame it stands on,
 the consensus bitmap, the colour read from that bitmap's centre, the normal the
-frame states, and one observation per `in` sighting with its keypoint and its
+frame states, the mean of what the last evaluation measured as each `in`
+sighting's reprojection error in the point's `error` column (zero where nothing
+was measured, which is what a point no observation could be scored for carries
+anywhere else), and one observation per `in` sighting with its keypoint and its
 leave-one-out ZNCC in `observation_confidence` where the column exists. The
 observations are written in image order, which is the order a stored track is in
 and every reader of one relies on.

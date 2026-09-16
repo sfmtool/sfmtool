@@ -86,7 +86,17 @@ pub struct TrackEdit {
     /// Where the threshold sliders stand. Panel state: a slider proposes and
     /// *Apply thresholds* is what makes the proposal verdicts, so moving one
     /// pushes no version and closing the panel keeps where they were left.
+    ///
+    /// Seeded from the **active track's own bars**, not from the defaults: the
+    /// track carries the bars it was last applied, and sliders that said
+    /// something else would paint the table by a rule the track does not hold
+    /// and hand that rule to the next press of the button.
     thresholds: Thresholds,
+    /// The item and the track's own bars [`TrackEdit::thresholds`] was seeded
+    /// from, so the seeding happens again when the active track changes or when
+    /// a step moves that track's bars -- and not while the person is dragging a
+    /// slider, which moves the panel's copy and leaves the track's alone.
+    seeded_from: Option<(ReconId, String, Thresholds)>,
     /// The verdicts the sliders propose for the active track, one per
     /// observation, which is what the rows are painted by.
     painted: Vec<Verdict>,
@@ -146,6 +156,7 @@ impl TrackEdit {
     pub fn new() -> Self {
         Self {
             thresholds: Thresholds::default(),
+            seeded_from: None,
             painted: Vec::new(),
             painted_for: None,
             commit_refusal: None,
@@ -193,6 +204,7 @@ impl TrackEdit {
         }
         self.painted_for = None;
         self.commit_refusal_for = None;
+        self.seeded_from = None;
         self.painted.clear();
         self.rows.clear();
     }
@@ -233,6 +245,7 @@ impl TrackEdit {
             self.selected_rows.clear();
             self.selection_of = Some((id, label.clone()));
         }
+        self.reseat_thresholds(id, &label, track);
         self.repaint_if_stale(&label, track);
         self.recheck_commit_if_stale(&label, track, node);
         self.retile_if_stale(&label, track);
@@ -416,7 +429,32 @@ impl TrackEdit {
                     .text("max \u{3c3}_pos")
                     .max_decimals(2),
             );
+            // The fourth bar of `Thresholds`, which view selection scores a
+            // candidate by as a fraction of the track's own self-agreement: a
+            // bar with no slider is a bar only the wire can move.
+            ui.add(
+                egui::Slider::new(&mut self.thresholds.min_relative_zncc, 0.0..=1.0)
+                    .text("min relative ZNCC")
+                    .max_decimals(2),
+            );
         });
+    }
+
+    /// Put the sliders where the active track's own bars are, when the track
+    /// they were seeded from is no longer the one being shown or its bars have
+    /// moved under them.
+    ///
+    /// A slider drag moves [`TrackEdit::thresholds`] and not the track's, so
+    /// the key below is unchanged and the drag survives; a step that sets the
+    /// track's bars -- *Apply thresholds* here, `apply_bench_track_thresholds`
+    /// over the wire, an undo of either -- moves them, and the sliders follow.
+    fn reseat_thresholds(&mut self, id: ReconId, label: &str, track: &EditableTrack) {
+        let key = (id, label.to_string(), track.thresholds.clone());
+        if self.seeded_from.as_ref() == Some(&key) {
+            return;
+        }
+        self.thresholds = track.thresholds.clone();
+        self.seeded_from = Some(key);
     }
 
     /// Recompute the painting when the track or the bars have moved.
@@ -665,9 +703,17 @@ fn measurements(observation: &Observation, stage: StageKind) -> [String; 6] {
                 number(m.and_then(|m| m.localizability), 3),
                 number(m.and_then(|m| m.reprojection_error), 2),
                 number(m.and_then(|m| m.ray_angle_deg), 2),
-                match m.and_then(|m| m.zncc) {
-                    Some(_) => "localized".to_string(),
-                    None => "not evaluated".to_string(),
+                // Named by what was measured rather than by the ZNCC alone: a
+                // row the evaluation reached but the fit did not place keeps
+                // its keypoint and is scored for everything the position says
+                // about it, and calling that "not evaluated" reads as though
+                // the numbers beside it came from nowhere.
+                match m {
+                    Some(m) if m.zncc.is_some() => "localized".to_string(),
+                    Some(m) if m.keypoint.is_some() || m.reprojection_error.is_some() => {
+                        "not localized".to_string()
+                    }
+                    _ => "not evaluated".to_string(),
                 },
             ]
         }
