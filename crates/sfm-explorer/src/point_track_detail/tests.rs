@@ -1234,3 +1234,79 @@ fn an_ordinary_frame_asks_for_no_removal() {
     let response = show_once(&mut panel, &ctx, &recon, Some(0), &sift_cache(8, 16));
     assert_eq!(response.remove_observation, None);
 }
+
+#[test]
+fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
+    let recon = SfmrReconstruction::demo(12);
+    let mut panel = PointTrackDetail::new();
+    let ctx = egui::Context::default();
+    let cache = sift_cache(8, 16);
+    // One frame prepares the observations; the painting is read off the next.
+    show_once(&mut panel, &ctx, &recon, Some(3), &cache);
+
+    let edited = edited_of(&recon);
+    let full_res: HashMap<ImageRef, Option<Arc<ImageU8>>> = HashMap::new();
+    let painted = crate::test_support::painted_text_rects(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(
+                ui,
+                &edited,
+                RECON,
+                TEST_POINT_ID,
+                Some(3),
+                None,
+                &cache,
+                &full_res,
+                &[],
+                &ScrollInput::default(),
+            );
+        },
+    );
+    let find = |text: &str| {
+        painted
+            .iter()
+            .find(|painted| painted.text == text)
+            .unwrap_or_else(|| {
+                let all: Vec<&str> = painted.iter().map(|p| p.text.as_str()).collect();
+                panic!("{text:?} was not painted: {all:?}")
+            })
+    };
+
+    // The rows are clipped to the scroll area's viewport, so a heading that
+    // carries a different clip rectangle, above that one, is a heading the
+    // rows cannot scroll over.
+    let cell = find("(500.0, 300.0)");
+    for heading in [
+        "Image",
+        "Name",
+        "Feat #",
+        "Size",
+        "Error",
+        "Angle",
+        "Feature (x, y)",
+    ] {
+        let painted = find(heading);
+        assert!(
+            painted.clip != cell.clip,
+            "the {heading:?} heading shares the rows' clip rectangle, so it scrolls with them",
+        );
+        assert!(
+            painted.rect.max.y <= cell.clip.min.y,
+            "the {heading:?} heading sits inside the scrolling rows ({:?} against {:?})",
+            painted.rect,
+            cell.clip,
+        );
+    }
+    // And it did not move sideways on the way out: the scroll bar takes width
+    // off the right edge, and every column is measured from the left one.
+    assert_eq!(
+        find("Feature (x, y)").rect.min.x,
+        cell.rect.min.x,
+        "the Feature (x, y) heading no longer stands over its column",
+    );
+}

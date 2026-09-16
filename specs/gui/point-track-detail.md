@@ -196,7 +196,9 @@ session, or after `sfm xform` produced a new file. See
 #### Observation Table
 
 Below the header, the panel shows a vertically scrollable table of observations
-— one row per image that observes this point.
+— one row per image that observes this point. The column headings sit above the
+scroll area rather than inside it, so they stay put while the rows scroll under
+them.
 
 ```
 +-----+-------+-----------------+--------+-----------+--------+-------+----------------+

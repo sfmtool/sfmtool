@@ -431,3 +431,75 @@ fn a_change_of_active_track_reseats_the_sliders() {
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds(), &Thresholds::default());
 }
+
+#[test]
+fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let painted = crate::test_support::painted_text_rects(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    let find = |text: &str| {
+        painted
+            .iter()
+            .find(|painted| painted.text == text)
+            .unwrap_or_else(|| {
+                let all: Vec<&str> = painted.iter().map(|p| p.text.as_str()).collect();
+                panic!("{text:?} was not painted: {all:?}")
+            })
+    };
+
+    // The rows are clipped to the scroll area's viewport; a heading drawn
+    // above that viewport is one that cannot scroll out of it. The name cell
+    // is the row text furthest from any widget, so it is the one asked.
+    let name = find("image_000.jpg");
+    for (_, heading) in super::table::ColumnLayout::new().headers() {
+        let painted = find(heading);
+        assert!(
+            painted.clip != name.clip,
+            "the {heading:?} heading shares the rows' clip rectangle, so it scrolls with them",
+        );
+        assert!(
+            painted.rect.max.y <= name.clip.min.y,
+            "the {heading:?} heading sits inside the scrolling rows ({:?} against {:?})",
+            painted.rect,
+            name.clip,
+        );
+    }
+}
+
+#[test]
+fn a_heading_stands_at_the_x_offset_its_column_is_drawn_at() {
+    let (state, _id, _label, mut panel, ctx) = on_the_bench();
+    let painted = crate::test_support::painted_text_rects(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    let x_of = |text: &str| {
+        painted
+            .iter()
+            .find(|painted| painted.text == text)
+            .map(|painted| painted.rect.min.x)
+            .unwrap_or_else(|| panic!("{text:?} was not painted"))
+    };
+    // Moving the heading out of the scroll area must not have moved it
+    // sideways: the scroll bar takes width off the right edge, and every
+    // column is measured from the left one.
+    assert_eq!(
+        x_of("Name"),
+        x_of("image_000.jpg"),
+        "the Name heading no longer stands over the name column",
+    );
+}

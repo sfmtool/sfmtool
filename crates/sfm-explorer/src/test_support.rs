@@ -221,6 +221,54 @@ pub(crate) fn painted_texts(
     texts
 }
 
+/// Every string painted in one headless frame, with where it was painted and
+/// the rectangle it was clipped to.
+///
+/// The clip rectangle is the point of it. A `ScrollArea` clips its contents to
+/// the viewport it scrolls them through, so a table header drawn *outside* one
+/// carries a different clip rectangle from the rows, and the two rectangles say
+/// which side of the boundary each string was drawn on. Two panels draw such a
+/// table, which is why the helper is here rather than in one of them.
+pub(crate) fn painted_text_rects(
+    ctx: &egui::Context,
+    input: egui::RawInput,
+    run_ui: impl FnMut(&mut egui::Ui),
+) -> Vec<PaintedText> {
+    let mut output = ctx.run_ui(input, run_ui);
+    output.textures_delta.clear();
+    let mut texts = Vec::new();
+    for clipped in &output.shapes {
+        collect_text_rects(&clipped.shape, clipped.clip_rect, &mut texts);
+    }
+    texts
+}
+
+/// One string a headless frame painted.
+#[derive(Debug, Clone)]
+pub(crate) struct PaintedText {
+    pub(crate) text: String,
+    /// Where the glyphs landed, in screen coordinates.
+    pub(crate) rect: egui::Rect,
+    /// What the painter was clipped to when it drew them.
+    pub(crate) clip: egui::Rect,
+}
+
+fn collect_text_rects(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<PaintedText>) {
+    match shape {
+        egui::Shape::Text(text) => out.push(PaintedText {
+            text: text.galley.text().to_owned(),
+            rect: egui::Rect::from_min_size(text.pos, text.galley.size()),
+            clip,
+        }),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_text_rects(shape, clip, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn collect_texts(shape: &egui::Shape, out: &mut Vec<String>) {
     match shape {
         egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),

@@ -244,6 +244,15 @@ impl App {
         };
         self.egui_winit_state = Some(egui_winit_state);
 
+        // A refusal the person at the window just walked into brings the
+        // Action Log forward, so the sentence saying why is on the screen
+        // rather than in a hidden tab. Here because the dock is back in the
+        // state and this frame's arrangement is already drawn: the panel moves
+        // for the next frame, which the repaint below asks for.
+        if self.state.surface_failed_user_action() {
+            self.egui_ctx.request_repaint();
+        }
+
         // --- Acquire the surface, encode the egui pass, submit, and present. ---
         let renderer = self.egui_renderer.as_mut().unwrap();
 

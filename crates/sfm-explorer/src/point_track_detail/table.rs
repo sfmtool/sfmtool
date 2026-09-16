@@ -6,7 +6,8 @@
 //!
 //! Rows are painted at fixed x-offsets rather than laid out by egui, so the
 //! header and every row stay aligned; [`ColumnLayout`] is the single place
-//! those offsets are computed.
+//! those offsets are computed. That is also what lets the header be drawn
+//! above the scroll area, where it stays put while the rows move under it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -131,9 +132,14 @@ impl PointTrackDetail {
 
         let cols = ColumnLayout::new(self.patch_frame.is_some());
 
-        let scroll_output = scroll_area.show(ui, |ui| {
-            draw_table_header(ui, &cols);
+        // Above the scroll area, not inside it: a header that scrolled away
+        // leaves the bottom of a long track as columns of numbers with nothing
+        // naming them. The offsets are unaffected by the move, every column
+        // being left-anchored at the table's left edge, which a scroll area
+        // does not move.
+        draw_table_header(ui, &cols);
 
+        let scroll_output = scroll_area.show(ui, |ui| {
             for obs_i in 0..self.observations.len() {
                 self.draw_observation_row(
                     ui,
@@ -502,7 +508,8 @@ fn gesture_scroll_delta(
 }
 
 /// Paint the table's column headers at the same fixed x-offsets the rows use,
-/// then allocate their height and a separator.
+/// then allocate their height and a separator. Drawn once, above the scroll
+/// area the rows live in.
 fn draw_table_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
     let header_rect = ui.available_rect_before_wrap();
     let header_y = header_rect.min.y;

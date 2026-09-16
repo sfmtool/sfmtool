@@ -326,6 +326,14 @@ pub(crate) struct ActionLog {
     /// reset, [`ActionLog::clear`] included, so a revision an agent is holding
     /// stays comparable for the life of the session.
     revision: u64,
+    /// Whether a refusal of the user's has been written that nobody has been
+    /// shown yet.
+    ///
+    /// A flag rather than a call into the dock, because an entry is written
+    /// from inside a panel body, where the dock is out of reach by the rule in
+    /// `crate::app`'s egui pass. The frame loop takes it afterwards
+    /// with [`ActionLog::take_surface_request`].
+    surface: bool,
 }
 
 impl ActionLog {
@@ -378,6 +386,7 @@ impl ActionLog {
             expanded: HashSet::new(),
             detailed_timing: false,
             revision: 0,
+            surface: false,
         }
     }
 
@@ -558,6 +567,14 @@ impl ActionLog {
         let Work { started, detail } = work;
         if self.mute > 0 {
             return;
+        }
+        // A refusal is only an answer if the person who walked into it can
+        // read it. Raised here rather than at each of the sites that refuse,
+        // because every one of them arrives through this write; and only for
+        // the user, since an agent's refusal is already the reply to its call
+        // and the viewer's own is nobody's question.
+        if failed && self.actor == Actor::User {
+            self.surface = true;
         }
         // One tick per write, in both branches below: an entry a run folded
         // into is as new to a reader as one that was appended.
@@ -855,6 +872,15 @@ impl ActionLog {
     /// Who entries are being attributed to right now.
     pub(crate) fn actor(&self) -> Actor {
         self.actor
+    }
+
+    /// Whether a refusal of the user's has been recorded since the last ask,
+    /// clearing the flag.
+    ///
+    /// One answer per frame however many refusals a frame wrote: the panel is
+    /// brought forward once, not once per row.
+    pub(crate) fn take_surface_request(&mut self) -> bool {
+        std::mem::take(&mut self.surface)
     }
 
     /// Suppress recording until the matching [`ActionLog::unmute`]. Nests.

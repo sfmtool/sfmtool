@@ -137,6 +137,32 @@ the log and has no state of its own. Consequences that differ from before:
   does not read its own polling back as the viewer's status. A refused query
   does reach it, like any other failure.
 
+### Surfacing a refusal
+
+A refusal the person at the window walked into is only an answer if they can
+read it, and the panel holding it is closeable. So an entry recorded as
+**failed** whose actor is the user brings the Action Log forward on the next
+frame: closed, it opens at its home position; docked behind another tab, it is
+raised to the front of its group; already in front, nothing moves. The move is
+`AppState::show_panel`, the same operation the Panels menu and the MCP
+`show_panel` tool run ([panel-layout.md](panel-layout.md) § "Home positions"),
+so the panel arrives where the user last put it rather than somewhere of the
+log's choosing.
+
+Three things bound it:
+
+- **Only the user's refusals surface.** An agent's refusal is already the reply
+  to its call, and the viewer's own is nobody's question, so a failed `MCP` or
+  `Viewer` row leaves the dock alone.
+- **The raise is not itself an action.** It records no `Raised Action Log
+  panel` row; the failed row the user is being shown is the frame's only entry.
+- **It moves the dock and nothing else.** A text field being typed into keeps
+  its cursor and its keyboard focus, `egui_dock`'s focused leaf being a
+  highlight rather than egui's focus.
+
+A frame that writes several refusals brings the panel forward once, not once
+per row.
+
 ## What gets logged
 
 The catalogue, by kind. **Kind** is what the row is about, and what the
@@ -779,6 +805,15 @@ same buffer the panel draws, on the same thread.
 - **`stick_to_bottom` and `show_rows` compose** as long as the total row count
   passed is the current count; the log grows monotonically between clears, so
   the scroll offset stays valid.
+- **The surfacing is a flag, not a call into the dock.** A failed entry is
+  usually written from inside a panel body, where the dock is out of reach: the
+  frame takes it out of `AppState` for the duration of `DockArea::show_inside`
+  and a tab that needs a layout operation reports it instead. So `write` raises
+  a one-bit request on the log and `AppState::surface_failed_user_action` takes
+  it once per frame, after the egui pass, muting the log around the
+  `show_panel` it then runs and asking for a repaint so the moved panel is
+  drawn. The early return on a panel that is already in front is what keeps
+  `egui_dock`'s focused leaf from moving in the case where nothing needs to.
 - **Entries are mirrored to `log::info!`** under the target
   `sfm_explorer::action_log`, one line each in the clipboard format, so a
   `RUST_LOG` capture of a session carries the same stream. The existing
@@ -854,6 +889,17 @@ Panel, headless:
   not panic.
 - **Clear** empties the buffer and the next frame paints no rows.
 
+Surfacing a refusal, over an `AppState` with the stock arrangement:
+
+- A failed `User` row raises the Action Log from behind the Image Browser, and
+  reopens it at its home position when it was closed. Neither raise records a
+  row, and the request is spent: a second frame with no new refusal moves
+  nothing.
+- A failed `Mcp` or `Viewer` row, and a successful `User` row, leave the
+  arrangement as it was.
+- A failed `User` row while the panel is already in front reports that nothing
+  moved, and `layout()` reads back unchanged.
+
 Attribution, in `mcp/tests.rs` beside the existing status-line test. Every
 helper there routes through `apply_as_agent` rather than bare `apply`, because
 attribution is part of what an MCP call *is* and a test that skipped it would
@@ -897,9 +943,6 @@ Scene-graph and resection tests that read `state.status_message` moved to
   — because an agent reading the log is nearly always asking the one question
   the panel's reader is not: what did the human do, with none of my own rows in
   it. Scrolling past a row costs a human nothing and costs an agent tokens.
-- **Raising the tab on a failure.** The status line already puts the failure
-  on the viewport; raising a tab the user may have docked elsewhere would move
-  their layout under them.
 - **Recording which control was used.** `Selected image …` does not say
   whether it was the strip, the tree, the viewport or the keyboard.
 - **An undo stack.** The entries are text; they are not replayable. Undo walks a

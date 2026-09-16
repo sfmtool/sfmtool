@@ -155,7 +155,10 @@ a drag moves the panel's copy and leaves the track's where it is. Sliders that
 said something other than the track's bars would paint the table by a rule the
 track does not hold, and hand that rule to the next press of the button.
 
-**The observation table**, one row per observation in index order:
+**The observation table**, one row per observation in index order. The column
+headings are drawn above the scroll area rather than as its first row, so they
+stay put while the rows move under them and the bottom of a long track still
+says which column each number is in.
 
 | Column | Cluster stage | Track stage |
 |---|---|---|

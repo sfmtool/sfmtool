@@ -163,6 +163,11 @@ non-coalescing — two panels closed in a row are two events:
 | Load Layout..., and the startup load | `Loaded layout from C:/Users/mark/.sfm-explorer-default-layout.json` |
 | a load refused | *failed:* `Load layout from …: <reason>` |
 
+The one raise that records nothing is the Action Log's own. A failed row from
+the user brings that panel forward through this same `show_panel`, with the log
+muted, because the raise is a consequence of the refusal rather than a step
+anybody took ([action-log.md](action-log.md) § "Surfacing a refusal").
+
 A load is one row whatever the file carried — the file is the action, and a
 document that moved the window and rearranged the panels did one thing the
 person asked for. (An MCP `set_window_layout` is the other case: nobody asked

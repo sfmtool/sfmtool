@@ -12,7 +12,9 @@
 //!
 //! Rows are painted at fixed x-offsets rather than laid out by egui, as the
 //! view-only panel's are, so the header and every row stay aligned whatever a
-//! cell prints. The one real widget in a row is the verdict control: the row
+//! cell prints, and the header can be drawn above the scroll area rather than
+//! as its first row: the offsets are the same either side of that boundary.
+//! The one real widget in a row is the verdict control: the row
 //! rect is registered first and the control after it, so the control wins the
 //! clicks that land on it and the row takes the rest.
 
@@ -54,7 +56,7 @@ pub(crate) struct RowSummary {
 }
 
 /// Fixed column x-offsets, relative to the left edge of the table.
-struct ColumnLayout {
+pub(super) struct ColumnLayout {
     verdict: f32,
     tile: f32,
     image: f32,
@@ -69,7 +71,7 @@ struct ColumnLayout {
 }
 
 impl ColumnLayout {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let verdict = 0.0;
         let tile = verdict + VERDICT_WIDTH + 6.0;
         let image = tile + TILE_SIZE + 8.0;
@@ -97,7 +99,7 @@ impl ColumnLayout {
     }
 
     /// The header's cells, each at the offset its column is drawn at.
-    fn headers(&self) -> [(f32, &'static str); 10] {
+    pub(super) fn headers(&self) -> [(f32, &'static str); 10] {
         [
             (self.verdict, "Verdict"),
             (self.image, "Img"),
@@ -156,12 +158,18 @@ impl TrackEdit {
             .map(ImageRef::index);
         self.rows.clear();
 
+        // Above the scroll area, not inside it: at the bottom of a long track
+        // a header that had scrolled away leaves six columns of numbers with
+        // nothing saying which is which. Alignment survives the move because
+        // every column is left-anchored at the table's left edge, and a scroll
+        // area moves its right edge, never that one.
+        draw_header(ui, &cols);
+
         let mut scroll_area = egui::ScrollArea::vertical().auto_shrink([false, false]);
         if let Some(offset) = self.scroll_offset_y {
             scroll_area = scroll_area.vertical_scroll_offset(offset);
         }
         let output = scroll_area.show(ui, |ui| {
-            draw_header(ui, &cols);
             for observation in 0..track.observations.len() {
                 self.draw_row(
                     ui,
@@ -364,7 +372,8 @@ impl TrackEdit {
     }
 }
 
-/// The header row, at the same offsets the rows draw at.
+/// The header row, at the same offsets the rows draw at, drawn once above the
+/// scroll area so it stays put while the rows move under it.
 fn draw_header(ui: &mut egui::Ui, cols: &ColumnLayout) {
     let available = ui.available_rect_before_wrap();
     let rect = egui::Rect::from_min_size(available.min, egui::vec2(available.width(), 20.0));

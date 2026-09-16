@@ -1055,6 +1055,49 @@ impl AppState {
         self.record_opened(tab);
     }
 
+    /// Whether `tab` is the front tab of the group it is docked in.
+    ///
+    /// Not the same question as [`AppState::is_panel_open`]: a panel docked
+    /// behind another tab is open and unreadable, which is the case the
+    /// surfacing below exists for.
+    pub(crate) fn panel_is_in_front(&self, tab: Tab) -> bool {
+        let Some(path) = self.dock.find_tab(&tab) else {
+            return false;
+        };
+        self.dock
+            .leaf(path.node_path())
+            .is_ok_and(|leaf| leaf.tabs.get(leaf.active.0) == Some(&tab))
+    }
+
+    /// Bring the Action Log forward when it holds a refusal of the user's that
+    /// they have not been shown, reporting whether anything moved.
+    ///
+    /// The whole of the rule in `specs/gui/action-log.md` § "Surfacing a
+    /// refusal": a button that refuses nine times in a row while its sentence
+    /// goes into a hidden panel reads as a button that does nothing. The move
+    /// is [`AppState::show_panel`] and nothing else, so a log that is closed
+    /// comes back at its home position and one that is docked behind another
+    /// tab is raised where the user put it. It records no row of its own,
+    /// the raise being a consequence of the refusal rather than a second
+    /// action, and it touches only the dock, so a text field keeps its
+    /// cursor: `egui_dock`'s focused leaf is a highlight, not egui's keyboard
+    /// focus.
+    ///
+    /// Called once per frame by the frame loop, after the egui pass: a panel
+    /// body may not touch the dock while [`egui_dock::DockArea`] holds it.
+    pub(crate) fn surface_failed_user_action(&mut self) -> bool {
+        if !self.action_log.take_surface_request() {
+            return false;
+        }
+        if self.panel_is_in_front(Tab::ActionLog) {
+            return false;
+        }
+        self.action_log.mute();
+        self.show_panel(Tab::ActionLog);
+        self.action_log.unmute();
+        true
+    }
+
     /// Close `tab`. A no-op, logged or otherwise, on a panel that is not open.
     pub(crate) fn hide_panel(&mut self, tab: Tab) {
         let Some(path) = self.dock.find_tab(&tab) else {

@@ -16,6 +16,7 @@ use jiff::Timestamp;
 use sfmtool_core::progress::Level;
 use sfmtool_core::SfmrReconstruction;
 
+use crate::dock::Tab;
 use crate::scene::{ImageRef, PointRef, ReconId};
 use crate::state::edits::tests::{creatable_state, CREATE_IMAGE, CREATE_PIXEL};
 use crate::state::AppState;
@@ -1920,4 +1921,112 @@ fn the_overhead_comes_after_the_operation_and_its_elsewhere() {
             == 1,
         "more than one rule was drawn",
     );
+}
+
+// ── Surfacing a refusal ──────────────────────────────────────────────────
+
+/// The refusal a nine-times-pressed toolbar button writes, worded as
+/// `crate::bench` words it.
+const REFUSAL: &str = "Cannot set the stage of dino_dog_toy_44@532,2898: 1 observations are in, \
+                       and the track stage needs two or more";
+
+#[test]
+fn a_failed_row_from_the_user_raises_the_action_log_where_it_is_docked() {
+    let mut state = AppState::new();
+    assert!(
+        state.is_panel_open(Tab::ActionLog) && !state.panel_is_in_front(Tab::ActionLog),
+        "the stock layout no longer docks the Action Log behind the Image Browser, \
+         so this test is not asking anything",
+    );
+
+    state.action_log.fail(Kind::Bench, REFUSAL);
+    assert!(
+        state.surface_failed_user_action(),
+        "a refusal of the user's left the panel where it was",
+    );
+    assert!(
+        state.panel_is_in_front(Tab::ActionLog),
+        "the Action Log did not come to the front of its tab group",
+    );
+    assert_eq!(
+        texts(&state.action_log),
+        [REFUSAL],
+        "the raise recorded a row of its own",
+    );
+
+    // The request is spent: a frame that recorded nothing moves nothing.
+    assert!(
+        !state.surface_failed_user_action(),
+        "the surfacing repeated itself on a frame with no new refusal",
+    );
+}
+
+#[test]
+fn a_failed_row_from_the_user_reopens_a_closed_action_log() {
+    let mut state = AppState::new();
+    state.hide_panel(Tab::ActionLog);
+    state.action_log.clear();
+
+    state.action_log.fail(Kind::Bench, REFUSAL);
+    assert!(state.surface_failed_user_action());
+    assert!(
+        state.panel_is_in_front(Tab::ActionLog),
+        "a closed Action Log was not reopened at its home position",
+    );
+    assert_eq!(
+        texts(&state.action_log),
+        [REFUSAL],
+        "reopening the panel recorded a row of its own",
+    );
+}
+
+#[test]
+fn an_agents_or_the_viewers_refusal_leaves_the_dock_alone() {
+    for actor in [Actor::Mcp, Actor::Viewer] {
+        let mut state = AppState::new();
+        state.action_log.set_actor(actor);
+        state.action_log.fail(Kind::Bench, REFUSAL);
+        state.action_log.set_actor(Actor::User);
+        assert!(
+            !state.surface_failed_user_action(),
+            "a refusal by {actor:?} moved the dock",
+        );
+        assert!(
+            !state.panel_is_in_front(Tab::ActionLog),
+            "a refusal by {actor:?} raised the Action Log",
+        );
+    }
+}
+
+#[test]
+fn a_successful_row_from_the_user_leaves_the_dock_alone() {
+    let mut state = AppState::new();
+    state
+        .action_log
+        .record(Kind::Bench, "Set dino_dog_toy_44 to the track stage");
+    assert!(
+        !state.surface_failed_user_action(),
+        "an action that worked raised the Action Log",
+    );
+    assert!(!state.panel_is_in_front(Tab::ActionLog));
+}
+
+#[test]
+fn a_refusal_with_the_action_log_already_in_front_moves_nothing() {
+    let mut state = AppState::new();
+    state.show_panel(Tab::ActionLog);
+    state.action_log.clear();
+    let before = state.layout();
+
+    state.action_log.fail(Kind::Bench, REFUSAL);
+    assert!(
+        !state.surface_failed_user_action(),
+        "a panel already in front was reported as moved",
+    );
+    assert_eq!(
+        state.layout(),
+        before,
+        "the arrangement changed under a panel that was already readable",
+    );
+    assert_eq!(texts(&state.action_log), [REFUSAL]);
 }
