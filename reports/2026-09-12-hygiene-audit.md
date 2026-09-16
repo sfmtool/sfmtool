@@ -997,6 +997,8 @@ format crates, and both docs say so**
 
 **Four inline `#[cfg(test)]` modules — a convention closed last cycle, re-broken in the
 two newest subsystems**
+> _Status (2026-09-15): Done — the four inline test modules now live in dedicated
+> child files, preserving their module scope, test names, and ignored diagnostic._
 - Location: `crates/sfmtool-core/src/features/kdforest/persistent.rs:910–1253` (`mod
   tests`, 343 lines); `crates/sfmtool-kdf-format/src/cache.rs:484–694` (`mod tests`,
   210); `crates/sfmtool-kdf-format/src/read.rs:1551–1756` (**`mod profiling`**, 205);
