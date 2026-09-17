@@ -600,7 +600,11 @@ point's exact projection and a photograph cached for every image:
 
 The handles are tested in
 [image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
-which drives real frames: hovering an edge asks for the resize cursor its
+which drives real frames: a press on an edge followed by two panel pixels of
+motion -- under egui's own drag threshold -- and then thirty resizes the patch
+and **pans nothing**, which is what says the press and not the drag decides the
+handle, while the same motion from a press on empty photograph pans as it always
+did; hovering an edge asks for the resize cursor its
 orientation on screen names, a corner for `Alias` and a dot for `Move`; a drag
 of the dot publishes a move that `AppState` turns into exactly one version whose
 label names it; a drag of an edge resizes so that the outline's dragged edge

@@ -518,6 +518,26 @@ sizing and turning by hand"). At the cluster stage each sighting has its own
 affine shape, so both gestures touch only the observation whose outline was
 grabbed.
 
+**The press decides which handle, not the drag.** A pointer press inside the
+panel is hit-tested against the geometry that frame starts from -- which is what
+the person pressed on, since nothing has panned yet -- and if it lands on a
+handle the gesture is that handle's from that moment, before egui would call it
+a drag at all. The alternative loses the gesture twice over: egui reports a drag
+only once the pointer has left the press by several pixels, while the view pans
+on whatever motion it is given with no threshold of its own, so the photograph
+moves first, the handle is no longer under the press position a later hit test
+would be given, and what the person gets is a pan. So the pan is suppressed from
+the **press**, for as long as the button is down over a handle, and a press that
+hits no handle leaves the view's own drag exactly as it was. A press on a handle
+that never moves is a click: it selects that observation's row and edits
+nothing.
+
+The reach is nine panel pixels for a dot or a corner and eight from an edge's
+polyline, generous against the marks they draw, because the two misses do not
+cost the same: a handle missed by two pixels pans the photograph, which the
+person then has to undo by eye, while one caught a little early is released
+without motion and does nothing.
+
 **One version per drag.** While the pointer is down the layer draws from a
 transient copy -- the track the release would produce, built by the same core
 step -- and nothing is pushed. The release applies it through

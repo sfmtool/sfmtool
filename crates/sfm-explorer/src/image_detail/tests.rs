@@ -1134,7 +1134,7 @@ fn framed(
     center_on: [f64; 2],
 ) -> impl Fn([f64; 2]) -> egui::Pos2 {
     let (w, h) = (image.width() as f32, image.height() as f32);
-    let scale = (PANEL.x / w).min(PANEL.y / h) * HANDLE_ZOOM;
+    let scale = panel_scale(image.width(), image.height());
     let display = egui::vec2(w * scale, h * scale);
     detail.zoom = HANDLE_ZOOM;
     detail.pan =
@@ -1156,22 +1156,32 @@ struct Dragged {
     /// The cursor the panel asked for while the pointer hovered the handle,
     /// before any button went down.
     cursor: egui::CursorIcon,
+    /// How far the **view** moved over the gesture, in panel px. Zero is the
+    /// claim a handle drag makes: the photograph holds still for the whole of
+    /// it.
+    panned: egui::Vec2,
 }
 
-/// Drive one press-move-release over the bench layer, in **source-image**
-/// pixels, and report what it produced.
+/// Drive one press-move-release over the bench layer and report what it
+/// produced.
 ///
-/// Six frames, because that is what the gesture really is: one to load the
-/// photograph, one hovering the handle (which is where the cursor is read), one
-/// that presses, two that move -- egui calls it a drag only once the pointer
-/// has left the press -- and one that releases.
-fn bench_drag(
+/// `press` is in source-image pixels; `steps` are pointer positions after it,
+/// as offsets from the press **in panel pixels**, so a test can put one below
+/// egui's own drag threshold and the next above it. That distinction is the
+/// whole of what the press-decides-the-handle rule is about: the view pans on
+/// the first pixel of motion, and egui does not call the gesture a drag until
+/// several.
+///
+/// The frames are the gesture: one to load the photograph, one hovering (which
+/// is where the cursor is read), one that presses, one per step, and one that
+/// releases.
+fn gesture(
     node: &SceneNode,
     image_index: usize,
     track: &sfmtool_core::bench::EditableTrack,
     center_on: [f64; 2],
-    from: [f64; 2],
-    to: [f64; 2],
+    press: [f64; 2],
+    steps: &[egui::Vec2],
     escape: bool,
 ) -> Dragged {
     let image = pixels(1920, 1080);
@@ -1180,7 +1190,8 @@ fn bench_drag(
     let mut intrinsics_display = IntrinsicsDisplaySettings::default();
     let display = FeatureDisplaySettings::default();
     let panel = framed(&mut detail, &image, center_on);
-    let (from, to) = (panel(from), panel(to));
+    let from = panel(press);
+    let was = detail.pan;
 
     let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
         pos,
@@ -1195,18 +1206,21 @@ fn bench_drag(
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     };
-    let frames: Vec<Vec<egui::Event>> = vec![
+    let last = steps.last().map_or(from, |step| from + *step);
+    let mut frames: Vec<Vec<egui::Event>> = vec![
         Vec::new(),
         vec![egui::Event::PointerMoved(from)],
         vec![egui::Event::PointerMoved(from), button(from, true)],
-        vec![egui::Event::PointerMoved(to)],
-        if escape {
-            vec![egui::Event::PointerMoved(to), escape_key]
-        } else {
-            vec![egui::Event::PointerMoved(to)]
-        },
-        vec![egui::Event::PointerMoved(to), button(to, false)],
     ];
+    for step in steps {
+        frames.push(vec![egui::Event::PointerMoved(from + *step)]);
+    }
+    frames.push(if escape {
+        vec![egui::Event::PointerMoved(last), escape_key]
+    } else {
+        vec![egui::Event::PointerMoved(last)]
+    });
+    frames.push(vec![egui::Event::PointerMoved(last), button(last, false)]);
 
     let mut edit = None;
     let mut cursor = egui::CursorIcon::Default;
@@ -1250,7 +1264,34 @@ fn bench_drag(
             edit = Some(from_panel);
         }
     }
-    Dragged { edit, cursor }
+    Dragged {
+        edit,
+        cursor,
+        panned: detail.pan - was,
+    }
+}
+
+/// One press-move-release between two places named in **source-image** pixels.
+fn bench_drag(
+    node: &SceneNode,
+    image_index: usize,
+    track: &sfmtool_core::bench::EditableTrack,
+    center_on: [f64; 2],
+    from: [f64; 2],
+    to: [f64; 2],
+    escape: bool,
+) -> Dragged {
+    let scale = panel_scale(1920, 1080);
+    let step = egui::vec2(
+        (to[0] - from[0]) as f32 * scale,
+        (to[1] - from[1]) as f32 * scale,
+    );
+    gesture(node, image_index, track, center_on, from, &[step], escape)
+}
+
+/// Panel pixels per source pixel at [`HANDLE_ZOOM`].
+fn panel_scale(width: u32, height: u32) -> f32 {
+    (PANEL.x / width as f32).min(PANEL.y / height as f32) * HANDLE_ZOOM
 }
 
 /// The node, its bench and the track put on it, in a state that can push
@@ -1528,4 +1569,85 @@ fn escape_cancels_a_drag_and_a_drag_that_ends_where_it_started_pushes_nothing() 
         before,
         "a drag that moved nothing pushed a version",
     );
+}
+
+/// **The press decides the handle, not the drag.**
+///
+/// egui calls a gesture a drag only after the pointer has left the press by
+/// several pixels, while the view pans on whatever motion it is given, with no
+/// threshold of its own. A layer that waited for `drag_started` therefore lost the
+/// gesture twice over -- the photograph had already moved, so the handle was no
+/// longer under the press position the hit test was given -- and what the
+/// person got was a pan. This is that case, with a step deliberately below the
+/// threshold in front of the real one.
+#[test]
+fn a_press_on_a_handle_takes_the_gesture_before_egui_would_call_it_a_drag() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    // Two panel pixels, then thirty: the first is under egui's drag threshold
+    // and is exactly what used to be spent panning the photograph.
+    let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
+
+    let dragged = gesture(&state.scene[0], 0, &track, centre, edge, &steps, false);
+    assert_eq!(
+        dragged.panned,
+        egui::Vec2::ZERO,
+        "the photograph panned under a handle drag",
+    );
+    let edit = dragged.edit.expect("the edge was grabbed at the press");
+    assert!(
+        matches!(
+            edit,
+            crate::bench::PatchEdit::ResizeFromEdge {
+                observation: 0,
+                edge: sfmtool_core::bench::Edge::PlusU,
+                ..
+            }
+        ),
+        "the gesture named something else: {edit:?}",
+    );
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel the ray reaches");
+    let labels = version_labels(&state, id);
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Resized {label} to ")),
+        "{:?}",
+        labels.last(),
+    );
+}
+
+/// A press that hits no handle is the pan it always was, and a press on a
+/// handle that never moves is a click: neither edits the track.
+#[test]
+fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothing() {
+    let (state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let steps = [egui::vec2(2.0, 0.0), egui::vec2(30.0, 0.0)];
+
+    // Far outside the outline, which is a couple of source pixels across.
+    let empty = [centre[0] + 40.0, centre[1] + 40.0];
+    let dragged = gesture(&state.scene[0], 0, &track, centre, empty, &steps, false);
+    assert!(dragged.edit.is_none(), "empty image edited the track");
+    assert!(
+        dragged.panned.x > 20.0 && dragged.panned.y == 0.0,
+        "a press off the handles is the pan it always was: {:?}",
+        dragged.panned,
+    );
+
+    // And a press on the edge that never moves leaves the track alone.
+    let edge = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let still = gesture(&state.scene[0], 0, &track, centre, edge, &[], false);
+    assert!(still.edit.is_none(), "a click edited the track");
+    assert_eq!(still.panned, egui::Vec2::ZERO);
 }

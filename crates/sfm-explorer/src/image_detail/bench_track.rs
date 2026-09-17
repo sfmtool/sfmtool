@@ -61,17 +61,18 @@ const KEYPOINT_RADIUS: f32 = 4.0;
 
 /// How far from a dot or a corner the pointer still grabs it, in panel px.
 ///
-/// A few points, which is what a person aiming at a 4 px dot with a mouse
-/// actually hits. The dot's own radius would make the handle harder to grab
-/// than the thing it draws is to see.
-const HANDLE_HIT_RADIUS: f32 = 7.0;
+/// Generous against the 4 px dot it draws, because the cost of the two misses
+/// is not symmetric: a handle missed by two pixels pans the photograph instead,
+/// which is a gesture the person then has to undo by eye, while a handle caught
+/// a little early is released with no motion and does nothing.
+const HANDLE_HIT_RADIUS: f32 = 9.0;
 
 /// How far from an edge's polyline the pointer still grabs it, in panel px.
 ///
 /// Narrower than a corner's reach, and tested after the corners, so the corner
 /// where two edges meet turns rather than resizing whichever edge won the
 /// distance.
-const EDGE_HIT_WIDTH: f32 = 5.0;
+const EDGE_HIT_WIDTH: f32 = 8.0;
 
 /// Radius of the arc glyph drawn beside a hovered corner, in panel px.
 const TURN_GLYPH_RADIUS: f32 = 9.0;
@@ -134,6 +135,12 @@ pub(super) struct Drag {
     pub(super) from: [f64; 2],
     /// Where the pointer is now, in source-image px.
     pub(super) to: [f64; 2],
+    /// Whether the pointer has left the press at all.
+    ///
+    /// A press is taken as a handle before egui would call it a drag, so this
+    /// is what tells the two apart at the release: a press that never moved is
+    /// a click, which selects the row under it and edits nothing.
+    pub(super) moved: bool,
     /// Set by Escape: the gesture is abandoned, so nothing is previewed and
     /// nothing is pushed, but the view still does not pan until the button
     /// comes up.
