@@ -250,6 +250,8 @@ pub struct EvaluateOptions {
     pub cluster: ClusterRefineParams,
     pub localize: KeypointLocalizeParams,   // open_localizer, one round
     pub search_px: f64,                     // patch-grid px
+    pub max_seed_offset_px: f64,            // how far a seed may sit, 64
+    pub max_cache_bytes: usize,             // one round's tiles, 256 MiB
 }
 
 pub struct FitOptions {
@@ -583,6 +585,15 @@ track-stage half is put down to the cluster stage by the same downgrade
 projects the frame through each observation's camera. The first track keeps its
 stage, its origin and everything it was.
 
+**A half whose every row is `out` still splits.** The rows a person cuts off are
+usually the ones the thresholds just rejected, so the common case is a half with
+no `in` observation in it at all. The cluster it becomes needs an observation to
+cut its template around, and that reference is a **seed and not a judgement**:
+the downgrade takes the `in` observation the patch is largest in where there is
+one, and otherwise the largest of whatever the half carries, verdicts and all.
+The verdicts travel with the rows either way. Only a half with no seed anywhere
+in it is refused, with `StageError::NoReference`.
+
 ### Searching the descriptor index
 
 `search_descriptors` is the third way an observation reaches a track, beside the
@@ -698,12 +709,14 @@ the very observation that would pull the point back.
 **A row without a score names its refusal.** `Unmeasured` is that name, one
 short sentence each: `NoSeed` (nothing says where it sits), `OffSensor` (it sits
 off the photograph), `NoProjection` (the point misses this view), `Grazing` (its
-ray grazes the patch plane, with the cosine), `NoConsensus` (fewer than two
-observations of its round could be read together) and `Unscorable` (its tile
-could not be scored: it runs off the photograph, or no channel of it carries
-texture). The first four are decided before any correlation, from the
-observation and the geometry, which is what lets the row carry the reason
-instead of simply going missing from the kernel's answer.
+ray grazes the patch plane, with the cosine), `SeedTooFar` (its seed sits
+further from the projection than the reading will widen its window for, with the
+offset and the bound), `NoConsensus` (fewer than two observations of its round
+could be read together) and `Unscorable` (its tile could not be scored: it runs
+off the photograph, or no channel of it carries texture). The first five are
+decided before any correlation, from the observation and the geometry, which is
+what lets the row carry the reason instead of simply going missing from the
+kernel's answer.
 
 **The search window is widened to reach the furthest seed.** The kernel anchors
 its window at the point's projection and clips the integer part of a seed beyond
@@ -715,6 +728,45 @@ correlation of a place the sighting is not. Each round therefore runs at
 offset). In return, an observation in a round that holds a far-out seed can
 report a peak further than `search_px` from itself, which is the honest reading
 of a window that had to be that wide.
+
+**And the widening is bounded, because it is a memory bound.** Every view of a
+round renders a tile `resolution + 4 · window` on a side, so the memory one
+round costs is the widening **squared**, per view: a seed a couple of thousand
+px from the projection asks for gigabytes of tile in each photograph of the
+track. Two numbers keep that from being asked for.
+
+- `max_seed_offset_px`, 64 patch-grid px, is how far a seed may sit from the
+  projection and still be read. A seed past it is left out of the round carrying
+  `SeedTooFar`, with its own offset and the bound in the sentence, and every
+  other observation of the round is read as it always was. Sixty-four is a
+  little under three tile-widths at the default `resolution` of 24 -- a sighting
+  a couple of patches from the projection is still read -- and a view's tile at
+  the bound is about a megabyte and a half rather than a gigabyte. Past it, the
+  correlation at the projection would say nothing about the sighting and the
+  correlation at the seed is a question about a different surface, so naming the
+  row is the whole of the answer.
+- `max_cache_bytes`, 256 MiB, is what one round's tiles may take **together**:
+  the offset bound holds one observation and this holds the round, which a track
+  with enough views at the bound would otherwise exceed. A round past it is
+  refused with `EvaluateError::TooLarge`, naming both numbers, **before**
+  anything is allocated.
+
+The order matters. An allocation the global allocator cannot make aborts the
+process where it stands, taking the window and everything unsaved in it, so
+these are decisions made from the parameters -- `plan_rounds` sizes each view's
+tile from its seed's offset, and the round's total is read off the same formula
+the localizer allocates by -- rather than attempts made and recovered from. What
+is left is the unforeseen size, and the localizer reserves its own tiles and
+shift grids through `try_reserve_exact`
+([`patch-keypoint-localization.md`](../patch/patch-keypoint-localization.md)),
+so even that comes back as a refusal.
+
+**A fit runs the same rounds as the reading it ends with**, the bound included:
+an observation the reading will refuse to read is one the kernels do not move
+either, so the two cannot come to disagree about which sightings were in play.
+The fit's own localization is not widened -- it registers each view within
+`localize.search` of where it sits -- so the budget bites where the widening is,
+which is the reading.
 
 **One localization holds one observation per image**, because it registers a
 point's sighting in a view and two sightings in one view are two hypotheses
@@ -791,7 +843,10 @@ the upgrade does, so the two directions state one relationship), divided by the
 new cluster's radius because that rule's columns are pixel half-axes and a
 cluster seed is per keypoint-frame unit. The reference
 becomes the `in` observation with the largest projected patch scale, which is
-the one showing the most of the patch, and the position, the frame and the
+the one showing the most of the patch -- and, where the track has no `in`
+observation left, the largest of whatever it does carry, because a reference is
+a seed to cut a template around and not a judgement about the sighting (§ "The
+split"). The position, the frame and the
 bitmap are dropped, and the track-stage measurements with them, since each was
 made against that position and frame. This is the
 step for a track whose observations were right and whose 3D hypothesis was the
@@ -866,6 +921,16 @@ start from the same bar and moving one is the person choosing to differ.
 | `max_keypoint_uncertainty` | `0.35` | The largest tile localizability an observation may have, in grid px. From `KeypointLocalizeParams::default`'s `max_member_keypoint_uncertainty`. |
 | `min_relative_zncc` | `0.7` | The fraction of the track's own self-agreement a sweep candidate has to reach. From `ViewSelectParams::default`. |
 
+The reading's two memory bounds are not thresholds either: nothing about them is
+a verdict on a sighting, and what they decide is what may be asked of the
+machine, so they live on `EvaluateOptions` beside the search radius.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `search_px` | `6.0` | How far from each observation's own pixel the correlation peak is looked for, in patch-grid px. From `KeypointLocalizeParams::default`'s `search`. |
+| `max_seed_offset_px` | `64.0` | How far from the point's projection a seed may sit and still be read, in patch-grid px. Past it the row carries `SeedTooFar` and is left out of the round. |
+| `max_cache_bytes` | `256 MiB` | What one round's per-view tiles may take together. A round past it is refused with `TooLarge`, before anything is allocated. |
+
 The descriptor search has bars of its own, which are not the track's: they say
 what the *index* is asked, and nothing about them is a verdict, so they are
 `SearchOptions` and not `Thresholds`.
@@ -934,8 +999,10 @@ the report's `label` reads.
 
 `evaluate`, `fit` and `set_stage` take `images` the way every patch kernel does
 -- a list of `HxW[xC]` `uint8` arrays, one per image of the reconstruction, or a
-prebuilt `ImagePyramidSet`. `evaluate` and `fit` take an optional keyword
-`search_px`, the radius the reading looks for each peak in; `set_stage` takes
+prebuilt `ImagePyramidSet`. `evaluate` and `fit` take three optional keywords --
+`search_px`, the radius the reading looks for each peak in, and
+`max_seed_offset_px` and `max_cache_bytes`, the two memory bounds above, each
+defaulting to the reading's own; `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured` and `unmeasured`, with `reference` at the cluster stage and
 `position` and `condition_number` at the track stage; `placed`, `position`,
@@ -1001,6 +1068,21 @@ committing a point onto the planted surface; setting the current stage reporting
 `changed` false; each refusal naming what did not hold; and the three
 precondition functions giving their step's own answer when they are asked alone,
 which is what makes them safe to ask in front of a decode.
+
+The two memory bounds are tested as the bounds they are: an observation seeded
+past `max_seed_offset_px` comes back named with `SeedTooFar`, carrying its own
+offset and the bound, while the rest of the round is read as it always was and
+raising the bound past that offset puts the row back in; and a budget nothing
+fits in refuses with `TooLarge` naming both numbers, where the same track reads
+at the default budget. The allocation itself is tested where it is made
+([keypoint_localize/tests.rs](../../../crates/sfmtool-core/src/patch/keypoint_localize/tests.rs)):
+a buffer of 256 TB comes back as `LocalizeError::OutOfMemory` rather than
+aborting the process, and the shift grids refuse a span no machine has the
+memory for.
+
+The split of a half whose every row is `out` is tested too: it splits, the half
+that comes off is a cluster cut around the one row it has, and the verdicts
+travel with the rows.
 
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):

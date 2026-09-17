@@ -292,3 +292,23 @@ the params' own grid -- and widens `search` to cover the furthest answer before 
 calls. That is what the bench's reading does
 ([`../bench/editable-track.md`](../bench/editable-track.md)); the alternative is
 a measurement made at a pixel the sighting is not at.
+
+**Widening is quadratic, so the big buffers are asked for fallibly.** The context
+tile is `R_s + 4 · margin` on a side and the shift grids are `(2 · margin + 1)²`
+cells, so a caller that widens `search` to reach a far-out seed asks for memory
+that grows as the square of that radius -- and an allocation the global allocator
+cannot make **aborts the process**, which in a window takes everything unsaved
+with it. `view_cache_bytes(params, channels)` is what one view's tile and the
+render scratch behind it cost, so a caller can decide before it asks; and
+`try_localize_patch_keypoints` reserves the tile planes and the shift grids
+through `try_reserve_exact`, reporting `LocalizeError::OutOfMemory` with the size
+it asked for. `localize_patch_keypoints` and
+`localize_patch_keypoints_with_basis` are that call with the panic left in, for
+the pipeline callers whose radius is a constant.
+
+**The fallible call is also the cancellable one.** `try_localize_patch_keypoints`
+takes the `Progress` every long kernel takes and polls it between rounds and
+between the views it renders -- which is where a widened search spends its time
+-- reporting `LocalizeError::Cancelled`. Nothing else about the two paths
+differs: with an uncancelled `Progress::none()` and buffers that fit, they
+compute the same numbers.

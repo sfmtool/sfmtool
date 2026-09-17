@@ -558,6 +558,46 @@ fn a_split_whose_reference_moved_reseats_both_halves() {
     assert_eq!(second.observations[0].image, 0);
 }
 
+/// The rows a person splits off are usually the ones the thresholds just turned
+/// out, so a half with no `in` observation in it is the ordinary case rather
+/// than a refusal.
+///
+/// The half is put down to the cluster stage, and a cluster needs an
+/// observation to cut its template around. That reference is a seed and not a
+/// judgement: it falls back past the verdicts to whichever of the split rows
+/// shows the patch largest, and only a half carrying no seed at all is refused.
+#[test]
+fn a_split_of_rows_the_thresholds_turned_out_still_splits() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (track, _) = set_verdict(&track, 1, Verdict::Out).expect("a live row");
+    assert!(
+        track.observations[1].verdict == Verdict::Out && track.in_observations() == vec![0],
+        "the row being split off is the rejected one"
+    );
+    let bench = install(&bench, &label, track);
+
+    let (bench, report) = split(&bench, &edited, &label, &[1]).expect("the out row splits off");
+    let second = bench.track(&report.label).expect("just put on");
+    assert_eq!(second.stage_kind(), StageKind::Cluster);
+    assert_eq!(
+        second.cluster().expect("a cluster").reference,
+        0,
+        "the one row it has is what its template is cut around"
+    );
+    assert_eq!(
+        second.observations[0].verdict,
+        Verdict::Out,
+        "the verdicts travel with the rows"
+    );
+    assert!(
+        second.observations[0].cluster.is_some(),
+        "and the row carries the seed the reference names"
+    );
+}
+
 #[test]
 fn a_split_of_nothing_or_of_everything_is_refused() {
     let scene = Scene::new();
@@ -1560,6 +1600,117 @@ fn an_observation_naming_an_image_with_no_view_is_refused() {
         evaluate_over(&scene, &edited, &track).expect_err("there is no image 9"),
         EvaluateError::NoView { image: 9 }
     );
+}
+
+/// The shape of the fatal case: an observation seeded a long way from the
+/// point's projection.
+///
+/// The reading widens its window to reach the furthest seed and each view's
+/// tile is `resolution + 4 · window` on a side, so an unbounded widening asks
+/// for a tile whose cost is that distance **squared**, per view -- gigabytes
+/// from one careless pixel. The bound turns that into a sentence on the row:
+/// the far sighting is named and left out, and every other row is read as it
+/// always was.
+///
+/// The fixture's images are 128 px across and its patch is about 4.8 px wide at
+/// `resolution` 24, so one source-image px is about 2.5 patch-grid px: a seed 60
+/// px from the projection is past the 64 grid-px bound while staying on the
+/// sensor, where `OffSensor` would otherwise answer first.
+#[test]
+fn a_seed_far_from_the_projection_is_named_rather_than_searched_for() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    // A corner of image 2, with the point projecting near its centre.
+    let projection = scene.project(2, WORLD);
+    let seed = [2.0, 2.0];
+    let offset = (projection[0] - seed[0]).hypot(projection[1] - seed[1]);
+    assert!(
+        offset > 40.0,
+        "the fixture puts the projection away from the corner: {offset}"
+    );
+    let (track, added) =
+        add_observation(&track, &ObservationSeed::at_pixel(2, seed)).expect("a finite pixel");
+    let at = added.observation;
+
+    let (read, report) = evaluate_over(&scene, &edited, &track).expect("two observations in");
+    assert_eq!(
+        (report.measured, report.unmeasured),
+        (2, 1),
+        "the far row is left out and the others are read as they were"
+    );
+    let row = read.observations[at]
+        .track
+        .as_ref()
+        .expect("every row is written, measured or not");
+    assert!(row.zncc.is_none(), "nothing was searched for it");
+    let Some(Unmeasured::SeedTooFar {
+        offset_px,
+        bound_px,
+    }) = row.reason
+    else {
+        panic!("the row names the bound it passed: {:?}", row.reason);
+    };
+    assert_eq!(bound_px, DEFAULT_MAX_SEED_OFFSET_PX);
+    assert!(
+        offset_px > bound_px,
+        "the offset it names is the one that passed the bound: {offset_px}"
+    );
+    assert!(
+        row.reason
+            .expect("a reason")
+            .to_string()
+            .contains("beyond the 64 px bound"),
+        "{}",
+        row.reason.expect("a reason")
+    );
+    // And the row still carries what the geometry says about it, which is the
+    // half of the reading that does not need a correlation.
+    assert!(row.projection_offset_px.expect("a distance") > 40.0);
+
+    // Raising the bound past the offset puts the row back in the round: the
+    // bound is what decides, and nothing else about the row changed.
+    let options = EvaluateOptions {
+        max_seed_offset_px: offset_px * 2.0,
+        ..EvaluateOptions::default()
+    };
+    let (wider, report) = evaluate(&track, &edited, &scene.views(), &options, &Progress::none())
+        .expect("the round is small enough to run");
+    assert_eq!(report.measured + report.unmeasured, 3);
+    assert_ne!(
+        wider.observations[at].track.as_ref().expect("a row").reason,
+        row.reason,
+        "past the bound is the only thing that was wrong with it"
+    );
+}
+
+/// The budget is the round's, and it is checked before a byte is asked for.
+#[test]
+fn a_round_past_the_cache_budget_is_refused_rather_than_attempted() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let options = EvaluateOptions {
+        max_cache_bytes: 1024,
+        ..EvaluateOptions::default()
+    };
+    let refused = evaluate(&track, &edited, &scene.views(), &options, &Progress::none())
+        .expect_err("two 48 px tiles do not fit in a kilobyte");
+    let EvaluateError::TooLarge { bytes, budget } = refused else {
+        panic!("the refusal names the budget: {refused}");
+    };
+    assert_eq!(budget, 1024);
+    assert!(bytes > budget, "{bytes} against {budget}");
+    assert!(
+        refused.to_string().contains("1 KB"),
+        "the sentence says both numbers in units a person holds: {refused}"
+    );
+    // The same track reads at the default budget, so what was refused is the
+    // budget and not the track.
+    assert!(evaluate_over(&scene, &edited, &track).is_ok());
 }
 
 #[test]

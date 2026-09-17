@@ -26,7 +26,7 @@ use sfmtool_core::features::kdforest::{
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{progress_note, SfmrReconstruction};
 
-use crate::action_log::Kind;
+use crate::action_log::{Actor, Kind};
 use crate::background::{Finished, Job, Operation};
 use crate::scene::ReconId;
 use crate::state::AppState;
@@ -68,12 +68,82 @@ impl DescriptorIndex {
 /// image's is the one taken: an index is over the whole capture whichever of
 /// them holds it, and a rule that picked differently per call would leave a
 /// second session looking in a different place.
+///
+/// **The separators are this platform's, all of them.** The feature directory
+/// is stored in the `.sfmr` with `/` between its parts, whatever wrote it, so a
+/// path joined from it on Windows comes out spelled
+/// `…\images\features/sift-sfmtool-…\index.kdf` -- which opens, and reads as
+/// two conventions arguing in a panel, a reply and a log row. Rebuilding the
+/// path from its components is what settles it: `Path::components` splits on
+/// both separators and `PathBuf` re-joins with the platform's own.
 pub(crate) fn default_index_path(recon: &SfmrReconstruction) -> Option<PathBuf> {
     if recon.image_table.images.is_empty() {
         return None;
     }
     let sift = recon.sift_path_for_image(0);
-    Some(sift.parent()?.join(INDEX_FILE_NAME))
+    Some(normalized(&sift.parent()?.join(INDEX_FILE_NAME)))
+}
+
+/// `path` spelled with this platform's separator throughout.
+fn normalized(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
+/// `path` as the index of `recon` may be written to, or why it may not.
+///
+/// A caller naming the file is worth keeping -- a second index over the same
+/// capture, under a name of its own, is a reasonable thing for an agent to ask
+/// for -- and what it is not worth is writing anywhere on the disk. So the path
+/// is resolved against the node's workspace directory when it is relative,
+/// lexically normalised (`.` and `..` folded, no filesystem walked, since the
+/// file is not there yet), and refused when the answer leaves that tree.
+///
+/// Lexical rather than canonical on purpose: `canonicalize` needs the path to
+/// exist, and this one is about to be created. A symlink out of the workspace
+/// therefore passes, which is a thing the person who made the symlink asked
+/// for. A reconstruction that names no workspace directory has no tree to be
+/// outside of, and every path is allowed.
+fn within_workspace(recon: &SfmrReconstruction, path: &Path) -> Result<PathBuf, String> {
+    let workspace = lexically_normalized(&recon.workspace_dir);
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        recon.workspace_dir.join(path)
+    };
+    let resolved = lexically_normalized(&joined);
+    if workspace.as_os_str().is_empty() || resolved.starts_with(&workspace) {
+        return Ok(resolved);
+    }
+    Err(format!(
+        "{} is outside the workspace at {}, and an index is written beside the \
+         features it indexes.",
+        resolved.display(),
+        workspace.display()
+    ))
+}
+
+/// `path` with its `.` and `..` components folded and its separators this
+/// platform's, without touching the filesystem.
+///
+/// A `..` that would climb past the root is dropped, so the answer never
+/// escapes upwards through a prefix.
+fn lexically_normalized(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    // Nothing left to climb: keep the `..` so a relative path
+                    // that really does leave its root is not silently flattened
+                    // into one that does not.
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// The `.sift` file of every image of `recon` that has one, by image index.
@@ -116,13 +186,22 @@ impl AppState {
             self.descriptor_indexes.insert(id, None);
             return;
         };
-        if let Err(why) = self.open_descriptor_index(id, Some(path)) {
+        // **The row this writes is the viewer's.** Nobody asked for it: the look
+        // happens because something was put on the bench, in the middle of the
+        // step that put it there. Attributed to whoever was acting, it would be
+        // the last row that step wrote, and a wire reply that reports the
+        // step's own sentence would report this one instead.
+        let standing = self.action_log.actor();
+        self.action_log.set_actor(Actor::Viewer);
+        let opened = self.open_descriptor_index(id, Some(path));
+        if let Err(why) = opened {
             // Said out loud: a file sitting where the index goes and not being
             // usable is worth a row, and this is the one chance to write it --
             // the miss is remembered, so nothing looks again.
             self.descriptor_indexes.insert(id, None);
             self.action_log.fail(Kind::Bench, why);
         }
+        self.action_log.set_actor(standing);
     }
 
     /// Open `path`, or the default when none is named, as `id`'s descriptor
@@ -235,7 +314,7 @@ impl AppState {
             .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
         let recon = node.recon();
         let path = match path {
-            Some(path) => path,
+            Some(path) => within_workspace(recon, &path)?,
             None => default_index_path(recon).ok_or_else(|| {
                 "This reconstruction has no images, so it has no feature directory to \
                  write into."

@@ -50,6 +50,7 @@ use crate::patch::normal_refine::{
     build_support, irls_view_weights, weighted_unit_template_into, znormalize_into_kept,
     ConsensusScratch, ProjectedImage, Sampler, Support,
 };
+use crate::progress::{Cancelled, Progress};
 // Only the reference scorer (`znorm_core`, test-only) needs the moment helper and
 // the flat-norm floor; the reference LOO-template test also needs the window enum.
 #[cfg(test)]
@@ -80,6 +81,137 @@ use kernels::{
 
 /// `remap_aniso` sample cap along the major axis (mirrors `normal_refine`).
 const MAX_ANISOTROPY: u32 = 16;
+
+/// `f32` lanes per destination pixel the render scratch behind one context tile
+/// holds: the warp map's interleaved `(x, y)`, its per-pixel 2x2 Jacobian, and
+/// the SVD's two singular values and major direction.
+///
+/// Counted so a tile's cost can be stated before it is asked for
+/// ([`view_cache_bytes`]) and so the size can be tested fallibly in front of the
+/// render, which allocates it where no refusal can be threaded.
+const RENDER_SCRATCH_LANES: usize = 10;
+
+/// Tile size above which the render scratch is probed before it is built, in
+/// bytes.
+///
+/// Sixteen MB is well past every tile a solve renders -- the production default
+/// is tens of KB -- and well short of any size an allocator would refuse, so
+/// the probe costs nothing where it would never have fired and is made
+/// everywhere it might.
+const PROBE_ABOVE_BYTES: usize = 16 << 20;
+
+/// Why a localization could not be run to its end.
+///
+/// The kernel's buffers are sized by the caller's `search` radius and they grow
+/// as its square, so a caller that widens the window far enough asks for a tile
+/// no machine has the memory for. An allocation that fails inside a global
+/// allocator **aborts the process**, which takes the window and everything
+/// unsaved in it; every buffer whose size the caller controls is therefore
+/// reserved fallibly, and what would have been an abort arrives here as a
+/// refusal a step can report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalizeError {
+    /// A buffer the search needs could not be allocated.
+    OutOfMemory {
+        /// What was asked for, in bytes.
+        bytes: usize,
+    },
+    /// The caller asked the operation to stop.
+    Cancelled,
+}
+
+impl std::fmt::Display for LocalizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LocalizeError::OutOfMemory { bytes } => write!(
+                f,
+                "the localizer could not allocate {bytes} bytes for its search buffers"
+            ),
+            LocalizeError::Cancelled => write!(f, "the operation was cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for LocalizeError {}
+
+impl From<Cancelled> for LocalizeError {
+    fn from(_: Cancelled) -> Self {
+        LocalizeError::Cancelled
+    }
+}
+
+/// A zeroed `f32` buffer of `len` lanes, or [`LocalizeError::OutOfMemory`].
+///
+/// `try_reserve_exact` asks the allocator the same question `vec![0.0; len]`
+/// asks and hands back the refusal instead of aborting on it.
+pub(super) fn try_zeroed_f32(len: usize) -> Result<Vec<f32>, LocalizeError> {
+    let mut buffer: Vec<f32> = Vec::new();
+    buffer
+        .try_reserve_exact(len)
+        .map_err(|_| LocalizeError::OutOfMemory {
+            bytes: len.saturating_mul(std::mem::size_of::<f32>()),
+        })?;
+    buffer.resize(len, 0.0);
+    Ok(buffer)
+}
+
+/// A `false`-filled `bool` buffer of `len` entries, or
+/// [`LocalizeError::OutOfMemory`].
+fn try_false_bools(len: usize) -> Result<Vec<bool>, LocalizeError> {
+    let mut buffer: Vec<bool> = Vec::new();
+    buffer
+        .try_reserve_exact(len)
+        .map_err(|_| LocalizeError::OutOfMemory { bytes: len })?;
+    buffer.resize(len, false);
+    Ok(buffer)
+}
+
+/// The bytes one view's search costs at `params`, over a photograph of
+/// `channels` channels.
+///
+/// Every buffer sized by the search radius, counted once: the rendered context
+/// tile the round loop reads from (its centered planes, its invalidity plane
+/// and its validity map), and the warp map and remapped image the render builds
+/// on the way to it. The side of that tile is `R_s + 4 · margin`, so the answer
+/// grows as the **square** of the search radius, which is what makes a widened
+/// window worth budgeting for before it is attempted rather than after.
+///
+/// The shift grids of the search scratch are not here: there is one set of them
+/// per call rather than one per view, and they are an order smaller than the
+/// tiles they slide over. A caller budgeting a whole round multiplies this by
+/// its view count.
+///
+/// # Example
+///
+/// ```
+/// # use sfmtool_core::patch::keypoint_localize::{view_cache_bytes, KeypointLocalizeParams};
+/// let params = KeypointLocalizeParams::default();
+/// // A three-channel photograph at the production defaults: tens of KB.
+/// assert!(view_cache_bytes(&params, 3) < 1 << 20);
+/// ```
+pub fn view_cache_bytes(params: &KeypointLocalizeParams, channels: usize) -> usize {
+    let m = (params.search_resolution_multiplier as f64).max(1e-3);
+    let resolution = ((m * params.resolution.max(2) as f64).round() as u32).max(2);
+    let margin = (params.search * m).ceil().max(1.0) as i64;
+    let side = (resolution as usize).saturating_add(4 * margin.max(0) as usize);
+    let pixels = side.saturating_mul(side);
+    let istride = cache_istride(side);
+    let f32_size = std::mem::size_of::<f32>();
+    // The tile: one centered plane per channel plus the invalidity plane, each
+    // `istride · side` lanes, and the `bool` validity map.
+    let tile = istride
+        .saturating_mul(side)
+        .saturating_mul(channels + 1)
+        .saturating_mul(f32_size)
+        .saturating_add(pixels);
+    // The render scratch it is built from: the warp map (two lanes of `(x, y)`,
+    // four of Jacobian and four of SVD) and the remapped `u8` image.
+    let render = pixels
+        .saturating_mul(RENDER_SCRATCH_LANES)
+        .saturating_mul(f32_size)
+        .saturating_add(pixels.saturating_mul(channels));
+    tile.saturating_add(render)
+}
 
 /// A rendered context tile for one view: source colour over a
 /// `cache_res × cache_res` grid (larger than the scored `R×R` core so the shift
@@ -202,6 +334,17 @@ pub(super) fn shifted_center(
 /// view** with `(au, av) = (0, 0)` to build the per-view cache: the scored core
 /// at the view's accumulated integer offset `iacc` then sits at cache offset
 /// `(context_res − R) / 2 + iacc`.
+///
+/// **The buffers are reserved before the render, and fallibly.** Their side is
+/// `R_s + 4 · margin`, so a caller that widens its search window asks for a tile
+/// that grows as the square of the radius; an allocation the global allocator
+/// refuses aborts the process, and an abort takes the window with it. So the
+/// planes this will fill are reserved first, through
+/// [`try_zeroed_f32`], and the render scratch -- the warp map and the remapped
+/// image, which are allocated inside kernels no refusal can be threaded through
+/// -- is asked for at its own size and released first whenever the tile is big
+/// enough for the answer to be no, so a refusal comes back as
+/// [`LocalizeError::OutOfMemory`] before either is built.
 #[allow(clippy::too_many_arguments)]
 fn render_context(
     patch: &OrientedPatch,
@@ -213,7 +356,48 @@ fn render_context(
     resolution: u32,
     context_res: u32,
     sampler: Sampler,
-) -> ContextTile {
+) -> Result<ContextTile, LocalizeError> {
+    // The tile the round loop will read, allocated **before** the render: the
+    // warp map and the remapped image are of the same order, and asking for
+    // this first means an impossible size is refused here rather than aborting
+    // the process inside one of them. `try_zeroed_f32` asks for exactly what
+    // will be filled below.
+    let cr = context_res as usize;
+    let channels = view.pyramid.level(0).channels() as usize;
+    let istride = cache_istride(cr);
+    let mut planes: Vec<Vec<f32>> = Vec::new();
+    planes
+        .try_reserve_exact(channels)
+        .map_err(|_| LocalizeError::OutOfMemory {
+            bytes: channels.saturating_mul(std::mem::size_of::<Vec<f32>>()),
+        })?;
+    for _ in 0..channels {
+        planes.push(try_zeroed_f32(istride.saturating_mul(cr))?);
+    }
+    let mut invalid_plane = try_zeroed_f32(istride.saturating_mul(cr))?;
+    let mut valid = try_false_bools(cr.saturating_mul(cr))?;
+
+    // The render's own scratch is bigger than the tile it produces -- the warp
+    // map carries ten `f32` lanes per pixel against the tile's four per channel
+    // -- and it is allocated inside `WarpMap` and the remap, where no refusal
+    // can be threaded. So a tile big enough to be refused has that size asked
+    // for here first and released: what the allocator says about it is what it
+    // will say a line later, and this is the line that can still report it.
+    //
+    // Only above the threshold, because this runs once per view per point of a
+    // whole cloud and an allocator does not refuse a few hundred KB: a probe at
+    // the production tile size would be an allocation and a free per render,
+    // bought against a refusal that cannot happen.
+    let scratch_lanes = cr.saturating_mul(cr).saturating_mul(RENDER_SCRATCH_LANES);
+    if scratch_lanes.saturating_mul(std::mem::size_of::<f32>()) > PROBE_ABOVE_BYTES {
+        let mut probe: Vec<f32> = Vec::new();
+        probe
+            .try_reserve_exact(scratch_lanes)
+            .map_err(|_| LocalizeError::OutOfMemory {
+                bytes: scratch_lanes.saturating_mul(std::mem::size_of::<f32>()),
+            })?;
+    }
+
     let center = shifted_center(patch, au, av, wpp_u, wpp_v);
     let scale = context_res as f64 / resolution as f64;
     let mut ctx_patch = OrientedPatch::from_center_normal(
@@ -235,9 +419,7 @@ fn render_context(
         Sampler::BilinearMip => remap_bilinear_mip(view.pyramid, &map),
         Sampler::Bilinear => remap_bilinear(view.pyramid.level(0), &map),
     });
-    let cr = context_res as usize;
-    let channels = img.channels() as usize;
-    let istride = cache_istride(cr);
+    debug_assert_eq!(channels, img.channels() as usize);
 
     // Per-channel sum → mean over the cache. We accumulate in `f64` to keep the
     // centering exact to the last `f32` ulp (one mean per channel; cheap).
@@ -257,10 +439,7 @@ fn render_context(
     // Centered planar planes. Pad columns past `cr` stay at `0.0` (= the mean
     // after centering, harmless — those columns only feed discarded grid cells
     // past the search window).
-    let (planes, invalid_plane, valid) = prof::RENDER_CENTER.time(|| {
-        let mut planes: Vec<Vec<f32>> = (0..channels).map(|_| vec![0.0f32; istride * cr]).collect();
-        let mut invalid_plane = vec![0.0f32; istride * cr];
-        let mut valid = vec![false; cr * cr];
+    prof::RENDER_CENTER.time(|| {
         for row in 0..context_res {
             for col in 0..context_res {
                 let r = row as usize;
@@ -275,9 +454,8 @@ fn render_context(
                 }
             }
         }
-        (planes, invalid_plane, valid)
     });
-    ContextTile {
+    Ok(ContextTile {
         res: cr,
         istride,
         channels,
@@ -285,7 +463,7 @@ fn render_context(
         planes,
         invalid_plane,
         valid,
-    }
+    })
 }
 
 /// Extract the raw (un-normalized) core of `tile` at window offset `(oy, ox)`
@@ -570,6 +748,13 @@ pub struct BasisEvidence<'a> {
 /// Equivalent to [`localize_patch_keypoints_with_basis`] with no basis
 /// evidence — which is what the uncapped path (the default
 /// `basis_max_views = 0`) needs.
+///
+/// # Panics
+///
+/// Panics if a search buffer cannot be allocated, which a `search` radius wide
+/// enough to size the per-view tile past the machine's memory can do. A caller
+/// whose radius is the person's rather than a constant runs
+/// [`try_localize_patch_keypoints`] and reports the [`LocalizeError`] instead.
 pub fn localize_patch_keypoints(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -587,6 +772,63 @@ pub fn localize_patch_keypoints(
     )
 }
 
+/// [`localize_patch_keypoints`] as a fallible call: the same localization, with
+/// the two things that can stop it reported rather than raised.
+///
+/// The buffers the search reads from are sized by
+/// [`search`](KeypointLocalizeParams::search) and grow as its square, so a
+/// caller that takes that radius from a person can ask for a tile no machine
+/// can hold; an allocation the global allocator refuses **aborts the process**,
+/// and this is the entry point that hands back
+/// [`LocalizeError::OutOfMemory`] instead. `progress` is polled between rounds
+/// and between views, so a caller that can be cancelled gets
+/// [`LocalizeError::Cancelled`] rather than running the whole schedule out.
+///
+/// # Example
+///
+/// ```no_run
+/// # use sfmtool_core::patch::keypoint_localize::{
+/// #     try_localize_patch_keypoints, KeypointLocalizeParams,
+/// # };
+/// # use sfmtool_core::patch::cloud::OrientedPatch;
+/// # use sfmtool_core::patch::normal_refine::ProjectedImage;
+/// # use sfmtool_core::progress::Progress;
+/// # fn run(
+/// #     patch: &OrientedPatch,
+/// #     views: &[ProjectedImage<'_>],
+/// #     view_set: &[u32],
+/// # ) -> Result<(), Box<dyn std::error::Error>> {
+/// let localized = try_localize_patch_keypoints(
+///     patch,
+///     views,
+///     view_set,
+///     None,
+///     &KeypointLocalizeParams::default(),
+///     &Progress::none(),
+/// )?;
+/// # let _ = localized;
+/// # Ok(())
+/// # }
+/// ```
+pub fn try_localize_patch_keypoints(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    params: &KeypointLocalizeParams,
+    progress: &Progress<'_>,
+) -> Result<KeypointLocalization, LocalizeError> {
+    try_localize_patch_keypoints_with_basis(
+        patch,
+        views,
+        view_set,
+        starting_keypoints,
+        BasisEvidence::default(),
+        params,
+        progress,
+    )
+}
+
 /// [`localize_patch_keypoints`] with the caller's per-view ranking evidence for
 /// the **consensus-basis cap** (`specs/core/patch/keypoint-localization-consensus-basis.md`).
 ///
@@ -595,6 +837,11 @@ pub fn localize_patch_keypoints(
 /// [`localize_patch_keypoints`] and `evidence` is unread. Otherwise `K` views
 /// are picked as the consensus basis and congeal exactly as before, and every
 /// remaining view registers once against the finished basis template.
+///
+/// # Panics
+///
+/// Panics if a search buffer cannot be allocated; see
+/// [`try_localize_patch_keypoints_with_basis`], which reports it.
 pub fn localize_patch_keypoints_with_basis(
     patch: &OrientedPatch,
     views: &[ProjectedImage<'_>],
@@ -603,6 +850,31 @@ pub fn localize_patch_keypoints_with_basis(
     evidence: BasisEvidence<'_>,
     params: &KeypointLocalizeParams,
 ) -> KeypointLocalization {
+    try_localize_patch_keypoints_with_basis(
+        patch,
+        views,
+        view_set,
+        starting_keypoints,
+        evidence,
+        params,
+        &Progress::none(),
+    )
+    .expect("the localizer's buffers fit and no cancellation is possible without a Progress")
+}
+
+/// [`localize_patch_keypoints_with_basis`] as a fallible call: the same
+/// localization, with an allocation it could not make and a cancellation
+/// reported through [`LocalizeError`] rather than raised.
+#[allow(clippy::too_many_arguments)]
+pub fn try_localize_patch_keypoints_with_basis(
+    patch: &OrientedPatch,
+    views: &[ProjectedImage<'_>],
+    view_set: &[u32],
+    starting_keypoints: Option<&[Option<[f64; 2]>]>,
+    evidence: BasisEvidence<'_>,
+    params: &KeypointLocalizeParams,
+    progress: &Progress<'_>,
+) -> Result<KeypointLocalization, LocalizeError> {
     // Search resolution `R_s = round(m·R)`: the cache, support, and shift grid all
     // build at `R_s`. An integer step in this grid is `1/m` patch-grid px, so the
     // found shift is scaled by `inv_m = 1/m` back to patch-grid px (`m = 1` — the
@@ -712,7 +984,7 @@ pub fn localize_patch_keypoints_with_basis(
     }
 
     if states.len() < 2 {
-        return finalize(patch, views, &states, wpp_u, wpp_v);
+        return Ok(finalize(patch, views, &states, wpp_u, wpp_v));
     }
 
     // Consensus-basis pick: hold every view past the cap out of the congealing
@@ -749,10 +1021,15 @@ pub fn localize_patch_keypoints_with_basis(
     // round reads its core and scores its shift grid from this cache at the view's
     // current integer offset `iacc` — no per-round render. `caches` stays parallel
     // to `states`; the view-dropping retain below filters both together.
+    //
+    // The cancel flag is polled **per view**: the render is the expensive half
+    // of a wide search, and a caller that has asked to stop should not wait out
+    // a dozen of them.
     let mut caches: Vec<ContextTile> = Vec::with_capacity(states.len());
     prof::count(&prof::N_RENDER, states.len() as u64);
-    prof::RENDER.time(|| {
+    prof::RENDER.time(|| -> Result<(), LocalizeError> {
         for st in &states {
+            progress.check_cancel()?;
             caches.push(render_context(
                 patch,
                 &views[st.idx as usize],
@@ -763,9 +1040,10 @@ pub fn localize_patch_keypoints_with_basis(
                 resolution,
                 context_res,
                 params.sampler,
-            ));
+            )?);
         }
-    });
+        Ok(())
+    })?;
 
     // Member localizability gate. A view whose own tile pins no 2D position — a
     // flat sky/water crop, a lone straight edge — correlates to noise against
@@ -806,8 +1084,14 @@ pub fn localize_patch_keypoints_with_basis(
 
     let mut loo = LooScratch::default();
     let mut search = SearchScratch::default();
+    // The shift grids, reserved once and fallibly: they are `(2 · margin + 1)²`
+    // per grid and the round loop resizes into them, so reserving the capacity
+    // here means every later `resize` sits inside it and cannot be the
+    // allocation that aborts.
+    search.try_reserve_grids((2 * margin + 1) as usize)?;
     let mut rounds_run = 0u32;
     for _round in 0..params.max_iters.max(1) {
+        progress.check_cancel()?;
         prof::count(&prof::N_ROUNDS, 1);
         rounds_run += 1;
         // View count entering this round: convergence below requires the view
@@ -1060,7 +1344,7 @@ pub fn localize_patch_keypoints_with_basis(
     // unnecessary by construction), then one shift search per tail view against
     // it. See `specs/core/patch/keypoint-localization-consensus-basis.md`.
     if !tail.is_empty() {
-        prof::TAIL_REGISTER.time(|| {
+        prof::TAIL_REGISTER.time(|| -> Result<(), LocalizeError> {
             register_tail(
                 patch,
                 views,
@@ -1078,17 +1362,19 @@ pub fn localize_patch_keypoints_with_basis(
                     wpp_v,
                 },
                 params,
-            );
+                progress,
+            )?;
             states.append(&mut tail);
             // Restore the input view-set order the result contract reports in
             // (basis and tail were each already ascending in `order`).
             states.sort_by_key(|st| st.order);
-        });
+            Ok(())
+        })?;
     }
 
     let mut out = finalize(patch, views, &states, wpp_u, wpp_v);
     out.rounds = rounds_run;
-    out
+    Ok(out)
 }
 
 /// The grid geometry phase-B registration needs, bundled so
@@ -1220,7 +1506,8 @@ fn register_tail(
     search: &mut SearchScratch,
     geom: TailGeometry,
     params: &KeypointLocalizeParams,
-) {
+    progress: &Progress<'_>,
+) -> Result<(), LocalizeError> {
     let Some((kept_ch, keep_mask)) = basis_template(
         states,
         caches,
@@ -1250,7 +1537,7 @@ fn register_tail(
                 params.max_shift_px,
             )
         });
-        return;
+        return Ok(());
     };
 
     // The tail's relative-agreement bar, from the basis members' final ZNCCs.
@@ -1278,6 +1565,7 @@ fn register_tail(
     let mut member_ok: Vec<bool> = Vec::with_capacity(tail.len());
     let mut grid_scratch: Vec<f32> = Vec::new();
     for st in tail.iter_mut() {
+        progress.check_cancel()?;
         let view = &views[st.idx as usize];
         let cache = prof::RENDER.time(|| {
             render_context(
@@ -1291,7 +1579,7 @@ fn register_tail(
                 tail_res,
                 params.sampler,
             )
-        });
+        })?;
         // Member localizability gate, the loop's verbatim: score this view's own
         // core tile (at its seed, where the cache is centred) and refuse a tile
         // that pins no 2D position before it is scored against the template.
@@ -1378,6 +1666,7 @@ fn register_tail(
         ) && st.loo.is_finite()
             && st.loo >= bar
     });
+    Ok(())
 }
 
 /// Where `keypoint` sits relative to the point's own projection, in **patch-grid

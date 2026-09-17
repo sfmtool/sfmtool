@@ -26,10 +26,12 @@ use nalgebra::{Point3, Vector3};
 use ndarray::Array3;
 
 use crate::patch::cloud::OrientedPatch;
-use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalizeParams};
+use crate::patch::keypoint_localize::{
+    try_localize_patch_keypoints, KeypointLocalizeParams, LocalizeError,
+};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelParams};
 use crate::patch::normal_refine::ProjectedImage;
-use crate::progress::Progress;
+use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::add_observation::placement_scale;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -37,7 +39,8 @@ use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 
 use super::evaluate::{
     check_observation_views, check_views, evaluate, evaluate_cluster, evaluated, finite,
-    open_localizer, plan_rounds, seed_of, EvaluateError, EvaluateOptions, EvaluateReport,
+    open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError, EvaluateOptions,
+    EvaluateReport,
 };
 use super::track::{EditableTrack, Stage, StageKind, TrackPayload};
 
@@ -97,6 +100,21 @@ pub enum FitError {
     /// The `in` observations do not triangulate: the depth is not observable,
     /// or the solve puts the point behind a camera that sees it.
     Triangulation,
+    /// One round's per-view tiles would take more memory than
+    /// [`EvaluateOptions::max_cache_bytes`] allows, and were not attempted.
+    TooLarge {
+        /// What the round's tiles would have taken, in bytes.
+        bytes: usize,
+        /// The budget it passed.
+        budget: usize,
+    },
+    /// A buffer the localizer needed could not be allocated.
+    OutOfMemory {
+        /// What the allocator refused, in bytes.
+        bytes: usize,
+    },
+    /// The caller asked the fit to stop.
+    Cancelled,
 }
 
 impl std::fmt::Display for FitError {
@@ -126,6 +144,18 @@ impl std::fmt::Display for FitError {
                 "the in observations do not triangulate: the depth is not observable, \
                  or the point falls behind a camera that sees it"
             ),
+            FitError::TooLarge { bytes, budget } => write!(
+                f,
+                "this round's tiles would take {} and the budget is {}; \
+                 narrow the search or turn out the observations furthest from \
+                 the projection",
+                shown_bytes(*bytes),
+                shown_bytes(*budget)
+            ),
+            FitError::OutOfMemory { bytes } => {
+                write!(f, "{bytes} bytes could not be allocated for the fit")
+            }
+            FitError::Cancelled => write!(f, "the fit was cancelled"),
         }
     }
 }
@@ -140,6 +170,24 @@ impl From<EvaluateError> for FitError {
             }
             EvaluateError::NoView { image } => FitError::NoView { image },
             EvaluateError::NoFrame => FitError::NoFrame,
+            EvaluateError::TooLarge { bytes, budget } => FitError::TooLarge { bytes, budget },
+            EvaluateError::OutOfMemory { bytes } => FitError::OutOfMemory { bytes },
+            EvaluateError::Cancelled => FitError::Cancelled,
+        }
+    }
+}
+
+impl From<Cancelled> for FitError {
+    fn from(_: Cancelled) -> Self {
+        FitError::Cancelled
+    }
+}
+
+impl From<LocalizeError> for FitError {
+    fn from(e: LocalizeError) -> Self {
+        match e {
+            LocalizeError::OutOfMemory { bytes } => FitError::OutOfMemory { bytes },
+            LocalizeError::Cancelled => FitError::Cancelled,
         }
     }
 }
@@ -335,7 +383,17 @@ pub(super) fn fit_track(
     // The `in` count is [`fit_preconditions`]'s, checked before the caller
     // spent anything on the views.
     let ins = track.in_observations();
-    let plan = plan_rounds(track, images, frame, options.localize.min_grazing_cos);
+    // The rounds are the reading's, bound and all: an observation the evaluation
+    // that follows will refuse to read for sitting too far from the projection
+    // is one the kernels do not move either, so the fit and its own report
+    // cannot come to disagree about which sightings were in play.
+    let plan = plan_rounds(
+        track,
+        images,
+        frame,
+        &options.localize,
+        options.evaluate.max_seed_offset_px,
+    );
 
     let mut fits: HashMap<usize, Fit> = HashMap::new();
     fit_round(
@@ -346,10 +404,11 @@ pub(super) fn fit_track(
         options,
         progress,
         &mut fits,
-    );
+    )?;
     for &i in &plan.contested {
+        progress.check_cancel()?;
         let round = plan.contested_round(track, i);
-        fit_round(track, images, frame, &round, options, progress, &mut fits);
+        fit_round(track, images, frame, &round, options, progress, &mut fits)?;
     }
 
     // ── The keypoints, and the re-triangulation they feed ──
@@ -433,9 +492,9 @@ fn fit_round(
     options: &FitOptions,
     progress: &Progress<'_>,
     fits: &mut HashMap<usize, Fit>,
-) {
+) -> Result<(), FitError> {
     if round.len() < 2 {
-        return;
+        return Ok(());
     }
     let view_set: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
     let seeds: Vec<Option<[f64; 2]>> = round
@@ -448,10 +507,19 @@ fn fit_round(
         .zip(round.iter().copied())
         .collect();
 
+    // The window a fit searches is the localizer's own rather than the widened
+    // one a reading runs at, so its tiles are the kernel's default size; the
+    // budget the reading states is checked there, where the widening happens.
     let localized = {
         let mut phase = progress.phase("localize");
-        let localized =
-            localize_patch_keypoints(frame, images, &view_set, Some(&seeds), &options.localize);
+        let localized = try_localize_patch_keypoints(
+            frame,
+            images,
+            &view_set,
+            Some(&seeds),
+            &options.localize,
+            progress,
+        )?;
         progress_note!(phase, "{} views", localized.views.len());
         localized
     };
@@ -482,6 +550,7 @@ fn fit_round(
         let keypoint = at.map_or(localized.keypoints[slot], |k| refined.keypoints[k]);
         fits.insert(i, Fit { keypoint });
     }
+    Ok(())
 }
 
 /// Triangulate the observations at `which` from the keypoints they carry.

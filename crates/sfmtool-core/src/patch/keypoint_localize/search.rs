@@ -21,7 +21,7 @@ use crate::patch::normal_refine::{
 use super::kernels::{
     accumulate_count, compute_channel_grids, count_invalid_at_cell, score_cell_one_channel,
 };
-use super::{parabolic, prof, ContextTile};
+use super::{parabolic, prof, ContextTile, LocalizeError};
 
 /// Reused per-call scratch for [`search_shift`], created once per
 /// [`localize_patch_keypoints`](super::localize_patch_keypoints) and shared
@@ -90,6 +90,41 @@ pub(super) struct SearchScratch {
     /// all-NaN at the start of every `search_shift_plus_descent` call. Replaces a
     /// per-call `HashMap<(i64,i64), Option<f64>>`.
     pub(super) pd_visited: Vec<f64>,
+}
+
+impl SearchScratch {
+    /// Reserve the shift grids for a `span × span` search window, fallibly.
+    ///
+    /// Every grid here is `span²` and the search resizes into it, so reserving
+    /// the capacity once means each later `resize` sits inside the capacity and
+    /// allocates nothing. That is what makes the size the **caller's** search
+    /// radius implies a refusal a step can report rather than an abort inside
+    /// the global allocator: a window wide enough to matter is `(2 · margin +
+    /// 1)²` cells, which grows as the square of the radius.
+    pub(super) fn try_reserve_grids(&mut self, span: usize) -> Result<(), LocalizeError> {
+        let cells = span.saturating_mul(span);
+        let reserve_f32 = |buffer: &mut Vec<f32>| -> Result<(), LocalizeError> {
+            buffer
+                .try_reserve_exact(cells.saturating_sub(buffer.len()))
+                .map_err(|_| LocalizeError::OutOfMemory {
+                    bytes: cells.saturating_mul(std::mem::size_of::<f32>()),
+                })
+        };
+        let reserve_f64 = |buffer: &mut Vec<f64>| -> Result<(), LocalizeError> {
+            buffer
+                .try_reserve_exact(cells.saturating_sub(buffer.len()))
+                .map_err(|_| LocalizeError::OutOfMemory {
+                    bytes: cells.saturating_mul(std::mem::size_of::<f64>()),
+                })
+        };
+        reserve_f32(&mut self.g_n)?;
+        reserve_f32(&mut self.g_s1)?;
+        reserve_f32(&mut self.g_s2)?;
+        reserve_f32(&mut self.ginv)?;
+        reserve_f64(&mut self.grid)?;
+        reserve_f64(&mut self.pd_visited)?;
+        Ok(())
+    }
 }
 
 /// Reused scratch for the **incremental leave-one-out consensus**: the

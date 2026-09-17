@@ -2523,3 +2523,41 @@ fn seed_offset_rejects_a_backward_plane_hit_on_a_ray_path_model() {
         "a bearing toward the plane must still register"
     );
 }
+
+/// An allocation no machine can make is a refusal the caller can report, not an
+/// abort.
+///
+/// The buffers here are sized by the caller's search radius and grow as its
+/// square, so a wide enough window asks the global allocator for something it
+/// cannot give -- and a failure inside the global allocator ends the process
+/// where it stands, taking a window and everything unsaved in it. Asking
+/// through `try_reserve_exact` is what turns that into a value.
+#[test]
+fn a_buffer_the_allocator_cannot_give_is_an_error_rather_than_an_abort() {
+    // 2^46 lanes is 256 TB of `f32`: no allocator says yes, and none of it is
+    // touched.
+    let refused = try_zeroed_f32(1 << 46).expect_err("256 TB is not available");
+    let LocalizeError::OutOfMemory { bytes } = refused else {
+        panic!("the refusal names what it asked for: {refused}");
+    };
+    assert_eq!(bytes, (1usize << 46) * std::mem::size_of::<f32>());
+    assert!(
+        refused.to_string().contains("could not allocate"),
+        "{refused}"
+    );
+    // And an ordinary size is still an ordinary buffer.
+    assert_eq!(try_zeroed_f32(8).expect("eight lanes"), vec![0.0f32; 8]);
+}
+
+/// The shift grids are reserved before the rounds, so a window past what the
+/// machine has is refused where the caller can see it rather than inside a
+/// `resize` in the search.
+#[test]
+fn the_shift_grids_are_reserved_before_the_search_uses_them() {
+    let mut scratch = SearchScratch::default();
+    assert!(scratch.try_reserve_grids(13).is_ok());
+    assert!(
+        scratch.try_reserve_grids(1 << 24).is_err(),
+        "a 16-million-cell span is 2 TB of grids"
+    );
+}

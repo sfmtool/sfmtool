@@ -13,8 +13,13 @@ An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
 one, on one node, with an id of its own. One task runs at a time. The six
 operations are `Bundle adjust`, and the five the bench runs -- `Evaluate
 track`, `Fit track`, `Set track stage`, `Search descriptors` and `Build
-descriptor index` ([bench.md](bench.md)), none of which is cancellable, since
-the kernels and the file reads they call never ask whether they should stop.
+descriptor index` ([bench.md](bench.md)). All but the last are **cancellable**:
+the four bench steps that read photographs poll the flag on either side of the
+decode and inside the kernels -- between the reading's rounds and between the
+views the localizer renders, which is where a widened search spends its time,
+and in front of the forest query and between the candidates for the search.
+`Build descriptor index` is not: the forest build and the file write are each
+one call that never asks whether it should stop.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.
@@ -349,6 +354,12 @@ and its LM iterations against the budget, so the bar is measured rather than a
 spinner, and it polls the cancel flag between rounds and between iterations, so
 Cancel is live ([operation-progress.md](operation-progress.md)).
 
+The bench's photometric steps fill in the phases and poll the same flag. A
+cancelled one ends as a cancellation rather than a failure of the kernel --
+`EvaluateError::Cancelled`, `FitError::Cancelled`, `SearchError::Cancelled` --
+and the job turns each into `Finished::Cancelled`, so the row says the operation
+stopped and no version is pushed.
+
 ## Rust API
 
 [`crates/sfm-explorer/src/background/`](../../crates/sfm-explorer/src/background):
@@ -632,7 +643,11 @@ Panel, through `test_support::run_frame_headless`:
   shows nothing there for an operation that has never set one.
 - **Every `Operation` that declares `cancellable` really is**: cancelling each
   one stops it and writes the cancelled entry. A declaration nothing checks is a
-  declaration that rots.
+  declaration that rots. Each is started over a fixture that can really run it
+  -- the adjustment over the resection node, the bench steps over a node with a
+  point on its bench and a photograph per image, the search over a workspace
+  with `.sift` files and a built `.kdf` -- so what is held to the claim is the
+  kernel rather than a stand-in for it.
 
 `crates/sfm-explorer/src/mcp/tests.rs`, over a fake operation held open on the
 editing fixture's node, so the wire is read at an instant the test chose:

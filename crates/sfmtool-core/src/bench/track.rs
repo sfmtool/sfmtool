@@ -171,6 +171,21 @@ pub enum Unmeasured {
         /// `|d_hat . n_hat|`, the cosine the grazing cutoff judges.
         cosine: f64,
     },
+    /// Its seed sits further from the point's projection than the reading is
+    /// willing to widen its window for.
+    ///
+    /// The window the localizer searches is anchored at the projection and has
+    /// to reach the seed, so a seed a thousand px out asks for a tile a
+    /// thousand px wide -- and the tile's cost is that number **squared**, per
+    /// view. Past the bound the answer is that the sighting is somewhere else
+    /// entirely, which is a thing to say about the row rather than a thing to
+    /// allocate for.
+    SeedTooFar {
+        /// How far the seed sits from the projection, in patch-grid px.
+        offset_px: f64,
+        /// The bound it passed, in the same units.
+        bound_px: f64,
+    },
     /// Fewer than two observations of its round could be read together, so
     /// there was no consensus to correlate this one against.
     NoConsensus,
@@ -186,6 +201,14 @@ impl std::fmt::Display for Unmeasured {
             Unmeasured::OffSensor => write!(f, "it sits off the photograph"),
             Unmeasured::NoProjection => write!(f, "the point misses this view"),
             Unmeasured::Grazing { cosine } => write!(f, "its ray grazes the patch ({cosine:.2})"),
+            Unmeasured::SeedTooFar {
+                offset_px,
+                bound_px,
+            } => write!(
+                f,
+                "its seed sits {offset_px:.0} px from the projection, beyond the \
+                 {bound_px:.0} px bound"
+            ),
             Unmeasured::NoConsensus => write!(f, "nothing to correlate against"),
             Unmeasured::Unscorable => write!(f, "its tile could not be scored"),
         }

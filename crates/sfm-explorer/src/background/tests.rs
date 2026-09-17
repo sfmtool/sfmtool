@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 
+use sfmtool_core::bench::StageKind;
 use sfmtool_core::progress::Progress;
 use sfmtool_core::{BundleAdjustOptions, SfmrReconstruction};
 
@@ -308,7 +309,10 @@ fn a_cancelled_operation_writes_a_failed_entry_and_pushes_nothing() {
         .map(|image| image.camera_center())
         .collect();
 
-    cancel_before_it_runs(&mut state, id, Operation::BUNDLE_ADJUST);
+    let job = state
+        .bundle_adjust_job(id, &BundleAdjustOptions::default())
+        .expect("the fixture is well posed");
+    cancel_before_it_runs(&mut state, id, Operation::BUNDLE_ADJUST, job);
 
     let entry = newest(&state);
     assert!(entry.failed, "{}", entry.text);
@@ -346,9 +350,11 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
         if !operation.cancellable {
             continue;
         }
-        let (mut state, id) = adjustable();
-        cancel_before_it_runs(&mut state, id, operation);
-        let entry = newest(&state);
+        let mut task = real_task(operation);
+        let versions = task.state.scene[0].history.versions().len();
+        let job = task.job.take().expect("the starter built one");
+        cancel_before_it_runs(&mut task.state, task.id, operation, job);
+        let entry = newest(&task.state);
         assert!(
             entry.failed && entry.text.ends_with("cancelled"),
             "{} claims to be cancellable and did not stop: {}",
@@ -356,8 +362,8 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
             entry.text,
         );
         assert_eq!(
-            state.scene[0].history.versions().len(),
-            1,
+            task.state.scene[0].history.versions().len(),
+            versions,
             "{} pushed a version after being cancelled",
             operation.name,
         );
@@ -372,10 +378,9 @@ fn every_operation_that_says_it_is_cancellable_really_is() {
 /// fixture solves. Cancelling *after* a start would be a bet on the machine
 /// being slower than the test.
 #[track_caller]
-fn cancel_before_it_runs(state: &mut AppState, id: ReconId, operation: Operation) {
+fn cancel_before_it_runs(state: &mut AppState, id: ReconId, operation: Operation, job: Job) {
     let mut gate = Gate::new();
     let held = gate.held();
-    let job = real_job(state, id, operation);
     state
         .start_background_task(
             operation,
@@ -391,17 +396,74 @@ fn cancel_before_it_runs(state: &mut AppState, id: ReconId, operation: Operation
     state.finish_background_task();
 }
 
-/// The work `operation` really does, so a test of the declaration tests the
-/// kernel rather than a stand-in for it.
+/// One operation's real work, with everything it needs to run: a test of the
+/// declaration then tests the kernel rather than a stand-in for it.
+struct RealTask {
+    /// The state the job was built from and runs against.
+    state: AppState,
+    /// The node it runs on.
+    id: ReconId,
+    /// The work itself, taken out when it is handed to the worker.
+    job: Option<Job>,
+    /// The directory the node's files live in, where it has any: a search
+    /// reads `.sift` files and a `.kdf` off the disk, and they have to outlive
+    /// the task.
+    _workspace: Option<tempfile::TempDir>,
+}
+
+/// The work `operation` really does, over a fixture that can actually do it.
 ///
 /// The `match` is exhaustive on purpose: a new [`Operation`] fails here until
 /// somebody says how to start it, which is what keeps the walk over
 /// [`Operation::ALL`] honest.
-fn real_job(state: &AppState, id: ReconId, operation: Operation) -> Job {
+fn real_task(operation: Operation) -> RealTask {
     match operation.name {
-        "Bundle adjust" => state
-            .bundle_adjust_job(id, &BundleAdjustOptions::default())
-            .expect("the fixture is well posed"),
+        "Bundle adjust" => {
+            let (state, id) = adjustable();
+            let job = state
+                .bundle_adjust_job(id, &BundleAdjustOptions::default())
+                .expect("the fixture is well posed");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
+        // The three steps that read photographs, over the bench fixture: a
+        // point on the bench and a textured photograph cached for every image.
+        "Evaluate track" | "Fit track" | "Set track stage" => {
+            let (mut state, id) = crate::bench::tests::state();
+            let label = crate::bench::tests::put_on_bench(&mut state, id);
+            let job = match operation.name {
+                "Evaluate track" => state.bench_evaluate_job(id, &label, None),
+                "Fit track" => state.bench_fit_job(id, &label, None),
+                _ => state.bench_stage_job(id, &label, StageKind::Cluster),
+            }
+            .expect("the fixture's track is readable");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
+        // The search, over the workspace fixture: it queries a real `.kdf` and
+        // reads a real `.sift` file, neither of which the demo node has.
+        "Search descriptors" => {
+            let workspace = tempfile::tempdir().expect("a temporary directory");
+            let (mut state, id, label) =
+                crate::descriptor_index::tests::searchable(workspace.path());
+            let job = state
+                .bench_search_job(id, &label, 0, None, None)
+                .expect("the fixture has an index and a searchable observation");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: Some(workspace),
+            }
+        }
         other => panic!("{other} has no starter here; add one"),
     }
 }

@@ -92,40 +92,47 @@ impl Operation {
 
     /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
     ///
-    /// Not cancellable: the patch kernels it runs take the `Progress` for their
-    /// phases and never ask whether they should stop, and an operation that
-    /// says `true` here is held to it by a test.
+    /// Cancellable: the reading polls the flag on either side of the decode,
+    /// between its rounds, and inside the localizer between the views it
+    /// renders -- which is where a widened search spends its time -- and hands
+    /// back `EvaluateError::Cancelled` rather than a half-read track.
     pub(crate) const BENCH_EVALUATE: Operation = Operation {
         name: "Evaluate track",
-        cancellable: false,
+        cancellable: true,
         kind: Kind::Bench,
     };
 
     /// One bench track fitted: localized, re-triangulated, fused, and read back.
-    /// Not cancellable, for the reason [`Operation::BENCH_EVALUATE`] is not.
+    /// Cancellable at the same places [`Operation::BENCH_EVALUATE`] is, the
+    /// reading it ends with included.
     pub(crate) const BENCH_FIT: Operation = Operation {
         name: "Fit track",
-        cancellable: false,
+        cancellable: true,
         kind: Kind::Bench,
     };
 
-    /// One bench track moved between the cluster and the track stage. Not
-    /// cancellable, for the reason [`Operation::BENCH_EVALUATE`] is not: an
-    /// upgrade is a fit with a triangulation in front of it.
+    /// One bench track moved between the cluster and the track stage.
+    /// Cancellable for the reason [`Operation::BENCH_FIT`] is: an upgrade is a
+    /// fit with a triangulation in front of it, and it stops where the fit
+    /// stops, leaving the track at the stage it was in.
     pub(crate) const BENCH_SET_STAGE: Operation = Operation {
         name: "Set track stage",
-        cancellable: false,
+        cancellable: true,
         kind: Kind::Bench,
     };
 
     /// One bench track searched from, in a descriptor index
     /// (`specs/core/bench/editable-track.md` § "Searching the descriptor
-    /// index"). Not cancellable, for the reason
-    /// [`Operation::BENCH_EVALUATE`] is not: the constellation query is one
-    /// call into the forest and never asks whether it should stop.
+    /// index").
+    ///
+    /// Cancellable in front of the forest query and between the candidates it
+    /// found. The query itself is one call into the forest and runs to its end
+    /// once entered, so a cancel lands either before it or after it -- which is
+    /// still the difference between a step that stops and a button that does
+    /// nothing.
     pub(crate) const BENCH_SEARCH: Operation = Operation {
         name: "Search descriptors",
-        cancellable: false,
+        cancellable: true,
         kind: Kind::Bench,
     };
 

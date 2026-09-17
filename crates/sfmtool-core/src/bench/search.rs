@@ -30,7 +30,7 @@ use std::collections::BTreeSet;
 use crate::features::kdforest::{
     constellation_from_keypoints, ConstellationParams, ImageKeypoints, KdfError, LazyKdForestU8,
 };
-use crate::progress::Progress;
+use crate::progress::{Cancelled, Progress};
 
 use super::steps::{add_observation, reference_shape, ObservationSeed};
 use super::track::{EditableTrack, Provenance};
@@ -111,6 +111,8 @@ pub enum SearchError {
     },
     /// The index refused, in its own words.
     Index(String),
+    /// The caller asked the search to stop.
+    Cancelled,
 }
 
 impl std::fmt::Display for SearchError {
@@ -138,11 +140,18 @@ impl std::fmt::Display for SearchError {
                  out of {keypoint_count} in the image"
             ),
             SearchError::Index(message) => write!(f, "the descriptor index refused: {message}"),
+            SearchError::Cancelled => write!(f, "the search was cancelled"),
         }
     }
 }
 
 impl std::error::Error for SearchError {}
+
+impl From<Cancelled> for SearchError {
+    fn from(_: Cancelled) -> Self {
+        SearchError::Cancelled
+    }
+}
 
 impl From<KdfError> for SearchError {
     fn from(e: KdfError) -> Self {
@@ -337,6 +346,10 @@ pub fn search_descriptors(
         min_inliers: options.min_inliers,
         ..options.constellation
     };
+    // The two places a cancel can land: in front of the forest query, which is
+    // one call and runs to its end once entered, and between the candidates it
+    // found, each of which grows the track.
+    progress.check_cancel()?;
     let found = {
         let _phase = progress.phase("query index");
         constellation_from_keypoints(
@@ -363,6 +376,7 @@ pub fn search_descriptors(
     let mut next = track.clone();
     let mut matches = Vec::with_capacity(found.matches.len());
     for candidate in &found.matches {
+        progress.check_cancel()?;
         let pixel = apply_affine(&candidate.affine, center);
         let outcome = if candidate.image_index == image {
             Found::OwnImage

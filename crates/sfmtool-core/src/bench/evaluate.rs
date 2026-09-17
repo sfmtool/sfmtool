@@ -22,7 +22,7 @@
 //! At the **cluster stage** the reading is the `.matches` refinement kernel over
 //! an in-memory cluster, whose `member_status` is its own account of every
 //! member; at the **track stage** it is one round of
-//! [`localize_patch_keypoints`] over the observations where they sit, which
+//! [`try_localize_patch_keypoints`] over the observations where they sit, which
 //! scores each one against the leave-one-out consensus of the others and finds
 //! its correlation peak without moving it there.
 
@@ -38,11 +38,12 @@ use crate::patch::cluster_refine::{
     MemberStatus, REFERENCE_UNREFINABLE,
 };
 use crate::patch::keypoint_localize::{
-    keypoint_grid_offset, localize_patch_keypoints, project_unclipped, KeypointLocalizeParams,
+    keypoint_grid_offset, project_unclipped, try_localize_patch_keypoints, view_cache_bytes,
+    KeypointLocalizeParams, LocalizeError,
 };
 use crate::patch::localizability::{score_localizability_stack, SIGMA_NOISE};
 use crate::patch::normal_refine::ProjectedImage;
-use crate::progress::Progress;
+use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
 use crate::reconstruction::create_point::render_bitmap;
 use crate::reconstruction::edited::EditedReconstruction;
@@ -117,8 +118,45 @@ pub struct EvaluateOptions {
     /// a window sized for the search radius alone would start an observation
     /// short of where it actually sits and report the correlation somewhere the
     /// sighting is not.
+    ///
+    /// The widening is bounded by [`Self::max_seed_offset_px`], because the
+    /// tile the widening sizes costs the radius **squared** per view.
     pub search_px: f64,
+    /// How far from the projection a seed may sit and still be read, in
+    /// **patch-grid px**.
+    ///
+    /// A round's window is widened to reach its furthest seed, and the tile
+    /// each view renders is `resolution + 4 · window` on a side, so the memory
+    /// one observation costs grows as the square of its offset: a seed a
+    /// couple of thousand px out asks for gigabytes per view. An observation
+    /// past this bound is left out of the round carrying
+    /// [`Unmeasured::SeedTooFar`], which is the honest reading of a sighting
+    /// that far from the point -- the correlation at the projection would say
+    /// nothing about it, and the correlation at the seed is a question about a
+    /// different surface.
+    ///
+    /// The default is `64`: a little under three tile-widths at the default
+    /// `resolution` of 24, so a sighting a couple of patches away from the
+    /// projection is still read, and a view's tile at the bound is about a
+    /// megabyte and a half rather than a gigabyte.
+    pub max_seed_offset_px: f64,
+    /// The most memory one round's per-view tiles may take together, in bytes.
+    ///
+    /// [`Self::max_seed_offset_px`] bounds one observation and this bounds the
+    /// round: a track with enough views at the bound would still add up to more
+    /// than the machine has. A round past it is refused with
+    /// [`EvaluateError::TooLarge`] **before** anything is allocated, which is a
+    /// sentence the person reads rather than an allocator abort that takes the
+    /// window with it. The default is 256 MiB, which is a couple of hundred
+    /// views at the offset bound and thousands at the default search radius.
+    pub max_cache_bytes: usize,
 }
+
+/// [`EvaluateOptions::max_seed_offset_px`]'s default: 64 patch-grid px.
+pub const DEFAULT_MAX_SEED_OFFSET_PX: f64 = 64.0;
+
+/// [`EvaluateOptions::max_cache_bytes`]'s default: 256 MiB.
+pub const DEFAULT_MAX_CACHE_BYTES: usize = 256 << 20;
 
 impl Default for EvaluateOptions {
     fn default() -> Self {
@@ -129,6 +167,8 @@ impl Default for EvaluateOptions {
                 ..open_localizer()
             },
             search_px: KeypointLocalizeParams::default().search,
+            max_seed_offset_px: DEFAULT_MAX_SEED_OFFSET_PX,
+            max_cache_bytes: DEFAULT_MAX_CACHE_BYTES,
         }
     }
 }
@@ -156,6 +196,26 @@ pub enum EvaluateError {
     /// The track carries no patch frame, so there is no surfel any view can be
     /// read against.
     NoFrame,
+    /// One round's per-view tiles would take more memory than
+    /// [`EvaluateOptions::max_cache_bytes`] allows.
+    ///
+    /// Refused in front of the allocation rather than attempted: the tiles are
+    /// sized by the widened search window and an allocation the global
+    /// allocator cannot make aborts the process.
+    TooLarge {
+        /// What the round's tiles would have taken, in bytes.
+        bytes: usize,
+        /// The budget it passed.
+        budget: usize,
+    },
+    /// A buffer the localizer needed could not be allocated, at a size the
+    /// budget admitted.
+    OutOfMemory {
+        /// What the allocator refused, in bytes.
+        bytes: usize,
+    },
+    /// The caller asked the evaluation to stop.
+    Cancelled,
 }
 
 impl std::fmt::Display for EvaluateError {
@@ -174,11 +234,56 @@ impl std::fmt::Display for EvaluateError {
                 "the track carries no patch frame to read against; upgrade it \
                  from the cluster stage to build one"
             ),
+            EvaluateError::TooLarge { bytes, budget } => write!(
+                f,
+                "this round's tiles would take {} and the budget is {}; \
+                 narrow the search or turn out the observations furthest from \
+                 the projection",
+                shown_bytes(*bytes),
+                shown_bytes(*budget)
+            ),
+            EvaluateError::OutOfMemory { bytes } => {
+                write!(f, "{bytes} bytes could not be allocated for the reading")
+            }
+            EvaluateError::Cancelled => write!(f, "the reading was cancelled"),
         }
     }
 }
 
 impl std::error::Error for EvaluateError {}
+
+/// A byte count as a refusal says it: `"512 MB"`, `"1.5 MB"`, `"96 KB"`.
+///
+/// Rounded to the unit that leaves a number a person can hold, because the
+/// sentence is read on a status line and the exact byte is not the point.
+pub(super) fn shown_bytes(bytes: usize) -> String {
+    const KB: usize = 1 << 10;
+    const MB: usize = 1 << 20;
+    const GB: usize = 1 << 30;
+    match bytes {
+        b if b >= 10 * GB => format!("{} GB", b / GB),
+        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+        b if b >= 10 * MB => format!("{} MB", b / MB),
+        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{} KB", b / KB),
+        b => format!("{b} bytes"),
+    }
+}
+
+impl From<Cancelled> for EvaluateError {
+    fn from(_: Cancelled) -> Self {
+        EvaluateError::Cancelled
+    }
+}
+
+impl From<LocalizeError> for EvaluateError {
+    fn from(e: LocalizeError) -> Self {
+        match e {
+            LocalizeError::OutOfMemory { bytes } => EvaluateError::OutOfMemory { bytes },
+            LocalizeError::Cancelled => EvaluateError::Cancelled,
+        }
+    }
+}
 
 /// What one evaluation read.
 ///
@@ -646,16 +751,26 @@ impl Rounds {
 /// Plan the rounds of one pass over `track` against `frame`, and name what each
 /// excluded observation was excluded for.
 ///
-/// The four exclusions are the localizer's own up-front refusals, decided here
+/// The five exclusions are the localizer's own up-front refusals, decided here
 /// so that the row carries the reason rather than simply going missing from the
 /// kernel's answer: no seed at all, a seed off the sensor, a point that does not
-/// project into the view, and a ray that grazes the patch plane.
+/// project into the view, a ray that grazes the patch plane, and a seed further
+/// from the projection than `max_seed_offset_px` patch-grid px.
+///
+/// **The offset bound is a memory bound.** A round's search window is widened to
+/// reach its furthest seed and each view's tile is `resolution + 4 · window` on
+/// a side, so one far-out observation sizes every tile of its round and the cost
+/// is that offset squared per view. Deciding it here means the tile is never
+/// asked for: the row is left out of the round carrying
+/// [`Unmeasured::SeedTooFar`], and the observations that can be read are read.
 pub(super) fn plan_rounds(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
     frame: &OrientedPatch,
-    min_grazing_cos: f64,
+    localize: &KeypointLocalizeParams,
+    max_seed_offset_px: f64,
 ) -> Rounds {
+    let min_grazing_cos = localize.min_grazing_cos;
     let normal = frame.normal();
     let mut excluded: Vec<(usize, Unmeasured)> = Vec::new();
     let readable = |i: usize| -> Result<(), Unmeasured> {
@@ -690,6 +805,19 @@ pub(super) fn plan_rounds(
         }
         if project_unclipped(view, &frame.center, frame.w).is_none() {
             return Err(Unmeasured::NoProjection);
+        }
+        // How far the window would have to be widened to reach this seed, and
+        // whether that is a widening worth making. A seed the kernel cannot
+        // measure an offset for at all -- the same refusals the seeding itself
+        // makes -- is left to the round, which seeds it at the projection.
+        if let Some(off) = keypoint_grid_offset(frame, view, seed, localize) {
+            let offset_px = off[0].hypot(off[1]);
+            if offset_px.is_finite() && offset_px > max_seed_offset_px {
+                return Err(Unmeasured::SeedTooFar {
+                    offset_px,
+                    bound_px: max_seed_offset_px,
+                });
+            }
         }
         Ok(())
     };
@@ -751,7 +879,13 @@ fn evaluate_track(
     let frame = payload.frame.clone().ok_or(EvaluateError::NoFrame)?;
     check_observation_views(track, images)?;
 
-    let plan = plan_rounds(track, images, &frame, options.localize.min_grazing_cos);
+    let plan = plan_rounds(
+        track,
+        images,
+        &frame,
+        &options.localize,
+        options.max_seed_offset_px,
+    );
     let mut readings: HashMap<usize, Reading> = HashMap::new();
     let mut reasons: HashMap<usize, Unmeasured> = plan.excluded.iter().copied().collect();
     {
@@ -763,11 +897,13 @@ fn evaluate_track(
             &frame,
             &plan.first,
             options,
+            progress,
             &mut readings,
             &mut reasons,
-        );
+        )?;
         rounds += 1;
         for &i in &plan.contested {
+            progress.check_cancel()?;
             let round = plan.contested_round(track, i);
             read_round(
                 track,
@@ -775,9 +911,10 @@ fn evaluate_track(
                 &frame,
                 &round,
                 options,
+                progress,
                 &mut readings,
                 &mut reasons,
-            );
+            )?;
             rounds += 1;
         }
         progress_note!(phase, "{rounds} rounds, {} observations", readings.len());
@@ -857,20 +994,22 @@ fn evaluate_track(
 /// and the peak of its shift search is where the correlation says it would
 /// rather be. Nothing is written back to the track here -- the peak is reported
 /// as a distance, not taken.
+#[allow(clippy::too_many_arguments)]
 fn read_round(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
     frame: &OrientedPatch,
     round: &[usize],
     options: &EvaluateOptions,
+    progress: &Progress<'_>,
     readings: &mut HashMap<usize, Reading>,
     reasons: &mut HashMap<usize, Unmeasured>,
-) {
+) -> Result<(), EvaluateError> {
     if round.len() < 2 {
         for &i in round {
             reasons.entry(i).or_insert(Unmeasured::NoConsensus);
         }
-        return;
+        return Ok(());
     }
     let view_set: Vec<u32> = round.iter().map(|&i| track.observations[i].image).collect();
     let seeds: Vec<Option<[f64; 2]>> = round
@@ -888,7 +1027,19 @@ fn read_round(
         search: search_radius(track, images, frame, round, options),
         ..options.localize.clone()
     };
-    let localized = localize_patch_keypoints(frame, images, &view_set, Some(&seeds), &params);
+    // What this round would cost, before a byte of it is asked for: the tile
+    // each view renders at the widened window, summed. A round past the budget
+    // is refused rather than attempted, because the allocation that would fail
+    // is the one that aborts the process.
+    let bytes = round_cache_bytes(track, images, round, &params);
+    if bytes > options.max_cache_bytes {
+        return Err(EvaluateError::TooLarge {
+            bytes,
+            budget: options.max_cache_bytes,
+        });
+    }
+    let localized =
+        try_localize_patch_keypoints(frame, images, &view_set, Some(&seeds), &params, progress)?;
 
     for (slot, &image) in localized.views.iter().enumerate() {
         let (Some(&i), Some(&at)) = (of_image.get(&image), at_image.get(&image)) else {
@@ -926,6 +1077,29 @@ fn read_round(
             reasons.entry(i).or_insert(Unmeasured::Unscorable);
         }
     }
+    Ok(())
+}
+
+/// What one round's per-view tiles cost together, in bytes.
+///
+/// One [`view_cache_bytes`] per observation of the round, at that round's own
+/// widened window and its own photograph's channel count. This is the number
+/// [`EvaluateOptions::max_cache_bytes`] is a budget on, and it is computed from
+/// the parameters alone -- nothing is rendered to find it out.
+pub(super) fn round_cache_bytes(
+    track: &EditableTrack,
+    images: &[ProjectedImage<'_>],
+    round: &[usize],
+    params: &KeypointLocalizeParams,
+) -> usize {
+    round
+        .iter()
+        .map(|&i| {
+            let view = &images[track.observations[i].image as usize];
+            let channels = view.pyramid.level(0).channels() as usize;
+            view_cache_bytes(params, channels)
+        })
+        .fold(0usize, |total, bytes| total.saturating_add(bytes))
 }
 
 /// The search radius one round runs at, in patch-grid px:
@@ -940,6 +1114,10 @@ fn read_round(
 /// observation in a round that holds a far-out seed may report a peak further
 /// than `search_px` from itself, which is the honest reading of a window that
 /// had to be that wide.
+///
+/// The widening is bounded, and the bound is applied a step earlier: a seed past
+/// [`EvaluateOptions::max_seed_offset_px`] is not in the round at all
+/// ([`plan_rounds`]), so the widest offset this can find is that bound.
 fn search_radius(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],

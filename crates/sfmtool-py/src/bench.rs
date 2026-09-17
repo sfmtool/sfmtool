@@ -708,21 +708,35 @@ fn fit_report_dict<'py>(py: Python<'py>, report: &FitReport) -> PyResult<Bound<'
 }
 
 /// The reading options a call runs with: the defaults, with the caller's own
-/// search radius where one was named.
-fn evaluate_options(search_px: Option<f64>) -> EvaluateOptions {
+/// search radius and memory bounds where they named them.
+fn evaluate_options(
+    search_px: Option<f64>,
+    max_seed_offset_px: Option<f64>,
+    max_cache_bytes: Option<usize>,
+) -> EvaluateOptions {
     let mut options = EvaluateOptions::default();
     if let Some(search_px) = search_px {
         options.search_px = search_px;
+    }
+    if let Some(max_seed_offset_px) = max_seed_offset_px {
+        options.max_seed_offset_px = max_seed_offset_px;
+    }
+    if let Some(max_cache_bytes) = max_cache_bytes {
+        options.max_cache_bytes = max_cache_bytes;
     }
     options
 }
 
 /// The fit options a call runs with. The reading the fit ends with takes the
-/// same search radius, so a fit and an `evaluate` of its result are stated in
-/// one set of terms.
-fn fit_options(search_px: Option<f64>) -> FitOptions {
+/// same search radius and the same bounds, so a fit and an `evaluate` of its
+/// result are stated in one set of terms.
+fn fit_options(
+    search_px: Option<f64>,
+    max_seed_offset_px: Option<f64>,
+    max_cache_bytes: Option<usize>,
+) -> FitOptions {
     FitOptions {
-        evaluate: evaluate_options(search_px),
+        evaluate: evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
         ..FitOptions::default()
     }
 }
@@ -767,6 +781,14 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// `search_px` is how far from each observation the peak is looked for, in
 /// patch-grid px; the default is the localizer's own search radius.
 ///
+/// Two bounds keep a wide window from asking for memory the machine does not
+/// have -- the window is widened to reach the furthest seed and each view's
+/// tile costs the square of it. `max_seed_offset_px` (64 patch-grid px by
+/// default) is how far from the point's projection a seed may sit and still be
+/// read: past it the row comes back with a ``reason`` naming the bound instead
+/// of a score. `max_cache_bytes` (256 MiB by default) is what one round's tiles
+/// may take together; a round past it is refused rather than attempted.
+///
 /// Nothing here decides anything: the thresholds propose and
 /// :func:`apply_thresholds` applies the proposal.
 ///
@@ -775,13 +797,23 @@ fn parse_stage(word: &str) -> PyResult<StageKind> {
 /// ``position`` and ``condition_number`` at the track stage. Raises
 /// ``ValueError`` with the reason when the reading is refused.
 #[pyfunction]
-#[pyo3(signature = (track, edited, images, *, search_px = None))]
+#[pyo3(signature = (
+    track,
+    edited,
+    images,
+    *,
+    search_px = None,
+    max_seed_offset_px = None,
+    max_cache_bytes = None,
+))]
 fn evaluate(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
     search_px: Option<f64>,
+    max_seed_offset_px: Option<f64>,
+    max_cache_bytes: Option<usize>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -790,7 +822,7 @@ fn evaluate(
         &track.inner,
         &edited.inner,
         &views,
-        &evaluate_options(search_px),
+        &evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
         &Progress::none(),
     )
     .map_err(refused)?;
@@ -822,13 +854,23 @@ fn evaluate(
 /// ``ValueError`` with the reason when the fit is refused -- a track stage with
 /// fewer than two ``in`` observations among them, which a reading permits.
 #[pyfunction]
-#[pyo3(signature = (track, edited, images, *, search_px = None))]
+#[pyo3(signature = (
+    track,
+    edited,
+    images,
+    *,
+    search_px = None,
+    max_seed_offset_px = None,
+    max_cache_bytes = None,
+))]
 fn fit(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
     search_px: Option<f64>,
+    max_seed_offset_px: Option<f64>,
+    max_cache_bytes: Option<usize>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -837,7 +879,7 @@ fn fit(
         &track.inner,
         &edited.inner,
         &views,
-        &fit_options(search_px),
+        &fit_options(search_px, max_seed_offset_px, max_cache_bytes),
         &Progress::none(),
     )
     .map_err(refused)?;

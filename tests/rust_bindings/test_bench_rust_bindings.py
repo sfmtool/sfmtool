@@ -289,6 +289,35 @@ class TestEvaluating:
             assert entry.get("projection_offset_px", 0.0) >= 0.0
             assert entry.get("localizability", 1.0) > 0.0
 
+    def test_the_reading_takes_its_memory_bounds_as_keyword_arguments(
+        self, edited, images, long_track_point
+    ):
+        """The two bounds that keep a widened window from asking for the machine.
+
+        The search window is widened to reach the furthest seed and each view's
+        tile costs the square of that width, so how far a seed may sit and what
+        one round's tiles may take together are both the caller's to set.
+        """
+        _, track = create_track(Bench(), edited, long_track_point)
+
+        # A bound below zero is past every seed, so every row comes back named
+        # rather than searched for.
+        read, report = evaluate(track, edited, images, max_seed_offset_px=-1.0)
+        assert report["measured"] == 0
+        for observation in read.observations:
+            assert "beyond" in observation["track"]["reason"]
+
+        # A budget nothing fits in refuses in one sentence, in front of the
+        # allocation rather than after it.
+        with pytest.raises(ValueError, match="budget"):
+            evaluate(track, edited, images, max_cache_bytes=1024)
+        with pytest.raises(ValueError, match="budget"):
+            fit(track, edited, images, max_cache_bytes=1024)
+
+        # And the defaults read the track as they always did.
+        _, report = evaluate(track, edited, images)
+        assert report["measured"] > 0
+
     def test_an_evaluation_moves_nothing(self, edited, images, long_track_point):
         """A reading writes measurements and no geometry.
 

@@ -231,6 +231,77 @@ fn the_default_path_is_index_kdf_beside_the_first_image_s_sift_file() {
     assert_eq!(state.default_descriptor_index_path(id), Some(expected));
 }
 
+/// The path is spelled in one convention, whatever the `.sfmr` stored.
+///
+/// The feature directory is written into the file with `/` between its parts,
+/// so joining it onto a Windows workspace directory gives
+/// `…\images\features/sift-test\index.kdf`: a path that opens, and that reads in
+/// a panel, a reply and a log row as two conventions arguing.
+#[test]
+fn the_default_path_is_spelled_with_one_kind_of_separator() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, id) = state_in(dir.path());
+    let recon = state.node(id).expect("loaded").recon();
+    assert!(
+        PREFIX.contains('/'),
+        "the fixture's feature directory is stored the way a .sfmr stores one"
+    );
+    let shown = default_index_path(recon)
+        .expect("a node with images has a default path")
+        .display()
+        .to_string();
+    // The separator this platform does not use, written as its code point so
+    // the test carries no escape of its own.
+    let backslash = char::from(0x5c_u8);
+    let foreign = if std::path::MAIN_SEPARATOR == '/' {
+        backslash
+    } else {
+        '/'
+    };
+    assert!(
+        !shown.contains(foreign),
+        "one convention, this platform's: {shown}"
+    );
+    assert!(shown.ends_with(INDEX_FILE_NAME), "{shown}");
+}
+
+/// A caller may name the file; it may not name a file outside the workspace.
+///
+/// Naming it is worth keeping -- a second index over the same capture, under a
+/// name of its own, is a reasonable thing to ask for -- and what is not worth
+/// keeping is a build that writes wherever the string points.
+#[test]
+fn a_build_outside_the_workspace_is_refused_naming_the_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = state_in(dir.path());
+    with_sift_files(&state, id, [900.0, 500.0]);
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let outside = elsewhere.path().join("stolen.kdf");
+    let why = state
+        .start_build_descriptor_index(id, Some(outside.clone()))
+        .expect_err("that is not beside the features it indexes");
+    assert!(why.contains("outside the workspace"), "{why}");
+    assert!(!outside.exists(), "nothing was written there");
+    assert!(state.background_task().is_none(), "no task was started");
+
+    // A climb out of the workspace is the same refusal, spelled differently.
+    let climbing = dir.path().join("..").join("stolen.kdf");
+    let why = state
+        .start_build_descriptor_index(id, Some(climbing))
+        .expect_err("a .. that leaves the tree leaves the tree");
+    assert!(why.contains("outside the workspace"), "{why}");
+
+    // Inside it, under a name of the caller's own, is built and opened.
+    let mine = dir.path().join("second.kdf");
+    state
+        .start_build_descriptor_index(id, Some(mine.clone()))
+        .expect("a path inside the workspace");
+    state.finish_background_task();
+    assert!(mine.is_file(), "the build wrote the file it was given");
+    assert_eq!(state.descriptor_index(id).expect("it opened it").path, mine);
+}
+
 #[test]
 fn a_node_with_no_sift_files_cannot_have_an_index_built() {
     let dir = tempfile::tempdir().unwrap();

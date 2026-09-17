@@ -6485,6 +6485,71 @@ fn evaluate_fit_and_set_stage_run_as_background_tasks() {
     );
 }
 
+/// An observation seeded a long way from the point's projection is **named** on
+/// its row rather than searched for.
+///
+/// The gesture is one an agent makes by hand: a pixel typed into
+/// `add_bench_track_observation` that is nowhere near where the point lands in
+/// that photograph. The reading widens its window to reach the furthest seed
+/// and each view's tile is the square of that width, so this is the call that
+/// used to ask for hundreds of gigabytes; what it does now is say so on the row
+/// and read everything else.
+#[test]
+fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let added = call(
+        &mut state,
+        &mut viewer,
+        "add_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "track": item,
+            "camera_image": 5,
+            "pixel": [24.0, 24.0],
+        }),
+    );
+    let at = added["observation"]
+        .as_u64()
+        .expect("an add names the index it took") as usize;
+
+    let evaluated = worked(
+        &mut state,
+        &mut viewer,
+        "evaluate_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert!(evaluated["report"].is_string(), "{evaluated}");
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let row = &track["observations"][at]["track"];
+    assert!(
+        row["zncc"].is_null(),
+        "nothing was searched for it: {track}"
+    );
+    let reason = row["reason"]
+        .as_str()
+        .expect("a row without a score says why");
+    assert!(
+        reason.contains("beyond the 64 px bound"),
+        "the row names the bound it passed: {reason}"
+    );
+    // The rows that could be read were read: the bound takes one observation
+    // out of the round and leaves the rest of the reading alone.
+    let measured = track["observations"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter(|row| row["track"]["zncc"].is_number())
+        .count();
+    assert!(measured >= 2, "{track}");
+}
+
 /// Setting the stage a track is already at changes nothing: no task, no
 /// version, and the version the node stands at as the answer.
 #[test]
@@ -7812,6 +7877,52 @@ fn the_descriptor_index_and_the_search_are_on_the_wire() {
         before,
         "an index is not a version"
     );
+}
+
+/// A step reports **its own** sentence, even when it sets something else off.
+///
+/// Putting the first item on a bench looks for the node's default descriptor
+/// index, and finding one writes an Action Log row of its own -- after the
+/// step's. The reply reads the log back for what the call did, so that row is
+/// the viewer's rather than the caller's, and the reply skips it.
+#[test]
+fn a_create_that_opens_the_default_index_still_reports_the_create() {
+    use crate::descriptor_index::tests as fixture;
+
+    // One session builds the index; a second opens the same workspace with
+    // nothing open yet, which is the state the first create meets.
+    let dir = tempfile::tempdir().unwrap();
+    let (_built, _, _) = fixture::searchable(dir.path());
+    let (mut state, id) = fixture::state_in(dir.path());
+    assert!(
+        state.descriptor_index(id).is_none(),
+        "the fresh session has opened nothing yet"
+    );
+    let label = state.node(id).expect("loaded").label.clone();
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_track",
+        json!({ "reconstruction_label": label, "point": fixture::POINT }),
+    );
+    let item = made["item"].as_str().expect("a create names its item");
+    let report = made["report"].as_str().expect("a create reports itself");
+    assert!(
+        report.starts_with("Put point") && report.contains(item),
+        "the reply carries the step's own sentence: {made}"
+    );
+    // The index really did open in the middle of it, and said so in a row of
+    // the viewer's own.
+    assert!(state.descriptor_index(id).is_some());
+    let opened = state
+        .action_log
+        .entries()
+        .find(|entry| entry.text.starts_with("Opened the descriptor index"))
+        .expect("the open wrote a row");
+    assert_eq!(opened.actor, crate::action_log::Actor::Viewer);
 }
 
 /// With no index, `get_bench` says so and still names where a build would put

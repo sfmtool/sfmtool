@@ -380,6 +380,44 @@ fn the_cells_follow_the_stage_the_track_is_in() {
     assert_eq!(rows[0].cells[5], "-", "a cluster has no ray angle");
 }
 
+/// A row the reading refused to widen its window for says so in the Status
+/// cell, in the reading's own sentence.
+///
+/// The seed's distance from the projection is what sizes the search window, and
+/// the tile that window renders costs its square, so a sighting placed a long
+/// way from the point is left out of the round with a reason rather than
+/// allocated for. The cell is where the person meets that decision.
+#[test]
+fn a_row_seeded_far_from_the_projection_says_so_in_the_status_cell() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    state
+        .add_bench_observation(
+            &label,
+            ImageRef::new(id, 5),
+            &crate::bench::Seed::Pixel {
+                pixel: [24.0, 24.0],
+                radius_px: None,
+            },
+        )
+        .expect("a pixel on the sensor");
+    state
+        .start_bench_evaluate(id, &label, None)
+        .expect("a framed track reads");
+    state.finish_background_task();
+    run_frame(&mut panel, &ctx, &state);
+
+    let rows = panel.rows();
+    let status = rows.last().expect("the row just added").cells[6].clone();
+    assert!(
+        status.contains("beyond the 64 px bound"),
+        "the cell names the bound the seed passed: {status}"
+    );
+    assert!(
+        rows.iter().filter(|row| row.cells[0] != "-").count() >= 2,
+        "and the rows that could be read still were: {rows:?}"
+    );
+}
+
 /// Reading and moving are two gestures, so the toolbar offers two buttons, and
 /// the search radius they carry is a control of its own beside the threshold
 /// sliders -- an input to the next reading rather than a bar the painting

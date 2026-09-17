@@ -43,7 +43,7 @@ use crate::state::edits::version_before;
 use crate::state::AppState;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Constellation size a search asks for when nobody names a radius.
 ///
@@ -100,8 +100,8 @@ pub(crate) enum Seed {
 /// its index and the portable id minted for it. Carried back from the step
 /// rather than looked up afterwards, because "the point this commit wrote" is
 /// not a question the value can be asked once the version has landed -- a
-/// replacement takes the index it replaced, and a creation takes whatever index
-/// the overlay had free.
+/// replacement takes a new index and deletes the one it replaced, and a
+/// creation takes whatever index the overlay had free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Committed {
     /// The index the written point holds in the new version.
@@ -787,7 +787,7 @@ impl AppState {
     /// crosses to the worker is that keypoint set, a clone of the track, and a
     /// clone of the forest handle -- the forest owns its own query pool and
     /// block cache, so the clone is a handle and not a copy.
-    fn bench_search_job(
+    pub(crate) fn bench_search_job(
         &mut self,
         id: ReconId,
         label: &str,
@@ -831,6 +831,7 @@ impl AppState {
                 &options,
                 progress,
             ) {
+                Err(sfmtool_core::bench::SearchError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot search {label}: {e}")),
                 Ok((grown, report)) => Finished::BenchTrack {
                     // The report is one sentence and it is the whole of what
@@ -893,7 +894,11 @@ impl AppState {
 
     /// The evaluation itself, as a function of the `Progress` it reports
     /// through.
-    fn bench_evaluate_job(
+    ///
+    /// Reachable from the crate's tests as well as from the step, so the test
+    /// that holds [`Operation::BENCH_EVALUATE`]'s cancellable declaration to
+    /// its claim runs the real work rather than a stand-in for it.
+    pub(crate) fn bench_evaluate_job(
         &mut self,
         id: ReconId,
         label: &str,
@@ -903,12 +908,23 @@ impl AppState {
         let label = label.to_string();
         let options = evaluate_options(search_px);
         Ok(Box::new(move |progress| {
+            // The decode is seconds of file reads with no poll of its own, so
+            // the flag is read on either side of it: a cancel during it is
+            // answered the moment it returns rather than after the kernels have
+            // run as well.
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
                 Err(e) => return Finished::Failed(format!("Cannot evaluate {label}: {e}")),
             };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let views = decoded.views();
             match bench::evaluate(&track, &edited, &views, &options, progress) {
+                Err(sfmtool_core::bench::EvaluateError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot evaluate {label}: {e}")),
                 Ok((measured, report)) => Finished::BenchTrack {
                     version_label: format!("Evaluated {label}"),
@@ -921,7 +937,8 @@ impl AppState {
     }
 
     /// The fit itself, as a function of the `Progress` it reports through.
-    fn bench_fit_job(
+    /// Crate-visible for the reason [`AppState::bench_evaluate_job`] is.
+    pub(crate) fn bench_fit_job(
         &mut self,
         id: ReconId,
         label: &str,
@@ -934,12 +951,19 @@ impl AppState {
             ..FitOptions::default()
         };
         Ok(Box::new(move |progress| {
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
                 Err(e) => return Finished::Failed(format!("Cannot fit {label}: {e}")),
             };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let views = decoded.views();
             match bench::fit(&track, &edited, &views, &options, progress) {
+                Err(sfmtool_core::bench::FitError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot fit {label}: {e}")),
                 Ok((fitted, report)) => Finished::BenchTrack {
                     version_label: format!("Fitted {label}"),
@@ -952,8 +976,9 @@ impl AppState {
     }
 
     /// The stage change itself, as a function of the `Progress` it reports
-    /// through.
-    fn bench_stage_job(
+    /// through. Crate-visible for the reason [`AppState::bench_evaluate_job`]
+    /// is.
+    pub(crate) fn bench_stage_job(
         &mut self,
         id: ReconId,
         label: &str,
@@ -962,10 +987,16 @@ impl AppState {
         let (edited, track, sources) = self.bench_photometric_inputs(id, label)?;
         let label = label.to_string();
         Ok(Box::new(move |progress| {
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let decoded = match sources.decode(progress) {
                 Ok(decoded) => decoded,
                 Err(e) => return Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
             };
+            if progress.is_cancelled() {
+                return Finished::Cancelled;
+            }
             let views = decoded.views();
             match bench::set_stage(
                 &track,
@@ -975,6 +1006,9 @@ impl AppState {
                 &FitOptions::default(),
                 progress,
             ) {
+                Err(sfmtool_core::bench::StageError::Fit(
+                    sfmtool_core::bench::FitError::Cancelled,
+                )) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot set the stage of {label}: {e}")),
                 Ok((staged, report)) => {
                     // The stage phrase is written once, here, and what core

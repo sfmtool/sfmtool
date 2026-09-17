@@ -50,7 +50,7 @@ use std::sync::Arc;
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
     evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,
-    EvaluateReport,
+    EvaluateReport, DEFAULT_MAX_CACHE_BYTES, DEFAULT_MAX_SEED_OFFSET_PX,
 };
 pub use fit::{fit, fit_preconditions, FitError, FitOptions, FitReport};
 pub use search::{

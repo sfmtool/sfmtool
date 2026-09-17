@@ -37,8 +37,8 @@ pub enum StageError {
     /// A downgrade needs the position the frame stands at, and the track
     /// carries none.
     NoPosition,
-    /// No `in` observation could anchor the cluster: none carries a seed, or
-    /// none has a usable affine shape to cut a template at.
+    /// No observation could anchor the cluster: none carries a seed, or none
+    /// has a usable affine shape to cut a template at.
     NoReference,
 }
 
@@ -57,7 +57,7 @@ impl std::fmt::Display for StageError {
             ),
             StageError::NoReference => write!(
                 f,
-                "no in observation carries a usable seed for the cluster to be \
+                "no observation carries a usable seed for the cluster to be \
                  cut around"
             ),
         }
@@ -448,7 +448,10 @@ fn downgrade(
     // surfel really has, and the next evaluation would register that square.
     let cluster = ClusterPayload::default();
     let mut next = track.clone();
-    let mut seeded: Vec<Option<(usize, f64)>> = Vec::new();
+    // Per observation: its index, the scale the patch has in it, and whether it
+    // is `in` -- the last so the reference can prefer the `in` set and still
+    // have somewhere to land when there is none.
+    let mut seeded: Vec<Option<(usize, f64, bool)>> = Vec::new();
     for (i, observation) in track.observations.iter().enumerate() {
         let image = observation.image as usize;
         let Some(keypoint) = observation
@@ -489,21 +492,38 @@ fn downgrade(
             shape,
         ));
         next.observations[i].track = None;
-        seeded.push((observation.verdict == Verdict::In).then_some((i, det.abs().sqrt())));
+        seeded.push(Some((
+            i,
+            det.abs().sqrt(),
+            observation.verdict == Verdict::In,
+        )));
     }
 
     // The reference is the `in` observation the patch is largest in, which is
     // the most detail any of them shows of it.
-    let reference = seeded
-        .iter()
-        .flatten()
-        .copied()
-        .max_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.0.cmp(&a.0))
-        })
-        .map(|(i, _)| i)
+    //
+    // **A cluster with no `in` observation still gets one.** A downgrade of a
+    // track whose every sighting is `out` is what a split of the rejected rows
+    // is: the person is cutting them off to look at them together, and their
+    // verdicts travel with them. A reference is a seed to cut a template
+    // around, not a judgement, so the pick falls back to the whole seeded set
+    // by the same largest-patch rule, and the refusal is left for a half that
+    // carries no seed at all.
+    let largest = |only_in: bool| {
+        seeded
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&(_, _, is_in)| is_in || !only_in)
+            .max_by(|a, b| {
+                a.1.partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.0.cmp(&a.0))
+            })
+            .map(|(i, _, _)| i)
+    };
+    let reference = largest(true)
+        .or_else(|| largest(false))
         .ok_or(StageError::NoReference)?;
     next.stage = Stage::Cluster(ClusterPayload {
         reference,

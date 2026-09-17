@@ -31,7 +31,11 @@ const POINT: u32 = 2;
 
 /// A state holding one `embedded_patches` node with a photograph cached for
 /// every image, so the steps that read pixels find them without a file on disk.
-fn state() -> (AppState, ReconId) {
+///
+/// Crate-visible: the background tests build their bench jobs over this, so the
+/// test that holds each operation's cancellable declaration to its claim runs
+/// the real work.
+pub(crate) fn state() -> (AppState, ReconId) {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(projected_embedded_demo(12)));
     let id = state.selected_recon.expect("a selected reconstruction");
@@ -85,7 +89,7 @@ fn pixel_seed(pixel: [f64; 2], radius_px: Option<f64>) -> crate::bench::Seed {
 }
 
 /// Put [`POINT`] on the bench and give back the label it took.
-fn put_on_bench(state: &mut AppState, id: ReconId) -> String {
+pub(crate) fn put_on_bench(state: &mut AppState, id: ReconId) -> String {
     state
         .put_point_on_bench(PointRef::new(id, POINT as usize))
         .expect("a live point")

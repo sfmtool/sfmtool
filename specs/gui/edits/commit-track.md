@@ -98,9 +98,9 @@ later rests.
 `AppState::commit_bench_track` answers with the point it wrote -- the index it
 took, and the index it replaced where it replaced one. One row of the
 reconstruction is the whole of what a commit adds, and neither index can be
-recovered afterwards: a replacement takes the index it replaced, a creation
-takes whatever index the overlay had free, and the sentence below states neither
-as a number a caller can use. The panel selects that point; the wire reports it
+recovered afterwards: a replacement writes a **new** row and deletes the one it
+replaced, a creation takes whatever index the overlay had free, and the sentence
+below states neither as a number a caller can use. The panel selects that point; the wire reports it
 as `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced": 1207 } }`,
 the id being the one the Point Track panel shows and `get_point` takes back, so
 an agent's next call names the row rather than hunting for it

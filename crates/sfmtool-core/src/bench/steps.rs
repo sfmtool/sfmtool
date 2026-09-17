@@ -820,9 +820,15 @@ pub struct SplitReport {
 ///
 /// A cluster whose reference moved out takes the first observation it has left
 /// as its reference, and the new track takes the one the downgrade picks -- the
-/// observation the patch is largest in -- or its own first when it was already
-/// a cluster; the template is dropped on both, because a template is a cut
-/// around a particular reference.
+/// observation the patch is largest in, whatever its verdict -- or its own
+/// first when it was already a cluster; the template is dropped on both,
+/// because a template is a cut around a particular reference.
+///
+/// **A half whose every row is `out` still splits.** The rows the thresholds
+/// rejected are exactly the ones a person cuts off to look at on their own, so
+/// the downgrade's reference falls back past the verdicts to the whole seeded
+/// set; what it cannot do without is a seed, and a half carrying none is
+/// refused.
 pub fn split(
     bench: &Bench,
     edited: &EditedReconstruction,

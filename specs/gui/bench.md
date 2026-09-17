@@ -191,8 +191,8 @@ the whole of what it produces, and both callers have to name it: the panel
 selects it, and the wire reports its index and its portable id. It comes back
 from the step rather than being looked up afterwards, because "the point this
 commit wrote" is not a question the value can be asked once the version has
-landed -- a replacement takes the index it replaced, and a creation takes
-whatever index the overlay had free.
+landed -- a replacement takes a **new** index and deletes the one it replaced,
+and a creation takes whatever index the overlay had free.
 
 **The three steps that read photographs return as soon as the worker is running.**
 They are `start_`-prefixed for that reason, and what they answer is whether the
@@ -311,10 +311,13 @@ A reading, a fit and a stage change run as **background tasks**
 ([`background-tasks.md`](background-tasks.md)), under `Evaluate track`, `Fit
 track` and `Set track stage`, beside `Search descriptors` and `Build descriptor
 index`, which read a `.kdf` and a capture's `.sift` files rather than
-photographs ([`track-edit.md`](track-edit.md) § "The descriptor index"). None of
-them is cancellable: the patch kernels
-they run take the `Progress` for their phases and never ask whether they should
-stop, and the declaration is held to that by the background tests.
+photographs ([`track-edit.md`](track-edit.md) § "The descriptor index"). All but
+the index build are **cancellable**: the kernels they run take the `Progress`
+for their phases and poll its flag as well -- between the reading's rounds and
+between the views the localizer renders, and in front of the forest query and
+between the candidates for the search -- so a cancelled step ends as a
+cancellation, pushing no version. The declaration is held to that by the
+background tests, which cancel each one over a fixture that can really run it.
 
 **What the track alone decides is decided before the task starts.** Core
 publishes the half of each step's own validation that reads no photograph --
@@ -460,11 +463,19 @@ only for an observation nothing says the place of, which is the state core's
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
 split name what they made, a rename names the label the item now holds, and an
-added observation names the index it took. **A commit names the point it
+added observation names the index it took.
+
+**The sentence is the step's own.** A step can set something else off -- putting
+the first item on a bench looks for the node's default descriptor index, and
+finding one writes a row of its own, after the step's. The reply reads the log
+back for what the call did, so a row nobody asked for would arrive under the
+step's label. Those rows are the **viewer's** (`Actor::Viewer`), which is what
+they are, and the reply skips them. **A commit names the point it
 wrote** -- `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced":
 1207 } }` -- because one row of the reconstruction is the whole of what a commit
 produces, and neither index is derivable from the sentence: a commit that
-replaces takes the index it replaced, and one that creates takes whatever index
+replaces writes a **new** row and deletes the one it replaced, so `index` and
+`replaced` are two different numbers, and one that creates takes whatever index
 the overlay had free. So the next call is a `get_point` rather than a search
 through the counts for whichever row is new. So `undo`, `redo` and
 `jump_to_version` need no bench variant: the history they walk already holds the
@@ -476,8 +487,12 @@ workspace and a handle on it, so `open_descriptor_index` and
 their reply is the index -- its path, whether it is open, and its descriptor
 count -- rather than a version. `get_bench` reports the same shape under
 `descriptor_index`, carrying the **default** path even when nothing is open, so
-an agent can see where a build would put one. The search itself is an ordinary
-bench step and answers as one.
+an agent can see where a build would put one; that path is spelled in one
+convention, the platform's own, rather than in the mixture a feature directory
+stored with `/` produces when it is joined onto a Windows workspace. A build
+takes a `path` of the caller's and refuses one that resolves outside the node's
+workspace directory ([`track-edit.md`](track-edit.md) § "The descriptor index").
+The search itself is an ordinary bench step and answers as one.
 
 **The steps that read a file answer in two levels**, as the bundle
 adjustment does: with the version they pushed when they finish inside the reply
@@ -542,7 +557,12 @@ fixture with a label on the node, for what the boundary owes: each tool being
 the `AppState` call the panel makes, an observation index surviving the steps
 that follow it, a refusal arriving as the step's own sentence, and the two
 photometric steps deferring to a worker and landing their version
-([mcp-server.md](mcp-server.md) § "Testing").
+([mcp-server.md](mcp-server.md) § "Testing"). Two of its cases are about what a
+reply says rather than what a step does: a create on a node whose default index
+is there but not yet open reports the **create's** sentence and not the open's,
+and an observation added at a pixel a long way from the point's projection comes
+back from a reading with the reason on its row, the rows that could be read
+still read.
 
 ---
 

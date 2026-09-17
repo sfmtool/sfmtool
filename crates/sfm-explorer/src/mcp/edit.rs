@@ -36,6 +36,7 @@ use super::{
     resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
     CameraImageSel, Deferred, JsonReply, ToolError, REPLY_DIRECTLY_WITHIN,
 };
+use crate::action_log::Actor;
 use crate::document::VersionSerial;
 use crate::goto_point::PointQuery;
 use crate::scene::{ReconId, SceneNode};
@@ -426,11 +427,18 @@ pub(super) fn version_reply(state: &AppState, id: ReconId, report: Option<String
 /// methods return `Result<(), String>` and hand their reports to the Action Log
 /// -- so reading it back is what puts them on the wire without a second
 /// rendering that could come to disagree with the one the human sees.
+///
+/// **A row the viewer wrote on its own is not the edit's.** A step can set
+/// something else off -- putting the first item on a bench opens the node's
+/// default descriptor index, which writes a row of its own after the step's --
+/// and the reply would then carry that row's sentence under the step's own
+/// label. Those rows are [`Actor::Viewer`]'s, because nobody asked for them,
+/// and skipping them here is what keeps a reply saying what the call did.
 fn recorded_text(state: &AppState, since: u64) -> Option<String> {
     state
         .action_log
         .since(since)
-        .filter(|entry| !entry.failed)
+        .filter(|entry| !entry.failed && entry.actor != Actor::Viewer)
         .last()
         .map(|entry| entry.text.clone())
 }

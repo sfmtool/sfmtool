@@ -230,7 +230,8 @@ out the very observations that would pull the point back.
 **The Status cell names the refusal.** A reading drops nothing, so a row without
 a ZNCC always has one of core's `Unmeasured` reasons behind it, and the cell
 prints that sentence -- `it sits off the photograph`, `its ray grazes the patch`,
-`nothing to correlate against` -- elided to its column, in place of a bare "not
+`its seed sits 2,483 px from the projection, beyond the 64 px bound`, `nothing
+to correlate against` -- elided to its column, in place of a bare "not
 localized" that says only that something happened. `not evaluated` is for the
 row nothing has read at all.
 
@@ -343,9 +344,30 @@ in the node's own order, including images with no `.sift` file -- an image with
 no features contributes no descriptor and still takes its row, which is what
 keeps a corpus image index and a node image index the same number.
 
+**A build may be told where to write, inside the workspace.** The wire's
+`build_descriptor_index` takes an optional `path`, because a second index over
+the same capture under a name of its own is a reasonable thing for an agent to
+ask for. A path that resolves outside the node's workspace directory is refused
+naming the workspace: an index is written beside the features it indexes, and a
+step that took a string and wrote wherever it pointed would be a different kind
+of tool. A relative path is resolved against that workspace, `.` and `..` are
+folded lexically -- the file is not there yet, so there is nothing to
+canonicalize -- and the default path is what a build with no `path` writes.
+
+**The path is spelled in one convention.** The feature directory is stored in
+the `.sfmr` with `/` between its parts, so a path joined onto a Windows
+workspace comes out as `…\images\features/sift-…\index.kdf`: it opens, and it
+reads in the row, the reply and the log as two conventions arguing. The default
+path is rebuilt from its components where it is formed, so what the panel, the
+wire and the Action Log say is the platform's own spelling throughout.
+
 Neither is a version. An index is a file beside the workspace and a handle on
 it; the reconstruction and the bench are untouched, so there is nothing for Undo
-to take back, and what each writes is one Action Log row of kind `Bench`.
+to take back, and what each writes is one Action Log row of kind `Bench`. The
+row the **lazy** open writes is the **viewer's** rather than whoever was acting:
+nobody asked for it, and it lands in the middle of the step that set it off, so
+attributing it to that step's actor would make it the last row the step wrote --
+which is the row a wire reply reads back as the step's own report.
 
 ### The way onto the bench
 
@@ -399,8 +421,17 @@ the warp gave it rather than around the point's own projection, with nothing
 evaluated;
 every item named in the tabs; the sliders keeping where they were left,
 following the active track's own bars when a step moves them, and re-seating
-when another item becomes active; and a row click reporting both the image it
-selects and the observation's pixel to reveal in it.
+when another item becomes active; a row seeded a long way from the point's
+projection saying so in its Status cell, in the reading's own sentence, while
+the rows that could be read still were; and a row click reporting both the image
+it selects and the observation's pixel to reveal in it.
+
+[descriptor_index/tests.rs](../../crates/sfm-explorer/src/descriptor_index/tests.rs),
+headless over a temporary workspace with a real `.sift` file per image: the
+default path being `index.kdf` beside them and spelled with one kind of
+separator whatever the `.sfmr` stored; a build writing a caller's path inside
+the workspace and opening what it wrote, and refusing one outside it or one that
+climbs out with `..`, naming the workspace and starting no task.
 
 The Panels menu entry and the tab's presence are covered by the layout test that
 walks every tab. There is no windowed `ui_basic` test, for the reason the

@@ -2017,7 +2017,9 @@ and, once it is over, what it cost (§ "get_background_task"); the same answer
 reaches the Action Log, with the whole operation's cost and the stages it
 reported ([operation-progress.md](operation-progress.md)), whichever way the
 call answered. `cancel_background` stops it;
-the adjustment polls between rounds and between iterations, and a cancelled one
+the adjustment polls between rounds and between iterations, and the bench's
+photometric steps poll on either side of their decode and inside their kernels,
+and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
@@ -2053,7 +2055,11 @@ sentence the Action Log recorded, plus the `item` it acted on -- a create and a
 split naming what they made, a rename naming the label the item now holds, and
 the commit naming the point it wrote. So `undo`, `redo` and `jump_to_version`
 need no bench variant: the history they walk already holds the bench steps, and
-`get_history` lists them among the rest.
+`get_history` lists them among the rest. The sentence is the **step's own**: a
+step that sets something else off -- putting the first item on a bench opens the
+node's default descriptor index, which writes a row after the step's -- writes
+that row as the viewer rather than as the caller, and the reply skips the
+viewer's rows ([bench.md](bench.md) § "The wire").
 
 **A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
 IMG_0042@142,198: the track is at the cluster stage; upgrade it before
@@ -2077,7 +2083,9 @@ observations is refused where a reading of the same track is not.
 
 **Three of the eighteen are about the descriptor index**, which is the node's
 rather than any track's: `open_descriptor_index` adopts a `.kdf`,
-`build_descriptor_index` makes one out of the node's `.sift` files, and
+`build_descriptor_index` makes one out of the node's `.sift` files -- at a
+`path` of the caller's where it names one, refused when that path resolves
+outside the node's workspace directory -- and
 `get_bench` reports which is open under `descriptor_index`, with the path a
 build would write to even when none is. Neither of the two pushes a version --
 an index is a file beside the workspace and a handle on it, and nothing about
