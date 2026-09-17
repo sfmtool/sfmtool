@@ -1098,6 +1098,55 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "move_bench_track_observation",
+            description: "Put one observation's sighting of a bench track at a pixel, by hand.                           At the track stage this writes its keypoint, which is the pixel a                           commit writes; at the cluster stage it moves its seed and keeps its                           shape. Either way the measurements read at the old pixel are dropped,                           because none of them says anything about the new one, and the                           observation is pinned: a sighting you placed is one you have ruled on,                           so the thresholds leave its verdict alone. This is the dot drag on the                           Image Detail panel's bench layer.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "resize_bench_track",
+            description: "Resize a bench track's patch by putting one edge of its outline under                           a pixel, with the opposite edge left where it is — the edge drag on                           the Image Detail panel's bench layer. The pixel is unprojected onto                           the patch's own plane, so the edge lands there exactly, through                           whatever distortion the lens has. Patch frames are square, so a resize                           is one scale and not two: the whole square grows or shrinks about the                           far edge. The observation says whose outline is meant — the surfel                           re-anchored on that sighting at the track stage, its own parallelogram                           at the cluster stage — and the pixel is in that observation's image.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    ("edge", edge_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "rotate_bench_track",
+            description: "Turn a bench track's patch in its own plane — the corner drag on the                           Image Detail panel's bench layer. At the track stage the surfel turns                           about its own outward normal, keeping its place, its size and the face                           it shows, so no observation need be named; at the cluster stage there                           is no surfel, only one affine shape per sighting, so name the                           observation whose shape should turn. Nothing moves: every sighting                           stays where it is.",
+            kind: Write,
+            schema: object(
+                &[
+                    ("track", bench_track_schema()),
+                    ("observation", observation_schema()),
+                ],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    (
+                        "degrees",
+                        json!({
+                            "type": "number",
+                            "description":
+                                "How far to turn, in degrees, positive about the patch's                                  outward normal at the track stage and from +x toward +y of the                                  image raster at the cluster stage.",
+                        }),
+                    ),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "set_bench_track_verdict",
             description: "Rule on one observation of a bench track by hand: in, out, or back to \
                           candidate. A verdict set this way is pinned, which is what leaves it \
@@ -1586,6 +1635,23 @@ fn observation_schema() -> Value {
             "Which observation, by its position in get_bench_track's observations list. \
              Observations are appended and never renumbered, so the position is stable for the \
              life of the track.",
+    })
+}
+
+/// Which edge of a patch's square a resize drags.
+///
+/// Named rather than numbered, and by side as well as axis, because a resize
+/// holds the **opposite** edge still: which of the two edges of an axis moves
+/// is the whole of the difference between the patch growing one way and the
+/// other.
+fn edge_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["+u", "-u", "+v", "-v"],
+        "description":
+            "Which edge of the patch's square to drag: +u and -u are the two edges across the \
+             patch's first axis, +v and -v the two across its second. The opposite edge stays \
+             where it is, so the patch grows or shrinks toward the one you name.",
     })
 }
 
@@ -2272,6 +2338,40 @@ pub(crate) fn parse(
                 seed: parse_seed(&args)?,
             }
         }
+        "move_bench_track_observation" => {
+            args.reject_unknown(&["reconstruction_label", "track", "observation", "pixel"])?;
+            Command::MoveBenchTrackObservation {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observation: args.required_usize("observation")?,
+                pixel: args.required_pixel_f64("pixel")?,
+            }
+        }
+        "resize_bench_track" => {
+            args.reject_unknown(&[
+                "reconstruction_label",
+                "track",
+                "observation",
+                "edge",
+                "pixel",
+            ])?;
+            Command::ResizeBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observation: args.required_usize("observation")?,
+                edge: args.edge("edge")?,
+                pixel: args.required_pixel_f64("pixel")?,
+            }
+        }
+        "rotate_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track", "degrees", "observation"])?;
+            Command::RotateBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                degrees: args.required_f64("degrees")?,
+                observation: args.optional_usize("observation")?,
+            }
+        }
         "set_bench_track_verdict" => {
             args.reject_unknown(&["reconstruction_label", "track", "observation", "verdict"])?;
             Command::SetBenchTrackVerdict {
@@ -2859,6 +2959,23 @@ impl Args<'_> {
             .optional_numbers::<2>(key)?
             .ok_or_else(|| self.error(format!("needs {key}: a pixel [x, y].")))?;
         Ok([x as f32, y as f32])
+    }
+
+    /// A pixel in a camera image, in the wire's own `f64`.
+    ///
+    /// Distinct from [`Self::pixel`], which narrows to the `f32` a `.sfmr`
+    /// keypoint is: the patch tools read their pixel against a lens and a plane
+    /// in `f64`, and narrowing on the way in would put a rounding of the
+    /// caller's number between the ray and the answer.
+    pub(super) fn required_pixel_f64(&self, key: &str) -> Result<[f64; 2], ToolError> {
+        self.optional_numbers::<2>(key)?
+            .ok_or_else(|| self.error(format!("needs {key}: a pixel [x, y].")))
+    }
+
+    /// Which edge of a patch's square, by its name on the wire.
+    fn edge(&self, key: &str) -> Result<sfmtool_core::bench::Edge, ToolError> {
+        let word = self.required_string(key)?;
+        word.parse().map_err(|why: String| self.error(why))
     }
 
     /// A patch radius in pixels: positive, or absent for the viewer's own

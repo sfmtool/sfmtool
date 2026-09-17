@@ -3620,6 +3620,27 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            "move_bench_track_observation",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "pixel": [142.0, 197.5],
+            }),
+        ),
+        (
+            "resize_bench_track",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "edge": "+u",
+                "pixel": [150.0, 197.5],
+            }),
+        ),
+        (
+            "rotate_bench_track",
+            json!({ "reconstruction_label": "alpha", "degrees": 12.5 }),
+        ),
+        (
             "set_bench_track_verdict",
             json!({
                 "reconstruction_label": "alpha",
@@ -3865,15 +3886,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty-four writes, the one that writes a file, and the
+    // Fourteen reads, forty-seven writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 60, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 63, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        44
+        47
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -5937,6 +5958,236 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
 
     // And every step was a version of the node, walked back one at a time.
     assert_eq!(version_count(&state), 4);
+}
+
+/// The three patch tools are the panel's three handles: a sighting placed, one
+/// edge put under a pixel with the far one held, and a turn in the patch's own
+/// plane. Each is one version, and what they write is what the exactness claim
+/// says it is.
+#[test]
+fn the_patch_tools_place_resize_and_turn_and_each_is_one_version() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    // The sighting of observation 0, where it stands.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let was: Vec<f64> = track["observations"][0]["pixel"]
+        .as_array()
+        .expect("every observation says where it sits")
+        .iter()
+        .map(|n| n.as_f64().expect("a number"))
+        .collect();
+    let to = [was[0] + 2.5, was[1] - 1.5];
+
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "move_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": 0,
+            "pixel": to,
+        }),
+    );
+    assert_eq!(moved["item"], json!(item), "{moved}");
+    assert_eq!(moved["observation"], json!(0), "{moved}");
+    assert!(
+        moved["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Moved observation 0 of {item} to (")),
+        "{moved}"
+    );
+    assert_eq!(version_count(&state), before + 1);
+
+    // The outline as it now stands at that sighting, so the resize can be
+    // aimed at a place on it.
+    let outline = |state: &AppState| {
+        let track = state
+            .bench_track(state.scene[0].id, &item)
+            .expect("the track is on the bench");
+        let sighting = &track.observations[0];
+        let (camera, pose) = crate::bench::geometry::view_of(
+            &state.scene[0].edited().base.image_table,
+            sighting.image as usize,
+        )
+        .expect("the fixture's images have cameras");
+        let frame = track
+            .track()
+            .and_then(|payload| payload.frame.clone())
+            .expect("a track from a point carries the stored patch");
+        let anchored = crate::bench::geometry::anchored_frame(&frame, &camera, &pose, sighting);
+        (anchored, camera, pose)
+    };
+    let corner = |patch: &sfmtool_core::patch::cloud::OrientedPatch,
+                  camera: &sfmtool_core::camera::CameraIntrinsics,
+                  pose: &sfmtool_core::geometry::RigidTransform,
+                  s: f64,
+                  t: f64| {
+        let (xyz, w) = patch.corner_homogeneous(s, t);
+        crate::bench::geometry::project(camera, pose, xyz, w).expect("in front of the camera")
+    };
+
+    let (before_patch, camera, pose) = outline(&state);
+    let far_before = corner(&before_patch, &camera, &pose, -1.0, 0.0);
+    let target = corner(&before_patch, &camera, &pose, 1.7, 0.0);
+    let resized = call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_track",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": 0,
+            "edge": "+u",
+            "pixel": target,
+        }),
+    );
+    assert_eq!(resized["edge"], json!("+u"), "{resized}");
+    assert!(
+        resized["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Resized {item} to ")),
+        "{resized}"
+    );
+    assert_eq!(version_count(&state), before + 2);
+
+    // The claim: the dragged edge lands on the pixel the call named, the far
+    // edge has not moved, and the frame is still square.
+    let frame = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .expect("a frame");
+    assert_eq!(frame.half_extent[0], frame.half_extent[1]);
+    let landed = corner(&frame, &camera, &pose, 1.0, 0.0);
+    assert!(
+        (landed[0] - target[0]).abs() < 1e-6 && (landed[1] - target[1]).abs() < 1e-6,
+        "the +u edge should land on {target:?}, it landed on {landed:?}",
+    );
+    let far_after = corner(&frame, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < 1e-6 && (far_after[1] - far_before[1]).abs() < 1e-6,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+
+    let turned = call(
+        &mut state,
+        &mut viewer,
+        "rotate_bench_track",
+        json!({ "reconstruction_label": "run_a", "degrees": 30.0 }),
+    );
+    assert_eq!(turned["degrees"], json!(30.0), "{turned}");
+    assert_eq!(
+        turned["label"].as_str().expect("a version label"),
+        format!("Rotated {item} by 30.0 degrees"),
+        "{turned}"
+    );
+    assert_eq!(version_count(&state), before + 3);
+    let after = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
+        .expect("a frame");
+    assert_eq!(
+        after.center, frame.center,
+        "a turn moves the surfel nowhere"
+    );
+    assert!((after.normal() - frame.normal()).norm() < 1e-12);
+
+    // And the three are versions of one history, walked back one at a time.
+    for _ in 0..3 {
+        call(
+            &mut state,
+            &mut viewer,
+            "undo",
+            json!({ "reconstruction_label": "run_a" }),
+        );
+    }
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let back: Vec<f64> = track["observations"][0]["pixel"]
+        .as_array()
+        .expect("a place")
+        .iter()
+        .map(|n| n.as_f64().expect("a number"))
+        .collect();
+    assert!(
+        (back[0] - was[0]).abs() < 1e-6 && (back[1] - was[1]).abs() < 1e-6,
+        "three undos did not put the sighting back: {back:?} != {was:?}",
+    );
+}
+
+/// A turn at the cluster stage is one sighting's affine shape, so it has to
+/// name one; a turn of a surfel does not.
+#[test]
+fn a_cluster_stage_turn_names_the_sighting_whose_shape_turns() {
+    let (mut state, mut viewer) = benchable();
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "create_bench_cluster",
+        json!({
+            "reconstruction_label": "run_a",
+            "camera_image": 0,
+            "pixel": [120.0, 90.0],
+            "radius_px": 6.0,
+        }),
+    );
+    let item = made["item"].as_str().expect("the new item").to_string();
+    let before = version_count(&state);
+    let was = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.observations[0].shape())
+        .expect("a seeded sighting has a shape");
+
+    let refused = refused_call(
+        &mut state,
+        &mut viewer,
+        "rotate_bench_track",
+        json!({ "reconstruction_label": "run_a", "degrees": 45.0 }),
+    )
+    .to_string();
+    assert!(refused.contains("observation"), "{refused}");
+    assert_eq!(version_count(&state), before, "a refusal pushes nothing");
+
+    let turned = call(
+        &mut state,
+        &mut viewer,
+        "rotate_bench_track",
+        json!({
+            "reconstruction_label": "run_a",
+            "degrees": 90.0,
+            "observation": 0,
+        }),
+    );
+    assert_eq!(
+        turned["label"].as_str().expect("a version label"),
+        format!("Rotated observation 0 of {item} by 90.0 degrees"),
+        "{turned}"
+    );
+    assert_eq!(version_count(&state), before + 1);
+
+    // A quarter turn in the raster's own sense: `R(90) * shape`, which sends
+    // each column onto the perpendicular of the one it was.
+    let shape = state
+        .bench_track(state.scene[0].id, &item)
+        .and_then(|track| track.observations[0].shape())
+        .expect("a seeded sighting has a shape");
+    let expected = [[-was[1][0], -was[1][1]], [was[0][0], was[0][1]]];
+    for (row, want) in shape.iter().zip(&expected) {
+        for (got, want) in row.iter().zip(want) {
+            assert!((got - want).abs() < 1e-9, "{shape:?} is not {expected:?}");
+        }
+    }
 }
 
 /// Every observation says where it sits, whether or not anything has read it.

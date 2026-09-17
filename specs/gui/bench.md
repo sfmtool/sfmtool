@@ -44,6 +44,19 @@ descriptor index a search queries is in
 [descriptor_index.rs](../../crates/sfm-explorer/src/descriptor_index.rs).
 
 ```rust
+/// One hand edit of a track's geometry, in the form the core steps take.
+pub(crate) enum PatchEdit {
+    /// Put one observation's sighting at this pixel of its own image.
+    Move { observation: usize, pixel: [f64; 2] },
+    /// Put one edge of the outline drawn at this observation under this pixel,
+    /// with the opposite edge left where it is.
+    ResizeFromEdge { observation: usize, edge: Edge, pixel: [f64; 2] },
+    /// Turn the track-stage surfel about its normal.
+    Rotate { angle_rad: f64 },
+    /// Turn one cluster-stage sighting's shape in its own image's pixels.
+    RotateShape { observation: usize, angle_rad: f64 },
+}
+
 /// Where a seed's position and shape come from.
 pub(crate) enum Seed {
     /// A pixel, with the patch's half-width in that image's own pixels where
@@ -98,6 +111,12 @@ impl AppState {
                                         seed: &Seed) -> Result<(), String>;
     pub(crate) fn set_bench_verdict(&mut self, id: ReconId, label: &str,
                                     observation: usize, verdict: Verdict) -> Result<(), String>;
+    /// One hand edit of the track's geometry: a sighting placed, one edge of
+    /// the patch put under a pixel, or a turn. The one call behind every
+    /// handle of the Image Detail panel's bench layer and behind the wire's
+    /// three patch tools.
+    pub(crate) fn edit_bench_patch(&mut self, id: ReconId, label: &str,
+                                   edit: &PatchEdit) -> Result<(), String>;
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
                                          thresholds: &Thresholds) -> Result<(), String>;
     pub(crate) fn split_bench_track(&mut self, id: ReconId, label: &str,
@@ -269,6 +288,10 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
+| Place a sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
+| Resize the patch | `Resized pt3d_a1b2c3d4_1207 to 7.4 px in IMG_0042.jpg` |
+| Turn the patch | `Rotated pt3d_a1b2c3d4_1207 by 12.3 degrees` |
+| Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
 | Evaluate | `Evaluated IMG_0042@142,198: measured 4 of 5 observations at (x, y, z)` |
 | Fit | `Fitted IMG_0042@142,198: placed 4, measured 4 of 5 observations at (x, y, z)` |
@@ -284,9 +307,15 @@ refusal is one failed row carrying the refusal's sentence.
 
 **A step that changes nothing pushes no version.** Setting the verdict an
 observation already has, setting the stage a track is already at, activating the
-active item and renaming an item to the label it holds each report that nothing
-happened and leave the history alone: a row that has to be undone for nothing is
-worse than no row.
+active item, renaming an item to the label it holds, and a drag of a handle that
+ends where it started each report that nothing happened and leave the history
+alone: a row that has to be undone for nothing is worse than no row.
+
+**A size is reported in the pixels of the sighting it was named at.** A world
+half-length says nothing to someone looking at a photograph, so the resize's
+sentence states the patch's half-width in that observation's own image -- the
+surfel re-anchored on it, projected -- and falls back to the world number only
+when the patch does not project there.
 
 ### Labels
 
@@ -385,7 +414,7 @@ the dock reads the label off the bench at that position before calling the step.
 
 ## The wire
 
-An agent gets the same bench a human does, through eighteen MCP tools
+An agent gets the same bench a human does, through twenty-one MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -419,6 +448,15 @@ panel means when it names no item.
 //                                "camera_image": 7, "pixel": [88.5, 210.0] }
 // set_bench_track_verdict      { "reconstruction_label": "bull", "observation": 3,
 //                                "verdict": "in" }
+//
+// The patch: the three handles the Image Detail panel's bench layer offers.
+// move_bench_track_observation { "reconstruction_label": "bull", "observation": 3,
+//                                "pixel": [1041.6, 1702.9] }
+// resize_bench_track           { "reconstruction_label": "bull", "observation": 3,
+//                                "edge": "+u", "pixel": [1049.0, 1702.9] }
+// rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3 }
+// rotate_bench_track           { "reconstruction_label": "bull", "degrees": 12.3,
+//                                "observation": 3 }   // the cluster stage's
 // apply_bench_track_thresholds { "reconstruction_label": "bull", "min_zncc": 0.8 }
 // evaluate_bench_track         { "reconstruction_label": "bull" }
 // fit_bench_track           { "reconstruction_label": "bull" }
@@ -459,6 +497,18 @@ marks, the place the Track Edit row click reveals, the centre of the tile that
 row draws and what `set_image_detail_view`'s `bench_observation` aims. `null`
 only for an observation nothing says the place of, which is the state core's
 `Unmeasured::NoSeed` names.
+
+**The three patch tools are the panel's three handles**, and each is one
+`edit_bench_patch`, so a drag and a tool call are the same version carrying the
+same sentence. `resize_bench_track` names an `edge` and a `pixel` rather than a
+size, because that is what the gesture is and what makes the answer exact: the
+pixel is unprojected onto the patch's own plane, so the edge lands there through
+whatever distortion the lens has, and the opposite edge is left where it was.
+Each names the `observation` whose outline is meant -- the surfel re-anchored on
+that sighting at the track stage, its own parallelogram at the cluster stage --
+except a turn at the track stage, where there is one surfel and no sighting need
+be named; a turn at the **cluster** stage has no surfel to turn and is refused
+without one.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -548,6 +598,18 @@ point's exact projection and a photograph cached for every image:
   row naming the row that would give it one, and an index build on a node with
   no `.sift` files is refused the same way.
 
+The handles are tested in
+[image_detail/tests.rs](../../crates/sfm-explorer/src/image_detail/tests.rs),
+which drives real frames: hovering an edge asks for the resize cursor its
+orientation on screen names, a corner for `Alias` and a dot for `Move`; a drag
+of the dot publishes a move that `AppState` turns into exactly one version whose
+label names it; a drag of an edge resizes so that the outline's dragged edge
+reprojects under the release point while the far edge holds; a drag of a corner
+onto its neighbour is a quarter turn and one version; Escape leaves no edit
+behind; and a drag that ends where it started pushes no version. The panel is
+zoomed in for them, because the demo's surfel is under three source pixels
+across and every handle would otherwise sit inside every other one's reach.
+
 The steps themselves are core's and are tested there, over a synthetic textured
 plane whose numbers are known to the pixel.
 
@@ -578,10 +640,11 @@ still read.
   [`../drafts/sfm-explorer-track-editing.md`](../drafts/sfm-explorer-track-editing.md).
 - **Drawing the bench in the 3D viewer and the Image Browser.** The preview
   buffer and the thumbnail borders are proposed in the same draft. The Image
-  Detail panel does draw the active track, as its bench layer
+  Detail panel does draw the active track, as its bench layer, and its marks are
+  the handles that place a sighting and size and turn the patch
   ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "The bench
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The fourteen tools for the steps that exist are
+  proposed in the same draft. The twenty-one tools for the steps that exist are
   § "The wire".

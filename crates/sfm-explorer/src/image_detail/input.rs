@@ -30,6 +30,7 @@ impl ImageDetail {
         display_size: egui::Vec2,
         scroll_input: &ScrollInput,
         gesture_events: &[GestureEvent],
+        bench_dragging: bool,
     ) -> bool {
         let pointer_over = platform::pointer_in_rect(ui.ctx(), panel_rect);
 
@@ -66,7 +67,10 @@ impl ImageDetail {
             let pointer = &i.pointer;
             pointer.is_moving() && pointer.any_down() && interact_response.hovered()
         });
-        if any_button_dragging || interact_response.dragged() {
+        // A drag that has hold of a bench handle is an edit of the track, and
+        // the pointer means one thing at a time: the photograph stays put for
+        // the whole gesture, cancelled or not, until the button comes up.
+        if (any_button_dragging || interact_response.dragged()) && !bench_dragging {
             let delta = if interact_response.dragged() {
                 interact_response.drag_delta()
             } else {

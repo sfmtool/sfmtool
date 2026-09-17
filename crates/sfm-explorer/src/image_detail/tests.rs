@@ -1111,3 +1111,421 @@ fn a_look_at_a_pixel_a_rect_and_the_whole_photograph_all_land() {
         "the whole photograph is off centre: {at:?}"
     );
 }
+
+// ── The bench layer's handles ───────────────────────────────────────────
+
+/// How far in the panel is zoomed for the handle tests.
+///
+/// The demo's surfel is under three source pixels across, which at fit-to-panel
+/// is a two-pixel outline: every handle would sit inside every other one's
+/// reach, and a test that grabbed an edge would be asserting nothing. Zoomed,
+/// the outline is tens of panel pixels wide, which is the size a person
+/// actually works a patch at.
+const HANDLE_ZOOM: f32 = 16.0;
+
+/// Frame the panel on `center_on` at `HANDLE_ZOOM`, and give back the mapping
+/// from source pixels to panel positions that framing produces.
+///
+/// Set before the first frame, as the view tests above do, so the recorded
+/// extent and the zoom agree the way they do after a real gesture.
+fn framed(
+    detail: &mut ImageDetail,
+    image: &ImageU8,
+    center_on: [f64; 2],
+) -> impl Fn([f64; 2]) -> egui::Pos2 {
+    let (w, h) = (image.width() as f32, image.height() as f32);
+    let scale = (PANEL.x / w).min(PANEL.y / h) * HANDLE_ZOOM;
+    let display = egui::vec2(w * scale, h * scale);
+    detail.zoom = HANDLE_ZOOM;
+    detail.pan =
+        display / 2.0 - egui::vec2(center_on[0] as f32 * scale, center_on[1] as f32 * scale);
+    let center = egui::pos2(PANEL.x / 2.0, PANEL.y / 2.0);
+    move |p: [f64; 2]| {
+        egui::pos2(
+            center.x + (p[0] - center_on[0]) as f32 * scale,
+            center.y + (p[1] - center_on[1]) as f32 * scale,
+        )
+    }
+}
+
+/// What one gesture over the bench layer produced.
+struct Dragged {
+    /// The edit the panel published on release, if the pointer had hold of a
+    /// handle.
+    edit: Option<crate::bench::PatchEdit>,
+    /// The cursor the panel asked for while the pointer hovered the handle,
+    /// before any button went down.
+    cursor: egui::CursorIcon,
+}
+
+/// Drive one press-move-release over the bench layer, in **source-image**
+/// pixels, and report what it produced.
+///
+/// Six frames, because that is what the gesture really is: one to load the
+/// photograph, one hovering the handle (which is where the cursor is read), one
+/// that presses, two that move -- egui calls it a drag only once the pointer
+/// has left the press -- and one that releases.
+fn bench_drag(
+    node: &SceneNode,
+    image_index: usize,
+    track: &sfmtool_core::bench::EditableTrack,
+    center_on: [f64; 2],
+    from: [f64; 2],
+    to: [f64; 2],
+    escape: bool,
+) -> Dragged {
+    let image = pixels(1920, 1080);
+    let ctx = egui::Context::default();
+    let mut detail = ImageDetail::new();
+    let mut intrinsics_display = IntrinsicsDisplaySettings::default();
+    let display = FeatureDisplaySettings::default();
+    let panel = framed(&mut detail, &image, center_on);
+    let (from, to) = (panel(from), panel(to));
+
+    let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let escape_key = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let frames: Vec<Vec<egui::Event>> = vec![
+        Vec::new(),
+        vec![egui::Event::PointerMoved(from)],
+        vec![egui::Event::PointerMoved(from), button(from, true)],
+        vec![egui::Event::PointerMoved(to)],
+        if escape {
+            vec![egui::Event::PointerMoved(to), escape_key]
+        } else {
+            vec![egui::Event::PointerMoved(to)]
+        },
+        vec![egui::Event::PointerMoved(to), button(to, false)],
+    ];
+
+    let mut edit = None;
+    let mut cursor = egui::CursorIcon::Default;
+    for (index, events) in frames.into_iter().enumerate() {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
+            events,
+            ..Default::default()
+        };
+        let mut response = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            response = Some(detail.show(
+                ui,
+                node.edited(),
+                node.id,
+                node.history.current_version().serial,
+                Some(image_index),
+                None,
+                None,
+                None,
+                BenchMenu {
+                    busy: None,
+                    active_track: Some(track),
+                },
+                &mut None,
+                &[],
+                &crate::platform::ScrollInput::default(),
+                None,
+                Some(&image),
+                &display,
+                &mut intrinsics_display,
+            ));
+        });
+        output.textures_delta.clear();
+        // The hover frame, before any button is down: what the layer asks for
+        // there is the cursor a person sees over the handle.
+        if index == 1 {
+            cursor = output.platform_output.cursor_icon;
+        }
+        if let Some(from_panel) = response.and_then(|response| response.bench_edit) {
+            edit = Some(from_panel);
+        }
+    }
+    Dragged { edit, cursor }
+}
+
+/// The node, its bench and the track put on it, in a state that can push
+/// versions: the panel publishes the edit and `AppState` is what turns it into
+/// one, exactly as the dock does.
+fn bench_state() -> (crate::state::AppState, crate::scene::ReconId, String) {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    (state, id, label)
+}
+
+/// The track on the bench, as an owned value.
+fn on_bench(
+    state: &crate::state::AppState,
+    id: crate::scene::ReconId,
+    label: &str,
+) -> sfmtool_core::bench::EditableTrack {
+    (**state.bench_track(id, label).expect("a track by that label")).clone()
+}
+
+/// The version labels the node holds, oldest first.
+fn version_labels(state: &crate::state::AppState, id: crate::scene::ReconId) -> Vec<String> {
+    state
+        .node(id)
+        .expect("loaded")
+        .history
+        .versions()
+        .iter()
+        .map(|version| version.label.clone())
+        .collect()
+}
+
+/// The surfel re-anchored on one sighting: the outline the layer draws there,
+/// and the geometry every handle of it is placed by.
+fn outline_at(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+    observation: usize,
+) -> (
+    sfmtool_core::patch::cloud::OrientedPatch,
+    sfmtool_core::camera::CameraIntrinsics,
+    sfmtool_core::geometry::RigidTransform,
+) {
+    let sighting = &track.observations[observation];
+    let table = &node.edited().base.image_table;
+    let (camera, pose) = crate::bench::geometry::view_of(table, sighting.image as usize)
+        .expect("the fixture's images have cameras");
+    let frame = track
+        .track()
+        .and_then(|payload| payload.frame.as_ref())
+        .expect("a track from a point carries the stored patch");
+    let anchored = crate::bench::geometry::anchored_frame(frame, &camera, &pose, sighting);
+    (anchored, camera, pose)
+}
+
+/// Where a patch's `(s, t)` corner lands, in source-image px.
+fn patch_pixel(
+    patch: &sfmtool_core::patch::cloud::OrientedPatch,
+    camera: &sfmtool_core::camera::CameraIntrinsics,
+    pose: &sfmtool_core::geometry::RigidTransform,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let (xyz, w) = patch.corner_homogeneous(s, t);
+    crate::bench::geometry::project(camera, pose, xyz, w).expect("the demo's patch is in front")
+}
+
+#[test]
+fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_names() {
+    let (state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let node = &state.scene[0];
+    let (frame, camera, pose) = outline_at(node, &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+
+    // The `+u` edge of this fixture's patch runs all but horizontally on
+    // screen, so it is the edge you move up and down.
+    let across = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let along = patch_pixel(&frame, &camera, &pose, 0.0, 1.0);
+    let steepness = |edge: [f64; 2]| ((edge[1] - centre[1]) / (edge[0] - centre[0])).abs();
+    assert!(
+        steepness(across) < 0.4 && steepness(along) > 2.5,
+        "the fixture's outline is meant to be all but axis-aligned: {across:?} {along:?}",
+    );
+
+    // Hovering the `+u` edge's midpoint, which runs vertically on screen.
+    let dragged = bench_drag(node, 0, &track, centre, across, across, false);
+    assert_eq!(dragged.cursor, egui::CursorIcon::ResizeHorizontal);
+    // And the `+v` edge, which runs horizontally.
+    let dragged = bench_drag(node, 0, &track, centre, along, along, false);
+    assert_eq!(dragged.cursor, egui::CursorIcon::ResizeVertical);
+    // A corner turns, and egui has no cursor for that.
+    let corner = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
+    let dragged = bench_drag(node, 0, &track, centre, corner, corner, false);
+    assert_eq!(dragged.cursor, egui::CursorIcon::Alias);
+    // The sighting's own dot moves it.
+    let dragged = bench_drag(node, 0, &track, centre, centre, centre, false);
+    assert_eq!(dragged.cursor, egui::CursorIcon::Move);
+}
+
+#[test]
+fn dragging_the_dot_moves_the_sighting_and_pushes_one_version_naming_it() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let was = track.observations[0].site().expect("a sighting");
+    let to = [was[0] + 1.5, was[1] + 2.0];
+
+    let edit = bench_drag(&state.scene[0], 0, &track, was, was, to, false)
+        .edit
+        .expect("the dot was dragged");
+    // A thousandth of a source pixel: the pointer's position is an `f32` panel
+    // coordinate on the way in and the source pixel is read back out of it, so
+    // the round trip is exact only to that type's precision, not to the drag's.
+    assert!(
+        matches!(edit, crate::bench::PatchEdit::Move { observation: 0, pixel }
+            if (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
+        "the drag named something else: {edit:?}",
+    );
+
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel on the sensor");
+    let labels = version_labels(&state, id);
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    let sentence = labels.last().expect("a version");
+    assert!(
+        sentence.starts_with(&format!("Moved observation 0 of {label} to (")),
+        "the version's label does not name the move: {sentence}",
+    );
+    let moved = on_bench(&state, id, &label);
+    let site = moved.observations[0].site().expect("a sighting");
+    assert!((site[0] - to[0]).abs() < 1e-3 && (site[1] - to[1]).abs() < 1e-3);
+    assert!(moved.observations[0].pinned);
+}
+
+#[test]
+fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
+    let to = patch_pixel(&frame, &camera, &pose, 2.0, 0.0);
+    let far_before = patch_pixel(&frame, &camera, &pose, -1.0, 0.0);
+
+    let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
+        .edit
+        .expect("the edge was dragged");
+    assert!(
+        matches!(
+            edit,
+            crate::bench::PatchEdit::ResizeFromEdge {
+                observation: 0,
+                edge: sfmtool_core::bench::Edge::PlusU,
+                ..
+            }
+        ),
+        "the drag named something else: {edit:?}",
+    );
+
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a pixel the ray reaches");
+    let labels = version_labels(&state, id);
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Resized {label} to ")),
+        "the version's label does not name the resize: {:?}",
+        labels.last(),
+    );
+
+    let resized = on_bench(&state, id, &label);
+    let resized = resized
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    assert_eq!(
+        resized.half_extent[0], resized.half_extent[1],
+        "a patch frame is square"
+    );
+    let landed = patch_pixel(&resized, &camera, &pose, 1.0, 0.0);
+    assert!(
+        (landed[0] - to[0]).abs() < 1e-3 && (landed[1] - to[1]).abs() < 1e-3,
+        "the dragged edge should land on {to:?}, it landed on {landed:?}",
+    );
+    let far_after = patch_pixel(&resized, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < 1e-3 && (far_after[1] - far_before[1]).abs() < 1e-3,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+}
+
+#[test]
+fn dragging_a_corner_turns_the_patch_and_pushes_one_version() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let (frame, camera, pose) = outline_at(&state.scene[0], &track, 0);
+    let centre = patch_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let from = patch_pixel(&frame, &camera, &pose, 1.0, 1.0);
+    // A quarter turn in the patch's own plane: the `(1, 1)` corner's offset
+    // rotated onto the `(-1, 1)` corner's.
+    let to = patch_pixel(&frame, &camera, &pose, -1.0, 1.0);
+
+    let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
+        .edit
+        .expect("the corner was dragged");
+    let crate::bench::PatchEdit::Rotate { angle_rad } = edit else {
+        panic!("the drag named something else: {edit:?}");
+    };
+    assert!(
+        (angle_rad.to_degrees() - 90.0).abs() < 0.5,
+        "a corner dragged onto its neighbour is a quarter turn, not {}",
+        angle_rad.to_degrees(),
+    );
+
+    let before = version_labels(&state, id).len();
+    state
+        .edit_bench_patch(id, &label, &edit)
+        .expect("a finite angle");
+    let labels = version_labels(&state, id);
+    assert_eq!(labels.len(), before + 1, "one gesture, one version");
+    assert!(
+        labels
+            .last()
+            .expect("a version")
+            .starts_with(&format!("Rotated {label} by ")),
+        "the version's label does not name the turn: {:?}",
+        labels.last(),
+    );
+    let was = track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    let turned = on_bench(&state, id, &label);
+    let turned = turned
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    assert_eq!(turned.center, was.center, "a turn moves the surfel nowhere");
+    assert!((turned.u_axis.norm() - was.u_axis.norm()).abs() < 1e-12);
+    assert!((turned.normal() - was.normal()).norm() < 1e-12);
+}
+
+#[test]
+fn escape_cancels_a_drag_and_a_drag_that_ends_where_it_started_pushes_nothing() {
+    let (mut state, id, label) = bench_state();
+    let track = on_bench(&state, id, &label);
+    let was = track.observations[0].site().expect("a sighting");
+    let to = [was[0] + 1.5, was[1] + 2.0];
+
+    let cancelled = bench_drag(&state.scene[0], 0, &track, was, was, to, true);
+    assert!(
+        cancelled.edit.is_none(),
+        "escape left an edit behind: {:?}",
+        cancelled.edit,
+    );
+
+    // And a gesture that ends where it began is a step that changes nothing,
+    // which pushes no version -- the way a verdict an observation already holds
+    // does.
+    let still = bench_drag(&state.scene[0], 0, &track, was, was, was, false);
+    let before = version_labels(&state, id).len();
+    if let Some(edit) = still.edit {
+        state
+            .edit_bench_patch(id, &label, &edit)
+            .expect("the pixel it already sits at");
+    }
+    assert_eq!(
+        version_labels(&state, id).len(),
+        before,
+        "a drag that moved nothing pushed a version",
+    );
+}

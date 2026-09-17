@@ -13,8 +13,11 @@
 
 use std::sync::Arc;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 use ndarray::Array3;
+
+use crate::camera::CameraIntrinsics;
+use crate::geometry::RigidTransform;
 
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{sample_member_grid, ClusterRefineParams, MemberStatus};
@@ -1735,4 +1738,530 @@ fn a_track_with_no_frame_has_nothing_to_register_against() {
             .expect_err("there is no frame to project"),
         StageError::NoFrame
     );
+}
+
+// ---- Placing a sighting, and sizing and turning the patch ------------------
+
+/// The fixture's camera swapped for one with real radial distortion, so every
+/// assertion below about an edge landing under a pixel is made through a lens
+/// whose forward and inverse maps are not the identity in disguise.
+///
+/// A straight patch edge projects to a *curve* here, which is exactly what the
+/// resize has to survive: the arithmetic is in the patch's own plane, so the
+/// only thing the lens is asked for is the ray under the pointer and the pixel
+/// under a corner.
+fn distorted(edited: &EditedReconstruction) -> EditedReconstruction {
+    let mut recon = (*edited.base).clone();
+    let (focal, cx, cy) = match recon.image_table.cameras[0].model {
+        crate::camera::CameraModel::Pinhole {
+            focal_length_x,
+            principal_point_x,
+            principal_point_y,
+            ..
+        } => (focal_length_x, principal_point_x, principal_point_y),
+        _ => panic!("the fixture's camera is a pinhole"),
+    };
+    recon.image_table.cameras[0].model = crate::camera::CameraModel::SimpleRadial {
+        focal_length: focal,
+        principal_point_x: cx,
+        principal_point_y: cy,
+        radial_distortion_k1: 0.18,
+    };
+    EditedReconstruction::new(Arc::new(recon))
+}
+
+/// The camera and the pose of image `image`, as the steps read them.
+fn view(edited: &EditedReconstruction, image: usize) -> (CameraIntrinsics, RigidTransform) {
+    let table = &edited.base.image_table;
+    let row = &table.images[image];
+    let camera = table.cameras[row.camera_index as usize].clone();
+    let q = row.quaternion_wxyz.quaternion();
+    let pose = RigidTransform::from_wxyz_translation(
+        [q.w, q.i, q.j, q.k],
+        [
+            row.translation_xyz.x,
+            row.translation_xyz.y,
+            row.translation_xyz.z,
+        ],
+    );
+    (camera, pose)
+}
+
+/// Where a patch's `(s, t)` corner lands in a view, in that image's px.
+fn corner_pixel(
+    patch: &OrientedPatch,
+    camera: &CameraIntrinsics,
+    pose: &RigidTransform,
+    s: f64,
+    t: f64,
+) -> [f64; 2] {
+    let (xyz, w) = patch.corner_homogeneous(s, t);
+    let pc = pose.transform_point_homogeneous(xyz, w);
+    let (u, v) = camera
+        .ray_to_pixel([pc.x, pc.y, pc.z])
+        .expect("the fixture's patch is in front of every camera");
+    [u, v]
+}
+
+/// The outline a person sees at `observation`: the surfel re-anchored on that
+/// sighting, which is the frame both the layer and the resize read.
+fn outline_of(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    observation: usize,
+) -> OrientedPatch {
+    let sighting = &track.observations[observation];
+    let (camera, pose) = view(edited, sighting.image as usize);
+    track
+        .track()
+        .and_then(|payload| payload.frame.as_ref())
+        .expect("a track from a point carries the stored patch")
+        .anchored_at_keypoint(&camera, &pose, sighting.site().expect("a sighting"))
+        .expect("the fixture's keypoint is the exact projection")
+}
+
+#[test]
+fn moving_a_sighting_writes_its_keypoint_pins_it_and_drops_what_was_read_at_the_old_one() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    // A measurement that was read at the old keypoint, which the move must not
+    // keep: it says nothing about a pixel three across.
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .seed_shift_px = Some(0.2);
+
+    let was = track.observations[1].site().expect("a sighting");
+    let pixel = [was[0] + 3.0, was[1] - 4.0];
+    let (next, report) = set_observation_keypoint(&track, 1, pixel).expect("a pixel on the sensor");
+
+    assert!(report.changed);
+    assert_eq!(report.observation, 1);
+    assert_eq!(report.pixel, pixel);
+    assert_eq!(report.was, Some(was));
+    assert!((report.moved_px.expect("it moved") - 5.0).abs() < 1e-9);
+
+    let moved = &next.observations[1];
+    assert_eq!(moved.site(), Some(pixel));
+    assert!(
+        moved.pinned,
+        "a sighting a person placed is one they ruled on"
+    );
+    let measurement = moved.track.as_ref().expect("a track slot");
+    assert_eq!(measurement.zncc, None);
+    assert_eq!(measurement.seed_shift_px, None);
+    // Nothing else moved: the other sighting, the surfel and the position stand.
+    assert_eq!(next.observations[0], track.observations[0]);
+    assert_eq!(
+        next.track().map(|p| p.position),
+        track.track().map(|p| p.position)
+    );
+    assert_eq!(
+        next.track().and_then(|p| p.frame.clone()),
+        track.track().and_then(|p| p.frame.clone())
+    );
+
+    // Put back exactly where it was, nothing changed -- but the pin stands,
+    // which is what a hand placement is.
+    let (again, report) = set_observation_keypoint(&next, 1, pixel).expect("the same pixel");
+    assert!(!report.changed);
+    assert!(again.observations[1].pinned);
+}
+
+#[test]
+fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() {
+    let scene = Scene::new();
+    let where_at = scene.project(0, WORLD);
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    let mut track = track_of(&bench, &report.label);
+    // A refinement to be dropped, and a refined shape to be kept.
+    let refined = [[9.0, 1.0], [-1.0, 9.0]];
+    let measurement = track.observations[0].cluster.as_mut().expect("a seed");
+    measurement.shape = Some(refined);
+    measurement.zncc = Some(0.91);
+    measurement.shift_px = Some(0.3);
+
+    let pixel = [where_at[0] + 2.5, where_at[1] + 1.5];
+    let (next, report) = set_observation_keypoint(&track, 0, pixel).expect("a pixel on the sensor");
+
+    assert!(report.changed);
+    let cluster = next.observations[0].cluster.as_ref().expect("a seed");
+    assert_eq!(cluster.seed_position, pixel);
+    assert_eq!(
+        cluster.seed_shape, refined,
+        "the shape it is read at is kept"
+    );
+    assert_eq!(cluster.shape, None);
+    assert_eq!(cluster.zncc, None);
+    assert_eq!(cluster.shift_px, None);
+    assert!(next.observations[0].pinned);
+}
+
+/// Exact under a pinhole, and within the lens's own inverse-map tolerance under
+/// distortion.
+///
+/// The resize itself is arithmetic in the patch's plane and has no error of its
+/// own; what the second bound admits is the iteration `pixel_to_ray` runs to
+/// invert the radial term, which is why the two are run with different
+/// tolerances rather than with one loose enough for both.
+///
+/// The assertions are about the **frame** the step wrote, not about the outline
+/// redrawn from the keypoint it wrote beside it: a keypoint is an `f32` slot, so
+/// re-anchoring on it is within a rounding of the centre and not on it. That
+/// rounding is what the looser bound on the dot below allows for.
+#[test]
+fn a_resize_from_an_edge_lands_that_edge_under_the_pixel_and_leaves_the_far_one_alone() {
+    let scene = Scene::new();
+    let pinhole = edited_fixture(&scene, WORLD);
+    resize_edge_case(&pinhole, 1e-9);
+    resize_edge_case(&distorted(&pinhole), 1e-5);
+}
+
+fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
+    let (bench, label) = bench_with_point(edited, 0);
+    let track = track_of(&bench, &label);
+
+    let sighting = track.observations[1].image as usize;
+    let (camera, pose) = view(edited, sighting);
+    let before = outline_of(&track, edited, 1);
+    // The far edge's midpoint, which the resize promises not to move.
+    let far_before = corner_pixel(&before, &camera, &pose, -1.0, 0.0);
+    // Aim well outside the outline, along the `+u` edge's own direction.
+    let out = corner_pixel(&before, &camera, &pose, 2.3, 0.0);
+
+    let (next, report) =
+        resize_from_edge(&track, edited, 1, Edge::PlusU, out).expect("a pixel the ray reaches");
+    assert!(report.changed);
+    assert_eq!(report.observation, Some(1));
+
+    let after = next.track().and_then(|p| p.frame.clone()).expect("a frame");
+    assert_eq!(
+        after.half_extent[0], after.half_extent[1],
+        "a patch frame is square, so a resize is one scale"
+    );
+    let dragged = corner_pixel(&after, &camera, &pose, 1.0, 0.0);
+    assert!(
+        (dragged[0] - out[0]).abs() < tolerance && (dragged[1] - out[1]).abs() < tolerance,
+        "the dragged edge should land on {out:?}, it landed on {dragged:?}",
+    );
+    let far_after = corner_pixel(&after, &camera, &pose, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < tolerance
+            && (far_after[1] - far_before[1]).abs() < tolerance,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+    // The patch grew toward the edge that was dragged, so its centre moved with
+    // it and the dot follows: the sighting is the new centre's projection.
+    let centre = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
+    let placed = next.observations[1].site().expect("a sighting");
+    assert!(
+        (placed[0] - centre[0]).abs() < 1e-4 && (placed[1] - centre[1]).abs() < 1e-4,
+        "the dot should sit at the outline's centre {centre:?}, it sits at {placed:?}",
+    );
+    assert!(
+        next.observations[1].pinned,
+        "the dragged sighting is hand-placed"
+    );
+    // The other sighting keeps its own keypoint and loses only what the resize
+    // invalidated.
+    assert_eq!(
+        next.observations[0].site(),
+        track.observations[0].site(),
+        "an untouched sighting stays where it is"
+    );
+    assert!(!next.observations[0].pinned);
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+}
+
+#[test]
+fn a_resize_from_an_edge_holds_the_far_edge_of_a_direction_patch_too() {
+    let scene = Scene::new();
+    let edited = distorted(&edited_fixture(&scene, WORLD));
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+
+    // A bearing rather than a position: the centre is a unit direction, the
+    // corners are directions too, and the arithmetic has to renormalize without
+    // moving any of them.
+    let sighting = track.observations[0].image as usize;
+    let (camera, pose) = view(&edited, sighting);
+    {
+        let payload = match &mut track.stage {
+            Stage::Track(payload) => payload,
+            Stage::Cluster(_) => unreachable!("a track from a point is at the track stage"),
+        };
+        let frame = payload.frame.as_mut().expect("a stored patch");
+        let direction = frame.center.coords.normalize();
+        *frame = OrientedPatch::from_infinity_direction(
+            Point3::from(direction),
+            Vector3::new(0.0, 1.0, 0.0),
+            [0.02, 0.02],
+        );
+        payload.position = None;
+    }
+    // The keypoint has to be the bearing's own projection for the outline to be
+    // the frame; put it there.
+    let centre = corner_pixel(
+        track
+            .track()
+            .and_then(|p| p.frame.as_ref())
+            .expect("a frame"),
+        &camera,
+        &pose,
+        0.0,
+        0.0,
+    );
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some([centre[0] as f32, centre[1] as f32]);
+
+    let before = outline_of(&track, &edited, 0);
+    let far_before = corner_pixel(&before, &camera, &pose, 0.0, -1.0);
+    let out = corner_pixel(&before, &camera, &pose, 0.0, 1.8);
+
+    let (next, _) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusV, out).expect("a pixel the ray reaches");
+    let after = next.track().and_then(|p| p.frame.clone()).expect("a frame");
+    assert_eq!(after.w, 0.0, "a bearing stays a bearing");
+    assert!(
+        (after.center.coords.norm() - 1.0).abs() < 1e-12,
+        "a bearing's centre is a unit direction"
+    );
+    assert_eq!(after.half_extent[0], after.half_extent[1]);
+    let dragged = corner_pixel(&after, &camera, &pose, 0.0, 1.0);
+    assert!(
+        (dragged[0] - out[0]).abs() < 1e-6 && (dragged[1] - out[1]).abs() < 1e-6,
+        "the dragged edge should land on {out:?}, it landed on {dragged:?}",
+    );
+    let far_after = corner_pixel(&after, &camera, &pose, 0.0, -1.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < 1e-6 && (far_after[1] - far_before[1]).abs() < 1e-6,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+}
+
+#[test]
+fn a_resize_about_the_centre_moves_both_edges_and_drops_what_was_read_over_the_old_square() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc = Some(0.88);
+    let centre = track
+        .track()
+        .and_then(|p| p.frame.as_ref())
+        .expect("a frame")
+        .center;
+    let keypoints: Vec<_> = track
+        .observations
+        .iter()
+        .map(|o| o.track.as_ref().and_then(|m| m.keypoint))
+        .collect();
+
+    let (next, report) = resize_frame(&track, 0.5).expect("a positive half-length");
+    assert!(report.changed);
+    let frame = next.track().and_then(|p| p.frame.clone()).expect("a frame");
+    assert_eq!(frame.half_extent, [0.5, 0.5]);
+    assert_eq!(frame.center, centre, "a centred resize moves nothing");
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+    for (k, observation) in next.observations.iter().enumerate() {
+        let measurement = observation.track.as_ref().expect("a track slot");
+        assert_eq!(measurement.keypoint, keypoints[k], "the sighting stays");
+        assert_eq!(
+            measurement.zncc, None,
+            "what was read over the old square goes"
+        );
+    }
+    assert!(resize_frame(&track, 0.0).is_err());
+    let held = track
+        .track()
+        .and_then(|p| p.frame.as_ref())
+        .expect("a frame")
+        .half_extent[0];
+    assert!(
+        !resize_frame(&track, held)
+            .expect("the size it has")
+            .1
+            .changed
+    );
+}
+
+#[test]
+fn a_turn_keeps_the_axes_and_the_normal_and_lands_the_corner_under_the_release_point() {
+    let scene = Scene::new();
+    let edited = distorted(&edited_fixture(&scene, WORLD));
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (camera, pose) = view(&edited, track.observations[0].image as usize);
+    let before = track
+        .track()
+        .and_then(|p| p.frame.clone())
+        .expect("a frame");
+
+    let angle = 0.42_f64;
+    // Where the `(1, 1)` corner has to land for that turn: the corner's own
+    // in-plane offset, rotated about the normal, projected through the lens.
+    let rotation = nalgebra::Rotation3::from_axis_angle(
+        &nalgebra::Unit::new_normalize(before.normal()),
+        angle,
+    );
+    let offset = before.u_axis * before.half_extent[0] + before.v_axis * before.half_extent[1];
+    let expected = {
+        let turned = before.center + rotation * offset;
+        let pc = pose.transform_point_homogeneous(turned.coords, before.w);
+        let (u, v) = camera.ray_to_pixel([pc.x, pc.y, pc.z]).expect("in front");
+        [u, v]
+    };
+
+    let (next, report) = rotate_frame(&track, angle).expect("a finite angle");
+    assert!(report.changed);
+    assert!((report.degrees - angle.to_degrees()).abs() < 1e-12);
+    let after = next.track().and_then(|p| p.frame.clone()).expect("a frame");
+    assert!((after.u_axis.norm() - before.u_axis.norm()).abs() < 1e-12);
+    assert!((after.v_axis.norm() - before.v_axis.norm()).abs() < 1e-12);
+    assert!(
+        (after.normal() - before.normal()).norm() < 1e-12,
+        "a turn about the normal keeps the plane and the face"
+    );
+    assert_eq!(after.center, before.center, "a turn moves no sighting");
+    assert_eq!(after.half_extent, before.half_extent);
+    assert_eq!(
+        next.observations[0].site(),
+        track.observations[0].site(),
+        "a turn moves no sighting"
+    );
+
+    let landed = corner_pixel(&after, &camera, &pose, 1.0, 1.0);
+    assert!(
+        (landed[0] - expected[0]).abs() < 1e-6 && (landed[1] - expected[1]).abs() < 1e-6,
+        "the turned corner should land on {expected:?}, it landed on {landed:?}",
+    );
+    assert!(!rotate_frame(&track, 0.0).expect("no turn").1.changed);
+    assert!(rotate_frame(&track, f64::NAN).is_err());
+}
+
+#[test]
+fn a_cluster_edge_drag_scales_the_shape_and_holds_the_far_edge_of_the_parallelogram() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let where_at = scene.project(0, WORLD);
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    let mut track = track_of(&bench, &report.label);
+    // A sheared shape, so the test says something about anisotropy surviving.
+    let shape = [[6.0, 1.5], [-0.5, 4.0]];
+    let measurement = track.observations[0].cluster.as_mut().expect("a seed");
+    measurement.seed_shape = shape;
+    measurement.zncc = Some(0.8);
+    let radius = track.cluster().expect("a cluster").radius;
+
+    // The parallelogram's corners, before.
+    let corner = |position: [f64; 2], shape: [[f64; 2]; 2], s: f64, t: f64| {
+        [
+            position[0] + shape[0][0] * s * radius + shape[0][1] * t * radius,
+            position[1] + shape[1][0] * s * radius + shape[1][1] * t * radius,
+        ]
+    };
+    let far_before = corner(where_at, shape, -1.0, 0.0);
+    let out = corner(where_at, shape, 2.0, 0.0);
+
+    let (next, report) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusU, out).expect("a usable drag");
+    assert!(report.changed);
+    let cluster = next.observations[0].cluster.as_ref().expect("a seed");
+    let scaled = cluster.seed_shape;
+    // One scalar: the shear is exactly the shear it had.
+    let scale = scaled[0][0] / shape[0][0];
+    for (row, was) in scaled.iter().zip(&shape) {
+        for (now, was) in row.iter().zip(was) {
+            assert!(
+                (now - was * scale).abs() < 1e-12,
+                "the shape was not scaled uniformly"
+            );
+        }
+    }
+    let position = cluster.seed_position;
+    let dragged = corner(position, scaled, 1.0, 0.0);
+    assert!(
+        (dragged[0] - out[0]).abs() < 1e-9 && (dragged[1] - out[1]).abs() < 1e-9,
+        "the dragged edge should land on {out:?}, it landed on {dragged:?}",
+    );
+    let far_after = corner(position, scaled, -1.0, 0.0);
+    assert!(
+        (far_after[0] - far_before[0]).abs() < 1e-9 && (far_after[1] - far_before[1]).abs() < 1e-9,
+        "the far edge moved from {far_before:?} to {far_after:?}",
+    );
+    assert_eq!(
+        cluster.zncc, None,
+        "the refinement was run at another shape"
+    );
+    assert!((report.half - half_width_px(scaled, radius)).abs() < 1e-12);
+}
+
+#[test]
+fn a_hand_set_cluster_shape_re_seeds_the_sighting_and_does_not_pin_its_verdict() {
+    let scene = Scene::new();
+    let where_at = scene.project(0, WORLD);
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    let mut track = track_of(&bench, &report.label);
+    let moved = [where_at[0] + 4.0, where_at[1]];
+    let measurement = track.observations[0].cluster.as_mut().expect("a seed");
+    measurement.position = Some(moved);
+    measurement.zncc = Some(0.77);
+    let radius = track.cluster().expect("a cluster").radius;
+
+    let turned = [[0.0, -7.0], [7.0, 0.0]];
+    let (next, report) = set_observation_shape(&track, 0, turned).expect("a shape with area");
+    assert!(report.changed);
+    assert_eq!(report.shape, turned);
+    assert!((report.half_px - half_width_px(turned, radius)).abs() < 1e-12);
+    let cluster = next.observations[0].cluster.as_ref().expect("a seed");
+    assert_eq!(cluster.seed_position, moved, "re-seeded where it was drawn");
+    assert_eq!(cluster.seed_shape, turned);
+    assert_eq!(cluster.zncc, None);
+    assert!(
+        !next.observations[0].pinned,
+        "a size is not a ruling on whether the sighting belongs"
+    );
+    assert!(set_observation_shape(&track, 0, [[1.0, 2.0], [2.0, 4.0]]).is_err());
+}
+
+#[test]
+fn the_patch_steps_refuse_the_stage_they_do_not_belong_to() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let where_at = scene.project(0, WORLD);
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    let cluster = track_of(&bench, &report.label);
+    assert!(matches!(
+        resize_frame(&cluster, 0.1),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+    assert!(matches!(
+        rotate_frame(&cluster, 0.1),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+
+    let (bench, label) = bench_with_point(&edited, 0);
+    let at_track = track_of(&bench, &label);
+    assert!(matches!(
+        set_observation_shape(&at_track, 0, [[5.0, 0.0], [0.0, 5.0]]),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+    assert!(matches!(
+        set_observation_keypoint(&at_track, 9, [1.0, 2.0]),
+        Err(TrackEditError::NoSuchObservation { .. })
+    ));
 }

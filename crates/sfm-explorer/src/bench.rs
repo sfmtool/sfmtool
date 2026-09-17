@@ -42,8 +42,12 @@ use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 use crate::state::edits::version_before;
 use crate::state::AppState;
 
+pub(crate) mod geometry;
+
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub(crate) use geometry::PatchEdit;
 
 /// Constellation size a search asks for when nobody names a radius.
 ///
@@ -179,17 +183,9 @@ pub(crate) struct ObservationSite {
 /// seed -- so a fresh candidate, which has only a seed, is drawn and reported
 /// where the step that proposed it put it rather than nowhere.
 pub(crate) fn observation_site(observation: &Observation) -> Option<ObservationSite> {
-    let cluster = observation.cluster.as_ref();
-    let shape = cluster.map(|m| m.shape.unwrap_or(m.seed_shape));
-    if let Some(keypoint) = observation.track.as_ref().and_then(|m| m.keypoint) {
-        return Some(ObservationSite {
-            pixel: [f64::from(keypoint[0]), f64::from(keypoint[1])],
-            shape,
-        });
-    }
     Some(ObservationSite {
-        pixel: cluster?.best_position(),
-        shape,
+        pixel: observation.site()?,
+        shape: observation.shape(),
     })
 }
 
@@ -375,6 +371,113 @@ impl AppState {
         };
         self.push_bench_step(index, bench, text);
         Ok(())
+    }
+
+    /// Apply one hand edit of a track's geometry: a sighting placed, the
+    /// surfel resized or turned, or one cluster-stage sighting's shape set.
+    ///
+    /// The one call behind every handle of the Image Detail panel's bench layer
+    /// and behind the wire's three patch tools, so a drag and a tool call are
+    /// the same version carrying the same sentence
+    /// (`specs/gui/multi-panel-image-browser.md` § "The bench layer"). One version per
+    /// gesture: a drag pushes nothing until it is released, and a release that
+    /// changed nothing -- the sighting put back where it was, the outline the
+    /// size it already had -- pushes nothing at all.
+    ///
+    /// A size is reported in the pixels of the sighting the gesture named,
+    /// because a world half-length says nothing to someone looking at a
+    /// photograph; the world number is the fallback for a patch that does not
+    /// project into that sighting's image.
+    pub(crate) fn edit_bench_patch(
+        &mut self,
+        id: ReconId,
+        label: &str,
+        edit: &PatchEdit,
+    ) -> Result<(), String> {
+        let (index, bench, track) = self.bench_step_target(id, label)?;
+        let (next, report) = geometry::apply(&track, self.scene[index].edited(), edit)
+            .map_err(|e| format!("Cannot edit that patch: {e}"))?;
+        if !report.changed() {
+            return Ok(());
+        }
+        let text = self.patch_edit_label(id, label, &next, &report);
+        let bench = install(&bench, label, next)?;
+        self.push_bench_step(index, bench, text);
+        Ok(())
+    }
+
+    /// The version label one patch edit takes: what moved, by how much, and in
+    /// whose pixels.
+    fn patch_edit_label(
+        &self,
+        id: ReconId,
+        label: &str,
+        next: &EditableTrack,
+        report: &geometry::EditReport,
+    ) -> String {
+        match report {
+            geometry::EditReport::Moved(report) => {
+                let name = self.image_name(ImageRef::new(id, report.image as usize));
+                let moved = report
+                    .moved_px
+                    .map(|px| format!(" ({px:.1} px)"))
+                    .unwrap_or_default();
+                format!(
+                    "Moved observation {} of {label} to ({:.1}, {:.1}) in {name}{moved}",
+                    report.observation, report.pixel[0], report.pixel[1]
+                )
+            }
+            geometry::EditReport::Resized(report) => {
+                let size = self.frame_size_phrase(id, next, report.observation);
+                format!("Resized {label} to {size}")
+            }
+            geometry::EditReport::Rotated(report) => {
+                format!("Rotated {label} by {:.1} degrees", report.degrees)
+            }
+            geometry::EditReport::Turned { report, degrees } => format!(
+                "Rotated observation {} of {label} by {degrees:.1} degrees",
+                report.observation
+            ),
+        }
+    }
+
+    /// How large the patch now is, as the phrase the resize sentence ends on.
+    ///
+    /// In the pixels of the sighting the resize was named at, because a world
+    /// half-length says nothing to someone looking at a photograph; in world
+    /// units only when the gesture named no sighting or the patch does not
+    /// project into its image. `at` is an **observation** index, not an image:
+    /// the size a person reads off an outline is the size of the outline drawn
+    /// at that sighting, which is the surfel re-anchored on it.
+    fn frame_size_phrase(&self, id: ReconId, track: &EditableTrack, at: Option<usize>) -> String {
+        let px = at.and_then(|index| {
+            let observation = track.observations.get(index)?;
+            let image = observation.image as usize;
+            let node = self.node(id)?;
+            let (camera, pose) = geometry::view_of(&node.edited().base.image_table, image)?;
+            let half = match track.stage_kind() {
+                StageKind::Track => {
+                    let frame = track.track()?.frame.as_ref()?;
+                    let anchored = geometry::anchored_frame(frame, &camera, &pose, observation);
+                    geometry::half_width_px(&anchored, &camera, &pose)?
+                }
+                StageKind::Cluster => sfmtool_core::bench::half_width_px(
+                    observation.shape()?,
+                    track.cluster()?.radius,
+                ),
+            };
+            Some(format!(
+                "{half:.1} px in {}",
+                self.image_name(ImageRef::new(id, image))
+            ))
+        });
+        px.unwrap_or_else(|| {
+            track
+                .track()
+                .and_then(|payload| payload.frame.as_ref())
+                .map(|frame| format!("a half-length of {:.4}", frame.half_extent[0]))
+                .unwrap_or_else(|| "its new size".to_string())
+        })
     }
 
     /// Set the track's bars to `thresholds` and paint the proposed verdicts

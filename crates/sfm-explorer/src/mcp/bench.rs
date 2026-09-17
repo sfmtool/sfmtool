@@ -23,14 +23,14 @@
 
 use serde_json::{json, Value};
 use sfmtool_core::bench::{
-    Bench, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Verdict,
+    Bench, Edge, EditableTrack, Observation, Provenance, Stage, StageKind, Thresholds, Verdict,
 };
 
 use super::{
     edit, resolve_camera_image, resolve_point_in, resolve_reconstruction, BackgroundReply,
     CameraImageSel, Deferred, JsonReply, Outcome, ThresholdChange, ToolError,
 };
-use crate::bench::Seed;
+use crate::bench::{PatchEdit, Seed};
 use crate::scene::ReconId;
 use crate::state::AppState;
 
@@ -246,6 +246,99 @@ pub(super) fn add_bench_track_observation(
         .map(|track| track.observations.len().saturating_sub(1));
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
+    Ok(reply)
+}
+
+/// `move_bench_track_observation`: one sighting put where the caller says.
+///
+/// The wire's half of the Image Detail panel's dot drag, and the same
+/// `AppState` call: the observation's keypoint at the track stage and its
+/// cluster seed at the cluster stage, pinned either way because a sighting a
+/// person placed is one they have ruled on, with the measurements that were
+/// read at the old pixel dropped.
+pub(super) fn move_bench_track_observation(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    pixel: [f64; 2],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::Move { observation, pixel };
+    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "pixel", json!(pixel));
+    Ok(reply)
+}
+
+/// `resize_bench_track`: one edge of the patch put under a pixel, with the
+/// opposite edge left where it is.
+///
+/// An edge and a pixel rather than a size, because that is what the gesture is
+/// and what makes the answer exact: the pixel is unprojected onto the patch's
+/// own plane, so the edge really lands there through whatever distortion the
+/// lens has. The observation says which sighting's outline is meant -- the
+/// surfel re-anchored on it at the track stage, its own parallelogram at the
+/// cluster stage -- and the pixel is in that observation's image.
+pub(super) fn resize_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    edge: Edge,
+    pixel: [f64; 2],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::ResizeFromEdge {
+        observation,
+        edge,
+        pixel,
+    };
+    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "edge", json!(edge.name()));
+    Ok(reply)
+}
+
+/// `rotate_bench_track`: the patch turned in its own plane.
+///
+/// What turns depends on the stage, which is why `observation` is optional: a
+/// track-stage track has **one** surfel and turning it is about its normal, so
+/// no sighting need be named; a cluster stage has no geometry at all, only one
+/// affine shape per sighting, so a turn there has to say which one.
+pub(super) fn rotate_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    degrees: f64,
+    observation: Option<usize>,
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let stage = state
+        .bench_track(id, &item)
+        .map(|track| track.stage_kind())
+        .ok_or_else(|| ToolError::new(format!("Nothing on the bench is called {item}.")))?;
+    let angle_rad = degrees.to_radians();
+    let edit = match stage {
+        StageKind::Track => PatchEdit::Rotate { angle_rad },
+        StageKind::Cluster => PatchEdit::RotateShape {
+            observation: observation.ok_or_else(|| {
+                ToolError::new(
+                    "A cluster-stage track has one affine shape per sighting rather than a \
+                     surfel, so a turn of one needs an observation.",
+                )
+            })?,
+            angle_rad,
+        },
+    };
+    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "degrees", json!(degrees));
+    if let Some(observation) = observation {
+        insert(&mut reply, "observation", json!(observation));
+    }
     Ok(reply)
 }
 

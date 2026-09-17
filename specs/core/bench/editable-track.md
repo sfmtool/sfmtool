@@ -73,6 +73,15 @@ pub struct Observation {
     pub track: Option<TrackMeasurement>,
 }
 
+impl Observation {
+    /// Where it sits: the track keypoint, else the cluster's refined position
+    /// or its seed, else nothing.
+    pub fn site(&self) -> Option<[f64; 2]>;
+    /// The affine shape it is read at, or `None` when only a keypoint says
+    /// where it is.
+    pub fn shape(&self) -> Option<[[f64; 2]; 2]>;
+}
+
 pub struct TrackMeasurement {
     pub keypoint: Option<[f32; 2]>,
     pub zncc: Option<f64>,
@@ -151,6 +160,78 @@ pub fn split(
     label: &str,
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError>;
+
+// Placing a sighting, and sizing and turning the patch, by hand.
+pub fn set_observation_keypoint(
+    track: &EditableTrack,
+    observation: usize,
+    pixel: [f64; 2],
+) -> Result<(EditableTrack, MoveObservationReport), TrackEditError>;
+
+pub fn resize_frame(
+    track: &EditableTrack,
+    half_length: f64,                    // world, both axes, about the centre
+) -> Result<(EditableTrack, ResizeReport), TrackEditError>;
+
+pub fn resize_from_edge(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    observation: usize,                  // whose outline is being dragged
+    edge: Edge,
+    pixel: [f64; 2],                     // where that edge's midpoint lands
+) -> Result<(EditableTrack, ResizeReport), TrackEditError>;
+
+pub fn rotate_frame(
+    track: &EditableTrack,
+    angle_rad: f64,                      // about the outward normal
+) -> Result<(EditableTrack, RotateFrameReport), TrackEditError>;
+
+pub fn set_observation_shape(
+    track: &EditableTrack,
+    observation: usize,
+    shape: [[f64; 2]; 2],                // cluster stage only
+) -> Result<(EditableTrack, ShapeReport), TrackEditError>;
+
+/// `radius * ||column 0||`: a shape's half-width along `u`, in that image's px.
+pub fn half_width_px(shape: [[f64; 2]; 2], radius: f64) -> f64;
+
+pub enum Axis { U, V }
+
+pub enum Edge { PlusU, MinusU, PlusV, MinusV }
+impl Edge {
+    pub fn axis(self) -> Axis;
+    pub fn sign(self) -> f64;            // -1.0 or +1.0
+    pub fn name(self) -> &'static str;   // "+u", "-u", "+v", "-v"
+    pub const ALL: [Edge; 4];
+}
+
+pub struct MoveObservationReport {
+    pub observation: usize,
+    pub image: u32,
+    pub was: Option<[f64; 2]>,
+    pub pixel: [f64; 2],
+    pub moved_px: Option<f64>,
+    pub changed: bool,
+}
+
+pub struct ResizeReport {
+    pub observation: Option<usize>,      // the sighting the size was named at
+    pub image: Option<u32>,
+    pub half: f64,                       // world at the track stage, px at the cluster stage
+    pub was: f64,
+    pub changed: bool,
+}
+
+pub struct RotateFrameReport { pub degrees: f64, pub changed: bool }
+
+pub struct ShapeReport {
+    pub observation: usize,
+    pub image: u32,
+    pub shape: [[f64; 2]; 2],
+    pub half_px: f64,
+    pub was_half_px: f64,
+    pub changed: bool,
+}
 
 // Grow it from a descriptor index, which reads a file and no photograph.
 pub fn search_descriptors(
@@ -594,6 +675,79 @@ one, and otherwise the largest of whatever the half carries, verdicts and all.
 The verdicts travel with the rows either way. Only a half with no seed anywhere
 in it is refused, with `StageError::NoReference`.
 
+### Placing, sizing and turning by hand
+
+Five steps put a person's own hand on the track's geometry, and they are the
+steps behind the Image Detail panel's bench handles
+([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
+§ "The bench layer") and the wire's three patch tools.
+
+**`set_observation_keypoint` places one sighting.** At the track stage it writes
+the observation's keypoint -- the pixel a commit writes and the place every
+reading is anchored at -- and at the cluster stage it re-seeds the observation
+at that pixel with the shape it is being read at, because a person moving a mark
+is saying where the patch is and not how large it is. Either way **every
+measurement read at the old pixel is dropped**: the leave-one-out ZNCC, both
+distances, the reprojection residual, the localizability and the reason were all
+computed for a pixel that is not this one, and an evaluation recomputes all of
+them from the track as it stands. **The observation is pinned**, at both stages:
+a sighting a person placed is a sighting they have ruled on, so
+`apply_thresholds` leaves its verdict where it is rather than painting over a
+placement by hand. Nothing else on the track moves.
+
+**`resize_frame` sizes the surfel about its own centre**, to one half-length on
+both axes. One scalar and not two, because a patch frame is square: the stored
+half-vector pair has `|u| == |v|` and the tile grid is square with it, so a
+resize that moved one axis alone would be a stretched template rather than a
+larger one.
+
+**`resize_from_edge` is the gesture**: one edge of the outline put under a
+pixel, with the **opposite edge left where it is**. A person pulling an edge
+expects the other three where the geometry puts them, not the far edge running
+away, so with the dragged edge at `+h` from the centre and the far one at `-h`,
+a pointer naming the offset `p` gives the new half-length `(p + h) / 2` and
+moves the centre by `h' - h` along the drag. The arithmetic is core's rather
+than each caller's, so a tool call and a drag cannot resize differently.
+
+*What the outline shows is what is resized.* At the track stage the outline is
+the surfel re-anchored on `observation`'s own sighting, which is where a person
+sees the patch in that photograph, so that is the frame the pixel is read
+against and the frame the resize writes back: the surfel takes the centre the
+outline had plus the edge's shift, the track's position follows it, and that
+observation's keypoint is set to the projection of the new centre -- pinned, as
+a hand-placed one -- so the dot and the outline move together and the far edge
+really does hold still on screen. Every other sighting keeps its own keypoint;
+their outlines simply grow. A **bearing** (`w == 0`) is handled by renormalizing
+the moved centre and dividing the half-length by the same factor, which leaves
+every corner the same direction, so the far edge is held there too.
+
+**`rotate_frame` turns the surfel about its own outward normal.** The axes are
+rotated as a pair by a rotation whose axis *is* the normal, so both keep their
+lengths, the frame keeps its handedness and the patch keeps the plane and the
+face it had; what changes is which way up the square sits. The centre is
+untouched, so a turn moves no sighting.
+
+**`set_observation_shape` sets one cluster-stage sighting's affine shape**,
+which is what a corner drag there hands it: the shape turned about the sighting.
+The observation is re-seeded where it is already drawn and its refinement is
+dropped, for the reason a move drops one -- the ZNCC, the drift and the status
+were the refinement's answer about the shape it was run at. The verdict is
+**not** pinned here: a size or a turn is not a ruling on whether the sighting
+belongs, which is what a pin protects from the painting.
+
+**What a change to the patch invalidates is cleared.** All three patch steps
+drop the consensus bitmap and every track measurement but its keypoint: the
+bitmap is the observations fused over the square as it stood, and every number
+beside a keypoint was read over that square and against that position. Where
+each sighting sits is not one of those things, so it stays; an evaluation
+restores the rest, and the next fit fuses a new bitmap at the size and turn the
+frame now has.
+
+**The stage decides which step applies.** `resize_frame` and `rotate_frame` are
+the track stage's and refuse a cluster; `set_observation_shape` is the cluster
+stage's and refuses a track. `set_observation_keypoint` and `resize_from_edge`
+work at either and do the stage's own arithmetic.
+
 ### Searching the descriptor index
 
 `search_descriptors` is the third way an observation reaches a track, beside the
@@ -1011,6 +1165,16 @@ the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `reference` for a stage change. An observation's `"track"` dict carries
 `reason`, the sentence, exactly when it carries no `zncc`.
 
+`set_observation_keypoint`, `resize_frame`, `rotate_frame` and
+`set_observation_shape` take their numbers directly; `resize_from_edge` takes
+the reconstruction too, because it reads the observation's camera to unproject
+the pixel, and names its edge as the word `"+u"`, `"-u"`, `"+v"` or `"-v"`.
+Their reports are dicts of the fields above, with `shape` as a 2x2 array.
+`EditableTrack.frame` is what the three patch steps are read back through: the
+surfel as `center`, `u_halfvec`, `v_halfvec` and `w`, the half-vectors being the
+axes scaled by the half-extents the way a `.sfmr` stores them, and `None` at the
+cluster stage or before anything has fitted one.
+
 `search_descriptors` takes the searched image's keypoints as the two arrays a
 `.sift` read gives -- an `(N, 2)` float32 of positions and an `(N, 2, 2)` of
 affine shapes, in that file's own row order -- and an open
@@ -1052,6 +1216,22 @@ observations, handing the half it takes off back as a cluster, and refusing an
 empty list or all of them; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.
+
+The hand steps are tested for what makes them worth having. A move writes the
+keypoint, pins the observation and leaves nothing that was read at the old
+pixel, and moving a cluster sighting keeps the shape it is read at. A resize
+from an edge is checked **through a lens**, over the same fixture with its
+camera swapped for one with real radial distortion: the dragged edge reprojects
+onto the pixel the call named, the far edge reprojects onto the pixel it was
+already on, and the frame stays square -- exactly under a pinhole, and within
+the lens's own inverse-map tolerance under distortion, which is the only error
+there is, since the resize itself is arithmetic in the patch's plane. The same
+is asserted for a **bearing** (`w == 0`), whose centre is renormalized. A turn
+keeps both axes' lengths and the normal, moves no sighting, and lands the corner
+under the pixel a drag of that corner would have released on. At the cluster
+stage the edge drag scales the shape by one scalar -- so the detector's
+anisotropy survives -- moves the sighting by half the change, and holds the far
+edge of the parallelogram.
 
 The fit is tested against the kernels themselves: a track put on the bench from
 a point fits to what a direct call of the same two kernels on the same frame and

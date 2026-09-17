@@ -470,7 +470,15 @@ impl OrientedPatch {
     /// The shared body of [`Self::anchored_at_keypoint`] and the keypoint
     /// localizer's seed offset, which scales it into patch-grid steps. `None` on
     /// the three refusals `anchored_at_keypoint` documents.
-    pub(crate) fn keypoint_plane_offset(
+    ///
+    /// Public because it is also how a **pointer** is read against a patch: a
+    /// viewer dragging the projected outline unprojects the pointer onto the
+    /// patch's own plane and reads the offset on its axes, which is this and
+    /// nothing else. Stating it once is what keeps the outline a person drags
+    /// and the frame the drag produces exactly consistent -- an unprojection
+    /// written a second time would agree only to the accuracy of its own
+    /// algebra.
+    pub fn keypoint_plane_offset(
         &self,
         camera: &CameraIntrinsics,
         cam_from_world: &RigidTransform,

@@ -1032,8 +1032,11 @@ covered by the existing layout test that walks every tab.
   file's representation, so it is the natural next step, and it is not this one.
 - Running an evaluation on the frame. Every one is a background task, including
   the small ones, so the panel has one path.
-- Editing the surfel's frame or normal by hand. The frame is what the kernels
-  fit; a wrong frame is downgraded and refit.
+- ~~Editing the surfel's frame or normal by hand.~~ Superseded: the Image
+  Detail panel's bench layer makes its marks handles, so the frame's **size and
+  turn** are edited by dragging the outline and a sighting is placed by dragging
+  its dot ([`../gui/multi-panel-image-browser.md`](../gui/multi-panel-image-browser.md)
+  § "The bench layer"). The normal is still the kernels'.
 - Bundle adjustment after a commit. The commit triangulates, as the one-step
   edits do, and the Edit menu's adjustment is a version of its own.
 - A `sift_files` commit. The bench can be used for inspection on such a node,

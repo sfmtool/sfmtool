@@ -297,6 +297,37 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
         seed: crate::bench::Seed,
     },
+    /// Put one observation's sighting at a pixel, by hand.
+    MoveBenchTrackObservation {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation's position in the track's list.
+        observation: usize,
+        /// Where, in that observation's own image's px.
+        pixel: [f64; 2],
+    },
+    /// Put one edge of the patch under a pixel, with the opposite edge left
+    /// where it is.
+    ResizeBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation whose outline is being dragged.
+        observation: usize,
+        /// Which edge of the patch's square.
+        edge: sfmtool_core::bench::Edge,
+        /// Where its midpoint should land, in that image's own px.
+        pixel: [f64; 2],
+    },
+    /// Turn the patch in its own plane.
+    RotateBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// How far, positive about the patch's outward normal.
+        degrees: f64,
+        /// Which sighting's shape turns, at the cluster stage, where there is
+        /// no surfel to turn.
+        observation: Option<usize>,
+    },
     SetBenchTrackVerdict {
         reconstruction_label: String,
         track: Option<String>,
@@ -1048,6 +1079,44 @@ pub(crate) fn apply_with_window(
             &camera_image,
             &seed,
         )),
+        Command::MoveBenchTrackObservation {
+            reconstruction_label,
+            track,
+            observation,
+            pixel,
+        } => done(bench::move_bench_track_observation(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            pixel,
+        )),
+        Command::ResizeBenchTrack {
+            reconstruction_label,
+            track,
+            observation,
+            edge,
+            pixel,
+        } => done(bench::resize_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            edge,
+            pixel,
+        )),
+        Command::RotateBenchTrack {
+            reconstruction_label,
+            track,
+            degrees,
+            observation,
+        } => done(bench::rotate_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            degrees,
+            observation,
+        )),
         Command::SetBenchTrackVerdict {
             reconstruction_label,
             track,
@@ -1635,6 +1704,9 @@ impl Command {
             Command::RenameBenchItem { .. } => "rename_bench_item",
             Command::DiscardBenchItem { .. } => "discard_bench_item",
             Command::AddBenchTrackObservation { .. } => "add_bench_track_observation",
+            Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
+            Command::ResizeBenchTrack { .. } => "resize_bench_track",
+            Command::RotateBenchTrack { .. } => "rotate_bench_track",
             Command::SetBenchTrackVerdict { .. } => "set_bench_track_verdict",
             Command::ApplyBenchTrackThresholds { .. } => "apply_bench_track_thresholds",
             Command::SplitBenchTrack { .. } => "split_bench_track",
@@ -1824,6 +1896,9 @@ impl Command {
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::AddBenchTrackObservation { .. }
+            | Command::MoveBenchTrackObservation { .. }
+            | Command::ResizeBenchTrack { .. }
+            | Command::RotateBenchTrack { .. }
             | Command::SetBenchTrackVerdict { .. }
             | Command::ApplyBenchTrackThresholds { .. }
             | Command::SplitBenchTrack { .. }

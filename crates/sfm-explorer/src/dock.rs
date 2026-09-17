@@ -755,6 +755,19 @@ impl TabContext<'_> {
                     }
                 }
             }
+            // A drag of one of the bench layer's handles: the sighting placed,
+            // the patch resized or turned. One version per gesture, through the
+            // call the wire's patch tools make, so a drag and a tool call are
+            // the same step with the same sentence.
+            if let Some(edit) = detail_response.bench_edit {
+                if let Some(label) = &bench_label {
+                    if let Err(why) = self.state.edit_bench_patch(id, label, &edit) {
+                        self.state
+                            .action_log
+                            .fail(crate::action_log::Kind::Bench, why);
+                    }
+                }
+            }
             // A click on one of the bench layer's marks selects that row in the
             // Track Edit panel, which is the same gesture as clicking the row
             // there: the mark and the row are one observation.

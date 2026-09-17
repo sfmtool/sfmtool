@@ -26,11 +26,14 @@ use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
     create_track as core_create_track, evaluate as core_evaluate, fit as core_fit,
-    search_descriptors as core_search_descriptors, set_stage as core_set_stage,
+    resize_frame as core_resize_frame, resize_from_edge as core_resize_from_edge,
+    rotate_frame as core_rotate_frame, search_descriptors as core_search_descriptors,
+    set_observation_keypoint as core_set_observation_keypoint,
+    set_observation_shape as core_set_observation_shape, set_stage as core_set_stage,
     set_verdict as core_set_verdict, split as core_split, Bench, BenchItem, ClusterSeed,
-    CreateTrackOptions, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions, FitReport,
-    Found, ItemKind, Observation, ObservationSeed, Provenance, SearchOptions, SearchReport,
-    StageKind, Verdict, DEFAULT_RADIUS_PX,
+    CreateTrackOptions, Edge, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions,
+    FitReport, Found, ItemKind, Observation, ObservationSeed, Provenance, ResizeReport,
+    SearchOptions, SearchReport, StageKind, Verdict, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -255,6 +258,30 @@ impl PyEditableTrack {
     fn position<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
         let p = self.inner.track()?.position?;
         Some(PyArray1::from_vec(py, vec![p.x, p.y, p.z]))
+    }
+
+    /// The track's surfel, or ``None`` at the cluster stage or before anything
+    /// has fitted one.
+    ///
+    /// A dict of ``center``, ``u_halfvec``, ``v_halfvec`` and ``w`` -- the two
+    /// half-vectors being the axes scaled by the half-extents, which is how a
+    /// `.sfmr` stores them, and ``w`` being ``1.0`` for a position and ``0.0``
+    /// for a bearing, whose ``center`` is a unit direction. The patch covers
+    /// ``center + s * u + t * v`` for ``(s, t)`` in ``[-1, 1]^2``, so this is
+    /// what :func:`resize_frame`, :func:`resize_from_edge` and
+    /// :func:`rotate_frame` are read back through.
+    #[getter]
+    fn frame<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(frame) = self.inner.track().and_then(|p| p.frame.as_ref()) else {
+            return Ok(None);
+        };
+        let vector = |v: nalgebra::Vector3<f64>| PyArray1::from_vec(py, vec![v.x, v.y, v.z]);
+        let d = PyDict::new(py);
+        d.set_item("center", vector(frame.center.coords))?;
+        d.set_item("u_halfvec", vector(frame.u_axis * frame.half_extent[0]))?;
+        d.set_item("v_halfvec", vector(frame.v_axis * frame.half_extent[1]))?;
+        d.set_item("w", frame.w)?;
+        Ok(Some(d))
     }
 
     /// Which observation the cluster stage cuts its template around, or
@@ -598,6 +625,169 @@ fn set_verdict(
         },
         d.unbind(),
     ))
+}
+
+/// Put one observation's sighting at ``pixel``, by hand.
+///
+/// At the track stage this writes the observation's keypoint, which is the pixel
+/// a commit writes; at the cluster stage it moves its seed and keeps the shape
+/// it is read at. Either way every measurement that was read at the old pixel is
+/// dropped -- none of them says anything about the new one -- and the
+/// observation is pinned, so :func:`apply_thresholds` leaves its verdict alone.
+///
+/// Returns ``(EditableTrack, report)``.
+#[pyfunction]
+fn set_observation_keypoint(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observation: usize,
+    pixel: [f64; 2],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) =
+        core_set_observation_keypoint(&track.inner, observation, pixel).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("image", report.image)?;
+    d.set_item("was", report.was)?;
+    d.set_item("pixel", report.pixel)?;
+    d.set_item("moved_px", report.moved_px)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Resize the track's surfel to ``half_length`` on both of its axes, about its
+/// own centre.
+///
+/// One scalar, because a patch frame is square: the stored half-vector pair has
+/// ``|u| == |v|`` and the tile grid is square with it, so a resize that moved
+/// one axis alone would stretch the template rather than enlarge it. The centre,
+/// the axes' directions and the normal are untouched. The consensus bitmap and
+/// every track measurement but the keypoints are dropped, because all of them
+/// were read over the square as it stood.
+///
+/// Returns ``(EditableTrack, report)``.
+#[pyfunction]
+fn resize_frame(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    half_length: f64,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) = core_resize_frame(&track.inner, half_length).map_err(refused)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        resize_report_dict(py, &report)?,
+    ))
+}
+
+/// Resize the patch by putting one edge of the outline drawn at ``observation``
+/// under ``pixel``, with the **opposite edge left where it is**.
+///
+/// ``edge`` is ``"+u"``, ``"-u"``, ``"+v"`` or ``"-v"``. At the track stage the
+/// pixel is unprojected onto the patch's own plane through that observation's
+/// camera, so the edge lands there exactly under any lens; the surfel takes the
+/// centre the outline had plus the edge's shift, the track's position follows
+/// it, and that observation's keypoint is set to the projection of the new
+/// centre and pinned. At the cluster stage the same arithmetic runs in that
+/// image's pixels over the observation's own affine shape.
+///
+/// Returns ``(EditableTrack, report)``.
+#[pyfunction]
+fn resize_from_edge(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    observation: usize,
+    edge: &str,
+    pixel: [f64; 2],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let edge: Edge = edge.parse().map_err(refused)?;
+    let (next, report) =
+        core_resize_from_edge(&track.inner, &edited.inner, observation, edge, pixel)
+            .map_err(refused)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        resize_report_dict(py, &report)?,
+    ))
+}
+
+/// Turn the track's surfel by ``angle_rad`` about its own outward normal.
+///
+/// Both axes are rotated by a rotation whose axis is the normal, so they keep
+/// their lengths and the patch keeps its plane and the face it shows: what
+/// changes is which way up the square sits. The centre is untouched, so no
+/// sighting moves.
+///
+/// Returns ``(EditableTrack, report)`` with ``degrees`` and ``changed``.
+#[pyfunction]
+fn rotate_frame(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    angle_rad: f64,
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) = core_rotate_frame(&track.inner, angle_rad).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("degrees", report.degrees)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Give one cluster-stage observation the affine shape ``shape``, by hand.
+///
+/// The shape is the cluster stage's own convention: the detector's canonical
+/// keypoint frame mapped onto this image's pixels, read over ``[-r, r]^2`` at
+/// the cluster's radius. The observation is re-seeded where it is already drawn
+/// and its refinement is dropped, because those numbers were the refinement's
+/// answer about another shape. The verdict is not pinned: a size or a turn is
+/// not a ruling on whether the sighting belongs.
+///
+/// Returns ``(EditableTrack, report)``.
+#[pyfunction]
+fn set_observation_shape(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    observation: usize,
+    shape: [[f64; 2]; 2],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) =
+        core_set_observation_shape(&track.inner, observation, shape).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("image", report.image)?;
+    d.set_item("shape", shape_array(report.shape).into_pyarray(py))?;
+    d.set_item("half_px", report.half_px)?;
+    d.set_item("was_half_px", report.was_half_px)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// What a resize reported, as a dict.
+fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("image", report.image)?;
+    d.set_item("half", report.half)?;
+    d.set_item("was", report.was)?;
+    d.set_item("changed", report.changed)?;
+    Ok(d.unbind())
 }
 
 /// Paint the proposed verdicts from the stored measurements onto the unpinned
@@ -1206,6 +1396,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_cluster, m)?)?;
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(set_observation_keypoint, m)?)?;
+    m.add_function(wrap_pyfunction!(resize_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(resize_from_edge, m)?)?;
+    m.add_function(wrap_pyfunction!(rotate_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(set_observation_shape, m)?)?;
     m.add_function(wrap_pyfunction!(apply_thresholds, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate, m)?)?;
     m.add_function(wrap_pyfunction!(fit, m)?)?;

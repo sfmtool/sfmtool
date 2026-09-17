@@ -308,6 +308,34 @@ impl Observation {
             track: None,
         }
     }
+
+    /// Where the observation currently sits in its photograph: the keypoint a
+    /// track-stage measurement carries, else the cluster stage's refined
+    /// position or the seed it started from, else nothing.
+    ///
+    /// The same order the evaluation's own seeding walks -- a measured position
+    /// wins over the seed it was measured from -- so a fresh candidate, which
+    /// has only a seed, is placed where the step that proposed it put it rather
+    /// than nowhere. One rule in one place, because everything that draws,
+    /// names or moves a sighting has to agree about where it is. `None` is the
+    /// state [`Unmeasured::NoSeed`] names.
+    pub fn site(&self) -> Option<[f64; 2]> {
+        if let Some(keypoint) = self.track.as_ref().and_then(|m| m.keypoint) {
+            return Some([f64::from(keypoint[0]), f64::from(keypoint[1])]);
+        }
+        Some(self.cluster.as_ref()?.best_position())
+    }
+
+    /// The affine shape the observation is read at -- keypoint-frame units to
+    /// this image's pixels -- where its cluster slot carries one.
+    ///
+    /// The refined shape when there is one, else the seed's. `None` for an
+    /// observation that has only a track-stage keypoint, whose shape is the
+    /// surfel's rather than its own.
+    pub fn shape(&self) -> Option<[[f64; 2]; 2]> {
+        let cluster = self.cluster.as_ref()?;
+        Some(cluster.shape.unwrap_or(cluster.seed_shape))
+    }
 }
 
 /// The cluster stage's own data: a `.matches` cluster with its cluster-patches

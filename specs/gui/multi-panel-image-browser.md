@@ -472,7 +472,67 @@ Clicking a mark selects that observation's row in the Track Edit panel
 clicking either is the one gesture. The layer is on top, so a click it catches
 does not also select a feature underneath.
 
-The layer is [image_detail/bench_track.rs](../../crates/sfm-explorer/src/image_detail/bench_track.rs).
+##### The handles
+
+**What the layer draws, it edits.** Each mark is a handle, so the geometry a
+person is looking at is the geometry they take hold of, and there is no second
+picture of the patch to keep in step with the first.
+
+- **The dot moves the sighting.** Dragging an observation's own mark places it:
+  the keypoint at the track stage, the cluster seed at the cluster stage. The
+  cursor is `Move` on hover and `Grabbing` while it is held.
+- **An edge resizes the patch, with the opposite edge left where it is.**
+  Dragging one of the outline's four edges is "put this edge here", and what a
+  person expects is the other three where the geometry puts them rather than the
+  far edge running away: with the dragged edge at `+h` from the centre and the
+  far one at `-h`, a pointer naming the offset `p` gives the new half-length
+  `(p + h) / 2` and moves the centre by `h' - h` along the drag. Patch frames are
+  square, so that is **one** scale and not two ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)).
+  The cursor comes from the edge's orientation **on screen**, which is what says
+  which edge is under the pointer when a lens has bent the square: near
+  horizontal takes `ResizeVertical`, near vertical `ResizeHorizontal`, and
+  oblique the diagonal its slope names.
+- **A corner turns it.** Dragging a corner rotates the patch in its own plane --
+  about the surfel's outward normal at the track stage, about the sighting at
+  the cluster stage -- keeping its place and its size. egui has no cursor for a
+  turn, so a corner takes `Alias` and a small arc is drawn beside the hovered
+  corner to say what it does.
+
+**The pointer is read against the patch, not against the screen.** A pixel is a
+ray, the ray meets the patch's own plane, and what the pointer named is the
+offset of that meeting on the patch's axes
+(`OrientedPatch::keypoint_plane_offset`). So an edge put under the pointer
+*reprojects onto the pointer*, through whatever distortion the lens has, and a
+turn is the angle swept on the patch's own surface rather than the foreshortened
+one swept on screen. The frame the pointer is read against is the one drawn: the
+surfel re-anchored on the observation whose outline it is.
+
+At the track stage the surfel is shared, so a resize or a turn changes the
+outline in **every** image; the resize also moves the point, and sets the
+dragged sighting's keypoint to the new centre's projection, so the dot and the
+outline move together and the far edge really does hold still. That keypoint is
+pinned, as a hand-placed one; every other sighting keeps its own and loses the
+measurements the change invalidates
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Placing,
+sizing and turning by hand"). At the cluster stage each sighting has its own
+affine shape, so both gestures touch only the observation whose outline was
+grabbed.
+
+**One version per drag.** While the pointer is down the layer draws from a
+transient copy -- the track the release would produce, built by the same core
+step -- and nothing is pushed. The release applies it through
+`AppState::edit_bench_patch`, which is the call the wire's three patch tools
+make, so one gesture is one version, one Action Log row of kind `Bench`, and one
+Undo. A drag that ends where it started pushes nothing, the way a verdict an
+observation already holds does. **Escape abandons the drag**: the preview goes
+and nothing is pushed. The photograph does not pan for the whole of a handle
+drag, cancelled or not, until the button comes up: the pointer means one thing
+at a time, and what it means was decided where the button went down.
+
+The layer is [image_detail/bench_track.rs](../../crates/sfm-explorer/src/image_detail/bench_track.rs),
+and what a pointer means against a patch is
+[bench/geometry.rs](../../crates/sfm-explorer/src/bench/geometry.rs), which the
+wire's patch tools read it through too.
 Like the selection, what the panel is told about the bench is passed in by the
 dock rather than read by the panel: one value carrying the task holding the node
 and the active track, which both this layer and the menu's two bench entries

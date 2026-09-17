@@ -59,10 +59,12 @@ pub use search::{
 };
 pub use stage::{set_stage, set_stage_preconditions, StageError, StageReport};
 pub use steps::{
-    add_observation, apply_thresholds, create_cluster, create_track, set_verdict, split,
-    AddObservationReport, ClusterSeed, CreateClusterError, CreateReport, CreateTrackError,
-    CreateTrackOptions, ObservationSeed, SplitError, SplitReport, ThresholdReport, TrackEditError,
-    VerdictReport,
+    add_observation, apply_thresholds, create_cluster, create_track, half_width_px, resize_frame,
+    resize_from_edge, rotate_frame, set_observation_keypoint, set_observation_shape, set_verdict,
+    split, AddObservationReport, Axis, ClusterSeed, CreateClusterError, CreateReport,
+    CreateTrackError, CreateTrackOptions, Edge, MoveObservationReport, ObservationSeed,
+    ResizeReport, RotateFrameReport, ShapeReport, SplitError, SplitReport, ThresholdReport,
+    TrackEditError, VerdictReport,
 };
 pub use track::{
     ClusterMeasurement, ClusterPayload, ClusterTemplate, EditableTrack, Observation, Origin,
