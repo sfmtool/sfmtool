@@ -10,7 +10,7 @@
 //! cursor. A row whose value the budget released is listed and disabled, since
 //! the history still knows what happened there while having nothing to show.
 
-use crate::document::VersionSerial;
+use crate::document::{Version, VersionSerial};
 use crate::scene::ReconId;
 use crate::state::AppState;
 
@@ -72,54 +72,88 @@ pub(crate) fn show(ui: &mut egui::Ui, state: &AppState) -> EditHistoryResponse {
         .id_salt("edit_history_versions")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for (index, version) in history.versions().iter().enumerate() {
-                let released = version.value.is_none();
-                let at_cursor = index == cursor;
-                let marks = format!(
-                    "{}{}",
-                    if at_cursor { CURSOR_MARK } else { " " },
-                    if version.serial == disk {
-                        DISK_MARK
-                    } else {
-                        " "
+            egui::Grid::new("edit_history_version_table")
+                .num_columns(4)
+                .striped(true)
+                .show(ui, |ui| {
+                    ui.label("");
+                    ui.label(egui::RichText::new("Version").strong().small());
+                    ui.label(egui::RichText::new("Description").strong().small());
+                    ui.label(egui::RichText::new("Size").strong().small());
+                    ui.end_row();
+                    for (index, version) in history.versions().iter().enumerate() {
+                        if show_version_row(
+                            ui,
+                            state,
+                            version,
+                            index == cursor,
+                            version.serial == disk,
+                        ) {
+                            response.jump = Some((node.id, version.serial));
+                        }
                     }
-                );
-                let text = format!(
-                    "{marks} {} {}{}",
-                    version.label,
-                    format_bytes(version.unshared_bytes),
-                    if released { "  (released)" } else { "" },
-                );
-                let row = ui.add_enabled(
-                    !released && !at_cursor,
-                    egui::Button::selectable(at_cursor, text),
-                );
-                let when = state.action_log.format(version.at, "%H:%M:%S");
-                let hover = if released {
-                    format!(
-                        "{} at {when}. Its value was released to keep the history inside its memory budget, so there is nothing to go back to.",
-                        version.serial
-                    )
-                } else if at_cursor {
-                    format!("{} at {when}. This is what the node shows.", version.serial)
-                } else {
-                    format!("{} at {when}. Click to go here.", version.serial)
-                };
-                // A released row and the cursor's own row are disabled, and a
-                // disabled widget answers a hover only through the disabled
-                // channel -- which is where the refusal has to be said, since
-                // that row is exactly the one the user asks about.
-                let row = if released || at_cursor {
-                    row.on_disabled_hover_text(hover)
-                } else {
-                    row.on_hover_text(hover)
-                };
-                if row.clicked() {
-                    response.jump = Some((node.id, version.serial));
-                }
-            }
+                });
         });
     response
+}
+
+/// Draw one selectable table row. Every cell participates in the same action,
+/// so the compact serial column is as clickable as the description and size.
+fn show_version_row(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    version: &Version,
+    at_cursor: bool,
+    at_disk: bool,
+) -> bool {
+    let released = version.value.is_none();
+    let marks = format!(
+        "{}{}",
+        if at_cursor { CURSOR_MARK } else { " " },
+        if at_disk { DISK_MARK } else { " " }
+    );
+    let enabled = !released && !at_cursor;
+    let mut row = ui.add_enabled(enabled, egui::Button::selectable(at_cursor, marks));
+    row = row.union(ui.add_enabled(
+        enabled,
+        egui::Button::selectable(at_cursor, version.serial.to_string()),
+    ));
+    row = row.union(ui.add_enabled(
+        enabled,
+        egui::Button::selectable(
+            at_cursor,
+            format!(
+                "{}{}",
+                version.label,
+                if released { "  (released)" } else { "" },
+            ),
+        ),
+    ));
+    row = row.union(ui.add_enabled(
+        enabled,
+        egui::Button::selectable(at_cursor, format_bytes(version.unshared_bytes)),
+    ));
+    ui.end_row();
+
+    let when = state.action_log.format(version.at, "%H:%M:%S");
+    let hover = if released {
+        format!(
+            "{} at {when}. Its value was released to keep the history inside its memory budget, so there is nothing to go back to.",
+            version.serial
+        )
+    } else if at_cursor {
+        format!("{} at {when}. This is what the node shows.", version.serial)
+    } else {
+        format!("{} at {when}. Click to go here.", version.serial)
+    };
+    // A released row and the cursor's own row are disabled, and a disabled
+    // widget answers a hover only through the disabled channel.
+    let row = if released || at_cursor {
+        row.on_disabled_hover_text(hover)
+    } else {
+        row.on_hover_text(hover)
+    };
+    row.clicked()
 }
 
 /// Bytes, as a row states them: three significant figures and a binary unit.

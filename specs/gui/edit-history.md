@@ -241,9 +241,14 @@ is closed, and it decides nothing: the dock hands the click to
 `AppState::jump_to_version` ([state/edits.rs](../../crates/sfm-explorer/src/state/edits.rs))
 and that is what moves the cursor.
 
-**A row per version, oldest first**, carrying the version's label, the time it
-was made and its unshared bytes, written for a person to read (`2.00 KiB`,
-`165 MiB`). A header above them names the node and counts its versions.
+**A row per version, oldest first**, with a compact **Version** column showing
+the version's minted serial exactly as `vN`, separate from its description.
+The serial is the row's `Version::serial`, never its position in the list: an
+undo leaves it unchanged, and a new edit after an undo receives a new serial
+after it discards the redo tail. The other columns carry the version's label
+and its unshared bytes, written for a person to read (`2.00 KiB`, `165 MiB`).
+A header above them names the node and counts its versions. The time it was
+made remains in the row's hover text.
 
 **Two marks.** The row at the cursor is marked with `▶` and drawn as the
 selected row: it is what the node is showing. The row at the **disk state** --
@@ -366,8 +371,9 @@ node -- each leaving the cursor and the log untouched.
 
 `crates/sfm-explorer/src/edit_history_panel/tests.rs` runs the panel through
 `Context::run_ui` and reads the strings it painted: the rows in oldest-first
-order with the cursor and disk marks on the right ones, the mark following an
-undo, a released row listing and saying so, the two empty states, and a
+order with their minted serials and the cursor and disk marks on the right
+ones, the mark following an undo, serial identity across undo and a new edit
+that truncates the redo tail, a released row listing and saying so, the two empty states, and a
 synthesized click on a row reporting that version -- which the test then jumps
 to, so what the panel offers and what the jump does are asserted together. The
 sizes are checked against the strings a row states them in.
