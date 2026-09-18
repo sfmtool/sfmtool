@@ -554,7 +554,9 @@ survives both.
 
 - No homography, and no refinement of the affine from its inliers. The transform
   is the best three-point model, not a least-squares fit to the consensus; a
-  caller wanting a refined warp fits one from `inlier_correspondences`.
+  caller wanting a refined warp fits one from `inlier_correspondences`. A refit
+  inside the query, weighted towards the patch centre, is proposed in
+  [kdf-constellation-affine-refit-amendment.md](../../drafts/kdf-constellation-affine-refit-amendment.md).
 - No ratio test against the neighbour list as a whole, and no other
   per-descriptor filtering of it. The consensus is the filter, and a ratio test
   over the whole corpus would discard the repeated-texture matches a
