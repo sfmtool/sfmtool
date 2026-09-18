@@ -154,6 +154,17 @@ pub fn set_verdict(
 
 pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdReport);
 
+pub fn duplicate(
+    bench: &Bench,
+    label: &str,
+) -> Result<(Bench, DuplicateReport), DuplicateError>;
+
+pub struct DuplicateReport {
+    pub label: String,               // the copy's, after the collision suffix
+    pub from: String,
+    pub observation_count: usize,
+}
+
 pub fn split(
     bench: &Bench,
     edited: &EditedReconstruction,
@@ -692,6 +703,27 @@ one, and otherwise the largest of whatever the half carries, verdicts and all.
 The verdicts travel with the rows either way. Only a half with no seed anywhere
 in it is refused, with `StageError::NoReference`.
 
+### Duplicating
+
+`duplicate` puts a copy of one item on the bench beside it, labelled
+`<label> copy` through the bench's own collision rule, and makes the copy the
+active one, because it is the thing about to be worked on.
+
+**What a second patch over neighbouring ground is started from.** A patch slid,
+turned and sized until it covers one piece of surface is most of the work of
+covering the piece beside it, so the copy carries everything that describes the
+geometry and the judgements made about it: the stage and all of its data (the
+surfel, the consensus bitmap, the cluster's template and its radius), every
+observation with its keypoint, its seed, its shape, its verdict and its pin, and
+the thresholds. The measurements come too, because they were read against this
+geometry and still describe it -- and the moment the copy is moved, the steps
+that move it drop the ones that no longer hold.
+
+**The copy has no origin**, and that is the whole of the difference between the
+two items. An origin is what makes a commit *replace* a point; a copy is a new
+patch over new ground and has to create one, or the second commit would delete
+what the first wrote.
+
 ### Placing, sizing and turning by hand
 
 Six steps put a person's own hand on the track's geometry, and they are the
@@ -1187,6 +1219,9 @@ it. Verdicts and provenance kinds are the lowercase words (`"in"`, `"out"`,
 or `shape`, a 2x2 in keypoint-frame units; `EditableTrack.radius` is the
 cluster's radius those units are read over, and is `None` at the track stage.
 
+`duplicate` takes the bench and the label and hands back `(Bench, report)`, as
+`split` does; the report carries `label`, `from` and `observation_count`.
+
 `apply_thresholds` takes each bar as a keyword and moves only the ones given, so
 a script can differ from the pipeline's default in one number without restating
 the others. `commit` takes the reconstruction's name as `node`, which is what
@@ -1255,7 +1290,11 @@ covers: a point put on the bench being at the track stage with every observation
 being `in`; the painting proposing from the measurements, leaving a pinned
 verdict alone and giving one image one `in`; a split taking exactly the named
 observations, handing the half it takes off back as a cluster, and refusing an
-empty list or all of them; and every commit path -- appending, replacing,
+empty list or all of them; a duplicate carrying every observation and all of the
+stage's data, dropping the origin so its commit creates a point rather than
+replacing the original's, taking the collision suffix on a second copy of the
+same track, becoming the active item, and leaving the original exactly as it
+was; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.
 

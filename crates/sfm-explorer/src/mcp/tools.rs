@@ -1098,14 +1098,35 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "duplicate_bench_item",
+            description: "Put a copy of one item on the bench beside it, and make the copy the \
+                          active one — what a second patch over neighbouring ground is started \
+                          from, since a patch already fitted to one piece of surface is most of \
+                          the way to the piece next to it. The copy carries everything that \
+                          describes the geometry and the judgements about it: the stage and its \
+                          data, every observation with its keypoint, seed, shape, verdict and \
+                          pin, the measurements, and the thresholds. The one thing it does not \
+                          carry is the **origin**, so a commit of the copy creates a point rather \
+                          than replacing the one the original came from. Its label is the \
+                          original's with \" copy\" after it. Omit item for the active track. \
+                          The reply names the copy, which is the handle every later call uses.",
+            kind: Write,
+            schema: object(
+                &[("item", bench_item_schema())],
+                &[("reconstruction_label", edited_label_schema())],
+            ),
+        },
+        ToolSpec {
             name: "move_bench_track",
             description: "Slide a bench track's patch across its own plane until its centre sits \
                           under a pixel — the dot drag on the Image Detail panel's bench layer. A \
                           track-stage track has one surfel and every observation is a view of it, \
                           so this moves the patch and not a sighting: the centre moves in-plane, \
                           the half-vectors and the normal are kept, and every observation's \
-                          keypoint becomes the projection of the new centre through its own \
-                          camera, so the outline moves in every image at once. Slide, turn and \
+                          keypoint is carried along the plane by that same displacement -- \
+                          keeping its own offset from the centre's projection, which is what the \
+                          tiles are cut on -- so the outline moves in every image at once and the \
+                          sighting you aimed through lands on the pixel you named. Slide, turn and \
                           resize together are how a patch is made to cover the piece of surface \
                           you mean. Nothing is pinned: a translation says where the patch is, not \
                           whether a sighting belongs to it. The observation names the image the \
@@ -1155,8 +1176,8 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           re-anchored on that sighting at the track stage, its own parallelogram \
                           at the cluster stage — and the pixel is in that observation's image. At \
                           the track stage the resize moves the centre, so every observation's \
-                          keypoint becomes the projection of the new centre, as move_bench_track \
-                          does; nothing is pinned.",
+                          keypoint is carried along the plane by that displacement, as \
+                          move_bench_track's are; nothing is pinned.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -2388,6 +2409,13 @@ pub(crate) fn parse(
                 track: args.optional_string("track")?,
                 camera_image: args.camera_image("camera_image")?,
                 seed: parse_seed(&args)?,
+            }
+        }
+        "duplicate_bench_item" => {
+            args.reject_unknown(&["reconstruction_label", "item"])?;
+            Command::DuplicateBenchItem {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                item: args.optional_string("item")?,
             }
         }
         "move_bench_track" => {

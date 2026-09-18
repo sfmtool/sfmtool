@@ -20,6 +20,7 @@ from sfmtool._sfmtool.bench import (
     commit,
     create_cluster,
     create_track,
+    duplicate,
     evaluate,
     fit,
     resize_frame,
@@ -998,6 +999,55 @@ class TestPlacingSizingAndTurningByHand:
             set_observation_shape(at_track, 0, turn)
         with pytest.raises(ValueError, match="track-stage step"):
             rotate_frame(track, 0.5)
+
+
+class TestDuplicating:
+    """A copy of an item beside it: everything but the origin."""
+
+    def test_a_copy_carries_the_patch_and_commits_as_a_creation(
+        self, edited, long_track_point
+    ):
+        bench, track = create_track(Bench(), edited, long_track_point)
+        label = bench.labels[0]
+
+        bench, report = duplicate(bench, label)
+        assert report["from"] == label
+        assert report["label"] == f"{label} copy"
+        assert report["observation_count"] == track.observation_count
+        assert bench.labels == [label, report["label"]]
+        assert bench.active_label() == report["label"], "the copy is what you work on"
+
+        copy = bench.track(report["label"])
+        assert copy.stage == track.stage
+        assert copy.observation_count == track.observation_count
+        assert copy.origin is None, "a copy has to create rather than replace"
+        assert bench.track(label).origin is not None, "the original kept its origin"
+        np.testing.assert_allclose(copy.position, track.position)
+        np.testing.assert_allclose(copy.frame["u_halfvec"], track.frame["u_halfvec"])
+        for index in range(copy.observation_count):
+            was, now = track.observation(index), copy.observation(index)
+            assert now["verdict"] == was["verdict"]
+            assert now["pinned"] == was["pinned"]
+            assert now["image"] == was["image"]
+            assert now["provenance"] == was["provenance"]
+            np.testing.assert_array_equal(
+                now["track"]["keypoint"], was["track"]["keypoint"]
+            )
+            assert now["track"].keys() == was["track"].keys()
+
+        # A second duplicate takes the bench's own collision suffix.
+        bench, again = duplicate(bench, label)
+        assert again["label"] == f"{label} copy (2)"
+
+        # And the copy's commit creates: the point it was copied from is
+        # untouched.
+        after, committed = commit(edited, copy, node="run")
+        assert "replaced" not in committed
+        assert committed["point"] == edited.point_count
+        assert after.point(long_track_point) is not None
+
+        with pytest.raises(ValueError, match="nothing on the bench"):
+            duplicate(bench, "nothing at all")
 
 
 def test_the_module_reports_its_public_location():

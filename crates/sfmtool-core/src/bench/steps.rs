@@ -919,12 +919,12 @@ pub fn resize_frame(
 /// patch in that photograph, so that is the frame the pointer is read against
 /// and the frame the resize writes back. The surfel therefore takes the centre
 /// the outline had, plus the edge's shift, and the track's position follows it;
-/// `observation`'s keypoint is set to the projection of that new centre, so the
-/// dot and the outline move together and the far edge really does hold still on
-/// screen. That keypoint is pinned, as a hand-placed one. Every other sighting
-/// keeps its own keypoint -- their outlines simply grow -- and loses the
-/// measurements the move and the resize invalidate, as they do for
-/// [`resize_frame`].
+/// `observation`'s keypoint is carried along the plane by the centre's own
+/// displacement, keeping its in-plane offset, so the dot and the outline move
+/// together and the far edge really does hold still on screen. Every other
+/// sighting is carried by the same displacement and keeps its own offset too,
+/// and all of them lose the measurements the move and the resize invalidate, as
+/// they do for [`resize_frame`]. Nothing is pinned.
 ///
 /// At the **cluster stage** there is no geometry, so the same arithmetic runs
 /// in that image's pixels: the sighting's affine shape is scaled by one scalar,
@@ -966,13 +966,14 @@ pub fn resize_from_edge(
             if !half.is_finite() || half <= 0.0 {
                 return Err(TrackEditError::BadSize(half));
             }
-            let mut center = anchored.center + direction * (half - was);
+            let displacement = direction * (half - was);
+            let mut center = frame.center + displacement;
             // A direction patch's centre is a unit bearing and its half-extents
             // are stated against one, so the moved centre is renormalized and
             // the half-length divided by the same factor. Scaling a bearing and
             // its tangent frame together leaves every corner the same
             // direction, which is what keeps the far edge exactly where it was.
-            let scale = if anchored.w == 0.0 {
+            let scale = if frame.w == 0.0 {
                 let norm = center.coords.norm();
                 if norm <= 1e-12 {
                     return Err(TrackEditError::BadSize(half));
@@ -994,7 +995,7 @@ pub fn resize_from_edge(
                 }
                 *bitmap = None;
             }
-            reproject_keypoints(&mut next, edited);
+            carry_keypoints(&mut next, edited, displacement);
             Ok((
                 next,
                 ResizeReport {
@@ -1088,15 +1089,21 @@ pub struct TranslateFrameReport {
 /// surfel and every observation is a view of it, so dragging the mark in one
 /// photograph is a statement about where that surfel is: the centre moves, the
 /// half-vectors and the normal are kept, and **every** observation's keypoint
-/// becomes the projection of the new centre through its own camera, so the
-/// outline moves in every image at once. That is what makes the gesture worth
-/// having -- a patch can be slid, turned and sized until it covers the piece of
-/// surface a person means, and each photograph shows where it lands.
+/// moves by the same displacement along the plane, so the outline moves in
+/// every image at once. That is what makes the gesture worth having -- a patch
+/// can be slid, turned and sized until it covers the piece of surface a person
+/// means, and each photograph shows where it lands.
 ///
 /// The pointer is read against the outline as drawn: the frame re-anchored on
 /// `observation`'s own sighting, so the offset is measured from the square the
 /// person can see. The move is in-plane by construction -- a ray-plane meeting
-/// minus a point on the plane -- so the normal and the plane are untouched.
+/// minus a point on the plane -- so the normal and the plane are untouched. **Every**
+/// observation's keypoint is carried along the plane by that same displacement,
+/// keeping its own in-plane offset from the centre: a keypoint is where that
+/// photograph sees the patch's content, and the offset is what the tile is cut
+/// on, so resetting keypoints to the centre's projection would scramble the
+/// correlation the next reading scores. The sighting the drag came through
+/// therefore lands under the pointer, and the others move with the patch.
 ///
 /// **Nothing is pinned.** A translation says where the patch is and not whether
 /// any sighting belongs to it, which is what a pin protects from the threshold
@@ -1131,19 +1138,22 @@ pub fn translate_frame(
     let offset = anchored
         .keypoint_plane_offset(&camera, &cam_from_world, pixel)
         .ok_or(TrackEditError::NoProjection { observation })?;
-    let mut center = anchored.center + offset;
+    // The whole patch moves by this, which is what makes the gesture a
+    // translation: the centre is carried by the drag and so is every sighting,
+    // rather than the surfel being re-seated onto the one observation the
+    // pointer came through.
+    let displacement = offset;
+    let mut center = frame.center + displacement;
     // A direction patch's centre is a unit bearing, which is what rendering and
     // the half-extents are stated against; the corner directions are unchanged
     // by the renormalization, so the patch keeps its size.
-    if anchored.w == 0.0 {
+    if frame.w == 0.0 {
         let norm = center.coords.norm();
         if norm <= 1e-12 {
             return Err(TrackEditError::BadPixel(pixel));
         }
         center = Point3::from(center.coords / norm);
     }
-    let landed = project_center(&camera, &cam_from_world, center, anchored.w)
-        .ok_or(TrackEditError::NoProjection { observation })?;
 
     let mut next = track.clone();
     {
@@ -1154,7 +1164,11 @@ pub fn translate_frame(
         }
         *bitmap = None;
     }
-    let placed = reproject_keypoints(&mut next, edited);
+    let placed = carry_keypoints(&mut next, edited, displacement);
+    // Where the dragged sighting now sits, which is the pointer: its own plane
+    // point plus the displacement is, by construction, the plane point under
+    // the pixel.
+    let landed = next.observations[observation].site().unwrap_or(pixel);
     Ok((
         next,
         TranslateFrameReport {
@@ -1353,33 +1367,58 @@ fn track_payload_mut(
     )
 }
 
-/// Put every sighting where the surfel's centre now projects in its own
-/// photograph, and drop every measurement read before it moved.
+/// Carry every sighting along the plane by `displacement`, and drop every
+/// measurement read before the patch moved.
 ///
-/// The rule the two steps that move the centre share: a track-stage track has
-/// one surfel, every observation is a view of it, and once it has moved the
-/// only place each sighting can honestly be is where the new centre lands in
-/// that photograph. A sighting whose camera the centre misses is left with no
-/// keypoint and the reason that says so, rather than with a stale one.
+/// The rule the two steps that move the centre share, and **not** a
+/// reprojection of the centre: a keypoint is where that photograph sees the
+/// patch's *content*, and the gap between it and the centre's projection is
+/// that observation's own in-plane offset -- the thing the tile is cut on and
+/// the correlation is scored at. Resetting every keypoint to the centre's
+/// projection would throw all of those away and scramble the correlation, so
+/// what moves is the **place**: each sighting's own plane point is found by
+/// re-anchoring the patch on it (`OrientedPatch::anchored_at_keypoint`, its own
+/// camera and pose), the displacement is added to that point, and the result is
+/// projected back. Every offset therefore survives the move exactly, and the
+/// sighting the drag came through lands under the pointer, because its plane
+/// point plus the displacement *is* the plane point under the pixel.
+///
+/// A sighting that has never been localized has no keypoint to carry, so it
+/// takes the projection of the new centre -- the only place the patch says it
+/// could be. One that no longer projects at all is left with no keypoint and
+/// the reason that says so, rather than with a stale one.
 ///
 /// Returns how many keypoints were written, which is how many photographs still
 /// hold the patch.
-fn reproject_keypoints(track: &mut EditableTrack, edited: &EditedReconstruction) -> usize {
-    let Some((center, w)) = track
-        .track()
-        .and_then(|payload| payload.frame.as_ref())
-        .map(|frame| (frame.center, frame.w))
-    else {
+fn carry_keypoints(
+    track: &mut EditableTrack,
+    edited: &EditedReconstruction,
+    displacement: Vector3<f64>,
+) -> usize {
+    let Some(frame) = track.track().and_then(|payload| payload.frame.clone()) else {
         return 0;
     };
     let mut placed = 0;
     for observation in &mut track.observations {
-        let landed =
-            view_of(edited, observation.image)
-                .ok()
-                .and_then(|(camera, cam_from_world)| {
-                    project_center(&camera, &cam_from_world, center, w)
-                });
+        let was = observation.track.as_ref().and_then(|m| m.keypoint);
+        let landed = view_of(edited, observation.image).ok().and_then(
+            |(camera, cam_from_world)| match was {
+                // Its own plane point, carried by the drag: the offset between
+                // the feature and the centre's projection is preserved.
+                Some(keypoint) => {
+                    let at = [f64::from(keypoint[0]), f64::from(keypoint[1])];
+                    let anchored = frame.anchored_at_keypoint(&camera, &cam_from_world, at)?;
+                    project_center(
+                        &camera,
+                        &cam_from_world,
+                        anchored.center + displacement,
+                        frame.w,
+                    )
+                }
+                // Never localized, so there is no offset to keep.
+                None => project_center(&camera, &cam_from_world, frame.center, frame.w),
+            },
+        );
         observation.track = Some(match landed {
             Some(pixel) => {
                 placed += 1;
@@ -1594,6 +1633,76 @@ fn proposed_verdict(
 }
 
 // ---- Splitting one track into two ------------------------------------------
+
+/// Why a duplicate was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuplicateError {
+    /// Nothing on the bench carries that label.
+    NoSuchTrack(String),
+}
+
+impl std::fmt::Display for DuplicateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DuplicateError::NoSuchTrack(label) => {
+                write!(f, "nothing on the bench is called `{label}`")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DuplicateError {}
+
+/// What one duplicate did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateReport {
+    /// The label the copy took.
+    pub label: String,
+    /// The label it was copied from.
+    pub from: String,
+    /// How many observations it carries, which is the original's count.
+    pub observation_count: usize,
+}
+
+/// Put a copy of the track called `label` on the bench beside it.
+///
+/// **What a second patch over the same ground is started from.** A patch that
+/// has been slid, turned and sized until it covers one piece of surface is most
+/// of the work of covering the piece next to it, so the copy carries everything
+/// that describes the geometry and the judgements made about it: the stage and
+/// all of its data (the surfel, the consensus bitmap, the cluster's template and
+/// radius), every observation with its keypoint, its seed, its shape, its
+/// verdict and its pin, and the thresholds. The measurements come too -- they
+/// were read against this geometry and still describe it, and the moment the
+/// copy is moved the steps that move it drop the ones that no longer hold.
+///
+/// **The copy has no origin.** An origin is what makes a commit *replace* a
+/// point, and a copy is a new patch over new ground: it has to create one, or
+/// the second commit would delete what the first wrote. That is the one field
+/// the copy does not carry, and it is the whole of the difference between the
+/// two items.
+///
+/// The label is minted from `<label> copy` through the bench's own collision
+/// rule ([`Bench::mint_label`]), so a second duplicate of the same track is
+/// `<label> copy (2)`, and the copy becomes the active track, because it is the
+/// thing the person is about to work on.
+pub fn duplicate(bench: &Bench, label: &str) -> Result<(Bench, DuplicateReport), DuplicateError> {
+    let track = bench
+        .track(label)
+        .ok_or_else(|| DuplicateError::NoSuchTrack(label.to_string()))?;
+    let mut copy = (**track).clone();
+    copy.origin = None;
+    let observation_count = copy.observations.len();
+    let (bench, new_label) = bench.put(&format!("{label} copy"), BenchItem::Track(Arc::new(copy)));
+    Ok((
+        bench,
+        DuplicateReport {
+            label: new_label,
+            from: label.to_string(),
+            observation_count,
+        },
+    ))
+}
 
 /// Why a split was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]

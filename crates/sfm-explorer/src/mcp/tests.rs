@@ -3611,6 +3611,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
         ),
         (
+            "duplicate_bench_item",
+            json!({ "reconstruction_label": "alpha", "item": "bull-nose" }),
+        ),
+        (
             "add_bench_track_observation",
             json!({
                 "reconstruction_label": "alpha",
@@ -3894,15 +3898,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty-eight writes, the one that writes a file, and the
+    // Fourteen reads, forty-nine writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 64, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 65, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        48
+        49
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -5968,6 +5972,71 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     assert_eq!(version_count(&state), 4);
 }
 
+/// A copy commits as a **creation**: it carries no origin, so it writes a new
+/// point rather than replacing the one the original came from.
+#[test]
+fn a_duplicate_carries_the_patch_and_commits_as_a_creation() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let before = version_count(&state);
+
+    let made = call(
+        &mut state,
+        &mut viewer,
+        "duplicate_bench_item",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let copy = made["item"].as_str().expect("the copy").to_string();
+    assert_eq!(copy, format!("{item} copy"), "{made}");
+    assert_eq!(made["copy_of"], json!(item), "{made}");
+    assert_eq!(
+        made["label"].as_str().expect("a version label"),
+        format!("Duplicated {item} as {copy}"),
+        "{made}"
+    );
+    assert_eq!(version_count(&state), before + 1);
+
+    // The copy is the active track, so a call that names none acts on it, and
+    // it carries the same sightings.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(track["item"], json!(copy), "{track}");
+    assert_eq!(track["active"], json!(true), "{track}");
+    assert_eq!(
+        track["origin"],
+        json!(null),
+        "a copy has no origin: {track}"
+    );
+    let original = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert_eq!(
+        track["observations"], original["observations"],
+        "the copy's sightings differ from the original's"
+    );
+    assert!(original["origin"].is_object(), "{original}");
+
+    let committed = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(
+        committed["point"]["replaced"],
+        json!(null),
+        "a copy has to create: {committed}"
+    );
+    assert!(committed["point"]["index"].is_number(), "{committed}");
+}
+
 /// The patch tools are the panel's handles: the patch slid, one edge put under
 /// a pixel with the far one held, and a turn in the patch's own plane. Each is
 /// one version, and what they write is what the exactness claim says it is --
@@ -6015,8 +6084,12 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     );
     assert_eq!(version_count(&state), before + 1);
 
-    // Every sighting is where the moved centre projects in its own photograph:
-    // the tool moved the patch, not the one observation it was aimed through.
+    // The tool moved the patch, not the one observation it was aimed through:
+    // every sighting moved, and each kept its own offset from where the centre
+    // projects, which is what the tiles are cut on. The fixture's keypoints are
+    // each point's exact projection, so every offset is zero and stays zero --
+    // what is asserted is that the carry preserved them rather than that they
+    // were reset.
     let sightings = call(
         &mut state,
         &mut viewer,
@@ -6108,21 +6181,25 @@ fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     );
     assert_eq!(version_count(&state), before + 2);
 
-    // The claim: the dragged edge lands on the pixel the call named, the far
-    // edge has not moved, and the frame is still square.
+    // The claim, on the outline as it is **redrawn** -- the surfel re-anchored
+    // on the sighting whose edge was dragged, which is what a person sees:
+    // that edge lands on the pixel the call named, the far edge has not moved,
+    // and the frame is still square. A thousandth of a pixel, because the
+    // redrawing goes through an `f32` keypoint slot.
+    let (redrawn, _, _) = outline(&state);
     let frame = state
         .bench_track(state.scene[0].id, &item)
         .and_then(|track| track.track().and_then(|payload| payload.frame.clone()))
         .expect("a frame");
     assert_eq!(frame.half_extent[0], frame.half_extent[1]);
-    let landed = corner(&frame, &camera, &pose, 1.0, 0.0);
+    let landed = corner(&redrawn, &camera, &pose, 1.0, 0.0);
     assert!(
-        (landed[0] - target[0]).abs() < 1e-6 && (landed[1] - target[1]).abs() < 1e-6,
+        (landed[0] - target[0]).abs() < 1e-3 && (landed[1] - target[1]).abs() < 1e-3,
         "the +u edge should land on {target:?}, it landed on {landed:?}",
     );
-    let far_after = corner(&frame, &camera, &pose, -1.0, 0.0);
+    let far_after = corner(&redrawn, &camera, &pose, -1.0, 0.0);
     assert!(
-        (far_after[0] - far_before[0]).abs() < 1e-6 && (far_after[1] - far_before[1]).abs() < 1e-6,
+        (far_after[0] - far_before[0]).abs() < 1e-3 && (far_after[1] - far_before[1]).abs() < 1e-3,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
 

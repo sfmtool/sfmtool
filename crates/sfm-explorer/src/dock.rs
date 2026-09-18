@@ -329,6 +329,10 @@ impl TabContext<'_> {
             let outcome = self.state.split_bench_track(id, &label, rows).map(|_| ());
             refuse(self.state, outcome);
         }
+        if response.duplicate {
+            let outcome = self.state.duplicate_bench_item(id, &label).map(|_| ());
+            refuse(self.state, outcome);
+        }
         if let Some(search_px) = response.evaluate {
             let outcome = self.state.start_bench_evaluate(id, &label, Some(search_px));
             // A refusal to begin is logged by the starter, in the words its

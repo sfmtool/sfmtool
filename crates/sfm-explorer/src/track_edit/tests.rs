@@ -740,3 +740,78 @@ fn a_row_s_context_menu_offers_the_search_and_greys_it_without_an_index() {
         .expect("no index is open on this node");
     assert!(why.contains("Descriptor index"), "{why}");
 }
+
+/// *Duplicate* is the toolbar's own way to a second patch over neighbouring
+/// ground: one version, a second item on the bench, and the copy active.
+#[test]
+fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
+    let (mut state, id, label, mut panel, ctx) = on_the_bench();
+    let texts = crate::test_support::painted_texts(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    assert!(
+        texts.iter().any(|t| t == "Duplicate"),
+        "the toolbar does not offer it: {texts:?}"
+    );
+
+    let before = state.node(id).expect("loaded").history.versions().len();
+    let copy = state
+        .duplicate_bench_item(id, &label)
+        .expect("the label is on the bench");
+    assert_eq!(copy, format!("{label} copy"));
+    let node = state.node(id).expect("loaded");
+    assert_eq!(
+        node.history.versions().len(),
+        before + 1,
+        "one gesture, one version"
+    );
+    assert_eq!(
+        node.history.versions().last().expect("a version").label,
+        format!("Duplicated {label} as {copy}")
+    );
+    let bench = state.bench(id).expect("a loaded node has a bench");
+    assert_eq!(bench.len(), 2, "the bench holds the original and the copy");
+    assert_eq!(crate::bench::active_track_label(bench), Some(copy.as_str()));
+    assert_eq!(
+        state.bench_track(id, &copy).and_then(|track| track.origin),
+        None,
+        "a copy commits as a creation"
+    );
+
+    // And the panel shows both, with the copy's tab the one it is drawing.
+    run_frame(&mut panel, &ctx, &state);
+    let texts = crate::test_support::painted_texts(
+        &ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+            ..Default::default()
+        },
+        |ui| {
+            panel.show(ui, &state);
+        },
+    );
+    // A tab reads `<label> (n in)`, so the labels are matched as prefixes.
+    assert!(
+        texts.iter().any(|t| t.starts_with(&format!("{label} ("))),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.starts_with(&format!("{copy} ("))),
+        "{texts:?}"
+    );
+    // And the copy is the one being drawn: its header says it commits as a
+    // creation, because it has no origin.
+    assert!(texts.contains(&copy), "{texts:?}");
+    assert!(
+        texts.iter().any(|t| t.contains("new")),
+        "the copy's header does not say it creates: {texts:?}"
+    );
+    assert_eq!(panel.rows().len(), 3, "the copy carries every sighting");
+}

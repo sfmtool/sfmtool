@@ -144,12 +144,22 @@ triangulated it yet.
 
 **The toolbar**, in two rows. The first acts on the active track: *Evaluate*,
 *Fit*, the *Stage* toggle (which names the stage it would move to), *Apply
-thresholds*, *Split off N rows*, *Commit* and *Discard*. The second is the way in and the
+thresholds*, *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The second is the way in and the
 rename: *Put selected point on bench* and *Rename*. Each entry is enabled or
 greyed with a hover text naming
 what is missing, in the style of the Image Detail menu entries -- and the
 Commit button's refusal is the core commit's own sentence, asked of the very
 track the button would commit, so the button and the step cannot disagree.
+
+**Duplicate is how a second patch over neighbouring ground is started.** It
+puts a copy of the active track on the bench and makes the copy active, so the
+patch just fitted to one piece of surface can be slid to the piece beside it
+rather than built again from a pixel
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "Duplicating"). The copy carries the geometry, the verdicts and the
+measurements and drops only the origin, which is what makes its commit create a
+point rather than replace the one the original came from -- so the header of the
+copy reads *new* where the original's names the point it came from.
 
 **Evaluate and Fit are two buttons because they are two questions.**
 *Evaluate* measures every observation where it sits and **moves nothing** -- no

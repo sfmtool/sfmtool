@@ -1347,6 +1347,39 @@ fn outline_at(
     (anchored, camera, pose)
 }
 
+/// Each sighting's offset from where the surfel's centre projects, in its own
+/// image's pixels.
+///
+/// **What a move of the patch must not disturb**: the gap between where a
+/// photograph sees the patch's content and where the geometry puts its middle
+/// is what the tile is cut on, so a step that reset every keypoint to the
+/// centre's projection would zero all of them and scramble the correlation.
+fn projection_offsets(
+    node: &SceneNode,
+    track: &sfmtool_core::bench::EditableTrack,
+) -> Vec<[f64; 2]> {
+    let frame = track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a track from a point carries the stored patch");
+    track
+        .observations
+        .iter()
+        .map(|observation| {
+            let (camera, pose) = crate::bench::geometry::view_of(
+                &node.edited().base.image_table,
+                observation.image as usize,
+            )
+            .expect("the fixture's images have cameras");
+            let centre =
+                crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
+                    .expect("the demo's patch is in front of every camera");
+            let site = observation.site().expect("a sighting");
+            [site[0] - centre[0], site[1] - centre[1]]
+        })
+        .collect()
+}
+
 /// Where a patch's `(s, t)` corner lands, in source-image px.
 fn patch_pixel(
     patch: &sfmtool_core::patch::cloud::OrientedPatch,
@@ -1402,6 +1435,7 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     let track = on_bench(&state, id, &label);
     let was = track.observations[0].site().expect("a sighting");
     let to = [was[0] + 1.5, was[1] + 2.0];
+    let offsets = projection_offsets(&state.scene[0], &track);
 
     let edit = bench_drag(&state.scene[0], 0, &track, was, was, to, false)
         .edit
@@ -1451,28 +1485,31 @@ fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
         offset.dot(&before_frame.normal()).abs() < 1e-12,
         "the patch left its own plane: {offset:?}",
     );
-    // Every sighting is where the moved centre projects in its own photograph,
-    // so the outline moved in every image at once.
-    for observation in &moved.observations {
-        let (camera, pose) = crate::bench::geometry::view_of(
-            &state.scene[0].edited().base.image_table,
-            observation.image as usize,
-        )
-        .expect("the fixture's images have cameras");
-        let expected = crate::bench::geometry::project(
-            &camera,
-            &pose,
-            after_frame.center.coords,
-            after_frame.w,
-        )
-        .expect("the demo's patch is in front of every camera");
-        let site = observation.site().expect("a sighting");
+    // Every sighting moved with the patch and **kept its own offset** from
+    // where the centre projects: the keypoints were carried along the plane,
+    // not reset to the centre, because that offset is what the tiles are cut
+    // on.
+    for (offset, now) in offsets
+        .iter()
+        .zip(projection_offsets(&state.scene[0], &moved))
+    {
         assert!(
-            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
-            "image {} should sight the centre at {expected:?}, it sights {site:?}",
+            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
+            "the slide scrambled a sighting's offset: {offset:?} became {now:?}",
+        );
+    }
+    assert!(
+        moved.observations.iter().all(|o| !o.pinned),
+        "a translation is not a verdict"
+    );
+    // The outline moved in every image at once: no sighting is where it was.
+    for (index, observation) in moved.observations.iter().enumerate() {
+        assert_ne!(
+            observation.site(),
+            track.observations[index].site(),
+            "image {} did not move with the patch",
             observation.image,
         );
-        assert!(!observation.pinned, "a translation is not a verdict");
     }
 }
 
@@ -1485,6 +1522,7 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
     let from = patch_pixel(&frame, &camera, &pose, 1.0, 0.0);
     let to = patch_pixel(&frame, &camera, &pose, 2.0, 0.0);
     let far_before = patch_pixel(&frame, &camera, &pose, -1.0, 0.0);
+    let offsets = projection_offsets(&state.scene[0], &track);
 
     let edit = bench_drag(&state.scene[0], 0, &track, centre, from, to, false)
         .edit
@@ -1525,31 +1563,28 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         resized.half_extent[0], resized.half_extent[1],
         "a patch frame is square"
     );
-    // A resize moves the centre, so every sighting follows it, exactly as a
-    // slide's does; nothing is pinned.
-    for observation in &after.observations {
-        let (camera, pose) = crate::bench::geometry::view_of(
-            &state.scene[0].edited().base.image_table,
-            observation.image as usize,
-        )
-        .expect("the fixture's images have cameras");
-        let expected =
-            crate::bench::geometry::project(&camera, &pose, resized.center.coords, resized.w)
-                .expect("the demo's patch is in front of every camera");
-        let site = observation.site().expect("a sighting");
+    // A resize moves the centre, so every sighting is carried by the same
+    // displacement and keeps its own offset, exactly as a slide's are; nothing
+    // is pinned.
+    for (offset, now) in offsets
+        .iter()
+        .zip(projection_offsets(&state.scene[0], &after))
+    {
         assert!(
-            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
-            "image {} should sight the centre at {expected:?}, it sights {site:?}",
-            observation.image,
+            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
+            "the resize scrambled a sighting's offset: {offset:?} became {now:?}",
         );
-        assert!(!observation.pinned);
     }
-    let landed = patch_pixel(&resized, &camera, &pose, 1.0, 0.0);
+    assert!(after.observations.iter().all(|o| !o.pinned));
+    // Against the outline as it is redrawn -- the surfel re-anchored on the
+    // sighting the edge was dragged in, which is what the person sees.
+    let (redrawn, _, _) = outline_at(&state.scene[0], &after, 0);
+    let landed = patch_pixel(&redrawn, &camera, &pose, 1.0, 0.0);
     assert!(
         (landed[0] - to[0]).abs() < 1e-3 && (landed[1] - to[1]).abs() < 1e-3,
         "the dragged edge should land on {to:?}, it landed on {landed:?}",
     );
-    let far_after = patch_pixel(&resized, &camera, &pose, -1.0, 0.0);
+    let far_after = patch_pixel(&redrawn, &camera, &pose, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < 1e-3 && (far_after[1] - far_before[1]).abs() < 1e-3,
         "the far edge moved from {far_before:?} to {far_after:?}",

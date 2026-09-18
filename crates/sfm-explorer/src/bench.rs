@@ -512,6 +512,31 @@ impl AppState {
         Ok(())
     }
 
+    /// Put a copy of the track called `label` on the bench beside it, and
+    /// report the label the copy took.
+    ///
+    /// What a second patch over neighbouring ground is started from: the copy
+    /// carries the geometry and the judgements and drops only the origin, so a
+    /// commit of it creates a point rather than replacing the one the original
+    /// came from ([`sfmtool_core::bench::duplicate`]). The copy is the active
+    /// track when the step returns, because it is the thing about to be moved.
+    pub(crate) fn duplicate_bench_item(
+        &mut self,
+        id: ReconId,
+        label: &str,
+    ) -> Result<String, String> {
+        if let Some(why) = self.busy_refusal(id) {
+            return Err(why);
+        }
+        let index = self.node_index(id)?;
+        let bench = Arc::clone(self.scene[index].history.current_bench());
+        let (next, report) = bench::duplicate(&bench, label)
+            .map_err(|e| format!("Cannot duplicate that item: {e}"))?;
+        let text = format!("Duplicated {label} as {}", report.label);
+        self.push_bench_step(index, next, text);
+        Ok(report.label)
+    }
+
     /// Move the named observations off the track called `label` onto a second
     /// track beside it, and report the label that one took.
     pub(crate) fn split_bench_track(

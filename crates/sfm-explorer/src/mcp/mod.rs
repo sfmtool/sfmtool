@@ -291,6 +291,13 @@ pub(crate) enum Command {
         reconstruction_label: String,
         item: String,
     },
+    /// Put a copy of one item on the bench beside it. A copy has no origin, so
+    /// a commit of it creates a point rather than replacing one.
+    DuplicateBenchItem {
+        reconstruction_label: String,
+        /// Omitted means the active track.
+        item: Option<String>,
+    },
     AddBenchTrackObservation {
         reconstruction_label: String,
         track: Option<String>,
@@ -1077,6 +1084,14 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &item,
         )),
+        Command::DuplicateBenchItem {
+            reconstruction_label,
+            item,
+        } => done(bench::duplicate_bench_item(
+            state,
+            &reconstruction_label,
+            item.as_deref(),
+        )),
         Command::AddBenchTrackObservation {
             reconstruction_label,
             track,
@@ -1725,6 +1740,7 @@ impl Command {
             Command::ActivateBenchItem { .. } => "activate_bench_item",
             Command::RenameBenchItem { .. } => "rename_bench_item",
             Command::DiscardBenchItem { .. } => "discard_bench_item",
+            Command::DuplicateBenchItem { .. } => "duplicate_bench_item",
             Command::AddBenchTrackObservation { .. } => "add_bench_track_observation",
             Command::MoveBenchTrack { .. } => "move_bench_track",
             Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
@@ -1918,6 +1934,7 @@ impl Command {
             | Command::ActivateBenchItem { .. }
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
+            | Command::DuplicateBenchItem { .. }
             | Command::AddBenchTrackObservation { .. }
             | Command::MoveBenchTrack { .. }
             | Command::MoveBenchTrackObservation { .. }

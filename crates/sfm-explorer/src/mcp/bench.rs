@@ -218,6 +218,30 @@ pub(super) fn rename_bench_item(
     Ok(with_item(reply, to))
 }
 
+/// `duplicate_bench_item`: a copy of the item beside it on the bench, which the
+/// reply names.
+///
+/// Answers as `split_bench_track` does, with the label the copy took, because
+/// that is the handle every later call has to use -- and the copy is the active
+/// track, so the calls that name none already act on it. `item` omitted means
+/// the active track, as it does for the track tools.
+pub(super) fn duplicate_bench_item(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let mut made = String::new();
+    let reply = edit::edited(state, id, |state| {
+        state.duplicate_bench_item(id, &item).map(|label| {
+            made = label;
+        })
+    })?;
+    let mut reply = with_item(reply, &made);
+    insert(&mut reply, "copy_of", json!(item));
+    Ok(reply)
+}
+
 pub(super) fn discard_bench_item(state: &mut AppState, label: &str, item: &str) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let reply = edit::edited(state, id, |state| state.discard_bench_item(id, item))?;

@@ -68,6 +68,8 @@ pub struct TrackEditResponse {
     pub apply_thresholds: Option<Thresholds>,
     /// *Split off selected rows*, carrying the rows.
     pub split: Option<Vec<usize>>,
+    /// *Duplicate*: put a copy of the active track on the bench beside it.
+    pub duplicate: bool,
     /// *Commit*.
     pub commit: bool,
     /// The Descriptor index row's *Open...*, which asks the dock for a file
@@ -402,6 +404,16 @@ impl TrackEdit {
                 "Move the selected rows onto a second track beside this one",
             ) {
                 response.split = Some(self.selected_rows.clone());
+            }
+            if entry(
+                ui,
+                "Duplicate",
+                busy.clone(),
+                "Put a copy of this track on the bench and work on that: a patch \
+                 already fitted to one piece of surface is most of the way to the \
+                 piece beside it",
+            ) {
+                response.duplicate = true;
             }
             let commit_refusal = busy.clone().or_else(|| self.commit_refusal.clone());
             if entry(

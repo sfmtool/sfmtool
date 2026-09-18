@@ -127,6 +127,9 @@ impl AppState {
                                     observations: &[usize]) -> Result<String, String>;
     pub(crate) fn activate_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
     pub(crate) fn discard_bench_item(&mut self, id: ReconId, label: &str) -> Result<(), String>;
+    /// A copy of the item beside it, active, with no origin: the label it took.
+    pub(crate) fn duplicate_bench_item(&mut self, id: ReconId, label: &str)
+        -> Result<String, String>;
     pub(crate) fn rename_bench_item(&mut self, id: ReconId, label: &str, to: &str)
         -> Result<(), String>;
     /// The point the commit wrote: the index it took, and the index it
@@ -304,6 +307,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
 | Activate | `Made IMG_0042@142,198 the active track` |
 | Discard | `Discarded IMG_0042@142,198 from the bench` |
+| Duplicate | `Duplicated IMG_0042@142,198 as IMG_0042@142,198 copy` |
 | Rename | `Renamed IMG_0042@142,198 to bull-nose on the bench` |
 
 The Action Log row is that sentence plus the version serials, exactly as an
@@ -419,7 +423,7 @@ the dock reads the label off the bench at that position before calling the step.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-two MCP tools
+An agent gets the same bench a human does, through twenty-three MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -446,6 +450,7 @@ panel means when it names no item.
 // rename_bench_item    { "reconstruction_label": "bull", "item": "IMG_0042@142,198",
 //                        "label": "bull-nose" }
 // discard_bench_item   { "reconstruction_label": "bull", "item": "bull-nose" }
+// duplicate_bench_item { "reconstruction_label": "bull", "item": "bull-nose" }
 //
 // One track on it. "track" omitted means the active track.
 // get_bench_track              { "reconstruction_label": "bull" }
@@ -662,5 +667,5 @@ still read.
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-two tools for the steps that exist are
-  § "The wire".
+  proposed in the same draft. The twenty-three tools for the steps that exist
+  are § "The wire".

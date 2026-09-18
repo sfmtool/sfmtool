@@ -25,8 +25,8 @@ use pyo3::types::{PyDict, PyDictMethods, PyList};
 use sfmtool_core::bench::{
     add_observation as core_add_observation, apply_thresholds as core_apply_thresholds,
     commit as core_commit, create_cluster as core_create_cluster,
-    create_track as core_create_track, evaluate as core_evaluate, fit as core_fit,
-    resize_frame as core_resize_frame, resize_from_edge as core_resize_from_edge,
+    create_track as core_create_track, duplicate as core_duplicate, evaluate as core_evaluate,
+    fit as core_fit, resize_frame as core_resize_frame, resize_from_edge as core_resize_from_edge,
     rotate_frame as core_rotate_frame, search_descriptors as core_search_descriptors,
     set_observation_keypoint as core_set_observation_keypoint,
     set_observation_shape as core_set_observation_shape, set_stage as core_set_stage,
@@ -1229,6 +1229,28 @@ fn split(
     Ok((PyBench::wrap(next), d.unbind()))
 }
 
+/// Put a copy of the item called ``label`` on the bench beside it.
+///
+/// What a second patch over neighbouring ground is started from: the copy
+/// carries the stage and all of its data, every observation with its keypoint,
+/// seed, shape, verdict and pin, the measurements, and the thresholds. The one
+/// field it does not carry is the **origin**, so a commit of the copy creates a
+/// point rather than replacing the one the original came from. Its label is the
+/// original's with ``" copy"`` after it, through the bench's own collision
+/// rule, and the copy is the active track.
+///
+/// Returns ``(Bench, report)`` with ``label``, ``from`` and
+/// ``observation_count``.
+#[pyfunction]
+fn duplicate(py: Python<'_>, bench: &PyBench, label: &str) -> PyResult<(PyBench, Py<PyDict>)> {
+    let (next, report) = core_duplicate(&bench.inner, label).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("label", report.label)?;
+    d.set_item("from", report.from)?;
+    d.set_item("observation_count", report.observation_count)?;
+    Ok((PyBench::wrap(next), d.unbind()))
+}
+
 /// Write `track` into `edited` as one point.
 ///
 /// The record is the track's payload plus its ``in`` observations' keypoints.
@@ -1460,6 +1482,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit, m)?)?;
     m.add_function(wrap_pyfunction!(set_stage, m)?)?;
     m.add_function(wrap_pyfunction!(split, m)?)?;
+    m.add_function(wrap_pyfunction!(duplicate, m)?)?;
     m.add_function(wrap_pyfunction!(search_descriptors, m)?)?;
     m.add_function(wrap_pyfunction!(commit, m)?)?;
     Ok(())

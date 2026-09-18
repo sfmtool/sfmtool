@@ -1740,6 +1740,82 @@ fn a_track_with_no_frame_has_nothing_to_register_against() {
     );
 }
 
+// ---- Duplicating -----------------------------------------------------------
+
+#[test]
+fn a_duplicate_is_the_same_patch_with_no_origin_and_becomes_the_active_one() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    // Something measured and something ruled on, so the copy can be checked to
+    // carry both: they were read against this geometry and still describe it.
+    let mut track = track_of(&bench, &label);
+    track.observations[0].verdict = Verdict::Out;
+    track.observations[0].pinned = true;
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .seed_shift_px = Some(0.4);
+    track.thresholds.min_zncc = 0.77;
+    let bench = install(&bench, &label, track.clone());
+
+    let (bench, report) = duplicate(&bench, &label).expect("the label is on the bench");
+    assert_eq!(report.label, format!("{label} copy"));
+    assert_eq!(report.from, label);
+    assert_eq!(report.observation_count, track.observations.len());
+    assert_eq!(bench.len(), 2);
+    assert_eq!(
+        bench.active_label(ItemKind::Track),
+        Some(report.label.as_str()),
+        "the copy is what the person is about to work on"
+    );
+
+    let copy = bench.track(&report.label).expect("just put on");
+    assert_eq!(copy.observations, track.observations, "every sighting came");
+    assert_eq!(copy.stage, track.stage, "the surfel and the bitmap came");
+    assert_eq!(copy.thresholds, track.thresholds);
+    assert_eq!(
+        copy.origin, None,
+        "a copy is a new patch, so its commit has to create rather than replace"
+    );
+    // And the original is exactly what it was, origin included.
+    let original = bench.track(&label).expect("still on the bench");
+    assert_eq!(**original, track);
+    assert_eq!(original.origin.map(|o| o.point), Some(0));
+
+    // A second duplicate of the same track takes the collision suffix.
+    let (bench, again) = duplicate(&bench, &label).expect("the label is on the bench");
+    assert_eq!(again.label, format!("{label} copy (2)"));
+    assert_eq!(bench.len(), 3);
+
+    assert!(matches!(
+        duplicate(&bench, "nothing at all"),
+        Err(DuplicateError::NoSuchTrack(_))
+    ));
+}
+
+#[test]
+fn a_commit_of_a_duplicate_creates_a_point_rather_than_replacing_one() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let (bench, report) = duplicate(&bench, &label).expect("the label is on the bench");
+    let copy = bench.track(&report.label).expect("just put on");
+
+    let (next, committed) = commit(&edited, copy).expect("a track with a position and a frame");
+    assert_eq!(committed.replaced, None, "a copy creates");
+    assert_eq!(
+        committed.point as usize,
+        edited.point_count(),
+        "it took the index after the ones that were there"
+    );
+    assert!(next.point(committed.point).is_some());
+    // The point it was copied from is still there, which is the whole reason
+    // the origin is dropped.
+    assert!(next.point(0).is_some(), "the original's point was deleted");
+}
+
 // ---- Placing a sighting, and sizing and turning the patch ------------------
 
 /// The fixture's camera swapped for one with real radial distortion, so every
@@ -1801,6 +1877,30 @@ fn corner_pixel(
         .ray_to_pixel([pc.x, pc.y, pc.z])
         .expect("the fixture's patch is in front of every camera");
     [u, v]
+}
+
+/// Each sighting's offset from where the centre projects, in its own image's
+/// pixels: the gap between where that photograph sees the patch's content and
+/// where the geometry puts the patch's middle.
+///
+/// **What a move of the patch must not disturb.** It is what the tile is cut on
+/// and the correlation is scored at, so a step that reset every keypoint to the
+/// centre's projection would zero all of them and scramble the next reading.
+fn projection_offsets(track: &EditableTrack, edited: &EditedReconstruction) -> Vec<[f64; 2]> {
+    track
+        .observations
+        .iter()
+        .map(|observation| {
+            let (camera, pose) = view(edited, observation.image as usize);
+            let frame = track
+                .track()
+                .and_then(|payload| payload.frame.as_ref())
+                .expect("a frame");
+            let centre = corner_pixel(frame, &camera, &pose, 0.0, 0.0);
+            let site = observation.site().expect("a sighting");
+            [site[0] - centre[0], site[1] - centre[1]]
+        })
+        .collect()
 }
 
 /// The outline a person sees at `observation`: the surfel re-anchored on that
@@ -1928,11 +2028,16 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
     let sighting = track.observations[1].image as usize;
     let (camera, pose) = view(edited, sighting);
     let before = outline_of(&track, edited, 1);
+    let unanchored = track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
     // The far edge's midpoint, which the resize promises not to move.
     let far_before = corner_pixel(&before, &camera, &pose, -1.0, 0.0);
     // Aim well outside the outline, along the `+u` edge's own direction.
     let out = corner_pixel(&before, &camera, &pose, 2.3, 0.0);
 
+    let offsets = projection_offsets(&track, edited);
     let (next, report) =
         resize_from_edge(&track, edited, 1, Edge::PlusU, out).expect("a pixel the ray reaches");
     assert!(report.changed);
@@ -1943,39 +2048,59 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
         after.half_extent[0], after.half_extent[1],
         "a patch frame is square, so a resize is one scale"
     );
-    let dragged = corner_pixel(&after, &camera, &pose, 1.0, 0.0);
+    // The patch moved along the dragged axis alone, by the amount that holds
+    // the far edge: `h' - h`.
+    let moved = after.center - unanchored.center;
+    assert!(
+        (moved - unanchored.u_axis * (report.half - report.was)).norm() < 1e-12,
+        "the surfel moved by {moved:?} rather than along +u by {}",
+        report.half - report.was,
+    );
+
+    // The claim, stated on the **exact** frame the step's own numbers describe:
+    // the outline is the surfel re-anchored on the dragged sighting, and that
+    // sighting's plane point moved by the same displacement, so this is what is
+    // drawn -- without the `f32` keypoint slot standing between the arithmetic
+    // and the assertion.
+    let drawn = OrientedPatch {
+        center: before.center + moved,
+        half_extent: after.half_extent,
+        ..before.clone()
+    };
+    let dragged = corner_pixel(&drawn, &camera, &pose, 1.0, 0.0);
     assert!(
         (dragged[0] - out[0]).abs() < tolerance && (dragged[1] - out[1]).abs() < tolerance,
         "the dragged edge should land on {out:?}, it landed on {dragged:?}",
     );
-    let far_after = corner_pixel(&after, &camera, &pose, -1.0, 0.0);
+    let far_after = corner_pixel(&drawn, &camera, &pose, -1.0, 0.0);
     assert!(
         (far_after[0] - far_before[0]).abs() < tolerance
             && (far_after[1] - far_before[1]).abs() < tolerance,
         "the far edge moved from {far_before:?} to {far_after:?}",
     );
-    // The patch grew toward the edge that was dragged, so its centre moved with
-    // it and the dot follows: the sighting is the new centre's projection.
-    let centre = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
-    let placed = next.observations[1].site().expect("a sighting");
-    assert!(
-        (placed[0] - centre[0]).abs() < 1e-4 && (placed[1] - centre[1]).abs() < 1e-4,
-        "the dot should sit at the outline's centre {centre:?}, it sits at {placed:?}",
-    );
-    // A resize moves the centre, so **every** sighting follows it, as a slide's
-    // does, and nothing is pinned: where the patch is says nothing about
-    // whether a sighting belongs to it.
-    for observation in &next.observations {
-        let (camera, pose) = view(edited, observation.image as usize);
-        let expected = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
-        let site = observation.site().expect("a sighting");
+    // And on the outline as it is really redrawn, through that slot: the same,
+    // to a thousandth of a pixel.
+    let redrawn = outline_of(&next, edited, 1);
+    for (s, name) in [(1.0, "dragged"), (-1.0, "far")] {
+        let want = if s > 0.0 { out } else { far_before };
+        let got = corner_pixel(&redrawn, &camera, &pose, s, 0.0);
         assert!(
-            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
-            "image {} should sight the centre at {expected:?}, it sights {site:?}",
-            observation.image,
+            (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+            "the redrawn {name} edge should be at {want:?}, it is at {got:?}",
         );
-        assert!(!observation.pinned);
     }
+
+    // **Every sighting keeps its own offset from the centre's projection**,
+    // which is what the tiles are cut on: the keypoints were carried along the
+    // plane rather than reset to the centre. And nothing is pinned, because
+    // where the patch is says nothing about whether a sighting belongs to it.
+    for (offset, now) in offsets.iter().zip(projection_offsets(&next, edited)) {
+        assert!(
+            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
+            "a resize scrambled a sighting's offset: {offset:?} became {now:?}",
+        );
+    }
+    assert!(next.observations.iter().all(|o| !o.pinned));
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 }
 
@@ -2016,6 +2141,7 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
     // real move: the `(0.7, 0.4)` point of the square.
     let target = corner_pixel(&outline, &camera, &pose, 0.7, 0.4);
 
+    let offsets = projection_offsets(&track, edited);
     let (next, report) =
         translate_frame(&track, edited, dragged, target).expect("a pixel the ray reaches");
     assert!(report.changed);
@@ -2039,42 +2165,55 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
         "the patch left its own plane: {offset:?}"
     );
     assert!((report.moved - offset.norm()).abs() < 1e-12);
+    assert_eq!(offset, displacement_of(&track, &next));
     assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
 
-    // The dot in the image it was dragged in lands under the pointer.
-    let landed = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    // **The dot the drag came through lands under the pointer.** Its own plane
+    // point plus the displacement is, by construction, the plane point under
+    // the pixel -- so this holds without the centre going anywhere near it,
+    // which is the whole point of carrying the offsets.
+    let landed = next.observations[dragged].site().expect("a sighting");
     assert!(
-        (landed[0] - target[0]).abs() < tolerance && (landed[1] - target[1]).abs() < tolerance,
-        "the centre should project to {target:?}, it projects to {landed:?}",
+        (landed[0] - target[0]).abs() < 1e-3 && (landed[1] - target[1]).abs() < 1e-3,
+        "the dot should land on {target:?}, it landed on {landed:?}",
     );
+    assert_eq!(report.pixel, landed);
+    // Exactly, before the `f32` keypoint slot rounds it.
+    let exact = {
+        let moved = OrientedPatch {
+            center: outline.center + displacement_of(&track, &next),
+            ..outline.clone()
+        };
+        corner_pixel(&moved, &camera, &pose, 0.0, 0.0)
+    };
     assert!(
-        (report.pixel[0] - target[0]).abs() < tolerance
-            && (report.pixel[1] - target[1]).abs() < tolerance,
+        (exact[0] - target[0]).abs() < tolerance && (exact[1] - target[1]).abs() < tolerance,
+        "the dragged sighting's plane point should project to {target:?}, it projects to {exact:?}",
     );
 
-    // And every sighting is where the moved centre projects in its own
-    // photograph, with nothing pinned and nothing left of the old readings.
-    for observation in &next.observations {
-        let (camera, pose) = view(edited, observation.image as usize);
-        let expected = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
-        let site = observation.site().expect("a sighting");
-        // Through the `f32` keypoint slot, which is the only loss here.
+    // **Every sighting keeps its own offset from the centre's projection.**
+    // That offset is where the photograph sees the patch's content against
+    // where the geometry puts its middle, and it is what the tile is cut on: a
+    // step that reset the keypoints to the centre would zero every one of them
+    // and scramble the correlation.
+    for (offset, now) in offsets.iter().zip(projection_offsets(&next, edited)) {
         assert!(
-            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
-            "image {} should sight the centre at {expected:?}, it sights {site:?}",
-            observation.image,
+            (now[0] - offset[0]).abs() < 1e-3 && (now[1] - offset[1]).abs() < 1e-3,
+            "a slide scrambled a sighting's offset: {offset:?} became {now:?}",
         );
+    }
+    for observation in &next.observations {
         assert!(!observation.pinned, "a translation is not a verdict");
         let measurement = observation.track.as_ref().expect("a track slot");
         assert_eq!(measurement.zncc, None);
         assert_eq!(measurement.reason, None);
     }
 
-    // A slide to the place it already sits changes nothing.
-    let centre = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
-    let (_, report) = translate_frame(&next, edited, dragged, centre).expect("the same place");
-    assert!(report.moved < 1e-9, "a slide to where it is moved it");
+    // A slide to where the dragged sighting already sits changes nothing.
+    let (again, report) = translate_frame(&next, edited, dragged, landed).expect("the same place");
+    assert!(report.moved < 1e-3, "a slide to where it is moved it");
+    let _ = again;
 
     // And it is the track stage's step.
     let where_at = scene_pixel(edited);
@@ -2084,6 +2223,18 @@ fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
         translate_frame(&track_of(&bench, &made.label), edited, 0, where_at),
         Err(TrackEditError::WrongStage { .. })
     ));
+}
+
+/// How far the surfel moved between two versions of a track.
+fn displacement_of(before: &EditableTrack, after: &EditableTrack) -> Vector3<f64> {
+    let centre = |track: &EditableTrack| {
+        track
+            .track()
+            .and_then(|payload| payload.frame.as_ref())
+            .expect("a frame")
+            .center
+    };
+    centre(after) - centre(before)
 }
 
 /// Somewhere on the sensor of image 0, for a step that has to be refused rather

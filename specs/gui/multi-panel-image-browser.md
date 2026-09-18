@@ -482,9 +482,9 @@ picture of the patch to keep in step with the first.
   every observation is a view of it, so dragging a mark slides that surfel
   across its own plane until its centre sits under the pointer: the
   half-vectors and the normal are kept, and **every** observation's keypoint
-  becomes the projection of the new centre through its own camera, so the
-  outline moves in every image at once. At the **cluster** stage there is no
-  shared geometry, so the mark is that sighting's own seed and nothing else
+  moves by the same displacement along the plane, keeping its own offset, so
+  the outline moves in every image at once. At the **cluster** stage there is
+  no shared geometry, so the mark is that sighting's own seed and nothing else
   moves. The cursor is `Move` on hover and `Grabbing` while it is held.
 - **An edge resizes the patch, with the opposite edge left where it is.**
   Dragging one of the outline's four edges is "put this edge here", and what a
@@ -514,10 +514,15 @@ surfel re-anchored on the observation whose outline it is.
 
 At the track stage the surfel is shared, so all three gestures change the
 outline in **every** image. The two that move its centre -- the slide and the
-resize -- also move the track's point and reproject **every** sighting onto the
-new centre, so the dot follows the outline in the image the gesture happened in
-and moves with the patch in the others; a turn moves the centre nowhere, so
-every sighting stays where it is. None of the three pins anything: where the
+resize -- also move the track's point and **carry every sighting along the
+plane by the same displacement**, which keeps each one's own offset from where
+the centre projects: that offset is where the photograph sees the patch's
+content against where the geometry puts its middle, and it is what the tiles
+are cut on, so resetting the keypoints to the centre would scramble the
+correlation the next reading scores. The sighting the gesture came through
+therefore lands under the pointer -- its plane point plus the displacement *is*
+the plane point under the pixel -- and the others move with the patch. A turn
+moves the centre nowhere, so every sighting stays where it is. None of the three pins anything: where the
 patch is says nothing about whether a sighting belongs to it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Placing,
 sizing and turning by hand"). At the cluster stage each sighting has its own
