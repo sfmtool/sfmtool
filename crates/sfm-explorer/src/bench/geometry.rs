@@ -23,7 +23,7 @@
 use nalgebra::Vector3;
 use sfmtool_core::bench::{
     self, Edge, EditableTrack, MoveObservationReport, Observation, ResizeReport, RotateFrameReport,
-    ShapeReport, TrackEditError,
+    ShapeReport, TrackEditError, TranslateFrameReport,
 };
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
@@ -42,7 +42,17 @@ const MIN_OFFSET: f64 = 1e-12;
 /// for the two that turn something.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum PatchEdit {
-    /// Put one observation's sighting at this pixel of its own image.
+    /// Slide the track-stage surfel across its own plane until its centre sits
+    /// under this pixel of that observation's image. Every sighting follows.
+    Translate {
+        /// The observation whose image the pixel is in.
+        observation: usize,
+        /// Where, in that image's own px.
+        pixel: [f64; 2],
+    },
+    /// Put one observation's own sighting at this pixel of its own image, and
+    /// leave every other where it is. The cluster stage's dot, where there is
+    /// no shared geometry to move.
     Move {
         /// The observation, by its position in the track's list.
         observation: usize,
@@ -77,7 +87,9 @@ pub(crate) enum PatchEdit {
 /// What one [`PatchEdit`] did, as the core step's own report.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum EditReport {
-    /// A sighting placed by hand.
+    /// The surfel slid across its plane, every sighting following.
+    Translated(TranslateFrameReport),
+    /// One sighting placed by hand.
     Moved(MoveObservationReport),
     /// The patch resized by one of its edges.
     Resized(ResizeReport),
@@ -97,6 +109,7 @@ impl EditReport {
     /// version, the way a verdict an observation already holds does.
     pub(crate) fn changed(&self) -> bool {
         match self {
+            EditReport::Translated(report) => report.changed,
             EditReport::Moved(report) => report.changed,
             EditReport::Resized(report) => report.changed,
             EditReport::Rotated(report) => report.changed,
@@ -118,6 +131,10 @@ pub(crate) fn apply(
     edit: &PatchEdit,
 ) -> Result<(EditableTrack, EditReport), TrackEditError> {
     match *edit {
+        PatchEdit::Translate { observation, pixel } => {
+            let (next, report) = bench::translate_frame(track, edited, observation, pixel)?;
+            Ok((next, EditReport::Translated(report)))
+        }
         PatchEdit::Move { observation, pixel } => {
             let (next, report) = bench::set_observation_keypoint(track, observation, pixel)?;
             Ok((next, EditReport::Moved(report)))

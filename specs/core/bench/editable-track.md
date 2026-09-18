@@ -161,7 +161,14 @@ pub fn split(
     observations: &[usize],
 ) -> Result<(Bench, SplitReport), SplitError>;
 
-// Placing a sighting, and sizing and turning the patch, by hand.
+// Placing a sighting, and moving, sizing and turning the patch, by hand.
+pub fn translate_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    observation: usize,                  // whose image the pixel is in
+    pixel: [f64; 2],                     // where the centre should land in it
+) -> Result<(EditableTrack, TranslateFrameReport), TrackEditError>;
+
 pub fn set_observation_keypoint(
     track: &EditableTrack,
     observation: usize,
@@ -203,6 +210,16 @@ impl Edge {
     pub fn sign(self) -> f64;            // -1.0 or +1.0
     pub fn name(self) -> &'static str;   // "+u", "-u", "+v", "-v"
     pub const ALL: [Edge; 4];
+}
+
+pub struct TranslateFrameReport {
+    pub observation: usize,
+    pub image: u32,
+    pub pixel: [f64; 2],                 // where the centre now projects in it
+    pub center: Point3<f64>,
+    pub moved: f64,                      // world units
+    pub placed: usize,                   // keypoints written
+    pub changed: bool,
 }
 
 pub struct MoveObservationReport {
@@ -677,23 +694,45 @@ in it is refused, with `StageError::NoReference`.
 
 ### Placing, sizing and turning by hand
 
-Five steps put a person's own hand on the track's geometry, and they are the
+Six steps put a person's own hand on the track's geometry, and they are the
 steps behind the Image Detail panel's bench handles
 ([`../../gui/multi-panel-image-browser.md`](../../gui/multi-panel-image-browser.md)
-§ "The bench layer") and the wire's three patch tools.
+§ "The bench layer") and the wire's four patch tools.
 
-**`set_observation_keypoint` places one sighting.** At the track stage it writes
-the observation's keypoint -- the pixel a commit writes and the place every
-reading is anchored at -- and at the cluster stage it re-seeds the observation
-at that pixel with the shape it is being read at, because a person moving a mark
-is saying where the patch is and not how large it is. Either way **every
-measurement read at the old pixel is dropped**: the leave-one-out ZNCC, both
-distances, the reprojection residual, the localizability and the reason were all
-computed for a pixel that is not this one, and an evaluation recomputes all of
-them from the track as it stands. **The observation is pinned**, at both stages:
-a sighting a person placed is a sighting they have ruled on, so
-`apply_thresholds` leaves its verdict where it is rather than painting over a
-placement by hand. Nothing else on the track moves.
+**At the track stage a track has one surfel and every observation is a view of
+it**, so the three gestures over the outline are gestures over *the patch*: it
+slides, resizes and turns, and each photograph shows where it lands. That is
+what makes them worth having -- a patch can be worked until it covers the piece
+of surface a person means. The cluster stage has no shared geometry at all, only
+one affine shape per sighting, so there each gesture is that sighting's own.
+
+**`translate_frame` slides the surfel across its own plane** until its centre
+sits under a pixel of one observation's photograph. The pointer is read against
+the outline as drawn -- the frame re-anchored on that observation's sighting --
+and the move is in-plane by construction, a ray-plane meeting minus a point on
+the plane, so the normal, the axes and the size are untouched. **Every**
+observation's keypoint then becomes the projection of the new centre through its
+own camera, which is the only place each sighting can honestly be once the thing
+they are all views of has moved; a sighting the centre no longer projects into
+is left with no keypoint and `Unmeasured::NoProjection` as its reason, which is
+the truth about it. Nothing is pinned: a translation says where the patch is, not
+whether any sighting belongs to it.
+
+**`set_observation_keypoint` places one sighting**, and one only. At the track
+stage it writes that observation's keypoint -- the pixel a commit writes and the
+place every reading is anchored at -- and at the cluster stage it re-seeds the
+observation at that pixel with the shape it is being read at, because a person
+moving a cluster's mark is saying where that patch is and not how large it is.
+Either way **every measurement read at the old pixel is dropped**: the
+leave-one-out ZNCC, both distances, the reprojection residual, the
+localizability and the reason were all computed for a pixel that is not this
+one, and an evaluation recomputes all of them from the track as it stands. **The
+observation is pinned**, at both stages: a sighting a person placed is a sighting
+they have ruled on, so `apply_thresholds` leaves its verdict where it is rather
+than painting over a placement by hand. Nothing else on the track moves -- which
+is the difference from `translate_frame`, and why the two are separate steps: the
+viewer's dot is the translation at the track stage and this at the cluster stage,
+and this is also what a script that really means one keypoint asks for.
 
 **`resize_frame` sizes the surfel about its own centre**, to one half-length on
 both axes. One scalar and not two, because a patch frame is square: the stored
@@ -713,11 +752,12 @@ than each caller's, so a tool call and a drag cannot resize differently.
 the surfel re-anchored on `observation`'s own sighting, which is where a person
 sees the patch in that photograph, so that is the frame the pixel is read
 against and the frame the resize writes back: the surfel takes the centre the
-outline had plus the edge's shift, the track's position follows it, and that
-observation's keypoint is set to the projection of the new centre -- pinned, as
-a hand-placed one -- so the dot and the outline move together and the far edge
-really does hold still on screen. Every other sighting keeps its own keypoint;
-their outlines simply grow. A **bearing** (`w == 0`) is handled by renormalizing
+outline had plus the edge's shift, and the track's position follows it. Because
+the centre moved, **every** observation's keypoint is then reprojected exactly as
+a translation's are -- so the dot and the outline move together in the image the
+edge was dragged in, the far edge really does hold still there, and the outline
+in every other image moves with the patch. Nothing is pinned. A **bearing**
+(`w == 0`) is handled by renormalizing
 the moved centre and dividing the half-length by the same factor, which leaves
 every corner the same direction, so the far edge is held there too.
 
@@ -735,18 +775,19 @@ were the refinement's answer about the shape it was run at. The verdict is
 **not** pinned here: a size or a turn is not a ruling on whether the sighting
 belongs, which is what a pin protects from the painting.
 
-**What a change to the patch invalidates is cleared.** All three patch steps
-drop the consensus bitmap and every track measurement but its keypoint: the
+**What a change to the patch invalidates is cleared.** Every patch step drops
+the consensus bitmap and every track measurement but its keypoint: the
 bitmap is the observations fused over the square as it stood, and every number
 beside a keypoint was read over that square and against that position. Where
 each sighting sits is not one of those things, so it stays; an evaluation
 restores the rest, and the next fit fuses a new bitmap at the size and turn the
 frame now has.
 
-**The stage decides which step applies.** `resize_frame` and `rotate_frame` are
-the track stage's and refuse a cluster; `set_observation_shape` is the cluster
-stage's and refuses a track. `set_observation_keypoint` and `resize_from_edge`
-work at either and do the stage's own arithmetic.
+**The stage decides which step applies.** `translate_frame`, `resize_frame` and
+`rotate_frame` are the track stage's and refuse a cluster;
+`set_observation_shape` is the cluster stage's and refuses a track.
+`set_observation_keypoint` and `resize_from_edge` work at either and do the
+stage's own arithmetic.
 
 ### Searching the descriptor index
 
@@ -1166,11 +1207,12 @@ the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `reason`, the sentence, exactly when it carries no `zncc`.
 
 `set_observation_keypoint`, `resize_frame`, `rotate_frame` and
-`set_observation_shape` take their numbers directly; `resize_from_edge` takes
-the reconstruction too, because it reads the observation's camera to unproject
-the pixel, and names its edge as the word `"+u"`, `"-u"`, `"+v"` or `"-v"`.
+`set_observation_shape` take their numbers directly; `translate_frame` and
+`resize_from_edge` take the reconstruction too, because they read the
+observation's camera to unproject the pixel, and the latter names its edge as
+the word `"+u"`, `"-u"`, `"+v"` or `"-v"`.
 Their reports are dicts of the fields above, with `shape` as a 2x2 array.
-`EditableTrack.frame` is what the three patch steps are read back through: the
+`EditableTrack.frame` is what the patch steps are read back through: the
 surfel as `center`, `u_halfvec`, `v_halfvec` and `w`, the half-vectors being the
 axes scaled by the half-extents the way a `.sfmr` stores them, and `None` at the
 cluster stage or before anything has fitted one.
@@ -1217,9 +1259,15 @@ empty list or all of them; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.
 
-The hand steps are tested for what makes them worth having. A move writes the
-keypoint, pins the observation and leaves nothing that was read at the old
-pixel, and moving a cluster sighting keeps the shape it is read at. A resize
+The hand steps are tested for what makes them worth having. A **slide** is run
+under a pinhole and under a distorting lens: the centre lands under the pointer
+in the image it was dragged in (exactly, and within the lens's inverse-map
+tolerance), the offset lies in the patch's own plane with the normal, the axes
+and the size untouched, every sighting comes back as the projection of the new
+centre through its own camera, nothing is pinned, and a slide to the place the
+patch already sits moves it nowhere. A single-keypoint move writes the keypoint,
+pins that observation and leaves nothing that was read at the old pixel, and
+moving a cluster sighting keeps the shape it is read at. A resize
 from an edge is checked **through a lens**, over the same fixture with its
 camera swapped for one with real radial distortion: the dragged edge reprojects
 onto the pixel the call named, the far edge reprojects onto the pixel it was

@@ -1392,8 +1392,12 @@ fn hovering_an_edge_of_the_outline_asks_for_the_resize_cursor_its_orientation_na
     assert_eq!(dragged.cursor, egui::CursorIcon::Move);
 }
 
+/// The dot at the track stage moves the **patch**, not one sighting: there is
+/// one surfel and every observation is a view of it, so the dot lands under the
+/// pointer in the image it was dragged in and every other sighting goes to
+/// where the moved centre projects in its own photograph.
 #[test]
-fn dragging_the_dot_moves_the_sighting_and_pushes_one_version_naming_it() {
+fn dragging_the_dot_slides_the_patch_and_every_sighting_follows_it() {
     let (mut state, id, label) = bench_state();
     let track = on_bench(&state, id, &label);
     let was = track.observations[0].site().expect("a sighting");
@@ -1406,7 +1410,7 @@ fn dragging_the_dot_moves_the_sighting_and_pushes_one_version_naming_it() {
     // coordinate on the way in and the source pixel is read back out of it, so
     // the round trip is exact only to that type's precision, not to the drag's.
     assert!(
-        matches!(edit, crate::bench::PatchEdit::Move { observation: 0, pixel }
+        matches!(edit, crate::bench::PatchEdit::Translate { observation: 0, pixel }
             if (pixel[0] - to[0]).abs() < 1e-3 && (pixel[1] - to[1]).abs() < 1e-3),
         "the drag named something else: {edit:?}",
     );
@@ -1414,18 +1418,62 @@ fn dragging_the_dot_moves_the_sighting_and_pushes_one_version_naming_it() {
     let before = version_labels(&state, id).len();
     state
         .edit_bench_patch(id, &label, &edit)
-        .expect("a pixel on the sensor");
+        .expect("a pixel the ray reaches");
     let labels = version_labels(&state, id);
     assert_eq!(labels.len(), before + 1, "one gesture, one version");
     let sentence = labels.last().expect("a version");
     assert!(
-        sentence.starts_with(&format!("Moved observation 0 of {label} to (")),
-        "the version's label does not name the move: {sentence}",
+        sentence.starts_with(&format!("Moved {label} by ")),
+        "the version's label does not name the slide: {sentence}",
     );
+
     let moved = on_bench(&state, id, &label);
+    // The dot sits where the pointer left it.
     let site = moved.observations[0].site().expect("a sighting");
-    assert!((site[0] - to[0]).abs() < 1e-3 && (site[1] - to[1]).abs() < 1e-3);
-    assert!(moved.observations[0].pinned);
+    assert!(
+        (site[0] - to[0]).abs() < 1e-3 && (site[1] - to[1]).abs() < 1e-3,
+        "the dot should sit at {to:?}, it sits at {site:?}",
+    );
+    // And the slide is in the patch's own plane: the normal is untouched and
+    // the offset lies in it.
+    let before_frame = track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    let after_frame = moved
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    assert!((after_frame.normal() - before_frame.normal()).norm() < 1e-12);
+    assert_eq!(after_frame.half_extent, before_frame.half_extent);
+    let offset = after_frame.center - before_frame.center;
+    assert!(
+        offset.dot(&before_frame.normal()).abs() < 1e-12,
+        "the patch left its own plane: {offset:?}",
+    );
+    // Every sighting is where the moved centre projects in its own photograph,
+    // so the outline moved in every image at once.
+    for observation in &moved.observations {
+        let (camera, pose) = crate::bench::geometry::view_of(
+            &state.scene[0].edited().base.image_table,
+            observation.image as usize,
+        )
+        .expect("the fixture's images have cameras");
+        let expected = crate::bench::geometry::project(
+            &camera,
+            &pose,
+            after_frame.center.coords,
+            after_frame.w,
+        )
+        .expect("the demo's patch is in front of every camera");
+        let site = observation.site().expect("a sighting");
+        assert!(
+            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
+            "image {} should sight the centre at {expected:?}, it sights {site:?}",
+            observation.image,
+        );
+        assert!(!observation.pinned, "a translation is not a verdict");
+    }
 }
 
 #[test]
@@ -1468,8 +1516,8 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         labels.last(),
     );
 
-    let resized = on_bench(&state, id, &label);
-    let resized = resized
+    let after = on_bench(&state, id, &label);
+    let resized = after
         .track()
         .and_then(|payload| payload.frame.clone())
         .expect("a frame");
@@ -1477,6 +1525,25 @@ fn dragging_an_edge_resizes_the_patch_so_it_reprojects_under_the_release_point()
         resized.half_extent[0], resized.half_extent[1],
         "a patch frame is square"
     );
+    // A resize moves the centre, so every sighting follows it, exactly as a
+    // slide's does; nothing is pinned.
+    for observation in &after.observations {
+        let (camera, pose) = crate::bench::geometry::view_of(
+            &state.scene[0].edited().base.image_table,
+            observation.image as usize,
+        )
+        .expect("the fixture's images have cameras");
+        let expected =
+            crate::bench::geometry::project(&camera, &pose, resized.center.coords, resized.w)
+                .expect("the demo's patch is in front of every camera");
+        let site = observation.site().expect("a sighting");
+        assert!(
+            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
+            "image {} should sight the centre at {expected:?}, it sights {site:?}",
+            observation.image,
+        );
+        assert!(!observation.pinned);
+    }
     let landed = patch_pixel(&resized, &camera, &pose, 1.0, 0.0);
     assert!(
         (landed[0] - to[0]).abs() < 1e-3 && (landed[1] - to[1]).abs() < 1e-3,

@@ -416,6 +416,13 @@ impl AppState {
         report: &geometry::EditReport,
     ) -> String {
         match report {
+            geometry::EditReport::Translated(report) => {
+                let centre = report.center;
+                format!(
+                    "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3})",
+                    report.moved, centre.x, centre.y, centre.z
+                )
+            }
             geometry::EditReport::Moved(report) => {
                 let name = self.image_name(ImageRef::new(id, report.image as usize));
                 let moved = report

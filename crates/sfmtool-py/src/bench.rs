@@ -30,10 +30,10 @@ use sfmtool_core::bench::{
     rotate_frame as core_rotate_frame, search_descriptors as core_search_descriptors,
     set_observation_keypoint as core_set_observation_keypoint,
     set_observation_shape as core_set_observation_shape, set_stage as core_set_stage,
-    set_verdict as core_set_verdict, split as core_split, Bench, BenchItem, ClusterSeed,
-    CreateTrackOptions, Edge, EditableTrack, EvaluateOptions, EvaluateReport, FitOptions,
-    FitReport, Found, ItemKind, Observation, ObservationSeed, Provenance, ResizeReport,
-    SearchOptions, SearchReport, StageKind, Verdict, DEFAULT_RADIUS_PX,
+    set_verdict as core_set_verdict, split as core_split, translate_frame as core_translate_frame,
+    Bench, BenchItem, ClusterSeed, CreateTrackOptions, Edge, EditableTrack, EvaluateOptions,
+    EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation, ObservationSeed,
+    Provenance, ResizeReport, SearchOptions, SearchReport, StageKind, Verdict, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -627,13 +627,66 @@ fn set_verdict(
     ))
 }
 
-/// Put one observation's sighting at ``pixel``, by hand.
+/// Slide the track's surfel across its own plane until its centre sits under
+/// ``pixel`` in ``observation``'s photograph.
+///
+/// This moves the **patch**, not one sighting: a track-stage track has one
+/// surfel and every observation is a view of it, so the centre moves in-plane,
+/// the half-vectors and the normal are kept, and every observation's keypoint
+/// becomes the projection of the new centre through its own camera. Nothing is
+/// pinned -- a translation says where the patch is, not whether a sighting
+/// belongs to it -- and the measurements and the bitmap go, because all of them
+/// were read at a place the patch has left. A sighting the moved centre no
+/// longer projects into is left with no keypoint and ``NoProjection`` as its
+/// reason.
+///
+/// The pointer is read against the outline as drawn: the frame re-anchored on
+/// that observation's own sighting. :func:`set_observation_keypoint` is the step
+/// for **one** keypoint.
+///
+/// Returns ``(EditableTrack, report)`` carrying ``observation``, ``image``,
+/// ``pixel`` (where the centre now projects in it), ``center``, ``moved``,
+/// ``placed`` and ``changed``.
+#[pyfunction]
+fn translate_frame(
+    py: Python<'_>,
+    track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
+    observation: usize,
+    pixel: [f64; 2],
+) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
+    let (next, report) =
+        core_translate_frame(&track.inner, &edited.inner, observation, pixel).map_err(refused)?;
+    let d = PyDict::new(py);
+    d.set_item("observation", report.observation)?;
+    d.set_item("image", report.image)?;
+    d.set_item("pixel", report.pixel)?;
+    d.set_item(
+        "center",
+        PyArray1::from_vec(py, vec![report.center.x, report.center.y, report.center.z]),
+    )?;
+    d.set_item("moved", report.moved)?;
+    d.set_item("placed", report.placed)?;
+    d.set_item("changed", report.changed)?;
+    Ok((
+        PyEditableTrack {
+            inner: Arc::new(next),
+        },
+        d.unbind(),
+    ))
+}
+
+/// Put **one** observation's own sighting at ``pixel``, by hand, leaving every
+/// other where it is.
 ///
 /// At the track stage this writes the observation's keypoint, which is the pixel
 /// a commit writes; at the cluster stage it moves its seed and keeps the shape
 /// it is read at. Either way every measurement that was read at the old pixel is
 /// dropped -- none of them says anything about the new one -- and the
 /// observation is pinned, so :func:`apply_thresholds` leaves its verdict alone.
+///
+/// :func:`translate_frame` is the step that moves the **patch**, which is what
+/// the viewer's dot drag means at the track stage.
 ///
 /// Returns ``(EditableTrack, report)``.
 #[pyfunction]
@@ -1396,6 +1449,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_cluster, m)?)?;
     m.add_function(wrap_pyfunction!(add_observation, m)?)?;
     m.add_function(wrap_pyfunction!(set_verdict, m)?)?;
+    m.add_function(wrap_pyfunction!(translate_frame, m)?)?;
     m.add_function(wrap_pyfunction!(set_observation_keypoint, m)?)?;
     m.add_function(wrap_pyfunction!(resize_frame, m)?)?;
     m.add_function(wrap_pyfunction!(resize_from_edge, m)?)?;

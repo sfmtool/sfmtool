@@ -297,7 +297,17 @@ pub(crate) enum Command {
         camera_image: CameraImageSel,
         seed: crate::bench::Seed,
     },
-    /// Put one observation's sighting at a pixel, by hand.
+    /// Slide the track-stage surfel across its own plane until its centre sits
+    /// under a pixel. Every sighting follows.
+    MoveBenchTrack {
+        reconstruction_label: String,
+        track: Option<String>,
+        /// The observation whose image the pixel is in.
+        observation: usize,
+        /// Where, in that image's own px.
+        pixel: [f64; 2],
+    },
+    /// Put one observation's own sighting at a pixel, by hand.
     MoveBenchTrackObservation {
         reconstruction_label: String,
         track: Option<String>,
@@ -1079,6 +1089,18 @@ pub(crate) fn apply_with_window(
             &camera_image,
             &seed,
         )),
+        Command::MoveBenchTrack {
+            reconstruction_label,
+            track,
+            observation,
+            pixel,
+        } => done(bench::move_bench_track(
+            state,
+            &reconstruction_label,
+            track.as_deref(),
+            observation,
+            pixel,
+        )),
         Command::MoveBenchTrackObservation {
             reconstruction_label,
             track,
@@ -1704,6 +1726,7 @@ impl Command {
             Command::RenameBenchItem { .. } => "rename_bench_item",
             Command::DiscardBenchItem { .. } => "discard_bench_item",
             Command::AddBenchTrackObservation { .. } => "add_bench_track_observation",
+            Command::MoveBenchTrack { .. } => "move_bench_track",
             Command::MoveBenchTrackObservation { .. } => "move_bench_track_observation",
             Command::ResizeBenchTrack { .. } => "resize_bench_track",
             Command::RotateBenchTrack { .. } => "rotate_bench_track",
@@ -1896,6 +1919,7 @@ impl Command {
             | Command::RenameBenchItem { .. }
             | Command::DiscardBenchItem { .. }
             | Command::AddBenchTrackObservation { .. }
+            | Command::MoveBenchTrack { .. }
             | Command::MoveBenchTrackObservation { .. }
             | Command::ResizeBenchTrack { .. }
             | Command::RotateBenchTrack { .. }

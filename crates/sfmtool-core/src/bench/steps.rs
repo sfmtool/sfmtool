@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 
 use crate::patch::cloud::OrientedPatch;
 use crate::progress::Progress;
@@ -983,11 +983,8 @@ pub fn resize_from_edge(
                 1.0
             };
             let half = half / scale;
-            let keypoint = project_center(&camera, &cam_from_world, center, anchored.w)
-                .ok_or(TrackEditError::NoProjection { observation })?;
 
             let mut next = track.clone();
-            keep_keypoints_only(&mut next);
             {
                 let (position, frame, bitmap) = track_payload_mut(&mut next);
                 frame.center = center;
@@ -997,12 +994,7 @@ pub fn resize_from_edge(
                 }
                 *bitmap = None;
             }
-            let target = &mut next.observations[observation];
-            target.track = Some(TrackMeasurement {
-                keypoint: Some([keypoint[0] as f32, keypoint[1] as f32]),
-                ..TrackMeasurement::default()
-            });
-            target.pinned = true;
+            reproject_keypoints(&mut next, edited);
             Ok((
                 next,
                 ResizeReport {
@@ -1067,6 +1059,114 @@ pub fn resize_from_edge(
             ))
         }
     }
+}
+
+/// What one translation of the surfel did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TranslateFrameReport {
+    /// The observation whose image the pointer named.
+    pub observation: usize,
+    /// That image.
+    pub image: u32,
+    /// Where the centre now projects in it.
+    pub pixel: [f64; 2],
+    /// Where the centre now stands. A unit bearing for a direction patch.
+    pub center: Point3<f64>,
+    /// How far it moved, in world units.
+    pub moved: f64,
+    /// How many sightings the moved centre projects into, and so how many
+    /// keypoints were written.
+    pub placed: usize,
+    /// Whether anything changed.
+    pub changed: bool,
+}
+
+/// Slide the surfel across its own plane until its centre sits under `pixel` in
+/// `observation`'s photograph.
+///
+/// **This moves the patch, not one sighting.** A track-stage track has one
+/// surfel and every observation is a view of it, so dragging the mark in one
+/// photograph is a statement about where that surfel is: the centre moves, the
+/// half-vectors and the normal are kept, and **every** observation's keypoint
+/// becomes the projection of the new centre through its own camera, so the
+/// outline moves in every image at once. That is what makes the gesture worth
+/// having -- a patch can be slid, turned and sized until it covers the piece of
+/// surface a person means, and each photograph shows where it lands.
+///
+/// The pointer is read against the outline as drawn: the frame re-anchored on
+/// `observation`'s own sighting, so the offset is measured from the square the
+/// person can see. The move is in-plane by construction -- a ray-plane meeting
+/// minus a point on the plane -- so the normal and the plane are untouched.
+///
+/// **Nothing is pinned.** A translation says where the patch is and not whether
+/// any sighting belongs to it, which is what a pin protects from the threshold
+/// painting. The measurements go, as they do for a resize: every number beside
+/// a keypoint was read at a place the patch has left. The bitmap goes with
+/// them.
+///
+/// A sighting the moved centre no longer projects into is left with no keypoint
+/// and [`Unmeasured::NoProjection`](super::track::Unmeasured::NoProjection) as
+/// its reason, which is the truth about it: the patch is no longer in that
+/// photograph.
+pub fn translate_frame(
+    track: &EditableTrack,
+    edited: &EditedReconstruction,
+    observation: usize,
+    pixel: [f64; 2],
+) -> Result<(EditableTrack, TranslateFrameReport), TrackEditError> {
+    if !pixel.iter().all(|c| c.is_finite()) {
+        return Err(TrackEditError::BadPixel(pixel));
+    }
+    let current = observation_at(track, observation)?;
+    let image = current.image;
+    let site = current
+        .site()
+        .ok_or(TrackEditError::NoPlace { observation })?;
+    let frame = frame_of(track)?;
+    let was = frame.center;
+    let (camera, cam_from_world) = view_of(edited, image)?;
+    let anchored = frame
+        .anchored_at_keypoint(&camera, &cam_from_world, site)
+        .ok_or(TrackEditError::NoProjection { observation })?;
+    let offset = anchored
+        .keypoint_plane_offset(&camera, &cam_from_world, pixel)
+        .ok_or(TrackEditError::NoProjection { observation })?;
+    let mut center = anchored.center + offset;
+    // A direction patch's centre is a unit bearing, which is what rendering and
+    // the half-extents are stated against; the corner directions are unchanged
+    // by the renormalization, so the patch keeps its size.
+    if anchored.w == 0.0 {
+        let norm = center.coords.norm();
+        if norm <= 1e-12 {
+            return Err(TrackEditError::BadPixel(pixel));
+        }
+        center = Point3::from(center.coords / norm);
+    }
+    let landed = project_center(&camera, &cam_from_world, center, anchored.w)
+        .ok_or(TrackEditError::NoProjection { observation })?;
+
+    let mut next = track.clone();
+    {
+        let (position, frame, bitmap) = track_payload_mut(&mut next);
+        frame.center = center;
+        if frame.w != 0.0 {
+            *position = Some(center);
+        }
+        *bitmap = None;
+    }
+    let placed = reproject_keypoints(&mut next, edited);
+    Ok((
+        next,
+        TranslateFrameReport {
+            observation,
+            image,
+            pixel: landed,
+            center,
+            moved: (center - was).norm(),
+            placed,
+            changed: center != was,
+        },
+    ))
 }
 
 /// What one turn of the surfel did.
@@ -1251,6 +1351,50 @@ fn track_payload_mut(
         frame.as_mut().expect("the frame was read before the clone"),
         bitmap,
     )
+}
+
+/// Put every sighting where the surfel's centre now projects in its own
+/// photograph, and drop every measurement read before it moved.
+///
+/// The rule the two steps that move the centre share: a track-stage track has
+/// one surfel, every observation is a view of it, and once it has moved the
+/// only place each sighting can honestly be is where the new centre lands in
+/// that photograph. A sighting whose camera the centre misses is left with no
+/// keypoint and the reason that says so, rather than with a stale one.
+///
+/// Returns how many keypoints were written, which is how many photographs still
+/// hold the patch.
+fn reproject_keypoints(track: &mut EditableTrack, edited: &EditedReconstruction) -> usize {
+    let Some((center, w)) = track
+        .track()
+        .and_then(|payload| payload.frame.as_ref())
+        .map(|frame| (frame.center, frame.w))
+    else {
+        return 0;
+    };
+    let mut placed = 0;
+    for observation in &mut track.observations {
+        let landed =
+            view_of(edited, observation.image)
+                .ok()
+                .and_then(|(camera, cam_from_world)| {
+                    project_center(&camera, &cam_from_world, center, w)
+                });
+        observation.track = Some(match landed {
+            Some(pixel) => {
+                placed += 1;
+                TrackMeasurement {
+                    keypoint: Some([pixel[0] as f32, pixel[1] as f32]),
+                    ..TrackMeasurement::default()
+                }
+            }
+            None => TrackMeasurement {
+                reason: Some(super::track::Unmeasured::NoProjection),
+                ..TrackMeasurement::default()
+            },
+        });
+    }
+    placed
 }
 
 /// Drop every track measurement but the keypoint it was read at.

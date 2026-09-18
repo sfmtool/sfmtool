@@ -30,6 +30,7 @@ from sfmtool._sfmtool.bench import (
     set_stage,
     set_verdict,
     split,
+    translate_frame,
 )
 from sfmtool._sfmtool.reconstruction import EditedReconstruction, SfmrReconstruction
 
@@ -835,7 +836,7 @@ class TestTheDescriptorSearch:
 
 
 class TestPlacingSizingAndTurningByHand:
-    """The five steps a person's own hand reaches the geometry through.
+    """The six steps a person's own hand reaches the geometry through.
 
     They are what the Image Detail panel's bench handles do. What the exactness
     of the resize claims -- the dragged edge reprojecting onto the pixel it was
@@ -844,6 +845,34 @@ class TestPlacingSizingAndTurningByHand:
     is checked here is that the bindings carry each step's numbers and each
     step's refusals.
     """
+
+    def test_sliding_the_patch_carries_every_sighting_with_it(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        was = track.observation(0)["track"]["keypoint"]
+        before = track.frame
+
+        moved, report = translate_frame(track, edited, 0, (was[0] + 6.0, was[1] - 4.0))
+        assert report["changed"]
+        assert report["observation"] == 0
+        assert report["placed"] == moved.observation_count
+        assert report["moved"] > 0.0
+        # In-plane only: the axes, the size and the normal are untouched.
+        after = moved.frame
+        for axis in ("u_halfvec", "v_halfvec"):
+            np.testing.assert_allclose(after[axis], before[axis])
+        offset = np.asarray(after["center"]) - np.asarray(before["center"])
+        normal = np.cross(before["u_halfvec"], before["v_halfvec"])
+        assert abs(float(offset @ normal)) < 1e-12, "the patch left its own plane"
+        np.testing.assert_allclose(moved.position, after["center"])
+        # Every sighting moved with it, and none was pinned by a translation.
+        for index in range(moved.observation_count):
+            observation = moved.observation(index)
+            assert not observation["pinned"]
+            assert "zncc" not in observation["track"]
+            before_at = track.observation(index)["track"]["keypoint"]
+            assert not np.array_equal(observation["track"]["keypoint"], before_at)
 
     def test_a_placed_sighting_is_written_pinned_and_stripped_of_the_old_reading(
         self, edited, long_track_point
@@ -930,10 +959,12 @@ class TestPlacingSizingAndTurningByHand:
             np.linalg.norm(frame["v_halfvec"]), rel=1e-12
         )
         # The patch grew toward the edge that was dragged, so its centre moved
-        # with it and the dot follows.
-        assert resized.observation(0)["pinned"]
+        # with it and every dot follows.
+        # A resize moves the centre, so every sighting follows it, exactly as a
+        # slide's does; nothing is pinned.
+        assert not resized.observation(0)["pinned"]
         assert not np.array_equal(resized.observation(0)["track"]["keypoint"], was)
-        np.testing.assert_array_equal(
+        assert not np.array_equal(
             resized.observation(1)["track"]["keypoint"],
             track.observation(1)["track"]["keypoint"],
         )

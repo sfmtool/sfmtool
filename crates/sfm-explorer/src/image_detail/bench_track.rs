@@ -23,12 +23,15 @@
 //!   refined affine shape, with the seed's own parallelogram dashed behind it.
 //!   The two apart are how far the refinement moved and how much it turned.
 //!
-//! **What it draws, it edits.** The dot is a handle that moves the sighting,
-//! an edge of the outline resizes the patch and a corner turns it; each drag
+//! **What it draws, it edits.** At the track stage every handle edits the one
+//! surfel and each photograph shows where it lands: the dot slides it across
+//! its own plane, an edge resizes it, a corner turns it. At the cluster stage
+//! there is no shared geometry, so each handle is that sighting's own -- the
+//! dot moves its seed and the outline is its own affine shape. Each drag
 //! previews by drawing the track the release would produce, and the release is
 //! one version. The geometry a pointer is read against is
-//! [`crate::bench::geometry`], which the wire's three patch tools read it
-//! against too.
+//! [`crate::bench::geometry`], which the wire's patch tools read it against
+//! too.
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Shape, Stroke, Vec2};
 use sfmtool_core::bench::{EditableTrack, Observation, Stage, Verdict};
@@ -629,9 +632,21 @@ impl Layer {
             | Handle::Corner { observation, .. } => observation,
         };
         match drag.handle {
-            Handle::Keypoint { .. } => Some(PatchEdit::Move {
-                observation,
-                pixel: drag.to,
+            // The dot means different things at the two stages, because the two
+            // stages have different things to move: a track-stage track has one
+            // surfel and every sighting is a view of it, so dragging the mark
+            // slides the **patch** and every sighting follows; a cluster has no
+            // shared geometry at all, so the mark is that sighting's own seed
+            // and nothing else moves.
+            Handle::Keypoint { .. } => Some(match track.stage {
+                Stage::Track(_) => PatchEdit::Translate {
+                    observation,
+                    pixel: drag.to,
+                },
+                Stage::Cluster(_) => PatchEdit::Move {
+                    observation,
+                    pixel: drag.to,
+                },
             }),
             Handle::Edge { edge, .. } => Some(PatchEdit::ResizeFromEdge {
                 observation,

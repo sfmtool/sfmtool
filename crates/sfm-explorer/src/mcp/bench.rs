@@ -249,13 +249,41 @@ pub(super) fn add_bench_track_observation(
     Ok(reply)
 }
 
+/// `move_bench_track`: the patch slid across its own plane until its centre
+/// sits under a pixel.
+///
+/// The wire's half of the dot drag at the **track** stage, where the dot means
+/// the patch and not the sighting: a track-stage track has one surfel and every
+/// observation is a view of it, so the centre moves and every keypoint becomes
+/// the projection of the new centre through its own camera. `observation` names
+/// the image the pixel is in, which is also the outline the pointer is read
+/// against.
+pub(super) fn move_bench_track(
+    state: &mut AppState,
+    label: &str,
+    named: Option<&str>,
+    observation: usize,
+    pixel: [f64; 2],
+) -> JsonReply {
+    let (id, item) = target(state, label, named)?;
+    let edit = PatchEdit::Translate { observation, pixel };
+    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let mut reply = with_item(reply, &item);
+    insert(&mut reply, "observation", json!(observation));
+    insert(&mut reply, "pixel", json!(pixel));
+    Ok(reply)
+}
+
 /// `move_bench_track_observation`: one sighting put where the caller says.
 ///
-/// The wire's half of the Image Detail panel's dot drag, and the same
-/// `AppState` call: the observation's keypoint at the track stage and its
-/// cluster seed at the cluster stage, pinned either way because a sighting a
-/// person placed is one they have ruled on, with the measurements that were
-/// read at the old pixel dropped.
+/// **One** sighting, which at the track stage is the step the panel's dot no
+/// longer makes: dragging the dot there moves the patch (`move_bench_track`),
+/// because a surfel every observation is a view of is the thing that gesture is
+/// about. This is what remains for a caller that really means one keypoint --
+/// the cluster stage's dot, where there is no shared geometry, and a script
+/// placing one sighting of a track-stage track by hand. Either way it writes
+/// that observation alone and pins it, because a sighting a person placed is one
+/// they have ruled on, and drops the measurements read at the old pixel.
 pub(super) fn move_bench_track_observation(
     state: &mut AppState,
     label: &str,
@@ -281,6 +309,10 @@ pub(super) fn move_bench_track_observation(
 /// lens has. The observation says which sighting's outline is meant -- the
 /// surfel re-anchored on it at the track stage, its own parallelogram at the
 /// cluster stage -- and the pixel is in that observation's image.
+///
+/// At the track stage a resize moves the centre, so **every** keypoint becomes
+/// the projection of the new centre, exactly as a translation's does; nothing is
+/// pinned.
 pub(super) fn resize_bench_track(
     state: &mut AppState,
     label: &str,

@@ -1962,19 +1962,135 @@ fn resize_edge_case(edited: &EditedReconstruction, tolerance: f64) {
         (placed[0] - centre[0]).abs() < 1e-4 && (placed[1] - centre[1]).abs() < 1e-4,
         "the dot should sit at the outline's centre {centre:?}, it sits at {placed:?}",
     );
-    assert!(
-        next.observations[1].pinned,
-        "the dragged sighting is hand-placed"
-    );
-    // The other sighting keeps its own keypoint and loses only what the resize
-    // invalidated.
-    assert_eq!(
-        next.observations[0].site(),
-        track.observations[0].site(),
-        "an untouched sighting stays where it is"
-    );
-    assert!(!next.observations[0].pinned);
+    // A resize moves the centre, so **every** sighting follows it, as a slide's
+    // does, and nothing is pinned: where the patch is says nothing about
+    // whether a sighting belongs to it.
+    for observation in &next.observations {
+        let (camera, pose) = view(edited, observation.image as usize);
+        let expected = corner_pixel(&after, &camera, &pose, 0.0, 0.0);
+        let site = observation.site().expect("a sighting");
+        assert!(
+            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
+            "image {} should sight the centre at {expected:?}, it sights {site:?}",
+            observation.image,
+        );
+        assert!(!observation.pinned);
+    }
     assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+}
+
+/// Sliding the patch is exact in the image it was dragged in, in-plane, and
+/// felt by every sighting.
+///
+/// Run under a pinhole and under a distorting lens, because "the dot lands
+/// under the pointer" is a claim about the projection: the arithmetic is in the
+/// patch's own plane, so the only error there is is the iteration the lens
+/// inverts its radial term with.
+#[test]
+fn sliding_the_patch_lands_the_dot_under_the_pointer_and_moves_every_sighting() {
+    let scene = Scene::new();
+    let pinhole = edited_fixture(&scene, WORLD);
+    translate_case(&pinhole, 1e-9);
+    translate_case(&distorted(&pinhole), 1e-5);
+}
+
+fn translate_case(edited: &EditedReconstruction, tolerance: f64) {
+    let (bench, label) = bench_with_point(edited, 0);
+    let mut track = track_of(&bench, &label);
+    // A measurement to be dropped, and a pin the slide must not invent.
+    track.observations[1]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .zncc = Some(0.9);
+
+    let dragged = 1;
+    let image = track.observations[dragged].image as usize;
+    let (camera, pose) = view(edited, image);
+    let was = track
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    let outline = outline_of(&track, edited, dragged);
+    // Aim at a place on the outline that is not its centre, so the slide is a
+    // real move: the `(0.7, 0.4)` point of the square.
+    let target = corner_pixel(&outline, &camera, &pose, 0.7, 0.4);
+
+    let (next, report) =
+        translate_frame(&track, edited, dragged, target).expect("a pixel the ray reaches");
+    assert!(report.changed);
+    assert_eq!(report.observation, dragged);
+    assert_eq!(report.image, track.observations[dragged].image);
+    assert_eq!(report.placed, next.observations.len());
+
+    let frame = next
+        .track()
+        .and_then(|payload| payload.frame.clone())
+        .expect("a frame");
+    // In-plane only: the normal, the axes and the size are untouched, and the
+    // offset lies in the plane it moved across.
+    assert!((frame.normal() - was.normal()).norm() < 1e-12);
+    assert_eq!(frame.half_extent, was.half_extent);
+    assert_eq!(frame.u_axis, was.u_axis);
+    assert_eq!(frame.v_axis, was.v_axis);
+    let offset = frame.center - was.center;
+    assert!(
+        offset.dot(&was.normal()).abs() < 1e-12,
+        "the patch left its own plane: {offset:?}"
+    );
+    assert!((report.moved - offset.norm()).abs() < 1e-12);
+    assert_eq!(next.track().and_then(|p| p.position), Some(frame.center));
+    assert_eq!(next.track().and_then(|p| p.bitmap.clone()), None);
+
+    // The dot in the image it was dragged in lands under the pointer.
+    let landed = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    assert!(
+        (landed[0] - target[0]).abs() < tolerance && (landed[1] - target[1]).abs() < tolerance,
+        "the centre should project to {target:?}, it projects to {landed:?}",
+    );
+    assert!(
+        (report.pixel[0] - target[0]).abs() < tolerance
+            && (report.pixel[1] - target[1]).abs() < tolerance,
+    );
+
+    // And every sighting is where the moved centre projects in its own
+    // photograph, with nothing pinned and nothing left of the old readings.
+    for observation in &next.observations {
+        let (camera, pose) = view(edited, observation.image as usize);
+        let expected = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+        let site = observation.site().expect("a sighting");
+        // Through the `f32` keypoint slot, which is the only loss here.
+        assert!(
+            (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
+            "image {} should sight the centre at {expected:?}, it sights {site:?}",
+            observation.image,
+        );
+        assert!(!observation.pinned, "a translation is not a verdict");
+        let measurement = observation.track.as_ref().expect("a track slot");
+        assert_eq!(measurement.zncc, None);
+        assert_eq!(measurement.reason, None);
+    }
+
+    // A slide to the place it already sits changes nothing.
+    let centre = corner_pixel(&frame, &camera, &pose, 0.0, 0.0);
+    let (_, report) = translate_frame(&next, edited, dragged, centre).expect("the same place");
+    assert!(report.moved < 1e-9, "a slide to where it is moved it");
+
+    // And it is the track stage's step.
+    let where_at = scene_pixel(edited);
+    let (bench, made) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    assert!(matches!(
+        translate_frame(&track_of(&bench, &made.label), edited, 0, where_at),
+        Err(TrackEditError::WrongStage { .. })
+    ));
+}
+
+/// Somewhere on the sensor of image 0, for a step that has to be refused rather
+/// than measured.
+fn scene_pixel(edited: &EditedReconstruction) -> [f64; 2] {
+    let camera = &edited.base.image_table.cameras[0];
+    [camera.width as f64 / 2.0, camera.height as f64 / 2.0]
 }
 
 #[test]

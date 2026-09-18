@@ -1098,8 +1098,41 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "move_bench_track",
+            description: "Slide a bench track's patch across its own plane until its centre sits \
+                          under a pixel — the dot drag on the Image Detail panel's bench layer. A \
+                          track-stage track has one surfel and every observation is a view of it, \
+                          so this moves the patch and not a sighting: the centre moves in-plane, \
+                          the half-vectors and the normal are kept, and every observation's \
+                          keypoint becomes the projection of the new centre through its own \
+                          camera, so the outline moves in every image at once. Slide, turn and \
+                          resize together are how a patch is made to cover the piece of surface \
+                          you mean. Nothing is pinned: a translation says where the patch is, not \
+                          whether a sighting belongs to it. The observation names the image the \
+                          pixel is in. A cluster-stage track has no shared geometry — use \
+                          move_bench_track_observation there.",
+            kind: Write,
+            schema: object(
+                &[("track", bench_track_schema())],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("observation", observation_schema()),
+                    ("pixel", pixel_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
             name: "move_bench_track_observation",
-            description: "Put one observation's sighting of a bench track at a pixel, by hand.                           At the track stage this writes its keypoint, which is the pixel a                           commit writes; at the cluster stage it moves its seed and keeps its                           shape. Either way the measurements read at the old pixel are dropped,                           because none of them says anything about the new one, and the                           observation is pinned: a sighting you placed is one you have ruled on,                           so the thresholds leave its verdict alone. This is the dot drag on the                           Image Detail panel's bench layer.",
+            description: "Put ONE observation's own sighting of a bench track at a pixel, by \
+                          hand, leaving every other where it is. At the track stage this writes \
+                          its keypoint, which is the pixel a commit writes; at the cluster stage \
+                          it moves its seed and keeps its shape. Either way the measurements read \
+                          at the old pixel are dropped, because none of them says anything about \
+                          the new one, and the observation is pinned: a sighting you placed is \
+                          one you have ruled on, so the thresholds leave its verdict alone. The \
+                          panel's dot drag is this only at the cluster stage; at the track stage \
+                          it moves the whole patch (move_bench_track), because there the surfel \
+                          is the thing every sighting is a view of.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -1112,7 +1145,18 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "resize_bench_track",
-            description: "Resize a bench track's patch by putting one edge of its outline under                           a pixel, with the opposite edge left where it is — the edge drag on                           the Image Detail panel's bench layer. The pixel is unprojected onto                           the patch's own plane, so the edge lands there exactly, through                           whatever distortion the lens has. Patch frames are square, so a resize                           is one scale and not two: the whole square grows or shrinks about the                           far edge. The observation says whose outline is meant — the surfel                           re-anchored on that sighting at the track stage, its own parallelogram                           at the cluster stage — and the pixel is in that observation's image.",
+            description: "Resize a bench track's patch by putting one edge of its outline under \
+                          a pixel, with the opposite edge left where it is — the edge drag on the \
+                          Image Detail panel's bench layer. The pixel is unprojected onto the \
+                          patch's own plane, so the edge lands there exactly, through whatever \
+                          distortion the lens has. Patch frames are square, so a resize is one \
+                          scale and not two: the whole square grows or shrinks about the far \
+                          edge. The observation says whose outline is meant — the surfel \
+                          re-anchored on that sighting at the track stage, its own parallelogram \
+                          at the cluster stage — and the pixel is in that observation's image. At \
+                          the track stage the resize moves the centre, so every observation's \
+                          keypoint becomes the projection of the new centre, as move_bench_track \
+                          does; nothing is pinned.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],
@@ -1126,7 +1170,13 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "rotate_bench_track",
-            description: "Turn a bench track's patch in its own plane — the corner drag on the                           Image Detail panel's bench layer. At the track stage the surfel turns                           about its own outward normal, keeping its place, its size and the face                           it shows, so no observation need be named; at the cluster stage there                           is no surfel, only one affine shape per sighting, so name the                           observation whose shape should turn. Nothing moves: every sighting                           stays where it is.",
+            description: "Turn a bench track's patch in its own plane — the corner drag on the \
+                          Image Detail panel's bench layer. At the track stage the surfel turns \
+                          about its own outward normal, keeping its place, its size and the face \
+                          it shows, so no observation need be named; at the cluster stage there \
+                          is no surfel, only one affine shape per sighting, so name the \
+                          observation whose shape should turn. Nothing moves: every sighting \
+                          stays where it is.",
             kind: Write,
             schema: object(
                 &[
@@ -1140,7 +1190,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                         json!({
                             "type": "number",
                             "description":
-                                "How far to turn, in degrees, positive about the patch's                                  outward normal at the track stage and from +x toward +y of the                                  image raster at the cluster stage.",
+                                "How far to turn, in degrees, positive about the patch's outward \
+                                 normal at the track stage and from +x toward +y of the image \
+                                 raster at the cluster stage.",
                         }),
                     ),
                 ],
@@ -2336,6 +2388,15 @@ pub(crate) fn parse(
                 track: args.optional_string("track")?,
                 camera_image: args.camera_image("camera_image")?,
                 seed: parse_seed(&args)?,
+            }
+        }
+        "move_bench_track" => {
+            args.reject_unknown(&["reconstruction_label", "track", "observation", "pixel"])?;
+            Command::MoveBenchTrack {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                track: args.optional_string("track")?,
+                observation: args.required_usize("observation")?,
+                pixel: args.required_pixel_f64("pixel")?,
             }
         }
         "move_bench_track_observation" => {

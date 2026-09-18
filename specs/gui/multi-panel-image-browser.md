@@ -478,9 +478,14 @@ does not also select a feature underneath.
 person is looking at is the geometry they take hold of, and there is no second
 picture of the patch to keep in step with the first.
 
-- **The dot moves the sighting.** Dragging an observation's own mark places it:
-  the keypoint at the track stage, the cluster seed at the cluster stage. The
-  cursor is `Move` on hover and `Grabbing` while it is held.
+- **The dot moves the patch.** At the track stage a track has one surfel and
+  every observation is a view of it, so dragging a mark slides that surfel
+  across its own plane until its centre sits under the pointer: the
+  half-vectors and the normal are kept, and **every** observation's keypoint
+  becomes the projection of the new centre through its own camera, so the
+  outline moves in every image at once. At the **cluster** stage there is no
+  shared geometry, so the mark is that sighting's own seed and nothing else
+  moves. The cursor is `Move` on hover and `Grabbing` while it is held.
 - **An edge resizes the patch, with the opposite edge left where it is.**
   Dragging one of the outline's four edges is "put this edge here", and what a
   person expects is the other three where the geometry puts them rather than the
@@ -507,16 +512,17 @@ turn is the angle swept on the patch's own surface rather than the foreshortened
 one swept on screen. The frame the pointer is read against is the one drawn: the
 surfel re-anchored on the observation whose outline it is.
 
-At the track stage the surfel is shared, so a resize or a turn changes the
-outline in **every** image; the resize also moves the point, and sets the
-dragged sighting's keypoint to the new centre's projection, so the dot and the
-outline move together and the far edge really does hold still. That keypoint is
-pinned, as a hand-placed one; every other sighting keeps its own and loses the
-measurements the change invalidates
+At the track stage the surfel is shared, so all three gestures change the
+outline in **every** image. The two that move its centre -- the slide and the
+resize -- also move the track's point and reproject **every** sighting onto the
+new centre, so the dot follows the outline in the image the gesture happened in
+and moves with the patch in the others; a turn moves the centre nowhere, so
+every sighting stays where it is. None of the three pins anything: where the
+patch is says nothing about whether a sighting belongs to it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Placing,
 sizing and turning by hand"). At the cluster stage each sighting has its own
-affine shape, so both gestures touch only the observation whose outline was
-grabbed.
+affine shape and its own seed, so every gesture touches only the observation
+whose mark or outline was grabbed.
 
 **The press decides which handle, not the drag.** A pointer press inside the
 panel is hit-tested against the geometry that frame starts from -- which is what

@@ -3620,6 +3620,14 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
+            "move_bench_track",
+            json!({
+                "reconstruction_label": "alpha",
+                "observation": 0,
+                "pixel": [142.0, 197.5],
+            }),
+        ),
+        (
             "move_bench_track_observation",
             json!({
                 "reconstruction_label": "alpha",
@@ -3886,15 +3894,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty-seven writes, the one that writes a file, and the
+    // Fourteen reads, forty-eight writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 63, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 64, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        47
+        48
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -5960,12 +5968,13 @@ fn a_cluster_an_observation_and_a_verdict_round_trip_through_get_bench_track() {
     assert_eq!(version_count(&state), 4);
 }
 
-/// The three patch tools are the panel's three handles: a sighting placed, one
-/// edge put under a pixel with the far one held, and a turn in the patch's own
-/// plane. Each is one version, and what they write is what the exactness claim
-/// says it is.
+/// The patch tools are the panel's handles: the patch slid, one edge put under
+/// a pixel with the far one held, and a turn in the patch's own plane. Each is
+/// one version, and what they write is what the exactness claim says it is --
+/// including that at the track stage a move of the centre carries **every**
+/// sighting with it, because the surfel is the thing they are all views of.
 #[test]
-fn the_patch_tools_place_resize_and_turn_and_each_is_one_version() {
+fn the_patch_tools_slide_resize_and_turn_and_each_is_one_version() {
     let (mut state, mut viewer) = benchable();
     let item = on_the_bench(&mut state, &mut viewer);
     let before = version_count(&state);
@@ -5988,7 +5997,7 @@ fn the_patch_tools_place_resize_and_turn_and_each_is_one_version() {
     let moved = call(
         &mut state,
         &mut viewer,
-        "move_bench_track_observation",
+        "move_bench_track",
         json!({
             "reconstruction_label": "run_a",
             "observation": 0,
@@ -6001,10 +6010,51 @@ fn the_patch_tools_place_resize_and_turn_and_each_is_one_version() {
         moved["report"]
             .as_str()
             .expect("a report")
-            .starts_with(&format!("Moved observation 0 of {item} to (")),
+            .starts_with(&format!("Moved {item} by ")),
         "{moved}"
     );
     assert_eq!(version_count(&state), before + 1);
+
+    // Every sighting is where the moved centre projects in its own photograph:
+    // the tool moved the patch, not the one observation it was aimed through.
+    let sightings = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let rows = sightings["observations"]
+        .as_array()
+        .expect("the observations");
+    assert!(rows.len() > 1, "the fixture's track is a single sighting");
+    for row in rows {
+        assert_eq!(row["pinned"], json!(false), "a slide is not a verdict");
+    }
+    {
+        let track = state
+            .bench_track(state.scene[0].id, &item)
+            .expect("the track is on the bench");
+        let frame = track
+            .track()
+            .and_then(|payload| payload.frame.clone())
+            .expect("a frame");
+        for observation in &track.observations {
+            let (camera, pose) = crate::bench::geometry::view_of(
+                &state.scene[0].edited().base.image_table,
+                observation.image as usize,
+            )
+            .expect("the fixture's images have cameras");
+            let expected =
+                crate::bench::geometry::project(&camera, &pose, frame.center.coords, frame.w)
+                    .expect("the demo's patch is in front of every camera");
+            let site = observation.site().expect("a sighting");
+            assert!(
+                (site[0] - expected[0]).abs() < 1e-3 && (site[1] - expected[1]).abs() < 1e-3,
+                "image {} should sight the centre at {expected:?}, it sights {site:?}",
+                observation.image,
+            );
+        }
+    }
 
     // The outline as it now stands at that sighting, so the resize can be
     // aimed at a place on it.
@@ -6124,6 +6174,35 @@ fn the_patch_tools_place_resize_and_turn_and_each_is_one_version() {
         (back[0] - was[0]).abs() < 1e-6 && (back[1] - was[1]).abs() < 1e-6,
         "three undos did not put the sighting back: {back:?} != {was:?}",
     );
+
+    // And the tool that moves **one** sighting is still there, for the cluster
+    // stage's dot and for a script that means one keypoint: it writes that
+    // observation alone and pins it.
+    let one = call(
+        &mut state,
+        &mut viewer,
+        "move_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a",
+            "observation": 0,
+            "pixel": [was[0] + 2.0, was[1]],
+        }),
+    );
+    assert!(
+        one["report"]
+            .as_str()
+            .expect("a report")
+            .starts_with(&format!("Moved observation 0 of {item} to (")),
+        "{one}"
+    );
+    let rows = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert_eq!(rows["observations"][0]["pinned"], json!(true), "{rows}");
+    assert_eq!(rows["observations"][1]["pinned"], json!(false), "{rows}");
 }
 
 /// A turn at the cluster stage is one sighting's affine shape, so it has to

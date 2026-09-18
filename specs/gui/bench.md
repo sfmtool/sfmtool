@@ -46,7 +46,11 @@ descriptor index a search queries is in
 ```rust
 /// One hand edit of a track's geometry, in the form the core steps take.
 pub(crate) enum PatchEdit {
-    /// Put one observation's sighting at this pixel of its own image.
+    /// Slide the track-stage surfel until its centre sits under this pixel of
+    /// that observation's image. Every sighting follows.
+    Translate { observation: usize, pixel: [f64; 2] },
+    /// Put one observation's own sighting at this pixel, and leave every other
+    /// where it is. The cluster stage's dot.
     Move { observation: usize, pixel: [f64; 2] },
     /// Put one edge of the outline drawn at this observation under this pixel,
     /// with the opposite edge left where it is.
@@ -111,10 +115,10 @@ impl AppState {
                                         seed: &Seed) -> Result<(), String>;
     pub(crate) fn set_bench_verdict(&mut self, id: ReconId, label: &str,
                                     observation: usize, verdict: Verdict) -> Result<(), String>;
-    /// One hand edit of the track's geometry: a sighting placed, one edge of
-    /// the patch put under a pixel, or a turn. The one call behind every
-    /// handle of the Image Detail panel's bench layer and behind the wire's
-    /// three patch tools.
+    /// One hand edit of the track's geometry: the patch slid, one edge of it
+    /// put under a pixel, a turn, or one sighting placed. The one call behind
+    /// every handle of the Image Detail panel's bench layer and behind the
+    /// wire's four patch tools.
     pub(crate) fn edit_bench_patch(&mut self, id: ReconId, label: &str,
                                    edit: &PatchEdit) -> Result<(), String>;
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
@@ -288,7 +292,8 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Start a cluster from a pixel | `Started IMG_0042@142,198 on the bench` |
 | Add an observation | `Added image_012.jpg to pt3d_a1b2c3d4_1207` |
 | A verdict | `Turned image_012.jpg out of pt3d_a1b2c3d4_1207` |
-| Place a sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
+| Slide the patch | `Moved pt3d_a1b2c3d4_1207 by 0.123 units to (1.204, -0.318, 4.006)` |
+| Place one sighting | `Moved observation 3 of pt3d_a1b2c3d4_1207 to (1041.6, 1702.9) in IMG_0042.jpg (2.3 px)` |
 | Resize the patch | `Resized pt3d_a1b2c3d4_1207 to 7.4 px in IMG_0042.jpg` |
 | Turn the patch | `Rotated pt3d_a1b2c3d4_1207 by 12.3 degrees` |
 | Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
@@ -414,7 +419,7 @@ the dock reads the label off the bench at that position before calling the step.
 
 ## The wire
 
-An agent gets the same bench a human does, through twenty-one MCP tools
+An agent gets the same bench a human does, through twenty-two MCP tools
 ([mcp-server.md](mcp-server.md) § "The bench family"), in
 [mcp/bench.rs](../../crates/sfm-explorer/src/mcp/bench.rs). **Each one is one of
 the `AppState` methods above**, which is the whole of what makes an agent's
@@ -450,6 +455,10 @@ panel means when it names no item.
 //                                "verdict": "in" }
 //
 // The patch: the three handles the Image Detail panel's bench layer offers.
+// move_bench_track           { "reconstruction_label": "bull", "observation": 3,
+//                              "pixel": [1041.6, 1702.9] }
+// resize_bench_track ... rotate_bench_track ... and the one that moves a single
+// sighting rather than the patch:
 // move_bench_track_observation { "reconstruction_label": "bull", "observation": 3,
 //                                "pixel": [1041.6, 1702.9] }
 // resize_bench_track           { "reconstruction_label": "bull", "observation": 3,
@@ -500,15 +509,18 @@ only for an observation nothing says the place of, which is the state core's
 
 **The three patch tools are the panel's three handles**, and each is one
 `edit_bench_patch`, so a drag and a tool call are the same version carrying the
-same sentence. `resize_bench_track` names an `edge` and a `pixel` rather than a
-size, because that is what the gesture is and what makes the answer exact: the
-pixel is unprojected onto the patch's own plane, so the edge lands there through
-whatever distortion the lens has, and the opposite edge is left where it was.
+same sentence. `move_bench_track` slides the patch, `resize_bench_track` names
+an `edge` and a `pixel` rather than a size -- because that is what the gesture
+is and what makes the answer exact: the pixel is unprojected onto the patch's
+own plane, so the edge lands there through whatever distortion the lens has, and
+the opposite edge is left where it was -- and `rotate_bench_track` turns it.
 Each names the `observation` whose outline is meant -- the surfel re-anchored on
 that sighting at the track stage, its own parallelogram at the cluster stage --
 except a turn at the track stage, where there is one surfel and no sighting need
 be named; a turn at the **cluster** stage has no surfel to turn and is refused
-without one.
+without one. `move_bench_track_observation` is the fourth, and the only one that
+moves a single sighting: the cluster stage's dot, and a script that means one
+keypoint.
 
 **Every step answers as an edit answers**, with the version it pushed and the
 sentence the Action Log recorded, plus the `item` it acted on. A create and a
@@ -650,5 +662,5 @@ still read.
   layer").
 - **Wire tools for the searches.** The three tools that would drive a descriptor
   search, a view sweep and a pull-in wait on the core steps behind them, and are
-  proposed in the same draft. The twenty-one tools for the steps that exist are
+  proposed in the same draft. The twenty-two tools for the steps that exist are
   § "The wire".
