@@ -316,7 +316,10 @@ neither today, in exchange for nothing. So:
 - **Point edits stay synchronous.** Delete point, add observation, remove
   observation, create point, move camera.
 - **Bulk edits go to the background.** The bundle adjustment is the one that
-  takes it, being the operation that froze the window for minutes. Resect in
+  takes it, being the operation that froze the window for minutes. The
+  `sift_files` -> `embedded_patches` conversion takes it too: it reads a `.sift`
+  file per image, twice over under the default sizing policy, so its cost grows
+  with the image count rather than with anything the frame can absorb. Resect in
   place, at 838 ms, is the other bulk edit over the threshold that matters; it
   runs on the GUI thread, and the mechanism here is what it would use.
 
@@ -353,6 +356,13 @@ count and a spinner; each kernel then decides how much of that it fills in.
 and its LM iterations against the budget, so the bar is measured rather than a
 spinner, and it polls the cancel flag between rounds and between iterations, so
 Cancel is live ([operation-progress.md](operation-progress.md)).
+
+`to_embedded_patches` fills in the phases and the count: three stages --
+`patch frames`, `read keypoints` and `assemble` -- with one count per image
+under the read, so the bar is measured there, and it polls the flag between the
+stages and between the images. A cancelled one is
+`ReconstructionError::Cancelled`, which the job turns into
+`Finished::Cancelled`.
 
 The bench's photometric steps fill in the phases and poll the same flag. A
 cancelled one ends as a cancellation rather than a failure of the kernel --
@@ -429,12 +439,19 @@ pub(crate) enum Report {
 /// knows it was cancelled: the kernel is what met the flag and said so, and
 /// deciding at poll time from the flag alone races a solve that finished on its
 /// own between the last poll and the cancel. What it produced is one variant
-/// per half of the version: a whole reconstruction, or one item of the bench.
-pub(crate) enum Finished {};
-s{    Cancelled,
-    Failed(String),
-}
-```}{    /// One bench item's next value. The document half is untouched, so there
+/// per kind of answer: a whole reconstruction, one item of the bench, or a
+/// descriptor index that is no version at all.
+pub(crate) enum Finished {
+    Produced {
+        /// The next value, and the map from the input's rows to its own.
+        value: SfmrReconstruction,
+        map: PointMap,
+        /// The version's label, and the Action Log sentence up to the serials,
+        /// which only the GUI thread can know.
+        version_label: String,
+        text: String,
+    },
+    /// One bench item's next value. The document half is untouched, so there
     /// is no map and no selection to follow; a report for an item that has
     /// left the bench at the cursor is discarded with one row
     /// ([bench.md](bench.md)).
@@ -444,17 +461,12 @@ s{    Cancelled,
         version_label: String,
         text: String,
     },
-    Cancelled,
-    Failed(String),
-}
-```
-    Produced {
-        /// The next value, and the map from the input's rows to its own.
-        value: SfmrReconstruction,
-        map: PointMap,
-        /// The version's label, and the Action Log sentence up to the serials,
-        /// which only the GUI thread can know.
-        version_label: String,
+    /// A descriptor index built and reopened. Not a version: the index is a
+    /// file beside the workspace and a handle on it, so the handle is
+    /// installed, a row is written, and Undo has nothing to take back.
+    DescriptorIndex {
+        path: PathBuf,
+        forest: Arc<LazyKdForestU8>,
         text: String,
     },
     Cancelled,
@@ -644,7 +656,8 @@ Panel, through `test_support::run_frame_headless`:
 - **Every `Operation` that declares `cancellable` really is**: cancelling each
   one stops it and writes the cancelled entry. A declaration nothing checks is a
   declaration that rots. Each is started over a fixture that can really run it
-  -- the adjustment over the resection node, the bench steps over a node with a
+  -- the adjustment over the resection node, the conversion over a `sift_files`
+  node with a `.sift` companion per image, the bench steps over a node with a
   point on its bench and a photograph per image, the search over a workspace
   with `.sift` files and a built `.kdf` -- so what is held to the claim is the
   kernel rather than a stand-in for it.

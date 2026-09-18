@@ -150,7 +150,16 @@ pub(crate) fn with_sift_files(state: &AppState, id: ReconId, center: [f64; 2]) {
 
 /// One `.sift` file with the given descriptors and keypoint positions, all at
 /// the same isotropic shape.
-fn write_sift(path: &Path, image_name: &str, descriptors: &[Vec<u8>], positions: &[[f64; 2]]) {
+///
+/// Shared with the conversion fixture in `state::edits::tests`, which wants
+/// the companions rather than the descriptors in them: what a `.sift` file has
+/// to carry to be read at all is the same question either way.
+pub(crate) fn write_sift(
+    path: &Path,
+    image_name: &str,
+    descriptors: &[Vec<u8>],
+    positions: &[[f64; 2]],
+) {
     let count = descriptors.len();
     let mut positions_xy = Array2::<f32>::zeros((count, 2));
     let mut affine = Array3::<f32>::zeros((count, 2, 2));

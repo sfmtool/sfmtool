@@ -430,6 +430,21 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: None,
             }
         }
+        // The conversion, over a workspace fixture: it reads a real `.sift`
+        // file per image, which the demo node has none of.
+        "Convert to embedded patches" => {
+            let workspace = tempfile::tempdir().expect("a temporary directory");
+            let (state, id) = crate::state::edits::tests::convertible_state(workspace.path());
+            let job = state
+                .convert_to_embedded_patches_job(id)
+                .expect("the fixture is a sift_files node with its companions");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: Some(workspace),
+            }
+        }
         // The three steps that read photographs, over the bench fixture: a
         // point on the bench and a textured photograph cached for every image.
         "Evaluate track" | "Fit track" | "Set track stage" => {

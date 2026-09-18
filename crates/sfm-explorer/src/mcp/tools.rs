@@ -988,6 +988,12 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "convert_to_embedded_patches",
+            description: "Change how one reconstruction locates its observations: from a                           feature index into a .sift file to a patch frame per point with the                           keypoint carried inline. The minimal conversion, the one sfm xform                           --to-embedded-patches runs: every point keeps its index, its position                           and its track, each point gets a (u, v) frame from its mean viewing                           direction sized at 2.5x the median projected keypoint scale, each                           observation's keypoint is copied verbatim from its .sift detection,                           and each image's identity hash is read from the .sift metadata. No                           photometric step runs and no reference bitmap is fused. One version,                           and it runs on a worker thread, so a conversion still going after                           200 ms replies with running: true and an operation_id instead of the                           version. Refused on a reconstruction that already carries embedded                           patches. Needs the workspace's .sift files where the reconstruction                           was made.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
             name: "create_bench_cluster",
             description: "Start a cluster-stage track on the bench from a place in one camera \
                           image, and make it the active track. A cluster is a set of image \
@@ -2335,6 +2341,12 @@ pub(crate) fn parse(
             Command::BundleAdjust {
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 release_focal: args.optional_bool("release_focal")?.unwrap_or(false),
+            }
+        }
+        "convert_to_embedded_patches" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::ConvertToEmbeddedPatches {
+                reconstruction_label: args.required_string("reconstruction_label")?,
             }
         }
         "get_bench" => {

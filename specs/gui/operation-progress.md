@@ -747,6 +747,7 @@ The operations:
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
 | the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection in place |
+| `patch frames`, `read keypoints` and `assemble` | `SfmrReconstruction::to_embedded_patches`, one count per image under the read | |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
 | `localize` and `refine` | the two calls `add_observation` makes | |

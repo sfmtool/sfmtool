@@ -253,6 +253,11 @@ pub(crate) enum Command {
         reconstruction_label: String,
         release_focal: bool,
     },
+    /// Convert one node's observations from `sift_files` to
+    /// `embedded_patches`, the minimal conversion with no photometric step.
+    ConvertToEmbeddedPatches {
+        reconstruction_label: String,
+    },
     /// One node's bench: the items, their kinds, origins, stages and counts,
     /// and which is active.
     GetBench {
@@ -1029,6 +1034,9 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             release_focal,
         } => edit::bundle_adjust(state, &reconstruction_label, release_focal),
+        Command::ConvertToEmbeddedPatches {
+            reconstruction_label,
+        } => edit::convert_to_embedded_patches(state, &reconstruction_label),
         Command::GetBench {
             reconstruction_label,
         } => done(bench::get_bench(state, &reconstruction_label)),
@@ -1733,6 +1741,7 @@ impl Command {
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
+            Command::ConvertToEmbeddedPatches { .. } => "convert_to_embedded_patches",
             Command::GetBench { .. } => "get_bench",
             Command::GetBenchTrack { .. } => "get_bench_track",
             Command::CreateBenchCluster { .. } => "create_bench_cluster",
@@ -1804,6 +1813,9 @@ impl Command {
             | Command::BundleAdjust {
                 reconstruction_label,
                 ..
+            }
+            | Command::ConvertToEmbeddedPatches {
+                reconstruction_label,
             }
             // The one bench step that writes the reconstruction. Every other
             // one changes the bench beside it, which is not the value a lock
@@ -1923,6 +1935,7 @@ impl Command {
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
             | Command::BundleAdjust { .. }
+            | Command::ConvertToEmbeddedPatches { .. }
             // The one bench step whose row is an `Edit`, because it is one
             // (`specs/gui/edits/commit-track.md`).
             | Command::CommitBenchTrack { .. }

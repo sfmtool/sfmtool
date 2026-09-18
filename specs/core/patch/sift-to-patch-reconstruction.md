@@ -26,7 +26,9 @@ This is a reconstruction-in / reconstruction-out transform at the
 
 A non-photometric **baseline** conversion also exists —
 `SfmrReconstruction::to_embedded_patches` (exposed as `sfm xform
---to-embedded-patches`, see [xform-command.md](../../cli/reconstruction/xform/xform-command.md)). It skips
+--to-embedded-patches`, see [xform-command.md](../../cli/reconstruction/xform/xform-command.md),
+and as the SfM Explorer's `Convert to Embedded Patches`, see
+[scene-graph.md](../../gui/scene-graph.md)). It skips
 all photometric steps: it gives each finite point a mean-viewing-direction frame
 (and each point at infinity a tangent-sphere frame around its direction, per the
 [format's infinity-patch convention](../../formats/sfmr-file-format.md)), copies each
@@ -34,6 +36,38 @@ observation's keypoint and each image's hash straight from the `.sift` files, an
 emits a valid `embedded_patches` reconstruction whose keypoints are exactly the
 original SIFT detections — the whole point set preserved. It runs none of the
 photometric steps of the pipeline below.
+
+### What the baseline conversion reports, and how it is stopped
+
+```rust
+pub fn to_embedded_patches(
+    &self,
+    normal: PatchNormal,
+    extent: PatchExtent,
+    progress: &Progress<'_>,
+) -> Result<Self, ReconstructionError>
+```
+
+It reads a `.sift` file per image -- twice over under the default
+`FeatureSize` sizing, once for the keypoint scales the frames are sized from and
+once for the detections and the image hashes -- so its cost grows with the image
+count and it takes a `Progress` like every other kernel that can outlast a
+frame ([operation-progress.md](../../gui/operation-progress.md)). Three stages
+under it, sharing the bar 45/45/10:
+
+| Phase | What it covers | What it notes |
+|---|---|---|
+| `patch frames` | the `PatchCloud::from_reconstruction` build, including the per-image scale read `FeatureSize` needs | the point count |
+| `read keypoints` | one `.sift` per image: the detections, and the `image_file_xxh128` each image's hash is decoded from | the image count, plus one `Count` per image as it goes |
+| `assemble` | the per-observation keypoint column, the output value, and its column validation | the observation count |
+
+**Cancellation is polled between the stages and between the images of the read**,
+which is where a `.sift` read is one call and therefore where a stop can land. A
+cancelled conversion returns `ReconstructionError::Cancelled` and builds nothing:
+the call is a function of its input and writes a new value, so there is no
+half-converted state to leave behind. `&Progress::none()` reports nothing and
+never stops, which is what the PyO3 binding passes: the Python signature is
+unchanged.
 
 ## Operating contract: surfel ops require `embedded_patches`
 
@@ -55,7 +89,8 @@ Consequences of the contract:
 
 - **The Rust `to_embedded_patches` is the one sift-consuming step.** That
   function — `SfmrReconstruction.to_embedded_patches` (the PyO3 binding, also
-  surfaced as `sfm xform --to-embedded-patches`) — is the only place that reads
+  surfaced as `sfm xform --to-embedded-patches` and as the viewer's
+  `Convert to Embedded Patches`) -- is the only place that reads
   `.sift` files to build patches; everything downstream is
   `embedded_patches → embedded_patches`.
 - **`embed-patches` calls `to_embedded_patches` as its first pipeline step.**

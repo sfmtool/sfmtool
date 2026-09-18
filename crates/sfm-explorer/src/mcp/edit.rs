@@ -297,6 +297,34 @@ pub(super) fn bundle_adjust(
     }))
 }
 
+/// `convert_to_embedded_patches`: start the conversion, and answer with its
+/// version or with a handle, whichever the clock reaches first.
+///
+/// The second background operation on the surface, and it replies the way the
+/// first one does: it reads a `.sift` file per image twice over, so a large
+/// node outlives [`REPLY_DIRECTLY_WITHIN`] and answers with a
+/// [`BackgroundReply`] the frame resolves. A refusal to begin -- an already
+/// embedded reconstruction, or a node an operation is already running on -- is
+/// immediate and in `AppState`'s own words, which are the words the greyed
+/// menu entry carries.
+pub(super) fn convert_to_embedded_patches(state: &mut AppState, label: &str) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_convert_to_embedded_patches(id) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        node: id,
+        label: task.label.clone(),
+        started: task.started,
+    }))
+}
+
 /// `cancel_background_task`: ask the running operation to stop.
 ///
 /// Refuses when there is nothing to stop, and when the operation never asks

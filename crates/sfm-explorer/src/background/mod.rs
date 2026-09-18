@@ -90,6 +90,20 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// One node converted from `sift_files` to `embedded_patches`, the minimal
+    /// conversion `sfm xform --to-embedded-patches` runs
+    /// (`specs/core/patch/sift-to-patch-reconstruction.md`).
+    ///
+    /// Cancellable because `SfmrReconstruction::to_embedded_patches` polls the
+    /// flag between its three stages and between the images of its `.sift`
+    /// read, and hands back `ReconstructionError::Cancelled` rather than a
+    /// half-converted value.
+    pub(crate) const TO_EMBEDDED_PATCHES: Operation = Operation {
+        name: "Convert to embedded patches",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
     ///
     /// Cancellable: the reading polls the flag on either side of the decode,
@@ -152,8 +166,9 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 6] = [
+    pub(crate) const ALL: [Operation; 7] = [
         Operation::BUNDLE_ADJUST,
+        Operation::TO_EMBEDDED_PATCHES,
         Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,

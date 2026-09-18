@@ -158,6 +158,12 @@ pub struct SceneGraphResponse {
     pub align_node: Option<(ReconId, ReconId, AlignOptions)>,
     /// `Reset Transform` chosen — return this node to its own frame.
     pub reset_transform: Option<ReconId>,
+    /// `Convert to Embedded Patches` chosen from a reconstruction's context
+    /// menu: give every point a patch frame and carry each observation's
+    /// keypoint inline, as the node's next version. A bulk edit, and a long
+    /// one, so `AppState::start_convert_to_embedded_patches` sends it to a
+    /// worker after the frame.
+    pub convert_to_embedded_patches: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// A Bench row was clicked: make that item the active one of its kind. The
@@ -228,6 +234,13 @@ impl SceneGraphPanel {
         // What every *other* node offers as an alignment target, taken before
         // the mutable walk below: the tree holds one node at a time, and the
         // `Align to ▸` submenu on that node has to name all the rest.
+        // The one node an operation locks, and the sentence that refuses an
+        // edit of it: taken here for the same reason `targets` is, since the
+        // walk below borrows the scene mutably.
+        let busy = state
+            .background_task()
+            .map(|task| task.node)
+            .and_then(|node| state.busy_refusal(node).map(|why| (node, why)));
         let targets: Vec<AlignTarget> = state
             .scene
             .iter()
@@ -282,6 +295,7 @@ impl SceneGraphPanel {
             hits: &mut self.hits,
             align_options: &mut self.align_options,
             targets: &targets,
+            busy,
             log,
         };
 
@@ -356,11 +370,25 @@ struct TreeOutput<'a> {
     /// Every loaded node, including the one being drawn (filtered out where the
     /// menu is built).
     targets: &'a [AlignTarget],
+    /// The node a background operation is running on and the sentence that
+    /// refuses an edit of it, or `None` when nothing is running. Read out
+    /// before the walk, because the walk holds the scene and `AppState` is one
+    /// borrow.
+    busy: Option<(ReconId, String)>,
     /// Where the toggles that write straight into a node record what they did.
     log: &'a mut ActionLog,
 }
 
 impl TreeOutput<'_> {
+    /// Why an edit of `id` is refused right now, or `None` --
+    /// `AppState::busy_refusal`'s answer, carried in.
+    fn busy_refusal(&self, id: ReconId) -> Option<&str> {
+        self.busy
+            .as_ref()
+            .filter(|(busy, _)| *busy == id)
+            .map(|(_, why)| why.as_str())
+    }
+
     /// Record where a row or toggle landed, and hand the response back through.
     fn hit(&mut self, id: egui::Id, response: egui::Response) -> egui::Response {
         self.mark(id, response.rect);

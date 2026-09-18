@@ -13,6 +13,11 @@
 //! whose keypoints are exactly the original SIFT detections, with no photometric
 //! [sift→patch pipeline](../../patch) (normal refinement + view selection +
 //! keypoint localization) involved.
+//!
+//! It reads a `.sift` file per image, twice over in the default sizing policy,
+//! so it is long enough to report and long enough to want stopping: it takes a
+//! [`Progress`] like every other kernel that can outlast a frame, names three
+//! stages under it, and polls the cancel flag between the images.
 
 use ndarray::Array2;
 
@@ -21,6 +26,11 @@ use sfmtool_sift_format::{read_sift_metadata, read_sift_positions};
 use super::data::ReconstructionError;
 use super::{ObservationSource, SfmrReconstruction};
 use crate::patch::cloud::{PatchCloud, PatchExtent, PatchNormal};
+use crate::progress::Progress;
+use crate::progress_note;
+
+#[cfg(test)]
+mod tests;
 
 impl SfmrReconstruction {
     /// Convert this `sift_files` reconstruction into an `embedded_patches` one
@@ -43,14 +53,44 @@ impl SfmrReconstruction {
     ///   `.sift` metadata (`image_file_xxh128`) — a minimal metadata read, no
     ///   re-hashing of the image bytes.
     ///
+    /// `progress` is where this call names its three stages -- `patch frames`
+    /// (the [`PatchCloud::from_reconstruction`] build), `read keypoints` (one
+    /// count per image over the `.sift` detections and image hashes), and
+    /// `assemble` (the per-observation keypoint column and the validated
+    /// output) -- and it is also how the call is asked to stop: the flag is
+    /// polled between the stages and between the images of the read, and a
+    /// cancelled conversion returns [`ReconstructionError::Cancelled`] with
+    /// nothing built. Pass `&Progress::none()` to report nothing and never
+    /// stop.
+    ///
     /// Errors with [`ReconstructionError::Unsupported`] if the reconstruction is
     /// already `embedded_patches` (no `.sift` to copy from) or the patch frame
     /// cannot be built, and with [`ReconstructionError::SiftRead`] if a `.sift`
     /// file cannot be read or lacks a feature an observation references.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal};
+    /// use sfmtool_core::progress::Progress;
+    /// use sfmtool_core::SfmrReconstruction;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let recon = SfmrReconstruction::load("run.sfmr".as_ref(), &Progress::none())?;
+    /// let embedded = recon.to_embedded_patches(
+    ///     PatchNormal::MeanViewing,
+    ///     PatchExtent::default(),
+    ///     &Progress::none(),
+    /// )?;
+    /// # let _ = embedded;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn to_embedded_patches(
         &self,
         normal: PatchNormal,
         extent: PatchExtent,
+        progress: &Progress<'_>,
     ) -> Result<Self, ReconstructionError> {
         if let ObservationSource::EmbeddedPatches { .. } = &self.point_set.observations {
             return Err(ReconstructionError::Unsupported(
@@ -70,22 +110,40 @@ impl SfmrReconstruction {
             ObservationSource::EmbeddedPatches { .. } => unreachable!(),
         };
 
+        // The three stages share the bar in proportion to what they cost: the
+        // frame build and the keypoint read each walk every `.sift` file once
+        // (the first for the keypoint scales `FeatureSize` sizes from, the
+        // second for the detections and the image hashes), and the assembly is
+        // a scatter over the observations with no file behind it.
+        let [framing, reading, assembling] = progress.split([0.45, 0.45, 0.10]);
+        progress.check_cancel()?;
+
         // Patch frames from the chosen normal/extent policy — no refinement.
         // Build frames for every point: finite surfels plus the tangent-sphere
         // frames for points at infinity (exclude_points_at_infinity = false), so
         // every point ends up with a real (non-zero) frame.
-        let cloud = PatchCloud::from_reconstruction(self, normal, extent, false).map_err(|e| {
-            ReconstructionError::Unsupported(format!(
-                "to_embedded_patches: building patch frames failed: {e}"
-            ))
-        })?;
-        let (patch_u, patch_v) = cloud.to_halfvec_arrays(self.point_set.points.len());
+        let (patch_u, patch_v) = {
+            let mut phase = framing.phase("patch frames");
+            let cloud =
+                PatchCloud::from_reconstruction(self, normal, extent, false).map_err(|e| {
+                    ReconstructionError::Unsupported(format!(
+                        "to_embedded_patches: building patch frames failed: {e}"
+                    ))
+                })?;
+            progress_note!(phase, "{} points", self.point_set.points.len());
+            cloud.to_halfvec_arrays(self.point_set.points.len())
+        };
 
         // Per-image: a minimal keypoint read plus the source-image identity hash.
         let n_images = self.image_table.images.len();
+        let mut reading = reading.phase("read keypoints");
+        progress_note!(reading, "{n_images} images");
         let mut positions_per_image: Vec<Vec<[f32; 2]>> = Vec::with_capacity(n_images);
         let mut image_file_hashes: Vec<[u8; 16]> = Vec::with_capacity(n_images);
         for i in 0..n_images {
+            // Between the images rather than inside one file's read: a `.sift`
+            // read is one call, so this is where a cancel can land.
+            reading.check_cancel()?;
             let path = self.sift_path_for_image(i);
             // The detections are needed only when the reconstruction states no
             // coordinates of its own; the image hash below is read either way.
@@ -117,10 +175,14 @@ impl SfmrReconstruction {
             })?;
             positions_per_image.push(positions);
             image_file_hashes.push(hash);
+            reading.count(i as u64 + 1, Some(n_images as u64), "image");
         }
+        drop(reading);
 
         // Per-observation keypoints, parallel to `tracks` (and thus to the
         // feature_indexes column), so the existing track ordering is preserved.
+        progress.check_cancel()?;
+        let mut assembling = assembling.phase("assemble");
         let m = self.point_set.tracks.len();
         let keypoints_xy = match inline_keypoints {
             Some(inline) => inline.clone(),
@@ -157,6 +219,7 @@ impl SfmrReconstruction {
         out.rebuild_derived_fields();
         out.validate_observation_columns()
             .map_err(ReconstructionError::Unsupported)?;
+        progress_note!(assembling, "{m} observations");
         Ok(out)
     }
 }

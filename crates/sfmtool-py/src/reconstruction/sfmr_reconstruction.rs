@@ -856,9 +856,12 @@ impl PySfmrReconstruction {
                 )))
             }
         };
+        // The core call reports its stages to a `Progress` and can be asked to
+        // stop through it; the bindings pass `Progress::none()`, so the
+        // Python-visible signature is unchanged.
         let inner = self
             .inner
-            .to_embedded_patches(normal, extent)
+            .to_embedded_patches(normal, extent, &Progress::none())
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(Self { inner })
     }

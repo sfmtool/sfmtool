@@ -1557,3 +1557,226 @@ fn a_cursor_move_across_a_deleted_image_follows_the_photograph() {
         .expect("a live image");
     assert_eq!(state.selected_image, None);
 }
+
+// -- Convert to embedded patches: the bulk edit that changes the source ---
+
+/// A `sift_files` node called `run_a` whose workspace is `dir`, with a real
+/// `.sift` file per image.
+///
+/// The demo value is `sift_files` already; what this adds is the companions
+/// the conversion reads -- the affine shapes its default `FeatureSize` sizing
+/// needs, and the detections it copies as keypoints -- and the workspace
+/// metadata saying where they are.
+pub(crate) fn convertible_state(dir: &std::path::Path) -> (AppState, ReconId) {
+    let mut recon = SfmrReconstruction::demo(24);
+    recon.workspace_dir = dir.to_path_buf();
+    recon.metadata.workspace.absolute_path = dir.display().to_string();
+    recon.metadata.workspace.relative_path = ".".into();
+    recon.metadata.workspace.contents.feature_prefix_dir = "features/sift-test".into();
+    for image in 0..recon.image_count() {
+        let count = recon.point_set.max_track_feature_index[image] as usize + 1;
+        // Distinct per feature and per image, so a keypoint the conversion
+        // copied can be told from a zero it did not.
+        let positions: Vec<[f64; 2]> = (0..count)
+            .map(|feature| [100.0 + feature as f64, 200.0 + image as f64])
+            .collect();
+        let path = recon.sift_path_for_image(image);
+        std::fs::create_dir_all(path.parent().expect("a feature directory")).unwrap();
+        crate::descriptor_index::tests::write_sift(
+            &path,
+            &recon.image_table.images[image].name,
+            &vec![vec![0u8; 128]; count],
+            &positions,
+        );
+    }
+    let mut state = AppState::new();
+    state.append_node(SceneNode::from_path(&dir.join("run_a.sfmr"), recon));
+    let id = state.scene[0].id;
+    (state, id)
+}
+
+/// The conversion pushes one version whose base is `embedded_patches`, with
+/// every point and every image still there and every index where it was.
+#[test]
+fn converting_pushes_one_embedded_patches_version_over_the_same_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    let points = state.scene[0].point_count();
+    let images = state.scene[0].image_count();
+    let observations = state.scene[0].edited().observation_count();
+    let before = Arc::clone(&state.scene[0].edited().base);
+    state.selected_point = Some(PointRef::new(id, 11));
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("the fixture has a .sift file per image");
+    state.finish_background_task();
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert_eq!(
+        node.recon().point_set.observations.name(),
+        "embedded_patches"
+    );
+    assert_eq!(node.recon().metadata.feature_source, "embedded_patches");
+    // What the panels' embedded path needs of the value: a keypoint per
+    // observation, and a frame with a real extent to derive each sighting's
+    // affine shape from. A zero frame would draw a degenerate ellipse in
+    // every overlay that reads one.
+    let keypoints = node
+        .recon()
+        .point_set
+        .keypoints_xy()
+        .expect("an embedded_patches value carries its keypoints");
+    assert_eq!(keypoints.shape(), [observations, 2]);
+    let u = node
+        .recon()
+        .point_set
+        .patch_u_halfvec_xyz
+        .as_ref()
+        .expect("the conversion frames every point");
+    let v = node
+        .recon()
+        .point_set
+        .patch_v_halfvec_xyz
+        .as_ref()
+        .expect("the conversion frames every point");
+    for point in 0..points {
+        for half in [u, v] {
+            let norm: f32 = (0..3).map(|c| half[[point, c]] * half[[point, c]]).sum();
+            assert!(
+                norm > 0.0,
+                "point {point} was framed with a zero half-vector"
+            );
+        }
+    }
+    assert_eq!(node.point_count(), points);
+    assert_eq!(node.image_count(), images);
+    assert_eq!(node.edited().observation_count(), observations);
+    assert_eq!(
+        node.history.current_version().label,
+        "Converted run_a to embedded patches"
+    );
+    // The map is the identity, so the selection stays on the index it was on
+    // and that index is still a live point.
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 11)));
+    assert!(state.scene[0].edited().point(11).is_some());
+    let map = state.scene[0]
+        .history
+        .map_into_cursor()
+        .expect("the version carries its map");
+    for point in 0..points as u32 {
+        assert_eq!(map.forward(point), Some(point), "point {point} moved");
+        assert_eq!(
+            map.inverse(point),
+            Some(point),
+            "point {point} came from elsewhere"
+        );
+    }
+    // The frames are there and the bitmaps are not: the minimal conversion
+    // fuses no reference texture, so the surfel renderer still has nothing to
+    // draw.
+    assert!(!state.scene[0].has_patch_data());
+}
+
+/// The entry says what it did, with the two counts, and the sentence ends on
+/// the serials the frame stamped.
+#[test]
+fn the_conversions_entry_carries_the_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    let entries = texts(&state).len();
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+
+    let logged = texts(&state);
+    assert_eq!(logged.len(), entries + 1, "{logged:?}");
+    let last = logged.last().expect("one entry");
+    assert!(
+        last.starts_with("Converted run_a to embedded patches: 24 points framed, 8 images read ("),
+        "{last}"
+    );
+    let serials = state.scene[0].history.versions();
+    assert!(
+        last.ends_with(&format!(
+            "({} \u{2192} {})",
+            serials[0].serial, serials[1].serial
+        )),
+        "{last}"
+    );
+}
+
+/// Undo puts the `sift_files` version back, with its feature indexes and no
+/// patch frame.
+#[test]
+fn an_undo_restores_the_sift_files_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("well posed");
+    state.finish_background_task();
+    state.undo(id).expect("one version to undo");
+
+    let recon = state.scene[0].recon();
+    assert_eq!(recon.point_set.observations.name(), "sift_files");
+    assert!(recon.point_set.feature_indexes().is_some());
+    assert!(recon.point_set.patch_u_halfvec_xyz.is_none());
+}
+
+/// A node that is already `embedded_patches` is refused, in the sentence the
+/// greyed menu entry carries, and nothing is pushed.
+#[test]
+fn an_embedded_patches_node_is_refused() {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+
+    assert_eq!(
+        state.convert_to_embedded_patches_refusal(id).as_deref(),
+        Some("run_a is already an embedded_patches reconstruction.")
+    );
+    let why = state
+        .start_convert_to_embedded_patches(id)
+        .expect_err("there is no .sift to copy from");
+    assert!(why.contains("already an embedded_patches"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(newest(&state).failed);
+}
+
+/// A node with no `.sift` companion fails in the kernel's own words, and
+/// pushes nothing.
+#[test]
+fn a_missing_sift_file_fails_the_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut state, id) = convertible_state(dir.path());
+    // Every companion removed, so the sizing step has nothing to read.
+    std::fs::remove_dir_all(dir.path().join("features")).unwrap();
+
+    state
+        .start_convert_to_embedded_patches(id)
+        .expect("nothing refused it before it ran");
+    state.finish_background_task();
+
+    let entry = newest(&state);
+    assert!(entry.failed, "{}", entry.text);
+    assert!(
+        entry
+            .text
+            .starts_with("Convert to embedded patches of run_a refused: ")
+            && entry.text.contains("building patch frames failed"),
+        "{}",
+        entry.text
+    );
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}

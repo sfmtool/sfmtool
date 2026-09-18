@@ -5,9 +5,10 @@
 //! closes when it is used.
 //!
 //! Two menus, one per row kind. The reconstruction row's
-//! ([`node_context_menu`]) carries the whole-node actions — visibility, tint,
-//! align, tint, reset, close — and the image row's ([`image_context_menu`])
-//! carries the two `Resect Image` entries. They are together because a menu is
+//! ([`node_context_menu`]) carries the whole-node actions (select, zoom to fit,
+//! align, reset transform, tint, convert to embedded patches, close) and the
+//! image row's ([`image_context_menu`]) carries the resections, the camera move
+//! and the image deletion. They are together because a menu is
 //! the one place in the panel where an item is *described* rather than drawn:
 //! each entry has a verb, an availability rule and a hover text explaining a
 //! refusal, and those three read as a set.
@@ -52,8 +53,44 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_tint_menu(ui, node, out);
     ui.separator();
+    show_convert_entry(ui, node, out);
+    ui.separator();
     if ui.button("Close").clicked() {
         out.response.close_node = Some(node.id);
+        ui.close();
+    }
+}
+
+/// What the entry that converts a node's observations is called, in the menu
+/// and in the tests that aim at it.
+pub(crate) const CONVERT_TO_EMBEDDED_PATCHES: &str = "Convert to Embedded Patches";
+
+/// `Convert to Embedded Patches`: the one entry on this menu that is a bulk
+/// edit of the reconstruction rather than display state.
+///
+/// Kept visible and greyed rather than hidden when it cannot run, like every
+/// other refusable entry in the panel: the operation exists on every
+/// reconstruction row, and an entry that vanishes reads as one that was never
+/// built. The hover text is `AppState`'s own sentence, so the greyed entry and
+/// a call that asks anyway give one answer.
+fn show_convert_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = crate::state::edits::convert_refusal(node, out.busy_refusal(node.id));
+    let entry = ui
+        .add_enabled(
+            refusal.is_none(),
+            egui::Button::new(CONVERT_TO_EMBEDDED_PATCHES),
+        )
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Give every point a patch frame from its mean viewing direction and carry each \
+             observation's .sift keypoint inline, as one version. Runs on a worker thread, and \
+             reads the workspace's .sift files. Undo (Ctrl+Z) puts the sift_files version back.",
+        );
+    if out
+        .hit(row_id(node.id, "to_embedded_patches"), entry)
+        .clicked()
+    {
+        out.response.convert_to_embedded_patches = Some(node.id);
         ui.close();
     }
 }

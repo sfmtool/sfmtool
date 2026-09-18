@@ -292,8 +292,28 @@ fixed-height for virtualization.
   painted or not, so the name does not shift as the selection moves.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
-  `Tint ▸` (Original / palette of distinguishable colors), `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
+  `Tint ▸` (Original / palette of distinguishable colors),
+  `Convert to Embedded Patches`, `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
+- **`Convert to Embedded Patches`** is the one entry on this menu that edits the
+  reconstruction. It runs the minimal `sift_files` → `embedded_patches`
+  conversion as the node's next version, on a worker thread
+  ([background-tasks.md](background-tasks.md)): a `(u, v)` frame per point from
+  its mean viewing direction, each observation's `.sift` keypoint carried
+  inline, each image's identity hash read from the `.sift` metadata, and no
+  photometric step
+  ([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)).
+  It is **live only on a node whose observations are `sift_files` and that
+  nothing is running on**, and
+  greyed with the reason otherwise: *"‹label› is already an embedded_patches
+  reconstruction."*, or the busy sentence every other edit of a locked node is
+  refused with. The gate is `state::edits::convert_refusal`, which the wire's
+  `convert_to_embedded_patches` and the operation itself also ask, so the greyed
+  entry and a call that asks anyway give one answer. The test is the observation
+  source and not `SceneNode::has_patch_data`: that answers the narrower question
+  of whether the node also carries the reference bitmaps the surfel renderer
+  textures a patch with, which this conversion does not produce, so the
+  `Patches` row below does not appear after one.
 - Expanded by default: with one file loaded the node's groups are the whole
   panel, and with a handful the tree is still what answers "what is in here".
   Its Camera Images and Points groups start *collapsed* — the image list is the

@@ -16,8 +16,11 @@
 //! - At the **track stage** the surfel's square boundary is sampled and each
 //!   sample projected through the camera, so the outline is the curve a
 //!   distorting lens really maps that square to. Beside it, each observation's
-//!   keypoint, and for a candidate the segment from the keypoint to the
-//!   surfel's own projection, which is the shift the *Shift* column reports.
+//!   keypoint and, for **every** observation and in that observation's own
+//!   verdict colour, the segment from the keypoint to the surfel's own
+//!   projection, which is the projection offset the *Proj. off* column
+//!   reports. Where a sighting sits on the projection the segment has no
+//!   length and is not seen, which is the answer as much as a long one is.
 //! - At the **cluster stage** there is no geometry, so what is drawn is the
 //!   parallelogram the template's square maps to under the observation's
 //!   refined affine shape, with the seed's own parallelogram dashed behind it.
@@ -173,8 +176,9 @@ pub(super) struct Layer {
     /// The outlines: one at the track stage, one per observation at the cluster
     /// stage.
     outlines: Vec<Outline>,
-    /// The surfel's own projection, which the shift segment runs to. `None` at
-    /// the cluster stage and for a track nothing has triangulated.
+    /// The surfel's own projection, which every observation's
+    /// projection-offset segment runs to. `None` at the cluster stage and for
+    /// a track nothing has triangulated.
     center: Option<Pos2>,
     /// The seed parallelograms drawn dashed behind the cluster stage's
     /// outlines. Never a handle: where an observation *started* is not a thing
@@ -336,8 +340,8 @@ impl Layer {
     /// them, so an image the track is `in` reads as `in`. It is drawn through
     /// the frame re-anchored on that sighting, as the tile is rendered: the
     /// sighting is where the patch sits in this photograph, and the geometric
-    /// projection is where the 3D says it should, which the centre dot and the
-    /// shift segment show separately.
+    /// projection is where the 3D says it should, which the hollow centre and
+    /// the projection-offset segment show separately.
     fn build_track_stage(
         &mut self,
         here: &[(usize, &Observation)],
@@ -547,14 +551,16 @@ impl Layer {
         for sighting in &self.sightings {
             let color = color_of(sighting.verdict);
             painter.circle_filled(sighting.at, KEYPOINT_RADIUS, color);
-            // The shift, drawn rather than tabulated: a candidate is exactly
-            // the question of whether the sighting and the surfel are the same
-            // thing, and the gap between the two dots is that question.
-            if sighting.verdict == Verdict::Candidate {
-                if let Some(center) = self.center {
-                    painter.line_segment([sighting.at, center], Stroke::new(1.5, color));
-                    painter.circle_stroke(center, KEYPOINT_RADIUS * 0.75, Stroke::new(1.5, color));
-                }
+            // The projection offset, drawn rather than tabulated, and drawn
+            // for every observation whatever its verdict: where this image's
+            // feature sits relative to where the surfel says it should is the
+            // question the layer exists to answer, and an observation already
+            // judged in is exactly the one whose answer is worth seeing. A
+            // sighting that sits on the projection draws a segment of no
+            // length, so nothing needs special casing for the agreeing case.
+            if let Some(center) = self.center {
+                painter.line_segment([sighting.at, center], Stroke::new(1.5, color));
+                painter.circle_stroke(center, KEYPOINT_RADIUS * 0.75, Stroke::new(1.5, color));
             }
         }
         // The one mark that is about the pointer rather than about the track:

@@ -100,9 +100,9 @@ place.
 
 ## The tool surface
 
-Sixty-five tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- forty-nine
-write, and one writes a file.
+Sixty-six tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- fifty write,
+and one writes a file.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -144,6 +144,7 @@ write, and one writes a file.
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
+| `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background` | write | Stop the operation running on a worker, when it can be stopped |
 | `get_bench` | read | One reconstruction's bench: every item on it, and which is active |
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
@@ -388,7 +389,8 @@ addressable. No arguments.
                    "show_patches": true, "show_points_at_infinity": true,
                    "tint": null },
       "transformed": false,               // SceneNode::has_transform
-      "has_patch_data": false
+      "feature_source": "sift_files",     // or "embedded_patches"
+      "has_patch_data": false             // narrower: the frames *and* the bitmaps
     }
   ],
   "selection": {
@@ -2028,13 +2030,53 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Four operations run on a worker**: this one, and the bench's
-`evaluate_bench_track`, `fit_bench_track` and `set_bench_track_stage`, which
-answer through the same two-level reply. Every other edit is still synchronous on the GUI thread,
+**Five operations run on a worker**: this one,
+`convert_to_embedded_patches`, and the bench's `evaluate_bench_track`,
+`fit_bench_track` and `set_bench_track_stage`, which answer through the same
+two-level reply. Every other edit is still synchronous on the GUI thread,
 and a reconstruction large enough to take more than the apply timeout will still
 time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
 version may well have been pushed.
+
+### `convert_to_embedded_patches`
+
+The third bulk edit, and the one that changes how a node's observations are
+located rather than what they say.
+
+```jsonc
+// convert_to_embedded_patches { "reconstruction_label": "seoul_bull" }
+```
+
+A `sift_files` reconstruction names each observation by a feature index into a
+`.sift` file beside the workspace; an `embedded_patches` one carries a `(u, v)`
+patch frame per point and a keypoint per observation inline. This is the
+**minimal** conversion between them, the one `sfm xform --to-embedded-patches`
+runs with that command's own defaults
+([sift-to-patch-reconstruction.md](../core/patch/sift-to-patch-reconstruction.md)):
+each point gets a frame from its mean viewing direction sized at `2.5 x` the
+median projected keypoint scale across its views, each observation's keypoint is
+copied verbatim from its `.sift` detection, and each image's identity hash is
+read from the `.sift` metadata. No photometric step runs and no reference bitmap
+is fused, so the node afterwards reports `feature_source:
+"embedded_patches"` and `has_patch_data: false` -- the frames are there and the
+textures the surfel renderer needs are not.
+
+Every point keeps its index, its position and its track, so a point id a caller
+is holding still names the same point and the selection does not move. The
+`.sift` files have to still be where the reconstruction was made; a missing one
+is the frame builder's refusal, worded by the state and recorded once.
+
+**It runs on a worker thread** and answers the two ways `bundle_adjust` does: the
+version and its report inside 200 ms, a `running: true` handle after it, with
+`"operation": "Convert to embedded patches"`. It polls the cancel flag between
+its three stages and between the images of its `.sift` read, so
+`cancel_background_task` stops it, and a cancelled conversion pushes no version.
+
+It is refused on a reconstruction that already carries embedded patches -- there
+is no `.sift` left to copy a keypoint from -- in the same sentence the greyed
+`Convert to Embedded Patches` entry in the Scene tree carries
+([scene-graph.md](scene-graph.md)).
 
 ### The bench family
 
@@ -3050,7 +3092,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-five tools**, fifteen of them reads and one of them
+- **The catalog is sixty-six tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

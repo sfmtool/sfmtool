@@ -3576,6 +3576,10 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
         ("bundle_adjust", json!({ "reconstruction_label": "alpha" })),
+        (
+            "convert_to_embedded_patches",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
         ("get_bench", json!({ "reconstruction_label": "alpha" })),
         (
             "get_bench_track",
@@ -3898,15 +3902,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fourteen reads, forty-nine writes, the one that writes a file, and the
-    // one that hands back a picture.
-    assert_eq!(catalog.len(), 65, "the catalog has grown or shrunk");
+    // Fifteen reads, fifty writes, the one that writes a file, and the one
+    // that hands back a picture.
+    assert_eq!(catalog.len(), 66, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        49
+        50
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4675,6 +4679,92 @@ fn a_slow_adjustment_answers_with_a_handle_naming_it() {
     state.finish_background_task();
 }
 
+/// The conversion is a background task on the wire, and `get_scene` says what
+/// it changed: one call defers, the frame answers with the version it pushed,
+/// and the node's `feature_source` has flipped.
+#[test]
+fn convert_to_embedded_patches_defers_and_flips_the_feature_source() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let (mut state, id) = crate::state::edits::tests::convertible_state(dir.path());
+    state.select_recon(id);
+    state.window = Some(FakeWindow::default().info());
+    let mut viewer = Viewer3D::new();
+    viewer.panel_size = [1280, 720];
+
+    let before = call(&mut state, &mut viewer, "get_scene", json!({}));
+    let node = &before["scene"][0];
+    assert_eq!(node["feature_source"], json!("sift_files"), "{before}");
+    assert_eq!(node["has_patch_data"], json!(false), "{before}");
+
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command =
+        tools::parse("convert_to_embedded_patches", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the conversion must defer"),
+    };
+    assert_eq!(pending.operation_name, "Convert to embedded patches");
+    state.finish_background_task();
+
+    let reply = match super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(
+        reply["label"],
+        json!("Converted run_a to embedded patches"),
+        "{reply}"
+    );
+    let report = reply["report"].as_str().expect("a report");
+    assert_eq!(
+        report.split(" (").next().expect("a sentence"),
+        "Converted run_a to embedded patches: 24 points framed, 8 images read",
+        "{report}"
+    );
+
+    // The same operation, read back through the tool an agent polls, under the
+    // same name and id the handle carried.
+    let over = call(&mut state, &mut viewer, "get_background_task", json!({}));
+    assert_eq!(over["running"], json!(false), "{over}");
+    assert_eq!(over["finished"], json!(true), "{over}");
+    assert_eq!(
+        over["operation"],
+        json!("Convert to embedded patches"),
+        "{over}"
+    );
+    assert_eq!(over["reconstruction_label"], json!("run_a"), "{over}");
+    assert_eq!(over["operation_id"], json!(pending.operation_id), "{over}");
+
+    let after = call(&mut state, &mut viewer, "get_scene", json!({}));
+    let node = &after["scene"][0];
+    assert_eq!(node["feature_source"], json!("embedded_patches"), "{after}");
+    // The minimal conversion fuses no reference bitmap, so the narrower field
+    // beside it does not move.
+    assert_eq!(node["has_patch_data"], json!(false), "{after}");
+}
+
+/// A node that already carries embedded patches is refused inline, in the
+/// sentence the greyed menu entry carries, and nothing is pushed.
+#[test]
+fn convert_to_embedded_patches_is_refused_on_an_embedded_node() {
+    let (mut state, mut viewer) = editable();
+    let error = refused_call(
+        &mut state,
+        &mut viewer,
+        "convert_to_embedded_patches",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    assert!(error.0.contains("already an embedded_patches"), "{error}");
+    assert_eq!(version_count(&state), 1);
+    assert!(state.background_task().is_none());
+}
+
 /// The id in a handle goes on naming its operation after that operation has
 /// finished, which is what an agent comes back with.
 #[test]
@@ -5307,6 +5397,7 @@ fn every_editing_tool_requires_its_reconstruction_label() {
         ),
         ("resect_camera_image_in_place", json!({ "camera_image": 1 })),
         ("bundle_adjust", json!({})),
+        ("convert_to_embedded_patches", json!({})),
     ] {
         let error = refused_call(&mut state, &mut viewer, name, arguments);
         assert!(error.0.contains("reconstruction_label"), "{name}: {error}");

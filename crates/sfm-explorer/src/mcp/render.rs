@@ -101,6 +101,16 @@ pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
             "tint": tint_name(node),
         },
         "transformed": node.has_transform(),
+        // How every observation is located: `"sift_files"` names a feature in
+        // a `.sift` file beside the workspace, `"embedded_patches"` carries a
+        // keypoint inline against a per-point patch frame. It is what
+        // convert_to_embedded_patches changes, and what every tool that needs
+        // one mode or the other is gated on.
+        "feature_source": node.recon().point_set.observations.name(),
+        // Narrower than `feature_source`: whether the node also carries the
+        // reference bitmaps the surfel renderer textures its patches with. An
+        // `embedded_patches` node converted in the viewer has frames and no
+        // bitmaps, so this stays false.
         "has_patch_data": node.has_patch_data(),
     })
 }

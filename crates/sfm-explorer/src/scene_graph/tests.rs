@@ -2779,3 +2779,89 @@ fn the_image_row_offers_move_camera_and_reports_the_image_it_was_chosen_on() {
         "Move Camera leaked onto the reconstruction row's menu"
     );
 }
+
+// -- Convert to Embedded Patches ------------------------------------------
+
+/// The entry is live on a `sift_files` node and reports the node it was opened
+/// on.
+#[test]
+fn the_convert_entry_is_live_on_a_sift_files_node() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "to_embedded_patches")).is_some(),
+        "the reconstruction row's menu offered no {}",
+        super::menus::CONVERT_TO_EMBEDDED_PATCHES
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "to_embedded_patches"),
+    );
+    assert_eq!(response.convert_to_embedded_patches, Some(id));
+}
+
+/// On a node that already carries embedded patches it is drawn and dead: there
+/// is no `.sift` left to copy a keypoint from.
+#[test]
+fn the_convert_entry_is_greyed_on_an_embedded_patches_node() {
+    let mut state = resectable_scene();
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel.hit_rect(row_id(id, "to_embedded_patches")).is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "to_embedded_patches"),
+    );
+    assert_eq!(
+        response.convert_to_embedded_patches, None,
+        "an embedded_patches node offered to be converted again"
+    );
+}
+
+/// And dead while an operation is running on that node, which is the state's
+/// own refusal rather than a second rule.
+#[test]
+fn the_convert_entry_is_greyed_while_the_node_is_busy() {
+    let mut state = shared_shoot(1);
+    let id = state.scene[0].id;
+    // A worker held open, so the node is still busy when the menu is drawn.
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::TO_EMBEDDED_PATCHES,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "to_embedded_patches"),
+    );
+    assert_eq!(
+        response.convert_to_embedded_patches, None,
+        "the entry was live on a busy node"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}

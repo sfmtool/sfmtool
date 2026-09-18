@@ -57,6 +57,9 @@ pub enum ReconstructionError {
     /// The operation is not supported for this reconstruction's feature source
     /// (e.g. a `.sift`-dependent step run on an `embedded_patches` recon).
     Unsupported(String),
+    /// The caller asked the operation to stop, and it did, so there is no
+    /// result to hand back.
+    Cancelled,
 }
 
 impl std::fmt::Display for ReconstructionError {
@@ -71,11 +74,21 @@ impl std::fmt::Display for ReconstructionError {
                 )
             }
             ReconstructionError::Unsupported(msg) => write!(f, "{msg}"),
+            ReconstructionError::Cancelled => write!(
+                f,
+                "the operation was asked to stop before it had an answer, so nothing was produced"
+            ),
         }
     }
 }
 
 impl std::error::Error for ReconstructionError {}
+
+impl From<crate::progress::Cancelled> for ReconstructionError {
+    fn from(_: crate::progress::Cancelled) -> Self {
+        ReconstructionError::Cancelled
+    }
+}
 
 /// A 3D point in the reconstruction.
 ///

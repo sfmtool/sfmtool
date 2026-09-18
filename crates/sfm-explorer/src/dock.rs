@@ -1068,6 +1068,13 @@ impl TabContext<'_> {
         if let Some(id) = response.reset_transform {
             self.state.reset_node_transform(id);
         }
+        // A bulk edit that goes to a worker: this returns as soon as the
+        // operation is running, and the version it produces is pushed by the
+        // frame that collects it, which drops the panel caches itself off
+        // `Polled::installed`.
+        if let Some(id) = response.convert_to_embedded_patches {
+            let _ = self.state.start_convert_to_embedded_patches(id);
+        }
         if let Some(id) = response.close_node {
             // Closing a node is a step away from a camera held in hand on it,
             // and it happens before the question below: an answer that arrives

@@ -447,7 +447,7 @@ differs by stage:
   polyline. The frame is first re-anchored on this image's keypoint
   (`OrientedPatch::anchored_at_keypoint`), as the tile in Track Edit is
   rendered, so the outline sits where the sighting is in this photograph; the
-  surfel's own projection is the centre dot the shift segment runs to. The outline is therefore the curve a distorting lens really maps
+  surfel's own projection is the hollow centre the offset segments run to. The outline is therefore the curve a distorting lens really maps
   that square to, rather than the quadrilateral through its four corners:
   `OrientedPatch::boundary` supplies the samples
   ([`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md)), eight per
@@ -455,8 +455,15 @@ differs by stage:
   outside the lens model's domain **breaks** the polyline there, so an outline
   that leaves the model's field is drawn as the arcs that are defined rather
   than closed across a chord that means nothing. Beside it, each observation's
-  own keypoint as a filled dot, and for a candidate the segment from that dot to
-  the surfel's own projection: the gap is the *Shift* column, drawn.
+  own keypoint as a filled dot and, for **every** observation whatever its
+  verdict, in that observation's own colour, the segment from that dot to the
+  surfel's own projection with a hollow circle at the projection: the gap is
+  the *Proj. off* column, drawn. Where the two coincide the segment has no
+  length and is not seen, which needs no special casing and is the answer as
+  much as a long segment is. It is drawn for a judged observation as well as a
+  proposed one because where this image's feature sits relative to the
+  projection is what the layer is read for, and an observation already voted
+  *in* is exactly the one whose answer is worth having in view.
 - At the **cluster stage** there is no geometry, so each observation in this
   image contributes the parallelogram its refined 2x2 affine shape maps the
   template's square to, at the refined position, with the seed's own

@@ -728,6 +728,38 @@ fn bench_shapes(
     image_index: usize,
     bench: BenchMenu<'_>,
 ) -> Vec<Vec<egui::Pos2>> {
+    let mut found = Vec::new();
+    for clipped in &bench_frame(node, image_index, bench) {
+        collect_bench_paths(&clipped.shape, &mut found);
+    }
+    found
+}
+
+/// Every bench-coloured **segment** the frame painted, with the colour it was
+/// drawn in: the projection offsets, which are line segments rather than
+/// paths and so invisible to [`bench_shapes`].
+fn bench_segments(
+    node: &SceneNode,
+    image_index: usize,
+    bench: BenchMenu<'_>,
+) -> Vec<([egui::Pos2; 2], egui::Color32)> {
+    let mut found = Vec::new();
+    for clipped in &bench_frame(node, image_index, bench) {
+        collect_bench_segments(&clipped.shape, &mut found);
+    }
+    found
+}
+
+/// One frame of the panel with `bench` on it, as the shapes it painted.
+///
+/// Two frames are run and the second one's shapes returned: the first loads
+/// the image and prepares the overlay, and the layer draws over what is on
+/// screen.
+fn bench_frame(
+    node: &SceneNode,
+    image_index: usize,
+    bench: BenchMenu<'_>,
+) -> Vec<egui::epaint::ClippedShape> {
     let ctx = egui::Context::default();
     let mut detail = ImageDetail::new();
     let mut intrinsics_display = IntrinsicsDisplaySettings::default();
@@ -737,11 +769,8 @@ fn bench_shapes(
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, PANEL)),
         ..Default::default()
     };
-    let mut found = Vec::new();
-    // Two frames: the first loads the image and prepares the overlay, and the
-    // layer draws over what is on screen.
+    let mut shapes = Vec::new();
     for _ in 0..2 {
-        found.clear();
         let mut output = ctx.run_ui(input(), |ui| {
             detail.show(
                 ui,
@@ -763,11 +792,9 @@ fn bench_shapes(
             );
         });
         output.textures_delta.clear();
-        for clipped in &output.shapes {
-            collect_bench_paths(&clipped.shape, &mut found);
-        }
+        shapes = output.shapes;
     }
-    found
+    shapes
 }
 
 fn collect_bench_paths(shape: &egui::Shape, out: &mut Vec<Vec<egui::Pos2>>) {
@@ -778,6 +805,27 @@ fn collect_bench_paths(shape: &egui::Shape, out: &mut Vec<Vec<egui::Pos2>>) {
         egui::Shape::Vec(shapes) => {
             for shape in shapes {
                 collect_bench_paths(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_bench_segments(shape: &egui::Shape, out: &mut Vec<([egui::Pos2; 2], egui::Color32)>) {
+    match shape {
+        egui::Shape::LineSegment { points, stroke }
+            if [
+                super::bench_track::IN_COLOR,
+                super::bench_track::CANDIDATE_COLOR,
+                super::bench_track::OUT_COLOR,
+            ]
+            .contains(&stroke.color) =>
+        {
+            out.push((*points, stroke.color));
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_bench_segments(shape, out);
             }
         }
         _ => {}
@@ -882,6 +930,86 @@ fn the_bench_layer_outlines_the_surfel_where_its_corners_project() {
         assert!(
             nearest < 0.01,
             "the outline misses the corner ({s}, {t}) at {expected:?} by {nearest}",
+        );
+    }
+}
+
+/// The projection offset is drawn for **every** observation, whatever its
+/// verdict, in that observation's own colour: it runs from the sighting's
+/// keypoint to where the surfel projects, which is the number the `Proj. off`
+/// column carries.
+#[test]
+fn the_bench_layer_draws_the_projection_offset_for_every_verdict() {
+    use sfmtool_core::bench::Verdict;
+    use sfmtool_core::geometry::RigidTransform;
+
+    let (node, track) = bench_track_fixture();
+    // Where the surfel's centre lands in this image, projected here rather
+    // than through the layer's own code.
+    let frame = track
+        .track()
+        .and_then(|payload| payload.frame.as_ref())
+        .expect("a track from a point carries the stored patch as its frame");
+    let table = &node.edited().base.image_table;
+    let image = &table.images[0];
+    let camera = &table.cameras[image.camera_index as usize];
+    let q = image.quaternion_wxyz.quaternion();
+    let pose = RigidTransform::from_wxyz_translation(
+        [q.w, q.i, q.j, q.k],
+        [
+            image.translation_xyz.x,
+            image.translation_xyz.y,
+            image.translation_xyz.z,
+        ],
+    );
+    let centre = {
+        let p = pose.transform_point_homogeneous(frame.center.coords, frame.w);
+        let (u, v) = camera
+            .ray_to_pixel([p.x, p.y, p.z])
+            .expect("the demo's surfel is in front of the camera");
+        to_panel(&pixels(640, 480), [u, v])
+    };
+    let keypoint = track
+        .observations
+        .iter()
+        .find(|o| o.image == 0)
+        .and_then(|o| o.track.as_ref())
+        .and_then(|m| m.keypoint)
+        .map(|k| to_panel(&pixels(640, 480), [f64::from(k[0]), f64::from(k[1])]))
+        .expect("a track from a point carries its keypoints");
+
+    for (verdict, expected) in [
+        (Verdict::In, super::bench_track::IN_COLOR),
+        (Verdict::Candidate, super::bench_track::CANDIDATE_COLOR),
+        (Verdict::Out, super::bench_track::OUT_COLOR),
+    ] {
+        let mut judged = track.clone();
+        for observation in &mut judged.observations {
+            observation.verdict = verdict;
+        }
+        let segments = bench_segments(
+            &node,
+            0,
+            BenchMenu {
+                busy: None,
+                active_track: Some(&judged),
+            },
+        );
+        assert_eq!(
+            segments.len(),
+            1,
+            "{verdict:?} drew {} offset segments rather than one",
+            segments.len()
+        );
+        let ([from, to], color) = segments[0];
+        assert_eq!(color, expected, "{verdict:?} drew the segment in {color:?}");
+        assert!(
+            (from - keypoint).length() < 0.01,
+            "{verdict:?}: the segment starts at {from:?}, not at the keypoint {keypoint:?}"
+        );
+        assert!(
+            (to - centre).length() < 0.01,
+            "{verdict:?}: the segment ends at {to:?}, not at the projection {centre:?}"
         );
     }
 }

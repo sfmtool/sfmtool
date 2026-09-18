@@ -30,6 +30,7 @@ use std::time::Instant;
 use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
+use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress_note;
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
@@ -46,6 +47,54 @@ use super::AppState;
 /// How many pyramid levels the photometric fit's sampler needs. The kernels'
 /// own callers build the same number.
 const PYRAMID_LEVELS: usize = 6;
+
+/// The patch-frame normal the viewer's `sift_files` → `embedded_patches`
+/// conversion seeds each point with: the mean of its point-to-camera
+/// directions, which is `sfm xform --to-embedded-patches`'s own default and the
+/// only seed that needs nothing but the solve.
+const CONVERSION_NORMAL: PatchNormal = PatchNormal::MeanViewing;
+
+/// The half-extent policy that conversion sizes each patch by, and the CLI's
+/// own default: `2.5 ×` the median projected keypoint scale across the point's
+/// views, so the full patch edge is five times the feature. `PatchExtent`'s
+/// `Default` *is* that pair, and it is spelled out here rather than taken from
+/// `Default` so the two layers are one written-down number rather than two that
+/// happen to agree.
+const CONVERSION_EXTENT: PatchExtent = PatchExtent::FeatureSize {
+    factor: 2.5,
+    across: ViewReduce::Median,
+};
+
+/// Why `node` cannot be converted to `embedded_patches`, or `None` when it can.
+///
+/// A free function over the node and the busy sentence rather than a method,
+/// because the two callers reach it from different sides: the Scene tree's menu
+/// is drawn inside a walk that holds the node and has already given up its
+/// borrow of the state, and [`AppState::convert_to_embedded_patches_refusal`]
+/// holds the state and looks the node up. One definition, so the greyed entry's
+/// hover text and the refusal a call gets are the same sentence.
+///
+/// `busy` is [`AppState::busy_refusal`]'s answer for this node, and it comes
+/// first: an operation already running on the node is the reason that will
+/// still be true a moment later.
+pub(crate) fn convert_refusal(
+    node: &crate::scene::SceneNode,
+    busy: Option<&str>,
+) -> Option<String> {
+    if let Some(why) = busy {
+        return Some(why.to_string());
+    }
+    // The observation source, not `SceneNode::has_patch_data`: that answers
+    // whether the node carries reference *bitmaps* to texture its surfels
+    // with, which this conversion does not produce and which the surfel
+    // renderer is the one reader of.
+    node.recon().point_set.feature_indexes().is_none().then(|| {
+        format!(
+            "{} is already an embedded_patches reconstruction.",
+            node.label
+        )
+    })
+}
 
 /// Decoded images for one edit, owning what a [`ProjectedImage`] borrows.
 ///
@@ -1052,6 +1101,127 @@ impl AppState {
             );
             Finished::Produced {
                 value: adjusted,
+                map,
+                version_label,
+                text,
+            }
+        }))
+    }
+
+    /// Why converting `id` to `embedded_patches` is refused right now, or
+    /// `None`.
+    ///
+    /// [`convert_refusal`]'s question asked of a node this state holds, which
+    /// is the form the wire and the job want; the Scene tree's menu asks the
+    /// free function directly, because the walk that draws it has the node and
+    /// not the state.
+    pub(crate) fn convert_to_embedded_patches_refusal(&self, id: ReconId) -> Option<String> {
+        let busy = self.busy_refusal(id);
+        convert_refusal(self.node(id)?, busy.as_deref())
+    }
+
+    /// Start converting `id`'s current value from `sift_files` to
+    /// `embedded_patches` on a worker thread.
+    ///
+    /// A bulk edit, and the minimal conversion: every point keeps its index, its
+    /// position and its track, and what changes is how each observation is
+    /// located -- a `(u, v)` patch frame per point from the mean viewing
+    /// direction, each observation's keypoint copied verbatim from its `.sift`
+    /// detection, and each image's identity hash read from the `.sift`
+    /// metadata. It is `sfm xform --to-embedded-patches` with that command's
+    /// own defaults ([`CONVERSION_EXTENT`]).
+    ///
+    /// Returns as soon as the worker is running, and **nothing is logged
+    /// here**: the entry is the outcome's, written by
+    /// [`AppState::poll_background_task`] on the frame the answer lands. An
+    /// `Err` is a refusal to *begin*, logged the way the synchronous edits log
+    /// theirs.
+    pub fn start_convert_to_embedded_patches(&mut self, id: ReconId) -> Result<(), String> {
+        let outcome = match self.convert_to_embedded_patches_job(id) {
+            Ok(job) => self.start_background_task(Operation::TO_EMBEDDED_PATCHES, id, job),
+            Err(message) => Err(message),
+        };
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Edit, message.clone());
+        }
+        outcome
+    }
+
+    /// The conversion itself, as a function of the
+    /// [`Progress`](sfmtool_core::progress::Progress) it reports through.
+    ///
+    /// The closure owns what it reads, the way the adjustment's does: the
+    /// overlay fold and the conversion are pure functions of the value at the
+    /// cursor, so what crosses to the worker is a clone of
+    /// [`EditedReconstruction`] whose `base` is the very `Arc` the node goes on
+    /// drawing.
+    pub(crate) fn convert_to_embedded_patches_job(&self, id: ReconId) -> Result<Job, String> {
+        let label = self
+            .node(id)
+            .map(|node| node.label.clone())
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        if let Some(why) = self.convert_to_embedded_patches_refusal(id) {
+            return Err(format!(
+                "Convert to embedded patches of {label} refused: {why}"
+            ));
+        }
+        let edited = self
+            .node(id)
+            .expect("just resolved")
+            .history
+            .current()
+            .clone();
+        Ok(Box::new(move |progress| {
+            let refuse =
+                |why: String| format!("Convert to embedded patches of {label} refused: {why}");
+
+            // Materialise only when there is an overlay to fold in; an empty
+            // one materialises to its own base, which the conversion can read
+            // directly.
+            let (materialised, mat_map) =
+                if edited.deleted_points.is_empty() && edited.added.points.is_empty() {
+                    (None, None)
+                } else {
+                    let _phase = progress.phase("materialise");
+                    let (value, map) = edited.materialize();
+                    (Some(value), Some(PointMap::Rows(map)))
+                };
+            let source: &SfmrReconstruction = match materialised.as_ref() {
+                Some(value) => value,
+                None => &edited.base,
+            };
+
+            // The kernel's own three stages nest directly under the
+            // operation's, since this `Progress` is at the top of it.
+            let converted =
+                match source.to_embedded_patches(CONVERSION_NORMAL, CONVERSION_EXTENT, progress) {
+                    Ok(converted) => converted,
+                    // The one error that is not a refusal: the operation was asked
+                    // to stop and did, which the log words as a cancellation.
+                    Err(sfmtool_core::reconstruction::ReconstructionError::Cancelled) => {
+                        return Finished::Cancelled
+                    }
+                    Err(e) => return Finished::Failed(refuse(e.to_string())),
+                };
+
+            // The identity, stated rather than scanned. The conversion keeps
+            // every point at its own index, and `RowMap::by_scan` could not
+            // read that off these two values anyway: it identifies a sighting
+            // by its feature index, which is exactly the column the conversion
+            // replaces, so it would fall back to matching on images alone.
+            let mut steps = Vec::new();
+            steps.extend(mat_map);
+            steps.push(PointMap::Removed(Vec::new()));
+            let map = PointMap::Chain(steps);
+
+            let version_label = format!("Converted {label} to embedded patches");
+            let text = format!(
+                "{version_label}: {} points framed, {} images read",
+                converted.point_count(),
+                converted.image_count(),
+            );
+            Finished::Produced {
+                value: converted,
                 map,
                 version_label,
                 text,
