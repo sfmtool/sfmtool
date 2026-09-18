@@ -204,6 +204,14 @@ pub enum Classification {
 #[derive(Debug, Clone, Copy)]
 pub struct RayClassification {
     pub class: Classification,
+    /// The least-squares point the rays triangulated to, whatever [`Self::class`]
+    /// made of it.
+    ///
+    /// Beside the class rather than only inside `Classification::Finite`, because
+    /// a caller that refused the depth may still want to know what was refused:
+    /// the bench scores this point and [`Self::bearing`] against the sightings and
+    /// keeps whichever explains them, which needs both candidates in hand.
+    pub point: Point3<f64>,
     pub condition_number: f64,
     pub resolvable_distance: f64,
     pub inverse_depth_z: f64,
@@ -283,6 +291,7 @@ pub fn classify_rays_at_infinity(
     if geometrically_finite && tri.condition_number < CONDITION_NUMBER_PREFILTER {
         return RayClassification {
             class: Classification::Finite(tri.point),
+            point: tri.point,
             condition_number: tri.condition_number,
             resolvable_distance: f64::NAN,
             inverse_depth_z: f64::NAN,
@@ -307,6 +316,7 @@ pub fn classify_rays_at_infinity(
     };
     RayClassification {
         class,
+        point: tri.point,
         condition_number: tri.condition_number,
         resolvable_distance: du.resolvable_distance,
         inverse_depth_z: du.inverse_depth_z,

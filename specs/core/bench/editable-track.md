@@ -372,6 +372,7 @@ pub struct FitOptions {
     pub evaluate: EvaluateOptions,          // the reading a fit ends with
     pub noise_floor_px: f64,                // the classification's, 1.0
     pub inverse_depth_z_cutoff: f64,        // the classification's, 4.0
+    pub residual_margin: f64,               // the classification's, 0.8
 }
 
 pub struct EvaluateReport {
@@ -399,6 +400,7 @@ pub fn classify_track_rays(
     images: &[ProjectedImage<'_>],
     noise_floor_px: f64,
     z_cutoff: f64,
+    residual_margin: f64,
 ) -> TrackClassification;
 
 pub struct TrackClassification {
@@ -411,6 +413,9 @@ pub struct TrackClassification {
     pub resolvable_distance: f64,
     pub finite_horizon: f64,
     pub max_pair_angle_deg: f64,
+    pub finite_rms_px: f64,              // the point reprojected against the sightings
+    pub bearing_rms_px: f64,             // the bearing, against the same sightings
+    pub residual_margin: f64,
 }
 
 pub enum ClassificationReason {
@@ -418,6 +423,9 @@ pub enum ClassificationReason {
     DepthResolved,        // the z-score reached the bar: finite
     DepthUnresolved,      // it did not, or the solve was degenerate: a bearing
     BaselineTooShort,     // no depth is resolvable at the capture's scale: a bearing
+    // The residual check, which overturns either of the criterion's answers.
+    FiniteDoesNotExplainTheSightings,
+    BearingDoesNotExplainTheSightings,
 }
 
 pub struct StageReport {
@@ -693,6 +701,40 @@ coordinate the track takes, a flag, and the number that settled it:
 
 The bearing a `w = 0` answer carries is the normalised mean of the rays, which
 is the robust direction those sightings agree on.
+
+**And then the sightings have the last word.** The criterion above is a
+statement about *observability* -- whether this geometry could resolve a depth --
+and on an ill-conditioned solve it can clear its own bar on a depth nothing in
+the photographs supports: the least-squares midpoint of near-parallel, slightly
+inconsistent rays lands wherever the inconsistency throws it, and then reprojects
+nowhere near the sightings it was solved from. So both candidates are scored on
+the one thing a person looking at the photographs can check -- the rms distance,
+in px, from each sighting to where the candidate projects in its own image,
+which is
+[`observation_metrics`](../../../crates/sfmtool-core/src/bench/evaluate.rs)'
+own first number and so the same residual the *Error* column shows -- and:
+
+- a **finite** answer stands only where the point's residual comes under
+  `residual_margin` of the bearing's **and** under it by more than
+  `noise_floor_px`; otherwise the bearing stands, with the reason
+  `FiniteDoesNotExplainTheSightings`;
+- a **bearing** answer stands unless the point clears that same bar, in which
+  case the photographs place the track at a depth whatever the conditioning
+  says, with the reason `BearingDoesNotExplainTheSightings`.
+
+One comparison, asked in both directions, so the two answers cannot be settled
+by different rules. The margin is a fraction because the comparison has no
+natural scale -- a scene metre is a pixel count that depends on the lens and the
+depth -- and the absolute term is there because a fraction alone would believe a
+0.05 px residual over a 0.07 px one, which is two roundings of the same answer.
+Both residuals and the margin are on every classification, and in every sentence
+it writes, because they are the evidence a person reads the call by.
+
+The finite candidate has three degrees of freedom against the bearing's two and
+neither is fitted to minimise pixel error, so a point that fits *slightly* better
+has bought that with its extra freedom while one that fits clearly better has
+found a depth. That is what the margin's default is set by; the constant carries
+the argument.
 
 **A fit registers against the frame the track has.** A `w = 0` surfel is
 tangent to the direction sphere and a fit of one registers against *that*: no
@@ -1313,6 +1355,7 @@ reconstruction's own passes use.
 |-----------|---------|---------|
 | `noise_floor_px` | `1.0` | The measurement noise the classification assumes at each sighting, in source-image px; the per-ray angular noise is this over the observing camera's focal length. From `DEFAULT_NOISE_FLOOR_PX`. |
 | `inverse_depth_z_cutoff` | `4.0` | The inverse-depth z-score a depth has to reach to be written as a finite point rather than a bearing. From `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`. |
+| `residual_margin` | `0.8` | The fraction of the bearing's rms reprojection residual the triangulated point has to come under, on top of beating it by more than `noise_floor_px`, before the depth is believed. From `RESIDUAL_MARGIN`; the constant carries the argument for the value. |
 
 The criterion's third number, the condition-number pre-filter that settles a
 well-conditioned solve before any noise model is consulted, is not an option
@@ -1393,8 +1436,9 @@ prebuilt `ImagePyramidSet`. `evaluate` and `fit` take three optional keywords --
 `search_px`, the radius the reading looks for each peak in, and
 `max_seed_offset_px` and `max_cache_bytes`, the two memory bounds above, each
 defaulting to the reading's own. `fit` and `set_stage` take the
-classification's two knobs as well, `noise_floor_px` and
-`inverse_depth_z_cutoff`, each defaulting to the reconstruction's own value;
+classification's three knobs as well, `noise_floor_px`,
+`inverse_depth_z_cutoff` and `residual_margin`, each defaulting to core's own
+value;
 `set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured` and `unmeasured`, with `reference` at the cluster stage and
@@ -1414,9 +1458,12 @@ point and is `None` for a bearing, and `direction` is the unit bearing and is
 holding a place one unit from the world origin. A fit's `classification` dict
 carries `at_infinity`, `position` or `direction`, `reason` (the lowercase words
 `"well_conditioned"`, `"depth_resolved"`, `"depth_unresolved"`,
-`"baseline_too_short"`), `condition_number`, `inverse_depth_z`,
+`"baseline_too_short"`, `"finite_does_not_explain_the_sightings"`,
+`"bearing_does_not_explain_the_sightings"`), `condition_number`,
+`inverse_depth_z`,
 `inverse_depth_z_cutoff`, `resolvable_distance`, `finite_horizon`,
-`max_pair_angle_deg` and `text`, the sentence the Action Log shows.
+`max_pair_angle_deg`, `finite_rms_px`, `bearing_rms_px`, `residual_margin` and
+`text`, the sentence the Action Log shows.
 
 `set_observation_keypoint`, `resize_frame`, `rotate_frame` and
 `set_observation_shape` take their numbers directly; `translate_frame` and
@@ -1554,6 +1601,19 @@ slide, an edge drag, a centred resize and a turn each leave a bearing's
 coordinate on the unit sphere with the payload's coordinate following the frame's
 centre. The near scene's own track is asserted to come back **finite**, on the
 condition-number pre-filter, so the two answers are both pinned.
+
+**The residual check has a fixture whose criterion answer is wrong.** Eight
+sightings on the far scene, tilted across the run by 0.2 px per camera and thrown
+off that tilt by 1.5 px alternating, are consistent with a bearing to 1.6 px rms
+while the midpoint solve reads a depth of 3.4 units out of the inconsistency. The
+test asserts the criterion's own answer first -- `Finite`, with the
+condition-number pre-filter *not* firing and the z-score clearing the bar -- so
+what it then checks is the check and not the criterion: the point reprojects at
+5.1 px rms, over three times the bearing's, the call comes back at infinity with
+`FiniteDoesNotExplainTheSightings`, and the sentence names both residuals. The
+near scene's track is run through the same comparison and survives it, the point
+beating the bearing by far more than the margin. And the whole fit over the
+skewed shape writes the bearing, at the frame size it arrived with.
 
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):

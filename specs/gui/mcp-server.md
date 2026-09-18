@@ -2089,10 +2089,12 @@ observations is refused where a reading of the same track is not.
 **A fit's sentence names the representation the rays earned.** Finite or at
 infinity is the decision a fit makes over a distant track
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
-points and bearings"), so the reply carries it in the criterion's own terms --
-`at infinity along (0.553, -0.809, -0.198): inverse-depth z 2.41 under the 4.00
-bar, rays up to 0.052 deg apart` -- along with how many sightings the walk bound
-left at their seeds. `get_bench_track`'s `stage_data` then says which the track
+points and bearings"), so the reply carries it in the deciding test's own terms
+-- `at infinity along (0.553, -0.809, -0.198): finite point would have 15.1 px
+rms against the bearing's 5.2 px` -- along with how many sightings the walk bound
+left at their seeds. Those two residuals are how an agent tells a depth the
+photographs support from one an ill-conditioned midpoint invented, so they are in
+every fit's sentence and not only in the ones they settled. `get_bench_track`'s `stage_data` then says which the track
 is: `at_infinity`, with the coordinate under `direction` for a bearing and
 `position` for a place, the other `null`. Under one name an agent could read a
 unit direction as a point one unit from the world origin, which is the one thing

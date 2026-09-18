@@ -328,6 +328,7 @@ fn upgrade(
         images,
         options.noise_floor_px,
         options.inverse_depth_z_cutoff,
+        options.residual_margin,
     );
 
     // 2. The surfel: the reference observation's own shape, unprojected onto

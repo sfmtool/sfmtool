@@ -1101,7 +1101,16 @@ impl AppState {
                 Err(sfmtool_core::bench::FitError::Cancelled) => Finished::Cancelled,
                 Err(e) => Finished::Failed(format!("Cannot fit {label}: {e}")),
                 Ok((fitted, report)) => Finished::BenchTrack {
-                    version_label: format!("Fitted {label}"),
+                    // The version label carries the classification, because
+                    // finite-versus-at-infinity is the fit's real outcome on a
+                    // distant track and a history row reading only "Fitted X"
+                    // hides the one thing a person scrolling it is looking for.
+                    // The counts stay in the Action Log's own text, which is the
+                    // whole report.
+                    version_label: match &report.classification {
+                        Some(call) => format!("Fitted {label}: {call}"),
+                        None => format!("Fitted {label}"),
+                    },
                     text: format!("Fitted {label}: {report}"),
                     label,
                     track: Box::new(fitted),

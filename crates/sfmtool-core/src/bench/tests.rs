@@ -2992,3 +2992,222 @@ fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() 
         frame.normal()
     );
 }
+
+// ---- The criterion checked against the sightings ---------------------------
+//
+// The criterion answers whether a depth is *observable*. On an ill-conditioned
+// solve it can clear its own bar on a depth nothing in the photographs supports:
+// the least-squares midpoint of near-parallel, slightly inconsistent rays lands
+// wherever the inconsistency throws it. The shape below is that case, built to
+// order: the sightings agree with a bearing to a couple of pixels, the
+// criterion's z-score clears the bar on a point a few units out, and the point
+// reprojects three times worse than the bearing does.
+
+/// How far the 5256-shaped fixture tilts its sightings across the run, in px
+/// per camera: a weak linear trend, which is the parallax signal the midpoint
+/// solve reads a depth out of.
+const SKEW_TREND_PX: f64 = 0.2;
+
+/// How far it throws them off that trend, in px, alternating: the inconsistency
+/// that makes the rays skew, so the depth the solve reads is noise.
+const SKEW_JITTER_PX: f64 = 1.5;
+
+/// The 5256 shape's sightings: one per near camera, a weak linear tilt in `u`
+/// about the bearing's own projection with an alternating jitter in `v`.
+fn skewed_sightings(scene: &Scene) -> Vec<([f64; 2], usize)> {
+    let centre = scene.project_homogeneous(0, far_direction(), 0.0);
+    (0..FAR_NEAR_VIEWS)
+        .map(|k| {
+            let du = -SKEW_TREND_PX * (k as f64 - 3.5);
+            let dv = if k % 2 == 0 {
+                SKEW_JITTER_PX
+            } else {
+                -SKEW_JITTER_PX
+            };
+            ([centre[0] + du, centre[1] + dv], k)
+        })
+        .collect()
+}
+
+/// Classify `rays` over `views` with the defaults, and hand back the rays too.
+fn classify_over(
+    views: &[crate::patch::normal_refine::ProjectedImage<'_>],
+    rays: &[([f64; 2], usize)],
+) -> (TrackClassification, TrackRays) {
+    let (_, built) = super::fit::triangulate_rays(rays, views).expect("a solve");
+    let call = classify_track_rays(
+        &built,
+        views,
+        DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
+        DEFAULT_CLASSIFY_Z_CUTOFF,
+        RESIDUAL_MARGIN,
+    );
+    (call, built)
+}
+
+/// What the shared criterion alone made of `rays`, with no data check over it.
+fn criterion_alone(
+    views: &[crate::patch::normal_refine::ProjectedImage<'_>],
+    rays: &TrackRays,
+) -> crate::analysis::infinity::RayClassification {
+    let centers: Vec<Point3<f64>> = views
+        .iter()
+        .map(|view| view.cam_from_world.inverse_translation_origin())
+        .collect();
+    let sigma_rad: Vec<f64> = rays
+        .focal_max
+        .iter()
+        .map(|&f| DEFAULT_CLASSIFY_NOISE_FLOOR_PX / f)
+        .collect();
+    crate::analysis::infinity::classify_rays_at_infinity(
+        &rays.dirs,
+        &rays.centers,
+        &sigma_rad,
+        DEFAULT_CLASSIFY_Z_CUTOFF,
+        crate::analysis::infinity::camera_extents(&centers),
+    )
+}
+
+#[test]
+fn a_depth_the_sightings_do_not_support_is_refused_and_the_bearing_stands() {
+    let scene = far_scene();
+    let views = scene.views();
+    let rays = skewed_sightings(&scene);
+    let (call, built) = classify_over(&views, &rays);
+
+    // The criterion on its own calls this finite, and not on the cheap
+    // pre-filter either: the solve is ill-conditioned, the baseline reaches the
+    // horizon, and the z-score clears the bar. Which is the whole point of the
+    // fixture -- without this the test would be checking the criterion rather
+    // than the check over it.
+    let alone = criterion_alone(&views, &built);
+    assert!(
+        matches!(
+            alone.class,
+            crate::analysis::infinity::Classification::Finite(_)
+        ),
+        "the criterion should call this finite, it called it {:?}",
+        alone.class
+    );
+    assert!(
+        alone.condition_number > crate::analysis::infinity::CONDITION_NUMBER_PREFILTER,
+        "the pre-filter should not have settled it: condition {}",
+        alone.condition_number
+    );
+    assert!(
+        alone.inverse_depth_z > DEFAULT_CLASSIFY_Z_CUTOFF,
+        "the z-score should clear the bar: {}",
+        alone.inverse_depth_z
+    );
+    assert!(
+        alone.resolvable_distance > call.finite_horizon,
+        "the baseline should reach the horizon: {} against {}",
+        alone.resolvable_distance,
+        call.finite_horizon
+    );
+
+    // And the sightings say otherwise, so the bearing stands.
+    assert!(
+        call.at_infinity,
+        "the check let a bad depth through: {call}"
+    );
+    assert_eq!(
+        call.reason,
+        ClassificationReason::FiniteDoesNotExplainTheSightings
+    );
+    assert!(
+        call.finite_rms_px > 3.0 * call.bearing_rms_px,
+        "the fixture should reproject three times worse as a point: \
+         {} px against {} px",
+        call.finite_rms_px,
+        call.bearing_rms_px
+    );
+    assert!(
+        call.bearing_rms_px < 3.0,
+        "and the sightings should agree with the bearing to a couple of pixels: {} px",
+        call.bearing_rms_px
+    );
+    assert!(
+        (call.coordinate.coords.norm() - 1.0).abs() < 1e-12,
+        "the coordinate is the unit bearing, it is {}",
+        call.coordinate
+    );
+    // The sentence carries both residuals, which is what a person reading the
+    // Action Log judges the call by.
+    let said = call.to_string();
+    assert!(
+        said.contains("finite point would have") && said.contains("against the bearing's"),
+        "the sentence should name both residuals: {said}"
+    );
+}
+
+#[test]
+fn a_depth_the_sightings_do_support_survives_the_check() {
+    // The near scene's own track, at its exact projections: the parallax is
+    // fifteen degrees and the bearing cannot bend toward it, so the point wins
+    // by a wide margin and the criterion's answer stands.
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let views = scene.views();
+    let rays: Vec<([f64; 2], usize)> = track
+        .observations
+        .iter()
+        .map(|o| {
+            let k = o
+                .track
+                .as_ref()
+                .and_then(|m| m.keypoint)
+                .expect("a keypoint");
+            ([f64::from(k[0]), f64::from(k[1])], o.image as usize)
+        })
+        .collect();
+    let (call, _) = classify_over(&views, &rays);
+
+    assert!(!call.at_infinity, "{call}");
+    assert_eq!(call.reason, ClassificationReason::WellConditioned);
+    assert!(
+        call.finite_rms_px < call.residual_margin * call.bearing_rms_px,
+        "the point should explain the sightings clearly better: {} px against {} px",
+        call.finite_rms_px,
+        call.bearing_rms_px
+    );
+    assert!(
+        call.finite_rms_px + DEFAULT_CLASSIFY_NOISE_FLOOR_PX < call.bearing_rms_px,
+        "and by more than a pixel of noise: {} px against {} px",
+        call.finite_rms_px,
+        call.bearing_rms_px
+    );
+    assert!(call.to_string().contains("rms"), "{call}");
+}
+
+#[test]
+fn a_fit_of_the_unsupported_depth_writes_the_bearing() {
+    // The same shape, through the whole fit rather than through the
+    // classification alone: what the step writes is the bearing, at the frame
+    // size it arrived with.
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let before = frame_of(&track);
+    for (k, (pixel, image)) in skewed_sightings(&scene).into_iter().enumerate() {
+        assert_eq!(track.observations[k].image as usize, image);
+        track.observations[k]
+            .track
+            .as_mut()
+            .expect("a track slot")
+            .keypoint = Some([pixel[0] as f32, pixel[1] as f32]);
+    }
+    // A bar wide enough that the fit keeps the sightings where they were put,
+    // so what is under test is the classification and not the walk.
+    track.thresholds.max_shift_px = 64.0;
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("eight sightings in");
+    let call = call_of(&report);
+    assert!(call.at_infinity, "the fit wrote a point: {report}");
+    let after = frame_of(&fitted);
+    assert_eq!(after.w, 0.0);
+    assert_eq!(after.half_extent, before.half_extent);
+}

@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 pub use classify::{
     classify_track_rays, ClassificationReason, TrackClassification, TrackRays,
-    DEFAULT_CLASSIFY_NOISE_FLOOR_PX, DEFAULT_CLASSIFY_Z_CUTOFF,
+    DEFAULT_CLASSIFY_NOISE_FLOOR_PX, DEFAULT_CLASSIFY_Z_CUTOFF, RESIDUAL_MARGIN,
 };
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{

@@ -732,3 +732,53 @@ fn a_descriptor_search_with_no_index_is_refused_before_the_worker() {
     assert_eq!(versions(&state, id), before, "a refusal pushed a version");
     assert_eq!(rows(&state), vec![(Kind::Bench, refusal)]);
 }
+
+/// A fit's **version label** carries the classification, not just the item.
+///
+/// Finite or at infinity is the fit's real outcome on a distant track, and a
+/// history row reading only "Fitted X" hides the one thing a person scrolling it
+/// is looking for -- which fit crossed the boundary, and on what evidence. The
+/// Action Log keeps the whole report, counts and all.
+#[test]
+fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    state.action_log.clear();
+    state
+        .start_bench_fit(id, &label, None)
+        .expect("a framed track with three sightings fits");
+    state.finish_background_task();
+
+    let version = state
+        .node(id)
+        .expect("loaded")
+        .history
+        .versions()
+        .last()
+        .expect("the fit pushed a version")
+        .label
+        .clone();
+    assert!(
+        version.starts_with(&format!("Fitted {label}: ")),
+        "the label should name the item and then say something: {version}"
+    );
+    assert!(
+        version.contains("finite at (") || version.contains("at infinity along ("),
+        "and what it says is which representation the rays earned: {version}"
+    );
+    assert!(
+        version.contains("rms"),
+        "with the residuals it was judged on: {version}"
+    );
+
+    let rows = rows(&state);
+    let row = rows
+        .iter()
+        .find(|(kind, text)| *kind == Kind::Bench && text.starts_with("Fitted "))
+        .map(|(_, text)| text.clone())
+        .unwrap_or_else(|| panic!("no fit row in {rows:?}"));
+    assert!(
+        row.contains("placed") && row.contains("measured"),
+        "the log row is the whole report: {row}"
+    );
+}

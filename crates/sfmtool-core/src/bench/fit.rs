@@ -39,7 +39,7 @@ use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 
 use super::classify::{
     classify_track_rays, TrackClassification, TrackRays, DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
-    DEFAULT_CLASSIFY_Z_CUTOFF,
+    DEFAULT_CLASSIFY_Z_CUTOFF, RESIDUAL_MARGIN,
 };
 use super::evaluate::{
     check_observation_views, check_views, evaluate, evaluate_cluster, evaluated, finite,
@@ -78,6 +78,11 @@ pub struct FitOptions {
     /// The inverse-depth z-score a track's depth has to reach to be written as a
     /// finite point rather than a bearing.
     pub inverse_depth_z_cutoff: f64,
+    /// The fraction of the bearing's rms reprojection residual a finite point
+    /// has to come under before its depth is believed. See
+    /// [`super::classify::RESIDUAL_MARGIN`] for the default and
+    /// why it is what it is.
+    pub residual_margin: f64,
 }
 
 impl Default for FitOptions {
@@ -88,6 +93,7 @@ impl Default for FitOptions {
             evaluate: EvaluateOptions::default(),
             noise_floor_px: DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
             inverse_depth_z_cutoff: DEFAULT_CLASSIFY_Z_CUTOFF,
+            residual_margin: RESIDUAL_MARGIN,
         }
     }
 }
@@ -557,6 +563,7 @@ pub(super) fn fit_track(
         images,
         options.noise_floor_px,
         options.inverse_depth_z_cutoff,
+        options.residual_margin,
     );
     let position = classification.coordinate;
 
@@ -727,7 +734,7 @@ pub(super) fn triangulate_in_seeds(
 /// exactly what a track at infinity looks like: the classification reads them as
 /// the evidence for a bearing rather than as a broken solve, so refusing here
 /// would take the answer away from the step whose job it is to give one.
-fn triangulate_rays(
+pub(super) fn triangulate_rays(
     rays: &[([f64; 2], usize)],
     images: &[ProjectedImage<'_>],
 ) -> Result<(Triangulation, TrackRays), FitError> {
@@ -737,8 +744,12 @@ fn triangulate_rays(
     let mut dirs: Vec<Vector3<f64>> = Vec::with_capacity(rays.len());
     let mut centers: Vec<Point3<f64>> = Vec::with_capacity(rays.len());
     let mut focal_max: Vec<f64> = Vec::with_capacity(rays.len());
+    let mut pixels: Vec<[f64; 2]> = Vec::with_capacity(rays.len());
+    let mut views: Vec<usize> = Vec::with_capacity(rays.len());
     for &(pixel, image) in rays {
         let view = &images[image];
+        pixels.push(pixel);
+        views.push(image);
         let ray = view.camera.pixel_to_ray(pixel[0], pixel[1]);
         // Camera-to-world carries the canonical (-Z forward) ray into the world
         // frame the triangulator solves in.
@@ -763,6 +774,8 @@ fn triangulate_rays(
             dirs,
             centers,
             focal_max,
+            pixels,
+            views,
         },
     ))
 }

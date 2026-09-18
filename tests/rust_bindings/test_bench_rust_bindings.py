@@ -1122,6 +1122,36 @@ class TestFinitePointsAndBearings:
         assert not fitted.at_infinity
         np.testing.assert_allclose(fitted.position, report["position"])
 
+        # The two candidates' rms reprojection residuals, and the margin the
+        # depth had to beat: a finite answer means the point explained the
+        # sightings clearly better than the bearing could.
+        assert call["residual_margin"] == pytest.approx(0.8)
+        assert call["finite_rms_px"] >= 0.0
+        assert call["bearing_rms_px"] > call["finite_rms_px"]
+        assert call["finite_rms_px"] < call["residual_margin"] * call["bearing_rms_px"]
+        assert "rms" in call["text"]
+
+    def test_a_depth_the_sightings_refuse_is_not_written(
+        self, edited, images, long_track_point
+    ):
+        """A margin nothing can beat leaves every track a bearing.
+
+        The criterion says whether a depth is *observable*; the residual check
+        says whether the depth it found is there. With the margin at zero no
+        finite point can clear it, so the check overturns the criterion and says
+        so -- which is the mechanism an ill-conditioned midpoint is caught by.
+        """
+        _, track = create_track(Bench(), edited, long_track_point)
+        demoted, report = fit(track, edited, images, residual_margin=0.0)
+
+        assert report["at_infinity"] is True
+        call = report["classification"]
+        assert call["reason"] == "finite_does_not_explain_the_sightings"
+        assert call["residual_margin"] == pytest.approx(0.0)
+        assert "finite point would have" in call["text"]
+        assert demoted.at_infinity
+        assert demoted.frame["w"] == 0.0
+
     def test_the_classification_knobs_are_keyword_arguments(
         self, edited, images, long_track_point
     ):

@@ -998,6 +998,12 @@ fn classification_dict<'py>(
             ClassificationReason::DepthResolved => "depth_resolved",
             ClassificationReason::DepthUnresolved => "depth_unresolved",
             ClassificationReason::BaselineTooShort => "baseline_too_short",
+            ClassificationReason::FiniteDoesNotExplainTheSightings => {
+                "finite_does_not_explain_the_sightings"
+            }
+            ClassificationReason::BearingDoesNotExplainTheSightings => {
+                "bearing_does_not_explain_the_sightings"
+            }
         },
     )?;
     d.set_item("condition_number", call.condition_number)?;
@@ -1006,6 +1012,9 @@ fn classification_dict<'py>(
     d.set_item("resolvable_distance", call.resolvable_distance)?;
     d.set_item("finite_horizon", call.finite_horizon)?;
     d.set_item("max_pair_angle_deg", call.max_pair_angle_deg)?;
+    d.set_item("finite_rms_px", call.finite_rms_px)?;
+    d.set_item("bearing_rms_px", call.bearing_rms_px)?;
+    d.set_item("residual_margin", call.residual_margin)?;
     d.set_item("text", call.to_string())?;
     Ok(d)
 }
@@ -1060,6 +1069,7 @@ fn fit_options(
     max_cache_bytes: Option<usize>,
     noise_floor_px: Option<f64>,
     inverse_depth_z_cutoff: Option<f64>,
+    residual_margin: Option<f64>,
 ) -> FitOptions {
     let mut options = FitOptions {
         evaluate: evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
@@ -1070,6 +1080,9 @@ fn fit_options(
     }
     if let Some(cutoff) = inverse_depth_z_cutoff {
         options.inverse_depth_z_cutoff = cutoff;
+    }
+    if let Some(margin) = residual_margin {
+        options.residual_margin = margin;
     }
     options
 }
@@ -1185,6 +1198,15 @@ fn evaluate(
 /// z-score a depth has to reach to be called finite (4.0); both default to the
 /// reconstruction pass's own values.
 ///
+/// **And the criterion's answer is checked against the sightings.** Both
+/// candidates -- the triangulated point and the bearing -- are reprojected into
+/// every sighting's own photograph, and the depth is believed only where the
+/// point's rms residual comes under ``residual_margin`` (0.8) of the bearing's
+/// *and* under it by more than ``noise_floor_px``. An ill-conditioned midpoint
+/// that landed wherever the rays' inconsistency threw it therefore does not
+/// become a point, however well the z-score reads; the report's
+/// ``classification`` carries both residuals and says which way the check went.
+///
 /// A fit ends by evaluating its own result, so every number in the observations'
 /// slots and in the report is that reading's and :func:`evaluate` called after
 /// it agrees to the last digit.
@@ -1208,6 +1230,7 @@ fn evaluate(
     max_cache_bytes = None,
     noise_floor_px = None,
     inverse_depth_z_cutoff = None,
+    residual_margin = None,
 ))]
 #[allow(clippy::too_many_arguments)]
 fn fit(
@@ -1220,6 +1243,7 @@ fn fit(
     max_cache_bytes: Option<usize>,
     noise_floor_px: Option<f64>,
     inverse_depth_z_cutoff: Option<f64>,
+    residual_margin: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -1234,6 +1258,7 @@ fn fit(
             max_cache_bytes,
             noise_floor_px,
             inverse_depth_z_cutoff,
+            residual_margin,
         ),
         &Progress::none(),
     )
@@ -1265,10 +1290,11 @@ fn fit(
 /// ``changed`` false, and the caller pushes no version for it.
 ///
 /// The upgrade puts the triangulated rays through the same finite-versus-
-/// infinity criterion a fit does, so a cluster whose sightings only ever stated
-/// a direction becomes a ``w = 0`` track rather than a point at a depth they
-/// never carried. ``noise_floor_px`` and ``inverse_depth_z_cutoff`` are that
-/// criterion's, exactly as on :func:`fit`.
+/// infinity criterion a fit does, with the same check against the sightings, so
+/// a cluster whose sightings only ever stated a direction becomes a ``w = 0``
+/// track rather than a point at a depth they never carried. ``noise_floor_px``,
+/// ``inverse_depth_z_cutoff`` and ``residual_margin`` are that criterion's,
+/// exactly as on :func:`fit`.
 ///
 /// Returns ``(EditableTrack, report)``, whose report carries ``from``, ``to``,
 /// ``changed``, the upgrade's ``fit`` report (``classification`` inside it) and
@@ -1282,7 +1308,9 @@ fn fit(
     *,
     noise_floor_px = None,
     inverse_depth_z_cutoff = None,
+    residual_margin = None,
 ))]
+#[allow(clippy::too_many_arguments)]
 fn set_stage(
     py: Python<'_>,
     track: &PyEditableTrack,
@@ -1291,6 +1319,7 @@ fn set_stage(
     stage: &str,
     noise_floor_px: Option<f64>,
     inverse_depth_z_cutoff: Option<f64>,
+    residual_margin: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let stage = parse_stage(stage)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
@@ -1301,7 +1330,14 @@ fn set_stage(
         &edited.inner,
         &views,
         stage,
-        &fit_options(None, None, None, noise_floor_px, inverse_depth_z_cutoff),
+        &fit_options(
+            None,
+            None,
+            None,
+            noise_floor_px,
+            inverse_depth_z_cutoff,
+            residual_margin,
+        ),
         &Progress::none(),
     )
     .map_err(refused)?;
