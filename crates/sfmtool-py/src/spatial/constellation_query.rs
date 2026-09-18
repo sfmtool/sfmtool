@@ -17,9 +17,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use sfmtool_core::features::kdforest::{
-    constellation_at_pixel, constellation_query, Constellation, ConstellationDescriptors,
-    ConstellationMatch, ConstellationParams, FeatureGeometry, FeatureOrigin, FeatureSources,
-    NeighborIndex, QueryImage, ResidentSources,
+    constellation_at_pixel, constellation_query, AffineRefit, Constellation,
+    ConstellationDescriptors, ConstellationMatch, ConstellationParams, FeatureGeometry,
+    FeatureOrigin, FeatureSources, NeighborIndex, QueryImage, ResidentSources,
 };
 
 use super::kdf::to_py_err;
@@ -29,9 +29,54 @@ use super::kdforest::extract_u8_2d;
 /// field of rather than to repeat a number that would then drift.
 pub(crate) const DEFAULTS: ConstellationParams = ConstellationParams::DEFAULT;
 
+/// The default `refit` spelling, so Python's keyword default is the Rust one.
+pub(crate) const DEFAULT_REFIT: &str = refit_name(DEFAULTS.refit);
+
+/// The default `refit_sigma`. A default that is not centre-weighted carries no
+/// sigma of its own, and the keyword then starts at the value the enum's own
+/// documentation recommends, so naming it is still meaningful.
+pub(crate) const DEFAULT_REFIT_SIGMA: f64 = match DEFAULTS.refit {
+    AffineRefit::CenterWeighted { sigma } => sigma,
+    _ => 0.5,
+};
+
+/// The spelling Python uses for one refit mode.
+const fn refit_name(refit: AffineRefit) -> &'static str {
+    match refit {
+        AffineRefit::None => "none",
+        AffineRefit::LeastSquares => "least_squares",
+        AffineRefit::CenterWeighted { .. } => "center_weighted",
+    }
+}
+
+/// One of the three spellings, with `refit_sigma` read only by the weighted one.
+///
+/// A misspelling is a `ValueError` naming all three rather than a silent fall
+/// back to a default: a caller asking for `"centre_weighted"` wants weighting,
+/// and quietly giving it the three-point model would be the one outcome it
+/// cannot detect from the result.
+fn parse_refit(refit: &str, sigma: f64) -> PyResult<AffineRefit> {
+    match refit {
+        "none" => Ok(AffineRefit::None),
+        "least_squares" => Ok(AffineRefit::LeastSquares),
+        "center_weighted" => {
+            if !(sigma.is_finite() && sigma > 0.0) {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "refit_sigma must be a finite positive fraction of the \
+                     constellation radius, got {sigma}"
+                )));
+            }
+            Ok(AffineRefit::CenterWeighted { sigma })
+        }
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "refit must be \"center_weighted\", \"least_squares\" or \"none\", got {other:?}"
+        ))),
+    }
+}
+
 /// Every tunable of the query, in one struct, so the two call sites declare the
 /// same keyword arguments instead of drifting apart.
-pub(crate) struct QueryOptions {
+pub(crate) struct QueryOptions<'a> {
     pub k: usize,
     pub max_leaf_checks: usize,
     pub threshold_px: f64,
@@ -41,12 +86,16 @@ pub(crate) struct QueryOptions {
     pub same_image_ratio: f32,
     pub min_inliers: usize,
     pub max_scale: f64,
+    pub refit: &'a str,
+    pub refit_sigma: f64,
     pub seed: u64,
 }
 
-impl From<&QueryOptions> for ConstellationParams {
-    fn from(value: &QueryOptions) -> Self {
-        Self {
+impl TryFrom<&QueryOptions<'_>> for ConstellationParams {
+    type Error = PyErr;
+
+    fn try_from(value: &QueryOptions<'_>) -> PyResult<Self> {
+        Ok(Self {
             k: value.k,
             max_leaf_checks: value.max_leaf_checks,
             threshold_px: value.threshold_px,
@@ -56,8 +105,9 @@ impl From<&QueryOptions> for ConstellationParams {
             same_image_ratio: value.same_image_ratio,
             min_inliers: value.min_inliers,
             max_scale: value.max_scale,
+            refit: parse_refit(value.refit, value.refit_sigma)?,
             seed: value.seed,
-        }
+        })
     }
 }
 
@@ -156,10 +206,12 @@ pub(crate) fn query<'py>(
     descriptors: Option<&Bound<'py, PyAny>>,
     feature_ids: Option<Vec<u32>>,
     image_index: Option<u32>,
-    options: &QueryOptions,
+    center: Option<(f32, f32)>,
+    options: &QueryOptions<'_>,
 ) -> PyResult<Py<PyList>> {
     let positions = read_positions(positions)?;
-    let params = ConstellationParams::from(options);
+    let params = ConstellationParams::try_from(options)?;
+    let center = center.map(|(x, y)| [x, y]);
     let matches = match (descriptors, feature_ids) {
         (Some(descriptors), None) => {
             let descriptors = extract_u8_2d(descriptors, "constellation descriptors")?;
@@ -180,6 +232,7 @@ pub(crate) fn query<'py>(
                         positions: &positions,
                         descriptors: ConstellationDescriptors::Vectors(&data),
                         image_index,
+                        center,
                     },
                     &params,
                 )
@@ -193,6 +246,7 @@ pub(crate) fn query<'py>(
                     positions: &positions,
                     descriptors: ConstellationDescriptors::FeatureIds(&ids),
                     image_index,
+                    center,
                 },
                 &params,
             )
@@ -217,9 +271,9 @@ pub(crate) fn at_pixel<'py>(
     center: (f32, f32),
     radius: f32,
     image_index: Option<u32>,
-    options: &QueryOptions,
+    options: &QueryOptions<'_>,
 ) -> PyResult<Py<PyDict>> {
-    let params = ConstellationParams::from(options);
+    let params = ConstellationParams::try_from(options)?;
     let found = py
         .detach(|| {
             constellation_at_pixel(

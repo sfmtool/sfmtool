@@ -685,6 +685,15 @@ to, so where the affine is fitted matters more.
 
 ## 8. Recommendation
 
+> _Status (2026-09-18): Partially done — "do not build a progressive query to
+> find images" stands and is now in the spec. The two-stage locked warp was
+> **superseded** by
+> [2026-09-18](2026-09-18-constellation-two-stage-eval.md), which measured it
+> directly at power and found the gain to be the three-point model's variance
+> rather than locality: what shipped instead is a weighted least-squares refit
+> of the affine over the single N=50 query's consensus, and no staging. The cache
+> budget item below is still open. PR #489._
+
 **Do not build a progressive query to find images.** Q1 and Q2 -- the best `S`
 and the best `D` -- do not have useful answers, because the thing they would
 govern (when to stop widening) has nothing to govern: no smaller prefix finds an

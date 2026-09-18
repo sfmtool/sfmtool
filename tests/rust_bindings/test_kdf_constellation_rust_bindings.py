@@ -211,10 +211,14 @@ def test_the_two_forests_answer_identically(duplicated_capture):
     assert _same(eager["matches"], lazy["matches"])
 
     # The primitive underneath agrees too, whether it is handed IDs or vectors.
+    # `constellation_at_pixel` passes its own centre into the constellation, so
+    # these have to be handed the same one to be the same query at all: without
+    # it the default refit has nothing to weigh distances from and fits flat.
     positions = duplicated_capture["positions"][inside]
     ids = inside.astype(np.uint32).tolist()
+    at = (float(centre[0]), float(centre[1]))
     by_id = duplicated_capture["lazy"].constellation_query(
-        positions, feature_ids=ids, image_index=0, **_KNOBS
+        positions, feature_ids=ids, image_index=0, center=at, **_KNOBS
     )
     by_vector = duplicated_capture["forest"].constellation_query(
         positions,
@@ -223,6 +227,7 @@ def test_the_two_forests_answer_identically(duplicated_capture):
             SiftReader(duplicated_capture["sift_path"]).read_descriptors()
         )[inside],
         image_index=0,
+        center=at,
         **_KNOBS,
     )
     assert _same(by_id, lazy["matches"])
@@ -262,6 +267,51 @@ def test_the_same_image_ratio_collapses_repeated_hits(duplicated_capture):
         assert all(m["correspondences"] <= len(inside) for m in collapsed), arm
         # Each feature has exactly one right answer in image 1, and it survives.
         assert collapsed[0]["inliers"] >= len(inside) // 2, arm
+
+
+def test_the_refit_modes_and_the_centre_they_weigh_from(duplicated_capture):
+    """The three spellings of `refit`, the centre one of them needs, and a typo.
+
+    Image 1 is image 0's descriptors under an exact affine, so every mode
+    recovers that warp: what separates them is which arithmetic produced it, not
+    which answer came back. So the checks here are that all three spell
+    something the binding accepts, that none of them moves a candidate or its
+    consensus, that the weighted one without a centre is the flat one, and that
+    a misspelling is refused rather than quietly treated as a default.
+    """
+    centre, radius, inside = _patch(duplicated_capture, wanted=24)
+    positions = duplicated_capture["positions"][inside]
+    ids = inside.astype(np.uint32).tolist()
+    lazy = duplicated_capture["lazy"]
+    at = (float(centre[0]), float(centre[1]))
+
+    def run(**extra):
+        return lazy.constellation_query(
+            positions, feature_ids=ids, image_index=0, **_KNOBS, **extra
+        )
+
+    default = run(center=at)
+    assert _same(default, run(center=at, refit="center_weighted", refit_sigma=0.5))
+    for mode in ("center_weighted", "least_squares", "none"):
+        found = run(center=at, refit=mode)
+        assert found, f"{mode} lost the planted image"
+        assert found[0]["image_index"] == 1
+        np.testing.assert_allclose(found[0]["affine"], _WARP, atol=1e-2)
+        # A refit reads a consensus; it does not choose one.
+        assert [m["image_index"] for m in found] == [m["image_index"] for m in default]
+        assert [m["inliers"] for m in found] == [m["inliers"] for m in default]
+
+    # With no centre there is nothing to weigh distances from, and the weighted
+    # mode is the flat one rather than a different answer or an error.
+    assert _same(run(), run(refit="least_squares"))
+    assert _same(run(refit_sigma=0.25), run(refit="least_squares"))
+
+    for spelling in ("centre_weighted", "weighted", "LeastSquares", ""):
+        with pytest.raises(ValueError):
+            run(center=at, refit=spelling)
+    for sigma in (0.0, -0.5, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            run(center=at, refit_sigma=sigma)
 
 
 def test_bad_arguments_and_a_sourceless_file_are_value_errors(

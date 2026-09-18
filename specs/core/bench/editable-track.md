@@ -1019,7 +1019,13 @@ observation's own pixel it gives that image a seed position, and its linear part
 applied to the observation's own keypoint-frame shape gives that seed a shape,
 so a candidate arrives at the place *and* the size the warp says the patch has
 there, whether the observation searched from was a detected feature or a
-hand-placed pixel. Both are the cluster stage's own convention (§ "The cluster
+hand-placed pixel. Because both halves of it are read, and read hardest at the
+observation's own pixel, the search hands the query that pixel as the
+constellation's centre and takes the query's default warp: a least-squares fit
+to the consensus, weighted towards the centre
+([`../features/kdf-constellation-query.md`](../features/kdf-constellation-query.md)
+§ "Three points find a model; the consensus reports one"), rather than the
+three-point model RANSAC drew. Both are the cluster stage's own convention (§ "The cluster
 stage's units"), which is what the next evaluation reads at either stage: at the
 cluster stage the refinement registers the seed, and at the track stage the
 candidate is a row the reading measures and the thresholds propose a verdict
@@ -1370,7 +1376,7 @@ what the *index* is asked, and nothing about them is a verdict, so they are
 |-----------|---------|---------|
 | `radius_px` | `DEFAULT_RADIUS_PX`, 128.0 | The constellation's radius around the observation, in source-image px. The constant is what the radius rule gives a full-frame capture at fifty features; a caller that knows its frame and its keypoint count computes its own with `radius_for_feature_count`, which is what the viewer does. |
 | `min_inliers` | `8` | Fewest agreeing correspondences an image needs to be found. From `ConstellationParams::DEFAULT`. |
-| `constellation` | `ConstellationParams::DEFAULT` | The query's own tunables: `k` neighbours per keypoint, the RANSAC budget and pixel threshold, the scale change a warp may claim. Its own `min_inliers` is not read. |
+| `constellation` | `ConstellationParams::DEFAULT` | The query's own tunables: `k` neighbours per keypoint, the RANSAC budget and pixel threshold, the scale change a warp may claim, and the `refit` the reported warp is fitted by. Its own `min_inliers` is not read. |
 
 ## Implementation notes
 

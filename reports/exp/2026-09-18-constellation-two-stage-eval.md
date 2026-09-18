@@ -485,6 +485,14 @@ of what 16 µs of least squares buys.**
 
 ## 8. Recommendation
 
+> _Status (2026-09-18): Done — `AffineRefit` ships on `ConstellationParams`,
+> defaulting to `CenterWeighted { sigma: 0.5 }`, with `Constellation::center`
+> passed through by both `*_at_pixel` / `*_from_keypoints` entry points; no
+> staged query was built. Every bullet below is implemented as written: the same
+> determinant and scale guards, the fallback to the three-point model, no
+> iteration, no guard, `min_inliers` unchanged at 8. Folded into
+> `specs/core/features/kdf-constellation-query.md`; PR #489._
+
 **Ship the refit. Do not build the staged query.**
 
 - **Which arm.** `C3_w0.5`: after RANSAC picks the consensus, refit the affine by

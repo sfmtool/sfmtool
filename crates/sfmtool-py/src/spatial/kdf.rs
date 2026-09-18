@@ -35,7 +35,7 @@ use sfmtool_core::features::kdforest::{
     KdfWorkspaceMetadata, KdfWriteOptions, LazyKdForestOptions, LazyKdForestU8,
 };
 
-use super::constellation_query::DEFAULTS;
+use super::constellation_query::{DEFAULTS, DEFAULT_REFIT, DEFAULT_REFIT_SIGMA};
 use super::kdforest::extract_u8_2d;
 
 /// Map a format error onto the closest Python exception.
@@ -490,6 +490,9 @@ impl PyLazyKdForest {
     ///         itself indexed; the descriptors are read from the corpus.
     ///     image_index: The query image's index in the file's image table.
     ///         Candidates from it are dropped.
+    ///     center: The (x, y) pixel the patch is about, when there is one. It is
+    ///         what `refit="center_weighted"` weighs distances from; without it
+    ///         that mode fits as `"least_squares"`.
     ///     k: Neighbours per constellation feature, far above a matcher's,
     ///         because the right image only has to be among the candidates.
     ///     max_leaf_checks: Per-query leaf budget.
@@ -508,6 +511,14 @@ impl PyLazyKdForest {
     ///     min_inliers: Fewest inliers to report one.
     ///     max_scale: Widest scale change a model may claim, as `sqrt(|det|)`
     ///         of its 2x2 part; one mirroring the patch is always refused.
+    ///     refit: How the reported affine is fitted to the consensus RANSAC
+    ///         chose -- `"center_weighted"`, `"least_squares"` or `"none"`,
+    ///         which reports the three-point model as drawn. Any other spelling
+    ///         is a `ValueError`. The inlier set is the three-point model's
+    ///         either way.
+    ///     refit_sigma: The weighted fit's standard deviation, as a fraction of
+    ///         the constellation's radius about `center`. Read only by
+    ///         `"center_weighted"`, and must be finite and positive.
     ///     seed: Base RNG seed; candidate image i draws from `seed + i`.
     ///
     /// Returns:
@@ -521,12 +532,13 @@ impl PyLazyKdForest {
     ///     ValueError: The arrays disagree, or the file carries no SIFT
     ///         sources, so its features have no image or geometry.
     #[pyo3(signature = (positions, *, descriptors=None, feature_ids=None, image_index=None,
-                        k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
+                        center=None, k=DEFAULTS.k, max_leaf_checks=DEFAULTS.max_leaf_checks,
                         threshold_px=DEFAULTS.threshold_px, iterations=DEFAULTS.iterations,
                         min_correspondences=DEFAULTS.min_correspondences,
                         one_hit_per_image=DEFAULTS.one_hit_per_image,
                         same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        refit=DEFAULT_REFIT, refit_sigma=DEFAULT_REFIT_SIGMA,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_query<'py>(
@@ -536,6 +548,7 @@ impl PyLazyKdForest {
         descriptors: Option<&Bound<'py, PyAny>>,
         feature_ids: Option<Vec<u32>>,
         image_index: Option<u32>,
+        center: Option<(f32, f32)>,
         k: usize,
         max_leaf_checks: usize,
         threshold_px: f64,
@@ -545,6 +558,8 @@ impl PyLazyKdForest {
         same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
+        refit: &str,
+        refit_sigma: f64,
         seed: u64,
     ) -> PyResult<Py<PyList>> {
         super::constellation_query::query(
@@ -555,6 +570,7 @@ impl PyLazyKdForest {
             descriptors,
             feature_ids,
             image_index,
+            center,
             &super::constellation_query::QueryOptions {
                 k,
                 max_leaf_checks,
@@ -565,6 +581,8 @@ impl PyLazyKdForest {
                 same_image_ratio,
                 min_inliers,
                 max_scale,
+                refit,
+                refit_sigma,
                 seed,
             },
         )
@@ -581,7 +599,9 @@ impl PyLazyKdForest {
     ///
     /// Args:
     ///     sift_path: The query image's `.sift` file.
-    ///     center: (x, y) pixel the patch is centred on.
+    ///     center: (x, y) pixel the patch is centred on. It selects the
+    ///         constellation and is then what the reported warp is fitted
+    ///         towards, so `refit="center_weighted"` needs nothing further.
     ///     radius: Patch radius in that image's pixels.
     ///     image_index: Its index in the file's image table, when indexed.
     ///     Remaining arguments are as `constellation_query`.
@@ -598,6 +618,7 @@ impl PyLazyKdForest {
                         one_hit_per_image=DEFAULTS.one_hit_per_image,
                         same_image_ratio=DEFAULTS.same_image_ratio,
                         min_inliers=DEFAULTS.min_inliers, max_scale=DEFAULTS.max_scale,
+                        refit=DEFAULT_REFIT, refit_sigma=DEFAULT_REFIT_SIGMA,
                         seed=DEFAULTS.seed))]
     #[allow(clippy::too_many_arguments)]
     fn constellation_at_pixel<'py>(
@@ -616,6 +637,8 @@ impl PyLazyKdForest {
         same_image_ratio: f32,
         min_inliers: usize,
         max_scale: f64,
+        refit: &str,
+        refit_sigma: f64,
         seed: u64,
     ) -> PyResult<Py<PyDict>> {
         super::constellation_query::at_pixel(
@@ -636,6 +659,8 @@ impl PyLazyKdForest {
                 same_image_ratio,
                 min_inliers,
                 max_scale,
+                refit,
+                refit_sigma,
                 seed,
             },
         )

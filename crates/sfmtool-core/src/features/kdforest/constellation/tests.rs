@@ -66,6 +66,21 @@ fn inflated_affine(p: [f32; 2]) -> [f32; 2] {
     [10.0 * p[0] + 5.0, 10.0 * p[1] + 9.0]
 }
 
+/// A deterministic wobble of one planted keypoint, up to `amount` pixels each
+/// way: the localisation noise a real detector carries, which is what makes a
+/// model through three keypoints measurably worse than a fit to forty.
+///
+/// Deterministic rather than drawn, so that planting it disturbs neither the
+/// descriptors nor the generator and a corpus with `amount` of zero is the
+/// same bytes it always was.
+fn jitter(row: usize, amount: f32) -> [f32; 2] {
+    let wobble = |salt: f32| {
+        let value = ((row as f32 + 1.0) * salt).sin() * 43758.547;
+        (value - value.floor() - 0.5) * 2.0 * amount
+    };
+    [wobble(12.9898), wobble(78.233)]
+}
+
 struct Corpus {
     descriptors: Vec<u8>,
     count: usize,
@@ -78,12 +93,12 @@ struct Corpus {
 
 /// [`corpus_with`] and nothing else planted.
 fn corpus() -> Corpus {
-    corpus_with(&[], 0)
+    corpus_with(&[], 0, 0.0)
 }
 
 /// [`corpus_with`] and `DECOYS` second hits inside the planted image.
 fn corpus_with_decoys() -> Corpus {
-    corpus_with(&[], DECOYS)
+    corpus_with(&[], DECOYS, 0.0)
 }
 
 /// Image 0 is the query image. Image 1 holds every one of its patch features
@@ -93,8 +108,10 @@ fn corpus_with_decoys() -> Corpus {
 /// warps are refused adds images without disturbing the ones above it: the
 /// extras draw nothing from the generator, so with none of them the corpus is
 /// the same bytes it always was. `decoys` does the same for image 1, whose
-/// first `decoys` patch features gain a near-copy of themselves there.
-fn corpus_with(extra: &[PlantedWarp], decoys: usize) -> Corpus {
+/// first `decoys` patch features gain a near-copy of themselves there, and
+/// `jitter_px` moves each of image 1's planted keypoints off the exact warp by
+/// up to that many pixels, both deterministically.
+fn corpus_with(extra: &[PlantedWarp], decoys: usize, jitter_px: f32) -> Corpus {
     let mut rng = StdRng::seed_from_u64(11);
     let mut descriptors: Vec<u8> = Vec::new();
     let mut origins = Vec::new();
@@ -144,8 +161,10 @@ fn corpus_with(extra: &[PlantedWarp], decoys: usize) -> Corpus {
         );
     }
 
-    // Image 1: the same patch descriptors, warped.
+    // Image 1: the same patch descriptors, warped and optionally wobbled.
     for (row, vector) in patch_vectors.iter().enumerate() {
+        let exact = planted_affine(patch_positions[row]);
+        let wobble = jitter(row, jitter_px);
         push(
             &mut descriptors,
             &mut origins,
@@ -153,7 +172,7 @@ fn corpus_with(extra: &[PlantedWarp], decoys: usize) -> Corpus {
             vector,
             1,
             row as u32,
-            planted_affine(patch_positions[row]),
+            [exact[0] + wobble[0], exact[1] + wobble[1]],
             3.0,
         );
     }
@@ -292,6 +311,7 @@ fn query<'a>(corpus: &'a Corpus, ids: &'a [u32]) -> Constellation<'a, u8> {
         positions: &corpus.query_positions,
         descriptors: ConstellationDescriptors::FeatureIds(ids),
         image_index: Some(0),
+        center: Some(corpus.query_positions[0]),
     }
 }
 
@@ -374,7 +394,7 @@ fn the_query_image_and_the_thin_candidate_are_absent() {
 
 #[test]
 fn a_mirrored_or_an_inflated_candidate_is_refused_and_a_doubled_one_is_not() {
-    let corpus = corpus_with(&[doubled_affine, mirrored_affine, inflated_affine], 0);
+    let corpus = corpus_with(&[doubled_affine, mirrored_affine, inflated_affine], 0, 0.0);
     let forest = forest(&corpus);
     let sources = resident(&corpus);
     let found = constellation_query(
@@ -555,6 +575,297 @@ fn the_model_solver_refuses_a_reflection_and_a_scale_far_from_unity() {
     assert!(solve_affine(src, doubled, default).is_some());
 }
 
+/// Where a 2x3 model sends one point.
+fn warp(model: &[[f64; 3]; 2], p: [f64; 2]) -> [f64; 2] {
+    [
+        model[0][0] * p[0] + model[0][1] * p[1] + model[0][2],
+        model[1][0] * p[0] + model[1][1] * p[1] + model[1][2],
+    ]
+}
+
+/// `count` positions filling a disc about `center`, no two on one ray.
+///
+/// A sunflower spiral rather than a ring, so the fit sees points at every
+/// radius the weighting distinguishes and the normal matrix is well
+/// conditioned without any of it being random.
+fn disc(center: [f64; 2], radius: f64, count: usize) -> Vec<[f64; 2]> {
+    (0..count)
+        .map(|i| {
+            let step = i as f64;
+            // The golden angle, in radians.
+            let angle = step * 2.399_963_229_728_653;
+            let r = radius * ((step + 0.5) / count as f64).sqrt();
+            [center[0] + r * angle.cos(), center[1] + r * angle.sin()]
+        })
+        .collect()
+}
+
+/// The constellation radius the refit measures: the farthest position from the
+/// centre.
+fn spread(positions: &[[f64; 2]], center: [f64; 2]) -> f64 {
+    positions
+        .iter()
+        .map(|p| (p[0] - center[0]).hypot(p[1] - center[1]))
+        .fold(0.0f64, f64::max)
+}
+
+/// A consensus that is the whole correspondence list.
+fn every(n: usize) -> Vec<usize> {
+    (0..n).collect()
+}
+
+/// `ConstellationParams::DEFAULT` with one refit mode named.
+fn fitting(refit: AffineRefit) -> ConstellationParams {
+    ConstellationParams {
+        refit,
+        ..ConstellationParams::DEFAULT
+    }
+}
+
+#[test]
+fn a_jittered_consensus_is_refitted_nearer_the_centre_than_its_three_point_model() {
+    // Image 1 holds the whole patch under the planted warp, every keypoint of
+    // it wobbled by up to two pixels. A model through three of those carries
+    // all three wobbles; a fit to the consensus averages forty of them.
+    let corpus = corpus_with(&[], 0, 2.0);
+    let forest = forest(&corpus);
+    let sources = resident(&corpus);
+    let center = corpus.query_positions[0];
+    let planted = |matches: &[ConstellationMatch]| {
+        matches
+            .iter()
+            .find(|m| m.image_index == 1)
+            .expect("the planted image")
+            .clone()
+    };
+    let found = |params: &ConstellationParams| {
+        planted(
+            &constellation_query(
+                &forest,
+                &sources,
+                &query(&corpus, &corpus.query_ids),
+                params,
+            )
+            .unwrap(),
+        )
+    };
+
+    let drawn = found(&fitting(AffineRefit::None));
+    let fitted = found(&params());
+
+    // The refit is a second reading of one consensus, not a second search: the
+    // inliers are the same features in the same order, and only the warp moved.
+    assert_eq!(drawn.inliers, fitted.inliers);
+    assert_eq!(drawn.correspondences, fitted.correspondences);
+    assert_eq!(drawn.inlier_correspondences, fitted.inlier_correspondences);
+    assert_ne!(drawn.affine, fitted.affine);
+
+    let truth = planted_affine(center);
+    let truth = [truth[0] as f64, truth[1] as f64];
+    let miss = |candidate: &ConstellationMatch| {
+        let placed = warp(&candidate.affine, [center[0] as f64, center[1] as f64]);
+        (placed[0] - truth[0]).hypot(placed[1] - truth[1])
+    };
+    assert!(
+        miss(&fitted) < miss(&drawn),
+        "the refit missed the centre by {} against the three-point model's {}",
+        miss(&fitted),
+        miss(&drawn)
+    );
+}
+
+#[test]
+fn an_exact_consensus_refits_to_the_exact_affine() {
+    let center = [640.0, 480.0];
+    let src = disc(center, 60.0, 40);
+    let truth = [[0.9, -0.3, 120.0], [0.3, 0.9, -45.0]];
+    let dst: Vec<[f64; 2]> = src.iter().map(|&p| warp(&truth, p)).collect();
+    let all = every(src.len());
+    let radius = spread(&src, center);
+
+    // Correspondences that really are affine leave the weights nothing to
+    // choose between, so every mode that fits at all recovers the warp exactly.
+    for refit in [
+        AffineRefit::LeastSquares,
+        AffineRefit::CenterWeighted { sigma: 0.5 },
+        AffineRefit::CenterWeighted { sigma: 0.25 },
+    ] {
+        let fitted = refit_affine(&src, &dst, &all, Some(center), radius, &fitting(refit))
+            .unwrap_or_else(|| panic!("{refit:?} refused an exact consensus"));
+        for (got, want) in fitted.iter().flatten().zip(truth.iter().flatten()) {
+            assert!(
+                (got - want).abs() < 1e-8,
+                "{got} against {want} for {refit:?}"
+            );
+        }
+    }
+    // Off is not a fit that happens to agree: nothing is computed at all, and
+    // the three-point model the caller already holds is what stands.
+    assert_eq!(
+        refit_affine(
+            &src,
+            &dst,
+            &all,
+            Some(center),
+            radius,
+            &fitting(AffineRefit::None)
+        ),
+        None
+    );
+}
+
+#[test]
+fn the_weighted_refit_is_truer_at_the_centre_than_the_flat_one() {
+    // A warp that is not affine: the planted one plus a term growing with the
+    // square of the distance from the centre, which is what the homography
+    // looks like once the patch is too large for its first-order part. The
+    // quadratic vanishes at the centre, so the truth there is the affine's.
+    let center = [640.0, 480.0];
+    let src = disc(center, 60.0, 40);
+    let truth = [[0.9, -0.3, 120.0], [0.3, 0.9, -45.0]];
+    let dst: Vec<[f64; 2]> = src
+        .iter()
+        .map(|&p| {
+            let flat = warp(&truth, p);
+            let (dx, dy) = (p[0] - center[0], p[1] - center[1]);
+            [flat[0] + 0.004 * dx * dx, flat[1] + 0.004 * dy * dy]
+        })
+        .collect();
+    let all = every(src.len());
+    let radius = spread(&src, center);
+    let want = warp(&truth, center);
+
+    let miss = |refit: AffineRefit| {
+        let fitted = refit_affine(&src, &dst, &all, Some(center), radius, &fitting(refit))
+            .unwrap_or_else(|| panic!("{refit:?} refused a curved consensus"));
+        let placed = warp(&fitted, center);
+        (placed[0] - want[0]).hypot(placed[1] - want[1])
+    };
+    let flat = miss(AffineRefit::LeastSquares);
+    let half = miss(AffineRefit::CenterWeighted { sigma: 0.5 });
+    let quarter = miss(AffineRefit::CenterWeighted { sigma: 0.25 });
+    assert!(half < flat, "weighted {half} against flat {flat}");
+    assert!(quarter < half, "at 0.25 {quarter} against at 0.5 {half}");
+}
+
+#[test]
+fn a_collinear_or_impossible_consensus_reports_the_three_point_model() {
+    let center = [100.0, 100.0];
+
+    // Inliers on one line in the query image constrain nothing across it, so
+    // the normal matrix is singular and there is no fit to report.
+    let line: Vec<[f64; 2]> = (0..10)
+        .map(|i| [100.0 + 5.0 * i as f64, 100.0 + 10.0 * i as f64])
+        .collect();
+    let shifted: Vec<[f64; 2]> = line.iter().map(|p| [p[0] + 3.0, p[1] - 2.0]).collect();
+    let along = every(line.len());
+    let radius = spread(&line, center);
+    for refit in [
+        AffineRefit::LeastSquares,
+        AffineRefit::CenterWeighted { sigma: 0.5 },
+    ] {
+        assert_eq!(
+            refit_affine(
+                &line,
+                &shifted,
+                &along,
+                Some(center),
+                radius,
+                &fitting(refit)
+            ),
+            None,
+            "{refit:?} fitted a line"
+        );
+    }
+
+    // A consensus whose least-squares model mirrors the patch, and one whose
+    // scale leaves the bound: refused by the tests a three-point model meets,
+    // for the same reasons, and the wider bound admits the second of them.
+    let src = disc(center, 50.0, 20);
+    let all = every(src.len());
+    let radius = spread(&src, center);
+    let mirrored: Vec<[f64; 2]> = src.iter().map(|p| [-p[0], p[1]]).collect();
+    let inflated: Vec<[f64; 2]> = src.iter().map(|p| [10.0 * p[0], 10.0 * p[1]]).collect();
+    let weighted = fitting(AffineRefit::CenterWeighted { sigma: 0.5 });
+    assert_eq!(
+        refit_affine(&src, &mirrored, &all, Some(center), radius, &weighted),
+        None
+    );
+    assert_eq!(
+        refit_affine(&src, &inflated, &all, Some(center), radius, &weighted),
+        None
+    );
+    let wider = ConstellationParams {
+        max_scale: 20.0,
+        ..weighted
+    };
+    assert!(refit_affine(&src, &inflated, &all, Some(center), radius, &wider).is_some());
+    assert_eq!(
+        refit_affine(&src, &mirrored, &all, Some(center), radius, &wider),
+        None,
+        "a reflection has no bound to lift"
+    );
+}
+
+#[test]
+fn a_constellation_with_no_centre_is_refitted_flat() {
+    // Nothing to weigh distances from is "no point matters more than another",
+    // which is least squares, and it is the same arithmetic rather than an
+    // approximation of it.
+    let center = [640.0, 480.0];
+    let src = disc(center, 60.0, 40);
+    let dst: Vec<[f64; 2]> = src
+        .iter()
+        .enumerate()
+        .map(|(row, &p)| {
+            let flat = warp(&[[0.9, -0.3, 120.0], [0.3, 0.9, -45.0]], p);
+            let wobble = jitter(row, 2.0);
+            [flat[0] + wobble[0] as f64, flat[1] + wobble[1] as f64]
+        })
+        .collect();
+    let all = every(src.len());
+    assert_eq!(
+        refit_affine(
+            &src,
+            &dst,
+            &all,
+            None,
+            0.0,
+            &fitting(AffineRefit::CenterWeighted { sigma: 0.5 })
+        ),
+        refit_affine(
+            &src,
+            &dst,
+            &all,
+            None,
+            0.0,
+            &fitting(AffineRefit::LeastSquares)
+        )
+    );
+
+    // And through the query, where a caller assembling its own positions simply
+    // leaves the centre out.
+    let corpus = corpus_with(&[], 0, 2.0);
+    let forest = forest(&corpus);
+    let sources = resident(&corpus);
+    let centreless = |refit: AffineRefit| {
+        let mut query = query(&corpus, &corpus.query_ids);
+        query.center = None;
+        constellation_query(
+            &forest,
+            &sources,
+            &query,
+            &ConstellationParams { refit, ..params() },
+        )
+        .unwrap()
+    };
+    let weighted = centreless(AffineRefit::CenterWeighted { sigma: 0.5 });
+    assert_eq!(weighted, centreless(AffineRefit::LeastSquares));
+    // Flat is still a fit, so it is not the same answer as turning the refit
+    // off: the centre is what the weighting needs, not the refit itself.
+    assert_ne!(weighted, centreless(AffineRefit::None));
+}
+
 #[test]
 fn the_radius_rule_holds_the_features_it_promises() {
     // A uniform scattering: the disc of the returned radius covers
@@ -575,6 +886,10 @@ fn the_radius_rule_holds_the_features_it_promises() {
 
 #[test]
 fn the_two_forests_answer_identically() {
+    // With the refit the default one, which is what the two paths have to agree
+    // about: it is a pure function of a consensus they already agree on, so it
+    // adds nothing to the comparison it cannot survive.
+    assert_eq!(params().refit, AffineRefit::CenterWeighted { sigma: 0.5 });
     let corpus = corpus();
     let forest = forest(&corpus);
     let sources = resident(&corpus);
@@ -616,6 +931,7 @@ fn the_two_forests_answer_identically() {
             positions: &corpus.query_positions,
             descriptors: ConstellationDescriptors::Vectors(&vectors),
             image_index: Some(0),
+            center: Some(corpus.query_positions[0]),
         },
         &params(),
     )

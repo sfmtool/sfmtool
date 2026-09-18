@@ -49,11 +49,17 @@ pub trait FeatureSources {
 }
 pub struct ResidentSources { /* origins and geometry in corpus order */ }
 
+pub enum AffineRefit {
+    None,                            // report the three-point model as drawn
+    LeastSquares,                    // every inlier weighted alike
+    CenterWeighted { sigma: f64 },   // Gaussian in the distance from the centre
+}
 pub struct ConstellationParams {
     pub k: usize, pub max_leaf_checks: usize, pub threshold_px: f64,
     pub iterations: usize, pub min_correspondences: usize,
     pub one_hit_per_image: bool, pub same_image_ratio: f32,
-    pub min_inliers: usize, pub max_scale: f64, pub seed: u64,
+    pub min_inliers: usize, pub max_scale: f64,
+    pub refit: AffineRefit, pub seed: u64,
 }
 impl ConstellationParams { pub const DEFAULT: Self; }
 pub enum ConstellationDescriptors<'a, S> { Vectors(&'a [S]), FeatureIds(&'a [u32]) }
@@ -61,6 +67,7 @@ pub struct Constellation<'a, S> {
     pub positions: &'a [[f32; 2]],
     pub descriptors: ConstellationDescriptors<'a, S>,
     pub image_index: Option<u32>,
+    pub center: Option<[f32; 2]>,
 }
 pub struct ConstellationCorrespondence {
     pub query_index: u32, pub feature_id: u32,
@@ -151,6 +158,30 @@ answer differently, and keeps for itself the one thing it adds: the fallback for
 an image the corpus does **not** index, whose descriptors have to come out of
 the `.sift` file because the corpus has none of them.
 
+**Why the centre is part of the constellation and not of the params.** It is a
+fact about the patch, as the positions are, and the two `*_at_pixel` /
+`*_from_keypoints` entry points already hold it: they select the constellation
+around it and then pass it through, so the [bench's descriptor
+search](../bench/editable-track.md), which calls `constellation_from_keypoints`,
+gets the centre-weighted warp with no argument of its own. A caller of
+`constellation_query` that assembled its positions some other way may have no
+centre to give; `None` under `CenterWeighted` fits as `LeastSquares`, which is
+the honest reading of "no point matters more than another" and is already most
+of the gain.
+
+**Why the refit's radius is measured and not passed.** The weight's scale is
+`sigma` times the largest distance from the centre to any constellation
+position. The radius a caller *asked* for can be much larger than the disc its
+features fill -- a radius rule is a prediction, not a count -- and a sigma
+proportional to an empty rim would flatten the weights towards `LeastSquares`
+without anyone having chosen that.
+
+**Why the refit is an enum and not a bare `sigma`.** Off, unweighted and
+weighted are three behaviours, and encoding two of them as `0.0` and infinity
+would put a correctness condition on a float comparison. `None` earns its place
+because the resident/file-backed parity tests and anyone diagnosing RANSAC
+itself want the model as it was drawn.
+
 **Choosing the constellation size.** The query takes a radius, but what governs
 the answer is how many features that radius holds, and the two are related
 through the image's keypoint density. `radius_for_feature_count` is that
@@ -165,6 +196,29 @@ around fifty, and past two hundred features the warp is wrong more often than
 right. Keypoints cluster on texture and a patch is usually centred on one, so
 the radius this predicts held 70 to 100% of the features asked for in
 measurement.
+
+**There is one size and no schedule.** Asking the nearest ten features first and
+widening only when nothing matched would be the cheaper query if a small prefix
+ever found an image the full fifty missed, and over 1,200 patch-stage
+comparisons on five captures it never did -- two single candidates, against a
+recall loss on everything else
+([2026-09-17](../../../reports/exp/2026-09-17-constellation-progressive-eval.md)).
+A feature's forest hits do not depend on which other features are in the
+constellation, so stage `n` of any schedule is exactly a fresh query on the
+nearest `n`, which is what lets one table of prefix queries answer for every
+schedule at once. What a small prefix *did* give was a more accurate warp near
+the centre, and a second round measured freezing each image's warp at the first
+stage that accepted it
+([2026-09-18](../../../reports/exp/2026-09-18-constellation-two-stage-eval.md)):
+over 13,416 (patch, image) cases on eight corpora that lock is beaten by
+refitting the fifty-feature consensus on all eight, by 0.065 to 0.148 of the
+share of images placing the patch centre within 3 px, and the gap *widens* with
+the baseline, so there is no capture shape where staging wins. It also costs
+more: 38,966 of 38,970 candidates' correspondence lists grew between a
+25-feature stage and the cap, so a staged query re-fits every candidate at every
+stage, +9 to +27% of wall time against the refit's +0.7 to +3.6%. So the
+constellation is fifty features fitted once, and what a caller chooses is how
+the consensus is reported, not how it is gathered.
 
 ```rust
 use sfmtool_core::features::kdforest::{
@@ -225,6 +279,41 @@ Three correspondences determine the affine exactly, so each trial solves rather
 than fits, and the model is scored by how many of the remaining correspondences
 it places within `threshold_px` of where they actually are.
 
+### Three points find a model; the consensus reports one
+
+Three points are how a model is *found*, and a poor way to report one. The
+sample size is what RANSAC's cost is exponential in, which is the whole argument
+above; but a model passing exactly through three keypoints carries all three
+keypoints' localisation noise, and nothing about having found the right images
+says the warp through those particular three is the best account of the fifty
+correspondences that agreed with it. So once the consensus is chosen, `refit`
+fits the reported affine to the whole of it by least squares. It is one 3x3
+solve per reported image, it changes nothing about which images are found, and
+across eight corpora it moves the share of found images whose warp places the
+patch centre within 3 px by +0.06 to +0.18, every interval clear of zero.
+
+The fit is weighted towards the centre, because that is where the caller applies
+the warp: for inliers `i` with constellation positions `p_i`, matched positions
+`q_i` and weights `w_i`, the affine minimises `sum w_i |A p_i + t - q_i|^2`,
+with `w_i = exp(-(d_i / (sigma R))^2 / 2)` in the distance `d_i` of `p_i` from
+`Constellation::center` and `R` the constellation's radius about that centre.
+The two rows of `[A | t]` share one 3x3 normal matrix
+`sum w_i [p_i; 1][p_i; 1]^T` and differ only in the right-hand side, so it is
+one factorisation and two back-solves.
+
+**One pass, and no re-selection.** Re-selecting the inliers under the refitted
+model and fitting again, up to three rounds, moved the centre share by at most
+0.007 on any corpus, so the query does not. That also keeps `inliers` meaning
+one thing -- within `threshold_px` of the model RANSAC chose -- at the price
+that an inlier may sit slightly outside `threshold_px` of the affine reported.
+
+**The refit is refusable and never fatal.** A refitted model goes through the
+same determinant guards as a three-point one, and a normal matrix that is
+singular -- which is what inliers collinear in the query image produce -- is a
+third way to refuse. Any refusal reports the three-point model instead: the
+consensus that admitted the candidate still stands, so nothing about the fit can
+drop an image from the answer.
+
 ### Refusing a model that collapses the patch
 
 A sample whose three source points are collinear determines no transform, which
@@ -253,7 +342,8 @@ a model that blows the patch up or shrinks it past anything a change of viewpoin
 explains; `max_scale` bounds that, refusing a model whose scale leaves
 `[1/max_scale, max_scale]`. Both are applied where the collapse test is, inside
 the three-point solve, so a refused model is never scored and can neither win a
-trial nor be reported.
+trial nor be reported -- and again to the refitted model, which is the other
+model that can reach a caller.
 
 Neither guard is free-floating. On four wide-baseline-stills captures, mirrored
 models were 2 to 30% of all reported candidates and almost none of them were
@@ -396,6 +486,7 @@ their keyword defaults, so there is one copy of each number.
 | `same_image_ratio` | `1.0` | Lowe's ratio inside one (constellation feature, candidate image) cell. Below 1.0 the cell collapses to its nearest hit and keeps it only when that hit's distance is under this factor times the cell's runner-up; a cell with one hit is kept. 1.0 and above is off. |
 | `min_inliers` | `8` | Fewest inliers for an image to be reported. |
 | `max_scale` | `4.0` | Widest scale change a model may claim, as `sqrt(\|det\|)` of its 2x2 linear part; one outside `[1/max_scale, max_scale]` is refused unscored, as is any reflection. |
+| `refit` | `CenterWeighted { sigma: 0.5 }` | How the reported affine is fitted to the consensus the winning three-point model collected. `None` reports that model as drawn, `LeastSquares` fits every inlier alike, and `CenterWeighted` weights an inlier by `exp(-(d / (sigma R))^2 / 2)` in its distance `d` from `Constellation::center`, `R` being the largest distance from that centre to any constellation position. |
 | `seed` | `0` | Base RNG seed; candidate image `i` draws from `seed + i`. |
 
 `max_leaf_checks` is 512 because 128 leaves a fifth to a third of the ground
@@ -429,7 +520,25 @@ is mostly six-inlier candidates. A caller who wants a list of images to look at
 rather than warps to use can set it back to 6.
 The `max_scale` default only refuses the absurd: a legitimate two- or
 threefold scale change between two frames exists, so the bound is loose by
-default and a caller who knows its own baselines tightens it.
+default and a caller who knows its own baselines tightens it. It bounds a
+refitted model exactly as it bounds a three-point one; nothing measured argues
+for a different bound on the two, and over eight corpora the refit's fallback
+fired too rarely to show in any column.
+
+`refit`'s `sigma` is 0.5 because it is the knee. `0.25` gives the best warp at
+the centre on all eight corpora and the worst over the disc -- 0.80 to 0.93 of
+found images place the ground truth's own correspondences within 3 px across the
+whole disc, against 0.91 to 0.98 for the unweighted fit -- because it all but
+discards the rim. `0.5` gives back 0.01 to 0.04 of the centre share and keeps
+essentially all of the disc share; at the rim its weight is `exp(-2)`, about an
+eighth, so the rim still constrains the linear part. That matters because the
+linear part is consumed too: the [bench's search](../bench/editable-track.md)
+seeds an observation's pixel from the translation and its shape from the 2x2,
+and the 2x2's error against a ground-truth local affine roughly halves at 0.5
+(rotation 2.13° to 1.25° on seoul_bull). A caller that only ever maps the centre
+sets 0.25. Whether the bench is such a caller is open: settling it needs the
+bench's own downstream score -- whether the refinement converges from the seed --
+rather than a residual, which no round has measured.
 
 ## Python bindings
 
@@ -449,7 +558,7 @@ for candidate in found["matches"]:
 ```
 
 `constellation_query(positions, *, descriptors=None, feature_ids=None,
-image_index=None, ...)` takes `(N, 2)` float32 positions and either an
+image_index=None, center=None, ...)` takes `(N, 2)` float32 positions and either an
 `(N, D)` uint8 descriptor array or the corpus feature IDs, and returns a list of
 dicts whose keys are the Rust field names: `image_index`, `affine` (a `(2, 3)`
 float64 array), `inliers`, `correspondences` and `inlier_correspondences`. That
@@ -469,6 +578,17 @@ positional argument, after `positions` and after `radius` respectively.
 a free function on the same module, next to the forest classes, and returns the
 float radius to hand `constellation_at_pixel` for a constellation of about
 `target` features.
+
+Both query methods take `refit="center_weighted" | "least_squares" | "none"` and
+`refit_sigma=0.5`, whose defaults are read off `ConstellationParams::DEFAULT`
+like every other keyword default here. A spelling that is none of the three is a
+`ValueError`, as is a `refit_sigma` that is not finite and positive, because a
+caller asking for a weighting and silently getting the three-point model is the
+one outcome it could not detect from the result. `center=(x, y)` on
+`constellation_query` is what the weighting measures distances from;
+`constellation_at_pixel` already has the centre it was asked about and passes it
+through, so the two forms of one query agree only when `constellation_query` is
+handed the same one.
 
 A budget too small for what was asked raises `MemoryError`, a damaged file
 raises `OSError`, and a bad argument raises `ValueError`, matching the rest of
@@ -525,6 +645,26 @@ Over it:
 - `the_model_solver_refuses_a_reflection_and_a_scale_far_from_unity` drives the
   three-point solve directly, over a mirrored, a tenfold, a tenth-scale and a
   doubled destination triangle, at the default bound and at a wider one.
+- `a_jittered_consensus_is_refitted_nearer_the_centre_than_its_three_point_model`
+  plants the warped image with a deterministic per-keypoint wobble of up to two
+  pixels, so that a model through three keypoints is measurably off, and asserts
+  the default refit places the patch centre nearer the planted warp than the
+  `AffineRefit::None` model from the same query does, over the same candidate
+  with the same inlier correspondences in the same order.
+- `an_exact_consensus_refits_to_the_exact_affine` drives the fit itself over a
+  disc of positions under a known affine: every mode that fits recovers it, and
+  `None` returns no fit at all rather than one that happens to agree.
+  `the_weighted_refit_is_truer_at_the_centre_than_the_flat_one` bends that warp
+  with a quadratic term, which is what a homography looks like once the patch is
+  too large for its first-order part, and asserts the weighted fit is nearer the
+  truth at the centre than the flat one and nearer still at `sigma` 0.25.
+  `a_collinear_or_impossible_consensus_reports_the_three_point_model` covers the
+  three refusals: a consensus on one line of the query image, one whose
+  least-squares model mirrors the patch, and one whose scale leaves the bound,
+  the last of which comes back when the bound is widened.
+- `a_constellation_with_no_centre_is_refitted_flat` asserts `CenterWeighted`
+  without a centre is `LeastSquares` bit for bit, both at the fit and through the
+  query, and that it is still a fit rather than the three-point model.
 - `the_radius_rule_holds_the_features_it_promises` checks that the disc
   `radius_for_feature_count` returns covers `target / K` of the frame, against
   the radii measured on two real captures, and that an image with no keypoints
@@ -548,15 +688,18 @@ its own twin beside other features of that image, so the same file is where
 `one_hit_per_image` and `same_image_ratio` are checked from Python: turning the
 collapse off offers some image more correspondences than the constellation has
 features, the default and the ratio each offer none, and the planted warp
-survives both.
+survives both. The planted warp being exactly affine, it also survives all three
+`refit` spellings, which is what the binding test asserts about them alongside
+their leaving every candidate and every inlier count where they were; what it
+tests about the mode itself is that a misspelling and a non-positive
+`refit_sigma` are `ValueError`s, and that the weighted mode without a `center`
+is the flat one.
 
 ## Non-goals
 
-- No homography, and no refinement of the affine from its inliers. The transform
-  is the best three-point model, not a least-squares fit to the consensus; a
-  caller wanting a refined warp fits one from `inlier_correspondences`. A refit
-  inside the query, weighted towards the patch centre, is proposed in
-  [kdf-constellation-affine-refit-amendment.md](../../drafts/kdf-constellation-affine-refit-amendment.md).
+- No homography. The model is affine at every stage: the three-point solve draws
+  one, the refit fits one, and a caller wanting the perspective term the patch
+  drops fits it from `inlier_correspondences`.
 - No ratio test against the neighbour list as a whole, and no other
   per-descriptor filtering of it. The consensus is the filter, and a ratio test
   over the whole corpus would discard the repeated-texture matches a

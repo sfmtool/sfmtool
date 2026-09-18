@@ -33,6 +33,47 @@ mod tests;
 /// bounded while still reading each origin block exactly once.
 const ORIGIN_SCAN_CHUNK: usize = 1 << 16;
 
+/// How the affine a candidate image is reported with is fitted to its consensus.
+///
+/// Three points are how a model is *found* -- the sample size is what RANSAC's
+/// cost is exponential in -- and a poor way to report one, because a model
+/// passing exactly through three keypoints carries all three keypoints'
+/// localisation noise. Once the consensus is chosen the whole of it can be
+/// fitted, at the cost of one 3x3 solve per reported image, and which images are
+/// found does not change.
+///
+/// Off, unweighted and weighted are three behaviours rather than one number:
+/// encoding the first two as a sigma of zero and of infinity would put a
+/// correctness condition on a float comparison. [`AffineRefit::None`] is kept
+/// because the two forests' parity test and anyone diagnosing RANSAC itself want
+/// the model as it was drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AffineRefit {
+    /// Report the best three-point model as drawn.
+    None,
+    /// Least squares over the consensus, every inlier weighted alike.
+    LeastSquares,
+    /// Least squares with a Gaussian weight in the distance of an inlier's
+    /// constellation position from [`Constellation::center`], the standard
+    /// deviation being `sigma` times the constellation's radius about that
+    /// centre -- the largest distance from it to any constellation position.
+    ///
+    /// The radius is measured rather than taken from the caller because the
+    /// radius a caller *asked* for can be much larger than the disc its features
+    /// actually fill, and a sigma proportional to an empty rim would flatten the
+    /// weights towards [`AffineRefit::LeastSquares`] without anyone having
+    /// chosen that. A constellation with no centre is fitted as
+    /// `LeastSquares`, which is the honest reading of "no point matters more
+    /// than another".
+    CenterWeighted {
+        /// Weight scale as a fraction of the constellation radius. At 0.5 the
+        /// rim still weighs `exp(-2)`, about an eighth, so it constrains the
+        /// linear part; at 0.25 it is all but discarded, which is the best warp
+        /// at the centre and the worst over the disc.
+        sigma: f64,
+    },
+}
+
 /// Tunables for [`constellation_query`].
 ///
 /// `k` is much larger than a descriptor matcher's. Most of a constellation
@@ -83,6 +124,13 @@ pub struct ConstellationParams {
     /// legitimately differ by two or three times in scale, so it only refuses
     /// the absurd, and a caller who knows its baselines tightens it.
     pub max_scale: f64,
+    /// How the reported affine is fitted to the consensus RANSAC chose.
+    ///
+    /// The default fits it to the whole consensus by least squares, weighted
+    /// towards the patch centre, because that is where the caller applies the
+    /// warp. It moves no image into or out of the answer and leaves
+    /// [`ConstellationMatch::inliers`] alone.
+    pub refit: AffineRefit,
     /// Base RNG seed; each candidate image draws from `seed + image_index`.
     pub seed: u64,
 }
@@ -100,6 +148,7 @@ impl ConstellationParams {
         same_image_ratio: 1.0,
         min_inliers: 8,
         max_scale: 4.0,
+        refit: AffineRefit::CenterWeighted { sigma: 0.5 },
         seed: 0,
     };
 }
@@ -136,6 +185,16 @@ pub struct Constellation<'a, S> {
     /// Candidates from that image are dropped: an image matching itself is not
     /// an answer to "where else is this patch".
     pub image_index: Option<u32>,
+    /// The pixel the patch is about, when there is one.
+    ///
+    /// It is a fact about the patch, like [`Self::positions`] are, and it is
+    /// what [`AffineRefit::CenterWeighted`] weighs distances from: the caller
+    /// applies the warp here, so this is where it should be most accurate. The
+    /// two `*_at_pixel` / `*_from_keypoints` entry points pass their own centre
+    /// through. A caller that assembled its positions some other way may have
+    /// none, and `None` under `CenterWeighted` fits as
+    /// [`AffineRefit::LeastSquares`].
+    pub center: Option<[f32; 2]>,
 }
 
 /// One inlier correspondence of a candidate image.
@@ -159,8 +218,14 @@ pub struct ConstellationMatch {
     /// Row-major 2x3 affine taking query-image pixels to this image's pixels:
     /// `x' = affine[0][0] * x + affine[0][1] * y + affine[0][2]`, and likewise
     /// `y'` from `affine[1]`.
+    ///
+    /// It is [`ConstellationParams::refit`]'s fit to [`Self::inliers`], not the
+    /// three-point model that selected them, so an inlier may sit a little
+    /// outside `threshold_px` of this warp.
     pub affine: [[f64; 3]; 2],
-    /// Correspondences agreeing with `affine` within the pixel threshold.
+    /// Correspondences agreeing within the pixel threshold with the three-point
+    /// model that won: the consensus [`Self::affine`] was fitted to, and not a
+    /// re-selection under it.
     pub inliers: usize,
     /// Correspondences this image had before the fit.
     pub correspondences: usize,
@@ -315,7 +380,14 @@ fn out_of_range(id: u32) -> KdfError {
 /// [`ConstellationParams::one_hit_per_image`] and
 /// [`ConstellationParams::same_image_ratio`] cut each such group down to its
 /// nearest member, or drop it outright when that member is not clearly nearer.
-/// Both are off by default, so by default every hit is a correspondence.
+/// The first is on by default and the second is off, so by default a cell keeps
+/// its nearest hit whatever its runner-up looks like.
+///
+/// Three points find each model and the consensus reports it: the affine handed
+/// back is [`ConstellationParams::refit`]'s fit to the inliers of the winning
+/// three-point model, while [`ConstellationMatch::inliers`] and
+/// [`ConstellationMatch::inlier_correspondences`] remain that model's own
+/// consensus, which is the set the fit was computed from.
 ///
 /// Determinism is a requirement rather than a nicety here, because this is the
 /// function a `.kdf`'s two access paths are compared through: given the same
@@ -439,6 +511,20 @@ where
             });
     }
 
+    // The centre and the disc it sits in are the refit's weighting, and both are
+    // facts about the constellation rather than about a candidate, so they are
+    // measured once. The radius is the largest distance from the centre to any
+    // constellation position, including features whose hits all fell away: it
+    // describes the disc the patch was taken from, not the consensus.
+    let center = query.center.map(|c| [c[0] as f64, c[1] as f64]);
+    let radius = center.map_or(0.0, |c| {
+        query
+            .positions
+            .iter()
+            .map(|p| (p[0] as f64 - c[0]).hypot(p[1] as f64 - c[1]))
+            .fold(0.0f64, f64::max)
+    });
+
     let mut matches = Vec::new();
     for (image, pairs) in by_image {
         if pairs.len() < params.min_correspondences.max(3) {
@@ -462,9 +548,13 @@ where
         if inliers.len() < params.min_inliers {
             continue;
         }
+        // One fit per reported image, over the consensus already chosen. A
+        // refusal reports the three-point model: the consensus that admitted
+        // this candidate stands whatever the fit to it comes out as.
+        let reported = refit_affine(&src, &dst, &inliers, center, radius, params).unwrap_or(affine);
         matches.push(ConstellationMatch {
             image_index: image,
-            affine,
+            affine: reported,
             inliers: inliers.len(),
             correspondences: pairs.len(),
             inlier_correspondences: inliers.into_iter().map(|i| pairs[i]).collect(),
@@ -624,17 +714,135 @@ fn solve_affine(src: [[f64; 2]; 3], dst: [[f64; 2]; 3], max_scale: f64) -> Optio
                     / det;
         }
     }
-    // One test with three jobs: not finite or near zero is a collapse, below
-    // zero is a reflection, and the square root is the geometric-mean scale.
+    plausible_warp(&affine, max_scale).then_some(affine)
+}
+
+/// Whether a 2x3 model is a warp of a patch two cameras could produce.
+///
+/// One test with three jobs, read off the determinant of the 2x2 linear part:
+/// not finite or near zero is a collapse of the patch onto a line or a point,
+/// below zero is a reflection, and the square root is the geometric-mean scale,
+/// which `max_scale` bounds either side of unity. It is applied to a three-point
+/// model before it is ever scored and to a refitted one before it is reported,
+/// so neither can be one of these.
+fn plausible_warp(affine: &[[f64; 3]; 2], max_scale: f64) -> bool {
     let linear = affine[0][0] * affine[1][1] - affine[0][1] * affine[1][0];
     if !linear.is_finite() || linear < 1e-9 {
-        return None;
+        return false;
     }
     let scale = linear.sqrt();
-    if scale > max_scale || scale < 1.0 / max_scale {
+    scale <= max_scale && scale >= 1.0 / max_scale
+}
+
+/// The affine [`ConstellationParams::refit`] asks for over one candidate's
+/// consensus, or `None` to report the three-point model as drawn.
+///
+/// `inliers` indexes `src` and `dst`, and is the consensus of the model RANSAC
+/// chose. The fit minimises `sum w_i |A p_i + t - q_i|^2`, whose two rows share
+/// one 3x3 normal matrix `sum w_i [p_i; 1][p_i; 1]^T` and differ only in the
+/// right-hand side, so it is one solve reused twice.
+///
+/// Positions are taken relative to `center`, or to the inliers' centroid when
+/// there is none, before the sums are formed, and the translation is carried
+/// back afterwards: pixel coordinates reach the thousands and squaring them
+/// uncentred spends digits the solve then needs. That also makes the normal
+/// matrix's determinant meaningful against its own trace, which is how a
+/// singular one -- inliers collinear in the query image -- is detected without
+/// an absolute threshold in units of pixels to the fourth power.
+///
+/// `None` comes back for [`AffineRefit::None`], for a consensus too small or too
+/// degenerate to fit, and for a fit that fails [`plausible_warp`]. Every one of
+/// them means "report the three-point model"; none of them drops the candidate.
+fn refit_affine(
+    src: &[[f64; 2]],
+    dst: &[[f64; 2]],
+    inliers: &[usize],
+    center: Option<[f64; 2]>,
+    radius: f64,
+    params: &ConstellationParams,
+) -> Option<[[f64; 3]; 2]> {
+    // A centre-weighted fit with no centre to weigh distances from, or a disc of
+    // no extent to scale them by, is a flat one: no point of it matters more
+    // than another, which is exactly least squares.
+    let weight_scale = match params.refit {
+        AffineRefit::None => return None,
+        AffineRefit::LeastSquares => None,
+        AffineRefit::CenterWeighted { sigma } => match center {
+            Some(_) if sigma > 0.0 && sigma.is_finite() && radius > 0.0 => Some(sigma * radius),
+            _ => None,
+        },
+    };
+    if inliers.len() < 3 {
         return None;
     }
-    Some(affine)
+    let origin = center.unwrap_or_else(|| {
+        let n = inliers.len() as f64;
+        let sum = inliers.iter().fold([0.0f64; 2], |acc, &i| {
+            [acc[0] + src[i][0], acc[1] + src[i][1]]
+        });
+        [sum[0] / n, sum[1] / n]
+    });
+
+    // The normal matrix is symmetric, so five of its nine entries are the other
+    // four; `rhs[axis]` is that axis's right-hand side.
+    let (mut xx, mut xy, mut yy, mut sx, mut sy, mut sw) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    let mut rhs = [[0.0f64; 3]; 2];
+    for &i in inliers {
+        let u = src[i][0] - origin[0];
+        let v = src[i][1] - origin[1];
+        let w = match weight_scale {
+            Some(scale) => {
+                let d = u.hypot(v) / scale;
+                (-0.5 * d * d).exp()
+            }
+            None => 1.0,
+        };
+        xx += w * u * u;
+        xy += w * u * v;
+        yy += w * v * v;
+        sx += w * u;
+        sy += w * v;
+        sw += w;
+        for (axis, row) in rhs.iter_mut().enumerate() {
+            let q = dst[i][axis];
+            row[0] += w * u * q;
+            row[1] += w * v * q;
+            row[2] += w * q;
+        }
+    }
+
+    // Cofactors of the symmetric [[xx, xy, sx], [xy, yy, sy], [sx, sy, sw]].
+    let c00 = yy * sw - sy * sy;
+    let c01 = sy * sx - xy * sw;
+    let c02 = xy * sy - yy * sx;
+    let determinant = xx * c00 + xy * c01 + sx * c02;
+    // The matrix is positive semi-definite, so its determinant is at most the
+    // cube of a third of its trace and vanishes exactly when the weighted
+    // positions are collinear. Comparing the two is a conditioning test that
+    // carries no unit and no assumption about how large a patch is.
+    let trace = xx + yy + sw;
+    if !determinant.is_finite() || determinant <= 1e-12 * trace * trace * trace {
+        return None;
+    }
+    let inverse = [
+        [c00, c01, c02],
+        [c01, xx * sw - sx * sx, xy * sx - xx * sy],
+        [c02, xy * sx - xx * sy, xx * yy - xy * xy],
+    ];
+
+    let mut affine = [[0.0f64; 3]; 2];
+    for (row, b) in affine.iter_mut().zip(rhs) {
+        for (coefficient, column) in row.iter_mut().zip(inverse.iter()) {
+            *coefficient = (column[0] * b[0] + column[1] * b[1] + column[2] * b[2]) / determinant;
+        }
+        // Back out of the centred frame: `A (p - origin) + t` is `A p` plus a
+        // translation the origin has been folded into.
+        row[2] -= row[0] * origin[0] + row[1] * origin[1];
+    }
+    if !affine.iter().flatten().all(|v| v.is_finite()) {
+        return None;
+    }
+    plausible_warp(&affine, params.max_scale).then_some(affine)
 }
 
 fn residual_sq(model: &[[f64; 3]; 2], src: [f64; 2], dst: [f64; 2]) -> f64 {
@@ -761,6 +969,10 @@ pub fn radius_for_feature_count(
 ///
 /// Features inside the radius that the corpus does not index are dropped from
 /// the constellation, so an index built over a subset stays usable.
+///
+/// `center` selects the constellation and is then carried inside it, so the
+/// reported warp is fitted towards the pixel that was asked about, as
+/// [`ConstellationParams::refit`] says.
 pub fn constellation_at_pixel<I, F>(
     index: &I,
     sources: &F,
@@ -797,6 +1009,7 @@ where
         positions: &positions,
         descriptors: ConstellationDescriptors::Vectors(&descriptors),
         image_index: None,
+        center: Some(center),
     };
     let matches = constellation_query(index, sources, &query, params)?;
     Ok(PatchConstellation {
@@ -821,7 +1034,8 @@ where
 /// [`FeatureSources::image_feature_ids`] resolves. Features inside the radius
 /// that the corpus does not index are dropped from the constellation, so an
 /// index built over a subset stays usable, and candidates from `image_index`
-/// itself are never reported.
+/// itself are never reported. `center` is carried into the constellation as
+/// well as used to select it, so the reported warp is fitted towards it.
 pub fn constellation_from_keypoints<I, F>(
     index: &I,
     sources: &F,
@@ -847,6 +1061,7 @@ where
         positions: &positions,
         descriptors: ConstellationDescriptors::FeatureIds(&feature_ids),
         image_index: Some(image_index),
+        center: Some(center),
     };
     let matches = constellation_query(index, sources, &query, params)?;
     Ok(PatchConstellation {

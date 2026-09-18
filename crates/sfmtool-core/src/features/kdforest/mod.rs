@@ -51,9 +51,9 @@ mod tests;
 
 pub use constellation::{
     constellation_at_pixel, constellation_from_keypoints, constellation_query,
-    radius_for_feature_count, Constellation, ConstellationCorrespondence, ConstellationDescriptors,
-    ConstellationMatch, ConstellationParams, FeatureSources, ImageKeypoints, PatchConstellation,
-    QueryImage, ResidentSources,
+    radius_for_feature_count, AffineRefit, Constellation, ConstellationCorrespondence,
+    ConstellationDescriptors, ConstellationMatch, ConstellationParams, FeatureSources,
+    ImageKeypoints, PatchConstellation, QueryImage, ResidentSources,
 };
 pub use distance::{ForestScalar, OrdF32};
 pub use neighbor_index::NeighborIndex;

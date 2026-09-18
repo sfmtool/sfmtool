@@ -1534,6 +1534,10 @@ fn search_descriptors(
             same_image_ratio,
             min_inliers,
             max_scale,
+            // The search's centre is the observation's own pixel, and the query
+            // takes it from the radius it is given, so the default weighted
+            // refit needs nothing said here.
+            refit: QUERY_DEFAULTS.refit,
             seed,
         },
         radius_px,

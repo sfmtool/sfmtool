@@ -1256,6 +1256,8 @@ def run_measure2(args) -> None:
         "same_image_ratio": 1.0,
         "min_inliers": args.floor_inliers,
         "max_scale": args.max_scale,
+        "refit": args.refit,
+        "refit_sigma": args.refit_sigma,
         "seed": args.seed % (1 << 32),
     }
     rng = np.random.default_rng(args.seed)
@@ -1326,9 +1328,17 @@ def run_measure2(args) -> None:
             for s, o, f in zip(gt_slot, gt_image, gt_feature)
         ]
 
+        # The centre is the query's, not only the harness's: it is what the
+        # shipped refit weighs distances from, so an arm computed offline from a
+        # `refit="none"` run and the Rust default are the same quantity.
+        at = (float(centre[0]), float(centre[1]))
         for n in prefixes:
             matches = lazy.constellation_query(
-                query_xy[:n], feature_ids=ids[:n], image_index=image, **knobs
+                query_xy[:n],
+                feature_ids=ids[:n],
+                image_index=image,
+                center=at,
+                **knobs,
             )
             record["stages"][str(n)] = [
                 {
@@ -2156,6 +2166,14 @@ def main() -> None:
     m2.add_argument("--min-correspondences", type=int, default=3)
     m2.add_argument("--floor-inliers", type=int, default=4)
     m2.add_argument("--max-scale", type=float, default=4.0)
+    m2.add_argument(
+        "--refit",
+        choices=("center_weighted", "least_squares", "none"),
+        default="center_weighted",
+        help="how the query fits the affine it reports over its own consensus;"
+        " 'none' is the bare three-point model the offline arms refit from",
+    )
+    m2.add_argument("--refit-sigma", type=float, default=0.5)
     m2.add_argument("--time-stages", action="store_true", help="also time each stage")
     m2.add_argument(
         "--min-centre-obs",
