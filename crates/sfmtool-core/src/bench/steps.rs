@@ -990,9 +990,11 @@ pub fn resize_from_edge(
                 let (position, frame, bitmap) = track_payload_mut(&mut next);
                 frame.center = center;
                 frame.half_extent = [half, half];
-                if frame.w != 0.0 {
-                    *position = Some(center);
-                }
+                // The track's coordinate is the frame's centre in both
+                // representations: a world point at `w = 1`, and the unit
+                // bearing itself at `w = 0`. Letting the two drift apart would
+                // commit a direction the outline has already left.
+                *position = Some(center);
                 *bitmap = None;
             }
             carry_keypoints(&mut next, edited, displacement);
@@ -1159,9 +1161,9 @@ pub fn translate_frame(
     {
         let (position, frame, bitmap) = track_payload_mut(&mut next);
         frame.center = center;
-        if frame.w != 0.0 {
-            *position = Some(center);
-        }
+        // The coordinate is the centre in both representations: a world point at
+        // `w = 1`, the unit bearing at `w = 0`.
+        *position = Some(center);
         *bitmap = None;
     }
     let placed = carry_keypoints(&mut next, edited, displacement);

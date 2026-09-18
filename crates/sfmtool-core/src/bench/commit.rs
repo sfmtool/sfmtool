@@ -169,10 +169,16 @@ impl From<EditError> for CommitError {
 /// Write `track` into `edited` as one point.
 ///
 /// The record is the track's payload plus its `in` observations' keypoints: the
-/// position it carries, the frame it stands on, the consensus bitmap, the
+/// coordinate it carries, the frame it stands on, the consensus bitmap, the
 /// colour read from that bitmap's centre, the normal the frame states, and one
 /// observation per `in` observation with its keypoint and its leave-one-out
 /// ZNCC in `observation_confidence` where the column exists.
+///
+/// **A bearing commits as a bearing.** The point's `w` is the frame's, so a
+/// track the classification put at infinity is written as the `w = 0` row it is:
+/// its coordinate is the unit direction, and its normal and normal confidence
+/// are zero, which is what the format states for such a row. Nothing here
+/// re-decides which it is -- that was settled by the fit that wrote the frame.
 ///
 /// With **no origin that resolves**, the point is appended. With **an origin
 /// that resolves** in this value, it takes that point's place, which is what
@@ -279,10 +285,18 @@ pub fn commit(
 
     // ---- The point the record stands on ----
     let frame = payload.frame.as_ref();
-    let normal = frame.map_or_else(Vector3::zeros, |patch| {
-        let n = patch.normal();
-        Vector3::new(n.x as f32, n.y as f32, n.z as f32)
-    });
+    let at_infinity = frame.is_some_and(|patch| patch.w == 0.0);
+    // A `w = 0` row carries a zero normal: the format states it, and the two
+    // conversions across the boundary hold to it -- a bearing's frame is tangent
+    // to the direction sphere and its cross product is the bearing itself, which
+    // says nothing about a surface. The confidence goes to zero with it, because
+    // the format keeps the two coherent.
+    let normal = frame
+        .filter(|_| !at_infinity)
+        .map_or_else(Vector3::zeros, |patch| {
+            let n = patch.normal();
+            Vector3::new(n.x as f32, n.y as f32, n.z as f32)
+        });
     let record = PointRecord {
         point: Point3D {
             position,
@@ -301,9 +315,13 @@ pub fn commit(
         patch_bitmap: edited
             .has_patch_bitmaps()
             .then(|| payload.bitmap.clone().expect("checked above")),
-        normal_confidence: edited
-            .has_normal_confidence()
-            .then(|| payload.normal_confidence.unwrap_or(0)),
+        normal_confidence: edited.has_normal_confidence().then(|| {
+            if at_infinity {
+                0
+            } else {
+                payload.normal_confidence.unwrap_or(0)
+            }
+        }),
         // A committed track states nothing about a distance a caller owns, so
         // its point is free.
         constraint: edited.has_point_constraints().then_some((

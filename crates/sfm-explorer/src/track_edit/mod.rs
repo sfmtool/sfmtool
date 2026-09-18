@@ -742,12 +742,19 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
             ));
         }
         sfmtool_core::bench::Stage::Track(payload) => {
+            // A bearing and a position are the same three numbers and different
+            // statements, so the word in front of them is what tells a reader
+            // which they are looking at. "at infinity" is the Point Track Detail
+            // panel's own word for the same row.
+            let at_infinity = payload.frame.as_ref().is_some_and(|frame| frame.w == 0.0);
             ui.weak(match payload.position {
                 Some(position) => format!(
-                    "Position ({:.3}, {:.3}, {:.3}){}",
+                    "{} ({:.3}, {:.3}, {:.3}){}{}",
+                    if at_infinity { "Bearing" } else { "Position" },
                     position.x,
                     position.y,
                     position.z,
+                    if at_infinity { ", at infinity" } else { "" },
                     match payload.condition_number {
                         Some(condition) => format!(", condition {condition:.1}"),
                         None => String::new(),
@@ -874,7 +881,16 @@ fn measurements(observation: &Observation, stage: StageKind) -> [String; 7] {
                 // was, in the evaluation's own sentence. An evaluation drops
                 // nothing, so "no ZNCC" always has one of those answers behind
                 // it, and a row that has never been read says that instead.
+                //
+                // The walk comes first among the answers a scored row can give:
+                // it says the sighting did *not* move where the correlation
+                // wanted it, which is the one thing about the row a person
+                // reading "localized" would get wrong.
                 match m {
+                    Some(m) if m.walked_px.is_some() => format!(
+                        "walked {:.0} px, kept at seed",
+                        m.walked_px.expect("just matched")
+                    ),
                     Some(m) if m.zncc.is_some() => "localized".to_string(),
                     Some(m) => match m.reason {
                         Some(reason) => reason.to_string(),

@@ -815,14 +815,25 @@ fn stage_data(track: &EditableTrack) -> Value {
             "radius": payload.radius,
             "template_cut": payload.template.is_some(),
         }),
-        Stage::Track(payload) => json!({
-            "position": payload.position.map(|p| [p.x, p.y, p.z]),
-            "condition_number": payload.condition_number,
-            "color": payload.color,
-            "normal_confidence": payload.normal_confidence,
-            "frame_fitted": payload.frame.is_some(),
-            "bitmap_fused": payload.bitmap.is_some(),
-        }),
+        // A bearing and a position are the same three numbers under different
+        // rules, so the coordinate is published under the name of whichever it
+        // is -- `direction` for a `w = 0` track, `position` otherwise, the other
+        // null -- with `at_infinity` beside them for a reader that wants the
+        // flag rather than the key.
+        Stage::Track(payload) => {
+            let at_infinity = payload.frame.as_ref().is_some_and(|frame| frame.w == 0.0);
+            let coordinate = payload.position.map(|p| [p.x, p.y, p.z]);
+            json!({
+                "at_infinity": at_infinity,
+                "position": (!at_infinity).then_some(coordinate).flatten(),
+                "direction": at_infinity.then_some(coordinate).flatten(),
+                "condition_number": payload.condition_number,
+                "color": payload.color,
+                "normal_confidence": payload.normal_confidence,
+                "frame_fitted": payload.frame.is_some(),
+                "bitmap_fused": payload.bitmap.is_some(),
+            })
+        }
     }
 }
 
@@ -895,6 +906,9 @@ fn track_measurement(observation: &Observation) -> Value {
         "reprojection_error": finite(measured.reprojection_error),
         "ray_angle_deg": finite(measured.ray_angle_deg),
         "localizability": finite(measured.localizability),
+        // Present only when the last fit refused the walk and left this sighting
+        // at its seed; the number is how far the correlation peak sat.
+        "walked_px": finite(measured.walked_px),
         "reason": measured.reason.map(|reason| reason.to_string()),
     })
 }

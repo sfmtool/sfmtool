@@ -33,6 +33,7 @@
 //! of behind it. The step itself calls its own, so the two answers cannot
 //! drift.
 
+pub mod classify;
 pub mod commit;
 pub mod evaluate;
 pub mod fit;
@@ -47,6 +48,10 @@ mod tests;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+pub use classify::{
+    classify_track_rays, ClassificationReason, TrackClassification, TrackRays,
+    DEFAULT_CLASSIFY_NOISE_FLOOR_PX, DEFAULT_CLASSIFY_Z_CUTOFF,
+};
 pub use commit::{commit, CommitError, CommitReport};
 pub use evaluate::{
     evaluate, evaluate_preconditions, open_localizer, EvaluateError, EvaluateOptions,

@@ -25,7 +25,7 @@ use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocaliza
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::progress::Progress;
 use crate::reconstruction::add_observation::tests::{
-    edited as edited_fixture, fixture_with_columns, Scene, WORLD,
+    edited as edited_fixture, fixture_of, fixture_with_columns, with_columns, Scene, WORLD,
 };
 use crate::reconstruction::edited::{EditedReconstruction, PointMap};
 use crate::reconstruction::SfmrReconstruction;
@@ -2531,4 +2531,464 @@ fn the_patch_steps_refuse_the_stage_they_do_not_belong_to() {
         set_observation_keypoint(&at_track, 9, [1.0, 2.0]),
         Err(TrackEditError::NoSuchObservation { .. })
     ));
+}
+
+// ---- Finite points and bearings --------------------------------------------
+//
+// The boundary is a property of the rays and not of the picture, so the fixture
+// these tests turn is the *capture*: the same textured plane, put two hundred
+// units out and looked at from cameras five centimetres apart, whose sightings
+// fix a direction and no depth. One camera of it sits twenty units off to the
+// side, so the very same eight sightings plus a ninth of its own do fix one --
+// which is what makes promotion and demotion two settings of one dial.
+
+/// The distant plane the bearing fixture stands on.
+const FAR_Z: f64 = 200.0;
+
+/// How far apart the bearing fixture's near cameras step along world `+x`.
+const FAR_STEP: f64 = 0.05;
+
+/// How many near cameras it has: the rays whose parallax is a third of a pixel
+/// across the whole run.
+const FAR_NEAR_VIEWS: usize = 8;
+
+/// Where the one camera with real baseline sits along world `+x`.
+const FAR_OFFSET_X: f64 = 20.0;
+
+/// The image index of that camera.
+const FAR_OFFSET_IMAGE: u32 = FAR_NEAR_VIEWS as u32;
+
+/// The world half-extent the far plane's patch has: the same apparent size the
+/// near scene's patch has, which is what keeps the two fixtures comparable.
+const FAR_HALF_WORLD: f64 = 6.0;
+
+/// Where the far fixture's point stands: straight ahead of the near run, on the
+/// distant plane.
+fn far_world() -> Point3<f64> {
+    Point3::new(0.0, 0.0, FAR_Z)
+}
+
+/// The unit bearing the far point is seen along, which is what a `w = 0` row of
+/// it stores.
+fn far_direction() -> Point3<f64> {
+    Point3::from(far_world().coords.normalize())
+}
+
+/// The capture: eight cameras stepping by [`FAR_STEP`] along world `+x`, and a
+/// ninth [`FAR_OFFSET_X`] away, all looking down `+z` at the plane `z = FAR_Z`.
+fn far_scene() -> Scene {
+    let mut centers: Vec<[f64; 3]> = (0..FAR_NEAR_VIEWS)
+        .map(|k| [k as f64 * FAR_STEP, 0.0, 0.0])
+        .collect();
+    centers.push([FAR_OFFSET_X, 0.0, 0.0]);
+    Scene::from_centers(&centers, FAR_Z)
+}
+
+/// The angular half-extent a bearing on the far plane carries.
+fn far_angular_half() -> f64 {
+    FAR_HALF_WORLD / FAR_Z
+}
+
+/// A version of [`far_scene`] holding the far point as a `w = 0` bearing on its
+/// tangent frame, observed by the eight near cameras.
+fn far_bearing_edited(scene: &Scene) -> EditedReconstruction {
+    let frame = OrientedPatch::from_infinity_direction(
+        far_direction(),
+        Vector3::new(0.0, 1.0, 0.0),
+        [far_angular_half(), far_angular_half()],
+    );
+    let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
+    EditedReconstruction::new(Arc::new(with_columns(
+        fixture_of(scene, far_direction(), 0.0, &observing, &frame),
+        BITMAP_R,
+    )))
+}
+
+/// A version of [`far_scene`] holding the far point as a finite `w = 1` point on
+/// a world-unit plane patch, observed by the same eight near cameras: the same
+/// sightings, stored as the thing the geometry does not support.
+fn far_finite_edited(scene: &Scene) -> EditedReconstruction {
+    let frame = OrientedPatch::from_center_normal(
+        far_world(),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [FAR_HALF_WORLD, FAR_HALF_WORLD],
+    );
+    let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
+    EditedReconstruction::new(Arc::new(with_columns(
+        fixture_of(scene, far_world(), 1.0, &observing, &frame),
+        BITMAP_R,
+    )))
+}
+
+/// The classification a fit reported.
+fn call_of(report: &FitReport) -> TrackClassification {
+    report
+        .classification
+        .expect("a track-stage fit classifies its rays")
+}
+
+#[test]
+fn a_bearing_whose_rays_stay_parallel_stays_a_bearing_at_the_size_it_had() {
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let before = frame_of(&track);
+    assert_eq!(before.w, 0.0, "the fixture stores a bearing");
+
+    // What a reading of the track as it stands makes of each sighting: the fit
+    // has to agree with this, because a fit that promoted the frame to a
+    // provisional depth would re-warp every view and walk the sightings.
+    let (read, _) = evaluate_over(&scene, &edited, &track).expect("eight sightings in");
+    let seen: Vec<f64> = read
+        .observations
+        .iter()
+        .map(|o| {
+            o.track
+                .as_ref()
+                .and_then(|m| m.zncc)
+                .expect("a bearing's tangent frame registers in every view")
+        })
+        .collect();
+    assert!(
+        seen.iter().all(|&z| z > 0.5),
+        "the reading should agree in every view, it scored {seen:?}"
+    );
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("eight sightings in");
+    let call = call_of(&report);
+    assert!(
+        call.at_infinity,
+        "a third of a pixel of parallax over two hundred units is a bearing, \
+         the fit said {call}"
+    );
+    assert_eq!(call.reason, ClassificationReason::DepthUnresolved);
+    assert!(call.inverse_depth_z < call.inverse_depth_z_cutoff, "{call}");
+    assert!(call.max_pair_angle_deg < 0.5, "{call}");
+    assert_eq!(report.kept_at_seed, 0);
+
+    let after = frame_of(&fitted);
+    assert_eq!(after.w, 0.0, "a bearing stays a bearing");
+    assert!(
+        (after.center.coords.norm() - 1.0).abs() < 1e-12,
+        "a bearing's coordinate is a unit direction, it is {}",
+        after.center
+    );
+    assert_eq!(
+        after.half_extent, before.half_extent,
+        "no promotion, so no rescale"
+    );
+    assert_eq!(
+        fitted.track().expect("the track stage").position,
+        Some(after.center),
+        "the coordinate and the frame's centre are one thing"
+    );
+
+    // No drift: every sighting is where the reading found it, and scores what
+    // the reading scored.
+    for (k, observation) in fitted.observations.iter().enumerate() {
+        let m = observation.track.as_ref().expect("a track slot");
+        let was = read.observations[k]
+            .track
+            .as_ref()
+            .and_then(|m| m.keypoint)
+            .expect("a seed");
+        let now = m.keypoint.expect("a keypoint");
+        let moved = f64::from(now[0] - was[0]).hypot(f64::from(now[1] - was[1]));
+        assert!(moved < 1.0, "sighting {k} moved {moved} px");
+        let zncc = m.zncc.expect("a score");
+        assert!(zncc > 0.5, "sighting {k} scored {zncc}");
+        assert!(
+            (zncc - seen[k]).abs() < 0.2,
+            "sighting {k} scored {zncc} where the reading scored {}",
+            seen[k]
+        );
+        assert_eq!(m.walked_px, None, "sighting {k} was not walked");
+    }
+}
+
+#[test]
+fn a_bearings_ray_angle_is_measured_against_the_bearing() {
+    // The angle to a bearing is the angle between the sighting's ray and the
+    // direction itself. Measuring it against a phantom point one unit from the
+    // world origin -- which is what applying the pose's translation to a unit
+    // direction does -- would print tens of degrees for rays that agree to a
+    // thousandth of one.
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (read, report) = evaluate_over(&scene, &edited, &track).expect("eight sightings in");
+    assert!(report.at_infinity, "the reading knows it read a bearing");
+    for (k, observation) in read.observations.iter().enumerate() {
+        let angle = observation
+            .track
+            .as_ref()
+            .and_then(|m| m.ray_angle_deg)
+            .expect("an angle");
+        assert!(
+            angle < 0.1,
+            "sighting {k}'s ray agrees with the bearing to a thousandth of a degree, \
+             the panel would show {angle}"
+        );
+    }
+}
+
+#[test]
+fn a_finite_track_fits_finite_and_says_which_test_settled_it() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("two observations in");
+    let call = call_of(&report);
+    assert!(
+        !call.at_infinity,
+        "fifteen degrees of parallax is a point, the fit said {call}"
+    );
+    assert_eq!(call.reason, ClassificationReason::WellConditioned);
+    assert!(call.max_pair_angle_deg > 1.0, "{call}");
+    assert!((call.coordinate - WORLD).norm() < 0.02, "{call}");
+    let after = frame_of(&fitted);
+    assert_eq!(after.w, 1.0);
+    assert_eq!(after.center, call.coordinate);
+}
+
+#[test]
+fn a_bearing_given_a_sighting_with_real_baseline_becomes_a_point() {
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    let before = frame_of(&track);
+
+    // The ninth camera, twenty units off to the side: the sighting that gives
+    // the track a depth. It sits where the plane's own point projects, which is
+    // what a person pointing at the same piece of surface would do.
+    let pixel = scene.project(FAR_OFFSET_IMAGE as usize, far_world());
+    let (added, _) = add_observation(&track, &ObservationSeed::at_pixel(FAR_OFFSET_IMAGE, pixel))
+        .expect("a finite pixel");
+    let last = added.observations.len() - 1;
+    let (turned, _) = set_verdict(&added, last, Verdict::In).expect("the new observation");
+    track = turned;
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("nine sightings in");
+    let call = call_of(&report);
+    assert!(
+        !call.at_infinity,
+        "a twenty-unit baseline resolves two hundred units of depth, the fit said {call}"
+    );
+    assert!(
+        (call.coordinate - far_world()).norm() < 2.0,
+        "the promoted point should stand on the plane, it stands at {}",
+        call.coordinate
+    );
+    let after = frame_of(&fitted);
+    assert_eq!(after.w, 1.0, "a promotion writes a place");
+    assert_eq!(after.center, call.coordinate);
+    // The angular extents became world ones at the placement distance, so the
+    // patch is the apparent size it was.
+    let grew = after.half_extent[0] / before.half_extent[0];
+    assert!(
+        (grew / FAR_Z - 1.0).abs() < 0.1,
+        "the frame grew by {grew} where the placement distance is about {FAR_Z}"
+    );
+}
+
+#[test]
+fn a_finite_track_whose_rays_no_longer_resolve_a_depth_becomes_a_bearing() {
+    let scene = far_scene();
+    let edited = far_finite_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let before = frame_of(&track);
+    assert_eq!(before.w, 1.0, "the fixture stores a place");
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("eight sightings in");
+    let call = call_of(&report);
+    assert!(
+        call.at_infinity,
+        "the eight near cameras cannot resolve two hundred units, the fit said {call}"
+    );
+    let after = frame_of(&fitted);
+    assert_eq!(after.w, 0.0, "a demotion writes a bearing");
+    assert!(
+        (after.center.coords.norm() - 1.0).abs() < 1e-12,
+        "a bearing's coordinate is a unit direction, it is {}",
+        after.center
+    );
+    assert!(
+        (after.center.coords - far_direction().coords).norm() < 1e-3,
+        "the bearing should be the direction the sightings agree on, it is {}",
+        after.center
+    );
+    // The world extents became angular ones by the distance the frame stood at.
+    let shrank = before.half_extent[0] / after.half_extent[0];
+    assert!(
+        (shrank / FAR_Z - 1.0).abs() < 0.1,
+        "the frame shrank by {shrank} where the frame stood about {FAR_Z} out"
+    );
+    assert_eq!(
+        fitted.track().expect("the track stage").position,
+        Some(after.center)
+    );
+}
+
+#[test]
+fn a_sighting_the_fit_would_walk_past_the_bar_keeps_its_seed_and_says_so() {
+    // Eight sightings, so the seven that agree hold the consensus still and the
+    // one moved off it is the only row with anywhere to walk back to. A bar of
+    // two pixels, and that one put four off the truth: the correlation will want
+    // it back, and four pixels is further than the person said a sighting may be
+    // moved.
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut track = track_of(&bench, &label);
+    track.thresholds.max_shift_px = 2.0;
+    let truth = track.observations[0]
+        .track
+        .as_ref()
+        .and_then(|m| m.keypoint)
+        .expect("a stored keypoint");
+    let moved = [truth[0] + 4.0, truth[1]];
+    track.observations[0]
+        .track
+        .as_mut()
+        .expect("a track slot")
+        .keypoint = Some(moved);
+
+    let (fitted, report) = fit_over(&scene, &edited, &track).expect("eight sightings in");
+    assert_eq!(report.kept_at_seed, 1, "{report}");
+    let held = fitted.observations[0].track.as_ref().expect("a track slot");
+    assert_eq!(
+        held.keypoint,
+        Some(moved),
+        "a sighting the fit refused to walk keeps the pixel it had"
+    );
+    let walked = held.walked_px.expect("the row says how far the peak sat");
+    assert!(
+        walked > track.thresholds.max_shift_px,
+        "the peak sat {walked} px away, past the {} px bar",
+        track.thresholds.max_shift_px
+    );
+    assert!(
+        held.zncc.is_some(),
+        "a sighting kept at its seed is still read there"
+    );
+    // The other sighting was inside the bar, so it moved and carries no flag.
+    let other = fitted.observations[1].track.as_ref().expect("a track slot");
+    assert_eq!(other.walked_px, None);
+}
+
+#[test]
+fn an_upgrade_of_a_bearing_comes_back_a_bearing_and_commits_as_one() {
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let half = frame_of(&track).half_extent[0];
+
+    // Down to the cluster stage, which throws the 3D away, and back up, which
+    // builds it again from the sightings alone. A capture that only ever stated
+    // a direction has to come back stating one.
+    let (down, _) = stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a downgrade");
+    assert_eq!(down.stage_kind(), StageKind::Cluster);
+    let (up, report) = stage_over(&scene, &edited, &down, StageKind::Track).expect("an upgrade");
+    let fitted = report.fit.expect("an upgrade runs the track stage's fit");
+    let call = call_of(&fitted);
+    assert!(call.at_infinity, "the upgrade said {call}");
+    let frame = frame_of(&up);
+    assert_eq!(frame.w, 0.0, "an upgrade of a bearing frames a bearing");
+    assert!(
+        (frame.center.coords.norm() - 1.0).abs() < 1e-12,
+        "a bearing's coordinate is a unit direction, it is {}",
+        frame.center
+    );
+    assert!(
+        (frame.half_extent[0] / half - 1.0).abs() < 0.3,
+        "a round trip through the cluster stage should keep the size: {} against {half}",
+        frame.half_extent[0]
+    );
+
+    // And the commit writes the row the format states for a bearing.
+    let (next, written) = commit(&edited, &up).expect("a fitted bearing");
+    let view = next.point(written.point).expect("just written");
+    let point = view.point();
+    assert_eq!(point.w, 0.0, "a bearing commits as a bearing");
+    assert!(
+        (point.position.coords.norm() - 1.0).abs() < 1e-9,
+        "a w = 0 row stores a unit direction, it stores {}",
+        point.position
+    );
+    assert_eq!(
+        point.normal,
+        Vector3::zeros(),
+        "a w = 0 row carries a zero normal"
+    );
+    assert_eq!(view.normal_confidence(), Some(0));
+    // And it survives materialisation, counted as a point at infinity.
+    let (materialized, _) = next.materialize();
+    assert_eq!(materialized.point_set.infinity_point_count, 1);
+}
+
+#[test]
+fn moving_sizing_and_turning_a_bearing_keeps_its_direction_on_the_unit_sphere() {
+    let scene = far_scene();
+    let edited = far_bearing_edited(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let before = frame_of(&track);
+    let (camera, pose) = view(&edited, 0);
+    let unit = |frame: &OrientedPatch, what: &str| {
+        assert_eq!(frame.w, 0.0, "{what} kept the representation");
+        assert!(
+            (frame.center.coords.norm() - 1.0).abs() < 1e-12,
+            "{what} left the direction at {}",
+            frame.center.coords.norm()
+        );
+        assert!(frame.half_extent[0] > 0.0 && frame.half_extent[1] > 0.0);
+    };
+
+    // A slide: the pointer two pixels off the centre's own projection.
+    let centre = corner_pixel(&before, &camera, &pose, 0.0, 0.0);
+    let (slid, _) = translate_frame(&track, &edited, 0, [centre[0] + 2.0, centre[1]])
+        .expect("a pixel the ray reaches");
+    let frame = frame_of(&slid);
+    unit(&frame, "a slide");
+    assert_eq!(
+        slid.track().expect("the track stage").position,
+        Some(frame.center),
+        "a slide carries the coordinate with the centre"
+    );
+    assert_ne!(frame.center, before.center, "a slide moves the bearing");
+
+    // An edge drag.
+    let out = corner_pixel(&before, &camera, &pose, 0.0, 1.8);
+    let (resized, _) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusV, out).expect("a pixel the ray reaches");
+    let frame = frame_of(&resized);
+    unit(&frame, "an edge drag");
+    assert_eq!(
+        resized.track().expect("the track stage").position,
+        Some(frame.center)
+    );
+
+    // A centred resize and a turn, neither of which moves the centre.
+    let (sized, _) = resize_frame(&track, before.half_extent[0] * 1.5).expect("a positive half");
+    let frame = frame_of(&sized);
+    unit(&frame, "a centred resize");
+    assert_eq!(frame.center, before.center);
+
+    let (turned, _) = rotate_frame(&track, 0.3).expect("a finite angle");
+    let frame = frame_of(&turned);
+    unit(&frame, "a turn");
+    assert_eq!(frame.center, before.center);
+    assert!(
+        (frame.normal() + before.center.coords).norm() < 1e-9,
+        "a bearing's outward normal is minus its direction, it turned to {}",
+        frame.normal()
+    );
 }

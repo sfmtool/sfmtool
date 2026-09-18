@@ -138,9 +138,19 @@ so the two cannot drift.
 **The header**: the active track's label, its stage as a word, its origin as a
 point index or `new`, and `N in · M candidates · K out`. Below it, the stage's
 own headline: at the cluster stage the reference observation and whether a
-template has been cut, and at the track stage the position and the last
+template has been cut, and at the track stage the coordinate and the last
 triangulation's condition number, or the sentence saying nothing has
 triangulated it yet.
+
+**The word in front of the coordinate says which coordinate it is.** A track at
+infinity carries a unit direction where a finite one carries a place
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
+points and bearings"), and the same three numbers under the wrong rule read as a
+point a metre from the world origin. So the line is `Bearing (x, y, z), at
+infinity` for `w = 0` and `Position (x, y, z)` otherwise -- *at infinity* being
+the word the Point Track Detail panel's own header uses for that row. A fit that
+crosses the boundary therefore changes the header's first word, which is how a
+person sees that it crossed.
 
 **The toolbar**, in two rows. The first acts on the active track: *Evaluate*,
 *Fit*, the *Stage* toggle (which names the stage it would move to), *Apply
@@ -222,7 +232,7 @@ says which column each number is in.
 | Proj. off | absent | how far the observation's keypoint sits from the point's projection, px |
 | σ_pos | the observation's own tile localizability | the same |
 | Error, Angle | absent | the reprojection error and the ray angle |
-| Status | the kernel's `member_status` | `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
+| Status | the kernel's `member_status` | `walked 19 px, kept at seed` where the last fit refused to move it, `localized` where the reading scored it, the reason's own sentence where it could not, `not evaluated` where nothing has been read |
 | From | the provenance | the provenance |
 
 A cell with nothing measured behind it reads `-`, which is what says the
@@ -244,6 +254,15 @@ prints that sentence -- `it sits off the photograph`, `its ray grazes the patch`
 to correlate against` -- elided to its column, in place of a bare "not
 localized" that says only that something happened. `not evaluated` is for the
 row nothing has read at all.
+
+**And it names the walk a fit refused.** A sighting the fit's kernels wanted to
+carry further than the `max shift px` bar from its seed kept the seed
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "The
+fit's walk is bounded by the person's bar"), and that is the one thing about the
+row a person reading `localized` would get wrong -- the row *is* scored, and it
+is scored where it already sat. So the walk comes first among the answers a
+scored row can give: `walked 19 px, kept at seed`, the number being how far the
+peak sat. Only a fit sets it, so a row that says it is a row the last fit held.
 
 **The tile is the column the numbers are about.** A ZNCC is a number; the
 picture that produced it is the thing a person can judge, which is the whole
@@ -435,6 +454,14 @@ when another item becomes active; a row seeded a long way from the point's
 projection saying so in its Status cell, in the reading's own sentence, while
 the rows that could be read still were; and a row click reporting both the image
 it selects and the observation's pixel to reveal in it.
+
+Two assertions are on the two lines the finite/infinity boundary changes: the
+header naming a `w = 0` track's coordinate `Bearing (...)` with *at infinity*
+beside it and never `Position (`, and a finite one the other way round -- read
+off the strings the headless frame actually painted, since the header elides
+nothing and a second formatting of the same idea could disagree with it; and the
+Status cell of a row carrying `walked_px` reading `walked 19 px, kept at seed`
+where the same row without the flag reads `localized`.
 
 [descriptor_index/tests.rs](../../crates/sfm-explorer/src/descriptor_index/tests.rs),
 headless over a temporary workspace with a real `.sift` file per image: the

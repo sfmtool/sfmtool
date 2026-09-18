@@ -815,3 +815,120 @@ fn duplicate_puts_a_second_item_on_the_bench_and_makes_it_active() {
     );
     assert_eq!(panel.rows().len(), 3, "the copy carries every sighting");
 }
+
+/// A track-stage track standing on a bearing: the payload a `w = 0` point
+/// arrives on the bench as.
+fn bearing_track() -> sfmtool_core::bench::EditableTrack {
+    use sfmtool_core::bench::{EditableTrack, Stage, TrackPayload};
+    use sfmtool_core::patch::cloud::OrientedPatch;
+
+    let direction = nalgebra::Point3::new(0.0, 0.0, 1.0);
+    let mut track = EditableTrack::empty_cluster();
+    track.stage = Stage::Track(TrackPayload {
+        position: Some(direction),
+        frame: Some(OrientedPatch::from_infinity_direction(
+            direction,
+            nalgebra::Vector3::y(),
+            [0.03, 0.03],
+        )),
+        condition_number: Some(68_848.0),
+        ..TrackPayload::default()
+    });
+    track
+}
+
+/// The same track standing on a place.
+fn position_track() -> sfmtool_core::bench::EditableTrack {
+    use sfmtool_core::bench::{Stage, TrackPayload};
+    use sfmtool_core::patch::cloud::OrientedPatch;
+
+    let center = nalgebra::Point3::new(1.0, 2.0, 3.0);
+    let mut track = bearing_track();
+    track.stage = Stage::Track(TrackPayload {
+        position: Some(center),
+        frame: Some(OrientedPatch::from_center_normal(
+            center,
+            nalgebra::Vector3::z(),
+            nalgebra::Vector3::y(),
+            [0.1, 0.1],
+        )),
+        ..TrackPayload::default()
+    });
+    track
+}
+
+/// Everything the header painted for `track`, joined.
+fn header_text(track: &sfmtool_core::bench::EditableTrack) -> String {
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), VIEWPORT)),
+        ..Default::default()
+    };
+    crate::test_support::painted_texts(&ctx, input, |ui| {
+        super::show_header(ui, "item", track);
+    })
+    .join(" | ")
+}
+
+/// A bearing and a position are the same three numbers under different rules,
+/// so the word in front of them is what tells a reader which they are looking
+/// at. Printing a bearing as a position reads as a point one unit from the
+/// world origin, which is the one thing it is not.
+#[test]
+fn the_header_names_a_bearing_a_bearing_and_a_position_a_position() {
+    let bearing = header_text(&bearing_track());
+    assert!(
+        bearing.contains("Bearing (0.000, 0.000, 1.000)"),
+        "the header should name the direction a bearing: {bearing}"
+    );
+    assert!(
+        bearing.contains("at infinity"),
+        "and say so in the panel's own words: {bearing}"
+    );
+    assert!(
+        !bearing.contains("Position ("),
+        "a bearing is not a position: {bearing}"
+    );
+
+    let position = header_text(&position_track());
+    assert!(
+        position.contains("Position (1.000, 2.000, 3.000)"),
+        "{position}"
+    );
+    assert!(
+        !position.contains("at infinity") && !position.contains("Bearing ("),
+        "{position}"
+    );
+}
+
+/// A sighting the fit refused to walk did **not** move where the correlation
+/// wanted it, which is the one thing about the row a person reading "localized"
+/// would get wrong. So the Status cell says it, and says how far.
+#[test]
+fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
+    use sfmtool_core::bench::{Observation, Provenance, TrackMeasurement};
+
+    let walked = Observation {
+        image: 0,
+        provenance: Provenance::Origin,
+        verdict: Verdict::In,
+        pinned: false,
+        cluster: None,
+        track: Some(TrackMeasurement {
+            keypoint: Some([10.0, 12.0]),
+            zncc: Some(0.41),
+            walked_px: Some(19.4),
+            ..TrackMeasurement::default()
+        }),
+    };
+    let cells = super::measurements(&walked, StageKind::Track);
+    assert_eq!(cells[6], "walked 19 px, kept at seed");
+
+    // The same row without the flag is the ordinary scored row.
+    let mut moved = walked.clone();
+    moved.track.as_mut().expect("a track slot").walked_px = None;
+    assert_eq!(
+        super::measurements(&moved, StageKind::Track)[6],
+        "localized"
+    );
+}

@@ -21,6 +21,7 @@ use crate::progress::Progress;
 use crate::reconstruction::data::{patch_affine_shape, Point3D};
 use crate::reconstruction::edited::EditedReconstruction;
 
+use super::classify::classify_track_rays;
 use super::fit::{fit_track, triangulate_in_seeds, FitError, FitOptions, FitReport};
 use super::track::{
     ClusterMeasurement, ClusterPayload, EditableTrack, Stage, StageKind, TrackPayload, Verdict,
@@ -313,15 +314,28 @@ fn upgrade(
         }
     }
 
-    // 1. Where the refined cluster positions put the point.
+    // 1. What the refined cluster positions resolve to: a point, or a bearing.
+    //    The same classification a fit ends at, so a cluster that only ever
+    //    stated a direction becomes a `w = 0` track rather than a point at a
+    //    depth its rays never carried.
     let seeded = EditableTrack {
         stage: Stage::Track(TrackPayload::default()),
         ..track.clone()
     };
-    let triangulation = triangulate_in_seeds(&seeded, images)?;
+    let (_, rays) = triangulate_in_seeds(&seeded, images)?;
+    let classification = classify_track_rays(
+        &rays,
+        images,
+        options.noise_floor_px,
+        options.inverse_depth_z_cutoff,
+    );
 
     // 2. The surfel: the reference observation's own shape, unprojected onto
     //    the plane at the depth it stands, turned to face the views that see it.
+    //    For a bearing there is no depth, so the shape is unprojected at unit
+    //    distance -- where a fronto-parallel half-axis *is* the tangent of the
+    //    angle it subtends, which is what an infinity patch's half-extent is --
+    //    and the frame becomes the tangent one the format states for `w = 0`.
     let reference = upgrade_reference(track, &payload, &ins).ok_or(StageError::NoReference)?;
     let observation = &track.observations[reference];
     let measurement = observation
@@ -329,7 +343,11 @@ fn upgrade(
         .as_ref()
         .expect("the reference was picked among the observations that carry a seed");
     let view = &images[observation.image as usize];
-    let depth = (triangulation.point - view.cam_from_world.inverse_translation_origin()).norm();
+    let depth = if classification.at_infinity {
+        1.0
+    } else {
+        (classification.coordinate - view.cam_from_world.inverse_translation_origin()).norm()
+    };
     // A cluster shape maps keypoint-frame units to pixels and the patch is
     // `[-radius, radius]` of them, while the framing rule reads a shape whose
     // columns are the patch's own pixel half-axes. The radius is what carries
@@ -346,21 +364,29 @@ fn upgrade(
         depth,
     )
     .ok_or(StageError::NoReference)?;
-    let centers: Vec<Point3<f64>> = ins
-        .iter()
-        .map(|&i| {
-            images[track.observations[i].image as usize]
-                .cam_from_world
-                .inverse_translation_origin()
-        })
-        .collect();
-    let normal = mean_viewing_normal(&triangulation.point, &centers);
-    let frame = OrientedPatch::from_center_normal(
-        triangulation.point,
-        normal,
-        framed.v_axis,
-        framed.half_extent,
-    );
+    let frame = if classification.at_infinity {
+        OrientedPatch::from_infinity_direction(
+            classification.coordinate,
+            framed.v_axis,
+            framed.half_extent,
+        )
+    } else {
+        let centers: Vec<Point3<f64>> = ins
+            .iter()
+            .map(|&i| {
+                images[track.observations[i].image as usize]
+                    .cam_from_world
+                    .inverse_translation_origin()
+            })
+            .collect();
+        let normal = mean_viewing_normal(&classification.coordinate, &centers);
+        OrientedPatch::from_center_normal(
+            classification.coordinate,
+            normal,
+            framed.v_axis,
+            framed.half_extent,
+        )
+    };
 
     // 3-4. Localize, refine, re-triangulate, fuse and read back: the track
     //      stage's own fit, over seeds that are the cluster's refined positions.

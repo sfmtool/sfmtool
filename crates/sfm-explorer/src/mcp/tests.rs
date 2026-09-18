@@ -5820,10 +5820,16 @@ fn get_action_log_reports_what_a_drawn_action_cost() {
 /// a field with nothing in it hands the correlation kernels no tile to register,
 /// and the refusal would be the fixture's rather than the code's.
 fn benchable() -> (AppState, Viewer3D) {
+    benchable_with(crate::state::edits::tests::projected_embedded_demo(12))
+}
+
+/// [`benchable`] over a reconstruction the caller built, so a test of the
+/// finite/infinity boundary can hand it one holding a bearing.
+fn benchable_with(recon: sfmtool_core::SfmrReconstruction) -> (AppState, Viewer3D) {
     let mut state = AppState::new();
     state.append_node(SceneNode::from_path(
         std::path::Path::new("/runs/run_a.sfmr"),
-        crate::state::edits::tests::projected_embedded_demo(12),
+        recon,
     ));
     let id = state.scene[0].id;
     state.select_recon(id);
@@ -8400,4 +8406,96 @@ fn a_search_with_no_index_is_refused_and_get_bench_names_the_default_path() {
     .expect("a valid call");
     let error = refused(&mut state, &mut viewer, command);
     assert!(error.to_string().contains("No .sift file"), "{error}");
+}
+
+/// [`crate::state::edits::tests::projected_embedded_demo`] with [`BENCH_POINT`]
+/// stored as a bearing: `w = 0`, a unit direction and a zero normal, which is
+/// the row the format states for a point at infinity.
+fn bearing_demo() -> sfmtool_core::SfmrReconstruction {
+    let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
+    let point = &mut recon.point_set.points[BENCH_POINT as usize];
+    point.position = nalgebra::Point3::from(point.position.coords.normalize());
+    point.w = 0.0;
+    point.normal = nalgebra::Vector3::zeros();
+    recon.rebuild_derived_fields();
+    recon
+}
+
+/// A bearing and a position are the same three numbers under different rules,
+/// so the wire publishes the coordinate under the name of whichever it is, with
+/// the flag beside it. An agent that read `position` off a `w = 0` track would
+/// be holding a place one unit from the world origin.
+#[test]
+fn get_bench_track_publishes_a_bearing_as_a_direction() {
+    let (mut state, mut viewer) = benchable_with(bearing_demo());
+    on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let stage = &track["stage_data"];
+    assert_eq!(stage["at_infinity"], json!(true), "{track}");
+    let direction = stage["direction"].as_array().expect("a bearing");
+    assert_eq!(direction.len(), 3, "{track}");
+    let norm: f64 = direction
+        .iter()
+        .map(|c| c.as_f64().expect("a number"))
+        .map(|c| c * c)
+        .sum::<f64>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-9, "a unit direction: {track}");
+    assert!(stage["position"].is_null(), "{track}");
+
+    // And the finite point of the same fixture comes back the other way round.
+    let (mut state, mut viewer) = benchable();
+    on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let stage = &track["stage_data"];
+    assert_eq!(stage["at_infinity"], json!(false), "{track}");
+    assert!(stage["position"].is_array(), "{track}");
+    assert!(stage["direction"].is_null(), "{track}");
+}
+
+/// A fit says which representation the rays earned and why, so an agent driving
+/// the bench reads the decision rather than inferring it from a coordinate.
+///
+/// The demo's cameras sit on an arc forty-five degrees apart, so the three
+/// sightings of a track on it resolve a depth easily: the stored bearing is
+/// promoted, which is the answer, and the wire carries it.
+#[test]
+fn a_fit_of_a_bearing_reports_the_classification_and_can_promote_it() {
+    let (mut state, mut viewer) = benchable_with(bearing_demo());
+    let item = on_the_bench(&mut state, &mut viewer);
+    let fitted = worked(
+        &mut state,
+        &mut viewer,
+        "fit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    let report = fitted["report"].as_str().expect("a report");
+    assert!(
+        report.contains("finite at (") && report.contains("rays up to"),
+        "the report should name the call and the evidence: {report}"
+    );
+
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let stage = &track["stage_data"];
+    assert_eq!(
+        stage["at_infinity"],
+        json!(false),
+        "the promotion is on the wire: {track}"
+    );
+    assert!(stage["position"].is_array(), "{track}");
 }

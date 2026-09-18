@@ -16,9 +16,7 @@ mod convert;
 mod discover;
 
 pub use convert::{
-    Classification, RayClassification, CONDITION_NUMBER_PREFILTER, DEFAULT_INVERSE_DEPTH_Z_CUTOFF,
-    DEFAULT_NOISE_FLOOR_PX,
+    camera_extents, classify_rays_at_infinity, Classification, RayClassification,
+    CONDITION_NUMBER_PREFILTER, DEFAULT_INVERSE_DEPTH_Z_CUTOFF, DEFAULT_NOISE_FLOOR_PX,
 };
 pub use discover::{find_infinity_tracks, InfinityParams, InfinityTrack};
-
-pub(crate) use convert::{camera_extents, classify_rays_at_infinity};

@@ -2086,6 +2086,20 @@ take `search_px`, how far from each observation's own pixel the correlation peak
 is looked for. A fit of a track-stage track with fewer than two `in`
 observations is refused where a reading of the same track is not.
 
+**A fit's sentence names the representation the rays earned.** Finite or at
+infinity is the decision a fit makes over a distant track
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
+points and bearings"), so the reply carries it in the criterion's own terms --
+`at infinity along (0.553, -0.809, -0.198): inverse-depth z 2.41 under the 4.00
+bar, rays up to 0.052 deg apart` -- along with how many sightings the walk bound
+left at their seeds. `get_bench_track`'s `stage_data` then says which the track
+is: `at_infinity`, with the coordinate under `direction` for a bearing and
+`position` for a place, the other `null`. Under one name an agent could read a
+unit direction as a point one unit from the world origin, which is the one thing
+a bearing is not; each observation's `track` block likewise carries `walked_px`
+exactly when the last fit refused to move that sighting, the number being how far
+the peak sat.
+
 **Four of the twenty-two are the patch a track is**, and they are the wire's
 half of the handles the Image Detail panel's bench layer offers
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
@@ -3012,7 +3026,12 @@ where a test hands no host over.
   rules out refuses inline in the step's own sentence, starting no task and
   pushing no version; and the point a commit replaced is reachable by the very
   index `get_scene` reports as the selection, which is above that node's point
-  count, and by the index and id the commit's own reply names it with.
+  count, and by the index and id the commit's own reply names it with. A `w = 0`
+  point put on the bench comes back with `stage_data.at_infinity` true, its
+  coordinate under `direction` as a unit vector and `position` null, where a
+  finite one comes back the other way round; and a fit of that track reports the
+  classification in its sentence and, on the demo's forty-five-degree camera arc,
+  promotes it, which `stage_data` then says.
 - **`content_hash` is the hash the version's point ids carry**: an edit that
   creates a point moves it, the created point's id is built from the eight
   digits it reports, and an undo takes it back to where it was.

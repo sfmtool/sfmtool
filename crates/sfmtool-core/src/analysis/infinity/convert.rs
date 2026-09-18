@@ -213,7 +213,7 @@ pub struct RayClassification {
 
 /// Spatial extent (bounding-box diagonal) of a set of camera centers — the
 /// scale of the region a capture explored, and the default `finite_horizon`.
-pub(crate) fn camera_extents(centers: &[Point3<f64>]) -> f64 {
+pub fn camera_extents(centers: &[Point3<f64>]) -> f64 {
     let Some(first) = centers.first() else {
         return 0.0;
     };
@@ -242,7 +242,7 @@ pub(crate) fn camera_extents(centers: &[Point3<f64>]) -> f64 {
 ///   z-score below `z_cutoff` is **at infinity** (a `w = 0` bearing direction —
 ///   the mean of the rays, or the first ray if they cancel exactly); else
 ///   **finite**.
-pub(crate) fn classify_rays_at_infinity(
+pub fn classify_rays_at_infinity(
     dirs: &[Vector3<f64>],
     centers: &[Point3<f64>],
     sigma_rad: &[f64],

@@ -37,6 +37,10 @@ use crate::reconstruction::add_observation::placement_scale;
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 
+use super::classify::{
+    classify_track_rays, TrackClassification, TrackRays, DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
+    DEFAULT_CLASSIFY_Z_CUTOFF,
+};
 use super::evaluate::{
     check_observation_views, check_views, evaluate, evaluate_cluster, evaluated, finite,
     open_localizer, plan_rounds, seed_of, shown_bytes, EvaluateError, EvaluateOptions,
@@ -63,6 +67,17 @@ pub struct FitOptions {
     /// comes from. A caller that reads with its own search radius fits with the
     /// same one, so the two buttons speak in one set of terms.
     pub evaluate: EvaluateOptions,
+    /// The measurement noise the finite-versus-bearing classification assumes at
+    /// each sighting, in source-image px.
+    ///
+    /// Here rather than on [`Thresholds`](super::track::Thresholds) because it
+    /// is not a bar a verdict is painted from: it is what the lens and the
+    /// keypoint detector are worth, and moving it changes which representation
+    /// the geometry earns rather than which sightings are kept.
+    pub noise_floor_px: f64,
+    /// The inverse-depth z-score a track's depth has to reach to be written as a
+    /// finite point rather than a bearing.
+    pub inverse_depth_z_cutoff: f64,
 }
 
 impl Default for FitOptions {
@@ -71,6 +86,8 @@ impl Default for FitOptions {
             localize: open_localizer(),
             refine: KeypointSubpixelParams::default(),
             evaluate: EvaluateOptions::default(),
+            noise_floor_px: DEFAULT_CLASSIFY_NOISE_FLOOR_PX,
+            inverse_depth_z_cutoff: DEFAULT_CLASSIFY_Z_CUTOFF,
         }
     }
 }
@@ -97,8 +114,11 @@ pub enum FitError {
     /// The track carries no patch frame, so there is no surfel the localizer
     /// can register a view against.
     NoFrame,
-    /// The `in` observations do not triangulate: the depth is not observable,
-    /// or the solve puts the point behind a camera that sees it.
+    /// The `in` observations do not triangulate: the linear solve came back with
+    /// a coordinate that is not a number.
+    ///
+    /// Rays too nearly parallel to fix a depth are **not** this. They are a
+    /// track at infinity, and the classification writes it as the bearing it is.
     Triangulation,
     /// One round's per-view tiles would take more memory than
     /// [`EvaluateOptions::max_cache_bytes`] allows, and were not attempted.
@@ -141,8 +161,8 @@ impl std::fmt::Display for FitError {
             ),
             FitError::Triangulation => write!(
                 f,
-                "the in observations do not triangulate: the depth is not observable, \
-                 or the point falls behind a camera that sees it"
+                "the in observations do not triangulate: the solve came back with a \
+                 coordinate that is not a number"
             ),
             FitError::TooLarge { bytes, budget } => write!(
                 f,
@@ -203,17 +223,35 @@ pub struct FitReport {
     /// the pixel it had, so it is still in the triangulation and still read;
     /// this count is how many the kernels themselves moved.
     pub placed: usize,
-    /// At the track stage, where the `in` observations triangulated.
+    /// How many `in` sightings the localizer moved further than
+    /// [`Thresholds::max_shift_px`](super::track::Thresholds::max_shift_px) and
+    /// were therefore left at their seeds.
+    pub kept_at_seed: usize,
+    /// At the track stage, the coordinate the `in` observations resolved to: a
+    /// world point, or a unit bearing when the classification put the track at
+    /// infinity. Read [`Self::classification`] to tell which.
     pub position: Option<Point3<f64>>,
     /// At the track stage, that triangulation's condition number.
     pub condition_number: Option<f64>,
+    /// At the track stage, which representation the rays earned and on which
+    /// test. `None` at the cluster stage, which triangulates nothing.
+    pub classification: Option<TrackClassification>,
 }
 
 impl std::fmt::Display for FitReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.evaluate.stage {
             StageKind::Cluster => write!(f, "{}", self.evaluate),
-            StageKind::Track => write!(f, "placed {}, {}", self.placed, self.evaluate),
+            StageKind::Track => {
+                write!(f, "placed {}", self.placed)?;
+                if self.kept_at_seed > 0 {
+                    write!(f, ", {} kept at seed", self.kept_at_seed)?;
+                }
+                if let Some(call) = &self.classification {
+                    write!(f, ", {call}")?;
+                }
+                write!(f, ", {}", self.evaluate)
+            }
         }
     }
 }
@@ -227,12 +265,29 @@ impl std::fmt::Display for FitReport {
 /// takes them.
 ///
 /// **At the track stage** the surfel is registered into every view of every
-/// round by the two kernels the embed pass and `add_observation` chain, the `in`
-/// results are re-triangulated, the frame is re-centred there and the consensus
-/// bitmap is fused over them. An observation the kernels did not place keeps the
-/// pixel it had, so the column still says where the sighting is and the
-/// re-triangulation still has its ray. The fitted track is then evaluated, which
-/// is where its measurement slots and the report's counts come from.
+/// round by the two kernels the embed pass and `add_observation` chain -- as the
+/// track carries it, bearing and all -- the `in` results are re-triangulated,
+/// the frame is placed at what they resolve to and the consensus bitmap is fused
+/// over them. An observation the kernels did not place keeps the pixel it had,
+/// so the column still says where the sighting is and the re-triangulation still
+/// has its ray. The fitted track is then evaluated, which is where its
+/// measurement slots and the report's counts come from.
+///
+/// **Which representation the track leaves with is the rays' to say.** The
+/// re-triangulation goes through [`classify_track_rays`], the reconstruction's
+/// own finite-versus-infinity criterion: a bearing whose sightings now carry a
+/// depth becomes a point at it, a point whose rays no longer fix one becomes a
+/// bearing, and either way the frame is carried across at the apparent size it
+/// had. [`FitReport::classification`] says which it chose and on which test.
+///
+/// **A sighting the kernels would walk further than
+/// [`Thresholds::max_shift_px`](super::track::Thresholds::max_shift_px) keeps
+/// its seed.** The kernels themselves stay gate-free, so nothing is dropped;
+/// what is bounded is where the fit may *put* a sighting, because a correlation
+/// that jumped onto a similar detail elsewhere would otherwise hand the
+/// re-triangulation a place the person never pointed at. Such a row says so in
+/// [`TrackMeasurement::walked_px`](super::track::TrackMeasurement::walked_px)
+/// and still casts its ray from the seed.
 ///
 /// **At the cluster stage** a fit is the refinement, which is also what a
 /// reading is: a cluster has no geometry behind it to move, so the one kernel
@@ -282,15 +337,21 @@ pub fn fit(
                 next,
                 FitReport {
                     placed: report.measured,
+                    kept_at_seed: 0,
                     position: None,
                     condition_number: None,
+                    classification: None,
                     evaluate: report,
                 },
             ))
         }
         Stage::Track(payload) => {
+            // The frame goes in as the track carries it, bearing and all: a
+            // `w = 0` surfel is tangent to the direction sphere and registering
+            // against it is what reads the photographs the track actually has.
+            // Which representation the track leaves with is the
+            // re-triangulation's to say, not the frame it arrived on.
             let frame = payload.frame.clone().ok_or(FitError::NoFrame)?;
-            let frame = finite_frame(track, &frame, images)?;
             fit_track(track, edited, images, &frame, options, progress)
         }
     }
@@ -334,34 +395,69 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     Ok(())
 }
 
-/// The surfel a track-stage fit registers against, made finite.
+/// The surfel `classification` says the track now stands on, built from the one
+/// it was fitted against.
 ///
-/// A track whose point is at infinity has a frame tangent to the direction
-/// sphere, and registering against one would pull every sighting back onto the
-/// bearing's projection and undo the depth the other sightings carry. So the
-/// seeds are triangulated first and the frame is promoted to the depth that
-/// gives -- the same two-pass shape
-/// [`add_observation`](mod@crate::reconstruction::add_observation) takes, and the
-/// same rescale, measured from the camera-cloud centroid.
-fn finite_frame(
-    track: &EditableTrack,
+/// Four cases, and all four keep the patch the apparent size it had:
+///
+/// - **Bearing to bearing.** The direction moves to the refined one and the
+///   tangent frame is re-pinned on it, at the half-extents it already had, which
+///   are angular.
+/// - **Bearing to point.** The angular half-extents become world ones at the
+///   placement distance, the same rescale
+///   [`add_observation`](mod@crate::reconstruction::add_observation) applies when
+///   a second sighting gives a bearing its depth, measured from the same
+///   reference: the camera-cloud centroid.
+/// - **Point to bearing.** The world half-extents become angular by dividing by
+///   the distance the frame stood at, which is the rescale
+///   `classify_points_at_infinity` applies to a demoted point, and the frame is
+///   re-expressed as the tangent one the format states for a `w = 0` row.
+/// - **Point to point.** The centre moves and nothing else does.
+fn placed_frame(
     frame: &OrientedPatch,
+    classification: &TrackClassification,
     images: &[ProjectedImage<'_>],
-) -> Result<OrientedPatch, FitError> {
-    if frame.w != 0.0 {
-        return Ok(frame.clone());
+) -> OrientedPatch {
+    let coordinate = classification.coordinate;
+    match (frame.w == 0.0, classification.at_infinity) {
+        (true, true) => {
+            OrientedPatch::from_infinity_direction(coordinate, frame.v_axis, frame.half_extent)
+        }
+        (true, false) => {
+            let scale = placement_scale(&coordinate, images);
+            let scale = if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            };
+            OrientedPatch::new(
+                coordinate,
+                frame.u_axis,
+                frame.v_axis,
+                [frame.half_extent[0] * scale, frame.half_extent[1] * scale],
+            )
+        }
+        (false, true) => {
+            let distance = placement_scale(&frame.center, images);
+            let inv = if distance.is_finite() && distance > 0.0 {
+                1.0 / distance
+            } else {
+                1.0
+            };
+            OrientedPatch::from_infinity_direction(
+                coordinate,
+                frame.v_axis,
+                [frame.half_extent[0] * inv, frame.half_extent[1] * inv],
+            )
+        }
+        (false, false) => OrientedPatch {
+            center: coordinate,
+            u_axis: frame.u_axis,
+            v_axis: frame.v_axis,
+            half_extent: frame.half_extent,
+            w: 1.0,
+        },
     }
-    let provisional = triangulate_in_seeds(track, images)?.point;
-    let scale = placement_scale(&provisional, images);
-    if !(scale.is_finite() && scale > 0.0) {
-        return Err(FitError::Triangulation);
-    }
-    Ok(OrientedPatch::new(
-        provisional,
-        frame.u_axis,
-        frame.v_axis,
-        [frame.half_extent[0] * scale, frame.half_extent[1] * scale],
-    ))
 }
 
 /// Register `frame` into every view, re-triangulate the `in` results, fuse the
@@ -412,11 +508,32 @@ pub(super) fn fit_track(
     }
 
     // ── The keypoints, and the re-triangulation they feed ──
+    //
+    // **The walk is bounded by the person's own bar.** The kernels run gate-free
+    // so that nothing is dropped, but a sighting the correlation carried further
+    // than `max_shift_px` from its seed has been walked onto some other piece of
+    // the photograph, and taking that pixel would feed the re-triangulation a
+    // place the person never pointed at. Such a row keeps its seed, says on its
+    // own row how far the peak sat, and still casts its ray -- from the seed.
+    let bound = track.thresholds.max_shift_px;
     let mut next = track.clone();
+    let mut kept_at_seed = 0usize;
     for i in evaluated(track) {
         let mut measurement = next.observations[i].track.clone().unwrap_or_default();
+        let seed = seed_of(&track.observations[i]);
+        measurement.walked_px = None;
         measurement.keypoint = match fits.get(&i) {
-            Some(fit) => Some([fit.keypoint[0] as f32, fit.keypoint[1] as f32]),
+            Some(fit) => {
+                let walked = seed.map(|s| (fit.keypoint[0] - s[0]).hypot(fit.keypoint[1] - s[1]));
+                match (walked, seed) {
+                    (Some(walked), Some(seed)) if walked.is_finite() && walked > bound => {
+                        measurement.walked_px = Some(walked);
+                        kept_at_seed += 1;
+                        Some([seed[0] as f32, seed[1] as f32])
+                    }
+                    _ => Some([fit.keypoint[0] as f32, fit.keypoint[1] as f32]),
+                }
+            }
             // The kernels did not place it: out of frame, or in no round at
             // all. Its keypoint is then wherever it already sat -- the one it
             // arrived with, or the cluster stage's refined position for a track
@@ -424,22 +541,27 @@ pub(super) fn fit_track(
             // sighting is and the re-triangulation still has its ray.
             None => measurement
                 .keypoint
-                .or_else(|| seed_of(&track.observations[i]).map(|p| [p[0] as f32, p[1] as f32])),
+                .or_else(|| seed.map(|p| [p[0] as f32, p[1] as f32])),
         };
         next.observations[i].track = Some(measurement);
     }
 
-    let triangulation = triangulate_keypoints(&next, images, &ins)?;
-    let position = triangulation.point;
+    // ── What the rays resolve to: a point, or a bearing ──
+    //
+    // The one classification every bench step that triangulates goes through, so
+    // a fit cannot write a depth the geometry does not carry -- nor refuse a
+    // track whose sightings have just given it one.
+    let (triangulation, rays) = triangulate_keypoints(&next, images, &ins)?;
+    let classification = classify_track_rays(
+        &rays,
+        images,
+        options.noise_floor_px,
+        options.inverse_depth_z_cutoff,
+    );
+    let position = classification.coordinate;
 
-    // ── The frame at the position the fit found, and the consensus it shows ──
-    let placed = OrientedPatch {
-        center: position,
-        u_axis: frame.u_axis,
-        v_axis: frame.v_axis,
-        half_extent: frame.half_extent,
-        w: 1.0,
-    };
+    // ── The frame at the coordinate the fit found, and the consensus it shows ──
+    let placed = placed_frame(frame, &classification, images);
     let (bitmap, color) = {
         let mut phase = progress.phase("fuse");
         let fused = fuse_bitmap(&next, edited, images, &placed, &ins, options);
@@ -466,8 +588,10 @@ pub(super) fn fit_track(
         FitReport {
             evaluate: report,
             placed: fits.len(),
+            kept_at_seed,
             position: Some(position),
             condition_number: finite(triangulation.condition_number),
+            classification: Some(classification),
         },
     ))
 }
@@ -553,16 +677,17 @@ fn fit_round(
     Ok(())
 }
 
-/// Triangulate the observations at `which` from the keypoints they carry.
+/// Triangulate the observations at `which` from the keypoints they carry, and
+/// give back the rays as well as the solve.
 ///
-/// Refused on the three signals every other caller refuses on: a non-finite
-/// position, an infinite condition number (the depth is not observable), or a
-/// solution behind one of the cameras that see it.
+/// The rays go back to the caller because the classification is a statement
+/// about *them* rather than about the point, and a near-parallel track's point
+/// is the one thing in the answer that does not mean anything.
 fn triangulate_keypoints(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
     which: &[usize],
-) -> Result<Triangulation, FitError> {
+) -> Result<(Triangulation, TrackRays), FitError> {
     let mut rays: Vec<([f64; 2], usize)> = Vec::with_capacity(which.len());
     for &i in which {
         let observation = &track.observations[i];
@@ -581,7 +706,7 @@ fn triangulate_keypoints(
 pub(super) fn triangulate_in_seeds(
     track: &EditableTrack,
     images: &[ProjectedImage<'_>],
-) -> Result<Triangulation, FitError> {
+) -> Result<(Triangulation, TrackRays), FitError> {
     let mut rays: Vec<([f64; 2], usize)> = Vec::new();
     for &i in &track.in_observations() {
         let observation = &track.observations[i];
@@ -595,34 +720,51 @@ pub(super) fn triangulate_in_seeds(
 }
 
 /// The batch triangulator over `(pixel, image)` pairs, with the crate's
-/// camera-to-world convention.
+/// camera-to-world convention, and the rays it solved over.
+///
+/// **The only refusal left here is a non-finite solve.** An infinite condition
+/// number and a point behind a camera used to be refusals too, and both are
+/// exactly what a track at infinity looks like: the classification reads them as
+/// the evidence for a bearing rather than as a broken solve, so refusing here
+/// would take the answer away from the step whose job it is to give one.
 fn triangulate_rays(
     rays: &[([f64; 2], usize)],
     images: &[ProjectedImage<'_>],
-) -> Result<Triangulation, FitError> {
+) -> Result<(Triangulation, TrackRays), FitError> {
     if rays.len() < 2 {
         return Err(FitError::TooFewObservations(rays.len()));
     }
     let mut dirs: Vec<Vector3<f64>> = Vec::with_capacity(rays.len());
     let mut centers: Vec<Point3<f64>> = Vec::with_capacity(rays.len());
+    let mut focal_max: Vec<f64> = Vec::with_capacity(rays.len());
     for &(pixel, image) in rays {
         let view = &images[image];
         let ray = view.camera.pixel_to_ray(pixel[0], pixel[1]);
         // Camera-to-world carries the canonical (-Z forward) ray into the world
         // frame the triangulator solves in.
         let rotation = view.cam_from_world.to_rotation_matrix();
-        dirs.push(rotation.transpose() * Vector3::new(ray[0], ray[1], ray[2]));
+        let world = rotation.transpose() * Vector3::new(ray[0], ray[1], ray[2]);
+        let norm = world.norm();
+        // Unit rays: the triangulator's normal matrix and the classification's
+        // pair angles are both stated over unit directions.
+        dirs.push(if norm > 0.0 { world / norm } else { world });
         centers.push(view.cam_from_world.inverse_translation_origin());
+        let (fx, fy) = view.camera.focal_lengths();
+        focal_max.push(fx.max(fy));
     }
     let offsets = [0usize, dirs.len()];
     let triangulation = triangulate_batch(&dirs, &centers, &offsets)[0];
-    if !triangulation.point.coords.iter().all(|c| c.is_finite())
-        || !triangulation.condition_number.is_finite()
-        || !triangulation.in_front_of_all_cameras
-    {
+    if !triangulation.point.coords.iter().all(|c| c.is_finite()) {
         return Err(FitError::Triangulation);
     }
-    Ok(triangulation)
+    Ok((
+        triangulation,
+        TrackRays {
+            dirs,
+            centers,
+            focal_max,
+        },
+    ))
 }
 
 /// Fuse the `in` observations into one consensus tile at their final keypoints,

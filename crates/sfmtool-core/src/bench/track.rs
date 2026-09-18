@@ -259,6 +259,23 @@ pub struct TrackMeasurement {
     pub ray_angle_deg: Option<f64>,
     /// The observation's own tile localizability, sigma_pos in grid px.
     pub localizability: Option<f64>,
+    /// How far the last fit's correlation peak sat from this sighting's seed,
+    /// when that was further than [`Thresholds::max_shift_px`] and the seed was
+    /// therefore kept, in source-image px.
+    ///
+    /// **Present is the whole statement**: this sighting did not move, and the
+    /// number says how far the kernel wanted to take it. The fit's kernels run
+    /// gate-free so that nothing is dropped, and this is the one bound on what
+    /// they may *write* -- a correlation that walked a sighting onto a similar
+    /// detail elsewhere in the photograph would otherwise feed the
+    /// re-triangulation a place the person never pointed at. The row still casts
+    /// its ray, from the seed, and the reading that follows scores it there like
+    /// any other.
+    ///
+    /// Only a fit sets and clears it; an evaluation leaves it alone, because the
+    /// statement is about what a fit did rather than about what the photographs
+    /// show.
+    pub walked_px: Option<f64>,
     /// Why there is no ZNCC, when there is none: an evaluation that could not
     /// read an observation says which of its refusals it was rather than
     /// leaving the row blank.

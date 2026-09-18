@@ -31,9 +31,10 @@ use sfmtool_core::bench::{
     set_observation_keypoint as core_set_observation_keypoint,
     set_observation_shape as core_set_observation_shape, set_stage as core_set_stage,
     set_verdict as core_set_verdict, split as core_split, translate_frame as core_translate_frame,
-    Bench, BenchItem, ClusterSeed, CreateTrackOptions, Edge, EditableTrack, EvaluateOptions,
-    EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation, ObservationSeed,
-    Provenance, ResizeReport, SearchOptions, SearchReport, StageKind, Verdict, DEFAULT_RADIUS_PX,
+    Bench, BenchItem, ClassificationReason, ClusterSeed, CreateTrackOptions, Edge, EditableTrack,
+    EvaluateOptions, EvaluateReport, FitOptions, FitReport, Found, ItemKind, Observation,
+    ObservationSeed, Provenance, ResizeReport, SearchOptions, SearchReport, StageKind,
+    TrackClassification, Verdict, DEFAULT_RADIUS_PX,
 };
 use sfmtool_core::features::kdforest::{ConstellationParams, ImageKeypoints};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
@@ -176,6 +177,9 @@ fn observation_to_dict<'py>(py: Python<'py>, o: &Observation) -> PyResult<Bound<
             ("reprojection_error", m.reprojection_error),
             ("ray_angle_deg", m.ray_angle_deg),
             ("localizability", m.localizability),
+            // Present exactly when the last fit refused the walk and left this
+            // sighting at its seed; the number is how far the peak sat.
+            ("walked_px", m.walked_px),
         ] {
             if let Some(value) = value {
                 t.set_item(key, value)?;
@@ -252,10 +256,40 @@ impl PyEditableTrack {
         }
     }
 
-    /// Where the track's point stands, or ``None`` at the cluster stage or
-    /// before anything has triangulated it.
+    /// Whether the track's surfel is a bearing (``w == 0``) rather than a point.
+    ///
+    /// ``False`` at the cluster stage and for a track with no frame, neither of
+    /// which states a direction.
+    #[getter]
+    fn at_infinity(&self) -> bool {
+        self.inner
+            .track()
+            .and_then(|p| p.frame.as_ref())
+            .is_some_and(|frame| frame.w == 0.0)
+    }
+
+    /// Where the track's point stands, or ``None`` at the cluster stage, before
+    /// anything has triangulated it, **or when the track is at infinity** --
+    /// which has no position, and whose coordinate is :attr:`direction`.
     #[getter]
     fn position<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        if self.at_infinity() {
+            return None;
+        }
+        let p = self.inner.track()?.position?;
+        Some(PyArray1::from_vec(py, vec![p.x, p.y, p.z]))
+    }
+
+    /// The unit bearing a track at infinity points along, or ``None`` when the
+    /// track is not at infinity.
+    ///
+    /// The coordinate a `w = 0` row of a `.sfmr` stores: the same three numbers
+    /// :attr:`position` would hold for a finite track, under the other rule.
+    #[getter]
+    fn direction<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
+        if !self.at_infinity() {
+            return None;
+        }
         let p = self.inner.track()?.position?;
         Some(PyArray1::from_vec(py, vec![p.x, p.y, p.z]))
     }
@@ -927,8 +961,14 @@ fn evaluate_report_dict<'py>(
     if let Some(reference) = report.reference {
         d.set_item("reference", reference)?;
     }
+    d.set_item("at_infinity", report.at_infinity)?;
     if let Some(p) = report.position {
-        d.set_item("position", PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
+        let key = if report.at_infinity {
+            "direction"
+        } else {
+            "position"
+        };
+        d.set_item(key, PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
     }
     if let Some(condition_number) = report.condition_number {
         d.set_item("condition_number", condition_number)?;
@@ -936,15 +976,56 @@ fn evaluate_report_dict<'py>(
     Ok(d)
 }
 
+/// The dict form of one classification: which representation the rays earned,
+/// and the numbers behind the call.
+fn classification_dict<'py>(
+    py: Python<'py>,
+    call: &TrackClassification,
+) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("at_infinity", call.at_infinity)?;
+    let c = call.coordinate;
+    let key = if call.at_infinity {
+        "direction"
+    } else {
+        "position"
+    };
+    d.set_item(key, PyArray1::from_vec(py, vec![c.x, c.y, c.z]))?;
+    d.set_item(
+        "reason",
+        match call.reason {
+            ClassificationReason::WellConditioned => "well_conditioned",
+            ClassificationReason::DepthResolved => "depth_resolved",
+            ClassificationReason::DepthUnresolved => "depth_unresolved",
+            ClassificationReason::BaselineTooShort => "baseline_too_short",
+        },
+    )?;
+    d.set_item("condition_number", call.condition_number)?;
+    d.set_item("inverse_depth_z", call.inverse_depth_z)?;
+    d.set_item("inverse_depth_z_cutoff", call.inverse_depth_z_cutoff)?;
+    d.set_item("resolvable_distance", call.resolvable_distance)?;
+    d.set_item("finite_horizon", call.finite_horizon)?;
+    d.set_item("max_pair_angle_deg", call.max_pair_angle_deg)?;
+    d.set_item("text", call.to_string())?;
+    Ok(d)
+}
+
 /// The dict form of one fit's report, the reading it ended with inside it.
 fn fit_report_dict<'py>(py: Python<'py>, report: &FitReport) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("placed", report.placed)?;
+    d.set_item("kept_at_seed", report.kept_at_seed)?;
+    let at_infinity = report.classification.is_some_and(|c| c.at_infinity);
+    d.set_item("at_infinity", at_infinity)?;
     if let Some(p) = report.position {
-        d.set_item("position", PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
+        let key = if at_infinity { "direction" } else { "position" };
+        d.set_item(key, PyArray1::from_vec(py, vec![p.x, p.y, p.z]))?;
     }
     if let Some(condition_number) = report.condition_number {
         d.set_item("condition_number", condition_number)?;
+    }
+    if let Some(call) = &report.classification {
+        d.set_item("classification", classification_dict(py, call)?)?;
     }
     d.set_item("evaluate", evaluate_report_dict(py, &report.evaluate)?)?;
     Ok(d)
@@ -977,11 +1058,20 @@ fn fit_options(
     search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
+    noise_floor_px: Option<f64>,
+    inverse_depth_z_cutoff: Option<f64>,
 ) -> FitOptions {
-    FitOptions {
+    let mut options = FitOptions {
         evaluate: evaluate_options(search_px, max_seed_offset_px, max_cache_bytes),
         ..FitOptions::default()
+    };
+    if let Some(noise_floor_px) = noise_floor_px {
+        options.noise_floor_px = noise_floor_px;
     }
+    if let Some(cutoff) = inverse_depth_z_cutoff {
+        options.inverse_depth_z_cutoff = cutoff;
+    }
+    options
 }
 
 /// The stage `word` names.
@@ -1081,21 +1171,32 @@ fn evaluate(
 /// Fit `track` at the stage it is in: the step that **moves** it.
 ///
 /// At the **track stage** the surfel is localized into every view, refined to
-/// sub-pixel, the ``in`` results are re-triangulated, the frame is re-centred
-/// there and the consensus bitmap is fused over them; the keypoints, the
-/// position, the frame and the bitmap are written. At the **cluster stage** a
-/// fit is the refinement, which is what a reading is too: a cluster has no
-/// geometry behind it to move.
+/// sub-pixel, the ``in`` results are re-triangulated, the frame is placed at
+/// what they resolve to and the consensus bitmap is fused over them; the
+/// keypoints, the coordinate, the frame and the bitmap are written. At the
+/// **cluster stage** a fit is the refinement, which is what a reading is too: a
+/// cluster has no geometry behind it to move.
+///
+/// **A track-stage fit decides finite versus at infinity afresh.** The rays are
+/// put through the reconstruction's own criterion, so a track whose sightings
+/// have just given it a depth becomes a point and one whose rays no longer fix
+/// one becomes a bearing. ``noise_floor_px`` is the per-sighting measurement
+/// noise that criterion assumes (1.0 px) and ``inverse_depth_z_cutoff`` the
+/// z-score a depth has to reach to be called finite (4.0); both default to the
+/// reconstruction pass's own values.
 ///
 /// A fit ends by evaluating its own result, so every number in the observations'
 /// slots and in the report is that reading's and :func:`evaluate` called after
 /// it agrees to the last digit.
 ///
 /// Returns ``(EditableTrack, report)``. The report carries ``placed`` (how many
-/// observations the kernels moved), ``position`` and ``condition_number`` at
-/// the track stage, and ``evaluate``: the reading's own report. Raises
-/// ``ValueError`` with the reason when the fit is refused -- a track stage with
-/// fewer than two ``in`` observations among them, which a reading permits.
+/// observations the kernels moved), ``kept_at_seed`` (how many the kernels
+/// wanted to walk further than ``max_shift_px`` and were left where they were),
+/// ``at_infinity`` with ``position`` or ``direction``, ``condition_number`` and
+/// ``classification`` at the track stage, and ``evaluate``: the reading's own
+/// report. Raises ``ValueError`` with the reason when the fit is refused -- a
+/// track stage with fewer than two ``in`` observations among them, which a
+/// reading permits.
 #[pyfunction]
 #[pyo3(signature = (
     track,
@@ -1105,7 +1206,10 @@ fn evaluate(
     search_px = None,
     max_seed_offset_px = None,
     max_cache_bytes = None,
+    noise_floor_px = None,
+    inverse_depth_z_cutoff = None,
 ))]
+#[allow(clippy::too_many_arguments)]
 fn fit(
     py: Python<'_>,
     track: &PyEditableTrack,
@@ -1114,6 +1218,8 @@ fn fit(
     search_px: Option<f64>,
     max_seed_offset_px: Option<f64>,
     max_cache_bytes: Option<usize>,
+    noise_floor_px: Option<f64>,
+    inverse_depth_z_cutoff: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
     let pyramids = resolve_pyramids(&posed, images)?;
@@ -1122,7 +1228,13 @@ fn fit(
         &track.inner,
         &edited.inner,
         &views,
-        &fit_options(search_px, max_seed_offset_px, max_cache_bytes),
+        &fit_options(
+            search_px,
+            max_seed_offset_px,
+            max_cache_bytes,
+            noise_floor_px,
+            inverse_depth_z_cutoff,
+        ),
         &Progress::none(),
     )
     .map_err(refused)?;
@@ -1152,16 +1264,33 @@ fn fit(
 /// Setting the stage a track is already at gives the track back unchanged, with
 /// ``changed`` false, and the caller pushes no version for it.
 ///
+/// The upgrade puts the triangulated rays through the same finite-versus-
+/// infinity criterion a fit does, so a cluster whose sightings only ever stated
+/// a direction becomes a ``w = 0`` track rather than a point at a depth they
+/// never carried. ``noise_floor_px`` and ``inverse_depth_z_cutoff`` are that
+/// criterion's, exactly as on :func:`fit`.
+///
 /// Returns ``(EditableTrack, report)``, whose report carries ``from``, ``to``,
-/// ``changed``, the upgrade's ``fit`` report and the downgrade's
-/// ``reference``.
+/// ``changed``, the upgrade's ``fit`` report (``classification`` inside it) and
+/// the downgrade's ``reference``.
 #[pyfunction]
+#[pyo3(signature = (
+    track,
+    edited,
+    images,
+    stage,
+    *,
+    noise_floor_px = None,
+    inverse_depth_z_cutoff = None,
+))]
 fn set_stage(
     py: Python<'_>,
     track: &PyEditableTrack,
     edited: &PyEditedReconstruction,
     images: &Bound<'_, PyAny>,
     stage: &str,
+    noise_floor_px: Option<f64>,
+    inverse_depth_z_cutoff: Option<f64>,
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let stage = parse_stage(stage)?;
     let posed = PosedViews::from_reconstruction(&edited.inner.base);
@@ -1172,7 +1301,7 @@ fn set_stage(
         &edited.inner,
         &views,
         stage,
-        &FitOptions::default(),
+        &fit_options(None, None, None, noise_floor_px, inverse_depth_z_cutoff),
         &Progress::none(),
     )
     .map_err(refused)?;

@@ -1053,3 +1053,100 @@ class TestDuplicating:
 def test_the_module_reports_its_public_location():
     assert bench_module.__name__ == "sfmtool.bench"
     assert Bench.__module__ == "sfmtool.bench"
+
+
+class TestFinitePointsAndBearings:
+    """The one classification, and the ``w = 0`` track it can write.
+
+    A bearing and a position are the same three numbers under different rules,
+    so the binding publishes the coordinate under the name of whichever it is
+    and says which in a flag. What decides it is the reconstruction's own
+    criterion, whose two knobs a caller can move.
+    """
+
+    @pytest.fixture
+    def bearing_edited(self, embedded, long_track_point):
+        """`embedded` with the long track's point stored as a bearing.
+
+        The homogeneous column is what says which a point is, so writing a
+        ``w = 0`` row is writing that column: the direction is the point's own,
+        which ``clone_with_changes`` normalises onto the unit sphere.
+        """
+        xyzw = np.asarray(embedded.positions_xyzw).copy()
+        xyz = xyzw[long_track_point, :3] / xyzw[long_track_point, 3]
+        xyzw[long_track_point] = [*xyz, 0.0]
+        return EditedReconstruction(embedded.clone_with_changes(positions=xyzw))
+
+    def test_a_bearing_goes_onto_the_bench_as_a_direction(
+        self, bearing_edited, long_track_point
+    ):
+        _, track = create_track(Bench(), bearing_edited, long_track_point)
+        assert track.at_infinity
+        assert track.position is None, "a bearing has no position"
+        direction = np.asarray(track.direction)
+        assert direction.shape == (3,)
+        np.testing.assert_allclose(np.linalg.norm(direction), 1.0, atol=1e-9)
+        assert track.frame["w"] == 0.0
+        np.testing.assert_allclose(track.frame["center"], direction)
+
+    def test_a_bearing_commits_back_as_a_bearing(
+        self, bearing_edited, long_track_point
+    ):
+        _, track = create_track(Bench(), bearing_edited, long_track_point)
+        after, report = commit(bearing_edited, track)
+        written = after.point(report["point"])
+        assert written["w"] == 0.0, "a bearing commits as a bearing"
+        np.testing.assert_allclose(
+            written["position"], np.asarray(track.direction), atol=1e-9
+        )
+        # A `w = 0` row carries a zero normal, which is what the format states.
+        np.testing.assert_allclose(written["normal"], [0.0, 0.0, 0.0])
+
+    def test_a_fit_reports_which_representation_the_rays_earned(
+        self, edited, images, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        fitted, report = fit(track, edited, images)
+
+        assert report["at_infinity"] is False
+        assert len(report["position"]) == 3
+        assert "direction" not in report
+        assert report["kept_at_seed"] >= 0
+        call = report["classification"]
+        assert call["at_infinity"] is False
+        assert call["reason"] in ("well_conditioned", "depth_resolved")
+        assert call["max_pair_angle_deg"] > 0.0
+        assert call["condition_number"] > 0.0
+        assert call["finite_horizon"] > 0.0
+        assert "finite at (" in call["text"]
+        assert not fitted.at_infinity
+        np.testing.assert_allclose(fitted.position, report["position"])
+
+    def test_the_classification_knobs_are_keyword_arguments(
+        self, edited, images, long_track_point
+    ):
+        """The criterion's two knobs, defaulting to the reconstruction's own.
+
+        ``inverse_depth_z_cutoff`` is the z-score a depth has to reach and
+        ``noise_floor_px`` the measurement noise it is scored against; the
+        report echoes the bar it judged by. Neither moves a well-conditioned
+        track: the criterion settles that one on the condition number alone,
+        before the noise model is consulted, which is what ``well_conditioned``
+        in the reason says.
+        """
+        _, track = create_track(Bench(), edited, long_track_point)
+        _, default = fit(track, edited, images)
+        assert default["classification"]["inverse_depth_z_cutoff"] == pytest.approx(4.0)
+
+        _, moved = fit(
+            track,
+            edited,
+            images,
+            inverse_depth_z_cutoff=25.0,
+            noise_floor_px=3.0,
+        )
+        call = moved["classification"]
+        assert call["inverse_depth_z_cutoff"] == pytest.approx(25.0)
+        assert call["reason"] == "well_conditioned"
+        assert call["at_infinity"] is False
+        np.testing.assert_allclose(moved["position"], default["position"], atol=1e-9)

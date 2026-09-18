@@ -302,7 +302,7 @@ exception in one respect only: its row is of kind `Edit`, because it is one
 | Turn one sighting's shape | `Rotated observation 3 of IMG_0042@142,198 by 12.3 degrees` |
 | Apply the thresholds | `Applied the thresholds to IMG_0042@142,198: 3 in, 1 out, 1 pinned, 0 unmeasured` |
 | Evaluate | `Evaluated IMG_0042@142,198: measured 4 of 5 observations at (x, y, z)` |
-| Fit | `Fitted IMG_0042@142,198: placed 4, measured 4 of 5 observations at (x, y, z)` |
+| Fit | `Fitted IMG_0042@142,198: placed 4, finite at (x, y, z): condition number 82 under the 10000 bar, rays up to 15.204 deg apart, measured 4 of 5 observations at (x, y, z)` |
 | Set the stage | `Set IMG_0042@142,198 to the track stage` |
 | Split | `Split 2 observations off pt3d_a1b2c3d4_1207 as pt3d_a1b2c3d4_1207-split` |
 | Activate | `Made IMG_0042@142,198 the active track` |
@@ -325,6 +325,15 @@ half-length says nothing to someone looking at a photograph, so the resize's
 sentence states the patch's half-width in that observation's own image -- the
 surfel re-anchored on it, projected -- and falls back to the world number only
 when the patch does not project there.
+
+**A fit's sentence says which representation the rays earned, and why.** The
+finite-versus-bearing decision is the step's real outcome on a distant track
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
+points and bearings"), so the row carries it in the criterion's own terms --
+`at infinity along (0.553, -0.809, -0.198): inverse-depth z 2.41 under the 4.00
+bar, rays up to 0.052 deg apart` -- and counts the sightings the walk bound left
+at their seeds. A person scrolling the log can therefore see the moment a track
+crossed the boundary without re-reading its coordinate.
 
 ### Labels
 
@@ -491,8 +500,14 @@ stage, origin and counts, and the active label per kind. `get_bench_track` is
 the Track Edit table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at the track stage, the two distances
-(`seed_shift_px` and `projection_offset_px`) and, for a row the reading could
-not score, the `reason` sentence in place of a ZNCC. **An observation is
+(`seed_shift_px` and `projection_offset_px`), `walked_px` for a row the last fit
+refused to move, and, for a row the reading could
+not score, the `reason` sentence in place of a ZNCC. The track stage's own data
+carries `at_infinity` with the coordinate under `direction` or `position`, the
+other null, for the reason the Track Edit header carries a word in front of it:
+the same three numbers are a place or a bearing depending on `w`, and an agent
+that read `position` off a `w = 0` track would be holding a place one unit from
+the world origin. **An observation is
 addressed by its position in
 that list**, which is stable for the life of the track, so an index an agent is holding after
 a verdict or an evaluation still names the same observation. The template's

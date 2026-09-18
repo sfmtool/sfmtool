@@ -49,6 +49,8 @@ that read no photograph in
 reading in
 [bench/evaluate.rs](../../../crates/sfmtool-core/src/bench/evaluate.rs), the
 fit in [bench/fit.rs](../../../crates/sfmtool-core/src/bench/fit.rs), the
+finite-versus-bearing criterion the fit and the upgrade share in
+[bench/classify.rs](../../../crates/sfmtool-core/src/bench/classify.rs), the
 stage change in
 [bench/stage.rs](../../../crates/sfmtool-core/src/bench/stage.rs), the
 descriptor search in
@@ -90,6 +92,7 @@ pub struct TrackMeasurement {
     pub reprojection_error: Option<f64>,
     pub ray_angle_deg: Option<f64>,
     pub localizability: Option<f64>,
+    pub walked_px: Option<f64>,              // set when a fit refused the walk and kept the seed
     pub reason: Option<Unmeasured>,          // present exactly when zncc is not
 }
 
@@ -367,6 +370,8 @@ pub struct FitOptions {
     pub localize: KeypointLocalizeParams,   // open_localizer
     pub refine: KeypointSubpixelParams,
     pub evaluate: EvaluateOptions,          // the reading a fit ends with
+    pub noise_floor_px: f64,                // the classification's, 1.0
+    pub inverse_depth_z_cutoff: f64,        // the classification's, 4.0
 }
 
 pub struct EvaluateReport {
@@ -374,15 +379,45 @@ pub struct EvaluateReport {
     pub measured: usize,
     pub unmeasured: usize,
     pub reference: Option<usize>,        // the cluster stage's
-    pub position: Option<Point3<f64>>,   // where the track stands
+    pub position: Option<Point3<f64>>,   // where the track stands; a bearing at w = 0
+    pub at_infinity: bool,               // which of the two that coordinate is
     pub condition_number: Option<f64>,
 }
 
 pub struct FitReport {
     pub evaluate: EvaluateReport,        // the reading of its own result
     pub placed: usize,
-    pub position: Option<Point3<f64>>,
+    pub kept_at_seed: usize,             // rows the walk bound left at their seeds
+    pub position: Option<Point3<f64>>,   // the coordinate: a place, or a bearing
     pub condition_number: Option<f64>,
+    pub classification: Option<TrackClassification>,
+}
+
+// The one rule every step that triangulates goes through.
+pub fn classify_track_rays(
+    rays: &TrackRays,
+    images: &[ProjectedImage<'_>],
+    noise_floor_px: f64,
+    z_cutoff: f64,
+) -> TrackClassification;
+
+pub struct TrackClassification {
+    pub at_infinity: bool,
+    pub coordinate: Point3<f64>,         // a world point, or a unit direction
+    pub reason: ClassificationReason,
+    pub condition_number: f64,
+    pub inverse_depth_z: f64,
+    pub inverse_depth_z_cutoff: f64,
+    pub resolvable_distance: f64,
+    pub finite_horizon: f64,
+    pub max_pair_angle_deg: f64,
+}
+
+pub enum ClassificationReason {
+    WellConditioned,      // the pre-filter settled it: finite
+    DepthResolved,        // the z-score reached the bar: finite
+    DepthUnresolved,      // it did not, or the solve was degenerate: a bearing
+    BaselineTooShort,     // no depth is resolvable at the capture's scale: a bearing
 }
 
 pub struct StageReport {
@@ -623,6 +658,108 @@ The template carries no radius of its own. Two copies of one number could
 disagree, and a template that disagreed with the seeds it was cut from would be
 a cut of a square nothing else was measured over.
 
+### Finite points and bearings
+
+A track-stage track stands on one of two things, and its frame's `w` says
+which: a **place** at `w = 1`, whose coordinate is a world point, or a
+**bearing** at `w = 0`, whose coordinate is a unit direction and whose frame is
+tangent to the direction sphere. That is the `.sfmr` rule for a point row
+([`../../formats/sfmr-file-format.md`](../../formats/sfmr-file-format.md)
+§ "Points at infinity"), and the payload's `position` holds whichever the frame
+says, so the coordinate and the frame's centre are one thing in both.
+
+**Every step that triangulates decides which, on one criterion.** The criterion
+is not the bench's: `classify_track_rays`
+([`classify.rs`](../../../crates/sfmtool-core/src/bench/classify.rs)) calls
+`classify_rays_at_infinity`, the same per-track test
+`classify_points_at_infinity` reclassifies a whole reconstruction with and
+`find_points_at_infinity` admits discovered tracks on
+([`../reconstruction/batch-triangulation-api.md`](../reconstruction/batch-triangulation-api.md)
+§ "Consumers"), with the same defaults. It reads the rays and answers with the
+coordinate the track takes, a flag, and the number that settled it:
+
+- a well-conditioned in-front solve is **finite** on the condition number
+  alone, before any noise model is consulted (`well_conditioned`);
+- otherwise the inverse-depth z-score decides: at or above the cutoff the track
+  is **finite** (`depth_resolved`), below it a **bearing**
+  (`depth_unresolved`), and a degenerate or behind-a-camera solve is a bearing
+  too;
+- a baseline that cannot place a point even at the capture's own scale
+  (`resolvable_distance` short of the camera cloud's extent) is a **bearing**
+  (`baseline_too_short`). The reconstruction passes leave such a track alone,
+  because leaving it alone is an option when the pass is relabel-only; a fit has
+  to write something, and what the numbers say is that the depth is not
+  observable.
+
+The bearing a `w = 0` answer carries is the normalised mean of the rays, which
+is the robust direction those sightings agree on.
+
+**A fit registers against the frame the track has.** A `w = 0` surfel is
+tangent to the direction sphere and a fit of one registers against *that*: no
+promotion to a provisional depth, because a frame promoted to a depth the rays
+do not carry re-warps every view, and the consensus rounds then walk sightings
+onto whatever detail the re-warped template happens to match. What comes out of
+the fit is the classification's, applied to the frame the fit ran against:
+
+| Was | Is | The frame |
+|-----|----|-----------|
+| bearing | bearing | the refined direction, the tangent frame re-pinned on it, at the angular half-extents it had |
+| bearing | place | the angular half-extents become world ones at the placement distance from the camera-cloud centroid, the rescale [`add-observation`](../reconstruction/add-observation.md) applies when a second sighting gives a bearing its depth |
+| place | bearing | the world half-extents become angular by the distance the frame stood at, the rescale `classify_points_at_infinity` applies to a demoted point, and the frame is re-expressed as the tangent one |
+| place | place | the centre moves and nothing else does |
+
+All four keep the patch the apparent size it had, so the next round registers
+the square the person has been looking at.
+
+**The cluster-to-track upgrade goes through the same criterion**, over the
+refined cluster positions: a capture that only ever stated a direction becomes a
+`w = 0` track rather than a point at a depth its rays never carried. There the
+reference observation's shape is unprojected at unit distance, where a
+fronto-parallel half-axis *is* the tangent of the angle it subtends, which is
+what an infinity patch's half-extent is.
+
+**A commit writes `w` as the track has it**, and nothing there re-decides: that
+was settled by the fit that wrote the frame. A bearing's row carries the unit
+direction as its coordinate and a zero normal with a zero normal confidence,
+which is what the format states for `w = 0`; the point map and
+[`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)'s
+`replace_point` / `add_point` take either, and the materialised value counts the
+row in `infinity_point_count`.
+
+**The hand edits keep a bearing a bearing.** A slide and an edge drag move the
+centre, which for `w = 0` is a direction, so the moved centre is renormalised
+and the half-extents are divided by the same factor -- scaling a bearing and its
+tangent frame together leaves every corner the same direction, which is what
+keeps the far edge where it was. A turn is about the frame's own normal, which
+for a bearing is minus the direction, so it keeps the tangency. Every one of
+them carries the payload's coordinate with the centre.
+
+**A reading reports a bearing as one.** `EvaluateReport` carries `at_infinity`
+beside its coordinate for the reason the payload does, and the per-observation
+*ray angle* at `w = 0` is the angle between the sighting's ray and the direction
+itself. Both the projection and that angle go through the homogeneous transform,
+which folds out the pose's translation at `w = 0`: applying it to a unit
+direction would measure against a phantom point one unit from the world origin,
+which is the one thing a bearing is not.
+
+### The fit's walk is bounded by the person's bar
+
+The kernels a fit runs stay gate-free and cap-free, for the reason
+`open_localizer` gives: a sighting that does not belong is turned out by the
+person or by a threshold, not deleted from the evidence by a kernel. What *is*
+bounded is where a fit may put a sighting. A row whose refined keypoint lands
+further than `max_shift_px` from its seed keeps the seed, records how far the
+peak sat in `walked_px`, and still casts its ray -- from the seed. The
+`FitReport` counts them in `kept_at_seed`.
+
+The bound is not a verdict and turns nothing out: a correlation that jumped onto
+a similar detail elsewhere in the photograph would otherwise hand the
+re-triangulation a place the person never pointed at, and on a near-parallel
+track that is the difference between a bearing and a scrambled point at some
+invented depth. The reading that follows scores the row where it sits, like any
+other. Only a fit sets and clears the flag; an evaluation leaves it alone,
+because the statement is about what a fit did rather than about what the
+photographs show.
 ## The steps
 
 ### Putting a point on the bench
@@ -1012,16 +1149,21 @@ question about the *other* hypothesis.
 **track stage** the surfel is localized into every view by the two kernels the
 embed pass and `add_observation` chain --
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) then
-`refine_patch_keypoints` -- the `in` results are re-triangulated, the frame is
-re-centred at that position and the consensus bitmap is fused over them. The
-payload takes the position, the frame, the fused bitmap, the colour at that
-bitmap's centre and the triangulation's condition number.
+`refine_patch_keypoints` -- against the frame the track carries, bearing and
+all; the `in` results are re-triangulated, the frame is placed at what they
+resolve to (§ "Finite points and bearings") and the consensus bitmap is fused
+over them. The payload takes the coordinate, the frame, the fused bitmap, the
+colour at that bitmap's centre and the triangulation's condition number, and the
+`FitReport` carries the classification: which representation the rays earned,
+which of the criterion's tests settled it, and the numbers behind that.
 
 **An observation the kernels did not place keeps its pixel.** Out of frame, or
 in no round at all, its keypoint stays wherever it already sat -- the one it
 arrived with, or the cluster stage's refined position for a track just upgraded
 -- so the column still says where the sighting is and the re-triangulation still
-has its ray.
+has its ray. One the kernels placed further than `max_shift_px` from its seed
+keeps its pixel too, and says so (§ "The fit's walk is bounded by the person's
+bar").
 
 The fuse is the sub-pixel kernel's own `render_bitmaps` path, run over the `in`
 views alone with no Gauss-Newton step, so it moves nothing and only renders and
@@ -1044,14 +1186,17 @@ toggle straight to it and push no version for a step that did not happen.
 
 **Up, cluster to track**, is the spawn pipeline's own steps over one candidate:
 
-1. **Triangulate** the `in` observations' refined cluster positions through
-   their cameras.
-2. **Frame** the patch at that position: the in-plane axes and half-extents are
-   what the reference observation's affine shape, scaled by the cluster's
+1. **Triangulate and classify** the `in` observations' refined cluster
+   positions through their cameras, on the criterion of § "Finite points and
+   bearings": the rays answer with a place or a bearing.
+2. **Frame** the patch at that coordinate: the in-plane axes and half-extents
+   are what the reference observation's affine shape, scaled by the cluster's
    radius, unprojects to on the plane at the triangulated depth
    ([`OrientedPatch::from_affine_shape_at_depth`](../patch/patch-cloud.md)), and
    the normal is the mean viewing direction, which is how `to_embedded_patches`
-   frames a surfel from the views that see it. The reference is the cluster's
+   frames a surfel from the views that see it. For a bearing the same
+   unprojection runs at unit distance and the frame becomes the tangent one, per
+   that section. The reference is the cluster's
    own when it is `in`, and otherwise the largest-scale `in` observation, which
    is what the cluster kernel would have picked among them.
 3. **Localize, refine, re-triangulate, fuse and read back**, which is the
@@ -1091,7 +1236,8 @@ hypothesis is what goes.
 
 `commit` is the only step that touches the reconstruction, and it is one
 ordinary point edit. It builds a `PointRecord` from the track-stage payload and
-the `in` observations: the position the track carries, the frame it stands on,
+the `in` observations: the coordinate the track carries with the frame's own `w`
+(§ "Finite points and bearings"), the frame it stands on,
 the consensus bitmap, the colour read from that bitmap's centre, the normal the
 frame states, the mean of what the last evaluation measured as each `in`
 sighting's reprojection error in the point's `error` column (zero where nothing
@@ -1158,6 +1304,21 @@ machine, so they live on `EvaluateOptions` beside the search radius.
 | `max_seed_offset_px` | `64.0` | How far from the point's projection a seed may sit and still be read, in patch-grid px. Past it the row carries `SeedTooFar` and is left out of the round. |
 | `max_cache_bytes` | `256 MiB` | What one round's per-view tiles may take together. A round past it is refused with `TooLarge`, before anything is allocated. |
 
+The finite-versus-bearing criterion's two knobs are not thresholds either: what
+they move is which representation the geometry earns rather than which sightings
+are kept, so they live on `FitOptions` and both default to the values the
+reconstruction's own passes use.
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `noise_floor_px` | `1.0` | The measurement noise the classification assumes at each sighting, in source-image px; the per-ray angular noise is this over the observing camera's focal length. From `DEFAULT_NOISE_FLOOR_PX`. |
+| `inverse_depth_z_cutoff` | `4.0` | The inverse-depth z-score a depth has to reach to be written as a finite point rather than a bearing. From `DEFAULT_INVERSE_DEPTH_Z_CUTOFF`. |
+
+The criterion's third number, the condition-number pre-filter that settles a
+well-conditioned solve before any noise model is consulted, is not an option
+here: it is the criterion's own constant, and a bench that could move it would be
+a second classifier.
+
 The descriptor search has bars of its own, which are not the track's: they say
 what the *index* is asked, and nothing about them is a verdict, so they are
 `SearchOptions` and not `Thresholds`.
@@ -1191,14 +1352,13 @@ wrapper that collects the references. Nothing about the refinement differs.
 
 [`ProjectedImage`]: ../../../crates/sfmtool-core/src/patch/normal_refine/params.rs
 
-**A track at infinity is promoted before it is fitted against.** A `w = 0` frame
-is tangent to the direction sphere, and a fit against one would pull every
-sighting back onto the bearing's projection and undo the depth the other
-sightings carry. So a track-stage fit of one triangulates the seeds first and
-promotes the frame to that depth -- the two-pass shape
-[`add_observation`](../reconstruction/add-observation.md) takes, and the same
-rescale from the camera-cloud centroid. A *reading* promotes nothing: it reports
-the track as it stands, bearing and all.
+**The triangulation refuses only a coordinate that is not a number.** An
+infinite condition number and a point behind one of the observing cameras used
+to be refusals here, as they are for every other caller that re-solves one
+track; on the bench they are exactly what a track at infinity looks like, and
+the classification reads them as the evidence for a bearing (§ "Finite points
+and bearings"). Refusing them would take the answer away from the step whose job
+it is to give one.
 
 **A commit's absorb list is filtered by what is still live.** A point another
 version already deleted is nothing to absorb, and a commit is not the place to
@@ -1232,14 +1392,31 @@ the report's `label` reads.
 prebuilt `ImagePyramidSet`. `evaluate` and `fit` take three optional keywords --
 `search_px`, the radius the reading looks for each peak in, and
 `max_seed_offset_px` and `max_cache_bytes`, the two memory bounds above, each
-defaulting to the reading's own; `set_stage` takes
+defaulting to the reading's own. `fit` and `set_stage` take the
+classification's two knobs as well, `noise_floor_px` and
+`inverse_depth_z_cutoff`, each defaulting to the reconstruction's own value;
+`set_stage` takes
 the stage as the word `"cluster"` or `"track"`. Their reports are dicts:
 `stage`, `measured` and `unmeasured`, with `reference` at the cluster stage and
-`position` and `condition_number` at the track stage; `placed`, `position`,
-`condition_number` and the reading's own `evaluate` report for a fit; and
+`at_infinity` with `position` or `direction` and `condition_number` at the track
+stage; `placed`, `kept_at_seed`, `at_infinity` with `position` or `direction`,
+`condition_number`, `classification` and the reading's own `evaluate` report for
+a fit; and
 `from`, `to`, `changed`, the upgrade's `fit` report and the downgrade's
 `reference` for a stage change. An observation's `"track"` dict carries
-`reason`, the sentence, exactly when it carries no `zncc`.
+`reason`, the sentence, exactly when it carries no `zncc`, and `walked_px`
+exactly when the last fit refused to walk that sighting and kept its seed.
+
+**The coordinate crosses under the name of whichever it is**, in the reports and
+on the track: `EditableTrack.at_infinity` says which, `position` is the world
+point and is `None` for a bearing, and `direction` is the unit bearing and is
+`None` for a place. A caller that read `position` off a `w = 0` track would be
+holding a place one unit from the world origin. A fit's `classification` dict
+carries `at_infinity`, `position` or `direction`, `reason` (the lowercase words
+`"well_conditioned"`, `"depth_resolved"`, `"depth_unresolved"`,
+`"baseline_too_short"`), `condition_number`, `inverse_depth_z`,
+`inverse_depth_z_cutoff`, `resolvable_distance`, `finite_horizon`,
+`max_pair_angle_deg` and `text`, the sentence the Action Log shows.
 
 `set_observation_keypoint`, `resize_frame`, `rotate_frame` and
 `set_observation_shape` take their numbers directly; `translate_frame` and
@@ -1350,6 +1527,33 @@ memory for.
 The split of a half whose every row is `out` is tested too: it splits, the half
 that comes off is a cluster cut around the one row it has, and the verdicts
 travel with the rows.
+
+**The finite/infinity boundary is tested by turning the capture, not the
+picture.** The fixture's scene takes its camera centres and its plane depth as
+arguments, with the texture's frequency scaled by that depth so a plane two
+hundred units out photographs as the same detail a plane four units out does.
+Eight cameras stepping by five centimetres at that far plane give a third of a
+pixel of parallax over the whole run, and one ninth camera twenty units off to
+the side gives real baseline, so promotion and demotion are two settings of one
+dial. Over that: a bearing fits and stays a bearing, at the half-extents it had,
+with every sighting inside a pixel of where a *reading* of the same track put it
+and scoring what the reading scored -- which is the claim, since a fit that
+promoted the frame to a provisional depth re-warps every view and the consensus
+rounds then walk sightings onto some other facade detail; a bearing's per-row ray
+angle agrees with the direction to a thousandth of a degree, where measuring it
+against a phantom point one unit from the origin reads tens of degrees; the same
+sightings plus the offset camera's promote to a point on the plane with the frame
+grown by the placement distance; the same eight sightings stored as a *finite*
+point demote to a bearing with the frame shrunk by the distance it stood at; a
+sighting moved four pixels off with the bar at two keeps its seed, carries
+`walked_px` and is still scored there while the other seven move; a bearing taken
+down to the cluster stage and back up comes back a bearing at the size it was and
+commits as a `w = 0` row with a unit direction, a zero normal and a zero normal
+confidence, counted in the materialised value's `infinity_point_count`; and a
+slide, an edge drag, a centred resize and a turn each leave a bearing's
+coordinate on the unit sphere with the payload's coordinate following the frame's
+centre. The near scene's own track is asserted to come back **finite**, on the
+condition-number pre-filter, so the two answers are both pinned.
 
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):

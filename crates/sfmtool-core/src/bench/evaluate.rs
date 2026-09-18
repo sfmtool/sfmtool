@@ -303,8 +303,15 @@ pub struct EvaluateReport {
     /// it landed, and it is `None` when no member could anchor one.
     pub reference: Option<usize>,
     /// At the track stage, where the track's point stands: what the reading was
-    /// made against, rather than anything this step computed.
+    /// made against, rather than anything this step computed. A unit bearing
+    /// direction when [`Self::at_infinity`], and a world point otherwise.
     pub position: Option<Point3<f64>>,
+    /// At the track stage, whether the track's surfel is a bearing (`w == 0`).
+    ///
+    /// Beside the position because three numbers are not self-describing: the
+    /// same triple is a place or a direction depending on this, and printing a
+    /// bearing as a position reads as a point one unit from the world origin.
+    pub at_infinity: bool,
     /// At the track stage, the condition number of the triangulation the track
     /// carries.
     pub condition_number: Option<f64>,
@@ -323,9 +330,12 @@ impl std::fmt::Display for EvaluateReport {
             }
             StageKind::Track => {
                 write!(f, "measured {} of {total} observations", self.measured)?;
-                match self.position {
-                    Some(p) => write!(f, " at ({:.4}, {:.4}, {:.4})", p.x, p.y, p.z),
-                    None => write!(f, "; the track stands nowhere"),
+                match (self.position, self.at_infinity) {
+                    (Some(p), false) => write!(f, " at ({:.4}, {:.4}, {:.4})", p.x, p.y, p.z),
+                    (Some(p), true) => {
+                        write!(f, " along ({:.4}, {:.4}, {:.4}) at infinity", p.x, p.y, p.z)
+                    }
+                    (None, _) => write!(f, "; the track stands nowhere"),
                 }
             }
         }
@@ -685,6 +695,7 @@ pub(super) fn evaluate_cluster(
             unmeasured: evaluated(track).len() - measured,
             reference,
             position: None,
+            at_infinity: false,
             condition_number: None,
         },
     ))
@@ -982,6 +993,7 @@ fn evaluate_track(
             unmeasured,
             reference: None,
             position: payload.position,
+            at_infinity: frame.w == 0.0,
             condition_number: payload.condition_number,
         },
     ))
@@ -1146,6 +1158,11 @@ fn search_radius(
 /// the direction to `position`, in degrees -- the two numbers the Point Track
 /// Detail panel tabulates for a committed track, over this track's own position
 /// and the pixel this observation sits at rather than the stored ones.
+///
+/// `w` says which `position` is. At `w == 1` the angle is between the sighting's
+/// ray and the camera-to-point direction; at `w == 0` `position` is a world
+/// bearing and the angle is between the sighting's ray and that bearing, which
+/// is the only thing either of them states.
 pub(super) fn observation_metrics(
     view: &ProjectedImage<'_>,
     position: &Point3<f64>,
@@ -1158,7 +1175,14 @@ pub(super) fn observation_metrics(
     let error = (u - keypoint[0]).hypot(v - keypoint[1]);
     let ray = view.camera.pixel_to_ray(keypoint[0], keypoint[1]);
     let ray = Vector3::new(ray[0], ray[1], ray[2]);
-    let towards = view.cam_from_world.transform_point(position).coords;
+    // Homogeneous, because `w` is the whole difference between a place and a
+    // direction: the camera-frame vector toward a finite point carries the
+    // pose's translation, and the one toward a bearing does not. Applying the
+    // translation to a unit direction would measure the angle to a phantom point
+    // one unit from the world origin, which is the one thing a bearing is not.
+    let towards = view
+        .cam_from_world
+        .transform_point_homogeneous(position.coords, w);
     let (ray_norm, towards_norm) = (ray.norm(), towards.norm());
     if !(ray_norm > 0.0 && towards_norm > 0.0) {
         return (error, f64::NAN);
