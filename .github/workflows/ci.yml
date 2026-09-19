@@ -93,13 +93,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-lint-target-', runner.os) || '' }}
 
       - name: Ruff format
@@ -161,6 +161,12 @@ jobs:
       - name: Prune superseded Rust caches
         # Delete the previous generation of what this job just saved, now,
         # rather than when the slowest job finishes. See "Rust caches".
+        #
+        # Two invocations, because this job saves both a target dir and a cargo
+        # home and the two are keyed on different generations. Passing the
+        # target hash for the cargo-home prefix would find no entry at it and
+        # silently prune nothing, letting the homes accumulate. Each key
+        # supplies its own hash, taken from the key the restore step computed.
         if: ${{ always() && github.ref == 'refs/heads/main' }}
         continue-on-error: true
         shell: bash
@@ -168,7 +174,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
-        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
+          HOME_KEY: ${{ steps.home-cache.outputs.cache-primary-key }}
+        run: |
+          bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
+          bash scripts/ci_prune_caches.sh "${HOME_KEY##*-}" "${HOME_KEY%-*}"
 
   # Builds the workspace with the *minimum* supported Rust, which is deliberately
   # older than the toolchain pixi.toml pins for development. The consumer is the
@@ -271,13 +280,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
@@ -414,13 +423,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-test-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
@@ -494,6 +503,12 @@ jobs:
       - name: Prune superseded Rust caches
         # Delete the previous generation of what this job just saved, now,
         # rather than when the slowest job finishes. See "Rust caches".
+        #
+        # Two invocations, because this job saves both a target dir and a cargo
+        # home and the two are keyed on different generations. Passing the
+        # target hash for the cargo-home prefix would find no entry at it and
+        # silently prune nothing, letting the homes accumulate. Each key
+        # supplies its own hash, taken from the key the restore step computed.
         if: ${{ always() && github.ref == 'refs/heads/main' }}
         continue-on-error: true
         shell: bash
@@ -501,7 +516,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
-        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
+          HOME_KEY: ${{ steps.home-cache.outputs.cache-primary-key }}
+        run: |
+          bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
+          bash scripts/ci_prune_caches.sh "${HOME_KEY##*-}" "${HOME_KEY%-*}"
 
   # The Python half of the non-Linux check: build the extension, run pytest.
   # See test-os-rust above for why the two are separate jobs.
@@ -549,10 +567,10 @@ jobs:
           # A prefix of its own, not test-os-rust's: that job fills target/debug
           # and this one target/release, so a shared key would have whichever
           # finished last overwrite the other's tree with a disjoint one, and
-          # every run would start cold. Same `<prefix>-<lockfile hash>` shape as
+          # every run would start cold. Same `<prefix>-<single hash>` shape as
           # the rest, which is what ci_prune_caches.sh parses. See "Rust caches"
           # above prune-caches.
-          key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-pyext-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
@@ -654,13 +672,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: UI tests
@@ -735,13 +753,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       # Compile the test binary (and the sfm-explorer bin it launches) without
@@ -851,13 +869,13 @@ jobs:
           path: |
             target
             !target/**/incremental/**
-          # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged, and the Save step below then
-          # leaves the existing entry alone. The prefix fallback warms a pull
-          # request whose lockfile has moved; main does without it, so each
-          # generation it saves holds only what that lockfile builds. See "Rust
-          # caches" above prune-caches.
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          # Content-addressed on the lockfile *and* the manifests -- see "Rust
+          # caches" above prune-caches for why the manifests belong in it. It
+          # hits outright whenever neither has moved, and the Save step below
+          # then leaves the existing entry alone. The prefix fallback warms a
+          # pull request whose key has moved; main does without it, so each
+          # generation it saves holds only what that key builds.
+          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}
           restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: Set up accessibility environment
@@ -897,13 +915,46 @@ jobs:
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
         run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
-  # Rust caches. Every job restores a cargo home (`<OS>-cargo-home-<lock>`) and,
-  # except msrv, a target dir (`<OS>-cargo-<job>-target-<lock>`), both keyed on
-  # `hashFiles('Cargo.lock')` alone -- one *generation* per lockfile. Only main
-  # saves, and only when its exact key missed, so a generation is written once
-  # and PRs restore main's copy (a PR's own entry would be scoped to its merge
-  # ref, where nothing else can read it). The cargo home is saved by the one job
-  # per OS that fetches every crate: lint on Linux, test-os-rust elsewhere.
+  # Rust caches. Every job restores a cargo home (`<OS>-cargo-home-<gen>`) and,
+  # except msrv, a target dir (`<OS>-cargo-<job>-target-<gen>`) -- one
+  # *generation* per key. Only main saves, and only when its exact key missed,
+  # so a generation is written once and PRs restore main's copy (a PR's own
+  # entry would be scoped to its merge ref, where nothing else can read it). The
+  # cargo home is saved by the one job per OS that fetches every crate: lint on
+  # Linux, test-os-rust elsewhere.
+  #
+  # The two kinds of cache are keyed on deliberately *different* things.
+  #
+  # A cargo home holds the registry index, crate downloads and git checkouts.
+  # That set is genuinely a pure function of Cargo.lock, so it is keyed on
+  # `hashFiles('Cargo.lock')` alone.
+  #
+  # A target dir is not. It holds compiled artifacts, and which artifacts those
+  # are depends on *feature resolution* and on which targets exist -- both of
+  # which are declared in the manifests, not the lockfile. So the target keys
+  # are `hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml')`.
+  #
+  # PR #518 is what that sentence costs when it is not true. It gated
+  # sfm-explorer's `ui_basic` behind a feature and collapsed two `cargo test`
+  # invocations into one, changing no dependency and so not touching Cargo.lock.
+  # The restore was an *exact* hit on an entry built under the old resolution,
+  # and cargo rebuilt the whole wgpu/egui/accesskit/windows stack against it:
+  # 13m13s, against 11m17s for the two invocations it replaced. That alone would
+  # be a one-time transition cost, but the save guard is
+  # `cache-hit != 'true'`, so main would have skipped the save, kept the
+  # poisoned entry, and paid the rebuild on every run until some unrelated
+  # change happened to bump Cargo.lock.
+  #
+  # The patterns are enumerated rather than written `**/Cargo.toml`, for two
+  # reasons that both end in a silently wrong hash. `lint` and the three
+  # `ui-test-*` jobs run setup-pixi *before* their restore steps, so `.pixi/` is
+  # in the workspace when their keys are computed while the other jobs' keys are
+  # computed without it; and the prune-caches job below sparse-checks out only
+  # what it needs, so a pattern matching files it does not fetch would give it a
+  # KEEP_HASH matching nothing any job ever wrote -- which reads as "no current
+  # generation for this prefix" and silently prunes nothing, for ever. Adding a
+  # manifest to the workspace means adding it to prune-caches' sparse-checkout
+  # too; `crates/*/Cargo.toml` already covers every workspace member.
   #
   # GitHub's 10 GB per-repo budget is the constraint, and the LRU eviction it
   # triggers picks victims by last access, not by whether anything still wants
@@ -945,19 +996,36 @@ jobs:
       # `gh cache delete` needs this; the workflow default is `contents: read`.
       actions: write
     steps:
-      # `hashFiles` reads the workspace, so the lockfile has to be on disk; the
-      # script is the only other thing this job reads.
+      # `hashFiles` reads the workspace, so everything either generation is
+      # keyed on has to be on disk -- the manifests as well as the lockfile,
+      # or this job's idea of the current generation would not be any job's.
+      # The script is the only other thing it reads. A new workspace member
+      # needs its manifest added here too.
       - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             Cargo.lock
+            Cargo.toml
+            crates/*/Cargo.toml
             scripts/ci_prune_caches.sh
           sparse-checkout-cone-mode: false
-      - name: Delete superseded cargo caches
+      # Two invocations because the target caches and the cargo homes are keyed
+      # on different generations (see "Rust caches" above), and the script takes
+      # one KEEP_HASH per call. The first sweeps every `*-cargo-*` prefix at the
+      # target generation; a cargo home has no entry at that hash, so the
+      # script's "no current-generation entry for this prefix" guard leaves them
+      # alone rather than deleting them, and the second call then prunes them at
+      # their own. Order matters only in that neither can run without the other.
+      - name: Delete superseded cargo target caches
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock') }}"
+        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml') }}"
+      - name: Delete superseded cargo home caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock') }}" Linux-cargo-home Windows-cargo-home macOS-cargo-home
 
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.

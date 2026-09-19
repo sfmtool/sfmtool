@@ -143,11 +143,19 @@ deleting the lines.
   (`cargo test --workspace`) and `test-os-python` (`maturin develop --release`
   then `pytest`); the windowed `ui_basic` suite gets a job per platform —
   `ui-test-windows`, `ui-test-macos`, `ui-test-linux`; the Rust build is
-  cached, one generation per `Cargo.lock`, saved and pruned by `main` only —
-  the "Rust caches" comment above `prune-caches` says why, and note that
-  `test-os-rust` and `test-os-python` must keep *separate* target-cache
-  prefixes because they build disjoint trees (`target/debug` vs
-  `target/release`); pixi envs are not cached anywhere, in either workflow),
+  cached, saved and pruned by `main` only — the "Rust caches" comment above
+  `prune-caches` says why. Two things there are easy to get wrong: a **target**
+  cache is keyed on `hashFiles('Cargo.lock', 'Cargo.toml',
+  'crates/*/Cargo.toml')`, not the lockfile alone, because feature resolution
+  and which targets exist are declared in the *manifests* — key it on the
+  lockfile and a feature change silently restores artifacts built under a
+  different resolution, which is a full rebuild that the `cache-hit != 'true'`
+  save guard then never replaces; and `test-os-rust` and `test-os-python` must
+  keep *separate* target-cache prefixes because they build disjoint trees
+  (`target/debug` vs `target/release`). A **cargo home** stays keyed on
+  `Cargo.lock` alone, so the two kinds are on different generations and
+  `ci_prune_caches.sh` takes one hash per call — prune them in separate
+  invocations. pixi envs are not cached anywhere, in either workflow),
   `docs.yml`, `publish_to_pypi.yml`.
 
 ## CLI
