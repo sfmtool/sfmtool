@@ -4,3 +4,8 @@
 # cargo's build fingerprints. Scoped to this one file on purpose — we do not
 # want to force eol on Windows-native files.
 Cargo.lock text eol=lf
+
+# Shell scripts are not Windows-native files: bash, including Git Bash on the
+# Windows runners, reads a CRLF line ending as a stray `\r` in every command.
+# CI runs `scripts/ci_prune_caches.sh` on Windows, so it has to stay LF there.
+*.sh text eol=lf

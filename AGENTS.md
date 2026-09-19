@@ -140,8 +140,10 @@ deleting the lines.
 - `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
   Windows and macOS run the same suites without instrumentation; the windowed
   `ui_basic` suite gets a job per platform — `ui-test-windows`,
-  `ui-test-macos`, `ui-test-linux`; pixi env and
-  Rust build are cached), `docs.yml`, `publish_to_pypi.yml`.
+  `ui-test-macos`, `ui-test-linux`; the Rust build is cached, one generation
+  per `Cargo.lock`, saved and pruned by `main` only — the "Rust caches" comment
+  above `prune-caches` says why; pixi envs are not cached), `docs.yml`,
+  `publish_to_pypi.yml`.
 
 ## CLI
 

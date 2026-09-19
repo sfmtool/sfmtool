@@ -53,6 +53,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -68,19 +72,20 @@ jobs:
           # the Rust target caches, which are worth ~15 min a run. See the
           # test-os job for the one environment that pays.
           cache: false
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -89,13 +94,13 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-lint-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-lint-target-', runner.os) || '' }}
 
       - name: Ruff format
         run: pixi run -e lint ruff format --check src tests
@@ -117,19 +122,43 @@ jobs:
         run: pixi run -e lint doc
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-lint-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Save cargo home
+        # This job fetches every crate the workspace needs on this OS, so it
+        # is the one that saves the shared cargo home. Success only, as the
+        # old combined actions/cache did: a half-fetched registry saved under
+        # the exact key would be restored as-is for the whole generation.
+        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.home-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
 
   # Builds the workspace with the *minimum* supported Rust, which is deliberately
   # older than the toolchain pixi.toml pins for development. The consumer is the
@@ -153,15 +182,20 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           run-install: false
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
 
       # Single source of truth: the floor lives in [workspace.package] and is read
       # from there, so bumping the MSRV never means editing this workflow too.
@@ -198,25 +232,28 @@ jobs:
       # instead of a stored CODECOV_TOKEN. Tokenless upload only works on
       # pull_request events, so push-to-main coverage was failing to upload.
       id-token: write
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
       # editable sfmtool); coverage.sh compiles the extension once via
       # `maturin develop --release`. Restore the cache first so that build is
       # incremental instead of a cold ~6 min compile.
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -225,13 +262,13 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-coverage-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-coverage-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: test-ci
@@ -283,19 +320,29 @@ jobs:
           flags: ubuntu-latest
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
   # Non-Linux correctness check: runs the same Rust + Python suites as the
   # coverage job, but without LLVM coverage instrumentation (much faster to
@@ -310,6 +357,10 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
@@ -317,19 +368,20 @@ jobs:
       # `maturin develop --release` step below. Restore the cache first so that
       # build is incremental instead of a cold compile. The key is namespaced by
       # runner.os, so each matrix OS keeps its own cache.
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -338,13 +390,13 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-test-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-test-target-', runner.os) || '' }}
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: test-ci
@@ -398,24 +450,52 @@ jobs:
           pixi run -e test-ci pytest -n "$workers"
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Save cargo home
+        # This job fetches every crate the workspace needs on this OS, so it
+        # is the one that saves the shared cargo home. Success only, as the
+        # old combined actions/cache did: a half-fetched registry saved under
+        # the exact key would be restored as-is for the whole generation.
+        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.home-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
 
   ui-test-windows:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -424,19 +504,20 @@ jobs:
           # No env cache: the ui env installs in 5s and restores in 4s.
           # See the lint job.
           cache: false
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -445,31 +526,41 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-ui-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: UI tests
         run: pixi run -e ui ui-test
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
   # macOS accessibility UI tests. Same xa11y-driven suite as the
   # ui-test-windows job, but macOS gates the AX API behind a TCC grant
@@ -482,6 +573,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -490,19 +585,20 @@ jobs:
           # No env cache: the ui env installs in 3s and restores in 4s.
           # See the lint job.
           cache: false
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -511,13 +607,13 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-ui-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       # Compile the test binary (and the sfm-explorer bin it launches) without
       # running, then resolve the test binary's hashed path from cargo's JSON
@@ -544,19 +640,29 @@ jobs:
         run: "${{ steps.build.outputs.bin }} --test-threads=1"
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
   # Linux accessibility UI tests. The same xa11y-driven suite as the Windows
   # and macOS jobs, but Linux is where the accessibility API has to be *stood
@@ -578,6 +684,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -586,19 +696,20 @@ jobs:
           # No env cache: the ui env installs in 4s and restores in 8s.
           # See the lint job.
           cache: false
-      - name: Cache cargo home
-        uses: actions/cache@v6
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           # Registry index + downloads and git checkouts are fully determined by
-          # Cargo.lock, so key on it alone (no run_id): the save is skipped on an
-          # unchanged lockfile — no per-run resave of this bulk — and refreshed
-          # only when dependencies change. Shared across all same-OS jobs.
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it, and the prefix fallback is for pull
+          # requests only. See "Rust caches" above prune-caches.
           key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-home-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
       - name: Restore Rust target
         id: target-cache
         uses: actions/cache/restore@v6
@@ -607,13 +718,13 @@ jobs:
             target
             !target/**/incremental/**
           # Content-addressed: the key is the lockfile alone, so it hits outright
-          # whenever the dependencies are unchanged -- and the Save step below
-          # then leaves the existing entry alone instead of writing a fresh
-          # multi-GB copy. The prefix fallback still warms a run whose lockfile
-          # has just moved. Caches are branch-scoped and only main writes them,
-          # so the main-written entry is the one every PR restores.
+          # whenever the dependencies are unchanged, and the Save step below then
+          # leaves the existing entry alone. The prefix fallback warms a pull
+          # request whose lockfile has moved; main does without it, so each
+          # generation it saves holds only what that lockfile builds. See "Rust
+          # caches" above prune-caches.
           key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-ui-target-
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-ui-target-', runner.os) || '' }}
 
       - name: Set up accessibility environment
         uses: xa11y/setup-a11y@v1
@@ -628,47 +739,61 @@ jobs:
         run: pixi run -e ui ui-test
 
       - name: Save Rust target
-        # Save only on main: branch scoping means PR-written caches help nobody
-        # else, so PR runs skip the save entirely (and dodge the slow Windows
-        # compression). The cache-hit guard is what keeps the total bounded --
-        # seven of these caches rewritten on every main push overran GitHub's
-        # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
-        # could find nothing and compile from scratch for 17 minutes.
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: |
             target
             !target/**/incremental/**
-          key: ${{ runner.os }}-cargo-ui-target-${{ hashFiles('Cargo.lock') }}
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
-  # Delete the previous generation of Rust caches once the current one exists.
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
+
+  # Rust caches. Every job restores a cargo home (`<OS>-cargo-home-<lock>`) and,
+  # except msrv, a target dir (`<OS>-cargo-<job>-target-<lock>`), both keyed on
+  # `hashFiles('Cargo.lock')` alone -- one *generation* per lockfile. Only main
+  # saves, and only when its exact key missed, so a generation is written once
+  # and PRs restore main's copy (a PR's own entry would be scoped to its merge
+  # ref, where nothing else can read it). The cargo home is saved by the one job
+  # per OS that fetches every crate: lint on Linux, test-os elsewhere.
   #
-  # `actions/cache` only ever adds entries, and GitHub's LRU does not run until
-  # the repo is already over its 10 GB budget -- at which point it is evicting
-  # *live* entries rather than dead ones. The seven target caches are keyed on
-  # `Cargo.lock` alone, so a dependency bump asks for a second full generation
-  # (~7 GB) on top of a steady state that is already ~7 GB, and about half the
-  # live set is destroyed to make room. That is why a PR can restore nothing and
-  # cold-compile: neither the key it wanted nor a prefix fallback survived,
-  # because the older generation had been the LRU victim. Superseded entries had
-  # been outliving their replacements by hours (`Windows-cargo-ui-target-1a22…`
-  # was still resident five hours after `…-777c…` replaced it).
+  # GitHub's 10 GB per-repo budget is the constraint, and the LRU eviction it
+  # triggers picks victims by last access, not by whether anything still wants
+  # them -- so staying under it has to be CI's job. Three rules do that:
   #
-  # Pruning bounds the total to one generation plus the run that replaces it.
-  # Two guards keep it from eating anything load-bearing:
+  #   * Main restores the exact key or nothing. A prefix fallback on main
+  #     carried the previous generation's artifacts into the next save, so each
+  #     dependency bump made the entries bigger: Windows-cargo-test-target went
+  #     1.9 -> 3.0 -> 4.3 -> 4.6 GB over four lockfile moves, while a fresh
+  #     build of macOS-cargo-test-target is 1.2 GB. PRs keep the fallback: they
+  #     never save, so their warm start costs the budget nothing, and it is what
+  #     keeps a lockfile-bumping PR from compiling cold.
+  #   * Each job prunes the previous generation of what it saved right after
+  #     saving it. With one prune at the end of the run, both generations sat
+  #     side by side for as long as the slowest Windows job took (~40 min), and
+  #     two generations have never fit: LRU ate the new Linux entries or the
+  #     old Windows ones instead.
+  #   * This job then sweeps every cargo prefix once more, for anything a
+  #     job's own prune missed (it failed, or the job stopped before it).
   #
-  #   1. An old entry goes only once the same prefix has an entry at *this* run's
-  #      lockfile hash. A save that failed or was skipped therefore leaves the
-  #      old generation alone -- which is exactly what `restore-keys` falls back
-  #      to.
-  #   2. An entry newer than that replacement is never touched, so two
-  #      overlapping pushes to main (the concurrency group deliberately does not
-  #      cancel main) cannot have the older one delete the newer one's caches.
-  #
-  # PR restores are unaffected: the `restore-keys` prefix fallback resolves to
-  # the newest matching entry, which after a prune is the generation just
-  # written.
+  # scripts/ci_prune_caches.sh holds the rules for what may be deleted: an old
+  # entry goes only once its prefix has an entry at this run's lockfile hash (so
+  # a failed or skipped save leaves the old generation as the PR fallback), and
+  # never when it is newer than that replacement.
   prune-caches:
     needs:
       [lint, test-linux, test-os, ui-test-windows, ui-test-macos, ui-test-linux]
@@ -678,60 +803,19 @@ jobs:
       # `gh cache delete` needs this; the workflow default is `contents: read`.
       actions: write
     steps:
-      # `hashFiles` reads the workspace, so the lockfile has to be on disk. It is
-      # the only thing this job reads, hence the sparse checkout.
+      # `hashFiles` reads the workspace, so the lockfile has to be on disk; the
+      # script is the only other thing this job reads.
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: Cargo.lock
+          sparse-checkout: |
+            Cargo.lock
+            scripts/ci_prune_caches.sh
           sparse-checkout-cone-mode: false
       - name: Delete superseded cargo caches
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          KEEP: ${{ hashFiles('Cargo.lock') }}
-        run: |
-          set -euo pipefail
-          gh cache list --repo "$REPO" --limit 100 \
-            --json id,key,createdAt,sizeInBytes \
-            --jq '.[] | [.id, .key, .createdAt, .sizeInBytes] | @tsv' > caches.tsv
-
-          # Prefix -> creation time of its current-generation entry. An empty
-          # KEEP (no lockfile) leaves this empty and the prune does nothing.
-          declare -A live
-          while IFS=$'\t' read -r id key created size; do
-            case "$key" in *-cargo-*) ;; *) continue ;; esac
-            if [ "${key##*-}" = "$KEEP" ]; then
-              live["${key%-*}"]=$created
-            fi
-          done < caches.tsv
-
-          freed=0
-          while IFS=$'\t' read -r id key created size; do
-            case "$key" in *-cargo-*) ;; *) continue ;; esac
-            if [ "${key##*-}" = "$KEEP" ]; then
-              continue
-            fi
-            replacement=${live[${key%-*}]:-}
-            if [ -z "$replacement" ]; then
-              echo "keeping  $key (no current-generation entry for this prefix)"
-              continue
-            fi
-            # Timestamps are fixed-width UTC ISO-8601, so this orders correctly.
-            if [[ ! "$created" < "$replacement" ]]; then
-              echo "keeping  $key (newer than its replacement)"
-              continue
-            fi
-            echo "deleting $key ($((size / 1048576)) MB)"
-            if gh cache delete "$id" --repo "$REPO"; then
-              freed=$((freed + size))
-            else
-              echo "         already gone"
-            fi
-          done < caches.tsv
-
-          echo "freed $((freed / 1048576)) MB"
-          gh cache list --repo "$REPO" --limit 100 --json sizeInBytes --jq \
-            '"remaining: \([.[].sizeInBytes] | add // 0 | . / 1073741824 * 100 | round / 100) GB"'
+        run: bash scripts/ci_prune_caches.sh "${{ hashFiles('Cargo.lock') }}"
 
   # Single stable check to mark as required in branch protection. Always runs
   # and reports a status, so docs-only PRs (which skip lint/test) aren't blocked.
