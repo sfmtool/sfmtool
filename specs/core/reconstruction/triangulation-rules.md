@@ -1,13 +1,15 @@
-# Point Estimation
+# Triangulation Rules
 
-One batched operation that re-reads every point of a track set from its own
+One batched operation that reads every point of a track set from its own
 observations at one geometry and decides, per track, what the observations
 support: a finite position, a bearing, or nothing. It is the decision layer
 over the batch triangulation solve
 ([batch-triangulation-api.md](batch-triangulation-api.md)), and it is the
 one implementation behind the bundle adjustment's inter-round re-estimation
 and any caller that holds poses and a camera and wants the structure those
-poses imply.
+poses imply. On top of it sits one reconstruction-level operation, for the
+caller that holds a whole value rather than arrays, and that one is a
+**re**-triangulation: it solves points a value already holds.
 
 ## What the solve leaves undecided
 
@@ -218,6 +220,83 @@ one.
   everything else off: finite points whose rays do not cross become
   bearings, nothing else moves.
 
+## Retriangulating a reconstruction
+
+The array forms know nothing about a reconstruction. `retriangulate_points`
+does: it takes an [`EditedReconstruction`](edited-reconstruction.md), says which
+of its points to re-solve, and hands back the value that holds the answers, the
+map from its indexes to that value's, and a report. It gathers the pixels, the
+poses and the constraint columns the observation form takes, runs it once, and
+writes each point's answer back. It is pure, and it moves no camera and no lens:
+what a point's observations support at *this* geometry is the whole of what it
+decides.
+
+```rust
+pub fn retriangulate_points(
+    edited: &EditedReconstruction,
+    which: RetriangulateWhich<'_>,
+    options: &RetriangulateOptions,
+    progress: &Progress<'_>,
+) -> Result<(EditedReconstruction, PointMap, RetriangulateReport), RetriangulateError>;
+```
+
+`RetriangulateWhich` has two cases, and they are also the two shapes a point
+edit takes, which is not a coincidence. `All` rewrites the whole point list,
+which is a new base: the overlay is folded in first and the map is the
+materialisation's. `These(&[index])` is a delete-and-re-add of each named
+point's whole record, which is an overlay edit over the same base: each point
+takes a new index and the map is a `PointMap::Replaced`. So a caller states
+which points it means and gets the edit that fits. `These` costs a rebuild of
+the addition set's derived indexes per point, so it is for a handful.
+
+`RetriangulateOptions` is the per-track rules minus the two a reconstruction
+answers for itself: the incoming direction mark is the point's own `w`, and the
+distance rule is the value's own constraint columns. Its default is the floor
+off, cheirality and its per-observation prune on, and no reprojection bar --
+with the floor off no free point crosses between a position and a direction on
+the rays' account alone, and a caller that wants that crossing states the angle
+it means.
+
+**A point's constraint is honoured.** A held point is never read: the value owns
+its coordinate, so it is not in the solve and not in the answer, and a call over
+held points alone is refused rather than answered with nothing. A ranged point
+keeps its distance and only its direction is re-read, measured from its
+reference image's camera centre at these poses; a ranged point whose reference
+the value does not name, or does not pose, carries no origin to measure from, so
+the rule says nothing about it and it is solved free.
+
+**A point the operation cannot speak for keeps the geometry it has.** That is a
+point fewer than two of whose observations state a usable ray, which comes back
+absent: it is counted in the report's `kept` rather than written as a `NaN`,
+because saying nothing is not the same as saying a point is nowhere. Every other
+verdict is written. A point the floor calls thin, or cheirality refuses, or the
+bar turns down becomes the direction its rays agree on, and the patch frame of a
+point that moved is rescaled so the patch keeps the angular size it had, by the
+same ratio the adjustment and the camera move resize theirs by.
+
+The preconditions are read before anything is gathered, and each is its own
+refusal: the observations have to carry a pixel (a `sift_files` value without
+the optional inline keypoint column carries none), some image has to be posed,
+and the **posed images have to share one camera**, because the observation form
+carries a single shared model and a value whose images disagree about the lens
+is better told so than silently solved through one of them. That is the same
+bar the reconstruction-level bundle adjustment sets
+([bundle-adjust.md](bundle-adjust.md)).
+
+`progress` names the three stages -- gathering the arrays, the solve, writing the
+answer back -- and is how the call is asked to stop. The cancel is read between
+stages: the array form runs to its end once entered, so a stopped call is one
+that broke off at a stage boundary, and it returns `Cancelled` and writes
+nothing. A value whose points were half re-solved is not an answer anybody asked
+for.
+
+The implementation is
+[retriangulate.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/retriangulate.rs),
+the one submodule of `reconstruction::triangulation` whose name carries the
+"re": the module root and [points.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/points.rs)
+triangulate whatever rays they are handed and have no opinion about whether
+those tracks have been triangulated before.
+
 ## Determinism
 
 Tracks are independent and may be solved in parallel; the output order is the
@@ -228,7 +307,7 @@ the same bytes.
 
 ## Binding
 
-`estimate_points(...)` in the reconstruction module of the bindings, taking
+`triangulate_points(...)` in the reconstruction module of the bindings, taking
 either form (rays and centres, or pixels with images, points, camera and
 poses) as NumPy arrays, the incoming state as optional arrays, and the rules
 as keyword arguments with the off position as each default. It returns the
@@ -248,7 +327,7 @@ The `distance` keyword is an `(n_track, 4)` float64 array whose rows are
 nothing about. One array rather than two keeps a distance and the origin it is
 measured from in one shape, which is how a caller builds them; the Rust
 interface
-([point_estimation.rs](../../../crates/sfmtool-core/src/reconstruction/point_estimation.rs))
+([points.rs](../../../crates/sfmtool-core/src/reconstruction/triangulation/points.rs))
 carries the same thing as one `PointDistance` per track on the rules. The
 `ranged` verdict appears in the exposed code table and its count in the census
 alongside every other rule's.
@@ -299,3 +378,18 @@ The in-front flag comes back beside the verdicts, which is what makes
   of one observation reads `few`. The rule on a ray set is refused.
 - **Determinism.** Two runs on the same arrays are byte-identical, with and
   without parallelism.
+- **The reconstruction.** Over a synthetic scene whose truth is known -- cameras
+  on a short arc, every observation the exact projection -- points nudged off
+  that truth land back on it to the precision an `f32` keypoint column carries,
+  and the input is left exactly as it was. A held point is neither read nor
+  moved and a call over one alone is refused; a ranged point comes back at
+  exactly its distance from its reference's camera centre, and one naming no
+  reference is solved free. A point one sighting is left of keeps the geometry
+  it had and is counted as kept. A floor wider than the arc turns every point
+  into a direction and reports the crossings, and no distance, since a crossing
+  has none. A direction goes in marked and comes back one. One point is an
+  overlay edit over the very same base under a `Replaced` map, a second pass
+  over it moves nothing and takes no new index, and an overlay edit under
+  `All` is folded in first. Mixed lenses, an unposed value and an index naming
+  no live point are each their own refusal, and a `Progress` already cancelled
+  stops the call before it writes.

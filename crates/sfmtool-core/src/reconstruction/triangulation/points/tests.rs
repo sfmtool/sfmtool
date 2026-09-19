@@ -111,7 +111,7 @@ fn every_rule_off_is_the_batch_triangulation_solve() {
             .collect::<Vec<_>>(),
         &offsets,
     );
-    let got = estimate_points_from_rays(
+    let got = triangulate_points_from_rays(
         RaySet {
             dirs: &unit_dirs,
             centres: &centres,
@@ -134,7 +134,7 @@ fn the_two_forms_agree_on_the_same_geometry() {
     let cam = camera();
     let (q, t) = views(&PAIR);
     let (uv, img, pt) = one_track(&cam, &PAIR, WORLD);
-    let from_obs = estimate_points_from_observations(
+    let from_obs = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -148,7 +148,7 @@ fn the_two_forms_agree_on_the_same_geometry() {
         dirs.extend_from_slice(&d);
         centres.extend_from_slice(c);
     }
-    let from_rays = estimate_points_from_rays(
+    let from_rays = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -168,7 +168,7 @@ fn a_marked_track_is_never_solved_even_when_its_rays_cross() {
     let cam = camera();
     let (q, t) = views(&PAIR);
     let (uv, img, pt) = one_track(&cam, &PAIR, WORLD);
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
@@ -184,7 +184,7 @@ fn a_marked_track_is_never_solved_even_when_its_rays_cross() {
     assert!((n - 1.0).abs() < 1e-12);
     assert_eq!(out.census.marked, 1);
     // Marks off, the same track is solved.
-    let solved = estimate_points_from_observations(
+    let solved = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -205,7 +205,7 @@ fn a_pair_exactly_at_the_floor_is_not_thin() {
     let b = Vector3::new(theta.sin(), 0.0, -theta.cos());
     let dirs = [a.x, a.y, a.z, b.x, b.y, b.z];
     let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let at = estimate_points_from_rays(
+    let at = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -222,7 +222,7 @@ fn a_pair_exactly_at_the_floor_is_not_thin() {
         vec![PointVerdict::Finite],
         "exactly at the floor"
     );
-    let inside = estimate_points_from_rays(
+    let inside = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -252,7 +252,7 @@ fn the_floor_reads_the_same_whether_a_track_has_two_rays_or_twenty() {
         wide_dirs.extend_from_slice(&[ang.sin(), 0.0, -ang.cos()]);
         wide_centres.extend_from_slice(&[f, 0.0, 0.0]);
     }
-    let many = estimate_points_from_rays(
+    let many = triangulate_points_from_rays(
         RaySet {
             dirs: &wide_dirs,
             centres: &wide_centres,
@@ -264,7 +264,7 @@ fn the_floor_reads_the_same_whether_a_track_has_two_rays_or_twenty() {
             ..Default::default()
         },
     );
-    let two = estimate_points_from_rays(
+    let two = triangulate_points_from_rays(
         RaySet {
             dirs: &[a.x, a.y, a.z, b.x, b.y, b.z],
             centres: &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -285,7 +285,7 @@ fn a_track_that_is_both_thin_and_behind_reads_thin() {
     // Two nearly parallel rays that meet behind the cameras.
     let dirs = [0.0, 0.0, -1.0, 1e-4, 0.0, -1.0];
     let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -300,7 +300,7 @@ fn a_track_that_is_both_thin_and_behind_reads_thin() {
     );
     assert_eq!(out.verdicts, vec![PointVerdict::Thin]);
     // With the floor off the same track reads behind.
-    let no_floor = estimate_points_from_rays(
+    let no_floor = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -319,7 +319,7 @@ fn a_track_that_is_both_thin_and_behind_reads_thin() {
 fn cheirality_off_keeps_the_point_and_reports_the_flag() {
     let dirs = [0.0, 0.0, -1.0, 1e-2, 0.0, -1.0];
     let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -338,7 +338,7 @@ fn a_track_under_the_bar_with_a_camera_behind_it_reads_behind() {
     let dirs = [0.0, 0.0, -1.0, 1e-2, 0.0, -1.0];
     let centres = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
     // Cheirality runs before the bar, so the bar never sees this track.
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -364,7 +364,7 @@ fn the_bar_reads_the_median_of_the_finite_residuals() {
     for k in 0..3 {
         uv[2 * k] += if k == 1 { -20.0 } else { 20.0 };
     }
-    let loose = estimate_points_from_observations(
+    let loose = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -374,7 +374,7 @@ fn the_bar_reads_the_median_of_the_finite_residuals() {
         },
     );
     assert_eq!(loose.verdicts, vec![PointVerdict::Finite]);
-    let tight = estimate_points_from_observations(
+    let tight = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -394,7 +394,7 @@ fn a_track_that_projects_nowhere_is_over_the_bar() {
     let cam = camera();
     let (q, t) = views(&PAIR);
     let uv = [320.0, 240.0, 320.0, 240.0];
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &[0, 1], &[0, 0], &q, &t, 1),
         None,
@@ -414,7 +414,7 @@ fn a_track_that_projects_nowhere_is_over_the_bar() {
 fn one_usable_ray_is_a_bearing_or_absent() {
     let dirs = [0.0, 0.0, -1.0];
     let centres = [0.0, 0.0, 0.0];
-    let bearing = estimate_points_from_rays(
+    let bearing = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -428,7 +428,7 @@ fn one_usable_ray_is_a_bearing_or_absent() {
     );
     assert_eq!(bearing.verdicts, vec![PointVerdict::Few]);
     assert_eq!(bearing.xyzw, vec![[0.0, 0.0, -1.0, 0.0]]);
-    let absent = estimate_points_from_rays(
+    let absent = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -443,7 +443,7 @@ fn one_usable_ray_is_a_bearing_or_absent() {
 
 #[test]
 fn no_usable_ray_falls_back_to_the_forward_direction() {
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &[],
             centres: &[],
@@ -471,7 +471,7 @@ fn no_usable_ray_falls_back_to_the_forward_direction() {
 fn few_is_read_before_marks() {
     // A marked track with one ray is absent under `few = absent`, which is what
     // an adjustment's own re-estimation does with it.
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &[0.0, 0.0, -1.0],
             centres: &[0.0, 0.0, 0.0],
@@ -490,7 +490,7 @@ fn a_track_no_observation_names_is_a_few_track() {
     let cam = camera();
     let (q, t) = views(&PAIR);
     let (uv, img, _pt) = one_track(&cam, &PAIR, WORLD);
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &[1, 1], &q, &t, 2),
         None,
@@ -537,7 +537,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
         few: FewObservations::Bearing,
         distance: None,
     };
-    let a = estimate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
+    let a = triangulate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
     assert_eq!(a.census.finite, 3);
     for (k, w) in worlds.iter().enumerate() {
         for (c, want) in w.iter().enumerate() {
@@ -545,7 +545,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
         }
     }
     assert!(a.census.triangulation_angle_median_deg.unwrap() > 0.0);
-    let b = estimate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
+    let b = triangulate_points_from_observations(&cam, obs(&uv, &img, &pt, &q, &t, 3), None, rules);
     assert_eq!(a, b);
 }
 
@@ -553,7 +553,7 @@ fn the_output_is_in_the_input_order_and_repeats_itself() {
 fn an_empty_observation_set_leaves_every_track_absent() {
     let cam = camera();
     let (q, t) = views(&PAIR);
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&[], &[], &[], &q, &t, 2),
         None,
@@ -621,7 +621,7 @@ const FIVE: [([f64; 3], bool); 5] = [
 fn a_minority_behind_is_dropped_and_the_track_is_rescued() {
     let p = [0.0, 0.0, -5.0];
     let (dirs, centres) = lines_at(p, &FIVE);
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -658,7 +658,7 @@ fn the_prune_off_leaves_the_same_track_a_bearing() {
         centres: &centres,
         offsets: &[0, 5],
     };
-    let off = estimate_points_from_rays(
+    let off = triangulate_points_from_rays(
         rays,
         None,
         PointRules {
@@ -672,7 +672,7 @@ fn the_prune_off_leaves_the_same_track_a_bearing() {
     assert_eq!(off.census.behind, 1);
     assert_eq!(off.census.pruned_obs, 0);
     // The prune with cheirality off is inert: the rule it reads never fires.
-    let no_rule = estimate_points_from_rays(
+    let no_rule = triangulate_points_from_rays(
         rays,
         None,
         PointRules {
@@ -680,7 +680,7 @@ fn the_prune_off_leaves_the_same_track_a_bearing() {
             ..Default::default()
         },
     );
-    let plain = estimate_points_from_rays(rays, None, PointRules::default());
+    let plain = triangulate_points_from_rays(rays, None, PointRules::default());
     assert_eq!(no_rule, plain);
     assert_eq!(no_rule.verdicts, vec![PointVerdict::Finite]);
 }
@@ -701,8 +701,8 @@ fn a_majority_behind_is_a_bearing_as_it_always_was() {
         centres: &centres,
         offsets: &[0, 5],
     };
-    let on = estimate_points_from_rays(rays, None, prune_rules());
-    let off = estimate_points_from_rays(
+    let on = triangulate_points_from_rays(rays, None, prune_rules());
+    let off = triangulate_points_from_rays(
         rays,
         None,
         PointRules {
@@ -728,7 +728,7 @@ fn half_the_track_behind_is_not_a_minority() {
         ([1.0, 0.0, -10.0], true),
     ];
     let (dirs, centres) = lines_at(p, &views);
-    let on = estimate_points_from_rays(
+    let on = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -742,7 +742,7 @@ fn half_the_track_behind_is_not_a_minority() {
     // A track of two can never show a minority, so the rescue never leaves a
     // single survivor behind.
     let (d2, c2) = lines_at(p, &[views[0], views[2]]);
-    let pair = estimate_points_from_rays(
+    let pair = triangulate_points_from_rays(
         RaySet {
             dirs: &d2,
             centres: &c2,
@@ -772,7 +772,7 @@ fn a_rescue_re_reads_the_floor_over_the_survivors() {
         centres: &centres,
         offsets: &[0, 3],
     };
-    let floored = estimate_points_from_rays(
+    let floored = triangulate_points_from_rays(
         rays,
         None,
         PointRules {
@@ -784,7 +784,7 @@ fn a_rescue_re_reads_the_floor_over_the_survivors() {
     assert_eq!(floored.pruned, vec![false; 3]);
     // With the floor off the same track is rescued: the floor is the only rule
     // that refused it.
-    let open = estimate_points_from_rays(rays, None, prune_rules());
+    let open = triangulate_points_from_rays(rays, None, prune_rules());
     assert_eq!(open.verdicts, vec![PointVerdict::FinitePruned]);
     assert_eq!(open.pruned, vec![false, false, true]);
 }
@@ -813,7 +813,7 @@ fn a_rescue_re_reads_the_bar_over_the_survivors() {
     uv.extend_from_slice(&[320.0, 240.0]);
     let img: Vec<u32> = (0..5).collect();
     let pt = [0u32; 5];
-    let loose = estimate_points_from_observations(
+    let loose = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -824,7 +824,7 @@ fn a_rescue_re_reads_the_bar_over_the_survivors() {
     );
     assert_eq!(loose.verdicts, vec![PointVerdict::FinitePruned]);
     assert_eq!(loose.pruned, vec![false, false, false, false, true]);
-    let tight = estimate_points_from_observations(
+    let tight = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -865,7 +865,7 @@ fn the_prune_mask_indexes_the_caller_s_own_observations() {
             pt.push(k as u32);
         }
     }
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 2),
         None,
@@ -887,7 +887,7 @@ fn the_prune_mask_indexes_the_caller_s_own_observations() {
             assert!((out.xyzw[k][c] - want).abs() < 1e-9);
         }
     }
-    let again = estimate_points_from_observations(
+    let again = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 2),
         None,
@@ -907,7 +907,7 @@ fn the_rescued_angle_is_the_survivors_own_widest_pair() {
         ([0.0, -10.0, -5.0], true),
     ];
     let (dirs, centres) = lines_at(p, &views);
-    let out = estimate_points_from_rays(
+    let out = triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,
@@ -950,7 +950,7 @@ fn a_ranged_track_keeps_its_distance_and_reads_its_direction() {
         + (world[2] - origin[2]).powi(2))
     .sqrt();
     let rows = vec![PointDistance { distance, origin }];
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -986,7 +986,7 @@ fn a_ranged_track_recovers_a_direction_its_rays_barely_carry() {
     let origin = [0.0, 0.0, 0.0];
     let distance = (world[0] * world[0] + world[1] * world[1] + world[2] * world[2]).sqrt();
     let rows = vec![PointDistance { distance, origin }];
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -1009,7 +1009,7 @@ fn an_infinite_range_is_the_marked_bearing() {
     let cam = camera();
     let (uv, img, pt) = one_track(&cam, &SPREAD, [0.4, -0.25, -6.0]);
     let (q, t) = views(&SPREAD);
-    let marked = estimate_points_from_observations(
+    let marked = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
@@ -1019,7 +1019,7 @@ fn an_infinite_range_is_the_marked_bearing() {
         distance: f64::INFINITY,
         origin: [f64::NAN; 3],
     }];
-    let ranged = estimate_points_from_observations(
+    let ranged = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -1051,7 +1051,7 @@ fn the_range_rule_outranks_the_mark_and_the_floor() {
         origin: [0.0, 0.0, 0.0],
     }];
     // Marked, and inside a floor that would call it thin: the distance decides.
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
@@ -1065,7 +1065,7 @@ fn the_range_rule_outranks_the_mark_and_the_floor() {
     assert_eq!(out.xyzw[0][3], 1.0);
     // A track the rule says nothing about is decided as it would be otherwise.
     let quiet = vec![PointDistance::NONE];
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         Some(&[true]),
@@ -1088,7 +1088,7 @@ fn a_ranged_track_of_one_observation_is_decided_by_few() {
         distance: 6.0,
         origin: [0.0, 0.0, 0.0],
     }];
-    let out = estimate_points_from_observations(
+    let out = triangulate_points_from_observations(
         &cam,
         obs(&uv, &img, &pt, &q, &t, 1),
         None,
@@ -1110,7 +1110,7 @@ fn the_range_rule_refuses_the_ray_form() {
         distance: 5.0,
         origin: [0.0, 0.0, 0.0],
     }];
-    estimate_points_from_rays(
+    triangulate_points_from_rays(
         RaySet {
             dirs: &dirs,
             centres: &centres,

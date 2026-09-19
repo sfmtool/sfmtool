@@ -20,6 +20,37 @@
 //! rays (un-projection, distortion, pose) is the caller's concern.
 //!
 //! See `specs/core/reconstruction/batch-triangulation-api.md` for the design.
+//!
+//! Two layers sit on top of this one, each in its own submodule and each
+//! re-exported here so a caller's path stays short:
+//!
+//! - [`points`] carries the per-track **rules** -- the angular floor,
+//!   cheirality and its per-observation prune, the reprojection bar, what a
+//!   track of one observation becomes, and a caller-held distance -- and says
+//!   which of them decided each track. With every rule off it is this solve.
+//! - [`retriangulate`] is the one operation a caller holding a whole
+//!   reconstruction asks for: re-solve these points of it, at its own poses and
+//!   its own lens, and hand back the value that holds the answers.
+//!
+//! The "re" is only in the second. This module and [`points`] triangulate from
+//! whatever rays they are given, with no opinion about whether those tracks
+//! have ever been triangulated before; [`retriangulate`] is by definition
+//! solving points a value already holds.
+//!
+//! See `specs/core/reconstruction/triangulation-rules.md` for both.
+
+pub mod points;
+pub mod retriangulate;
+
+pub use points::{
+    triangulate_points_from_observations, triangulate_points_from_rays, FewObservations,
+    ObservationSet, PointCensus, PointDistance, PointRules, PointVerdict, RaySet,
+    TriangulatedPoints, FALLBACK_DIRECTION,
+};
+pub use retriangulate::{
+    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
+    RetriangulateWhich,
+};
 
 use nalgebra::{Matrix3, Point3, SymmetricEigen, Vector3};
 

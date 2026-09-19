@@ -1,17 +1,18 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python bindings for point estimation: re-reading every track from its own
-//! observations at one geometry, with the per-track rules held as options.
+//! Python bindings for the rule-carrying triangulation of a track set: every
+//! track read from its own observations at one geometry, with the per-track
+//! rules held as options.
 
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use sfmtool_core::reconstruction::point_estimation::{
-    estimate_points_from_observations, estimate_points_from_rays, FewObservations, ObservationSet,
-    PointDistance, PointRules, PointVerdict, RaySet,
+use sfmtool_core::reconstruction::triangulation::{
+    triangulate_points_from_observations, triangulate_points_from_rays, FewObservations,
+    ObservationSet, PointDistance, PointRules, PointVerdict, RaySet,
 };
 
 use crate::geometry::PyCameraIntrinsics;
@@ -30,7 +31,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(d)
 }
 
-/// Re-estimate every track from its own observations at one geometry.
+/// Triangulate every track from its own observations at one geometry.
 ///
 /// Two input forms. Pass ``dirs``, ``centres`` and ``offsets`` for the ray form
 /// (world rays and camera centres, CSR over tracks), or ``uv``, ``obs_image``,
@@ -105,7 +106,7 @@ fn verdict_codes(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     few="absent",
 ))]
 #[allow(clippy::too_many_arguments)]
-pub fn estimate_points<'py>(
+pub fn triangulate_points<'py>(
     py: Python<'py>,
     dirs: Option<PyReadonlyArray2<'py, f64>>,
     centres: Option<PyReadonlyArray2<'py, f64>>,
@@ -220,7 +221,7 @@ pub fn estimate_points<'py>(
             check_marks(m.len(), offs.len().saturating_sub(1))?;
         }
         py.detach(|| {
-            estimate_points_from_rays(
+            triangulate_points_from_rays(
                 RaySet {
                     dirs: &dd,
                     centres: &cc,
@@ -313,7 +314,7 @@ pub fn estimate_points<'py>(
         }
         let inner = cam.inner.clone();
         py.detach(move || {
-            estimate_points_from_observations(
+            triangulate_points_from_observations(
                 &inner,
                 ObservationSet {
                     uv: &uu,
@@ -404,7 +405,7 @@ fn check_marks(given: usize, want: usize) -> PyResult<()> {
 // ── Registration ──────────────────────────────────────────────────────────
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(estimate_points, m)?)?;
+    m.add_function(wrap_pyfunction!(triangulate_points, m)?)?;
     m.add("VERDICT_CODES", verdict_codes(m.py())?)?;
     Ok(())
 }

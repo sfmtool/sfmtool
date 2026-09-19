@@ -93,7 +93,7 @@ Per schedule round, mirroring the experiment scripts exactly:
 1. **Retriangulate (rounds after the first).** Rebuild *every* point from
    *all* supplied observations at the current poses, through the point
    estimation operation
-   ([point-estimation.md](../reconstruction/point-estimation.md)) with `marks`
+   ([triangulation-rules.md](../reconstruction/triangulation-rules.md)) with `marks`
    on for the round's direction mask, `few = absent`, and the floor, cheirality
    and bar rules off, the settings a free point crossing representations moves
    off, and a ranged or held point never reads (see "Point constraints"):
@@ -510,9 +510,9 @@ standard `(1e6, 0)` penalized residual with a zero Jacobian row.
   normalized mean of its observations' back-rotated rays
   `R_iᵀ · pixel_to_ray(uv)` at the current rotations. A direction track
   with fewer than 2 observations becomes `NaN`, mirroring finite tracks. Both
-  families are one call of the point estimation operation with the
+  families are one call of the retriangulation operation with the
   adjustment's settings (marks on, few absent, every other rule off), see
-  [point-estimation.md](../reconstruction/point-estimation.md).
+  [triangulation-rules.md](../reconstruction/triangulation-rules.md).
 
 ### Binding
 
@@ -595,7 +595,7 @@ constraint triple (see
 Within a round nothing changes: a finite point perturbs in three Euclidean
 degrees of freedom and a direction in the two of its tangent plane. The crossing
 happens where the representation is already re-read, the inter-round
-re-estimation, which under `cross` runs the point-estimation operation with
+re-estimation, which under `cross` runs the retriangulation operation with
 `marks` **off** for free points, `cheirality` **on**, `few = absent`, and the
 `floor` at the round's noise-floor angle
 
@@ -661,9 +661,9 @@ The converse is worth expecting: a solve carrying one distance moves the whole
 reconstruction under it until the scale fits.
 
 Re-estimation between rounds keeps `r` and re-solves `d` through the
-point-estimation operation's `distance` rule at the origin the reference
+retriangulation operation's `distance` rule at the origin the reference
 resolves to at the round's poses
-([point-estimation.md](../reconstruction/point-estimation.md)).
+([triangulation-rules.md](../reconstruction/triangulation-rules.md)).
 
 ### Held points: residuals without parameters
 

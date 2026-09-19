@@ -818,6 +818,43 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "retriangulate_point",
+            description: "Re-solve one 3D point from its own observations, at the poses and the \
+                          lens the reconstruction already holds. Moves no camera and no other \
+                          point. A point edit, so every other index stays good; the point itself \
+                          is deleted and re-added, so it takes a new index, which the reply's \
+                          report names along with the verdict its observations supported - \
+                          finite, at infinity, behind a camera that sees it, too thin to place. \
+                          A point the reconstruction holds at a fixed coordinate is refused, and \
+                          a point fewer than two of whose observations state a usable ray keeps \
+                          the geometry it had. Undo puts it back.",
+            kind: Write,
+            schema: object(
+                &[],
+                &[
+                    ("reconstruction_label", edited_label_schema()),
+                    ("point", point_schema()),
+                ],
+            ),
+        },
+        ToolSpec {
+            name: "retriangulate_all_points",
+            description: "Re-solve every 3D point of one reconstruction from its own \
+                          observations, at the poses and the lens it already holds. Moves no \
+                          camera and no lens: this is the structure re-read at a geometry \
+                          somebody else decided. A bulk edit giving the node a whole new base, \
+                          but it deletes no point and creates none, so every index still means \
+                          what it meant. Points the reconstruction holds at a fixed coordinate \
+                          are left alone, a ranged point keeps its distance and only its \
+                          direction is re-read, and a point too thinly seen to place keeps the \
+                          geometry it had. One version, and it runs on a worker thread, so a \
+                          retriangulation still going after 200 ms replies with running: true \
+                          and an operation_id instead of the version; cancel_background_task \
+                          stops it. Needs a pixel per observation and one shared camera.",
+            kind: Write,
+            schema: object(&[], &[("reconstruction_label", edited_label_schema())]),
+        },
+        ToolSpec {
             name: "delete_camera_image",
             description: "Delete one camera image, its observations, and any track left with \
                           none. A bulk edit: every image index at or after the deleted one moves \
@@ -2256,6 +2293,19 @@ pub(crate) fn parse(
         "convert_to_embedded_patches" => {
             args.reject_unknown(&["reconstruction_label"])?;
             Command::ConvertToEmbeddedPatches {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+            }
+        }
+        "retriangulate_point" => {
+            args.reject_unknown(&["reconstruction_label", "point"])?;
+            Command::RetriangulatePoint {
+                reconstruction_label: args.required_string("reconstruction_label")?,
+                point: args.point("point")?,
+            }
+        }
+        "retriangulate_all_points" => {
+            args.reject_unknown(&["reconstruction_label"])?;
+            Command::RetriangulateAllPoints {
                 reconstruction_label: args.required_string("reconstruction_label")?,
             }
         }

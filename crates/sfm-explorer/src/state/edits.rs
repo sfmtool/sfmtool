@@ -33,6 +33,10 @@ use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::{PatchExtent, PatchNormal, ViewReduce};
 use sfmtool_core::patch::normal_refine::ProjectedImage;
 use sfmtool_core::progress_note;
+use sfmtool_core::reconstruction::triangulation::{
+    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
+    RetriangulateWhich,
+};
 use sfmtool_core::{EditedReconstruction, RowMap, SfmrReconstruction};
 
 use crate::action_log::Kind;
@@ -94,6 +98,69 @@ pub(crate) fn convert_refusal(
             node.label
         )
     })
+}
+
+/// Why `node` cannot be retriangulated, or `None` when it can.
+///
+/// The three reasons a caller can see without solving anything, and they are
+/// the core operation's own refusals ([`RetriangulateError`]) asked before the
+/// gesture rather than after it: the observations carry no pixel to cast a ray
+/// through, no image carries a pose, and the posed images do not share one
+/// lens.
+///
+/// A free function over the node and the busy sentence for the reason
+/// [`convert_refusal`] is one: the Scene tree's menu is drawn inside a walk
+/// that has already given up its borrow of the state, and the edits look the
+/// node up. One definition, so the greyed entry's hover text and the refusal a
+/// call gets are the same sentence.
+///
+/// `busy` is [`AppState::busy_refusal`]'s answer for this node, and it comes
+/// first: an operation already running on the node is the reason that will
+/// still be true a moment later.
+pub(crate) fn retriangulate_refusal(
+    node: &crate::scene::SceneNode,
+    busy: Option<&str>,
+) -> Option<String> {
+    if let Some(why) = busy {
+        return Some(why.to_string());
+    }
+    let edited = node.history.current();
+    if !edited.has_keypoints() {
+        return Some(
+            "This reconstruction's observations are .sift feature indexes with no inline \
+             keypoints, and retriangulation needs a pixel per observation."
+                .to_string(),
+        );
+    }
+    match edited.posed_lens_count() {
+        0 => Some("No image of this reconstruction carries a pose.".to_string()),
+        1 => None,
+        n => Some(format!(
+            "Retriangulation reads one shared camera, and these images are taken through {n}."
+        )),
+    }
+}
+
+/// What one retriangulation did, as the Action Log says it.
+///
+/// The version label is the short half the Edit History panel lists; the
+/// sentence is that label plus the numbers, which is the shape every other edit
+/// here reports in.
+fn retriangulate_summary(report: &RetriangulateReport) -> String {
+    let mut text = format!("{} of {} points moved", report.moved, report.read);
+    if report.crossed > 0 {
+        text.push_str(&format!(", {} crossed to or from infinity", report.crossed));
+    }
+    if report.kept > 0 {
+        text.push_str(&format!(", {} too thinly seen to place", report.kept));
+    }
+    if report.held > 0 {
+        text.push_str(&format!(", {} held", report.held));
+    }
+    if report.median_shift.is_finite() {
+        text.push_str(&format!(", median shift {:.4}", report.median_shift));
+    }
+    text
 }
 
 /// Decoded images for one edit, owning what a [`ProjectedImage`] borrows.
@@ -237,6 +304,223 @@ impl AppState {
         self.action_log
             .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
         Ok(())
+    }
+
+    /// Why retriangulating `id` is refused right now, or `None`.
+    ///
+    /// [`retriangulate_refusal`]'s question asked of a node this state holds,
+    /// which is the form the wire and the job want; the Scene tree's menu asks
+    /// the free function directly, because the walk that draws it has the node
+    /// and not the state.
+    pub(crate) fn retriangulate_refusal(&self, id: ReconId) -> Option<String> {
+        let busy = self.busy_refusal(id);
+        retriangulate_refusal(self.node(id)?, busy.as_deref())
+    }
+
+    /// Carry out whatever the 3D viewport's point context menu asked for.
+    ///
+    /// Here rather than in the viewport for the reason every other panel's
+    /// response is applied outside it: `Viewer3D::show` holds the node borrowed
+    /// out of this state while it draws, and each of these needs it mutably.
+    ///
+    /// The selection moves first in every case, so a menu that merely *opened*
+    /// on a point leaves the rest of the viewer looking at that point whether
+    /// or not an entry is chosen afterwards.
+    pub fn apply_point_menu(&mut self, request: crate::viewer_3d::PointMenuRequest) {
+        use crate::viewer_3d::PointMenuRequest;
+
+        let point = match request {
+            PointMenuRequest::Opened(point)
+            | PointMenuRequest::EditOnBench(point)
+            | PointMenuRequest::Retriangulate(point) => point,
+        };
+        self.select_point(point);
+        match request {
+            PointMenuRequest::Opened(_) => {}
+            PointMenuRequest::EditOnBench(point) => {
+                // The same call the Track Edit panel's own button makes. That
+                // button lives inside the panel and so has nothing to raise;
+                // this one is reached from the viewport, and a track staged
+                // into a panel nobody can see is a gesture with no answer.
+                match self.put_point_on_bench(point) {
+                    Ok(_) => self.show_panel(crate::dock::Tab::TrackEdit),
+                    Err(why) => self.action_log.fail(Kind::Bench, why),
+                }
+            }
+            PointMenuRequest::Retriangulate(point) => {
+                let _ = self.retriangulate_point(point);
+            }
+        }
+    }
+
+    /// Re-solve one point from its own observations, at the poses and the lens
+    /// its reconstruction already holds, and install the answer as that node's
+    /// next version.
+    ///
+    /// A point edit: the new version's overlay carries the re-solved record and
+    /// the base is the same `Arc`, so every index but this one still means what
+    /// it meant. Delete-and-re-add gives the point a **new index**, which is why
+    /// the map is a [`PointMap::Replaced`] rather than the empty one a deletion
+    /// pushes -- a selection, a copied id and a panel's prepared state all
+    /// follow the point through it.
+    ///
+    /// Nothing else moves: no camera, no lens, and no other point. What this
+    /// point's observations support at this geometry is the whole of what it
+    /// decides, and the verdict the core operation reached is in the sentence
+    /// the Action Log keeps.
+    ///
+    /// See `specs/gui/edits/retriangulate-point.md`.
+    pub fn retriangulate_point(&mut self, point: PointRef) -> Result<(), String> {
+        let started = Instant::now();
+        // The level the Action Log toolbar's checkbox last left, read as the
+        // operation starts so that a change to it takes effect on the next one.
+        let collector = Collector::new(self.action_log.detailed_timing());
+        match self.retriangulate_point_inner(point, &collector) {
+            Ok(message) => {
+                self.action_log
+                    .record_done(Kind::Edit, started, message, collector.take());
+                Ok(())
+            }
+            Err(message) => {
+                self.action_log.fail(Kind::Edit, message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
+    /// refusal's.
+    fn retriangulate_point_inner(
+        &mut self,
+        point: PointRef,
+        collector: &Collector,
+    ) -> Result<String, String> {
+        if let Some(why) = self.busy_refusal(point.recon) {
+            return Err(why);
+        }
+        let index = self
+            .scene
+            .iter()
+            .position(|n| n.id == point.recon)
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        let label = self.scene[index].label.clone();
+        let refuse = |why: String| format!("Cannot retriangulate point {}: {why}", point.point);
+        if let Some(why) = retriangulate_refusal(&self.scene[index], None) {
+            return Err(refuse(why));
+        }
+
+        let edited = self.scene[index].history.current();
+        let (next, map, report) = {
+            let _phase = collector.phase("retriangulate");
+            retriangulate_points(
+                edited,
+                RetriangulateWhich::These(&[point.point]),
+                &RetriangulateOptions::default(),
+                &collector.progress(),
+            )
+            .map_err(|e| refuse(e.to_string()))?
+        };
+
+        // One point read, so the census names one verdict, and that verdict is
+        // what a reader wants to be told about this gesture.
+        let verdict = report
+            .census
+            .sole_verdict()
+            .map_or_else(String::new, |verdict| format!(": {}", verdict.label()));
+        let text = format!("Retriangulated point {} in {label}", point.point);
+        let node = &mut self.scene[index];
+        let serial = {
+            let _phase = collector.phase("push version");
+            node.history.push(next, map, text.clone())
+        };
+        let parent = version_before(node, serial);
+        self.follow_selection_forward(point.recon);
+        Ok(format!("{text}{verdict} ({parent} → {serial})"))
+    }
+
+    /// Start a retriangulation of every point of `id` on a worker thread.
+    ///
+    /// A bulk edit: every point's geometry is re-read from its own observations
+    /// at the poses and the lens the value already holds, so the next version is
+    /// a whole new base. No point is deleted and none is created, so the indexes
+    /// do not move; what the panels cached *about* the geometry is the caller's
+    /// to drop, as it is after an adjustment.
+    ///
+    /// Returns as soon as the worker is running, and **nothing is logged
+    /// here**: the entry is the outcome's, written by
+    /// [`AppState::poll_background_task`] on the frame the answer lands, from
+    /// the instant the operation started and in the name of whoever asked for
+    /// it. An `Err` is a refusal to *begin*, logged the way the synchronous
+    /// edits log theirs.
+    pub fn start_retriangulate_all_points(&mut self, id: ReconId) -> Result<(), String> {
+        let outcome = match self.retriangulate_all_points_job(id) {
+            Ok(job) => self.start_background_task(Operation::RETRIANGULATE_ALL_POINTS, id, job),
+            Err(message) => Err(message),
+        };
+        if let Err(message) = &outcome {
+            self.action_log.fail(Kind::Edit, message.clone());
+        }
+        outcome
+    }
+
+    /// The retriangulation itself, as a function of the
+    /// [`Progress`](sfmtool_core::progress::Progress) it reports through.
+    ///
+    /// The closure owns what it reads, the way the adjustment's does: the
+    /// overlay fold and the solve are pure functions of the value at the cursor,
+    /// so what crosses to the worker is a clone of [`EditedReconstruction`]
+    /// whose `base` is the very `Arc` the node goes on drawing.
+    pub(crate) fn retriangulate_all_points_job(&self, id: ReconId) -> Result<Job, String> {
+        let label = self
+            .node(id)
+            .map(|node| node.label.clone())
+            .ok_or_else(|| "That reconstruction is no longer loaded.".to_string())?;
+        // The gate is the menu entry's own, so the entry and the edit cannot
+        // disagree about when the retriangulation can run.
+        if let Some(why) = self.retriangulate_refusal(id) {
+            return Err(format!(
+                "Retriangulate all points of {label} refused: {why}"
+            ));
+        }
+        let edited = self
+            .node(id)
+            .expect("just resolved")
+            .history
+            .current()
+            .clone();
+        Ok(Box::new(move |progress| {
+            let refuse =
+                |why: String| format!("Retriangulate all points of {label} refused: {why}");
+
+            // The core operation's own three stages nest directly under the
+            // operation's, since this `Progress` is at the top of it, and the
+            // overlay fold it does is one of them.
+            let (next, map, report) = match retriangulate_points(
+                &edited,
+                RetriangulateWhich::All,
+                &RetriangulateOptions::default(),
+                progress,
+            ) {
+                Ok(solved) => solved,
+                // The one error that is not a refusal: the operation was asked
+                // to stop and did, which the log words as a cancellation rather
+                // than as a failure of the solve.
+                Err(RetriangulateError::Cancelled) => return Finished::Cancelled,
+                Err(e) => return Finished::Failed(refuse(e.to_string())),
+            };
+
+            let version_label = format!("Retriangulated {label}");
+            let text = format!("{version_label}: {}", retriangulate_summary(&report));
+            Finished::Produced {
+                // `RetriangulateWhich::All` folds the overlay in, so the value
+                // that comes back is a base with nothing over it, and taking it
+                // out of the version is a move rather than a materialisation.
+                value: Arc::unwrap_or_clone(next.base),
+                map,
+                version_label,
+                text,
+            }
+        }))
     }
 
     /// The patch radius a gesture that names none takes for `image`, in that

@@ -1,10 +1,10 @@
 # Copyright The SfM Tool Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the point-estimation binding
-(``sfmtool._sfmtool.reconstruction.estimate_points``, ``VERDICT_CODES``).
+"""Tests for the rule-carrying triangulation binding
+(``sfmtool._sfmtool.reconstruction.triangulate_points``, ``VERDICT_CODES``).
 
-The operation re-reads every track from its own observations at one geometry
+The operation reads every track from its own observations at one geometry
 and decides, per track, what those observations support. Two input forms, and
 five rules each with an off position; with every rule off it is the batch
 triangulation solve. Canonical camera convention throughout, so a point in
@@ -18,7 +18,7 @@ import pytest
 
 from sfmtool._sfmtool.analysis import triangulate_batch
 from sfmtool._sfmtool.geometry import CameraIntrinsics
-from sfmtool._sfmtool.reconstruction import VERDICT_CODES, estimate_points
+from sfmtool._sfmtool.reconstruction import VERDICT_CODES, triangulate_points
 
 FINITE = VERDICT_CODES["finite"]
 MARKED = VERDICT_CODES["marked"]
@@ -72,7 +72,7 @@ WORLD = np.array([[0.2, -0.1, -5.0]])
 def _call(cam, centres, world, pairs, **rules):
     quats, trans = _views(centres)
     uv, oi, op = _observations(cam, centres, world, pairs)
-    return estimate_points(
+    return triangulate_points(
         uv=uv,
         obs_image=oi,
         obs_point=op,
@@ -93,7 +93,7 @@ def test_every_rule_off_is_the_batch_triangulation_solve():
     centres = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
     offsets = np.array([0, 3], np.int64)
     want = triangulate_batch(dirs, centres, offsets)
-    got = estimate_points(dirs=dirs, centres=centres, offsets=offsets)
+    got = triangulate_points(dirs=dirs, centres=centres, offsets=offsets)
     npt.assert_array_equal(got["verdicts"], [FINITE])
     npt.assert_array_equal(got["xyzw"][0][:3], want["points"][0])
     assert got["xyzw"][0][3] == 1.0
@@ -107,7 +107,7 @@ def test_the_two_forms_agree_on_the_same_geometry():
     from_obs = _call(cam, PAIR, WORLD, [(0, 0), (1, 0)])
     uv, _oi, _op = _observations(cam, PAIR, WORLD, [(0, 0), (1, 0)])
     dirs = np.asarray(cam.pixel_to_ray_batch(np.ascontiguousarray(uv)), float)
-    from_rays = estimate_points(
+    from_rays = triangulate_points(
         dirs=dirs, centres=PAIR, offsets=np.array([0, 2], np.int64)
     )
     npt.assert_array_equal(from_obs["xyzw"], from_rays["xyzw"])
@@ -144,11 +144,11 @@ def test_a_pair_exactly_at_the_floor_is_not_thin():
     centres = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
     offsets = np.array([0, 2], np.int64)
     floor = np.arccos(np.clip(dirs[0] @ dirs[1], -1.0, 1.0))
-    at = estimate_points(
+    at = triangulate_points(
         dirs=dirs, centres=centres, offsets=offsets, floor_rad=float(floor)
     )
     npt.assert_array_equal(at["verdicts"], [FINITE])
-    inside = estimate_points(
+    inside = triangulate_points(
         dirs=dirs, centres=centres, offsets=offsets, floor_rad=float(floor) * 1.0001
     )
     npt.assert_array_equal(inside["verdicts"], [THIN])
@@ -160,10 +160,12 @@ def test_cheirality_off_keeps_the_point_and_reports_the_flag():
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
     centres = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
     offsets = np.array([0, 2], np.int64)
-    kept = estimate_points(dirs=dirs, centres=centres, offsets=offsets)
+    kept = triangulate_points(dirs=dirs, centres=centres, offsets=offsets)
     npt.assert_array_equal(kept["verdicts"], [FINITE])
     npt.assert_array_equal(kept["in_front"], [False])
-    cut = estimate_points(dirs=dirs, centres=centres, offsets=offsets, cheirality=True)
+    cut = triangulate_points(
+        dirs=dirs, centres=centres, offsets=offsets, cheirality=True
+    )
     npt.assert_array_equal(cut["verdicts"], [BEHIND])
     assert cut["xyzw"][0][3] == 0.0
     assert cut["census"]["behind"] == 1
@@ -184,9 +186,9 @@ def test_the_bar_demotes_what_its_own_rows_disagree_with():
         translations=trans,
         n_points=1,
     )
-    loose = estimate_points(bar_px=1e6, **common)
+    loose = triangulate_points(bar_px=1e6, **common)
     npt.assert_array_equal(loose["verdicts"], [FINITE])
-    tight = estimate_points(bar_px=0.5, **common)
+    tight = triangulate_points(bar_px=0.5, **common)
     npt.assert_array_equal(tight["verdicts"], [OVER_BAR])
     assert tight["census"]["over_bar"] == 1
     assert tight["xyzw"][0][3] == 0.0
@@ -194,7 +196,7 @@ def test_the_bar_demotes_what_its_own_rows_disagree_with():
 
 def test_the_bar_needs_the_observation_form():
     with pytest.raises(ValueError, match="bar_px needs the observation form"):
-        estimate_points(
+        triangulate_points(
             dirs=np.zeros((2, 3)),
             centres=np.zeros((2, 3)),
             offsets=np.array([0, 2], np.int64),
@@ -209,19 +211,19 @@ def test_one_usable_ray_is_a_bearing_or_absent():
     dirs = np.array([[0.0, 0.0, -1.0]])
     centres = np.zeros((1, 3))
     offsets = np.array([0, 1], np.int64)
-    bearing = estimate_points(
+    bearing = triangulate_points(
         dirs=dirs, centres=centres, offsets=offsets, few="bearing"
     )
     npt.assert_array_equal(bearing["verdicts"], [FEW])
     npt.assert_array_equal(bearing["xyzw"], [[0.0, 0.0, -1.0, 0.0]])
-    absent = estimate_points(dirs=dirs, centres=centres, offsets=offsets)
+    absent = triangulate_points(dirs=dirs, centres=centres, offsets=offsets)
     npt.assert_array_equal(absent["verdicts"], [FEW])
     assert np.isnan(absent["xyzw"]).all()
     assert absent["census"]["few"] == 1
 
 
 def test_no_usable_ray_falls_back_to_the_forward_direction():
-    out = estimate_points(
+    out = triangulate_points(
         dirs=np.zeros((0, 3)),
         centres=np.zeros((0, 3)),
         offsets=np.array([0, 0], np.int64),
@@ -231,7 +233,7 @@ def test_no_usable_ray_falls_back_to_the_forward_direction():
 
 
 def test_few_is_read_before_marks():
-    out = estimate_points(
+    out = triangulate_points(
         dirs=np.array([[0.0, 0.0, -1.0]]),
         centres=np.zeros((1, 3)),
         offsets=np.array([0, 1], np.int64),
@@ -315,7 +317,7 @@ def _specimen(cam, n_agreeing, baseline=0.05):
     The agreeing views sit on a short baseline and see :data:`SPECIMEN` where
     they say it is; the last row is the revisit camera's own observation, whose
     ray is ``REVISIT_YAW_DEG`` off theirs and which the point is behind.
-    Returns the keyword arguments of one ``estimate_points`` call."""
+    Returns the keyword arguments of one ``triangulate_points`` call."""
     centres = np.array(
         [[baseline * k, 0.0, 0.0] for k in range(n_agreeing)] + [REVISIT_CENTRE]
     )
@@ -360,13 +362,13 @@ def test_one_wrong_observation_no_longer_hides_a_finite_point(n_agreeing):
     assert off.min() > 45.0
 
     # As it stands, the whole track is a bearing.
-    whole = estimate_points(cheirality=True, **floor, **kw)
+    whole = triangulate_points(cheirality=True, **floor, **kw)
     npt.assert_array_equal(whole["verdicts"], [BEHIND])
     assert whole["xyzw"][0][3] == 0.0
     assert not whole["pruned"].any()
 
     # Read per observation, the wrong one is dropped and the point stands.
-    pruned = estimate_points(cheirality=True, prune_behind=True, **floor, **kw)
+    pruned = triangulate_points(cheirality=True, prune_behind=True, **floor, **kw)
     npt.assert_array_equal(pruned["verdicts"], [FINITE_PRUNED])
     assert pruned["xyzw"][0][3] == 1.0
     npt.assert_allclose(pruned["xyzw"][0][:3], SPECIMEN[0], atol=1e-9)
@@ -400,8 +402,8 @@ def test_a_majority_behind_is_still_a_bearing():
     )
     offsets = np.array([0, 5], np.int64)
     common = dict(dirs=dirs, centres=centres, offsets=offsets, cheirality=True)
-    whole = estimate_points(**common)
-    pruned = estimate_points(prune_behind=True, **common)
+    whole = triangulate_points(**common)
+    pruned = triangulate_points(prune_behind=True, **common)
     npt.assert_array_equal(pruned["verdicts"], [BEHIND])
     npt.assert_array_equal(pruned["xyzw"], whole["xyzw"])
     assert not pruned["pruned"].any()
@@ -422,7 +424,7 @@ def test_half_the_track_behind_is_not_a_minority():
             [1.0, 0.0, -10.0],
         ]
     )
-    out = estimate_points(
+    out = triangulate_points(
         dirs=dirs,
         centres=centres,
         offsets=np.array([0, 4], np.int64),
@@ -436,12 +438,12 @@ def test_half_the_track_behind_is_not_a_minority():
 def test_the_prune_flags_are_over_the_observations_given():
     cam = _cam()
     kw = _specimen(cam, 4)
-    out = estimate_points(cheirality=True, prune_behind=True, few="bearing", **kw)
+    out = triangulate_points(cheirality=True, prune_behind=True, few="bearing", **kw)
     assert out["pruned"].shape == (len(kw["obs_image"]),)
     assert out["pruned"].dtype == np.bool_
     # The rows the caller keeps are the rows the estimate was solved on.
     keep = ~out["pruned"]
-    again = estimate_points(
+    again = triangulate_points(
         uv=np.ascontiguousarray(kw["uv"][keep]),
         obs_image=np.ascontiguousarray(kw["obs_image"][keep]),
         obs_point=np.ascontiguousarray(kw["obs_point"][keep]),
@@ -459,8 +461,8 @@ def test_the_prune_flags_are_over_the_observations_given():
 def test_the_prune_off_is_the_reading_it_always_was():
     cam = _cam()
     kw = _specimen(cam, 4)
-    a = estimate_points(cheirality=True, few="bearing", **kw)
-    b = estimate_points(cheirality=True, prune_behind=False, few="bearing", **kw)
+    a = triangulate_points(cheirality=True, few="bearing", **kw)
+    b = triangulate_points(cheirality=True, prune_behind=False, few="bearing", **kw)
     npt.assert_array_equal(a["xyzw"], b["xyzw"])
     npt.assert_array_equal(a["verdicts"], b["verdicts"])
     npt.assert_array_equal(a["pruned"], b["pruned"])
@@ -472,7 +474,7 @@ def test_the_prune_off_is_the_reading_it_always_was():
 def test_the_prune_needs_the_rule_it_reads():
     cam = _cam()
     with pytest.raises(ValueError, match="needs cheirality"):
-        estimate_points(prune_behind=True, **_specimen(cam, 4))
+        triangulate_points(prune_behind=True, **_specimen(cam, 4))
 
 
 def test_the_inputs_are_checked():
@@ -490,12 +492,12 @@ def test_the_inputs_are_checked():
     )
 
     def call(**over):
-        return estimate_points(**{**good, **over})
+        return triangulate_points(**{**good, **over})
 
     with pytest.raises(ValueError, match="not both"):
         call(dirs=np.zeros((2, 3)))
     with pytest.raises(ValueError, match="needs n_points"):
-        estimate_points(**{k: v for k, v in good.items() if k != "n_points"})
+        triangulate_points(**{k: v for k, v in good.items() if k != "n_points"})
     with pytest.raises(ValueError, match="uv must have shape"):
         call(uv=np.zeros((2, 3)))
     with pytest.raises(ValueError, match="same length"):
@@ -511,7 +513,7 @@ def test_the_inputs_are_checked():
     with pytest.raises(ValueError, match="few must be"):
         call(few="whatever")
     with pytest.raises(ValueError, match="non-decreasing"):
-        estimate_points(
+        triangulate_points(
             dirs=np.zeros((4, 3)),
             centres=np.zeros((4, 3)),
             offsets=np.array([0, 3, 1], np.int64),
@@ -553,7 +555,7 @@ def test_an_all_nan_distance_row_leaves_its_track_to_the_solve():
 def test_the_distance_rule_needs_the_observation_form():
     dirs = np.array([[0.0, 0.0, -1.0], [0.2, 0.0, -1.0]])
     with pytest.raises(ValueError, match="needs the observation form"):
-        estimate_points(
+        triangulate_points(
             dirs=dirs,
             centres=PAIR,
             offsets=np.array([0, 2], np.int64),

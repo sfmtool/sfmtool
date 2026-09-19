@@ -100,8 +100,8 @@ place.
 
 ## The tool surface
 
-Sixty-three tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- forty-seven
+Sixty-five tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- forty-nine
 write, and one writes a file.
 
 | Tool | Kind | What it does |
@@ -137,6 +137,8 @@ write, and one writes a file.
 | `undo` / `redo` | write | Step one reconstruction's history back or forward a version |
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
+| `retriangulate_point` | write | Re-solve one 3D point from its own observations at the poses and lens the reconstruction holds |
+| `retriangulate_all_points` | write | Re-solve every 3D point the same way, on a worker thread |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
@@ -170,7 +172,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the forty-seven writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the forty-nine writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1673,7 +1675,8 @@ that lists them and the one that writes a file. What the ten share is worth
 stating once rather than ten times.
 
 **Each one is a single `AppState` call**: `delete_point`, `delete_image`,
-`resect_image`, `bundle_adjust`, `undo`, `save_node_as`. It is the
+`resect_image`, `bundle_adjust`, `retriangulate_point`, `undo`, `save_node_as`.
+It is the
 same call the menu, the panel or the keyboard makes. So an agent's edit is a
 version in the same history, with the same label, drawn on the same Edit History
 rows, undone by the same Undo; the actor column is the only thing that differs,
@@ -1976,10 +1979,10 @@ and a cancelled one
 writes a failed entry, pushes no version, and keeps the breakdown of how far it
 got.
 
-**Five operations run on a worker**: this one,
-`convert_to_embedded_patches`, and the bench's `evaluate_bench_track`,
-`fit_bench_track` and `set_bench_track_stage`, which answer through the same
-two-level reply. Every other edit is still synchronous on the GUI thread,
+**Six operations run on a worker**: this one,
+`convert_to_embedded_patches`, `retriangulate_all_points`, and the bench's
+`evaluate_bench_track`, `fit_bench_track` and `set_bench_track_stage`, which
+answer through the same two-level reply. Every other edit is still synchronous on the GUI thread,
 and a reconstruction large enough to take more than the apply timeout will still
 time out the call while the work goes on and finishes. An agent that gets a
 timeout from one of those should read `get_history` rather than retry, since the
@@ -2023,6 +2026,41 @@ It is refused on a reconstruction that already carries embedded patches -- there
 is no `.sift` left to copy a keypoint from -- in the same sentence the greyed
 `Convert to Embedded Patches` entry in the Scene tree carries
 ([scene-graph.md](scene-graph.md)).
+
+### `retriangulate_point` / `retriangulate_all_points`
+
+The structure re-read at a geometry somebody else decided: every point named is
+re-solved from its own observations, at the poses and the lens the
+reconstruction already holds, and no camera and no lens moves
+([retriangulate-point.md](edits/retriangulate-point.md)).
+
+```jsonc
+// retriangulate_point      { "reconstruction_label": "seoul_bull", "point": 1207 }
+// retriangulate_all_points { "reconstruction_label": "seoul_bull" }
+```
+
+`retriangulate_point` is a **point edit** and finishes inside the call: one
+track's rays are a microsecond of arithmetic whatever the reconstruction's size.
+It is delete-and-re-add, so the point takes a new index while every other index
+stays good, and the `report` the reply carries is the edit's own Action Log
+sentence, which names the verdict the observations supported -- `finite`, `at
+infinity`, `behind a camera that sees it`, `too thin to place`. That verdict is
+the answer an agent came for: a call that moved nothing because the track is
+seen from one place says so, rather than reporting silent success.
+
+`retriangulate_all_points` is a **bulk edit** that runs on a worker thread and
+answers the two ways `bundle_adjust` does, with `"operation": "Retriangulate all
+points"`. It deletes no point and creates none, so every index still means what
+it meant and no cache is dropped for it until the version lands. It polls the
+cancel flag between its stages, so `cancel_background_task` stops it and a
+cancelled retriangulation pushes no version.
+
+Both refuse in `AppState`'s own words, which are the words the greyed
+`Retriangulate All Points` entry in the Scene tree carries: a reconstruction
+whose observations are `.sift` feature indexes with no inline keypoint has no
+pixel to cast a ray through, and one whose posed images are taken through more
+than one lens is refused rather than silently solved through one of them. A
+point the value holds at a fixed coordinate is refused by name.
 
 ### The bench family
 
@@ -3061,7 +3099,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-three tools**, fifteen of them reads and one of them
+- **The catalog is sixty-five tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s

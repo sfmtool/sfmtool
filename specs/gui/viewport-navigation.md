@@ -55,6 +55,42 @@ during Zoom to Fit to center on the point cloud.
 | Pan | Alt + Shift + Left button drag | Pan camera and target (same as Shift+drag, target visible) |
 | Set target | Alt + Click | Set target to the point under the cursor (depth pick) |
 | Enter camera view | Double-click frustum | Select frustum and enter camera view mode (see [camera-views.md](camera-views.md)) |
+| Point menu | Right button click on a point | Select that point and open its context menu (see [The point context menu](#the-point-context-menu)) |
+
+### The point context menu
+
+A right **click** on a point -- press and release inside egui's drag threshold
+-- selects that point and opens a small menu on it. A right **drag** is the zoom
+above, and the threshold is what tells the two apart: the zoom reads the raw
+platform button state, which says nothing about press and release, so the menu
+hangs off egui's own `clicked_by(Secondary)` instead. The Image Detail overlay's
+menu is opened the same way and for the same reason
+([multi-panel-image-browser.md](multi-panel-image-browser.md)).
+
+The point is the one the GPU pick reported under the cursor on the frame the
+click landed. The pick encodes a point's **dot and its patch to the same id**,
+so right-clicking a surfel names the point it belongs to, exactly as
+left-clicking it selects that point. A right click anywhere else -- empty space,
+a frustum -- opens nothing.
+
+Two entries, in this order:
+
+| Entry | What it does |
+|-------|--------------|
+| `Edit on Bench` | Puts the point's track on the bench as a track-stage track and raises the Track Edit panel on it ([track-edit.md](track-edit.md)) |
+| `Retriangulate Point` | Re-solves the point from its own observations at these poses and this lens, as one version ([edits/retriangulate-point.md](edits/retriangulate-point.md)) |
+
+`Edit on Bench` is the Track Edit panel's own `Put selected point on bench`
+reached from the viewport, and it raises that panel afterwards because this
+gesture is made somewhere the panel is not. Both entries are drawn and greyed
+while an operation is running on the node, carrying the state's own busy
+sentence.
+
+The menu **reports** rather than acts: the viewport holds the selected node
+borrowed out of `AppState` while it draws, so what it leaves behind is a request
+the frame carries out afterwards. Selecting the point is part of opening, not
+part of choosing, so a menu dismissed without a choice still leaves the viewer
+looking at the point it was opened on.
 
 ### Trackpad Controls
 

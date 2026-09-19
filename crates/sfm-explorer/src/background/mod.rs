@@ -104,6 +104,20 @@ impl Operation {
         kind: Kind::Edit,
     };
 
+    /// Every point of one node re-solved from its own observations, at the
+    /// poses and the lens the value already holds
+    /// (`specs/gui/edits/retriangulate-point.md`).
+    ///
+    /// Cancellable because `sfmtool_core::reconstruction::retriangulate_points`
+    /// polls the flag between its stages and hands back
+    /// `RetriangulateError::Cancelled` rather than a value whose points were
+    /// half re-solved.
+    pub(crate) const RETRIANGULATE_ALL_POINTS: Operation = Operation {
+        name: "Retriangulate all points",
+        cancellable: true,
+        kind: Kind::Edit,
+    };
+
     /// One bench track read at the stage it is in (`specs/gui/track-edit.md`).
     ///
     /// Cancellable: the reading polls the flag on either side of the decode,
@@ -166,9 +180,10 @@ impl Operation {
     /// a declaration nothing checks is a declaration that rots.
     // Read by that test alone, which is what it is for.
     #[cfg(test)]
-    pub(crate) const ALL: [Operation; 7] = [
+    pub(crate) const ALL: [Operation; 8] = [
         Operation::BUNDLE_ADJUST,
         Operation::TO_EMBEDDED_PATCHES,
+        Operation::RETRIANGULATE_ALL_POINTS,
         Operation::BENCH_EVALUATE,
         Operation::BENCH_FIT,
         Operation::BENCH_SET_STAGE,

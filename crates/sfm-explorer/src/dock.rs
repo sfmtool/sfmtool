@@ -178,6 +178,12 @@ impl TabContext<'_> {
         // line is derived from the whole log, and the viewport call
         // below holds the log mutably for the keyboard bindings.
         let status = self.state.status_message();
+        // Read here for the same reason: the point menu greys its entries with
+        // it, and the answer is the whole state's rather than the node's.
+        let busy = self
+            .state
+            .selected_recon
+            .and_then(|id| self.state.busy_refusal(id));
         // Fetched only after `show_hud` has handed back its `&mut
         // AppState`: the node borrows `state.scene`, and the two cannot
         // overlap.
@@ -205,10 +211,14 @@ impl TabContext<'_> {
                 self.scene_texture_id,
                 self.hover_depth,
                 self.hover_pick,
+                busy.as_deref(),
                 &mut self.state.action_log,
             );
             if selection != self.state.selected_image {
                 self.state.select_image(selection);
+            }
+            if let Some(request) = self.viewer_3d.point_menu.take() {
+                self.state.apply_point_menu(request);
             }
         } else {
             ui.centered_and_justified(|ui| {
@@ -988,6 +998,9 @@ impl TabContext<'_> {
         // `Polled::installed`.
         if let Some(id) = response.convert_to_embedded_patches {
             let _ = self.state.start_convert_to_embedded_patches(id);
+        }
+        if let Some(id) = response.retriangulate_all_points {
+            let _ = self.state.start_retriangulate_all_points(id);
         }
         if let Some(id) = response.close_node {
             // Closing a node is a step away from a camera held in hand on it,

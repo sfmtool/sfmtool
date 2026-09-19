@@ -3535,6 +3535,14 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "point": 0 }),
         ),
         (
+            "retriangulate_point",
+            json!({ "reconstruction_label": "alpha", "point": 0 }),
+        ),
+        (
+            "retriangulate_all_points",
+            json!({ "reconstruction_label": "alpha" }),
+        ),
+        (
             "delete_camera_image",
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
@@ -3880,15 +3888,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, forty-seven writes, the one that writes a file, and the
+    // Fifteen reads, forty-nine writes, the one that writes a file, and the
     // one that hands back a picture.
-    assert_eq!(catalog.len(), 63, "the catalog has grown or shrunk");
+    assert_eq!(catalog.len(), 65, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        47
+        49
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4512,6 +4520,65 @@ fn delete_point_pushes_a_version_the_reply_names() {
     // And it is the agent's row, not the human's.
     let last = rows(&state).pop().expect("one entry per edit");
     assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+}
+
+/// A retriangulated point pushes a version, and the report names the verdict
+/// its own observations supported rather than merely that something happened.
+#[test]
+fn retriangulate_point_pushes_a_version_that_names_its_verdict() {
+    let (mut state, mut viewer) = editable();
+    let reply = call(
+        &mut state,
+        &mut viewer,
+        "retriangulate_point",
+        json!({ "reconstruction_label": "run_a", "point": 3 }),
+    );
+
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(reply["reconstruction_label"], "run_a");
+    let serial = state.scene[0].history.current_version().serial.to_string();
+    assert_eq!(reply["serial"], serial);
+    assert_eq!(reply["label"], "Retriangulated point 3 in run_a");
+    let report = reply["report"].as_str().expect("a report");
+    assert!(
+        report.starts_with("Retriangulated point 3 in run_a"),
+        "{report}"
+    );
+    assert!(
+        report.contains("finite") || report.contains("infinity") || report.contains("left where"),
+        "the report names no verdict: {report}"
+    );
+    let last = rows(&state).pop().expect("one entry per edit");
+    assert_eq!(last, (Actor::Mcp, false, report.to_string()));
+}
+
+/// The whole-value retriangulation goes to a worker, and the version it comes
+/// back with is the node's next one.
+#[test]
+fn retriangulate_all_points_defers_and_comes_back_with_a_version() {
+    let (mut state, mut viewer) = editable();
+    let map = json!({ "reconstruction_label": "run_a" })
+        .as_object()
+        .cloned()
+        .expect("an object");
+    let command = tools::parse("retriangulate_all_points", Some(&map)).expect("a well-formed call");
+    let pending = match agent(&mut state, &mut viewer, command) {
+        Outcome::Deferred(super::Deferred::Background(pending)) => pending,
+        Outcome::Done(Err(e)) => panic!("expected a deferral, got refusal: {e}"),
+        _ => panic!("the retriangulation must defer"),
+    };
+    assert_eq!(pending.operation_name, "Retriangulate all points");
+    state.finish_background_task();
+
+    let reply = match super::edit::background_reply(&state, &pending).expect("it finished") {
+        Ok(ToolOutput::Json(value)) => value,
+        Ok(ToolOutput::Png { .. }) => panic!("expected JSON, got an image"),
+        Err(e) => panic!("expected success, got refusal: {e}"),
+    };
+    assert_eq!(version_count(&state), 2);
+    assert_eq!(reply["label"], json!("Retriangulated run_a"), "{reply}");
+    let report = reply["report"].as_str().expect("a report");
+    assert!(report.contains("points moved"), "{report}");
 }
 
 /// An edit the state refuses pushes no version, answers in the state's words,

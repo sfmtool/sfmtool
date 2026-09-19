@@ -12,7 +12,6 @@ mod embed;
 pub mod filter;
 pub mod move_camera;
 pub mod point_correspondence;
-pub mod point_estimation;
 pub mod triangulation;
 
 pub use bundle_adjust::{
@@ -20,6 +19,11 @@ pub use bundle_adjust::{
 };
 
 pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, ReprojectionSample};
+
+pub use triangulation::retriangulate::{
+    retriangulate_points, RetriangulateError, RetriangulateOptions, RetriangulateReport,
+    RetriangulateWhich,
+};
 
 pub use edited::{
     EditError, EditedReconstruction, PointMap, PointRecord, PointView, RecordObservation, RowMap,

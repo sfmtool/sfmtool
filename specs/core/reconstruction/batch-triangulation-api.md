@@ -13,7 +13,7 @@ from the *maximum pairwise viewing angle* — is an extreme order statistic that
 keypoint noise inflates and that **grows with view count**, so genuine points at
 infinity with many observations were misclassified as finite.
 
-Related: [the decision layer over this API](point-estimation.md), which judges a
+Related: [the decision layer over this API](triangulation-rules.md), which judges a
 cluster against an angular floor, cheirality and a reprojection bar and returns
 a position or a bearing;
 [finding points at infinity in an existing solve](../../cli/reconstruction/xform/find-points-at-infinity.md),

@@ -610,6 +610,32 @@ impl EditedReconstruction {
         self.base.point_set.point_constraints.is_some()
     }
 
+    /// How many camera models the **posed** images of this value are taken
+    /// through, which is zero when none of them carries a pose.
+    ///
+    /// The question every operation that reads one shared lens asks before it
+    /// starts -- the adjustment and the retriangulation both -- so the sentence
+    /// a menu entry is greyed with and the refusal the operation itself
+    /// produces are read off one count rather than two scans that could drift
+    /// apart. An unposed image states no ray, so it sits the operation out and
+    /// its lens is not part of the question.
+    pub fn posed_lens_count(&self) -> usize {
+        let mut lenses: Vec<u32> = self
+            .base
+            .image_table
+            .images
+            .iter()
+            .filter(|image| {
+                image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
+                    && image.translation_xyz.iter().all(|c| c.is_finite())
+            })
+            .map(|image| image.camera_index)
+            .collect();
+        lenses.sort_unstable();
+        lenses.dedup();
+        lenses.len()
+    }
+
     // ── The point edits ──────────────────────────────────────────────
 
     /// Delete the point at `index`.

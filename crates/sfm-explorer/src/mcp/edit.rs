@@ -26,8 +26,9 @@
 //! - [`moved`] wraps the three cursor moves, whose answer is the version now
 //!   current rather than one that was made.
 //!
-//! [`bundle_adjust`] is the exception to the first sentence, and it is the
-//! operation's doing rather than the surface's: the solve runs on a worker, so
+//! [`bundle_adjust`], [`convert_to_embedded_patches`] and
+//! [`retriangulate_all_points`] are the exceptions to the first sentence, and it
+//! is the operations' doing rather than the surface's: each runs on a worker, so
 //! the call starts it and the frame answers it, with the version it pushed or
 //! with a handle to an operation that is still going
 //! ([`background_reply`]).
@@ -145,6 +146,51 @@ pub(super) fn delete_point(state: &mut AppState, label: &str, query: &PointQuery
     let id = resolve_reconstruction(state, Some(label))?;
     let point = resolve_point_in(state, id, query)?;
     edited(state, id, |state| state.delete_point(point))
+}
+
+/// `retriangulate_point`: one point re-solved from its own observations, at
+/// the poses and the lens the reconstruction already holds.
+///
+/// A point edit, and it finishes inside the call: one track's rays are a
+/// microsecond of arithmetic whatever the reconstruction's size. The reply is
+/// the edit's own Action Log sentence, which carries the verdict the operation
+/// reached -- finite, at infinity, behind a camera that sees it -- so an agent
+/// learns what the observations supported and not merely that something moved.
+pub(super) fn retriangulate_point(
+    state: &mut AppState,
+    label: &str,
+    query: &PointQuery,
+) -> JsonReply {
+    let id = resolve_reconstruction(state, Some(label))?;
+    let point = resolve_point_in(state, id, query)?;
+    edited(state, id, |state| state.retriangulate_point(point))
+}
+
+/// `retriangulate_all_points`: start the whole-value retriangulation, and
+/// answer with its version or with a handle, whichever the clock reaches first.
+///
+/// The third background operation on the surface, and it replies the way the
+/// other two do: a reconstruction of any size spends real time re-solving every
+/// track, so a large node outlives [`REPLY_DIRECTLY_WITHIN`] and answers with a
+/// [`BackgroundReply`] the frame resolves. A refusal to begin is immediate and
+/// in `AppState`'s own words, which are the words the greyed menu entry
+/// carries.
+pub(super) fn retriangulate_all_points(state: &mut AppState, label: &str) -> super::Outcome {
+    let id = match resolve_reconstruction(state, Some(label)) {
+        Ok(id) => id,
+        Err(error) => return super::Outcome::Done(Err(error)),
+    };
+    if let Err(message) = state.start_retriangulate_all_points(id) {
+        return super::Outcome::Done(Err(ToolError::new(message)));
+    }
+    let task = state.background_task().expect("the operation just started");
+    super::Outcome::Deferred(Deferred::Background(BackgroundReply {
+        operation_id: task.id,
+        operation_name: task.operation.name,
+        node: id,
+        label: task.label.clone(),
+        started: task.started,
+    }))
 }
 
 pub(super) fn delete_camera_image(

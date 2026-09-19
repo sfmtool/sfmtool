@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use nalgebra::{DMatrix, DVector, Matrix3, Point3, SymmetricEigen, Vector3};
 
 use crate::numeric::{median, median_in_place};
-use crate::reconstruction::point_estimation::smallest_pairwise_cosine;
+use crate::reconstruction::triangulation::points::smallest_pairwise_cosine;
 use crate::reconstruction::triangulation::triangulate_batch;
 
 /// Rounds of the centre solve's reweighting.

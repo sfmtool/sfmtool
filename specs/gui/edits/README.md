@@ -20,6 +20,7 @@ invocation, the version's label and the history entry.
 | [move-camera.md](move-camera.md) | Move one image's pose by hand: camera view with the camera coming along, so every navigation input moves it, with a live residual readout and one version when the lock is released. |
 | [commit-track.md](commit-track.md) | Write the active bench track into the reconstruction: the one step of the bench that touches the file, replacing the point it came from or creating one, with the bench and the value stated in one version. |
 | [resect-image.md](resect-image.md) | Re-estimate one image's pose against structure held out from it, from the image row's context menu, and keep the answer as the node's next version. |
+| [retriangulate-point.md](retriangulate-point.md) | Re-solve structure at the poses and the lens the value already holds: one point from its context menu in the 3D viewport, or every point from the reconstruction row's, as the node's next version. |
 
 The two edits that predate this directory are specced with the document model
 they were built to exercise: **delete point** (the point edit) and **delete

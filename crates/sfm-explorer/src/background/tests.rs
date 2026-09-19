@@ -445,6 +445,21 @@ fn real_task(operation: Operation) -> RealTask {
                 _workspace: Some(workspace),
             }
         }
+        // Every point re-solved, over the adjustment's own fixture: it needs
+        // exactly what the adjustment needs -- a pixel per observation and one
+        // shared lens.
+        "Retriangulate all points" => {
+            let (state, id) = adjustable();
+            let job = state
+                .retriangulate_all_points_job(id)
+                .expect("the fixture is well posed");
+            RealTask {
+                state,
+                id,
+                job: Some(job),
+                _workspace: None,
+            }
+        }
         // The three steps that read photographs, over the bench fixture: a
         // point on the bench and a textured photograph cached for every image.
         "Evaluate track" | "Fit track" | "Set track stage" => {

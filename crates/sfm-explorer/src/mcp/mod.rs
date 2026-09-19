@@ -210,6 +210,16 @@ pub(crate) enum Command {
         reconstruction_label: String,
         point: crate::goto_point::PointQuery,
     },
+    /// Re-solve one point from its own observations, at the poses and the lens
+    /// the reconstruction already holds.
+    RetriangulatePoint {
+        reconstruction_label: String,
+        point: crate::goto_point::PointQuery,
+    },
+    /// Re-solve every point of one node the same way.
+    RetriangulateAllPoints {
+        reconstruction_label: String,
+    },
     DeleteCameraImage {
         reconstruction_label: String,
         camera_image: CameraImageSel,
@@ -953,6 +963,17 @@ pub(crate) fn apply_with_window(
             reconstruction_label,
             point,
         } => done(edit::delete_point(state, &reconstruction_label, &point)),
+        Command::RetriangulatePoint {
+            reconstruction_label,
+            point,
+        } => done(edit::retriangulate_point(
+            state,
+            &reconstruction_label,
+            &point,
+        )),
+        Command::RetriangulateAllPoints {
+            reconstruction_label,
+        } => edit::retriangulate_all_points(state, &reconstruction_label),
         Command::DeleteCameraImage {
             reconstruction_label,
             camera_image,
@@ -1687,6 +1708,8 @@ impl Command {
             Command::JumpToVersion { .. } => "jump_to_version",
             Command::SaveReconstruction { .. } => "save_reconstruction",
             Command::DeletePoint { .. } => "delete_point",
+            Command::RetriangulatePoint { .. } => "retriangulate_point",
+            Command::RetriangulateAllPoints { .. } => "retriangulate_all_points",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImage { .. } => "resect_camera_image",
@@ -1735,6 +1758,13 @@ impl Command {
             Command::DeletePoint {
                 reconstruction_label,
                 ..
+            }
+            | Command::RetriangulatePoint {
+                reconstruction_label,
+                ..
+            }
+            | Command::RetriangulateAllPoints {
+                reconstruction_label,
             }
             | Command::DeleteCameraImage {
                 reconstruction_label,
@@ -1816,6 +1846,14 @@ impl Command {
             | Command::CommitBenchTrack {
                 reconstruction_label,
                 ..
+            }
+            // A retriangulated point is a delete-and-re-add and takes a new
+            // index for the same reason, so the same drop applies. Its
+            // whole-value sibling is not here, for the reason the adjustment is
+            // not: it runs in the background and has renumbered nothing yet.
+            | Command::RetriangulatePoint {
+                reconstruction_label,
+                ..
             } => Some(reconstruction_label),
             _ => None,
         }
@@ -1866,6 +1904,8 @@ impl Command {
             | Command::Redo { .. }
             | Command::JumpToVersion { .. }
             | Command::DeletePoint { .. }
+            | Command::RetriangulatePoint { .. }
+            | Command::RetriangulateAllPoints { .. }
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImage { .. }

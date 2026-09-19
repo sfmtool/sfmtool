@@ -1,11 +1,11 @@
 // Copyright The SfM Tool Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Re-reading every point of a track set from its own observations at one
+//! Triangulating every point of a track set from its own observations at one
 //! geometry, and deciding per track what those observations support.
 //!
-//! [`super::triangulation::triangulate_batch`] answers where a track's rays
-//! come closest and how well the depth was observed. It does not say whether
+//! [`super::triangulate_batch`] answers where a track's rays come closest and
+//! how well the depth was observed. It does not say whether
 //! that answer should be used. Whether a track with parallel rays is a bearing,
 //! whether a point behind a camera is demoted now or left for a later trim and
 //! whether that demotion reads the track or the one observation that failed,
@@ -15,14 +15,14 @@
 //! caller states its policy and the arithmetic is shared. With every option off
 //! the operation is the batch triangulation solve.
 //!
-//! See `specs/core/reconstruction/point-estimation.md` for the design.
+//! See `specs/core/reconstruction/triangulation-rules.md` for the design.
 
 use nalgebra::{Matrix2, Point3, Quaternion, UnitQuaternion, Vector2, Vector3};
 use rayon::prelude::*;
 
+use super::triangulate_batch;
 use crate::camera::CameraIntrinsics;
 use crate::numeric::median_in_place;
-use crate::reconstruction::triangulation::triangulate_batch;
 
 /// The direction a track with no usable ray at all falls back to: the camera
 /// convention's forward direction.
@@ -133,6 +133,24 @@ impl PointVerdict {
     pub fn code(self) -> u8 {
         self as u8
     }
+
+    /// The verdict in the words a reader is shown, as the tail of a sentence
+    /// about one point: "Retriangulated point 42 in run_a: `finite`".
+    ///
+    /// Held here rather than at each display, so the viewer's status line, the
+    /// Action Log and the wire say the same word about the same answer.
+    pub fn label(self) -> &'static str {
+        match self {
+            PointVerdict::Finite => "finite",
+            PointVerdict::FinitePruned => "finite, on the observations that agree",
+            PointVerdict::Marked => "at infinity",
+            PointVerdict::Ranged => "at its held distance",
+            PointVerdict::Thin => "too thin to place, so at infinity",
+            PointVerdict::Behind => "behind a camera that sees it, so at infinity",
+            PointVerdict::OverBar => "past the reprojection bar, so at infinity",
+            PointVerdict::Few => "too few observations to place, so left where it was",
+        }
+    }
 }
 
 /// How many tracks each rule took, and what the finite ones look like.
@@ -166,9 +184,38 @@ pub struct PointCensus {
     pub triangulation_angle_median_deg: Option<f64>,
 }
 
+impl PointCensus {
+    /// The one verdict a census over a single track describes, or `None` where
+    /// it describes more or fewer than one.
+    ///
+    /// What a caller that solved one point reads instead of picking the census
+    /// apart: every bucket but one is zero, and this is the one.
+    pub fn sole_verdict(&self) -> Option<PointVerdict> {
+        let buckets = [
+            (self.finite, PointVerdict::Finite),
+            (self.finite_pruned, PointVerdict::FinitePruned),
+            (self.marked, PointVerdict::Marked),
+            (self.ranged, PointVerdict::Ranged),
+            (self.thin, PointVerdict::Thin),
+            (self.behind, PointVerdict::Behind),
+            (self.over_bar, PointVerdict::OverBar),
+            (self.few, PointVerdict::Few),
+        ];
+        let mut sole = None;
+        for (count, verdict) in buckets {
+            match count {
+                0 => {}
+                1 if sole.is_none() => sole = Some(verdict),
+                _ => return None,
+            }
+        }
+        sole
+    }
+}
+
 /// What the operation decided, one entry per track in the caller's own order.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PointEstimates {
+pub struct TriangulatedPoints {
     /// `(x, y, z, w)` per track. `w = 1` is a position, `w = 0` a unit bearing,
     /// and every component is `NaN` for an absent track.
     pub xyzw: Vec<[f64; 4]>,
@@ -231,15 +278,15 @@ struct Track {
     distance: Option<PointDistance>,
 }
 
-/// Re-estimate every track of a ray set.
+/// Triangulate every track of a ray set.
 ///
 /// `marks` is the incoming direction flag per track; `None` is the rule off.
 /// The reprojection bar needs pixels and a camera and is ignored in this form.
-pub fn estimate_points_from_rays(
+pub fn triangulate_points_from_rays(
     rays: RaySet<'_>,
     marks: Option<&[bool]>,
     rules: PointRules<'_>,
-) -> PointEstimates {
+) -> TriangulatedPoints {
     assert_eq!(
         rays.dirs.len(),
         rays.centres.len(),
@@ -282,19 +329,19 @@ pub fn estimate_points_from_rays(
     decide(&tracks, n_tracks, rays.dirs.len() / 3, None, rules)
 }
 
-/// Re-estimate every track of an observation set, building the world rays
+/// Triangulate every track of an observation set, building the world rays
 /// through `cam` and the observing image's pose.
 ///
 /// The world ray of an observation is `R⁻¹ · pixel_to_ray(u, v)` and its camera
 /// centre `-R⁻¹ t`, with `R` the image's world-to-camera rotation. An
 /// observation whose ray is not finite is dropped from its track before any rule
 /// is read.
-pub fn estimate_points_from_observations(
+pub fn triangulate_points_from_observations(
     cam: &CameraIntrinsics,
     obs: ObservationSet<'_>,
     marks: Option<&[bool]>,
     rules: PointRules<'_>,
-) -> PointEstimates {
+) -> TriangulatedPoints {
     let n_obs = obs.obs_image.len();
     assert_eq!(obs.obs_point.len(), n_obs, "obs_image/obs_point mismatch");
     assert_eq!(obs.uv.len(), n_obs * 2, "uv must be n_obs * 2");
@@ -435,7 +482,7 @@ fn decide(
     n_obs: usize,
     reproject: Option<(&CameraIntrinsics, ObservationSet<'_>)>,
     rules: PointRules<'_>,
-) -> PointEstimates {
+) -> TriangulatedPoints {
     let mut xyzw = vec![[f64::NAN; 4]; n_tracks];
     let mut verdicts = vec![PointVerdict::Few; n_tracks];
     let mut in_front = vec![false; n_tracks];
@@ -587,7 +634,7 @@ fn decide(
         Some(median_in_place(&mut angles))
     };
 
-    PointEstimates {
+    TriangulatedPoints {
         xyzw,
         verdicts,
         in_front,

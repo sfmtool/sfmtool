@@ -164,6 +164,12 @@ pub struct SceneGraphResponse {
     /// one, so `AppState::start_convert_to_embedded_patches` sends it to a
     /// worker after the frame.
     pub convert_to_embedded_patches: Option<ReconId>,
+    /// `Retriangulate All Points` chosen from a reconstruction's context menu:
+    /// re-solve every point from its own observations at the poses and the lens
+    /// the value already holds, as the node's next version. A bulk edit, and a
+    /// long one, so `AppState::start_retriangulate_all_points` sends it to a
+    /// worker after the frame.
+    pub retriangulate_all_points: Option<ReconId>,
     /// `Close` chosen from a reconstruction's context menu.
     pub close_node: Option<ReconId>,
     /// A Bench row was clicked: make that item the active one of its kind. The

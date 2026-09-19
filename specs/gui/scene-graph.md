@@ -290,8 +290,21 @@ fixed-height for virtualization.
 - Context menu: `Select`, `Zoom to Fit`, `Align to ▸` (one entry per other
   loaded node — see "Node Transforms and Alignment"), `Reset Transform`,
   `Tint ▸` (Original / palette of distinguishable colors),
-  `Convert to Embedded Patches`, `Close`. **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
+  `Retriangulate All Points`, `Convert to Embedded Patches`, `Close`.
+  **`Solo` is not in the menu** — it is the row's `S` (see "Comparison
   Affordances").
+- **`Retriangulate All Points`** re-solves every point of the node from its own
+  observations, at the poses and the lens the value already holds, as the node's
+  next version and on a worker thread
+  ([background-tasks.md](background-tasks.md),
+  [edits/retriangulate-point.md](edits/retriangulate-point.md)). It moves no
+  camera and no lens, deletes no point and creates none, so every index still
+  means what it meant. It is **live only on a node whose observations carry a
+  pixel, whose posed images share one lens, and that nothing is running on**,
+  and greyed with the reason otherwise. The gate is
+  `state::edits::retriangulate_refusal`, which the wire's
+  `retriangulate_all_points` and the operation itself also ask, so the greyed
+  entry and a call that asks anyway give one answer.
 - **`Convert to Embedded Patches`** is the one entry on this menu that edits the
   reconstruction. It runs the minimal `sift_files` → `embedded_patches`
   conversion as the node's next version, on a worker thread

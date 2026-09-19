@@ -26,8 +26,8 @@ use crate::camera::intrinsics::SplineRadial;
 use crate::camera::{CameraModel, PixelJacobian};
 use crate::progress::Progress;
 use crate::progress_info;
-use crate::reconstruction::point_estimation::{
-    estimate_points_from_observations, tangent_basis, FewObservations, ObservationSet,
+use crate::reconstruction::triangulation::points::{
+    tangent_basis, triangulate_points_from_observations, FewObservations, ObservationSet,
     PointDistance, PointRules,
 };
 use crate::CameraIntrinsics;
@@ -944,8 +944,8 @@ fn residual_norms_depths(
     (norms, depths)
 }
 
-/// Re-estimation (rounds after the first): the shared point-estimation
-/// operation ([`crate::reconstruction::point_estimation`]) at the round's
+/// Re-estimation (rounds after the first): the shared retriangulation
+/// operation ([`crate::reconstruction::triangulation`]) at the round's
 /// geometry with the adjustment's settings. `marks` is on with the round's
 /// direction mask, `few` is `absent`, and the floor, cheirality and bar rules
 /// are off. A finite track rebuilds from all supplied observations by
@@ -969,7 +969,7 @@ fn residual_norms_depths(
 /// carried by the distance rule at whatever origin its reference resolves to
 /// now, and a held point is not re-estimated at all.
 #[allow(clippy::too_many_arguments)]
-fn reestimate_points(
+fn retriangulate_round(
     cam: &CameraIntrinsics,
     quats: &[UnitQuaternion<f64>],
     trans: &[Vector3<f64>],
@@ -1020,7 +1020,7 @@ fn reestimate_points(
             })
             .collect()
     });
-    let est = estimate_points_from_observations(
+    let est = triangulate_points_from_observations(
         cam,
         ObservationSet {
             uv: uv.as_flattened(),
@@ -2114,7 +2114,7 @@ fn bundle_adjust_staged(
             free_points.noise_floor_scale * stage.loss_scale / (0.5 * (fx + fy))
         });
         if rnd > 0 {
-            reestimate_points(
+            retriangulate_round(
                 &cam_now,
                 quats,
                 trans,

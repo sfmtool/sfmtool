@@ -1437,3 +1437,253 @@ fn a_missing_sift_file_fails_the_operation() {
     );
     assert_eq!(state.scene[0].history.versions().len(), 1);
 }
+
+// ── Retriangulate: the point edit and its whole-value sibling ───────────
+
+/// The resectable node with one point pushed off the place its own keypoints
+/// were computed at, so a retriangulation has somewhere to pull it back to.
+fn nudged_point_state(point: u32) -> (AppState, ReconId) {
+    let mut state = AppState::new();
+    state.append_node(crate::scene_graph::tests::resectable_node(
+        "/runs/run_a.sfmr",
+    ));
+    let id = state.scene[0].id;
+    state.scene[0].recon_mut().point_set.points[point as usize].position +=
+        nalgebra::Vector3::new(0.05, -0.04, 0.03);
+    (state, id)
+}
+
+/// Where the fixture's pixels were computed from, which is where a
+/// retriangulation of that point has to head back toward.
+fn truth_position(point: u32) -> nalgebra::Point3<f64> {
+    crate::scene_graph::tests::resectable_node("/runs/truth.sfmr")
+        .recon()
+        .point_set
+        .points[point as usize]
+        .position
+}
+
+/// Where `state`'s node holds the point that started life at index `origin`.
+fn live_position(state: &AppState, origin: u32) -> nalgebra::Point3<f64> {
+    let edited = state.scene[0].edited();
+    let index = edited
+        .live_index_of_base(origin)
+        .expect("the point is still somewhere");
+    edited.point(index).expect("a live point").point().position
+}
+
+#[test]
+fn retriangulating_a_point_leaves_the_base_alone_and_moves_only_that_point() {
+    let (mut state, id) = nudged_point_state(11);
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let truth = truth_position(11);
+    let neighbour = before.point_set.points[12].position;
+    let away = (live_position(&state, 11) - truth).norm();
+
+    state
+        .retriangulate_point(PointRef::new(id, 11))
+        .expect("the fixture retriangulates");
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        Arc::ptr_eq(&before, &node.edited().base),
+        "a point edit rewrote its input's base"
+    );
+    assert_eq!(node.point_count(), before.point_count());
+    // The nudged point came back toward the place its own pixels state, and
+    // nothing beside it moved.
+    assert!((live_position(&state, 11) - truth).norm() < away, "{away}");
+    assert_eq!(live_position(&state, 12), neighbour);
+}
+
+#[test]
+fn a_retriangulated_point_takes_a_new_index_the_selection_follows() {
+    let (mut state, id) = nudged_point_state(11);
+    state.selected_point = Some(PointRef::new(id, 11));
+
+    state
+        .retriangulate_point(PointRef::new(id, 11))
+        .expect("the fixture retriangulates");
+
+    let selected = state.selected_point.expect("the point survived");
+    assert_eq!(selected.recon, id);
+    assert_ne!(selected.point, 11, "delete-and-re-add reuses no index");
+    assert!(state.scene[0].edited().point(selected.point).is_some());
+}
+
+#[test]
+fn the_point_entry_names_the_version_and_the_verdict() {
+    let (mut state, id) = nudged_point_state(11);
+    state
+        .retriangulate_point(PointRef::new(id, 11))
+        .expect("the fixture retriangulates");
+
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Retriangulated point 11 in run_a"
+    );
+    let text = newest(&state).text.clone();
+    assert!(
+        text.starts_with("Retriangulated point 11 in run_a: "),
+        "{text}"
+    );
+    assert!(text.contains("finite"), "{text}");
+    // The two stages a point edit has, and the core operation's three
+    // underneath the first of them.
+    let rows = phase_rows(&newest(&state).detail);
+    assert!(
+        rows.iter().any(|&(name, ..)| name == "retriangulate"),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|&(name, ..)| name == "push version"),
+        "{rows:?}"
+    );
+    assert_timed_from_the_work(&mut state.action_log);
+}
+
+#[test]
+fn undo_puts_the_point_back_where_it_was() {
+    let (mut state, id) = nudged_point_state(11);
+    let before = live_position(&state, 11);
+    state
+        .retriangulate_point(PointRef::new(id, 11))
+        .expect("the fixture retriangulates");
+    assert_ne!(live_position(&state, 11), before);
+    state.undo(id).expect("one version to take back");
+    assert_eq!(live_position(&state, 11), before);
+}
+
+#[test]
+fn retriangulating_a_point_a_reconstruction_no_longer_holds_is_refused() {
+    let (mut state, id) = nudged_point_state(11);
+    let count = state.scene[0].point_count();
+    let why = state
+        .retriangulate_point(PointRef::new(id, count + 5))
+        .expect_err("that index names nothing");
+    assert!(why.contains("Cannot retriangulate point"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert!(newest(&state).failed);
+}
+
+#[test]
+fn retriangulating_every_point_pushes_one_version_with_a_new_base() {
+    let (mut state, id) = nudged_point_state(11);
+    let before = Arc::clone(&state.scene[0].edited().base);
+    let truth = truth_position(11);
+    let away = (live_position(&state, 11) - truth).norm();
+    let count = state.scene[0].point_count();
+    state.selected_point = Some(PointRef::new(id, 11));
+
+    state
+        .start_retriangulate_all_points(id)
+        .expect("the fixture is well posed");
+    state.finish_background_task();
+
+    let node = &state.scene[0];
+    assert_eq!(node.history.versions().len(), 2);
+    assert!(
+        !Arc::ptr_eq(&before, &node.edited().base),
+        "a bulk edit reused its input's base"
+    );
+    assert_eq!(node.point_count(), count, "no point was deleted or created");
+    assert_eq!(node.history.current_version().label, "Retriangulated run_a");
+    assert!((live_position(&state, 11) - truth).norm() < away, "{away}");
+    // No index moved, so the selection is where it was.
+    assert_eq!(state.selected_point, Some(PointRef::new(id, 11)));
+    let entry = newest(&state);
+    assert!(
+        entry.text.starts_with("Retriangulated run_a: "),
+        "{}",
+        entry.text
+    );
+    assert!(entry.text.contains("points moved"), "{}", entry.text);
+}
+
+#[test]
+fn a_cancelled_whole_value_retriangulation_pushes_no_version() {
+    let (mut state, id) = nudged_point_state(11);
+    let before = live_position(&state, 11);
+    state
+        .start_retriangulate_all_points(id)
+        .expect("the fixture is well posed");
+    state.cancel_background_task();
+    state.finish_background_task();
+
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+    assert_eq!(live_position(&state, 11), before);
+    let entry = newest(&state);
+    assert!(entry.failed, "{}", entry.text);
+    assert!(
+        entry
+            .text
+            .contains("Retriangulate all points of run_a cancelled"),
+        "{}",
+        entry.text
+    );
+}
+
+#[test]
+fn a_reconstruction_with_no_pixels_is_refused_in_the_menu_s_own_words() {
+    // The demo value states no inline keypoint, so there is no pixel to cast a
+    // ray through -- and the entry's greying and the call's refusal are the
+    // same sentence.
+    let mut state = state();
+    let id = node(&state);
+    let why = state
+        .retriangulate_refusal(id)
+        .expect("the demo value carries no keypoints");
+    assert!(why.contains("no inline"), "{why}");
+    let refused = state
+        .start_retriangulate_all_points(id)
+        .expect_err("with no pixels there is nothing to solve from");
+    assert!(refused.contains(&why), "{refused}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+// ── The viewport's point menu ───────────────────────────────────────────
+
+#[test]
+fn a_menu_that_only_opened_selects_the_point_and_edits_nothing() {
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::Opened(point));
+    assert_eq!(state.selected_point, Some(point));
+    assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+#[test]
+fn choosing_retriangulate_selects_the_point_and_pushes_its_version() {
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::Retriangulate(point));
+    assert_eq!(state.scene[0].history.versions().len(), 2);
+    assert_eq!(
+        state.scene[0].history.current_version().label,
+        "Retriangulated point 11 in run_a"
+    );
+    // The selection moved to the point first, and then followed the edit.
+    let selected = state.selected_point.expect("the point survived");
+    assert_eq!(selected.recon, id);
+    assert!(state.scene[0].edited().point(selected.point).is_some());
+}
+
+#[test]
+fn choosing_edit_on_bench_stages_the_track_and_raises_the_panel() {
+    let (mut state, id) = nudged_point_state(11);
+    let point = PointRef::new(id, 11);
+    // Closed first, so that what the gesture does to the dock is visible: the
+    // default layout already carries the panel.
+    state.hide_panel(crate::dock::Tab::TrackEdit);
+    assert!(!state.is_panel_open(crate::dock::Tab::TrackEdit));
+
+    state.apply_point_menu(crate::viewer_3d::PointMenuRequest::EditOnBench(point));
+
+    assert_eq!(state.selected_point, Some(point));
+    // The same staging the Track Edit panel's own button does, and then the
+    // panel itself, because this gesture was made somewhere the panel is not.
+    let bench = state.scene[0].history.current_bench();
+    assert_eq!(bench.entries().len(), 1, "the point is not on the bench");
+    assert!(state.is_panel_open(crate::dock::Tab::TrackEdit));
+}

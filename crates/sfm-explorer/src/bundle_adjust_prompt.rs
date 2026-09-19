@@ -34,19 +34,7 @@ pub(crate) fn refusal(edited: &EditedReconstruction) -> Option<String> {
                 .to_string(),
         );
     }
-    let table = &edited.base.image_table;
-    let mut lenses: Vec<u32> = table
-        .images
-        .iter()
-        .filter(|image| {
-            image.quaternion_wxyz.coords.iter().all(|c| c.is_finite())
-                && image.translation_xyz.iter().all(|c| c.is_finite())
-        })
-        .map(|image| image.camera_index)
-        .collect();
-    lenses.sort_unstable();
-    lenses.dedup();
-    match lenses.len() {
+    match edited.posed_lens_count() {
         0 => Some("No image of this reconstruction carries a pose.".to_string()),
         1 => None,
         n => Some(format!(

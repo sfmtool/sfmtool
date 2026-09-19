@@ -135,6 +135,12 @@ selected -- and one line naming the other, which is the Image Detail context
 menu's *Start cluster on the bench here*, quoted from that entry's own constant
 so the two cannot drift.
 
+A third way in is outside this panel: *Edit on Bench* on a point's context menu
+in the 3D viewport ([viewport-navigation.md](viewport-navigation.md) § "The
+point context menu"). It is the same call *Put selected point on bench* makes,
+and it raises this panel afterwards, because that gesture is made somewhere this
+panel is not.
+
 **The header**: the active track's label, its stage as a word, its origin as a
 point index or `new`, and `N in · M candidates · K out`. Below it, the stage's
 own headline: at the cluster stage the reference observation and whether a

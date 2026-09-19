@@ -53,6 +53,7 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
     ui.separator();
     show_tint_menu(ui, node, out);
     ui.separator();
+    show_retriangulate_entry(ui, node, out);
     show_convert_entry(ui, node, out);
     ui.separator();
     if ui.button("Close").clicked() {
@@ -64,6 +65,38 @@ pub(super) fn node_context_menu(ui: &mut egui::Ui, node: &mut SceneNode, out: &m
 /// What the entry that converts a node's observations is called, in the menu
 /// and in the tests that aim at it.
 pub(crate) const CONVERT_TO_EMBEDDED_PATCHES: &str = "Convert to Embedded Patches";
+
+/// What the entry that re-solves every point of a node is called, in the menu
+/// and in the tests that aim at it.
+pub(crate) const RETRIANGULATE_ALL_POINTS: &str = "Retriangulate All Points";
+
+/// `Retriangulate All Points`: every point of the node re-read from its own
+/// observations, at the poses and the lens the value already holds.
+///
+/// Greyed rather than hidden when it cannot run, for the reason
+/// [`show_convert_entry`] is, and on `AppState`'s own sentence so the greyed
+/// entry and a call that asks anyway give one answer.
+fn show_retriangulate_entry(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    let refusal = crate::state::edits::retriangulate_refusal(node, out.busy_refusal(node.id));
+    let entry = ui
+        .add_enabled(
+            refusal.is_none(),
+            egui::Button::new(RETRIANGULATE_ALL_POINTS),
+        )
+        .on_disabled_hover_text(refusal.unwrap_or_default())
+        .on_hover_text(
+            "Re-solve every point from its own observations at these poses and this lens, as \
+             one version. Moves no camera. Runs on a worker thread and can be cancelled; Undo \
+             (Ctrl+Z) puts the geometry back.",
+        );
+    if out
+        .hit(row_id(node.id, "retriangulate_all_points"), entry)
+        .clicked()
+    {
+        out.response.retriangulate_all_points = Some(node.id);
+        ui.close();
+    }
+}
 
 /// `Convert to Embedded Patches`: the one entry on this menu that is a bulk
 /// edit of the reconstruction rather than display state.

@@ -10,16 +10,20 @@ it is not, and `get_background_task` answers about the task from either side of
 that line.
 
 An **operation** is the kind of work, `Bundle adjust`; a **task** is one run of
-one, on one node, with an id of its own. One task runs at a time. The six
-operations are `Bundle adjust`, and the five the bench runs -- `Evaluate
-track`, `Fit track`, `Set track stage`, `Search descriptors` and `Build
-descriptor index` ([bench.md](bench.md)). All but the last are **cancellable**:
-the four bench steps that read photographs poll the flag on either side of the
-decode and inside the kernels -- between the reading's rounds and between the
-views the localizer renders, which is where a widened search spends its time,
-and in front of the forest query and between the candidates for the search.
-`Build descriptor index` is not: the forest build and the file write are each
-one call that never asks whether it should stop.
+one, on one node, with an id of its own. One task runs at a time. The eight
+operations are the three whole-value edits -- `Bundle adjust`, `Convert to
+embedded patches` and `Retriangulate all points` -- and the five the bench runs
+-- `Evaluate track`, `Fit track`, `Set track stage`, `Search descriptors` and
+`Build descriptor index` ([bench.md](bench.md)). All but the last are
+**cancellable**: the four bench steps that read photographs poll the flag on
+either side of the decode and inside the kernels -- between the reading's rounds
+and between the views the localizer renders, which is where a widened search
+spends its time, and in front of the forest query and between the candidates for
+the search; the adjustment polls between its rounds and its iterations, the
+conversion between its three stages and the images of its `.sift` read, and the
+retriangulation between its own three. `Build descriptor index` is not: the
+forest build and the file write are each one call that never asks whether it
+should stop.
 
 This covers the worker and what makes it safe, the panel, what the rest of the
 viewer may do meanwhile, what is written when a task ends, and the wire.

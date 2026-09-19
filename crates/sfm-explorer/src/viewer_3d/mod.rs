@@ -13,6 +13,9 @@ mod input;
 /// they are the user-facing wording of the scene stats and hover lines.
 pub(crate) mod overlay;
 
+#[cfg(test)]
+mod tests;
+
 pub use camera::{best_fit_fov, ViewportCamera};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense};
@@ -21,7 +24,7 @@ use sfmtool_core::{Camera, Se3Transform};
 
 use crate::action_log::{ActionLog, Kind};
 use crate::platform::GestureEvent;
-use crate::scene::{ImageRef, ReconId, SceneNode};
+use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
 
 /// Drag/gesture zoom speed: maps pixel deltas to zoom amount.
 const DRAG_ZOOM_SPEED: f64 = 0.13125;
@@ -210,7 +213,52 @@ pub struct Viewer3D {
     /// that cannot rely on egui's layer arbitration (scroll, gestures, pinch)
     /// excludes it geometrically. `None` until the HUD has been built once.
     pub hud_rect: Option<Rect>,
+    /// The point the viewport's context menu stands on, recorded on the frame
+    /// the secondary click landed and read on every later frame the menu is
+    /// laid out over -- by which time the pointer has moved off the dot the
+    /// user named, and whatever the pick reports under it is somebody else's.
+    menu_point: Option<PointRef>,
+    /// What that menu asked of the app, drained by `dock.rs` after the frame.
+    ///
+    /// A single slot, because the two things it carries happen on different
+    /// frames: a menu opens on the frame of the click and an entry is chosen on
+    /// a later one.
+    pub point_menu: Option<PointMenuRequest>,
+    /// Where each of the point menu's entries was drawn on the frame just
+    /// past, empty on a frame with no menu up.
+    ///
+    /// Recorded in the production path rather than behind a test flag, for the
+    /// reason the Scene tree records its own row rects: what a headless test
+    /// aims at is then the very layout the window produces, rather than a
+    /// second layout built to be aimed at.
+    pub(crate) menu_entry_rects: Vec<(&'static str, Rect)>,
 }
+
+/// What the viewport's point context menu asked of the app.
+///
+/// Reported rather than done, for the reason every other panel reports its
+/// gestures: [`Viewer3D::show`] holds the node borrowed out of `AppState` while
+/// it draws, and each of these needs that state mutably.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointMenuRequest {
+    /// The menu opened on this point. Select it, so that what the entries will
+    /// act on is also what the rest of the viewer is looking at.
+    Opened(PointRef),
+    /// [`EDIT_ON_BENCH_LABEL`] was chosen: put this point's track on the bench
+    /// and show the Track Edit panel.
+    EditOnBench(PointRef),
+    /// [`RETRIANGULATE_POINT_LABEL`] was chosen: re-solve this point from its
+    /// own observations.
+    Retriangulate(PointRef),
+}
+
+/// What the entry that stages a point's track on the bench is called, in the
+/// menu and in the tests that aim at it.
+pub const EDIT_ON_BENCH_LABEL: &str = "Edit on Bench";
+
+/// What the entry that re-solves one point is called, in the menu and in the
+/// tests that aim at it.
+pub const RETRIANGULATE_POINT_LABEL: &str = "Retriangulate Point";
 
 impl Default for Viewer3D {
     fn default() -> Self {
@@ -250,7 +298,85 @@ impl Viewer3D {
             target_transition: None,
             hud_open: true,
             hud_rect: None,
+            menu_point: None,
+            point_menu: None,
+            menu_entry_rects: Vec::new(),
         }
+    }
+
+    /// The point context menu: right-click a point's dot or its patch, and this
+    /// is what opens.
+    ///
+    /// **A right *click* opens it and a right *drag* does not.** The viewport's
+    /// right-drag is its zoom, read from the raw platform button state in
+    /// [`Self::handle_drag`], and that state says nothing about press and
+    /// release. So the menu hangs off egui's own `clicked_by(Secondary)`, whose
+    /// drag threshold is what tells a click from a drag, exactly as the Image
+    /// Detail overlay's menu does.
+    ///
+    /// The point is the one the pick reported under the cursor on the frame the
+    /// click landed, kept in [`Self::menu_point`] because the entries are laid
+    /// out on later frames by which time the pointer has moved. A secondary
+    /// click on anything else clears it, so no menu opens over empty space.
+    fn show_point_menu(
+        &mut self,
+        response: &egui::Response,
+        hover_pick: Option<crate::scene_renderer::PickTarget>,
+        busy: Option<&str>,
+    ) {
+        if response.clicked_by(egui::PointerButton::Secondary) {
+            self.menu_point = match hover_pick {
+                Some(crate::scene_renderer::PickTarget::Point(point)) => Some(point),
+                _ => None,
+            };
+            // Selecting on open rather than on choice: the menu is about this
+            // point, and the panels beside the viewport should be saying so
+            // while it stands open.
+            if let Some(point) = self.menu_point {
+                self.point_menu = Some(PointMenuRequest::Opened(point));
+            }
+        }
+        self.menu_entry_rects.clear();
+        let Some(point) = self.menu_point else {
+            return;
+        };
+        let mut rects = Vec::with_capacity(2);
+        egui::Popup::context_menu(response).show(|ui| {
+            let mut entry = |ui: &mut egui::Ui, text: &'static str, hint: &str| -> bool {
+                let button = egui::Button::new(text);
+                let (response, clicked) = match busy {
+                    None => {
+                        let response = ui.add(button);
+                        let clicked = response.clicked();
+                        (response.on_hover_text(hint), clicked)
+                    }
+                    Some(why) => (
+                        ui.add_enabled(false, button).on_disabled_hover_text(why),
+                        false,
+                    ),
+                };
+                rects.push((text, response.rect));
+                clicked
+            };
+            if entry(
+                ui,
+                EDIT_ON_BENCH_LABEL,
+                "Put this point's track on the bench and open the Track Edit panel on it.",
+            ) {
+                self.point_menu = Some(PointMenuRequest::EditOnBench(point));
+                ui.close();
+            }
+            if entry(
+                ui,
+                RETRIANGULATE_POINT_LABEL,
+                "Re-solve this point from its own observations at these poses and this lens, \
+                 as one version.",
+            ) {
+                self.point_menu = Some(PointMenuRequest::Retriangulate(point));
+                ui.close();
+            }
+        });
+        self.menu_entry_rects = rects;
     }
 
     /// Shows the 3D viewer UI and renders the reconstruction.
@@ -282,6 +408,10 @@ impl Viewer3D {
         scene_texture_id: Option<egui::TextureId>,
         hover_depth: Option<f32>,
         hover_pick: Option<crate::scene_renderer::PickTarget>,
+        // Why an edit of the selected node is refused right now, or `None`:
+        // what the point menu greys its entries with. Read before the node is
+        // borrowed out of the scene, because the answer is the whole state's.
+        busy: Option<&str>,
         // The viewport's own keyboard bindings — `Z`, `Home`, `,` / `.` — are
         // discrete commands, so they record what they did. Taken as a separate
         // `&mut` rather than through `AppState` because `node` and `scene`
@@ -381,6 +511,7 @@ impl Viewer3D {
             self.handle_keyboard(ui, rect, node, selected_image, log);
         }
         self.handle_click(ui, &response, rect);
+        self.show_point_menu(&response, hover_pick, busy);
 
         // Record mouse position in texture pixels for GPU depth readback
         let ppp = ui.ctx().pixels_per_point();

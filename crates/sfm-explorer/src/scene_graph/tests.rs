@@ -2670,3 +2670,90 @@ fn the_convert_entry_is_greyed_while_the_node_is_busy() {
     open.send(()).expect("the worker is waiting");
     state.finish_background_task();
 }
+
+/// `Retriangulate All Points` is live on a node whose observations carry a
+/// pixel, and reports the node it was opened on.
+#[test]
+fn the_retriangulate_entry_is_live_on_a_node_with_keypoints() {
+    let mut state = resectable_scene();
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel
+            .hit_rect(row_id(id, "retriangulate_all_points"))
+            .is_some(),
+        "the reconstruction row's menu offered no {}",
+        super::menus::RETRIANGULATE_ALL_POINTS
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "retriangulate_all_points"),
+    );
+    assert_eq!(response.retriangulate_all_points, Some(id));
+}
+
+/// On a node whose observations are `.sift` feature indexes it is drawn and
+/// dead: there is no pixel to cast a ray through.
+#[test]
+fn the_retriangulate_entry_is_greyed_without_inline_keypoints() {
+    let mut state = shared_shoot(1);
+    let (mut panel, ctx) = settled(&mut state);
+    let id = state.scene[0].id;
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    assert!(
+        panel
+            .hit_rect(row_id(id, "retriangulate_all_points"))
+            .is_some(),
+        "the entry was hidden rather than greyed"
+    );
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "retriangulate_all_points"),
+    );
+    assert_eq!(
+        response.retriangulate_all_points, None,
+        "a node with no pixel per observation offered to be retriangulated"
+    );
+}
+
+/// And dead while an operation is running on that node, which is the state's
+/// own refusal rather than a second rule.
+#[test]
+fn the_retriangulate_entry_is_greyed_while_the_node_is_busy() {
+    let mut state = resectable_scene();
+    let id = state.scene[0].id;
+    let (open, held) = std::sync::mpsc::channel::<()>();
+    state
+        .start_background_task(
+            crate::background::Operation::RETRIANGULATE_ALL_POINTS,
+            id,
+            Box::new(move |_progress| {
+                let _ = held.recv();
+                crate::background::Finished::Failed("nothing".to_string())
+            }),
+        )
+        .expect("nothing else is running");
+    let (mut panel, ctx) = settled(&mut state);
+
+    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "node_label"));
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, "retriangulate_all_points"),
+    );
+    assert_eq!(
+        response.retriangulate_all_points, None,
+        "the entry was live on a busy node"
+    );
+
+    open.send(()).expect("the worker is waiting");
+    state.finish_background_task();
+}

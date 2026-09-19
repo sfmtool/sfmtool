@@ -594,31 +594,19 @@ pub fn focal_is_releasable(camera: &CameraIntrinsics) -> bool {
 /// Crate-visible because every edit that moves a point has to keep its patch
 /// the size it looked: this solve, and the re-triangulation
 /// [`move_camera`](super::move_camera::move_camera) runs.
+///
+/// An edit that holds the frame as a loose [`PointRecord`](super::PointRecord)
+/// rather than as rows of a value reads the same number out of
+/// [`patch_frame_factor`] and applies it itself.
 pub(crate) fn rescale_patch_frame(
     out: &mut SfmrReconstruction,
     p: usize,
     before: Option<f64>,
     after: Option<&Point3<f64>>,
 ) {
-    let usable = |d: f64| (d.is_finite() && d > 0.0).then_some(d);
-    let before = match before {
-        Some(d) => match usable(d) {
-            Some(d) => d,
-            None => return,
-        },
-        None => 1.0,
-    };
-    let after = match after {
-        Some(position) => match usable(out.image_table.placement_scale(position)) {
-            Some(d) => d,
-            None => return,
-        },
-        None => 1.0,
-    };
-    let factor = (after / before) as f32;
-    if !factor.is_finite() || factor == 1.0 {
+    let Some(factor) = patch_frame_factor(&out.image_table, before, after) else {
         return;
-    }
+    };
     for column in [
         &mut out.point_set.patch_u_halfvec_xyz,
         &mut out.point_set.patch_v_halfvec_xyz,
@@ -629,6 +617,33 @@ pub(crate) fn rescale_patch_frame(
             }
         }
     }
+}
+
+/// How much a patch frame has to grow for its point to keep the angular size it
+/// had, or `None` when the frame is to be left exactly as it is.
+///
+/// The arithmetic [`rescale_patch_frame`] applies, held apart from the rows it
+/// applies it to, because an overlay edit carries the frame in a
+/// [`PointRecord`](super::PointRecord) rather than in a column of a value, and
+/// two spellings of one ratio could only disagree. `None` covers the two cases
+/// that leave a frame alone: a degenerate placement distance on either side, and
+/// a ratio of exactly one.
+pub(crate) fn patch_frame_factor(
+    table: &super::data::ImageTable,
+    before: Option<f64>,
+    after: Option<&Point3<f64>>,
+) -> Option<f32> {
+    let usable = |d: f64| (d.is_finite() && d > 0.0).then_some(d);
+    let before = match before {
+        Some(d) => usable(d)?,
+        None => 1.0,
+    };
+    let after = match after {
+        Some(position) => usable(table.placement_scale(position))?,
+        None => 1.0,
+    };
+    let factor = (after / before) as f32;
+    (factor.is_finite() && factor != 1.0).then_some(factor)
 }
 
 /// The median of the finite residuals of the points `keep` marks.
