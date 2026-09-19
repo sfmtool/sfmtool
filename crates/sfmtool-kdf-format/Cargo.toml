@@ -18,7 +18,7 @@ sfmtool-sift-format = { path = "../sfmtool-sift-format" }
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
-zstd = "0.13"
+zstd = "0.14"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

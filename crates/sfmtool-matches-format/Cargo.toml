@@ -22,7 +22,7 @@ thiserror = "2"
 [dev-dependencies]
 # Only the round-trip tests reach for the compressor directly; the library
 # goes through `sfmtool-archive-io`.
-zstd = "0.13"
+zstd = "0.14"
 
 # Rustdoc lints are denied workspace-wide (see the root Cargo.toml).
 [lints]

@@ -42,7 +42,7 @@ image = "0.25"
 # Used by the .sfmr v4→v5 upgrade-on-load tests to author version-4 fixture
 # bytes (rewriting the archive's metadata.json.zst version field).
 zip = { version = "8", default-features = false, features = ["deflate"] }
-zstd = "0.13"
+zstd = "0.14"
 tempfile = "3"
 
 [[bench]]
