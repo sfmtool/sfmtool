@@ -37,6 +37,7 @@ use crate::state::{
 use crate::texture::rgb_to_color_image;
 use sfmtool_core::camera::remap::ImageU8;
 use sfmtool_core::camera::CameraIntrinsics;
+use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;
 use std::collections::HashMap;
 
@@ -70,7 +71,7 @@ struct FeatureOverlayState {
     min_feature_size: Option<f32>,
     max_feature_size: Option<f32>,
     features: Vec<DisplayFeature>,
-    tree: kiddo::KdTree<f32, 2>,
+    tree: PointCloud2<f32>,
 }
 
 /// Image detail panel state.
@@ -795,7 +796,7 @@ impl ImageDetail {
                 min_feature_size: None,
                 max_feature_size: None,
                 features: Vec::new(),
-                tree: kiddo::KdTree::<f32, 2>::new(),
+                tree: PointCloud2::<f32>::new(&[], 0),
             });
             return;
         }
@@ -822,10 +823,7 @@ impl ImageDetail {
                 });
             }
         }
-        let mut tree = kiddo::KdTree::<f32, 2>::new();
-        for (i, feature) in features.iter().enumerate() {
-            tree.add(&feature.position, i as u64);
-        }
+        let tree = build_feature_tree(&features);
         log::info!(
             "Loaded {} tracked features for image {}",
             features.len(),
@@ -909,7 +907,7 @@ impl ImageDetail {
                 min_feature_size: settings.min_feature_size,
                 max_feature_size: settings.max_feature_size,
                 features: Vec::new(),
-                tree: kiddo::KdTree::<f32, 2>::new(),
+                tree: PointCloud2::<f32>::new(&[], 0),
             });
             return;
         };
@@ -1018,12 +1016,11 @@ fn feature_size(affine: &[[f32; 2]; 2]) -> f32 {
 }
 
 /// Build a 2-D kd-tree over feature positions for hit-testing / hover.
-fn build_feature_tree(features: &[DisplayFeature]) -> kiddo::KdTree<f32, 2> {
-    let mut tree = kiddo::KdTree::<f32, 2>::new();
-    for (i, feature) in features.iter().enumerate() {
-        tree.add(&feature.position, i as u64);
-    }
-    tree
+///
+/// Indices into the cloud are indices into `features`.
+fn build_feature_tree(features: &[DisplayFeature]) -> PointCloud2<f32> {
+    let flat: Vec<f32> = features.iter().flat_map(|f| f.position).collect();
+    PointCloud2::<f32>::new(&flat, features.len())
 }
 
 /// Feature list for an `embedded_patches` reconstruction: every observation

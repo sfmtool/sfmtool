@@ -8,8 +8,8 @@
 use super::{DisplayFeature, ImageDetail, ImageDetailResponse};
 use crate::colormap;
 use crate::state::{FeatureDisplaySettings, OverlayMode};
-use kiddo::SquaredEuclidean;
 use sfmtool_core::bench::EditableTrack;
+use sfmtool_core::spatial::PointCloud2;
 use sfmtool_core::EditedReconstruction;
 
 /// The start-a-cluster entry's label, and what the Track Edit panel's empty
@@ -563,21 +563,23 @@ pub(crate) fn ellipse_points(
 /// Returns the point_index of the nearest tracked feature, or None if none is close enough.
 fn find_nearest_tracked_feature(
     features: &[DisplayFeature],
-    tree: &kiddo::KdTree<f32, 2>,
+    tree: &PointCloud2<f32>,
     query_px: &[f32; 2],
     hit_radius_px: f32,
 ) -> Option<usize> {
     if features.is_empty() {
         return None;
     }
-    let hit_radius_sq = hit_radius_px * hit_radius_px;
-    // Check a few nearest neighbors in case the closest is untracked
-    let neighbors = tree.nearest_n::<SquaredEuclidean>(query_px, 5);
-    for neighbor in neighbors {
-        if neighbor.distance > hit_radius_sq {
+    // Check a few nearest neighbours in case the closest is untracked. The
+    // result is ordered by distance and padded with `u32::MAX` once the
+    // radius runs out of candidates.
+    const CANDIDATES: usize = 5;
+    let neighbors = tree.nearest_k_within_radius(query_px, 1, CANDIDATES, hit_radius_px);
+    for &index in &neighbors {
+        if index == u32::MAX {
             break;
         }
-        let feature = &features[neighbor.item as usize];
+        let feature = &features[index as usize];
         if feature.is_tracked() {
             return Some(feature.point_index as usize);
         }

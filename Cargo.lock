@@ -4936,7 +4936,6 @@ dependencies = [
  "env_logger",
  "image",
  "jiff",
- "kiddo",
  "log",
  "nalgebra",
  "ndarray",

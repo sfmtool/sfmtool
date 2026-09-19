@@ -38,7 +38,6 @@ concerns with 10M+ points and GIL limitations for background image loading.
 |-------|---------|
 | `nalgebra` | Linear algebra (quaternions, matrices, transforms) |
 | `image` | Image loading and resizing for thumbnails |
-| `kiddo` | KD-tree for nearest-neighbor distance (auto point sizing) |
 | `rayon` | Parallel iterators |
 | `eframe` | Used for its `egui_wgpu` sub-crate (renderer + screen descriptor), not the eframe event loop |
 | `egui` + `egui-winit` | Immediate-mode UI + winit integration |

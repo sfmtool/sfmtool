@@ -27,13 +27,23 @@
 //! trimmed medians of the same two clouds agreed to within 1.25x: the trim
 //! converges on the spacing the two clouds share.
 
-use kiddo::{KdTree, SquaredEuclidean};
 use nalgebra::Point3;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
+use sfmtool_core::spatial::PointCloud3;
+use std::collections::HashMap;
 
 use super::gpu_types::{FALLBACK_POINT_SIZE, NN_SUBSAMPLE_COUNT};
+
+/// Euclidean distance between two 3-D points, accumulated the way the KD-tree
+/// accumulates its squared distances so the two agree bit for bit.
+fn distance(a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    (0..3)
+        .map(|d| (a[d] - b[d]) * (a[d] - b[d]))
+        .sum::<f32>()
+        .sqrt()
+}
 
 /// A nearest-neighbour distance above this multiple of the current median is
 /// an isolated point by the cloud's own scale, and leaves the set the next
@@ -100,11 +110,9 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
         return FALLBACK_POINT_SIZE;
     }
 
-    // Build KD-tree from finite points (f32 for speed)
-    let mut tree: KdTree<f32, 3> = KdTree::with_capacity(positions.len());
-    for (i, p) in positions.iter().enumerate() {
-        tree.add(p, i as u64);
-    }
+    // Build the index over every finite point (f32 for speed).
+    let flat: Vec<f32> = positions.iter().flatten().copied().collect();
+    let cloud = PointCloud3::<f32>::new(&flat, positions.len());
 
     // Subsample indices for NN queries
     let mut rng = StdRng::seed_from_u64(NN_SUBSAMPLE_SEED);
@@ -117,16 +125,21 @@ pub(super) fn compute_auto_point_size(points: &[sfmtool_core::Point3D]) -> f32 {
         indices
     };
 
-    // Query nearest neighbor for each subsampled point (k=2: self + nearest)
+    // Query the two nearest points for each subsampled point: the first is the
+    // point itself (or a coincident twin), so the second is the neighbour.
+    let query: Vec<f32> = query_indices
+        .iter()
+        .flat_map(|&idx| positions[idx])
+        .collect();
+    let neighbors = cloud.nearest_k(&query, query_indices.len(), 2);
     let mut nn_distances: Vec<f32> = Vec::with_capacity(query_indices.len());
-    for &idx in &query_indices {
-        let neighbors = tree.nearest_n::<SquaredEuclidean>(&positions[idx], 2);
-        // The first result is the point itself (distance 0); take the second
-        if neighbors.len() >= 2 {
-            let dist = neighbors[1].distance.sqrt();
-            if dist > 0.0 {
-                nn_distances.push(dist);
-            }
+    for (&idx, pair) in query_indices.iter().zip(neighbors.chunks(2)) {
+        if pair[1] == u32::MAX {
+            continue;
+        }
+        let dist = distance(&positions[idx], &cloud.position(pair[1] as usize));
+        if dist > 0.0 {
+            nn_distances.push(dist);
         }
     }
 
@@ -164,33 +177,36 @@ pub(super) fn compute_camera_nn_scale(images: &[sfmtool_core::SfmrImage]) -> Opt
         return None;
     }
 
-    // Exact-duplicate centers collapse to a single tree entry: kiddo v5's
-    // fixed-size leaf buckets panic once more than 32 items share identical
-    // coordinates (a rotation-only reconstruction stores every camera at the
-    // origin), and duplicates could only contribute the zero distances the
-    // `dist > 0.0` filter below discards.
-    let mut tree: KdTree<f32, 3> = KdTree::with_capacity(images.len());
-    let mut seen = std::collections::HashSet::with_capacity(images.len());
-    for (i, img) in images.iter().enumerate() {
-        let c = img.camera_center();
-        let p = [c.x as f32, c.y as f32, c.z as f32];
-        if seen.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]) {
-            tree.add(&p, i as u64);
-        }
-    }
-
-    let mut nn_distances: Vec<f32> = Vec::with_capacity(images.len());
+    // Exact-duplicate centers collapse to a single cloud entry, and every
+    // image that shares a center reports that entry's distance. Indexing the
+    // duplicates instead would make each of them report zero — the distance to
+    // its twin — which the `dist.is_finite() && dist > 0.0` filter below then
+    // throws away, so a colocated rig pair would contribute nothing at all
+    // rather than the spacing to the nearest camera that is somewhere else.
+    let mut distinct: Vec<f32> = Vec::with_capacity(images.len() * 3);
+    let mut entry_of: HashMap<[u32; 3], usize> = HashMap::with_capacity(images.len());
+    let mut per_image: Vec<usize> = Vec::with_capacity(images.len());
     for img in images {
         let c = img.camera_center();
-        let query = [c.x as f32, c.y as f32, c.z as f32];
-        let neighbors = tree.nearest_n::<SquaredEuclidean>(&query, 2);
-        if neighbors.len() >= 2 {
-            let dist = neighbors[1].distance.sqrt();
-            if dist > 0.0 {
-                nn_distances.push(dist);
-            }
-        }
+        let p = [c.x as f32, c.y as f32, c.z as f32];
+        let key = [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()];
+        let next = entry_of.len();
+        let entry = *entry_of.entry(key).or_insert_with(|| {
+            distinct.extend_from_slice(&p);
+            next
+        });
+        per_image.push(entry);
     }
+
+    // Every center is its own cloud point, so a cloud of one (a rotation-only
+    // reconstruction) reports an infinite distance and drops out here.
+    let cloud = PointCloud3::<f32>::new(&distinct, entry_of.len());
+    let entry_nn = cloud.nearest_neighbor_distances();
+    let mut nn_distances: Vec<f32> = per_image
+        .iter()
+        .map(|&entry| entry_nn[entry])
+        .filter(|d| d.is_finite() && *d > 0.0)
+        .collect();
 
     if nn_distances.is_empty() {
         return None;
