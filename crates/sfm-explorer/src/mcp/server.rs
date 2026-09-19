@@ -41,7 +41,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -227,8 +228,8 @@ impl Viewer {
 }
 
 impl ServerHandler for Viewer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "Drives a running SfM Explorer window: the scene graph of loaded .sfmr \
                  reconstructions, the selection, the 3D viewport camera, and a screenshot of \
                  what is on screen. Start with get_scene — the reconstruction labels it reports \

@@ -86,8 +86,11 @@ serde_json = "1"
 # `rmcp` is pinned to an exact minor: it is here to absorb the protocol's
 # revision history (2024-11-05 through 2026-07-28), so which revisions a given
 # version negotiates is the reason it is a dependency at all, and a silent
-# minor bump could change it.
-rmcp = { version = "~3.2", optional = true, default-features = false, features = [
+# minor bump could change it. Moving the pin is therefore a deliberate step that
+# re-checks `ProtocolVersion::KNOWN_VERSIONS` and `LATEST`: 3.2 -> 3.4 left both
+# exactly as above, with `LATEST` still 2025-11-25, so what a client negotiates
+# is unchanged.
+rmcp = { version = "~3.4", optional = true, default-features = false, features = [
     "server",
     "transport-streamable-http-server",
 ] }
