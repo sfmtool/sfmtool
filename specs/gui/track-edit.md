@@ -178,6 +178,15 @@ greys *Evaluate*, *Fit* and *Stage: track -> cluster* with *"this track has no
 surfel yet; fit it first"* rather than offering three buttons whose only act
 would be to decode a dozen images and fail.
 
+**Commit leaves the point it wrote selected.** The write is
+[`edits/commit-track.md`](edits/commit-track.md)'s, and the panel's own part in
+it is that the point the commit produced becomes the viewer's selection --
+whether it replaced a point or created one -- so the 3D viewport's track rays,
+the frustums of the observing images and the Point Track Detail panel next door
+are all looking at what was just written rather than at wherever the selection
+had been left. The dock drops what the panels cached about the node's points in
+the same breath, as it does after any other edit that moves them.
+
 **Duplicate is how a second patch over neighbouring ground is started.** It
 puts a copy of the active track on the bench and makes the copy active, so the
 patch just fitted to one piece of surface can be slid to the piece beside it

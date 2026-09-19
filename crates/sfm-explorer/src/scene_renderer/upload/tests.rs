@@ -24,7 +24,8 @@ use sfmtool_core::reconstruction::ObservationSource;
 use sfmtool_core::{RotQuaternion, Se3Transform, SfmrReconstruction};
 
 use super::super::gpu_types::{
-    BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS, THUMBNAIL_SIZE,
+    EdgeInstance, BG_PINHOLE_SUBDIVISIONS, DISTORTION_SUBDIVISIONS, FISHEYE_SUBDIVISIONS,
+    THUMBNAIL_SIZE,
 };
 use super::super::picking::{PickTarget, PICK_TAG_FRUSTUM, PICK_TAG_NONE, PICK_TAG_POINT};
 use super::super::recon::{NodeDisplay, ReconResources};
@@ -1427,6 +1428,93 @@ fn track_rays_for_a_point_at_infinity_run_to_twice_the_scene_extent() {
     }
 }
 
+/// The endpoints of one build, in a shape that compares.
+///
+/// `EdgeInstance` is a GPU record and carries no `PartialEq`; what the tests
+/// below are asking about is the two points each ray runs between.
+fn endpoints(edges: &[EdgeInstance]) -> Vec<[[f32; 3]; 2]> {
+    edges.iter().map(|e| [e.endpoint_a, e.endpoint_b]).collect()
+}
+
+/// The rays are geometry and not just a gate: a version that moves the selected
+/// point puts every endpoint somewhere else, and an undo puts them back.
+///
+/// Driven through a real edit rather than by editing a value in place, because
+/// the question is about the two things the frame holds together -- the point
+/// and the version it is read out of.
+#[test]
+fn track_ray_edges_follow_the_version_under_the_selection() {
+    let (mut state, id) = crate::state::edits::tests::adjustable_state();
+    let selected = PointRef::new(id, 0);
+    let built = |state: &crate::state::AppState| {
+        let node = state.node(id).expect("the node is loaded");
+        endpoints(&track_ray_edges(
+            node.edited(),
+            selected,
+            &state.sift_cache,
+            &identity(),
+        ))
+    };
+
+    let before = built(&state);
+    assert!(!before.is_empty(), "the fixture draws rays at all");
+
+    state
+        .start_bundle_adjust(id, &sfmtool_core::BundleAdjustOptions::default())
+        .expect("the fixture is well posed");
+    state.finish_background_task();
+    let after = built(&state);
+    assert_ne!(
+        before, after,
+        "the adjustment moved the point and the rays stayed where they were",
+    );
+
+    state.undo(id).expect("there is an adjustment to undo");
+    assert_eq!(
+        built(&state),
+        before,
+        "the undo left the rays on the version it stepped off",
+    );
+}
+
+/// The same question across a commit, which renumbers the point as well as
+/// moving it: the rays are built for the index the commit wrote, and the value
+/// they come out of is the one it pushed.
+#[test]
+fn track_ray_edges_follow_a_committed_track_to_its_new_index() {
+    let (mut state, id) = crate::bench::tests::state();
+    let label = crate::bench::tests::put_on_bench(&mut state, id);
+    let origin = PointRef::new(id, 2);
+    state.select_point(origin);
+    let built = |state: &crate::state::AppState, point: PointRef| {
+        let node = state.node(id).expect("the node is loaded");
+        endpoints(&track_ray_edges(
+            node.edited(),
+            point,
+            &state.sift_cache,
+            &identity(),
+        ))
+    };
+    let before = built(&state, origin);
+    assert!(!before.is_empty(), "the fixture draws rays at all");
+
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    let point = state.selected_point.expect("the commit selected its point");
+    assert_eq!(point.point, written.point, "the selection is the commit's");
+    assert!(
+        built(&state, point)
+            .iter()
+            .all(|ray| ray[0][0].is_finite() && ray[1][0].is_finite()),
+        "the written point draws rays of its own",
+    );
+    assert!(
+        built(&state, origin).is_empty(),
+        "the replaced index still draws rays, and they are what would be left \
+         on screen",
+    );
+}
+
 #[test]
 fn clear_track_rays_drops_the_buffer() {
     let (device, _queue) = device();
@@ -1733,6 +1821,73 @@ fn an_addition_that_carries_a_bitmap_gets_a_slot_in_its_own_atlas() {
     assert!(
         !patch.slot_of_point.contains_key(&3),
         "the additions' atlas is its own, not an extension of the base's"
+    );
+}
+
+/// The frame writes a uniform block per atlas the pass draws, and the
+/// additions' atlas is one of them.
+///
+/// This is the bug it is here for. Each `PatchResources` carries its own grid
+/// in its own uniform block, and the frame's write covered only the base's, so
+/// the additions' block stayed as `wgpu` left it: zeros. A zero `view_proj`
+/// takes every corner of every surfel in that atlas to `vec4(0, 0, 0, 0)`, so a
+/// point committed from the bench drew its dot and no patch at all -- an atlas
+/// built, filled, bound and drawn, one buffer write short of being visible.
+///
+/// Both sides now read `ReconResources::patch_atlases`, so what is asserted
+/// here is that list: the two atlases are two entries with two uniform buffers,
+/// and neither can be covered by writing the other's.
+#[test]
+fn the_additions_atlas_is_one_of_the_atlases_the_frame_writes_uniforms_for() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    assert!(sync(&mut renderer, &device, &queue, RECON, &loaded));
+    assert_eq!(
+        bundle(&renderer).patch_atlases().count(),
+        1,
+        "a node with no additions draws its base's atlas alone"
+    );
+
+    let mut edited = loaded.clone();
+    let record = moved_record(&edited, 3);
+    edited.replace_point(3, record).expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    // Read through the draw loop's own filter, so the list asserted on is the
+    // one the patch pass walks rather than a second reading of the bundle.
+    let atlases: Vec<_> = renderer
+        .drawn(|b| b.display.show_patches)
+        .flat_map(|bundle| bundle.patch_atlases())
+        .collect();
+    assert_eq!(atlases.len(), 2, "the additions' atlas is not in the list");
+    assert_eq!(atlases[1].count, 1, "the addition's own surfel");
+    assert!(
+        atlases[0].uniform_buffer != atlases[1].uniform_buffer,
+        "the two atlases share a uniform block, and one write would serve both",
+    );
+
+    // The write itself, over the list, as the frame makes it: a block whose
+    // grid disagrees with the atlas it describes samples the wrong cell, and
+    // one never written at all draws nothing.
+    renderer.update_uniforms(
+        &queue,
+        &crate::viewer_3d::ViewportCamera::default(),
+        0.0,
+        2.0,
+        true,
+        1.0,
+        [0.0; 3],
+        0.0,
+        1.0,
+        0.0,
+        None,
+        None,
+        None,
+        0.0,
+        1.0,
+        0.1,
     );
 }
 

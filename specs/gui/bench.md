@@ -149,8 +149,8 @@ impl AppState {
         -> Result<String, String>;
     pub(crate) fn rename_bench_item(&mut self, id: ReconId, label: &str, to: &str)
         -> Result<(), String>;
-    /// The point the commit wrote: the index it took, and the index it
-    /// replaced where it replaced one.
+    /// The point the commit wrote, which it also selects: the index it took,
+    /// and the index it replaced where it replaced one.
     pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
         -> Result<Committed, String>;
     /// Read the track where it sits, moving nothing. `search_px` is how far
@@ -230,8 +230,8 @@ being done. The caller is a menu entry or a button that has to say in one line
 why nothing happened.
 
 **The commit hands back the point it wrote.** One row of the reconstruction is
-the whole of what it produces, and both callers have to name it: the panel
-selects it, and the wire reports its index and its portable id. It comes back
+the whole of what it produces, and it has to be named: the step selects it, and
+the wire reports its index and its portable id. It comes back
 from the step rather than being looked up afterwards, because "the point this
 commit wrote" is not a question the value can be asked once the version has
 landed -- a replacement takes a **new** index and deletes the one it replaced,
@@ -572,7 +572,9 @@ the first item on a bench looks for the node's default descriptor index, and
 finding one writes a row of its own, after the step's. The reply reads the log
 back for what the call did, so a row nobody asked for would arrive under the
 step's label. Those rows are the **viewer's** (`Actor::Viewer`), which is what
-they are, and the reply skips them. **A commit names the point it
+they are, and the reply skips them. It skips `Selection` rows for the same
+reason: a commit selects the point it wrote, which is where the call left the
+viewer looking rather than what the call did. **A commit names the point it
 wrote** -- `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced":
 1207 } }` -- because one row of the reconstruction is the whole of what a commit
 produces, and neither index is derivable from the sentence: a commit that
@@ -687,10 +689,12 @@ point's exact projection and a photograph cached for every image:
   them in order and redo replays them;
 - a document edit between two bench steps is a version in its place, and undoing
   it leaves the bench alone;
-- a commit replaces its origin point, the selection follows it, and an undo
-  restores the pair;
+- a commit replaces its origin point, the selection lands on what it wrote from
+  wherever it was standing, and an undo restores the pair;
+- a commit that creates a point selects what it created, and an undo of that
+  clears the selection;
 - a commit's row is an `Edit` and every other bench step's is a `Bench`, one row
-  per step;
+  per step, with the selection's row after the commit's;
 - a step that changes nothing pushes no version;
 - a run of bench steps over a clean value is clean, a commit is dirty, and
   undoing the commit is clean again;

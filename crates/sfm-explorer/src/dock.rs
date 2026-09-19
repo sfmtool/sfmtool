@@ -354,7 +354,9 @@ impl TabContext<'_> {
                 Ok(_) => {
                     // The commit gave the node a new version, so what the
                     // panels cached about its points describes a value it no
-                    // longer holds.
+                    // longer holds. The point it wrote is already the
+                    // selection, chosen by the step itself so that the wire's
+                    // commit and this one leave the viewer in the same place.
                     self.forget_recon(id);
                 }
             }

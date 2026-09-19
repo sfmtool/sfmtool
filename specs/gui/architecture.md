@@ -302,6 +302,13 @@ under it, and an undo of one does the same in reverse. A `VersionSerial` is
 minted once and never reused, so holding the last frame's against this one's
 asks whether the rays on screen were built from the value on screen.
 
+That pair -- point and version serial -- is `app::selected_point_source`, and
+everything the frame draws *for the selection* is gated on it, the rays and the
+frustum colours of the images that observe the point alike. A commit of a bench
+track moves both halves at once: the selection lands on the row the commit
+wrote, above the node's point count where it replaced one, and the version under
+it is the one the commit pushed.
+
 **When they are cleared**: whenever there is nothing to draw: no selection, a
 node that has gone, a point this version does not have, or a node that is not
 visible. Visibility belongs here because the rays are a singleton with no node

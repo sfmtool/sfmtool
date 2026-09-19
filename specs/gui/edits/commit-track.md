@@ -73,9 +73,31 @@ It is the one step pushed with **both halves stated**
 (`History::push_pair`): the next reconstruction value, and the bench with the
 committed track seated on what it just wrote. The map is the one core reported,
 pushed as it stands -- a `Replaced` of one pair for a replacement, a `Created`
-for a creation -- so the selection follows a replaced point exactly as it
-follows any other point edit, and an undo restores the pair: the point gone from
-the value, and the track back to the half it had before.
+for a creation -- and an undo restores the pair: the point gone from the value,
+and the track back to the half it had before.
+
+### The selection
+
+**The written point becomes the selection**, through `AppState::select_point`
+like any other, so the 3D viewport puts the track rays on it, the Point Track
+Detail panel opens on it and the images that observe it light up. That holds
+wherever the selection was standing and whether the commit replaced a point or
+created one: a commit is a gesture about one point, and the index it landed at
+is the one thing the person who asked for it cannot work out.
+
+It replaces the map-following every other edit does. The map carries a selection
+that was already on the origin to the same row this puts it on, and says nothing
+about a selection that was elsewhere -- and `PointMap::Created` is the identity
+forward, so a creation would leave the selection wherever it was.
+
+Undo and redo are then the map's, exactly as they are for
+[Retriangulate Point](retriangulate-point.md): stepping back off a replacement
+puts the selection on the point it replaced, and stepping back off a creation
+clears it, there being no index on the earlier version that held that point.
+
+The selection is one Action Log row of kind `Selection` after the commit's
+`Edit` row, in the order the two happened in. It is not what the step *did*, so
+the wire's `report` skips it ([`../mcp-server.md`](../mcp-server.md)).
 
 A commit that creates rather than replaces is pushed with a `CreatedPoints`
 carrying the point edit's own content hash and the index it took, because a
@@ -96,7 +118,8 @@ took, and the index it replaced where it replaced one. One row of the
 reconstruction is the whole of what a commit adds, and neither index can be
 recovered afterwards: a replacement writes a **new** row and deletes the one it
 replaced, a creation takes whatever index the overlay had free, and the sentence
-below states neither as a number a caller can use. The panel selects that point; the wire reports it
+below states neither as a number a caller can use. It is what the step selects;
+the wire reports it
 as `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced": 1207 } }`,
 the id being the one the Point Track panel shows and `get_point` takes back, so
 an agent's next call names the row rather than hunting for it
@@ -136,10 +159,20 @@ synthetic textured plane whose numbers are known to the pixel. See
 
 Explorer ([bench/tests.rs](../../../crates/sfm-explorer/src/bench/tests.rs),
 headless): a commit replaces its origin point and leaves the point count alone,
-the selection follows the replacement, and an undo restores the pair -- the
-point the commit replaced back, and the track still on the bench; a commit's row
-is an `Edit` where every other bench step's is a `Bench`; and a commit is what
-makes a node dirty where a run of bench steps does not.
+the selection lands on the written point, and an undo restores the pair -- the
+point the commit replaced back and selected again, and the track still on the
+bench; a commit made with the selection standing on some other point still
+selects what it wrote, and so does one that creates a point, whose undo clears
+the selection and whose redo invents none; a commit's row is an `Edit` where
+every other bench step's is a `Bench`, with the selection's row after it; and a
+commit is what makes a node dirty where a run of bench steps does not.
+
+The frame's side of it is in
+[app/tests.rs](../../../crates/sfm-explorer/src/app/tests.rs) and
+[scene_renderer/upload/tests.rs](../../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs):
+a commit is a new track-ray source on the point it wrote, and the ray geometry
+built for that point is the version's rather than the one the rays were standing
+on ([`../architecture.md`](../architecture.md) § "Track Ray Visualization").
 
 Wire ([mcp/tests.rs](../../../crates/sfm-explorer/src/mcp/tests.rs), headless):
 the point a commit names resolves both ways -- `get_point` by the index gives

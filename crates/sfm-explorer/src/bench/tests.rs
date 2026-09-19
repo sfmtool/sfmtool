@@ -368,6 +368,11 @@ fn a_commit_replaces_the_origin_point_and_an_undo_restores_the_pair() {
     );
 
     state.undo(id).expect("the commit");
+    assert_eq!(
+        state.selected_point.map(|point| point.point),
+        Some(POINT),
+        "the undo left the selection on a point the commit deleted"
+    );
     assert_eq!(state.scene[0].point_count(), points);
     assert!(
         state.scene[0].edited().point(POINT).is_some(),
@@ -378,6 +383,70 @@ fn a_commit_replaces_the_origin_point_and_an_undo_restores_the_pair() {
         track.origin.map(|origin| origin.point),
         Some(POINT),
         "the undo left the track seated on what the commit wrote"
+    );
+}
+
+/// A commit selects the row it wrote, wherever the selection was standing.
+///
+/// The map carries a selection that was already on the origin, and says nothing
+/// about one that was elsewhere -- and a commit is a gesture about one point
+/// whose landing index is the one thing the person who asked for it cannot work
+/// out.
+#[test]
+fn a_commit_selects_the_point_it_wrote_from_a_selection_elsewhere() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let elsewhere = PointRef::new(id, 0);
+    state.select_point(elsewhere);
+
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    assert_eq!(written.replaced, Some(POINT), "this one replaces");
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, written.point as usize)),
+        "the commit left the selection where it found it"
+    );
+}
+
+/// The creating commit selects what it created, which no map could have done:
+/// `PointMap::Created` is the identity forward, so a selection left to follow it
+/// stays wherever it was.
+#[test]
+fn a_commit_that_creates_a_point_selects_the_point_it_created() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    // An origin that resolves to nothing leaves the commit creating a point
+    // rather than replacing one.
+    state
+        .delete_point(PointRef::new(id, POINT as usize))
+        .expect("a live point");
+    state.deselect_point();
+    let points = state.scene[0].point_count();
+
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    assert_eq!(written.replaced, None, "this one creates");
+    assert_eq!(
+        state.scene[0].point_count(),
+        points + 1,
+        "a creation did not grow the point count"
+    );
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, written.point as usize)),
+        "nothing was selected, and nothing is"
+    );
+
+    // The version that created the point is the one that holds it, so stepping
+    // off it drops the selection rather than carrying it to an index that held
+    // nothing -- which is what an undo across any creation does.
+    state.undo(id).expect("the commit");
+    assert_eq!(state.selected_point, None);
+    state.redo(id).expect("the commit");
+    assert_eq!(
+        state.selected_point, None,
+        "a redo invents no selection the undo dropped"
     );
 }
 
@@ -401,14 +470,23 @@ fn a_commit_is_an_edit_row_and_every_other_bench_step_is_a_bench_row() {
         .expect("a track stage");
 
     let rows = rows(&state);
-    assert_eq!(rows.len(), 4, "one row per step: {rows:?}");
+    // One row per step, and the commit's own move of the selection onto the
+    // point it wrote after it.
+    assert_eq!(rows.len(), 5, "one row per step: {rows:?}");
     assert_eq!(
         rows.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
-        [Kind::Bench, Kind::Bench, Kind::Bench, Kind::Edit],
+        [
+            Kind::Bench,
+            Kind::Bench,
+            Kind::Bench,
+            Kind::Edit,
+            Kind::Selection
+        ],
         "only the commit's row is an Edit"
     );
     assert!(rows[0].1.starts_with("Turned "), "{}", rows[0].1);
     assert!(rows[3].1.starts_with("Committed track:"), "{}", rows[3].1);
+    assert!(rows[4].1.starts_with("Selected point "), "{}", rows[4].1);
 }
 
 #[test]

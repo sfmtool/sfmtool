@@ -229,6 +229,20 @@ code over a shorter list. Two draws in one pass; nothing in the shader tells the
 apart, because each `PatchResources` already carries its own grid dimensions in
 its own uniform block.
 
+**The frame writes a block per atlas it draws**, and the two read one list:
+`ReconResources::patch_atlases` yields the base's atlas and then the additions',
+and both the per-frame uniform write (`scene_renderer/uniforms.rs`) and the patch
+pass (`scene_renderer/render.rs`) walk it. They have to agree, because a block
+carries the view-projection as well as the grid: an atlas whose block is never
+written reads it as zeros, and a zero `view_proj` takes every corner of every
+surfel in that atlas to `vec4(0, 0, 0, 0)`. Such an atlas draws nothing at all
+rather than drawing wrongly, so the failure looks like a point that has no patch
+-- which is what a point committed from the bench is. That list is what
+[scene_renderer/upload/tests.rs](../../crates/sfm-explorer/src/scene_renderer/upload/tests.rs)
+asserts on, through the draw loop's own filter: a version that added a
+patch-bearing point is two atlases with two uniform blocks, and neither is
+covered by writing the other's.
+
 A second atlas rather than slots appended to the base's: the base's atlas is
 exactly what a run of point edits shares, so appending to it would mean building
 a new texture per edit and re-uploading every tile. An addition's instance

@@ -229,8 +229,10 @@ impl SceneRenderer {
                 );
             }
 
-            // Patch uniforms (this node's surfel atlas + the global controls)
-            if let Some(patch) = &bundle.patch {
+            // Patch uniforms (a surfel atlas's grid + the global controls), for
+            // every atlas this bundle holds -- the base's and the overlay's
+            // additions' own -- which is the list the patch pass draws.
+            for patch in bundle.patch_atlases() {
                 queue.write_buffer(
                     &patch.uniform_buffer,
                     0,

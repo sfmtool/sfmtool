@@ -308,8 +308,12 @@ is exactly what a run of point edits shares, and appending to a texture means
 building a new one. The packing arithmetic is the same code over a shorter list,
 and each `PatchResources` already carries its own grid dimensions in its own
 uniform block, so two atlases are two draws in one pass and nothing in the shader
-tells them apart. An addition's surfel instance carries its **edited** index, so
-one mask write finds either atlas's slot.
+tells them apart. The frame's uniform write and the patch pass walk the same
+list, `ReconResources::patch_atlases`, because a block also carries the
+view-projection: an atlas the write misses reads a zero one and collapses every
+surfel it holds to a clipped vertex ([patch-rendering.md](patch-rendering.md)
+§ "The overlay's additions get a second atlas"). An addition's surfel instance
+carries its **edited** index, so one mask write finds either atlas's slot.
 
 The additions carry their own copy of the node's per-recon uniform block for one
 field: their pick base is the node's plus its base instance count, and the node's
@@ -328,6 +332,18 @@ Undoing to a version whose base is the one on the GPU therefore writes the mask
 and drops or rebuilds the additions, and nothing else; the GPU cost of an undo is
 the size of what it undid. A materialisation replaces both sets of buffers with
 one, through the row map.
+
+**What the selection lights up is keyed on the version too.** The frustums of
+the images that observe the selected point are coloured from that point's
+**track**, and the track is the version's rather than the index's: a
+retriangulation of every point renumbers nothing and can leave a point observed
+from a different set of images, so a gate that compared the selection alone
+would read no change at all and go on lighting the frustums of the version
+before. The selection is therefore compared as the pair `(point, version
+serial)` -- `app::selected_point_source` -- which is what the track rays are
+already gated on ([architecture.md](architecture.md) § "Track Ray
+Visualization"). The selection highlight and the patch highlight need no such
+rule: they are per-frame uniform writes rather than buffers held between frames.
 
 **Node transforms are detected the same way.** Mirroring a node's transform onto
 its bundle reports whether it differs from the one the bundle held, and that

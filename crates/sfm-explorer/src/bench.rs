@@ -106,13 +106,13 @@ pub(crate) enum Seed {
 
 /// The point a commit wrote, in the version the commit produced.
 ///
-/// One row is the whole of what a commit adds to the reconstruction, and the
-/// two callers both need to name it: the panel selects it, and the wire reports
-/// its index and the portable id minted for it. Carried back from the step
-/// rather than looked up afterwards, because "the point this commit wrote" is
-/// not a question the value can be asked once the version has landed -- a
-/// replacement takes a new index and deletes the one it replaced, and a
-/// creation takes whatever index the overlay had free.
+/// One row is the whole of what a commit adds to the reconstruction, and it is
+/// what the commit selects and what the wire reports -- its index and the
+/// portable id minted for it. Carried back from the step rather than looked up
+/// afterwards, because "the point this commit wrote" is not a question the
+/// value can be asked once the version has landed -- a replacement takes a new
+/// index and deletes the one it replaced, and a creation takes whatever index
+/// the overlay had free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Committed {
     /// The index the written point holds in the new version.
@@ -738,8 +738,8 @@ impl AppState {
     ///
     /// The one bench step that changes both halves of the version, and the one
     /// whose row is an `Edit`: the map the core commit reports is pushed as it
-    /// stands, so the selection follows a replaced point exactly as it follows
-    /// an added observation, and an undo restores the pair -- the point gone,
+    /// stands, so an index taken before the commit is followed across it like
+    /// any other point edit's, and an undo restores the pair -- the point gone,
     /// and the track back to the half it had before.
     ///
     /// The track's origin is **followed to the cursor** first. It names the
@@ -750,8 +750,18 @@ impl AppState {
     ///
     /// What comes back is the point it wrote ([`Committed`]), because the whole
     /// of what a commit produces is one row of the reconstruction and a caller
-    /// that cannot name it has to go looking for it. The panel selects it; the
-    /// wire reports its index and its id.
+    /// that cannot name it has to go looking for it. The wire reports its index
+    /// and its id.
+    ///
+    /// **The written point becomes the selection**, through
+    /// [`AppState::select_point`] like any other, so the viewport puts the
+    /// track rays on it and the Point Track Detail panel opens on it --
+    /// wherever the selection happened to be, and whether the commit replaced a
+    /// point or created one. A commit is a gesture about one point, and the
+    /// index it landed at is the one thing the person who asked for it cannot
+    /// work out. That replaces the map-following every other edit does here:
+    /// the map carries a selection that was already on the origin to the same
+    /// row this puts it on, and says nothing about one that was elsewhere.
     pub(crate) fn commit_bench_track(
         &mut self,
         id: ReconId,
@@ -799,9 +809,12 @@ impl AppState {
             created,
         );
         let parent = version_before(node, serial);
-        self.follow_selection_forward(id);
         self.action_log
             .record(Kind::Edit, format!("{text} ({parent} → {serial})"));
+        // After the row the edit wrote, because that is the order the two
+        // happened in: the point the selection moves to is a row of the version
+        // the line above just announced.
+        self.select_point(PointRef::new(id, report.point as usize));
         Ok(Committed {
             point: report.point,
             replaced: report.replaced,
