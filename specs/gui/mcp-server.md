@@ -2108,6 +2108,25 @@ node's default descriptor index, which writes a row after the step's -- writes
 that row as the viewer rather than as the caller, and the reply skips the
 viewer's rows ([bench.md](bench.md) § "The wire").
 
+**A step that had no effect answers successfully, with `changed: false`.**
+Setting the verdict an observation already has, dragging the patch to the pixel
+it already sits under, painting the verdicts the track already carries: the
+history is not moved, `serial` and `cursor` are the version the node still stands
+at, and `report` is the step's **own** no-effect sentence rather than the
+previous step's label. `changed` is on every edit reply, not only the bench's.
+Whether a step had an effect is core's to decide, with a tolerance in the units
+of the value, because a pixel's round trip through a patch's plane does not
+return bit for bit; the contract is written once in [bench.md](bench.md)
+§ "The wire".
+
+**A pixel off the photograph is brought inside it rather than refused.** The
+four tools that name a pixel as a gesture -- `move_bench_track`,
+`move_bench_track_observation`, `resize_bench_track`,
+`add_bench_track_observation` -- and `create_bench_cluster` take the nearest
+pixel of `[0, width) x [0, height)`, and the reply says so with `clamped`,
+`clamped_from` and the `pixel` used. [bench.md](bench.md) § "The wire" states
+the rule and what it costs.
+
 **A refusal is the bench's own sentence and pushes nothing**: *"Cannot commit
 IMG_0042@142,198: the track is at the cluster stage; upgrade it before
 committing"*, *"Cannot set that verdict: image 4 already has observation 1 in;
@@ -2133,18 +2152,22 @@ infinity is the decision a fit makes over a distant track
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
 points and bearings"), so the reply carries it in the deciding test's own terms
 -- `at infinity along (0.553, -0.809, -0.198): finite point would have 15.1 px
-rms against the bearing's 5.2 px` -- along with how many sightings the walk bound
-left at their seeds. Those two residuals are how an agent tells a depth the
+rms against the bearing's 5.2 px rms` -- along with how many sightings the walk
+bound left at their seeds. Those two residuals are how an agent tells a depth the
 photographs support from one an ill-conditioned midpoint invented, so they are in
-every fit's sentence and not only in the ones they settled. `get_bench_track`'s `stage_data` then says which the track
+every fit's sentence and not only in the ones they settled. A candidate that
+reprojects into **none** of the sightings has no residual, and the sentence says
+that in words rather than printing `NaN` where a number of pixels belongs. `get_bench_track`'s `stage_data` then says which the track
 is: `at_infinity`, with the coordinate under `direction` for a bearing and
-`position` for a place, the other `null`. Under one name an agent could read a
+`position` for a place, the other `null`. That flag is the **track's** and not
+its surfel's `w`, so a point put on the bench from a node with no patch frames --
+every row of a `sift_files` value -- publishes the bearing it is. Under one name an agent could read a
 unit direction as a point one unit from the world origin, which is the one thing
 a bearing is not; each observation's `track` block likewise carries `walked_px`
 exactly when the last fit refused to move that sighting, the number being how far
 the peak sat.
 
-**Four of the twenty-two are the patch a track is**, and they are the wire's
+**Four of the twenty-three are the patch a track is**, and they are the wire's
 half of the handles the Image Detail panel's bench layer offers
 ([multi-panel-image-browser.md](multi-panel-image-browser.md) § "The bench
 layer"). `move_bench_track` slides the patch across its own plane until its
@@ -2187,7 +2210,7 @@ creates one, which is what it must do; otherwise the second commit would delete
 what the first wrote. The copy is the active track and the reply names it, as a
 split's does.
 
-**Three of the twenty-two are about the descriptor index**, which is the node's
+**Three of the twenty-three are about the descriptor index**, which is the node's
 rather than any track's: `open_descriptor_index` adopts a `.kdf`,
 `build_descriptor_index` makes one out of the node's `.sift` files -- at a
 `path` of the caller's where it names one, refused when that path resolves

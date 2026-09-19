@@ -18,7 +18,11 @@
 //!   serial and label and the **sentence the edit recorded** -- which is where
 //!   each family's own numbers already are (add-observation's ZNCC, the
 //!   adjustment's residuals), in the words the human is reading off the panel.
-//!   One text, not a second rendering of the same report.
+//!   One text, not a second rendering of the same report. It also carries
+//!   `changed`, which is whether the cursor moved: a step that had no effect
+//!   pushes no version and answers with the one the node still stands at, and
+//!   `changed: false` is what tells the two apart without comparing serials
+//!   across calls (`specs/gui/bench.md` section "The wire").
 //! - [`moved`] wraps the three cursor moves, whose answer is the version now
 //!   current rather than one that was made.
 //!
@@ -378,8 +382,21 @@ pub(super) fn background_reply(
             ))));
         };
         return Some(match &outcome.outcome {
-            Ok(report) => version_reply(state, pending.node, Some(report.clone()))
-                .map(super::ToolOutput::Json),
+            // An operation that finished with a report pushed a version: the
+            // three photometric bench steps end in `Finished::BenchTrack` and
+            // the two solves in an edit, and a run that was cancelled or refused
+            // is the `Err` arm. So the field is here for the reason it is on
+            // every other edit reply -- one question, one answer, whichever
+            // family the caller is in.
+            Ok(report) => {
+                version_reply(state, pending.node, Some(report.clone())).map(|mut reply| {
+                    reply
+                        .as_object_mut()
+                        .expect("a version reply is an object")
+                        .insert("changed".into(), json!(true));
+                    super::ToolOutput::Json(reply)
+                })
+            }
             Err(message) => Err(ToolError::new(message.clone())),
         });
     }
@@ -406,9 +423,23 @@ pub(super) fn edited(
     edit: impl FnOnce(&mut AppState) -> Result<(), String>,
 ) -> JsonReply {
     let before = state.action_log.revision();
+    let was = cursor_of(state, id);
     edit(state).map_err(ToolError::new)?;
     let report = recorded_text(state, before);
-    version_reply(state, id, report)
+    let mut reply = version_reply(state, id, report)?;
+    // Whether a version was pushed, read off the cursor rather than taken from
+    // the step: every step reports what it did in its own shape, and "did the
+    // history move" is one question with one answer for all of them.
+    reply
+        .as_object_mut()
+        .expect("a version reply is an object")
+        .insert("changed".into(), json!(cursor_of(state, id) != was));
+    Ok(reply)
+}
+
+/// The serial at `id`'s cursor, or `None` for a node that is no longer loaded.
+fn cursor_of(state: &AppState, id: ReconId) -> Option<VersionSerial> {
+    Some(state.node(id)?.history.current_version().serial)
 }
 
 /// Move the cursor and report the version it landed on.
@@ -446,6 +477,20 @@ pub(super) fn version_reply(state: &AppState, id: ReconId, report: Option<String
             .expect("a version reply is an object")
             .insert("report".into(), json!(report));
     }
+    Ok(reply)
+}
+
+/// The version the node stands at, for a step that pushed none.
+///
+/// `changed: false` and the step's **own** sentence, read back from `since`: a
+/// step that found nothing to do wrote a no-effect row, and a reply that carried
+/// no report would leave an agent reading the previous step's `label` instead.
+pub(super) fn unchanged_reply(state: &AppState, id: ReconId, since: u64) -> JsonReply {
+    let mut reply = version_reply(state, id, recorded_text(state, since))?;
+    reply
+        .as_object_mut()
+        .expect("a version reply is an object")
+        .insert("changed".into(), json!(false));
     Ok(reply)
 }
 

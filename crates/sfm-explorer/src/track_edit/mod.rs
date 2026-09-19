@@ -353,37 +353,33 @@ impl TrackEdit {
         let id = node.id;
         let busy = state.busy_refusal(id);
         ui.horizontal_wrapped(|ui| {
+            let (next, stage_label) = match track.stage_kind() {
+                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{2192} track"),
+                StageKind::Track => (StageKind::Cluster, "Stage: track \u{2192} cluster"),
+            };
+            let refusals = photometric_refusals(busy.as_deref(), track, next);
             if entry(
                 ui,
                 "Evaluate",
-                busy.clone(),
+                refusals.evaluate,
                 "Measure every observation where it sits, moving nothing: no gate \
                  drops a row, and a row that cannot be read says why",
             ) {
                 response.evaluate = Some(self.search_px);
             }
-            let fit_refusal = busy.clone().or_else(|| {
-                sfmtool_core::bench::fit_preconditions(track)
-                    .err()
-                    .map(|why| why.to_string())
-            });
             if entry(
                 ui,
                 "Fit",
-                fit_refusal,
+                refusals.fit,
                 "Localize every sighting against the surfel, re-triangulate the \
                  in ones and re-fuse: this one moves the track",
             ) {
                 response.fit = Some(self.search_px);
             }
-            let (next, stage_label) = match track.stage_kind() {
-                StageKind::Cluster => (StageKind::Track, "Stage: cluster \u{2192} track"),
-                StageKind::Track => (StageKind::Cluster, "Stage: track \u{2192} cluster"),
-            };
             if entry(
                 ui,
                 stage_label,
-                busy.clone(),
+                refusals.stage,
                 "Move the track between its two representations",
             ) {
                 response.set_stage = Some(next);
@@ -746,7 +742,11 @@ fn show_header(ui: &mut egui::Ui, label: &str, track: &EditableTrack) {
             // statements, so the word in front of them is what tells a reader
             // which they are looking at. "at infinity" is the Point Track Detail
             // panel's own word for the same row.
-            let at_infinity = payload.frame.as_ref().is_some_and(|frame| frame.w == 0.0);
+            //
+            // The track's own flag and not its frame's `w`: a point put on the
+            // bench from a node with no patch frames carries no surfel to read a
+            // `w` off, and a bearing it came from is still a bearing.
+            let at_infinity = payload.at_infinity;
             ui.weak(match payload.position {
                 Some(position) => format!(
                     "{} ({:.3}, {:.3}, {:.3}){}{}",
@@ -808,6 +808,55 @@ fn split_refusal(panel: &TrackEdit, track: &EditableTrack) -> Option<String> {
             Some("Every row is selected, which would leave one track rather than two.".to_string())
         }
         _ => None,
+    }
+}
+
+/// What each of the three photometric entries is greyed with, or `None` where
+/// the step can run.
+pub(super) struct PhotometricRefusals {
+    /// *Evaluate*.
+    pub(super) evaluate: Option<String>,
+    /// *Fit*.
+    pub(super) fit: Option<String>,
+    /// The *Stage* toggle, for the stage it would move to.
+    pub(super) stage: Option<String>,
+}
+
+/// The sentence each of the three photometric entries is greyed with.
+///
+/// The busy refusal first, and then core's **own** half of that step's
+/// validation -- the half that reads no photograph
+/// ([`sfmtool_core::bench::evaluate_preconditions`],
+/// [`sfmtool_core::bench::fit_preconditions`],
+/// [`sfmtool_core::bench::set_stage_preconditions`]). Asking them here is what
+/// keeps a button that cannot work from starting a task whose only act would be
+/// to decode a dozen photographs and fail for a reason the track already knew,
+/// and it is why the button and the step cannot disagree about what is missing.
+///
+/// Split out of [`TrackEdit::show_toolbar`] so the rule can be read without a
+/// frame to draw it in.
+pub(super) fn photometric_refusals(
+    busy: Option<&str>,
+    track: &EditableTrack,
+    next: StageKind,
+) -> PhotometricRefusals {
+    let refused = |why: Option<String>| busy.map(str::to_string).or(why);
+    PhotometricRefusals {
+        evaluate: refused(
+            sfmtool_core::bench::evaluate_preconditions(track)
+                .err()
+                .map(|why| why.to_string()),
+        ),
+        fit: refused(
+            sfmtool_core::bench::fit_preconditions(track)
+                .err()
+                .map(|why| why.to_string()),
+        ),
+        stage: refused(
+            sfmtool_core::bench::set_stage_preconditions(track, next)
+                .err()
+                .map(|why| why.to_string()),
+        ),
     }
 }
 

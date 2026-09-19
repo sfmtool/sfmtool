@@ -1881,3 +1881,33 @@ fn a_press_off_the_handles_still_pans_and_a_press_that_does_not_move_edits_nothi
     assert!(still.edit.is_none(), "a click edited the track");
     assert_eq!(still.panned, egui::Vec2::ZERO);
 }
+
+/// Every sighting of a point at infinity casts the same ray, so its widest pair
+/// is zero degrees whatever the baseline. The three stored numbers are that
+/// direction and not a place: subtracting a camera centre from them measures the
+/// spread of rays to a point a unit from the world origin, which is a confident
+/// wrong number and a different one from what the Point Track Detail panel
+/// reports for the same row.
+#[test]
+fn the_max_track_angle_of_a_bearing_is_zero_and_not_the_spread_about_the_origin() {
+    let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
+    let point = &mut recon.point_set.points[2];
+    let finite = point.position;
+    point.position = nalgebra::Point3::from(point.position.coords.normalize());
+    point.w = 0.0;
+    point.normal = nalgebra::Vector3::zeros();
+    recon.rebuild_derived_fields();
+    let bearing = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
+    assert_eq!(super::compute_max_track_angle_deg(&bearing, 2), 0.0);
+
+    // The same track as a place has a real spread, so the zero above is the
+    // bearing's and not the fixture's.
+    let mut recon = crate::state::edits::tests::projected_embedded_demo(12);
+    recon.point_set.points[2].position = finite;
+    recon.rebuild_derived_fields();
+    let place = sfmtool_core::EditedReconstruction::new(std::sync::Arc::new(recon));
+    assert!(
+        super::compute_max_track_angle_deg(&place, 2) > 1.0,
+        "the fixture's finite track should subtend a real angle"
+    );
+}

@@ -1131,12 +1131,23 @@ fn populate_feature_diagnostics(
 
 /// Compute the max pairwise angle (degrees) between world-space rays from
 /// observing cameras to a 3D point. Single-observation points return 0.0.
+///
+/// **A point at infinity is a bearing and every sighting of it casts the same
+/// ray**, so its widest pair is zero degrees whatever the baseline. The three
+/// stored numbers are that direction rather than a place, and subtracting a
+/// camera centre from them would measure the spread of rays to a point one unit
+/// from the world origin -- a confident wrong number, and a different one from
+/// what the Point Track Detail panel reports for the same row.
 fn compute_max_track_angle_deg(edited: &EditedReconstruction, point_idx: u32) -> f32 {
     let Some(view) = edited.point(point_idx) else {
         return f32::NAN;
     };
-    let point_pos = view.point().position;
+    let point = view.point();
     let observations = view.observations();
+    if point.is_at_infinity() {
+        return 0.0;
+    }
+    let point_pos = point.position;
     let mut world_rays: Vec<[f64; 3]> = Vec::with_capacity(observations.len());
     for obs in observations {
         let img_idx = obs.image_index as usize;

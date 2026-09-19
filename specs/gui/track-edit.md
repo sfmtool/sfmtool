@@ -147,8 +147,13 @@ infinity carries a unit direction where a finite one carries a place
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
 points and bearings"), and the same three numbers under the wrong rule read as a
 point a metre from the world origin. So the line is `Bearing (x, y, z), at
-infinity` for `w = 0` and `Position (x, y, z)` otherwise -- *at infinity* being
-the word the Point Track Detail panel's own header uses for that row. A fit that
+infinity` for a bearing and `Position (x, y, z)` otherwise -- *at infinity* being
+the word the Point Track Detail panel's own header uses for that row. Which it is
+comes from the track's own `at_infinity` and not from its surfel's `w`, so a
+point put on the bench from a reconstruction with no patch frames reads as the
+bearing it is
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+section "The track stage"). A fit that
 crosses the boundary therefore changes the header's first word, which is how a
 person sees that it crossed.
 
@@ -158,8 +163,14 @@ thresholds*, *Split off N rows*, *Duplicate*, *Commit* and *Discard*. The second
 rename: *Put selected point on bench* and *Rename*. Each entry is enabled or
 greyed with a hover text naming
 what is missing, in the style of the Image Detail menu entries -- and the
-Commit button's refusal is the core commit's own sentence, asked of the very
-track the button would commit, so the button and the step cannot disagree.
+refusal is the core step's own sentence, asked of the very track the button would
+act on, so the button and the step cannot disagree. *Commit* asks the core
+commit; *Evaluate*, *Fit* and the *Stage* toggle ask `evaluate_preconditions`,
+`fit_preconditions` and `set_stage_preconditions`, which are the halves of those
+steps' validation that read no photograph. A track with no surfel therefore
+greys *Evaluate*, *Fit* and *Stage: track -> cluster* with *"this track has no
+surfel yet; fit it first"* rather than offering three buttons whose only act
+would be to decode a dozen images and fail.
 
 **Duplicate is how a second patch over neighbouring ground is started.** It
 puts a copy of the active track on the bench and makes the copy active, so the

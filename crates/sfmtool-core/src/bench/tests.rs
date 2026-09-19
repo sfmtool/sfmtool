@@ -25,7 +25,8 @@ use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocaliza
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::progress::Progress;
 use crate::reconstruction::add_observation::tests::{
-    edited as edited_fixture, fixture_of, fixture_with_columns, with_columns, Scene, WORLD,
+    edited as edited_fixture, fixture_of, fixture_with_columns, with_columns, Scene, IMG_H, IMG_W,
+    WORLD,
 };
 use crate::reconstruction::edited::{EditedReconstruction, PointMap};
 use crate::reconstruction::SfmrReconstruction;
@@ -1936,7 +1937,8 @@ fn moving_a_sighting_writes_its_keypoint_pins_it_and_drops_what_was_read_at_the_
 
     let was = track.observations[1].site().expect("a sighting");
     let pixel = [was[0] + 3.0, was[1] - 4.0];
-    let (next, report) = set_observation_keypoint(&track, 1, pixel).expect("a pixel on the sensor");
+    let (next, report) =
+        set_observation_keypoint(&track, &edited, 1, pixel).expect("a pixel on the sensor");
 
     assert!(report.changed);
     assert_eq!(report.observation, 1);
@@ -1966,7 +1968,8 @@ fn moving_a_sighting_writes_its_keypoint_pins_it_and_drops_what_was_read_at_the_
 
     // Put back exactly where it was, nothing changed -- but the pin stands,
     // which is what a hand placement is.
-    let (again, report) = set_observation_keypoint(&next, 1, pixel).expect("the same pixel");
+    let (again, report) =
+        set_observation_keypoint(&next, &edited, 1, pixel).expect("the same pixel");
     assert!(!report.changed);
     assert!(again.observations[1].pinned);
 }
@@ -1974,6 +1977,7 @@ fn moving_a_sighting_writes_its_keypoint_pins_it_and_drops_what_was_read_at_the_
 #[test]
 fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() {
     let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
     let where_at = scene.project(0, WORLD);
     let (bench, report) =
         create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
@@ -1986,7 +1990,8 @@ fn moving_a_cluster_sighting_moves_its_seed_and_keeps_the_shape_it_is_read_at() 
     measurement.shift_px = Some(0.3);
 
     let pixel = [where_at[0] + 2.5, where_at[1] + 1.5];
-    let (next, report) = set_observation_keypoint(&track, 0, pixel).expect("a pixel on the sensor");
+    let (next, report) =
+        set_observation_keypoint(&track, &edited, 0, pixel).expect("a pixel on the sensor");
 
     assert!(report.changed);
     let cluster = next.observations[0].cluster.as_ref().expect("a seed");
@@ -2440,7 +2445,13 @@ fn a_cluster_edge_drag_scales_the_shape_and_holds_the_far_edge_of_the_parallelog
         ]
     };
     let far_before = corner(where_at, shape, -1.0, 0.0);
-    let out = corner(where_at, shape, 2.0, 0.0);
+    // A pointer inside the photograph: the step clamps one that is not, and this
+    // test is about the arithmetic rather than about the clamp.
+    let out = corner(where_at, shape, 1.1, 0.0);
+    assert!(
+        out[0] >= 0.0 && out[0] < f64::from(IMG_W) && out[1] >= 0.0 && out[1] < f64::from(IMG_H),
+        "the drag target {out:?} has to be on the photograph"
+    );
 
     let (next, report) =
         resize_from_edge(&track, &edited, 0, Edge::PlusU, out).expect("a usable drag");
@@ -2528,7 +2539,7 @@ fn the_patch_steps_refuse_the_stage_they_do_not_belong_to() {
         Err(TrackEditError::WrongStage { .. })
     ));
     assert!(matches!(
-        set_observation_keypoint(&at_track, 9, [1.0, 2.0]),
+        set_observation_keypoint(&at_track, &edited, 9, [1.0, 2.0]),
         Err(TrackEditError::NoSuchObservation { .. })
     ));
 }
@@ -3210,4 +3221,305 @@ fn a_fit_of_the_unsupported_depth_writes_the_bearing() {
     let after = frame_of(&fitted);
     assert_eq!(after.w, 0.0);
     assert_eq!(after.half_extent, before.half_extent);
+}
+
+// ---- A bearing that carries no surfel --------------------------------------
+
+/// [`far_bearing_edited`] with the patch-frame columns stripped: the bearing a
+/// node with no `patch_u_halfvec` holds, which is every row of a `sift_files`
+/// value.
+fn far_bearing_frameless(scene: &Scene) -> EditedReconstruction {
+    let frame = OrientedPatch::from_infinity_direction(
+        far_direction(),
+        Vector3::new(0.0, 1.0, 0.0),
+        [far_angular_half(), far_angular_half()],
+    );
+    let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
+    let mut recon = fixture_of(scene, far_direction(), 0.0, &observing, &frame);
+    recon.point_set.patch_u_halfvec_xyz = None;
+    recon.point_set.patch_v_halfvec_xyz = None;
+    recon.rebuild_derived_fields();
+    EditedReconstruction::new(Arc::new(recon))
+}
+
+/// A bearing is a bearing because the **point** says `w = 0`, and a node with no
+/// patch frames has no frame to read a `w` off. Reading the frame put the three
+/// numbers under `position` and committed them back as a place one unit from the
+/// world origin.
+#[test]
+fn a_bearing_with_no_patch_frame_is_still_a_bearing() {
+    let scene = far_scene();
+    let edited = far_bearing_frameless(&scene);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let payload = track.track().expect("the track stage");
+
+    assert_eq!(payload.frame, None, "the node stores no patch frame");
+    assert!(
+        payload.at_infinity,
+        "the point's own w = 0 is what says it is a bearing"
+    );
+    let coordinate = payload.position.expect("a bearing has a coordinate");
+    assert!(
+        (coordinate.coords.norm() - 1.0).abs() < 1e-9,
+        "a w = 0 row stores a unit direction, it stores {coordinate}"
+    );
+
+    // And it commits back as the row it came from.
+    let (next, written) = commit(&edited, &track).expect("eight sightings in, with a coordinate");
+    let point = next.point(written.point).expect("just written").point();
+    assert_eq!(point.w, 0.0, "a frameless bearing commits as a bearing");
+    assert!(
+        (point.position.coords.norm() - 1.0).abs() < 1e-9,
+        "it stores {}",
+        point.position
+    );
+
+    // The two steps that need a surfel still refuse, in their own words.
+    assert_eq!(evaluate_preconditions(&track), Err(EvaluateError::NoFrame));
+    assert_eq!(fit_preconditions(&track), Err(FitError::NoFrame));
+    assert_eq!(
+        set_stage_preconditions(&track, StageKind::Cluster),
+        Err(StageError::NoFrame)
+    );
+}
+
+/// The same node's finite twin, so the flag is read and not assumed: a `w = 1`
+/// row with no frame is a place.
+#[test]
+fn a_frameless_finite_point_is_not_a_bearing() {
+    let scene = far_scene();
+    let frame = OrientedPatch::from_center_normal(
+        far_world(),
+        Vector3::new(0.0, 0.0, -1.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        [FAR_HALF_WORLD, FAR_HALF_WORLD],
+    );
+    let observing: Vec<u32> = (0..FAR_NEAR_VIEWS as u32).collect();
+    let mut recon = fixture_of(&scene, far_world(), 1.0, &observing, &frame);
+    recon.point_set.patch_u_halfvec_xyz = None;
+    recon.point_set.patch_v_halfvec_xyz = None;
+    recon.rebuild_derived_fields();
+    let edited = EditedReconstruction::new(Arc::new(recon));
+
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let payload = track.track().expect("the track stage");
+    assert_eq!(payload.frame, None);
+    assert!(!payload.at_infinity, "a w = 1 row is a place");
+
+    let (next, written) = commit(&edited, &track).expect("a finite commit");
+    assert_eq!(
+        next.point(written.point).expect("just written").point().w,
+        1.0
+    );
+}
+
+// ---- No effect --------------------------------------------------------------
+
+/// A step told to do what has already been done says so and leaves the value
+/// alone. The comparison cannot be exact: a pixel named on the wire or under a
+/// pointer is turned into a ray, met with the patch's plane and projected back,
+/// and that round trip does not return bit for bit -- which is how a drag
+/// released on its own start came to report "moved by 0.000 units".
+#[test]
+fn a_patch_edit_that_changes_nothing_reports_no_effect() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    // The centre put back under the pixel it already projects to.
+    let site = track.observations[0].site().expect("a sighting");
+    let (moved, report) =
+        translate_frame(&track, &edited, 0, site).expect("the sighting's own pixel");
+    assert!(!report.changed, "the patch already sits there: {report:?}");
+    assert_eq!(report.moved, 0.0);
+    assert_eq!(moved, track, "a no-effect step gives the track back");
+
+    // A resize repeated: the second drag names the size the first left.
+    let target = [site[0] + 3.0, site[1] + 1.0];
+    let (bigger, first) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusU, target).expect("a usable drag");
+    assert!(first.changed);
+    let (again, second) =
+        resize_from_edge(&bigger, &edited, 0, Edge::PlusU, target).expect("the same drag");
+    assert!(
+        !second.changed,
+        "the patch is already that size: {second:?}"
+    );
+    assert_eq!(again, bigger);
+
+    // A turn under a nanoradian is no turn.
+    let (still, turn) = rotate_frame(&track, 1e-12).expect("a finite angle");
+    assert!(!turn.changed, "a nanoradian is not a gesture");
+    assert_eq!(still, track);
+
+    // A sighting put back within a thousandth of a pixel of where it sits.
+    let nudged = [site[0] + 1e-6, site[1] - 1e-6];
+    let (_, placed) =
+        set_observation_keypoint(&track, &edited, 0, nudged).expect("a pixel on the sensor");
+    assert!(
+        !placed.changed,
+        "the sighting already sits there: {placed:?}"
+    );
+}
+
+/// The cluster stage's two hand edits, judged the same way.
+#[test]
+fn a_cluster_edit_that_changes_nothing_reports_no_effect() {
+    let scene = Scene::new();
+    let edited = edited_fixture(&scene, WORLD);
+    let where_at = scene.project(0, WORLD);
+    let (bench, report) =
+        create_cluster(&Bench::new(), &pixel_seed(0, where_at)).expect("a usable seed");
+    let track = track_of(&bench, &report.label);
+    let shape = track.observations[0].shape().expect("a seed shape");
+
+    let (same, report) = set_observation_shape(&track, 0, shape).expect("the shape it has");
+    assert!(!report.changed, "the sighting already has that shape");
+    assert_eq!(same, track);
+
+    // An edge put back under the pixel it already reaches.
+    let radius = track.cluster().expect("a cluster").radius;
+    let edge = [
+        where_at[0] + shape[0][0] * radius,
+        where_at[1] + shape[1][0] * radius,
+    ];
+    let (held, report) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusU, edge).expect("the edge's own pixel");
+    assert!(!report.changed, "the parallelogram is already that size");
+    assert_eq!(held, track);
+}
+
+/// A painting that proposes the verdicts the track already carries moves
+/// nothing, and the report says so rather than leaving a caller to compare two
+/// tracks.
+#[test]
+fn a_painting_that_moves_no_verdict_reports_no_effect() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (painted, first) = apply_thresholds(&track);
+    let (again, second) = apply_thresholds(&painted);
+    assert!(!second.changed, "the second painting moved something");
+    assert_eq!(again.observations, painted.observations);
+    assert_eq!(first.changed, painted.observations != track.observations);
+}
+
+// ---- The photograph's own bounds -------------------------------------------
+
+/// A pixel a pointer was dragged past the edge of the picture to, or a call
+/// carrying two numbers of its own, names no place on the photograph: `(-500,
+/// -500)` of a 128 px frame is no column and no row, and the patch whose centre
+/// was slid to meet that pixel's ray was flung across the reconstruction. The
+/// step takes the nearest place the photograph does name, and says that it did.
+#[test]
+fn a_pixel_off_the_photograph_is_brought_inside_it() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let off = [-500.0, -500.0];
+
+    let (_, report) = translate_frame(&track, &edited, 0, off).expect("a finite pixel");
+    assert_eq!(
+        report.clamped_from,
+        Some(off),
+        "the move did not say it clamped"
+    );
+    assert!(
+        report.pixel[0] >= 0.0
+            && report.pixel[0] < f64::from(IMG_W)
+            && report.pixel[1] >= 0.0
+            && report.pixel[1] < f64::from(IMG_H),
+        "the centre landed at {:?}, off the photograph",
+        report.pixel
+    );
+
+    let (_, report) = set_observation_keypoint(&track, &edited, 0, off).expect("a finite pixel");
+    assert_eq!(report.clamped_from, Some(off));
+    assert_eq!(report.pixel, [0.0, 0.0], "the nearest pixel is the corner");
+
+    let (_, report) =
+        resize_from_edge(&track, &edited, 0, Edge::PlusU, off).expect("a finite pixel");
+    assert_eq!(report.clamped_from, Some(off));
+    assert_eq!(report.pixel, Some([0.0, 0.0]));
+
+    // And the far end is the largest pixel the sensor has rather than its width,
+    // `[0, width)` being half open.
+    let past = [f64::from(IMG_W) + 9.0, f64::from(IMG_H) + 9.0];
+    let (_, report) = set_observation_keypoint(&track, &edited, 0, past).expect("a finite pixel");
+    assert_eq!(report.clamped_from, Some(past));
+    assert!(
+        report.pixel[0] < f64::from(IMG_W) && report.pixel[1] < f64::from(IMG_H),
+        "a pixel at the width names a column the sensor does not have: {:?}",
+        report.pixel
+    );
+
+    // A pixel on the photograph is left exactly where it was named.
+    let site = track.observations[0].site().expect("a sighting");
+    let (_, report) = set_observation_keypoint(&track, &edited, 0, [site[0] + 2.0, site[1]])
+        .expect("a pixel on the sensor");
+    assert_eq!(report.clamped_from, None);
+}
+
+// ---- What a classification says when a candidate reprojects nowhere ---------
+
+/// A candidate that reprojects into none of the sightings has no residual, and
+/// the sentence says that rather than printing `NaN` as though it were a number
+/// of pixels. The classification already treats it as no evidence.
+#[test]
+fn a_candidate_that_reprojects_nowhere_is_named_rather_than_printed_as_nan() {
+    let call = TrackClassification {
+        at_infinity: true,
+        coordinate: Point3::new(0.0, 0.0, 1.0),
+        reason: ClassificationReason::DepthUnresolved,
+        condition_number: 1.0e6,
+        inverse_depth_z: -22.30,
+        inverse_depth_z_cutoff: 4.0,
+        resolvable_distance: f64::NAN,
+        finite_horizon: 1.0,
+        max_pair_angle_deg: 0.01,
+        finite_rms_px: f64::NAN,
+        bearing_rms_px: 9.3,
+        residual_margin: 0.8,
+    };
+    let said = call.to_string();
+    assert!(!said.contains("NaN"), "{said}");
+    assert!(
+        said.contains("finite point reprojects into none of the sightings"),
+        "{said}"
+    );
+    assert!(said.contains("9.3 px as a bearing"), "{said}");
+
+    // The other side, and the overturned reasons, read the same way.
+    let swapped = TrackClassification {
+        finite_rms_px: 3.4,
+        bearing_rms_px: f64::NAN,
+        ..call
+    };
+    let said = swapped.to_string();
+    assert!(!said.contains("NaN"), "{said}");
+    assert!(
+        said.contains("the bearing reprojects into none of the sightings"),
+        "{said}"
+    );
+
+    let overturned = TrackClassification {
+        reason: ClassificationReason::FiniteDoesNotExplainTheSightings,
+        ..call
+    };
+    let said = overturned.to_string();
+    assert!(!said.contains("NaN"), "{said}");
+    assert!(said.contains("finite point would have"), "{said}");
+
+    let neither = TrackClassification {
+        finite_rms_px: f64::NAN,
+        bearing_rms_px: f64::NAN,
+        ..call
+    };
+    assert!(!neither.to_string().contains("NaN"), "{neither}");
 }

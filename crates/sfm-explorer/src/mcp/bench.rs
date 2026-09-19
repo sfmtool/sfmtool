@@ -17,9 +17,17 @@
 //!
 //! The replies are [`super::edit`]'s, because a bench step is an edit of the
 //! bench half of the version: [`super::edit::edited`] carries the version the
-//! step pushed and the sentence it recorded, and the two steps that read
-//! photographs answer with a handle when they outlive
-//! [`super::REPLY_DIRECTLY_WITHIN`], exactly as `bundle_adjust` does.
+//! step pushed, `changed` for whether it pushed one at all, and the sentence it
+//! recorded, and the two steps that read photographs answer with a handle when
+//! they outlive [`super::REPLY_DIRECTLY_WITHIN`], exactly as `bundle_adjust`
+//! does.
+//!
+//! **A step that had no effect answers with the version the node already stands
+//! at**, `changed: false`, and its own no-effect sentence under `report` --
+//! never the previous step's label, which is what a reply assembled from the
+//! cursor alone would echo. The four tools that name a pixel add `clamped` and
+//! the `pixel` they used, because a pixel off the photograph is brought inside
+//! it rather than refused (`specs/gui/bench.md` section "The wire").
 
 use serde_json::{json, Value};
 use sfmtool_core::bench::{
@@ -166,13 +174,16 @@ pub(super) fn create_bench_cluster(
 ) -> JsonReply {
     let id = resolve_reconstruction(state, Some(label))?;
     let image = resolve_camera_image(state, id, selector)?;
-    let mut made = String::new();
+    let mut made: Option<crate::bench::Seeded> = None;
     let reply = edit::edited(state, id, |state| {
-        state.start_bench_cluster(image, seed).map(|label| {
-            made = label;
+        state.start_bench_cluster(image, seed).map(|seeded| {
+            made = Some(seeded);
         })
     })?;
-    Ok(with_item(reply, &made))
+    let made = made.expect("the step reported what it made");
+    let mut reply = with_item(reply, &made.label);
+    insert_clamp(&mut reply, Some(made.pixel), made.clamped_from);
+    Ok(reply)
 }
 
 /// `create_bench_track`: a point of the reconstruction put on the bench as a
@@ -262,14 +273,21 @@ pub(super) fn add_bench_track_observation(
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     let image = resolve_camera_image(state, id, selector)?;
+    let mut added: Option<crate::bench::Seeded> = None;
     let reply = edit::edited(state, id, |state| {
-        state.add_bench_observation(&item, image, seed)
+        state
+            .add_bench_observation(&item, image, seed)
+            .map(|seeded| {
+                added = Some(seeded);
+            })
     })?;
+    let added = added.expect("the step reported where it seeded");
     let observation = state
         .bench_track(id, &item)
         .map(|track| track.observations.len().saturating_sub(1));
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
+    insert_clamp(&mut reply, Some(added.pixel), added.clamped_from);
     Ok(reply)
 }
 
@@ -291,10 +309,14 @@ pub(super) fn move_bench_track(
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     let edit = PatchEdit::Translate { observation, pixel };
-    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let (reply, edited) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
-    insert(&mut reply, "pixel", json!(pixel));
+    insert_clamp(
+        &mut reply,
+        edited.pixel.or(Some(pixel)),
+        edited.clamped_from,
+    );
     Ok(reply)
 }
 
@@ -317,10 +339,14 @@ pub(super) fn move_bench_track_observation(
 ) -> JsonReply {
     let (id, item) = target(state, label, named)?;
     let edit = PatchEdit::Move { observation, pixel };
-    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let (reply, edited) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
-    insert(&mut reply, "pixel", json!(pixel));
+    insert_clamp(
+        &mut reply,
+        edited.pixel.or(Some(pixel)),
+        edited.clamped_from,
+    );
     Ok(reply)
 }
 
@@ -351,10 +377,15 @@ pub(super) fn resize_bench_track(
         edge,
         pixel,
     };
-    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let (reply, edited) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "observation", json!(observation));
     insert(&mut reply, "edge", json!(edge.name()));
+    insert_clamp(
+        &mut reply,
+        edited.pixel.or(Some(pixel)),
+        edited.clamped_from,
+    );
     Ok(reply)
 }
 
@@ -389,7 +420,7 @@ pub(super) fn rotate_bench_track(
             angle_rad,
         },
     };
-    let reply = edit::edited(state, id, |state| state.edit_bench_patch(id, &item, &edit))?;
+    let (reply, _) = patched(state, id, &item, &edit)?;
     let mut reply = with_item(reply, &item);
     insert(&mut reply, "degrees", json!(degrees));
     if let Some(observation) = observation {
@@ -530,9 +561,10 @@ pub(super) fn evaluate_bench_track(
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
+    let since = state.action_log.revision();
     match state.start_bench_evaluate(id, &item, search_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id),
+        Ok(()) => started(state, id, since),
     }
 }
 
@@ -548,9 +580,10 @@ pub(super) fn fit_bench_track(
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
+    let since = state.action_log.revision();
     match state.start_bench_fit(id, &item, search_px) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id),
+        Ok(()) => started(state, id, since),
     }
 }
 
@@ -570,9 +603,10 @@ pub(super) fn set_bench_track_stage(
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
+    let since = state.action_log.revision();
     match state.start_bench_stage(id, &item, stage) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id),
+        Ok(()) => started(state, id, since),
     }
 }
 
@@ -590,9 +624,10 @@ pub(super) fn search_bench_track_descriptors(
         Ok(target) => target,
         Err(error) => return Outcome::Done(Err(error)),
     };
+    let since = state.action_log.revision();
     match state.start_bench_descriptor_search(id, &item, observation, radius_px, min_inliers) {
         Err(message) => Outcome::Done(Err(ToolError::new(message))),
-        Ok(()) => started(state, id),
+        Ok(()) => started(state, id, since),
     }
 }
 
@@ -642,8 +677,13 @@ pub(super) fn build_descriptor_index(
 /// The answer of a step that may have gone to a worker: the deferral that the
 /// frame turns into a result or a handle, or the standing version where the
 /// step found nothing to do and started nothing.
-fn started(state: &AppState, id: ReconId) -> Outcome {
-    started_or(state, id, |state| edit::version_reply(state, id, None))
+///
+/// `since` is the Action Log revision from before the step, so the second case
+/// answers with the step's own no-effect sentence rather than with nothing --
+/// setting the stage a track is already at is the one step here that can find
+/// nothing to do (`specs/gui/bench.md` section "The wire").
+fn started(state: &AppState, id: ReconId, since: u64) -> Outcome {
+    started_or(state, id, |state| edit::unchanged_reply(state, id, since))
 }
 
 /// [`started`] with the answer a step that started nothing gives.
@@ -777,6 +817,37 @@ fn with_item(mut reply: Value, item: &str) -> Value {
     reply
 }
 
+/// One patch edit, with what it did beside the version reply.
+///
+/// The four patch tools all want the same two things out of the step -- the
+/// pixel it used and whether it had to bring that pixel inside the photograph --
+/// and the `AppState` method is the only place either is known.
+fn patched(
+    state: &mut AppState,
+    id: ReconId,
+    item: &str,
+    edit: &PatchEdit,
+) -> Result<(Value, crate::bench::PatchEdited), ToolError> {
+    let mut done: Option<crate::bench::PatchEdited> = None;
+    let reply = edit::edited(state, id, |state| {
+        state.edit_bench_patch(id, item, edit).map(|edited| {
+            done = Some(edited);
+        })
+    })?;
+    Ok((reply, done.expect("the step reported what it did")))
+}
+
+/// The pixel a step used, and whether it is the one that was asked for.
+///
+/// `clamped` is the fact an agent acts on -- the call named a place off the
+/// photograph and the step took the nearest place on it -- and `pixel` is what
+/// it took, so a reader that ignores the flag still has the right number.
+fn insert_clamp(reply: &mut Value, pixel: Option<[f64; 2]>, clamped_from: Option<[f64; 2]>) {
+    insert(reply, "pixel", json!(pixel));
+    insert(reply, "clamped", json!(clamped_from.is_some()));
+    insert(reply, "clamped_from", json!(clamped_from));
+}
+
 fn insert(reply: &mut Value, key: &str, value: Value) {
     reply
         .as_object_mut()
@@ -820,8 +891,12 @@ fn stage_data(track: &EditableTrack) -> Value {
         // is -- `direction` for a `w = 0` track, `position` otherwise, the other
         // null -- with `at_infinity` beside them for a reader that wants the
         // flag rather than the key.
+        //
+        // The track's own flag, not its frame's `w`: a point put on the bench
+        // from a node with no patch frames carries no surfel at all, and a
+        // bearing it came from is still a bearing.
         Stage::Track(payload) => {
-            let at_infinity = payload.frame.as_ref().is_some_and(|frame| frame.w == 0.0);
+            let at_infinity = payload.at_infinity;
             let coordinate = payload.position.map(|p| [p.x, p.y, p.z]);
             json!({
                 "at_infinity": at_infinity,

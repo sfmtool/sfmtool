@@ -36,6 +36,29 @@ const HASH_PREFIX_LEN: usize = 8;
 /// span no area, so there is no frame to warp a template through.
 const MIN_ABS_DET: f64 = 1e-9;
 
+/// Below this fraction of the value it is measured against -- the patch's own
+/// half-length for a centre that moved, the half-length itself for a resize --
+/// a change is no change.
+///
+/// **The comparison cannot be exact.** A pixel named under a pointer or on the
+/// wire is turned into a ray, met with the patch's plane, and projected back,
+/// and that round trip returns the place it started from to within the
+/// arithmetic's last bits rather than bit for bit. An exact `!=` therefore reads
+/// every re-statement of where the patch already is as a move, and the history
+/// fills with versions that say "by 0.000 units". A tolerance in the units of
+/// the value is what makes "the patch already sits there" a statement about the
+/// patch instead of about the floating-point path the pixel took.
+const NO_EFFECT_FRACTION: f64 = 1e-6;
+
+/// Below this many source-image px, a sighting named at a pixel is named at the
+/// pixel it already sits on. In the dragged pixel's own units, for the same
+/// reason `NO_EFFECT_FRACTION` is in the patch's.
+const NO_EFFECT_PX: f64 = 1e-3;
+
+/// Below this many radians, a turn is no turn. A hundredth of a microdegree,
+/// which no gesture and no caller means.
+const NO_EFFECT_RAD: f64 = 1e-9;
+
 /// What putting an item on the bench did.
 ///
 /// The label is the whole of it: an item is named by its label everywhere, and
@@ -179,6 +202,10 @@ pub fn create_track(
 
     let payload = TrackPayload {
         position: Some(stored.position),
+        // The **point's** own `w`, read off the row rather than off the frame: a
+        // node with no patch frames has no frame to read one from, and its
+        // bearings are still bearings.
+        at_infinity: stored.is_at_infinity(),
         frame,
         bitmap: view.patch_bitmap().map(|b| b.to_owned()),
         color: stored.color,
@@ -363,6 +390,11 @@ impl std::error::Error for CreateClusterError {}
 /// The cluster takes the default [`ClusterPayload::radius`], which is the
 /// radius [`ClusterSeed::from_pixel`] sized its shape against, so a seed named
 /// in pixels arrives on the bench at the size it was named.
+///
+/// The seed is not clamped to the photograph here, for the reason
+/// [`add_observation`]'s is not: this step takes a seed rather than a gesture,
+/// and the caller that knows its pixel came from a pointer or a wire call is the
+/// one that brings it inside ([`clamp_to_photograph`]).
 pub fn create_cluster(
     bench: &Bench,
     seed: &ClusterSeed,
@@ -566,6 +598,16 @@ pub struct AddObservationReport {
 /// [`ClusterPayload::radius`]. That is the cluster stage's convention like any
 /// other shape, and it is what a track with nothing to say about its own scale
 /// is worth.
+///
+/// **The seed is not clamped to the photograph here**, unlike the steps a hand
+/// gesture goes through ([`clamp_to_photograph`]). A descriptor search places its
+/// candidates by the warp it found, and a warp can put the patch off the edge of
+/// an image that only half holds it; bringing that seed inside would report a
+/// sighting where the search never said there was one, rather than leaving the
+/// reading to refuse it as
+/// [`Unmeasured::OffSensor`](super::track::Unmeasured::OffSensor). The clamp for
+/// a pixel a person or a caller named belongs to the caller that knows it is one,
+/// which for the viewer is `AppState::add_bench_observation`.
 pub fn add_observation(
     track: &EditableTrack,
     seed: &ObservationSeed,
@@ -754,9 +796,12 @@ pub struct MoveObservationReport {
     /// How far it moved, in that image's px, or `None` when it came from
     /// nowhere.
     pub moved_px: Option<f64>,
-    /// Whether anything changed. A sighting put back exactly where it was
-    /// pins it and changes nothing else.
+    /// Whether anything changed. A sighting put back where it already sits --
+    /// within `NO_EFFECT_PX` of it -- pins it and changes nothing else.
     pub changed: bool,
+    /// The pixel that was asked for, when it sat off the photograph and was
+    /// brought inside it. `None` for a pixel that named a place on the picture.
+    pub clamped_from: Option<[f64; 2]>,
 }
 
 /// Put one observation's sighting at `pixel`, by hand.
@@ -787,6 +832,7 @@ pub struct MoveObservationReport {
 /// rather than painting over a placement by hand.
 pub fn set_observation_keypoint(
     track: &EditableTrack,
+    edited: &EditedReconstruction,
     observation: usize,
     pixel: [f64; 2],
 ) -> Result<(EditableTrack, MoveObservationReport), TrackEditError> {
@@ -797,6 +843,7 @@ pub fn set_observation_keypoint(
     let was = current.site();
     let image = current.image;
     let shape = current.shape();
+    let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
 
     let mut next = track.clone();
     let target = &mut next.observations[observation];
@@ -824,7 +871,8 @@ pub fn set_observation_keypoint(
             was,
             pixel,
             moved_px,
-            changed: was != Some(pixel),
+            changed: moved_px.is_none_or(|px| px > NO_EFFECT_PX),
+            clamped_from,
         },
     ))
 }
@@ -843,8 +891,31 @@ pub struct ResizeReport {
     pub half: f64,
     /// What it was, in the same unit.
     pub was: f64,
-    /// Whether anything changed.
+    /// Whether anything changed: a half-length within `NO_EFFECT_FRACTION` of
+    /// the one the patch already had is the size it already had.
     pub changed: bool,
+    /// The pixel the dragged edge's midpoint was put under, after the clamp.
+    /// `None` for [`resize_frame`], which names a size and no pixel.
+    pub pixel: Option<[f64; 2]>,
+    /// The pixel that was asked for, when it sat off the photograph and was
+    /// brought inside it. Always `None` for [`resize_frame`], which names a size
+    /// and no pixel.
+    pub clamped_from: Option<[f64; 2]>,
+}
+
+/// Whether two lengths in the same unit are the same length, to the tolerance a
+/// no-effect step is judged by.
+///
+/// The tolerance is a fraction of the length itself, so it says the same thing
+/// about a patch a millimetre across and one a kilometre across. A zero or
+/// non-finite `was` leaves the comparison exact, there being no scale to take a
+/// fraction of.
+fn same_length(value: f64, was: f64) -> bool {
+    let scale = was.abs();
+    if scale == 0.0 || !scale.is_finite() {
+        return value == was;
+    }
+    (value - was).abs() <= NO_EFFECT_FRACTION * scale
 }
 
 /// Resize the track's surfel to `half_length` along **both** of its axes, about
@@ -880,7 +951,8 @@ pub fn resize_frame(
     let frame = frame_of(track)?;
     let was = frame.half_extent[0];
     let mut next = track.clone();
-    let changed = frame.half_extent != [half_length, half_length];
+    let changed = !(same_length(half_length, frame.half_extent[0])
+        && same_length(half_length, frame.half_extent[1]));
     if changed {
         let (position, frame, bitmap) = track_payload_mut(&mut next);
         frame.half_extent = [half_length, half_length];
@@ -896,6 +968,8 @@ pub fn resize_frame(
             half: half_length,
             was,
             changed,
+            pixel: None,
+            clamped_from: None,
         },
     ))
 }
@@ -947,6 +1021,7 @@ pub fn resize_from_edge(
     let site = current
         .site()
         .ok_or(TrackEditError::NoPlace { observation })?;
+    let (clamped_from, pixel) = clamped_to_view(edited, image, pixel);
     match &track.stage {
         Stage::Track(_) => {
             let frame = frame_of(track)?;
@@ -965,6 +1040,20 @@ pub fn resize_from_edge(
             let half = (offset.dot(&direction) + was) / 2.0;
             if !half.is_finite() || half <= 0.0 {
                 return Err(TrackEditError::BadSize(half));
+            }
+            if same_length(half, was) {
+                return Ok((
+                    track.clone(),
+                    ResizeReport {
+                        observation: Some(observation),
+                        image: Some(image),
+                        half: was,
+                        was,
+                        changed: false,
+                        pixel: Some(pixel),
+                        clamped_from,
+                    },
+                ));
             }
             let displacement = direction * (half - was);
             let mut center = frame.center + displacement;
@@ -1005,7 +1094,9 @@ pub fn resize_from_edge(
                     image: Some(image),
                     half,
                     was,
-                    changed: half != was,
+                    changed: true,
+                    pixel: Some(pixel),
+                    clamped_from,
                 },
             ))
         }
@@ -1028,6 +1119,21 @@ pub fn resize_from_edge(
             let scale = (along + 1.0) / 2.0;
             if !scale.is_finite() || scale <= 0.0 {
                 return Err(TrackEditError::BadSize(scale));
+            }
+            if same_length(scale, 1.0) {
+                let was = half_width_px(shape, radius);
+                return Ok((
+                    track.clone(),
+                    ResizeReport {
+                        observation: Some(observation),
+                        image: Some(image),
+                        half: was,
+                        was,
+                        changed: false,
+                        pixel: Some(pixel),
+                        clamped_from,
+                    },
+                ));
             }
             // From the centre to the dragged edge's midpoint, in pixels.
             let column = match edge.axis() {
@@ -1057,7 +1163,9 @@ pub fn resize_from_edge(
                     image: Some(image),
                     half: half_width_px(scaled, radius),
                     was,
-                    changed: scale != 1.0,
+                    changed: true,
+                    pixel: Some(pixel),
+                    clamped_from,
                 },
             ))
         }
@@ -1080,8 +1188,13 @@ pub struct TranslateFrameReport {
     /// How many sightings the moved centre projects into, and so how many
     /// keypoints were written.
     pub placed: usize,
-    /// Whether anything changed.
+    /// Whether anything changed: a centre that moved by less than
+    /// `NO_EFFECT_FRACTION` of the patch's own half-length is a centre that
+    /// stayed where it was.
     pub changed: bool,
+    /// The pixel that was asked for, when it sat off the photograph and was
+    /// brought inside it. `None` for a pixel that named a place on the picture.
+    pub clamped_from: Option<[f64; 2]>,
 }
 
 /// Slide the surfel across its own plane until its centre sits under `pixel` in
@@ -1134,6 +1247,7 @@ pub fn translate_frame(
     let frame = frame_of(track)?;
     let was = frame.center;
     let (camera, cam_from_world) = view_of(edited, image)?;
+    let (clamped_from, pixel) = clamp_to_photograph(&camera, pixel);
     let anchored = frame
         .anchored_at_keypoint(&camera, &cam_from_world, site)
         .ok_or(TrackEditError::NoProjection { observation })?;
@@ -1145,6 +1259,26 @@ pub fn translate_frame(
     // rather than the surfel being re-seated onto the one observation the
     // pointer came through.
     let displacement = offset;
+    // A drag released where it started, or a pixel naming the place the centre
+    // already projects to, is a statement of where the patch is and not a move
+    // of it. Judged against the patch's own half-length, because that is the
+    // unit the displacement is in.
+    let moved = displacement.norm();
+    if moved == 0.0 || moved <= NO_EFFECT_FRACTION * frame.half_extent[0].abs() {
+        return Ok((
+            track.clone(),
+            TranslateFrameReport {
+                observation,
+                image,
+                pixel: site,
+                center: was,
+                moved: 0.0,
+                placed: 0,
+                changed: false,
+                clamped_from,
+            },
+        ));
+    }
     let mut center = frame.center + displacement;
     // A direction patch's centre is a unit bearing, which is what rendering and
     // the half-extents are stated against; the corner directions are unchanged
@@ -1180,7 +1314,8 @@ pub fn translate_frame(
             center,
             moved: (center - was).norm(),
             placed,
-            changed: center != was,
+            changed: true,
+            clamped_from,
         },
     ))
 }
@@ -1190,7 +1325,7 @@ pub fn translate_frame(
 pub struct RotateFrameReport {
     /// How far it turned, in degrees, positive about the outward normal.
     pub degrees: f64,
-    /// Whether anything changed.
+    /// Whether anything changed: a turn under `NO_EFFECT_RAD` is no turn.
     pub changed: bool,
 }
 
@@ -1216,7 +1351,7 @@ pub fn rotate_frame(
     }
     frame_of(track)?;
     let mut next = track.clone();
-    let changed = angle_rad != 0.0;
+    let changed = angle_rad.abs() > NO_EFFECT_RAD;
     if changed {
         keep_keypoints_only(&mut next);
         let (_, frame, bitmap) = track_payload_mut(&mut next);
@@ -1250,8 +1385,29 @@ pub struct ShapeReport {
     pub half_px: f64,
     /// What that half-width was.
     pub was_half_px: f64,
-    /// Whether anything changed.
+    /// Whether anything changed: a shape whose every coefficient is within
+    /// `NO_EFFECT_FRACTION` of the one the sighting already carries is the
+    /// shape it already carries.
     pub changed: bool,
+}
+
+/// Whether two affine shapes are the same shape, to the tolerance a no-effect
+/// step is judged by: every coefficient within `NO_EFFECT_FRACTION` of its
+/// counterpart, read against the shape's own largest coefficient so the
+/// tolerance is in the shape's units.
+fn same_shape(shape: [[f64; 2]; 2], was: [[f64; 2]; 2]) -> bool {
+    let scale = was
+        .iter()
+        .flatten()
+        .fold(0.0f64, |most, c| most.max(c.abs()));
+    if scale == 0.0 || !scale.is_finite() {
+        return shape == was;
+    }
+    shape
+        .iter()
+        .flatten()
+        .zip(was.iter().flatten())
+        .all(|(a, b)| (a - b).abs() <= NO_EFFECT_FRACTION * scale)
 }
 
 /// Give one cluster-stage observation the affine shape `shape`, by hand.
@@ -1295,8 +1451,12 @@ pub fn set_observation_shape(
         .site()
         .ok_or(TrackEditError::NoPlace { observation })?;
 
+    let changed = !was.is_some_and(|was| same_shape(shape, was));
     let mut next = track.clone();
-    next.observations[observation].cluster = Some(ClusterMeasurement::from_seed(position, shape));
+    if changed {
+        next.observations[observation].cluster =
+            Some(ClusterMeasurement::from_seed(position, shape));
+    }
     Ok((
         next,
         ShapeReport {
@@ -1305,7 +1465,7 @@ pub fn set_observation_shape(
             shape,
             half_px: half_width_px(shape, radius),
             was_half_px: was.map_or(0.0, |was| half_width_px(was, radius)),
-            changed: was != Some(shape),
+            changed,
         },
     ))
 }
@@ -1315,6 +1475,47 @@ pub fn set_observation_shape(
 /// is `radius` of them.
 pub fn half_width_px(shape: [[f64; 2]; 2], radius: f64) -> f64 {
     radius * shape[0][0].hypot(shape[1][0])
+}
+
+/// One pixel brought inside the photograph it names, with the pixel that was
+/// asked for when it had to be brought in.
+///
+/// A pointer can be dragged past the edge of the picture and a wire call can
+/// carry any two finite numbers, and neither is a statement about a place on the
+/// photograph: `(-500, -500)` of a 480 px frame names no column and no row, and
+/// a patch slid until its centre meets that pixel's ray is flung across the
+/// reconstruction. So the target is taken to the nearest pixel of
+/// `[0, width) x [0, height)` -- the sensor's own half-open extent, the range
+/// [`Unmeasured::OffSensor`](super::track::Unmeasured::OffSensor) is written
+/// against -- and the step reports that it did, so the sentence a person reads
+/// says where the patch went and why it is not where they pointed.
+///
+/// The far end is the largest double **under** the extent rather than the extent
+/// itself, because a pixel at the width names a column the sensor does not have.
+pub fn clamp_to_photograph(
+    camera: &crate::camera::CameraIntrinsics,
+    pixel: [f64; 2],
+) -> (Option<[f64; 2]>, [f64; 2]) {
+    let inside = |value: f64, extent: u32| value.clamp(0.0, f64::from(extent).next_down().max(0.0));
+    let landed = [
+        inside(pixel[0], camera.width),
+        inside(pixel[1], camera.height),
+    ];
+    ((landed != pixel).then_some(pixel), landed)
+}
+
+/// [`clamp_to_photograph`] against the camera of the image `observation` is in, and a
+/// pass-through for an image the reconstruction no longer has: a missing view is
+/// the business of the refusal the step makes next, not of the clamp.
+fn clamped_to_view(
+    edited: &EditedReconstruction,
+    image: u32,
+    pixel: [f64; 2],
+) -> (Option<[f64; 2]>, [f64; 2]) {
+    match view_of(edited, image) {
+        Ok((camera, _)) => clamp_to_photograph(&camera, pixel),
+        Err(_) => (None, pixel),
+    }
 }
 
 /// The observation at `observation`, or the refusal a step owes an index past
@@ -1513,6 +1714,10 @@ pub struct ThresholdReport {
     pub pinned: usize,
     /// How many it left alone because nothing at this stage has measured them.
     pub unmeasured: usize,
+    /// Whether any verdict moved. A painting that proposes exactly the verdicts
+    /// the track already carries has no effect, and a caller pushes no version
+    /// for it.
+    pub changed: bool,
 }
 
 /// Paint the proposed verdicts from the stored measurements onto the
@@ -1534,6 +1739,7 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
         turned_out: 0,
         pinned: 0,
         unmeasured: 0,
+        changed: false,
     };
     let mut next = track.clone();
     // The images an `in` observation this painting cannot move already holds.
@@ -1583,6 +1789,14 @@ pub fn apply_thresholds(track: &EditableTrack) -> (EditableTrack, ThresholdRepor
             Some(Verdict::Candidate) => {}
         }
     }
+    // Every verdict the painting moved, counted rather than inferred from the
+    // three tallies: an observation demoted to `candidate` because its image was
+    // already spoken for is in none of them and is still a change.
+    report.changed = next
+        .observations
+        .iter()
+        .zip(&track.observations)
+        .any(|(now, was)| now.verdict != was.verdict);
     (next, report)
 }
 

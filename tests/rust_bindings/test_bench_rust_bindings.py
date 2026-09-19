@@ -880,7 +880,9 @@ class TestPlacingSizingAndTurningByHand:
     ):
         _, track = create_track(Bench(), edited, long_track_point)
         was = track.observation(0)["track"]["keypoint"]
-        moved, report = set_observation_keypoint(track, 0, (was[0] + 3.0, was[1] - 4.0))
+        moved, report = set_observation_keypoint(
+            track, edited, 0, (was[0] + 3.0, was[1] - 4.0)
+        )
 
         assert report["changed"]
         assert report["observation"] == 0
@@ -1180,3 +1182,55 @@ class TestFinitePointsAndBearings:
         assert call["reason"] == "well_conditioned"
         assert call["at_infinity"] is False
         np.testing.assert_allclose(moved["position"], default["position"], atol=1e-9)
+
+
+class TestNoEffectAndTheClamp:
+    """The three facts the reports carry beside what a step did.
+
+    A pixel named on the wire or under a pointer is turned into a ray, met with
+    the patch's plane and projected back, and that round trip does not return bit
+    for bit: an exact comparison reads every re-statement of where the patch
+    already is as a move. And a pixel off the photograph names no place on it, so
+    it is brought to the nearest place that it does.
+    """
+
+    def test_a_patch_edit_that_changes_nothing_reports_no_effect(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+        was = track.observation(0)["track"]["keypoint"]
+
+        # The centre put back under the pixel it already projects to.
+        moved, report = translate_frame(track, edited, 0, (was[0], was[1]))
+        assert not report["changed"]
+        assert report["moved"] == 0.0
+        assert not report["clamped"]
+        assert report["clamped_from"] is None
+        np.testing.assert_array_equal(
+            moved.observation(0)["track"]["keypoint"],
+            track.observation(0)["track"]["keypoint"],
+        )
+
+        # A turn under a nanoradian is no turn.
+        _, turn = rotate_frame(track, 1e-12)
+        assert not turn["changed"]
+
+        # A sighting put back within a thousandth of a pixel of where it sits.
+        _, placed = set_observation_keypoint(
+            track, edited, 0, (was[0] + 1e-6, was[1] - 1e-6)
+        )
+        assert not placed["changed"]
+
+    def test_a_pixel_off_the_photograph_is_brought_inside_it(
+        self, edited, long_track_point
+    ):
+        _, track = create_track(Bench(), edited, long_track_point)
+
+        _, report = translate_frame(track, edited, 0, (-500.0, -500.0))
+        assert report["clamped"]
+        assert tuple(report["clamped_from"]) == (-500.0, -500.0)
+
+        _, report = set_observation_keypoint(track, edited, 0, (-500.0, -500.0))
+        assert report["clamped"]
+        assert tuple(report["clamped_from"]) == (-500.0, -500.0)
+        assert tuple(report["pixel"]) == (0.0, 0.0)

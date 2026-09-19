@@ -185,9 +185,19 @@ pub fn translate_frame(
 
 pub fn set_observation_keypoint(
     track: &EditableTrack,
+    edited: &EditedReconstruction,       // the photograph the pixel is clamped to
     observation: usize,
     pixel: [f64; 2],
 ) -> Result<(EditableTrack, MoveObservationReport), TrackEditError>;
+
+/// One pixel brought inside `[0, width) x [0, height)`, with the pixel that was
+/// asked for when it had to move. The rule the three steps above share, and the
+/// one a caller holding a seed applies before `create_cluster` or
+/// `add_observation`.
+pub fn clamp_to_photograph(
+    camera: &CameraIntrinsics,
+    pixel: [f64; 2],
+) -> (Option<[f64; 2]>, [f64; 2]);
 
 pub fn resize_frame(
     track: &EditableTrack,
@@ -234,6 +244,7 @@ pub struct TranslateFrameReport {
     pub moved: f64,                      // world units
     pub placed: usize,                   // keypoints written
     pub changed: bool,
+    pub clamped_from: Option<[f64; 2]>,  // the pixel asked for, when off the picture
 }
 
 pub struct MoveObservationReport {
@@ -243,6 +254,7 @@ pub struct MoveObservationReport {
     pub pixel: [f64; 2],
     pub moved_px: Option<f64>,
     pub changed: bool,
+    pub clamped_from: Option<[f64; 2]>,
 }
 
 pub struct ResizeReport {
@@ -251,6 +263,8 @@ pub struct ResizeReport {
     pub half: f64,                       // world at the track stage, px at the cluster stage
     pub was: f64,
     pub changed: bool,
+    pub pixel: Option<[f64; 2]>,         // the edge's pixel; none for resize_frame
+    pub clamped_from: Option<[f64; 2]>,
 }
 
 pub struct RotateFrameReport { pub degrees: f64, pub changed: bool }
@@ -416,6 +430,13 @@ pub struct TrackClassification {
     pub finite_rms_px: f64,              // the point reprojected against the sightings
     pub bearing_rms_px: f64,             // the bearing, against the same sightings
     pub residual_margin: f64,
+}
+
+impl TrackClassification {
+    /// The call and the numbers behind it, as one sentence. A candidate whose
+    /// rms is `NaN` reprojected into none of the sightings, and the sentence
+    /// names that instead of printing the word.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;   // Display
 }
 
 pub enum ClassificationReason {
@@ -622,12 +643,27 @@ because cutting it reads the reference's pixels: a track carries one once an
 evaluation has run, and none before that.
 
 **The track stage** is an `embedded_patches` point that is not in the
-reconstruction yet: a position, an
+reconstruction yet: a position, a flag saying whether that position is a place or
+a bearing, an
 [`OrientedPatch`](../../../crates/sfmtool-core/src/patch/cloud.rs) frame, a
 consensus bitmap and a colour, and per observation a keypoint with its
 leave-one-out ZNCC, its reprojection error, its ray angle and its tile
 localizability. It is what a track is when put on the bench from a committed
 point.
+
+**`TrackPayload::at_infinity` is where that one bit lives, and not the frame's
+`w`.** The same three numbers are a world place at `w = 1` and a unit bearing at
+`w = 0`, and the frame carries a `w` of its own for the kernels that project its
+corners -- but a track can carry the bit with no frame at all. A point put on the
+bench from a reconstruction with no `patch_u_halfvec` column has no surfel to
+read a `w` off, and a bearing it came from is still a bearing: a reader that went
+to the frame would call it a place one unit from the world origin, publish it
+under `position`, and commit it back at `w = 1`. So `create_track` takes the
+point's own `w`, `fit` takes the classification's, and everything that states
+which of the two it is holding -- the Track Edit header's word, the wire's choice
+of `direction` over `position`, the commit's `w`, the reading's report -- reads
+the flag. Where a frame exists the two agree, and every step that writes one
+writes both.
 
 ### The cluster stage's units
 
@@ -999,6 +1035,39 @@ frame now has.
 `set_observation_shape` is the cluster stage's and refuses a track.
 `set_observation_keypoint` and `resize_from_edge` work at either and do the
 stage's own arithmetic.
+
+**A step that would change nothing reports `changed: false`.** The patch steps
+hand the track back exactly as it was; the two that **pin** -- a verdict set again
+by hand, a sighting placed where it already sits -- still pin, because a pin is
+the person's ruling on the row and not the thing the tolerance is about. The
+comparison is not exact, and cannot be: a pixel is turned
+into a ray, met with the patch's own plane and projected back, and the round trip
+returns the place it started from to within the arithmetic's last bits. An exact
+`!=` therefore reads every re-statement of where the patch already is as a move.
+So each step judges in the units of the value it moves -- a centre within `1e-6`
+of the patch's own half-length, a half-length within `1e-6` of itself, an affine
+coefficient within `1e-6` of the shape's largest, a sighting within `1e-3` px, a
+turn within `1e-9` rad -- while the steps that compare a verdict, a stage or a
+label compare those exactly, there being nothing to round. What the caller does
+with the flag is the caller's: the viewer pushes no version and records the row
+that says so ([`../../gui/bench.md`](../../gui/bench.md) § "The wire").
+
+**A pixel is brought inside the photograph it names.** `translate_frame`,
+`resize_from_edge` and `set_observation_keypoint` take the nearest pixel of
+`[0, width) x [0, height)` -- the sensor's own half-open extent, and the far end
+is the largest double **under** the width, a pixel at the width naming a column
+the sensor does not have -- and report the pixel that was asked for as
+`clamped_from` where it had to move. A patch whose centre is slid until it meets
+an extrapolated ray's crossing of its plane lands an arbitrary distance from where
+it stood, which is not what a pointer past the edge of the picture or a call
+carrying two numbers of its own means. The consequence worth knowing is that a
+resize's reach is the photograph: an edge cannot be put where that sighting does
+not show it. `clamp_to_photograph` is the rule, public so a caller that holds a
+**seed** rather than a gesture can apply it before `create_cluster` or
+`add_observation` -- those two do not, because a descriptor search places its
+candidates by the warp it found and a warp may put the patch off the edge of an
+image that only half holds it, which the reading refuses as `OffSensor` rather
+than the step inventing a sighting inside the frame.
 
 ### Searching the descriptor index
 
@@ -1620,6 +1689,11 @@ what it then checks is the check and not the criterion: the point reprojects at
 near scene's track is run through the same comparison and survives it, the point
 beating the bearing by far more than the margin. And the whole fit over the
 skewed shape writes the bearing, at the frame size it arrived with.
+
+**The sentence is also read back over a candidate with no residual at all**, a
+classification built in the test with one side's rms `NaN` and then both: a
+candidate that reprojects into none of the sightings is named in words, in every
+one of the sentence's four shapes, and the word `NaN` appears in none of them.
 
 The search is tested over a corpus built in the test
 ([bench/search/tests.rs](../../../crates/sfmtool-core/src/bench/search/tests.rs)):

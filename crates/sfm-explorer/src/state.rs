@@ -464,6 +464,28 @@ pub struct AppState {
     /// frame to do it in would be a guess.
     pub(crate) image_detail_view: Option<ViewGeometry>,
 
+    /// The dock rectangle the panel's body was laid out in when
+    /// [`Self::image_detail_view`] was published.
+    ///
+    /// **The geometry alone cannot say whether it is still current.** The panel
+    /// measures its own body and nothing invalidates that measurement, so a dock
+    /// that has been re-split or a window that has been resized since leaves the
+    /// last reading describing a panel that no longer exists -- and a view tool
+    /// answering from it reports a panel size the very next frame contradicts.
+    /// The leaf's rectangle is the one quantity a caller can compare against the
+    /// dock as it stands now, so it is kept beside the reading and
+    /// `set_image_detail_view` defers to the frame that draws whenever the two
+    /// disagree.
+    pub(crate) image_detail_view_layout: Option<egui::Rect>,
+
+    /// How many frames have published [`Self::image_detail_view`].
+    ///
+    /// What a deferred view request waits on: "the panel has drawn that
+    /// photograph" is not enough, because it may have drawn it before the call
+    /// and before the layout moved. A reply is owed a publication that is
+    /// **newer** than the call, and this counts them.
+    pub(crate) image_detail_view_serial: u64,
+
     /// Transient hover state: image under cursor (from GPU pick or browser).
     /// Updated every frame; cleared when pointer leaves the source panel.
     pub hovered_image: Option<ImageRef>,
@@ -773,6 +795,8 @@ impl AppState {
             selected_point: None,
             look: None,
             image_detail_view: None,
+            image_detail_view_layout: None,
+            image_detail_view_serial: 0,
             hovered_image: None,
             hovered_point: None,
             feature_display: FeatureDisplaySettings::default(),
@@ -910,6 +934,7 @@ impl AppState {
         self.selected_point = None;
         self.look = None;
         self.image_detail_view = None;
+        self.image_detail_view_layout = None;
         self.hovered_image = None;
         self.hovered_point = None;
         self.sift_cache.clear();
@@ -938,8 +963,41 @@ impl AppState {
         self.selected_point = self.selected_point.filter(|p| p.recon != id);
         self.look = self.look.filter(|(image, _)| image.recon != id);
         self.image_detail_view = self.image_detail_view.filter(|view| view.image.recon != id);
+        if self.image_detail_view.is_none() {
+            self.image_detail_view_layout = None;
+        }
         self.hovered_image = self.hovered_image.filter(|i| i.recon != id);
         self.hovered_point = self.hovered_point.filter(|p| p.recon != id);
+    }
+
+    /// Take the panel's own reading of the view it drew, with the dock rectangle
+    /// it was laid out in and a serial for the frame that published it.
+    ///
+    /// The one door for [`Self::image_detail_view`], so the three things a view
+    /// tool has to know about a reading -- what it says, which layout it says it
+    /// of, and how recent it is -- cannot come apart.
+    pub(crate) fn publish_image_detail_view(&mut self, view: ViewGeometry) {
+        self.image_detail_view_layout =
+            crate::mcp::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail);
+        self.image_detail_view = Some(view);
+        self.image_detail_view_serial = self.image_detail_view_serial.wrapping_add(1);
+    }
+
+    /// Whether [`Self::image_detail_view`] still describes the panel as the dock
+    /// now has it.
+    ///
+    /// The condition for answering a view request from the standing reading
+    /// rather than from the frame that draws next. The dock's leaf rectangle is
+    /// the comparison rather than the panel's own body size, because the two are
+    /// different quantities -- egui's margins come off the leaf before the panel
+    /// measures what is left -- and only the leaf is readable without drawing.
+    /// Equal rectangles mean the panel is laid out where it was when it last
+    /// published; anything else, a re-split, a resize, a panel not docked at all,
+    /// means the reading is about a panel that is gone.
+    pub(crate) fn image_detail_view_is_current(&self) -> bool {
+        self.image_detail_view.is_some()
+            && self.image_detail_view_layout
+                == crate::mcp::panel_body_points(&self.dock, crate::dock::Tab::ImageDetail)
     }
 
     /// Select a reconstruction directly.

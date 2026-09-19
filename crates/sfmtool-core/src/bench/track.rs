@@ -423,9 +423,22 @@ pub struct TrackPayload {
     /// Where the track's point stands. `None` for a track whose observations
     /// have not been triangulated, which a commit refuses.
     pub position: Option<Point3<f64>>,
+    /// Whether [`Self::position`] is a bearing rather than a place: the point's
+    /// own `w == 0`.
+    ///
+    /// **The flag is the authority and the frame is not.** The same three
+    /// numbers are a place or a unit direction depending on this one bit, and a
+    /// track can carry the bit with no surfel at all -- a point put on the bench
+    /// from a `sift_files` reconstruction has no patch frame to read a `w` off,
+    /// and its bearings are still bearings. So everything that says which of the
+    /// two it is holding -- the panel's word in front of the coordinate, the
+    /// wire's choice of `direction` over `position`, the commit's `w` -- reads
+    /// this, and [`Self::frame`]'s own `w` is kept equal to it wherever both
+    /// exist, for the renderer and the kernels that project corners.
+    pub at_infinity: bool,
     /// The surfel the localizer registers against. Its centre is
-    /// [`Self::position`] when both are present, and its `w` says whether the
-    /// point is finite or a bearing.
+    /// [`Self::position`] when both are present, and its `w` agrees with
+    /// [`Self::at_infinity`].
     pub frame: Option<OrientedPatch>,
     /// The `(R, R, C)` consensus bitmap the observations were fused into.
     pub bitmap: Option<Array3<u8>>,

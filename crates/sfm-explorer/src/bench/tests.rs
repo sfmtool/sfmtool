@@ -115,7 +115,8 @@ fn putting_a_second_item_on_activating_and_discarding_are_three_versions() {
 
     let second = state
         .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
-        .expect("a pixel on the sensor");
+        .expect("a pixel on the sensor")
+        .label;
     assert_eq!(bench(&state, id).len(), 2);
     assert_eq!(
         crate::bench::active_track_label(bench(&state, id)),
@@ -167,7 +168,8 @@ fn the_two_pixel_gestures_are_one_version_and_one_bench_row_each() {
 
     let label = state
         .start_bench_cluster(ImageRef::new(id, 0), &pixel_seed([120.0, 90.0], Some(6.0)))
-        .expect("a pixel on the sensor");
+        .expect("a pixel on the sensor")
+        .label;
     state
         .add_bench_observation(
             &label,
@@ -781,4 +783,52 @@ fn a_fit_s_version_label_carries_the_classification_and_the_log_the_whole_report
         row.contains("placed") && row.contains("measured"),
         "the log row is the whole report: {row}"
     );
+}
+
+/// A drag that leaves and comes back to where it started is not a move, and the
+/// exact comparison that decided it was is defeated by the pixel round trip: a
+/// pointer's pixel becomes a ray, meets the patch's plane and is projected back,
+/// and the number that comes home is the one it left to within the arithmetic's
+/// last bits. The history filled with rows saying "by 0.000 units".
+#[test]
+fn a_drag_out_and_back_to_where_it_started_pushes_nothing() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let track = state.bench_track(id, &label).expect("on the bench").clone();
+    let site = track.observations[0].site().expect("a sighting");
+
+    let before = versions(&state, id);
+    let out = crate::bench::PatchEdit::Translate {
+        observation: 0,
+        pixel: [site[0] + 4.0, site[1] - 3.0],
+    };
+    let edited = state
+        .edit_bench_patch(id, &label, &out)
+        .expect("a pixel on the sensor");
+    assert!(edited.changed, "the drag out moved the patch");
+    assert_eq!(versions(&state, id), before + 1);
+
+    let back = crate::bench::PatchEdit::Translate {
+        observation: 0,
+        pixel: site,
+    };
+    let edited = state
+        .edit_bench_patch(id, &label, &back)
+        .expect("a pixel on the sensor");
+    assert!(edited.changed, "the drag back moved it again");
+    assert_eq!(versions(&state, id), before + 2);
+
+    // And now the release on the place it already sits pushes nothing, with a
+    // row that says why rather than silence.
+    state.action_log.clear();
+    let edited = state
+        .edit_bench_patch(id, &label, &back)
+        .expect("a pixel on the sensor");
+    assert!(!edited.changed, "the patch already sits there");
+    assert_eq!(versions(&state, id), before + 2, "a no-effect step pushed");
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 1, "one row, saying nothing happened: {rows:?}");
+    assert_eq!(rows[0].0, Kind::Bench);
+    assert!(rows[0].1.contains("no effect"), "{}", rows[0].1);
+    assert!(!rows[0].1.contains("0.000 units"), "{}", rows[0].1);
 }

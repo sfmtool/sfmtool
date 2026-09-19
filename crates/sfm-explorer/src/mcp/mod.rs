@@ -754,6 +754,13 @@ pub(crate) struct PendingView {
     pub(crate) image: ImageRef,
     /// When the call was made, which the deadline is measured from.
     pub(crate) started: std::time::Instant,
+    /// The publication serial the panel stood at when the call was made.
+    ///
+    /// The reply is owed a reading **newer** than this. "The panel has drawn
+    /// that photograph" is not enough on its own: it may have drawn it before
+    /// the call and before the layout moved, and answering from that reading is
+    /// how a reply comes to report a panel size the next frame contradicts.
+    pub(crate) after: u64,
 }
 
 /// A tool call waiting on the operation it started.
@@ -2160,7 +2167,7 @@ fn screenshot_size(
 ///
 /// `Rect::NOTHING` is what a leaf carries until the dock has drawn it once, and
 /// it is not a rectangle to crop to — a picture of it would be empty.
-fn panel_body_points(
+pub(crate) fn panel_body_points(
     dock: &egui_dock::DockState<crate::dock::Tab>,
     panel: crate::dock::Tab,
 ) -> Option<egui::Rect> {

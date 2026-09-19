@@ -285,7 +285,11 @@ pub fn commit(
 
     // ---- The point the record stands on ----
     let frame = payload.frame.as_ref();
-    let at_infinity = frame.is_some_and(|patch| patch.w == 0.0);
+    // The track's own flag rather than the frame's `w`. A track put on the bench
+    // from a `sift_files` reconstruction has no patch frame at all, and a bearing
+    // it came from is still a bearing: reading the frame would commit it back as
+    // a place one unit from the world origin.
+    let at_infinity = payload.at_infinity;
     // A `w = 0` row carries a zero normal: the format states it, and the two
     // conversions across the boundary hold to it -- a bearing's frame is tangent
     // to the direction sphere and its cross product is the bearing itself, which
@@ -300,7 +304,7 @@ pub fn commit(
     let record = PointRecord {
         point: Point3D {
             position,
-            w: frame.map_or(1.0, |patch| patch.w),
+            w: if at_infinity { 0.0 } else { 1.0 },
             color: bitmap_color(payload),
             error: mean_reprojection_error(track, &kept),
             normal,

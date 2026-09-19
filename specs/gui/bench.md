@@ -109,18 +109,35 @@ impl AppState {
         -> Option<&Arc<EditableTrack>>;
 
     pub(crate) fn put_point_on_bench(&mut self, point: PointRef) -> Result<String, String>;
+    /// The pixel is brought inside the photograph before anything is seeded, and
+    /// the answer says where the observation went and what was asked for.
     pub(crate) fn start_bench_cluster(&mut self, image: ImageRef, seed: &Seed)
-        -> Result<String, String>;
+        -> Result<Seeded, String>;
     pub(crate) fn add_bench_observation(&mut self, label: &str, image: ImageRef,
-                                        seed: &Seed) -> Result<(), String>;
+                                        seed: &Seed) -> Result<Seeded, String>;
+
+    /// What a seeding step made, and whether its pixel had to be clamped.
+    pub(crate) struct Seeded {
+        pub(crate) label: String,
+        pub(crate) pixel: [f64; 2],
+        pub(crate) clamped_from: Option<[f64; 2]>,
+    }
     pub(crate) fn set_bench_verdict(&mut self, id: ReconId, label: &str,
                                     observation: usize, verdict: Verdict) -> Result<(), String>;
     /// One hand edit of the track's geometry: the patch slid, one edge of it
     /// put under a pixel, a turn, or one sighting placed. The one call behind
     /// every handle of the Image Detail panel's bench layer and behind the
-    /// wire's four patch tools.
+    /// wire's four patch tools. An edit that changed nothing pushes no version
+    /// and writes the row that says so.
     pub(crate) fn edit_bench_patch(&mut self, id: ReconId, label: &str,
-                                   edit: &PatchEdit) -> Result<(), String>;
+                                   edit: &PatchEdit) -> Result<PatchEdited, String>;
+
+    /// What one patch edit did, as much of it as a reply needs.
+    pub(crate) struct PatchEdited {
+        pub(crate) changed: bool,
+        pub(crate) pixel: Option<[f64; 2]>,
+        pub(crate) clamped_from: Option<[f64; 2]>,
+    }
     pub(crate) fn apply_bench_thresholds(&mut self, id: ReconId, label: &str,
                                          thresholds: &Thresholds) -> Result<(), String>;
     pub(crate) fn split_bench_track(&mut self, id: ReconId, label: &str,
@@ -331,7 +348,7 @@ finite-versus-bearing decision is the step's real outcome on a distant track
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md) § "Finite
 points and bearings"), so the **version label** carries it -- `Fitted
 IMG_0042@142,198: at infinity along (0.553, -0.809, -0.198): finite point would
-have 15.1 px rms against the bearing's 5.2 px` -- rather than naming the item and
+have 15.1 px rms against the bearing's 5.2 px rms` -- rather than naming the item and
 stopping there. A person scrolling the history can therefore see which fit
 crossed the boundary, and on what evidence, without opening each version and
 re-reading its coordinate. The **Action Log row** is the whole report, which is
@@ -590,6 +607,62 @@ version the node stands at, and a step the **track** rules out starts no task
 either: it is a tool error in the step's own sentence, arriving in the call
 rather than through a task the agent would have had to poll to learn that
 nothing was ever going to happen.
+
+**A step that had no effect pushes nothing either, and says so.** A refusal and
+a no-effect are different answers and the surface keeps them apart: a refusal is
+a tool error, and a step that was allowed to run and found there was nothing to
+do answers successfully. The contract is one for every step:
+
+- **No version.** The history is not moved, so there is no row to undo for
+  nothing.
+- **One Action Log row**, of kind `Bench` and not marked failed, carrying the
+  step's own no-effect sentence -- *"Moved bull-nose: no effect, the patch
+  already sits there"*, *"Set bull-nose to the track stage: no effect, it is at
+  that stage already"*. The row has no `(v3 -> v4)` because there is no
+  transition to name.
+- **A reply that agrees with it.** `changed` is `false`, `serial` and `cursor`
+  are the version the node still stands at, `label` is that version's label, and
+  `report` is the row just written -- the step's **own** sentence, never the
+  previous step's label, which is what a reply assembled from the cursor alone
+  echoes.
+
+`changed` is on **every** edit reply, not only the bench's: it is read off the
+cursor before and after the call, so "did the history move" has one answer in one
+place for every family.
+
+**Whether a step had an effect is core's to decide, with a tolerance.** A pixel
+named under a pointer or on the wire is turned into a ray, met with the patch's
+own plane and projected back, and that round trip returns the place it started
+from to within the arithmetic's last bits rather than bit for bit. An exact
+comparison therefore reads every re-statement of where the patch already is as a
+move, and the version it pushes says the patch moved by zero. So each step judges
+in the units of the value it
+moves: a centre within a millionth of the patch's own half-length, a half-length
+within a millionth of itself, an affine coefficient within a millionth of the
+shape's largest, a sighting within a thousandth of a pixel, a turn within a
+nanoradian. The steps that compare something that is not a float -- a verdict, a
+stage, a label, which item is active -- compare it exactly, because there is
+nothing to round.
+
+**A pixel off the photograph is brought inside it rather than refused.** A
+pointer can be dragged past the edge of the picture and a call can carry any two
+finite numbers, and neither names a place on the photograph: `[-500, -500]` of a
+480 px frame is no column and no row, and a patch whose centre is slid until it
+meets that pixel's ray lands wherever the extrapolated ray happens to cross its
+plane, which is an arbitrary distance from where it stood. Every step
+that takes a pixel as a **gesture** -- `move_bench_track`,
+`move_bench_track_observation`, `resize_bench_track`,
+`add_bench_track_observation`'s seed and `create_bench_cluster`'s pixel -- takes
+the nearest pixel of `[0, width) x [0, height)` instead, and says that it did:
+the reply carries `clamped: true`, `clamped_from` and the `pixel` it used, and
+the Action Log row and the version label end *"clamped to the photograph from
+(-500.0, -500.0) to (0.0, 0.0)"*. The consequence worth knowing is that a
+resize's reach is the photograph: an edge cannot be dragged to a place the
+sighting does not show, and a patch grown past the frame is grown in a photograph
+that holds it. `sfmtool_core::bench::clamp_to_photograph` is the one rule, so the
+panel's drag and the tool call land on the same pixel. A seed a **search** places
+is not clamped -- a warp may put the patch off the edge of an image that only
+half holds it, and saying so is the reading's job.
 
 **A refusal is the step's own sentence and pushes nothing.** The wire wraps
 nothing: what an agent reads is the sentence the panel's status line would show.

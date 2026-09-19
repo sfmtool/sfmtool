@@ -256,16 +256,16 @@ impl PyEditableTrack {
         }
     }
 
-    /// Whether the track's surfel is a bearing (``w == 0``) rather than a point.
+    /// Whether the track's coordinate is a bearing (``w == 0``) rather than a
+    /// point.
     ///
-    /// ``False`` at the cluster stage and for a track with no frame, neither of
-    /// which states a direction.
+    /// The track's own flag and not its frame's ``w``: a track put on the bench
+    /// from a reconstruction with no patch frames carries no surfel at all, and a
+    /// bearing it came from is still a bearing. ``False`` at the cluster stage,
+    /// which states no direction.
     #[getter]
     fn at_infinity(&self) -> bool {
-        self.inner
-            .track()
-            .and_then(|p| p.frame.as_ref())
-            .is_some_and(|frame| frame.w == 0.0)
+        self.inner.track().is_some_and(|p| p.at_infinity)
     }
 
     /// Where the track's point stands, or ``None`` at the cluster stage, before
@@ -678,9 +678,15 @@ fn set_verdict(
 /// that observation's own sighting. :func:`set_observation_keypoint` is the step
 /// for **one** keypoint.
 ///
+/// A pixel off the photograph names no place on it, so it is brought to the
+/// nearest pixel of ``[0, width) x [0, height)`` before anything is moved; the
+/// report says whether it had to be. A centre that ends within a millionth of
+/// the patch's own half-length of where it started did not move, and the track
+/// comes back as it was.
+///
 /// Returns ``(EditableTrack, report)`` carrying ``observation``, ``image``,
 /// ``pixel`` (where the centre now projects in it), ``center``, ``moved``,
-/// ``placed`` and ``changed``.
+/// ``placed``, ``changed``, ``clamped`` and ``clamped_from``.
 #[pyfunction]
 fn translate_frame(
     py: Python<'_>,
@@ -702,6 +708,8 @@ fn translate_frame(
     d.set_item("moved", report.moved)?;
     d.set_item("placed", report.placed)?;
     d.set_item("changed", report.changed)?;
+    d.set_item("clamped", report.clamped_from.is_some())?;
+    d.set_item("clamped_from", report.clamped_from)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),
@@ -722,16 +730,22 @@ fn translate_frame(
 /// :func:`translate_frame` is the step that moves the **patch**, which is what
 /// the viewer's dot drag means at the track stage.
 ///
-/// Returns ``(EditableTrack, report)``.
+/// The pixel is brought inside the photograph, and a sighting put back within a
+/// thousandth of a pixel of where it sits reports ``changed`` false.
+///
+/// Returns ``(EditableTrack, report)``, the report carrying ``clamped`` and
+/// ``clamped_from`` beside the rest.
 #[pyfunction]
 fn set_observation_keypoint(
     py: Python<'_>,
     track: &PyEditableTrack,
+    edited: &PyEditedReconstruction,
     observation: usize,
     pixel: [f64; 2],
 ) -> PyResult<(PyEditableTrack, Py<PyDict>)> {
     let (next, report) =
-        core_set_observation_keypoint(&track.inner, observation, pixel).map_err(refused)?;
+        core_set_observation_keypoint(&track.inner, &edited.inner, observation, pixel)
+            .map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
     d.set_item("image", report.image)?;
@@ -739,6 +753,8 @@ fn set_observation_keypoint(
     d.set_item("pixel", report.pixel)?;
     d.set_item("moved_px", report.moved_px)?;
     d.set_item("changed", report.changed)?;
+    d.set_item("clamped", report.clamped_from.is_some())?;
+    d.set_item("clamped_from", report.clamped_from)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),
@@ -866,7 +882,9 @@ fn set_observation_shape(
     ))
 }
 
-/// What a resize reported, as a dict.
+/// What a resize reported, as a dict: the size, what it was, whether anything
+/// changed, and -- for the edge form -- the pixel the edge was put under and the
+/// pixel that was asked for when that one was off the photograph.
 fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDict>> {
     let d = PyDict::new(py);
     d.set_item("observation", report.observation)?;
@@ -874,6 +892,8 @@ fn resize_report_dict(py: Python<'_>, report: &ResizeReport) -> PyResult<Py<PyDi
     d.set_item("half", report.half)?;
     d.set_item("was", report.was)?;
     d.set_item("changed", report.changed)?;
+    d.set_item("clamped", report.clamped_from.is_some())?;
+    d.set_item("clamped_from", report.clamped_from)?;
     Ok(d.unbind())
 }
 
@@ -918,6 +938,7 @@ fn apply_thresholds(
     d.set_item("turned_out", report.turned_out)?;
     d.set_item("pinned", report.pinned)?;
     d.set_item("unmeasured", report.unmeasured)?;
+    d.set_item("changed", report.changed)?;
     Ok((
         PyEditableTrack {
             inner: Arc::new(next),

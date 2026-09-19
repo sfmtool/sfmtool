@@ -3951,6 +3951,25 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
         "the spec never says {reads_sentence:?}"
     );
 
+    // The bench family says its own size three times -- once in the heading
+    // sentence and twice in the back-references that split it -- and the three
+    // have to be one number. They were "twenty-three" and "the twenty-two".
+    let bench = catalog
+        .iter()
+        .filter(|spec| spec.name.contains("bench") || spec.name.contains("descriptor_index"))
+        .count();
+    let family = format!("{} tools that read and work the", spelled(bench));
+    assert!(
+        prose.contains(&family),
+        "the spec never says {family:?}: § \"The bench family\" carries the count"
+    );
+    let back = format!("of the {}", spelled(bench));
+    assert_eq!(
+        prose.matches(&back).count(),
+        2,
+        "the two sentences that split the bench family should both say {back:?}"
+    );
+
     let panels = format!(
         "the {} names are the layout file's",
         spelled(Tab::ALL.len())
@@ -7055,7 +7074,9 @@ fn an_observation_far_from_the_projection_is_named_rather_than_searched_for() {
 }
 
 /// Setting the stage a track is already at changes nothing: no task, no
-/// version, and the version the node stands at as the answer.
+/// version, the version the node stands at as the answer, and the step's own
+/// no-effect sentence rather than the silence that would leave an agent reading
+/// the previous step's label.
 #[test]
 fn setting_the_stage_a_track_is_already_at_starts_nothing() {
     let (mut state, mut viewer) = benchable();
@@ -7070,7 +7091,15 @@ fn setting_the_stage_a_track_is_already_at_starts_nothing() {
     );
     assert_eq!(version_count(&state), before, "{reply}");
     assert!(state.background_task().is_none());
-    assert_eq!(reply["report"], Value::Null, "{reply}");
+    assert_eq!(reply["changed"], json!(false), "{reply}");
+    let report = reply["report"].as_str().expect("the step's own sentence");
+    assert!(report.contains("no effect"), "{reply}");
+    assert!(report.contains("that stage already"), "{reply}");
+    assert_ne!(
+        report,
+        reply["label"].as_str().expect("a version label"),
+        "the reply echoed the previous step's label: {reply}"
+    );
 }
 
 /// A commit that replaces a point hands the replacement an index one past the
@@ -7653,17 +7682,25 @@ fn a_point_not_in_this_photograph_is_refused_rather_than_followed() {
 /// reading published on `AppState`. That publication is the whole of what a
 /// deferred view call waits for.
 fn panel_draws(state: &mut AppState, image: crate::scene::ImageRef) {
+    panel_draws_at(state, image, VIEW_PANEL);
+}
+
+/// The same, in a panel body of a named size: what a frame after a layout change
+/// publishes, which is a different panel from the one before it.
+fn panel_draws_at(state: &mut AppState, image: crate::scene::ImageRef, panel: [f32; 2]) {
     let mut geometry = crate::image_detail::ViewGeometry {
         image,
         image_size: VIEW_IMAGE,
-        panel_size: VIEW_PANEL,
+        panel_size: panel,
         pan: [0.0, 0.0],
         zoom: 1.0,
     };
     if let Some(look) = state.take_look(image) {
         geometry = crate::image_detail::look_at(geometry, &look);
     }
-    state.image_detail_view = Some(geometry);
+    // Through the publication, not the field: the serial and the layout it was
+    // drawn in are what a waiting call and a view tool read it by.
+    state.publish_image_detail_view(geometry);
 }
 
 /// The wait a view call left behind, or a panic saying it did not wait.
@@ -8589,4 +8626,302 @@ fn a_fit_of_a_bearing_reports_the_classification_and_can_promote_it() {
         "the promotion is on the wire: {track}"
     );
     assert!(stage["position"].is_array(), "{track}");
+}
+
+// ── The no-effect contract, the clamp, and a frameless bearing ─────────────
+
+/// A step told to do what has already been done answers successfully and says
+/// so: no version, `changed: false`, the cursor where it was, and the step's
+/// **own** sentence under `report` -- not the previous step's label, which is
+/// what a reply assembled from the cursor alone echoes.
+#[test]
+fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let pixel = track["observations"][0]["pixel"]
+        .as_array()
+        .expect("a sighting has a pixel")
+        .iter()
+        .map(|c| c.as_f64().expect("a number"))
+        .collect::<Vec<f64>>();
+
+    let before = version_count(&state);
+    let cursor = call(
+        &mut state,
+        &mut viewer,
+        "get_history",
+        json!({ "reconstruction_label": "run_a" }),
+    )["cursor"]
+        .as_str()
+        .expect("a cursor")
+        .to_string();
+
+    // The patch slid to the pixel its centre already sits under.
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "move_bench_track",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "pixel": [pixel[0], pixel[1]],
+        }),
+    );
+    assert_eq!(moved["changed"], json!(false), "{moved}");
+    assert_eq!(moved["serial"], json!(cursor), "{moved}");
+    assert_eq!(moved["cursor"], json!(cursor), "{moved}");
+    let report = moved["report"].as_str().expect("a sentence");
+    assert!(report.contains("no effect"), "{report}");
+    assert!(report.starts_with("Moved"), "{report}");
+    assert!(!report.contains("by 0.000 units"), "{report}");
+
+    // A turn of nothing, and a verdict the observation already carries.
+    let turned = call(
+        &mut state,
+        &mut viewer,
+        "rotate_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item, "degrees": 0.0 }),
+    );
+    assert_eq!(turned["changed"], json!(false), "{turned}");
+    assert!(
+        turned["report"]
+            .as_str()
+            .expect("a sentence")
+            .contains("no effect"),
+        "{turned}"
+    );
+
+    let verdict = call(
+        &mut state,
+        &mut viewer,
+        "set_bench_track_verdict",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "verdict": "in",
+        }),
+    );
+    assert_eq!(verdict["changed"], json!(false), "{verdict}");
+    assert!(
+        verdict["report"]
+            .as_str()
+            .expect("a sentence")
+            .contains("no effect"),
+        "{verdict}"
+    );
+
+    // A painting that proposes the verdicts the track already carries.
+    let painted = call(
+        &mut state,
+        &mut viewer,
+        "apply_bench_track_thresholds",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert_eq!(painted["changed"], json!(false), "{painted}");
+    assert!(
+        painted["report"]
+            .as_str()
+            .expect("a sentence")
+            .contains("no effect"),
+        "{painted}"
+    );
+
+    // A resize repeated: the second drag names the size the first left.
+    let target = [pixel[0] + 3.0, pixel[1] + 1.0];
+    let first = call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_track",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "edge": "+u", "pixel": target,
+        }),
+    );
+    assert_eq!(first["changed"], json!(true), "{first}");
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "resize_bench_track",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "edge": "+u", "pixel": target,
+        }),
+    );
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert!(
+        again["report"]
+            .as_str()
+            .expect("a sentence")
+            .contains("no effect"),
+        "{again}"
+    );
+
+    // One version for the one drag that did something, and none for the rest.
+    assert_eq!(
+        version_count(&state),
+        before + 1,
+        "a no-effect step pushed a version"
+    );
+}
+
+/// A pixel off the photograph names no place on it, and the patch whose centre
+/// was slid to meet that pixel's ray was flung across the reconstruction. The
+/// step takes the nearest place the photograph does name, and the reply says so.
+#[test]
+fn a_bench_pixel_off_the_photograph_is_clamped_and_the_reply_says_so() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+
+    let moved = call(
+        &mut state,
+        &mut viewer,
+        "move_bench_track",
+        json!({
+            "reconstruction_label": "run_a", "track": item,
+            "observation": 0, "pixel": [-500.0, -500.0],
+        }),
+    );
+    assert_eq!(moved["clamped"], json!(true), "{moved}");
+    assert_eq!(moved["clamped_from"], json!([-500.0, -500.0]), "{moved}");
+    let used = moved["pixel"].as_array().expect("the pixel it used");
+    let camera = &state.scene[0].recon().image_table.cameras[0];
+    for (value, extent) in used.iter().zip([camera.width, camera.height]) {
+        let value = value.as_f64().expect("a number");
+        assert!(
+            value >= 0.0 && value < f64::from(extent),
+            "the centre landed at {value}, off a {extent} px axis: {moved}"
+        );
+    }
+    let report = moved["report"].as_str().expect("a sentence");
+    assert!(
+        report.contains("clamped to the photograph from"),
+        "{report}"
+    );
+
+    // A pixel on the photograph is left where it was named.
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let pixel = track["observations"][0]["pixel"].clone();
+    let at = pixel.as_array().expect("a pixel");
+    let inside = call(
+        &mut state,
+        &mut viewer,
+        "move_bench_track_observation",
+        json!({
+            "reconstruction_label": "run_a", "track": item, "observation": 0,
+            "pixel": [at[0].as_f64().expect("x") + 2.0, at[1].as_f64().expect("y")],
+        }),
+    );
+    assert_eq!(inside["clamped"], json!(false), "{inside}");
+    assert_eq!(inside["clamped_from"], Value::Null, "{inside}");
+}
+
+/// [`bearing_demo`] with the patch-frame columns stripped: the bearing a node
+/// with no `patch_u_halfvec` holds, which is every row of a `sift_files` value.
+fn frameless_bearing_demo() -> sfmtool_core::SfmrReconstruction {
+    let mut recon = bearing_demo();
+    recon.point_set.patch_u_halfvec_xyz = None;
+    recon.point_set.patch_v_halfvec_xyz = None;
+    recon.rebuild_derived_fields();
+    recon
+}
+
+/// The flag is the **track's** and not its surfel's `w`, so a bearing put on the
+/// bench from a node with no patch frames publishes the bearing it is. Reading
+/// the frame answered `at_infinity: false` and put a unit direction under
+/// `position`, which is a place one unit from the world origin.
+#[test]
+fn a_frameless_bearing_is_published_as_a_bearing_on_the_wire() {
+    let (mut state, mut viewer) = benchable_with(frameless_bearing_demo());
+
+    // The point itself says so, through `get_point`.
+    let point = call(
+        &mut state,
+        &mut viewer,
+        "get_point",
+        json!({ "point": BENCH_POINT }),
+    );
+    assert_eq!(point["at_infinity"], json!(true), "{point}");
+
+    // And so does the track put on the bench from it.
+    on_the_bench(&mut state, &mut viewer);
+    let track = call(
+        &mut state,
+        &mut viewer,
+        "get_bench_track",
+        json!({ "reconstruction_label": "run_a" }),
+    );
+    let stage = &track["stage_data"];
+    assert_eq!(stage["frame_fitted"], json!(false), "{track}");
+    assert_eq!(stage["at_infinity"], json!(true), "{track}");
+    assert!(stage["position"].is_null(), "{track}");
+    let direction = stage["direction"].as_array().expect("a bearing: {track}");
+    let norm: f64 = direction
+        .iter()
+        .map(|c| c.as_f64().expect("a number"))
+        .map(|c| c * c)
+        .sum::<f64>()
+        .sqrt();
+    assert!((norm - 1.0).abs() < 1e-9, "a unit direction: {track}");
+}
+
+/// A view request is answered by the frame that draws it whenever the standing
+/// reading is about a panel the dock no longer has. Answering from the stale
+/// reading reported a `panel_size_points` the very next `get_image_detail_view`
+/// contradicted, with the arithmetic done in a panel body that had gone.
+#[test]
+fn a_view_set_after_a_layout_change_reports_the_panel_as_it_now_is() {
+    let (mut state, mut viewer) = two_reconstructions();
+    let image = crate::scene::ImageRef::new(state.scene[0].id, 0);
+    state.select_image(Some(image));
+
+    // A frame draws the panel and publishes what it measured.
+    panel_draws(&mut state, image);
+    let view = call(&mut state, &mut viewer, "get_image_detail_view", json!({}));
+    assert_eq!(
+        view["image_detail_view"]["panel_size_points"],
+        json!([VIEW_PANEL[0] as f64, VIEW_PANEL[1] as f64]),
+        "{view}"
+    );
+
+    // The dock is re-laid out under it: the panel the reading describes is gone.
+    lay_out(
+        &mut state,
+        Tab::ImageDetail,
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1366.0, 720.0)),
+    );
+    let pending = deferred_view(
+        &mut state,
+        &mut viewer,
+        json!({ "pixel": [300.0, 200.0], "zoom": 2.0 }),
+    );
+    assert_eq!(pending.image, image);
+    assert!(
+        super::display::pending_view_reply(&state, &pending).is_none(),
+        "answered from the reading the layout change invalidated"
+    );
+
+    // The frame that draws in the new layout is the one that answers.
+    let after = [1366.0f32, 680.0f32];
+    panel_draws_at(&mut state, image, after);
+    let landed = view_reply(&state, &pending);
+    assert_eq!(
+        landed["image_detail_view"]["panel_size_points"],
+        json!([after[0] as f64, after[1] as f64]),
+        "{landed}"
+    );
+    assert_eq!(landed["image_detail_view"]["zoom"], json!(2.0), "{landed}");
+    assert_about(
+        view_centre(&landed),
+        [300.0, 200.0],
+        "the pixel is off centre",
+    );
 }

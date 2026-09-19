@@ -993,7 +993,10 @@ fn evaluate_track(
             unmeasured,
             reference: None,
             position: payload.position,
-            at_infinity: frame.w == 0.0,
+            // The payload's flag, not the frame's `w`: the two agree wherever a
+            // frame exists, and the flag is the one a frameless track also
+            // carries.
+            at_infinity: payload.at_infinity,
             condition_number: payload.condition_number,
         },
     ))

@@ -174,6 +174,31 @@ impl TrackClassification {
             && self.finite_rms_px < self.residual_margin * self.bearing_rms_px
             && self.finite_rms_px + noise_floor_px < self.bearing_rms_px
     }
+
+    /// How the finite candidate's residual reads, as the phrase a sentence puts
+    /// it in.
+    ///
+    /// `NaN` is not a residual and is never printed as one. A candidate that
+    /// reprojects into none of the sightings has nothing to be scored against,
+    /// which is the whole of what there is to say about it -- and it is the state
+    /// [`Self::finite_explains_better`] already treats as no evidence, so the
+    /// sentence and the call agree.
+    fn finite_phrase(&self) -> String {
+        if self.finite_rms_px.is_finite() {
+            format!("{:.1} px rms", self.finite_rms_px)
+        } else {
+            "reprojects into none of the sightings".to_string()
+        }
+    }
+
+    /// The same, for the bearing candidate.
+    fn bearing_phrase(&self) -> String {
+        if self.bearing_rms_px.is_finite() {
+            format!("{:.1} px rms", self.bearing_rms_px)
+        } else {
+            "reprojects into none of the sightings".to_string()
+        }
+    }
 }
 
 impl fmt::Display for TrackClassification {
@@ -210,13 +235,15 @@ impl fmt::Display for TrackClassification {
             )?,
             ClassificationReason::FiniteDoesNotExplainTheSightings => write!(
                 f,
-                "finite point would have {:.1} px rms against the bearing's {:.1} px",
-                self.finite_rms_px, self.bearing_rms_px
+                "finite point would have {} against the bearing's {}",
+                self.finite_phrase(),
+                self.bearing_phrase()
             )?,
             ClassificationReason::BearingDoesNotExplainTheSightings => write!(
                 f,
-                "bearing would have {:.1} px rms against the point's {:.1} px",
-                self.bearing_rms_px, self.finite_rms_px
+                "bearing would have {} against the point's {}",
+                self.bearing_phrase(),
+                self.finite_phrase()
             )?,
         }
         // The two residuals are the evidence a person reads the call by, so they
@@ -226,11 +253,33 @@ impl fmt::Display for TrackClassification {
             ClassificationReason::FiniteDoesNotExplainTheSightings
                 | ClassificationReason::BearingDoesNotExplainTheSightings
         ) {
-            write!(
-                f,
-                ", rms {:.1} px finite against {:.1} px as a bearing",
-                self.finite_rms_px, self.bearing_rms_px
-            )?;
+            match (
+                self.finite_rms_px.is_finite(),
+                self.bearing_rms_px.is_finite(),
+            ) {
+                (true, true) => write!(
+                    f,
+                    ", rms {:.1} px finite against {:.1} px as a bearing",
+                    self.finite_rms_px, self.bearing_rms_px
+                )?,
+                (false, true) => write!(
+                    f,
+                    ", finite point reprojects into none of the sightings, against \
+                     {:.1} px as a bearing",
+                    self.bearing_rms_px
+                )?,
+                (true, false) => write!(
+                    f,
+                    ", rms {:.1} px finite, and the bearing reprojects into none of \
+                     the sightings",
+                    self.finite_rms_px
+                )?,
+                (false, false) => write!(
+                    f,
+                    ", neither the finite point nor the bearing reprojects into any \
+                     of the sightings"
+                )?,
+            }
         }
         write!(f, ", rays up to {:.3} deg apart", self.max_pair_angle_deg)
     }

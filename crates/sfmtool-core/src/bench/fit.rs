@@ -579,6 +579,7 @@ pub(super) fn fit_track(
     let previous = track.track();
     next.stage = Stage::Track(TrackPayload {
         position: Some(position),
+        at_infinity: classification.at_infinity,
         frame: Some(placed),
         color: color
             .or_else(|| previous.map(|p| p.color))

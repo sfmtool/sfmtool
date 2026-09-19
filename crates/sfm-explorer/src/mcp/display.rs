@@ -392,6 +392,13 @@ fn apply_view(
     let id = resolve_reconstruction(state, request.reconstruction_label.as_deref())?;
     let (image, look) = resolve_target(state, id, request)?;
     let standing = geometry_for(state, image)?;
+    // Whether the standing reading still describes the panel the dock now has,
+    // and whether the panel is docked at all -- both read before the surfacing
+    // below, which gives the panel a new leaf when it opens one rather than
+    // raising a tab that was already there.
+    let current = state.image_detail_view_is_current();
+    let docked = state.dock.find_tab(&Tab::ImageDetail).is_some();
+    let after = state.image_detail_view_serial;
     state.look_at_in_image(image, look);
     // A view of a panel nobody can see is a view nobody asked for -- and a
     // panel docked behind another tab draws nothing, so there would also be no
@@ -401,10 +408,17 @@ fn apply_view(
     if !state.panel_is_in_front(Tab::ImageDetail) {
         state.show_panel(Tab::ImageDetail);
     }
-    let Some(geometry) = standing else {
+    // Two reasons to let the frame answer instead: the panel has never drawn,
+    // and the reading it did draw is about a layout that has moved. The second
+    // is what a reply reporting a stale `panel_size_points` was -- the
+    // arithmetic was done in a panel body that no longer existed -- and the
+    // deferral costs nothing, because the drain runs before the egui pass and
+    // the frame that applies the look is the frame that answers.
+    let Some(geometry) = standing.filter(|_| current && docked) else {
         return Ok(Outcome::Deferred(Deferred::ImageDetailView(PendingView {
             image,
             started: std::time::Instant::now(),
+            after,
         })));
     };
     let landed = crate::image_detail::look_at(geometry, &look);
@@ -424,6 +438,7 @@ fn apply_view(
 pub(super) fn pending_view_reply(state: &AppState, pending: &super::PendingView) -> Option<Reply> {
     if let Some(view) = state
         .image_detail_view
+        .filter(|_| state.image_detail_view_serial > pending.after)
         .filter(|view| view.image == pending.image)
     {
         return Some(Ok(ToolOutput::Json(

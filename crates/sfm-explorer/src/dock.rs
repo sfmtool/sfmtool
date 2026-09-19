@@ -677,7 +677,7 @@ impl TabContext<'_> {
             // last reading standing, which is the reading a view tool should
             // still be answering from.
             if let Some(view) = detail_response.view {
-                self.state.image_detail_view = Some(view);
+                self.state.publish_image_detail_view(view);
             }
             if let Some(point_idx) = detail_response.select_point {
                 // Through the setter rather than the field: the point

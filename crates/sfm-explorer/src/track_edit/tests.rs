@@ -463,7 +463,8 @@ fn the_tabs_name_every_item_and_the_active_one_is_the_one_shown() {
                 radius_px: Some(6.0),
             },
         )
-        .expect("a pixel on the sensor");
+        .expect("a pixel on the sensor")
+        .label;
     let mut panel = TrackEdit::new();
     let ctx = egui::Context::default();
     run_frame(&mut panel, &ctx, &state);
@@ -583,7 +584,8 @@ fn a_change_of_active_track_reseats_the_sliders() {
                 radius_px: Some(6.0),
             },
         )
-        .expect("a pixel on the sensor");
+        .expect("a pixel on the sensor")
+        .label;
     assert_ne!(second, first);
     run_frame(&mut panel, &ctx, &state);
     assert_eq!(panel.thresholds(), &Thresholds::default());
@@ -826,6 +828,9 @@ fn bearing_track() -> sfmtool_core::bench::EditableTrack {
     let mut track = EditableTrack::empty_cluster();
     track.stage = Stage::Track(TrackPayload {
         position: Some(direction),
+        // The track's own flag is what the header reads; the frame's `w` agrees
+        // with it wherever a frame exists.
+        at_infinity: true,
         frame: Some(OrientedPatch::from_infinity_direction(
             direction,
             nalgebra::Vector3::y(),
@@ -931,4 +936,77 @@ fn a_sighting_kept_at_its_seed_says_so_in_the_status_cell() {
         super::measurements(&moved, StageKind::Track)[6],
         "localized"
     );
+}
+
+/// A track-stage track standing on a bearing with **no surfel**: the payload a
+/// `w = 0` point of a node with no patch frames arrives on the bench as, which
+/// is every row of a `sift_files` value.
+fn frameless_bearing_track() -> sfmtool_core::bench::EditableTrack {
+    use sfmtool_core::bench::{EditableTrack, Stage, TrackPayload};
+
+    let direction = nalgebra::Point3::new(0.778, -0.611, -0.146);
+    let mut track = EditableTrack::empty_cluster();
+    track.stage = Stage::Track(TrackPayload {
+        position: Some(direction),
+        at_infinity: true,
+        frame: None,
+        ..TrackPayload::default()
+    });
+    track
+}
+
+/// The header reads the **track's** flag and not its surfel's `w`, so a bearing
+/// that carries no surfel still reads as a bearing. Reading the frame printed
+/// `Position (0.778, -0.611, -0.146)` for a unit direction, which is a place one
+/// unit from the world origin and the one thing that row is not.
+#[test]
+fn a_bearing_with_no_surfel_still_reads_as_a_bearing() {
+    let said = header_text(&frameless_bearing_track());
+    assert!(
+        said.contains("Bearing (0.778, -0.611, -0.146)"),
+        "the header should name it a bearing: {said}"
+    );
+    assert!(said.contains("at infinity"), "{said}");
+    assert!(!said.contains("Position ("), "{said}");
+}
+
+/// *Evaluate* and the *Stage* toggle are greyed by what the track is missing,
+/// the way *Fit* already was: all three ask core's own half of their step's
+/// validation, so a button that cannot work is not offered and the sentence a
+/// person reads is the one the step would have refused with.
+#[test]
+fn the_photometric_entries_grey_with_their_own_sentence_on_a_frameless_track() {
+    let track = frameless_bearing_track();
+    let refusals = super::photometric_refusals(None, &track, StageKind::Cluster);
+    for (what, refusal) in [
+        ("Evaluate", &refusals.evaluate),
+        ("Fit", &refusals.fit),
+        ("Stage", &refusals.stage),
+    ] {
+        let why = refusal
+            .as_deref()
+            .unwrap_or_else(|| panic!("{what} should be greyed on a track with no surfel"));
+        assert!(
+            why.contains("no patch frame") || why.contains("no surfel"),
+            "{what} is greyed with {why:?}, which does not name what is missing"
+        );
+    }
+
+    // And a whole track offers all three.
+    let (state, id) = state();
+    let mut state = state;
+    let label = state
+        .put_point_on_bench(PointRef::new(id, POINT as usize))
+        .expect("a live point");
+    let whole = state.bench_track(id, &label).expect("on the bench");
+    let refusals = super::photometric_refusals(None, whole, StageKind::Cluster);
+    assert!(refusals.evaluate.is_none(), "{:?}", refusals.evaluate);
+    assert!(refusals.fit.is_none(), "{:?}", refusals.fit);
+    assert!(refusals.stage.is_none(), "{:?}", refusals.stage);
+
+    // Busy wins over everything, as it did before.
+    let refusals = super::photometric_refusals(Some("Busy."), whole, StageKind::Cluster);
+    assert_eq!(refusals.evaluate.as_deref(), Some("Busy."));
+    assert_eq!(refusals.fit.as_deref(), Some("Busy."));
+    assert_eq!(refusals.stage.as_deref(), Some("Busy."));
 }

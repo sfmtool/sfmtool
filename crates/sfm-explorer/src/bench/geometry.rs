@@ -104,16 +104,80 @@ pub(crate) enum EditReport {
     },
 }
 
+/// Below this many degrees a cluster-stage turn is no turn: the same tolerance
+/// core judges a surfel's turn by ([`bench::rotate_frame`]), read in the unit
+/// this report carries.
+const NO_EFFECT_DEG: f64 = 1e-9_f64.to_degrees();
+
 impl EditReport {
     /// Whether anything changed. A drag that ends where it started pushes no
     /// version, the way a verdict an observation already holds does.
+    ///
+    /// Every answer is the core step's own, which is where the tolerance lives:
+    /// the pixel a pointer names is unprojected onto the patch's plane and
+    /// projected back, and that round trip does not return bit for bit, so an
+    /// exact comparison reads a re-statement of where the patch already is as a
+    /// move (`specs/gui/bench.md` section "The wire").
     pub(crate) fn changed(&self) -> bool {
         match self {
             EditReport::Translated(report) => report.changed,
             EditReport::Moved(report) => report.changed,
             EditReport::Resized(report) => report.changed,
             EditReport::Rotated(report) => report.changed,
-            EditReport::Turned { degrees, .. } => *degrees != 0.0,
+            EditReport::Turned { report, degrees } => {
+                report.changed && degrees.abs() > NO_EFFECT_DEG
+            }
+        }
+    }
+
+    /// The pixel the gesture landed on, for the three edits that name one.
+    ///
+    /// The pixel **used**, which is the clamped one where the caller named a
+    /// place off the photograph: the reply and the log row both say where the
+    /// patch went rather than where it was aimed.
+    pub(crate) fn pixel(&self) -> Option<[f64; 2]> {
+        match self {
+            EditReport::Translated(report) => Some(report.pixel),
+            EditReport::Moved(report) => Some(report.pixel),
+            EditReport::Resized(report) => report.pixel,
+            EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+        }
+    }
+
+    /// The pixel that was asked for, when it sat off the photograph and the step
+    /// brought it inside.
+    pub(crate) fn clamped_from(&self) -> Option<[f64; 2]> {
+        match self {
+            EditReport::Translated(report) => report.clamped_from,
+            EditReport::Moved(report) => report.clamped_from,
+            EditReport::Resized(report) => report.clamped_from,
+            EditReport::Rotated(_) | EditReport::Turned { .. } => None,
+        }
+    }
+
+    /// The sentence a step that had no effect records, naming what was asked for
+    /// and why nothing came of it.
+    ///
+    /// The step's **own** sentence, one per gesture, because the Action Log row
+    /// and the reply both carry it and a reader of either should be able to tell
+    /// which gesture it was without a version to read it off.
+    pub(crate) fn no_effect_sentence(&self, label: &str) -> String {
+        match self {
+            EditReport::Translated(_) => {
+                format!("Moved {label}: no effect, the patch already sits there")
+            }
+            EditReport::Moved(report) => format!(
+                "Moved observation {} of {label}: no effect, the sighting already sits there",
+                report.observation
+            ),
+            EditReport::Resized(_) => {
+                format!("Resized {label}: no effect, the patch is already that size")
+            }
+            EditReport::Rotated(_) => format!("Rotated {label}: no effect, no turn was asked for"),
+            EditReport::Turned { report, .. } => format!(
+                "Rotated observation {} of {label}: no effect, no turn was asked for",
+                report.observation
+            ),
         }
     }
 }
@@ -136,7 +200,8 @@ pub(crate) fn apply(
             Ok((next, EditReport::Translated(report)))
         }
         PatchEdit::Move { observation, pixel } => {
-            let (next, report) = bench::set_observation_keypoint(track, observation, pixel)?;
+            let (next, report) =
+                bench::set_observation_keypoint(track, edited, observation, pixel)?;
             Ok((next, EditReport::Moved(report)))
         }
         PatchEdit::ResizeFromEdge {

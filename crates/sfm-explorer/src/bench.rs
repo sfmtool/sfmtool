@@ -22,9 +22,16 @@
 //! 5. record one Action Log row, of kind [`Kind::Bench`] for every step but
 //!    the commit, whose row is an `Edit` because it is one.
 //!
-//! A step that changes nothing pushes no version: setting the verdict an
-//! observation already has, or the stage a track is already at, is reported
-//! back to the caller and leaves the history alone.
+//! **A step that changes nothing pushes no version**, and says so instead:
+//! setting the verdict an observation already has, dragging a patch to the pixel
+//! it already sits under, painting the verdicts the track already carries. The
+//! contract is one for every step (`no_effect` below, `specs/gui/bench.md`
+//! § "The wire"): the history is left alone, one Action Log row of kind
+//! [`Kind::Bench`] records the step's own no-effect sentence, and the caller
+//! gets that sentence back beside the version the node still stands at.
+//! Deciding *whether* a step had an effect is core's, with a tolerance in the
+//! units of the value, because a pixel's round trip through a patch's plane does
+//! not return bit for bit.
 
 use std::sync::Arc;
 
@@ -115,7 +122,8 @@ pub(crate) struct Committed {
     pub(crate) replaced: Option<u32>,
 }
 
-/// A [`Seed`] with its `.sift` row read, if it named one.
+/// A [`Seed`] with its `.sift` row read, if it named one, and its pixel brought
+/// inside the photograph.
 struct SeededAt {
     /// Where the observation goes, in source-image px.
     pixel: [f64; 2],
@@ -124,6 +132,56 @@ struct SeededAt {
     shape: Option<[[f64; 2]; 2]>,
     /// The feature it came from, which is what the provenance records.
     feature: Option<u32>,
+    /// The pixel that was asked for, when it sat off the photograph and was
+    /// brought inside it.
+    clamped_from: Option<[f64; 2]>,
+}
+
+/// What one seeding step put on the bench, and where.
+///
+/// The label is the handle every later call uses -- the item a cluster was made
+/// as, or the item an observation was added to -- and the two pixels are the
+/// clamp: where the observation went, and where the caller asked for it when
+/// those differ.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Seeded {
+    /// The item the step made, or the one it added to.
+    pub(crate) label: String,
+    /// The pixel the observation was seeded at.
+    pub(crate) pixel: [f64; 2],
+    /// The pixel that was asked for, when the clamp moved it.
+    pub(crate) clamped_from: Option<[f64; 2]>,
+}
+
+/// What one patch edit did, as much of it as a reply needs.
+///
+/// The core reports are five different shapes and a caller outside this module
+/// wants three facts out of all of them: whether a version was pushed, the pixel
+/// the gesture ended at, and whether that pixel had to be brought inside the
+/// photograph.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PatchEdited {
+    /// Whether the edit had an effect and so pushed a version.
+    pub(crate) changed: bool,
+    /// The pixel the gesture landed on, for the three edits that name one.
+    pub(crate) pixel: Option<[f64; 2]>,
+    /// The pixel that was asked for, when the clamp moved it.
+    pub(crate) clamped_from: Option<[f64; 2]>,
+}
+
+/// The sentence a clamped pixel adds to a step's own, or nothing for a pixel
+/// that named a place on the photograph.
+///
+/// One wording for every step, because a person reading two rows of the Action
+/// Log should not have to work out that they say the same thing.
+fn clamp_note(clamped_from: Option<[f64; 2]>, landed: [f64; 2]) -> String {
+    match clamped_from {
+        Some(asked) => format!(
+            ", clamped to the photograph from ({:.1}, {:.1}) to ({:.1}, {:.1})",
+            asked[0], asked[1], landed[0], landed[1]
+        ),
+        None => String::new(),
+    }
 }
 
 /// What the viewer calls the item a gesture names when the caller named none:
@@ -264,7 +322,7 @@ impl AppState {
         &mut self,
         image: ImageRef,
         seed: &Seed,
-    ) -> Result<String, String> {
+    ) -> Result<Seeded, String> {
         if let Some(why) = self.busy_refusal(image.recon) {
             return Err(why);
         }
@@ -298,13 +356,21 @@ impl AppState {
         let bench = Arc::clone(node.history.current_bench());
         let (next, report) = bench::create_cluster(&bench, &seed)
             .map_err(|e| format!("Cannot start a track there: {e}"))?;
-        let text = format!("Started {} on the bench", report.label);
+        let text = format!(
+            "Started {} on the bench{}",
+            report.label,
+            clamp_note(seeded.clamped_from, seeded.pixel)
+        );
         self.push_bench_step(index, next, text);
         // Putting something on the bench is the moment a search becomes
         // possible, so it is the moment to look for the index that would serve
         // one. The look is remembered, so the second item costs nothing.
         self.open_default_descriptor_index(image.recon);
-        Ok(report.label)
+        Ok(Seeded {
+            label: report.label,
+            pixel: seeded.pixel,
+            clamped_from: seeded.clamped_from,
+        })
     }
 
     /// Add a candidate observation of the track called `label` in `image`, at
@@ -317,7 +383,7 @@ impl AppState {
         label: &str,
         image: ImageRef,
         seed: &Seed,
-    ) -> Result<(), String> {
+    ) -> Result<Seeded, String> {
         let seeded = self.seeded_at(image, seed)?;
         let (index, bench, track) = self.bench_step_target(image.recon, label)?;
         let name = self.image_name(image);
@@ -333,17 +399,25 @@ impl AppState {
         let (next, _report) = bench::add_observation(&track, &seed)
             .map_err(|e| format!("Cannot add that observation: {e}"))?;
         let bench = install(&bench, label, next)?;
-        let text = format!("Added {name} to {label}");
+        let text = format!(
+            "Added {name} to {label}{}",
+            clamp_note(seeded.clamped_from, seeded.pixel)
+        );
         self.push_bench_step(index, bench, text);
-        Ok(())
+        Ok(Seeded {
+            label: label.to_string(),
+            pixel: seeded.pixel,
+            clamped_from: seeded.clamped_from,
+        })
     }
 
     /// Set the verdict of one observation of the track called `label`, by hand.
     ///
-    /// A verdict the observation already carries changes nothing but the pin,
-    /// which the core step reports as `changed: false`; no version is pushed
-    /// for it, because a history row that says nothing happened is a row that
-    /// has to be undone for nothing.
+    /// A verdict the observation already carries changes nothing, which the core
+    /// step reports as `changed: false`; no version is pushed for it, because a
+    /// history row that says nothing happened is a row that has to be undone for
+    /// nothing. The row that says so is written instead
+    /// (`no_effect`).
     pub(crate) fn set_bench_verdict(
         &mut self,
         id: ReconId,
@@ -359,10 +433,13 @@ impl AppState {
             .ok_or_else(|| format!("{label} has no observation {observation}."))?;
         let (next, report) = bench::set_verdict(&track, observation, verdict)
             .map_err(|e| format!("Cannot set that verdict: {e}"))?;
+        let name = self.image_name(ImageRef::new(id, image));
         if !report.changed {
+            self.no_effect(format!(
+                "Left {name} {verdict} in {label}: no effect, it is {verdict} already"
+            ));
             return Ok(());
         }
-        let name = self.image_name(ImageRef::new(id, image));
         let bench = install(&bench, label, next)?;
         let text = match verdict {
             Verdict::In => format!("Turned {name} in to {label}"),
@@ -393,17 +470,28 @@ impl AppState {
         id: ReconId,
         label: &str,
         edit: &PatchEdit,
-    ) -> Result<(), String> {
+    ) -> Result<PatchEdited, String> {
         let (index, bench, track) = self.bench_step_target(id, label)?;
         let (next, report) = geometry::apply(&track, self.scene[index].edited(), edit)
             .map_err(|e| format!("Cannot edit that patch: {e}"))?;
-        if !report.changed() {
-            return Ok(());
+        let edited = PatchEdited {
+            changed: report.changed(),
+            pixel: report.pixel(),
+            clamped_from: report.clamped_from(),
+        };
+        if !edited.changed {
+            let landed = edited.pixel.unwrap_or_default();
+            self.no_effect(format!(
+                "{}{}",
+                report.no_effect_sentence(label),
+                clamp_note(edited.clamped_from, landed)
+            ));
+            return Ok(edited);
         }
         let text = self.patch_edit_label(id, label, &next, &report);
         let bench = install(&bench, label, next)?;
         self.push_bench_step(index, bench, text);
-        Ok(())
+        Ok(edited)
     }
 
     /// The version label one patch edit takes: what moved, by how much, and in
@@ -419,8 +507,12 @@ impl AppState {
             geometry::EditReport::Translated(report) => {
                 let centre = report.center;
                 format!(
-                    "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3})",
-                    report.moved, centre.x, centre.y, centre.z
+                    "Moved {label} by {:.3} units to ({:.3}, {:.3}, {:.3}){}",
+                    report.moved,
+                    centre.x,
+                    centre.y,
+                    centre.z,
+                    clamp_note(report.clamped_from, report.pixel)
                 )
             }
             geometry::EditReport::Moved(report) => {
@@ -430,13 +522,17 @@ impl AppState {
                     .map(|px| format!(" ({px:.1} px)"))
                     .unwrap_or_default();
                 format!(
-                    "Moved observation {} of {label} to ({:.1}, {:.1}) in {name}{moved}",
-                    report.observation, report.pixel[0], report.pixel[1]
+                    "Moved observation {} of {label} to ({:.1}, {:.1}) in {name}{moved}{}",
+                    report.observation,
+                    report.pixel[0],
+                    report.pixel[1],
+                    clamp_note(report.clamped_from, report.pixel)
                 )
             }
             geometry::EditReport::Resized(report) => {
                 let size = self.frame_size_phrase(id, next, report.observation);
-                format!("Resized {label} to {size}")
+                let note = clamp_note(report.clamped_from, report.pixel.unwrap_or_default());
+                format!("Resized {label} to {size}{note}")
             }
             geometry::EditReport::Rotated(report) => {
                 format!("Rotated {label} by {:.1} degrees", report.degrees)
@@ -503,6 +599,16 @@ impl AppState {
         let mut with_bars = (*track).clone();
         with_bars.thresholds = thresholds.clone();
         let (next, report) = bench::apply_thresholds(&with_bars);
+        // The bars are half of what this step is: moving one and painting nothing
+        // is still a change, and leaving both where they are and painting nothing
+        // is not.
+        if !report.changed && with_bars.thresholds == track.thresholds {
+            self.no_effect(format!(
+                "Applied the thresholds to {label}: no effect, every verdict is already the \
+                 one they propose"
+            ));
+            return Ok(());
+        }
         let bench = install(&bench, label, next)?;
         let text = format!(
             "Applied the thresholds to {label}: {} in, {} out, {} pinned, {} unmeasured",
@@ -569,6 +675,9 @@ impl AppState {
         let index = self.node_index(id)?;
         let bench = Arc::clone(self.scene[index].history.current_bench());
         if active_track_label(&bench) == Some(label) {
+            self.no_effect(format!(
+                "Made {label} the active track: no effect, it is active already"
+            ));
             return Ok(());
         }
         let next = bench
@@ -615,6 +724,9 @@ impl AppState {
         // A rename to the label an item already holds is no step: core allows it,
         // and a version for it would have to be undone for nothing.
         if label == to {
+            self.no_effect(format!(
+                "Renamed {label} on the bench: no effect, it is called {to} already"
+            ));
             return Ok(());
         }
         let next = bench
@@ -808,6 +920,9 @@ impl AppState {
             .bench_track(id, label)
             .is_some_and(|track| track.stage_kind() == stage)
         {
+            self.no_effect(format!(
+                "Set {label} to the {stage} stage: no effect, it is at that stage already"
+            ));
             return Ok(());
         }
         let outcome = self.begin_bench_stage(id, label, stage);
@@ -1230,6 +1345,18 @@ impl AppState {
         node.edited().point(index).is_some().then_some(index)
     }
 
+    /// Write the row for a step that had no effect, and push no version.
+    ///
+    /// The other half of [`Self::push_bench_step`], and the whole of what a
+    /// no-effect step does. The row carries no `(v3 -> v4)`, there being no
+    /// transition to name, and it is not a failure: nothing was refused, and the
+    /// answer to "what happened" is that what was asked for was already so.
+    /// `specs/gui/bench.md` section "The wire" states the contract the reply
+    /// shares.
+    fn no_effect(&mut self, text: String) {
+        self.action_log.record(Kind::Bench, text);
+    }
+
     /// Push one bench step as the node's next version and write its row.
     fn push_bench_step(&mut self, index: usize, bench: Bench, text: String) {
         let node = &mut self.scene[index];
@@ -1264,27 +1391,53 @@ impl AppState {
     /// The one place a feature index becomes a position and a shape, so the
     /// menu's pixel gesture and a caller holding a feature reach the same two
     /// numbers by the same route.
+    /// The pixel a gesture named is brought inside the photograph here
+    /// ([`sfmtool_core::bench::clamp_to_photograph`]), which is why the two
+    /// seeding steps and the two wire tools behind them agree: a pointer dragged
+    /// past the edge of the picture and a call carrying `[-500, -500]` name no
+    /// place on it, and the nearest place they do name is the one the step takes.
+    /// A `.sift` feature is already a row of that photograph and is never moved.
     fn seeded_at(&mut self, image: ImageRef, seed: &Seed) -> Result<SeededAt, String> {
-        match *seed {
-            Seed::Pixel { pixel, radius_px } => Ok(SeededAt {
+        let placed = match *seed {
+            Seed::Pixel { pixel, radius_px } => SeededAt {
                 pixel,
                 shape: radius_px.map(ClusterSeed::shape_from_radius_px),
                 feature: None,
-            }),
-            Seed::Affine { pixel, shape } => Ok(SeededAt {
+                clamped_from: None,
+            },
+            Seed::Affine { pixel, shape } => SeededAt {
                 pixel,
                 shape: Some(shape),
                 feature: None,
-            }),
+                clamped_from: None,
+            },
             Seed::Feature { feature } => {
                 let (pixel, shape) = self.sift_feature(image, feature)?;
-                Ok(SeededAt {
+                return Ok(SeededAt {
                     pixel,
                     shape: Some(shape),
                     feature: Some(feature),
-                })
+                    clamped_from: None,
+                });
             }
-        }
+        };
+        let Some(camera) = self.image_camera(image) else {
+            return Ok(placed);
+        };
+        let (clamped_from, pixel) = sfmtool_core::bench::clamp_to_photograph(&camera, placed.pixel);
+        Ok(SeededAt {
+            pixel,
+            clamped_from,
+            ..placed
+        })
+    }
+
+    /// The lens of one camera image, for the clamp and for anything else that
+    /// needs the photograph's own extent.
+    fn image_camera(&self, image: ImageRef) -> Option<sfmtool_core::camera::CameraIntrinsics> {
+        let table = &self.node(image.recon)?.recon().image_table;
+        let row = table.images.get(image.index())?;
+        table.cameras.get(row.camera_index as usize).cloned()
     }
 
     /// Where one `.sift` feature sits and what keypoint frame it carries, read
