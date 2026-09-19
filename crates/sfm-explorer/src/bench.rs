@@ -115,11 +115,15 @@ pub(crate) enum Seed {
 /// the overlay had free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Committed {
-    /// The index the written point holds in the new version.
+    /// The index the written point holds in the new version, or the point that
+    /// already held the track where the commit wrote nothing.
     pub(crate) point: u32,
     /// The index it replaced, now deleted, or `None` where the commit created a
-    /// point instead.
+    /// point instead or wrote nothing at all.
     pub(crate) replaced: Option<u32>,
+    /// Whether a version was pushed. False where the point already held exactly
+    /// this track, which is the commit that has no effect.
+    pub(crate) changed: bool,
 }
 
 /// A [`Seed`] with its `.sift` row read, if it named one, and its pixel brought
@@ -762,6 +766,13 @@ impl AppState {
     /// work out. That replaces the map-following every other edit does here:
     /// the map carries a selection that was already on the origin to the same
     /// row this puts it on, and says nothing about one that was elsewhere.
+    ///
+    /// **A commit onto a point that already holds exactly this track pushes no
+    /// version**, and says so in the no-effect row every bench step answers a
+    /// nothing-to-do with. Pressing *Commit* twice over would otherwise delete
+    /// the point and re-add an identical one at a new index for each press. The
+    /// point is still selected, because the gesture is a question about where
+    /// it is as much as an instruction.
     pub(crate) fn commit_bench_track(
         &mut self,
         id: ReconId,
@@ -789,6 +800,23 @@ impl AppState {
 
         let (next, report) = bench::commit(node.edited(), &seated)
             .map_err(|e| format!("Cannot commit {label}: {e}"))?;
+        // A commit onto a point that already holds exactly this track writes
+        // nothing: no version, and the bench left as it stands -- the track is
+        // seated on that point already, which is how the commit came to have
+        // nothing to do. The point is selected all the same, because a person
+        // who pressed Commit is asking where it went.
+        if !report.changed {
+            self.no_effect(format!(
+                "Committed {label}: no effect, point {} already holds this track",
+                report.point
+            ));
+            self.select_point(PointRef::new(id, report.point as usize));
+            return Ok(Committed {
+                point: report.point,
+                replaced: None,
+                changed: false,
+            });
+        }
         // The track stays on the bench, seated on the point it just wrote, so
         // a second commit replaces that rather than putting a second point on
         // one surface. It is seated at the version the commit was computed
@@ -818,6 +846,7 @@ impl AppState {
         Ok(Committed {
             point: report.point,
             replaced: report.replaced,
+            changed: true,
         })
     }
 

@@ -14,7 +14,7 @@ that names no item means the active track, and a second kind of item would get a
 second panel rather than a mode in this one.
 
 Related specs: [`bench.md`](bench.md) (the bench, the versions its steps push
-and the Scene tree group), [`edits/commit-track.md`](edits/commit-track.md) (the
+and the Scene tree groups), [`edits/commit-track.md`](edits/commit-track.md) (the
 Commit button's edit), [`point-track-detail.md`](point-track-detail.md) (the
 view-only panel whose columns this table carries first),
 [`multi-panel-image-browser.md`](multi-panel-image-browser.md) (the Image Detail
@@ -191,6 +191,15 @@ the frustums of the observing images and the Point Track Detail panel next door
 are all looking at what was just written rather than at wherever the selection
 had been left. The dock drops what the panels cached about the node's points in
 the same breath, as it does after any other edit that moves them.
+
+**A commit of a track the point already holds writes nothing**, and the button
+is not greyed for it: the press pushes no version and records the no-effect row
+*"Committed bull-nose: no effect, point 4211 already holds this track"*, with
+that point selected, which is the answer a person pressing Commit on an already
+committed track is asking for. The greying stays what it is because it is about
+whether the step can run rather than about what it would produce, and because
+the call behind it is made of the track as the bench holds it rather than of the
+track seated at the cursor.
 
 **Duplicate is how a second patch over neighbouring ground is started.** It
 puts a copy of the active track on the bench and makes the copy active, so the

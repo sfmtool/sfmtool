@@ -627,6 +627,28 @@ class TestCommitting:
         assert index_map.payload == [commit_report["point"]]
         assert index_map.inverse(commit_report["point"]) is None
 
+    def test_a_commit_onto_the_point_that_holds_the_track_writes_nothing(
+        self, edited, long_track_point
+    ):
+        # The second press of Commit: the track is seated on the point the
+        # first one wrote, which already holds exactly this record, so there is
+        # nothing to write and no index to mint.
+        _, track = create_track(Bench(), edited, long_track_point)
+        after, first = commit(edited, track, node="bull")
+        assert first["changed"]
+
+        settled = track.with_origin(1, first["point"])
+        again, report = commit(after, settled, node="bull")
+        assert not report["changed"]
+        assert report["point"] == first["point"]
+        assert "replaced" not in report
+        assert report["map"].forward(first["point"]) == first["point"]
+        assert report["label"] == (
+            f"Committed track: no effect, point {first['point']} of bull already holds it"
+        )
+        assert again.point_count == after.point_count
+        assert again.index_bound == after.index_bound
+
     def test_a_track_with_one_observation_in_refuses(self, edited, long_track_point):
         _, track = create_track(Bench(), edited, long_track_point)
         for i in range(1, track.observation_count):

@@ -8818,6 +8818,50 @@ fn a_bench_step_with_no_effect_pushes_nothing_and_says_so() {
     );
 }
 
+/// The commit is in the contract too: a second call on a track the point it
+/// wrote already holds answers `changed: false`, names that point as any commit
+/// names the one it wrote, and pushes no version.
+#[test]
+fn a_second_commit_of_the_same_track_answers_changed_false() {
+    let (mut state, mut viewer) = benchable();
+    let item = on_the_bench(&mut state, &mut viewer);
+    let first = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+    assert_eq!(first["changed"], json!(true), "{first}");
+    let point = first["point"]["index"].clone();
+    let cursor = first["cursor"].as_str().expect("a cursor").to_string();
+    let before = version_count(&state);
+    let points = state.scene[0].point_count();
+
+    let again = call(
+        &mut state,
+        &mut viewer,
+        "commit_bench_track",
+        json!({ "reconstruction_label": "run_a", "track": item }),
+    );
+
+    assert_eq!(again["changed"], json!(false), "{again}");
+    assert_eq!(again["serial"], json!(cursor), "{again}");
+    assert_eq!(again["cursor"], json!(cursor), "{again}");
+    assert_eq!(again["item"], json!(item), "{again}");
+    assert_eq!(again["point"]["index"], point, "{again}");
+    assert_eq!(again["point"]["replaced"], json!(null), "{again}");
+    assert_eq!(again["point"]["id"], first["point"]["id"], "{again}");
+    let report = again["report"].as_str().expect("a sentence");
+    assert!(report.contains("no effect"), "{report}");
+    assert!(report.starts_with("Committed "), "{report}");
+    assert_eq!(
+        version_count(&state),
+        before,
+        "a second commit is a version"
+    );
+    assert_eq!(state.scene[0].point_count(), points, "{again}");
+}
+
 /// A pixel off the photograph names no place on it, and the patch whose centre
 /// was slid to meet that pixel's ray was flung across the reconstruction. The
 /// step takes the nearest place the photograph does name, and the reply says so.

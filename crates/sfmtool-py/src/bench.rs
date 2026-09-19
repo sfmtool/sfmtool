@@ -1448,12 +1448,18 @@ fn duplicate(py: Python<'_>, bench: &PyBench, label: &str) -> PyResult<(PyBench,
 /// and a track that carries none refuses naming the evaluation as the step that
 /// is missing.
 ///
+/// A commit onto an origin that already holds exactly the record this would
+/// write -- every column, exactly -- writes nothing: the value comes back as it
+/// stands with ``changed`` false and ``point`` naming that point, and the
+/// caller pushes no version for it.
+///
 /// Returns ``(EditedReconstruction, report)``. The report carries ``point``,
-/// the index the written point took; ``replaced``, the index it took the place
-/// of, present only when the track's origin resolved; the ``absorbed`` point
-/// indexes; ``observation_count``; ``label``, the sentence a log records; and
-/// ``map``, the :class:`PointMap` the commit made -- the write, with the
-/// absorbed points' removal chained after it when there was one.
+/// the index the written point took; ``changed``, whether anything was
+/// written; ``replaced``, the index it took the place of, present only when the
+/// track's origin resolved; the ``absorbed`` point indexes;
+/// ``observation_count``; ``label``, the sentence a log records; and ``map``,
+/// the :class:`PointMap` the commit made -- the write, with the absorbed
+/// points' removal chained after it when there was one.
 #[pyfunction]
 #[pyo3(signature = (edited, track, *, node = "the reconstruction"))]
 fn commit(
@@ -1465,6 +1471,7 @@ fn commit(
     let (next, report) = core_commit(&edited.inner, &track.inner).map_err(refused)?;
     let d = PyDict::new(py);
     d.set_item("point", report.point)?;
+    d.set_item("changed", report.changed)?;
     if let Some(replaced) = report.replaced {
         d.set_item("replaced", replaced)?;
     }

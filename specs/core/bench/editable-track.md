@@ -470,6 +470,7 @@ pub fn commit(
 
 pub struct CommitReport {
     pub point: u32,
+    pub changed: bool,
     pub replaced: Option<u32>,
     pub map: PointMap,
     pub observation_count: usize,
@@ -1399,6 +1400,35 @@ An origin whose point the value no longer holds names nothing, and the commit
 creates rather than refusing: the person is looking at a track whose point was
 deleted under it.
 
+**A commit that would change nothing writes nothing.** Where the origin
+resolves, already holds exactly the record the commit would write, and nothing
+is left to absorb, the value comes back as it stands with `changed: false`,
+`point` naming the point that already holds the track, `replaced` `None` and the
+map an empty `Chain`; every other commit reports `changed: true`. Otherwise
+committing one track twice deletes a point and re-adds an identical one at a new
+index for each press, and a value's history fills with versions that say
+nothing. The comparison is `PointRecord::agrees_with`, which is exact on the
+stored representation -- the `f64` coordinate as stored, the `f32` keypoints, the
+`u8` confidences, the whole bitmap -- because what it answers is whether writing
+the record would leave the point as it is, and a position that moved by a stored
+amount is a point that moved. Its one concession is that two `NaN`s in a column
+agree, a free point's constraint distance being `NaN` by definition. The
+observations are compared in the order they are stored, which the commit sorts
+into, so a bench holding the same sightings in another order is the same track.
+
+Three things are therefore changes even where the record is the one the point
+holds: a track with **no origin** (it creates, which a second copy of one
+landmark is meant to do -- nothing here looks for an identical point elsewhere in
+the value), an origin whose point has **gone** since, and a track with a sighting
+still to **absorb** from a live point.
+
+Two columns the commit writes are not carried across from the point, so the
+*first* commit of a point put on the bench and left alone is in general a change:
+the colour, which is read from the consensus bitmap's centre rather than from the
+stored byte, and the `error`, which is the mean of what the last evaluation
+measured and is zero for a track nothing has read. Everything else round-trips
+exactly, and after that first write the two agree.
+
 **The commit does not triangulate.** A track commits with the position it
 carries, so the record that is written is one the numbers on screen describe,
 and a track that carries no position refuses naming the fit as the step
@@ -1414,7 +1444,8 @@ observation with no keypoint, and an image past the image table.
 
 `CommitReport::label(node)` writes the sentence a log records, which needs the
 name the caller knows the reconstruction by: `Committed track: 5 observations in
-bull, replacing point 1207, absorbing 2 points`.
+bull, replacing point 1207, absorbing 2 points`, or, for the commit that wrote
+nothing, `Committed track: no effect, point 1207 of bull already holds it`.
 
 ## Parameters
 
@@ -1521,7 +1552,8 @@ cluster's radius those units are read over, and is `None` at the track stage.
 `apply_thresholds` takes each bar as a keyword and moves only the ones given, so
 a script can differ from the pipeline's default in one number without restating
 the others. `commit` takes the reconstruction's name as `node`, which is what
-the report's `label` reads.
+the report's `label` reads; its report carries `changed`, and `replaced` is
+absent for the commit that wrote nothing, as it is for one that created.
 
 `evaluate`, `fit` and `set_stage` take `images` the way every patch kernel does
 -- a list of `HxW[xC]` `uint8` arrays, one per image of the reconstruction, or a
@@ -1616,6 +1648,19 @@ same track, becoming the active item, and leaving the original exactly as it
 was; and every commit path -- appending, replacing,
 absorbing a pulled-from point, the map each of those reports, and each refusal
 naming why.
+
+The commit that writes nothing has a slice of its own: ten presses after the one
+that wrote the point leave the value, the indexes and the point count where the
+first left them and report the same point each time; the same sightings in
+another order are the same track; a sighting turned out, a point taken back, a
+track with no origin and a sighting still to absorb each write again; every
+column the commit writes is moved in turn and each is seen; and the two columns a
+first commit of an untouched point rewrites -- its colour and its error -- are
+stated as what they are.
+[edited/tests.rs](../../../crates/sfmtool-core/src/reconstruction/edited/tests.rs)
+holds the comparison itself: a record agrees with itself, `NaN` columns
+included, and disagrees with every one-column move of it, each by the smallest
+step the stored representation holds.
 
 The hand steps are tested for what makes them worth having. A **slide** is run
 under a pinhole and under a distorting lens: the centre lands under the pointer

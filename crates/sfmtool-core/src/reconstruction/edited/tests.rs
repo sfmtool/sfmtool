@@ -89,22 +89,62 @@ fn new_record(seed: u32, image_count: u32) -> PointRecord {
     }
 }
 
-/// A record's equality with `NaN` distances treated as equal, since the free
-/// constraint's distance is `NaN` by definition and `NaN != NaN`.
-fn records_agree(a: &PointRecord, b: &PointRecord) -> bool {
-    let constraints_agree = match (a.constraint, b.constraint) {
-        (Some((ka, da, ra)), Some((kb, db, rb))) => {
-            ka == kb && ra == rb && (da == db || (da.is_nan() && db.is_nan()))
-        }
-        (x, y) => x.is_none() && y.is_none(),
-    };
-    constraints_agree
-        && a.point == b.point
-        && a.observations == b.observations
-        && a.patch_u_halfvec == b.patch_u_halfvec
-        && a.patch_v_halfvec == b.patch_v_halfvec
-        && a.patch_bitmap == b.patch_bitmap
-        && a.normal_confidence == b.normal_confidence
+/// The record comparison: exact on every stored column, with `NaN` agreeing
+/// with `NaN` so that a free point's distance -- or any other column a `NaN`
+/// reached -- cannot make a record differ from a copy of itself forever.
+#[test]
+fn a_record_agrees_with_itself_and_with_nothing_that_moved() {
+    let record = new_record(5, 8);
+    assert!(record.agrees_with(&record.clone()));
+
+    let mut nan = record.clone();
+    nan.point.position.x = f64::NAN;
+    nan.point.normal.y = f32::NAN;
+    nan.observations[0].keypoint_xy = Some([f32::NAN, 7.0]);
+    assert!(
+        nan.agrees_with(&nan.clone()),
+        "a NaN column has to agree with itself"
+    );
+    assert!(!nan.agrees_with(&record), "a NaN is not the number it was");
+
+    // One column at a time, each moved by the smallest amount the stored
+    // representation holds.
+    let mut moved = record.clone();
+    moved.point.position.z = f64::from_bits(record.point.position.z.to_bits() + 1);
+    assert!(!moved.agrees_with(&record), "the position");
+    let mut moved = record.clone();
+    moved.point.error = f32::from_bits(record.point.error.to_bits() + 1);
+    assert!(!moved.agrees_with(&record), "the error");
+    let mut moved = record.clone();
+    moved.point.w = 0.0;
+    assert!(!moved.agrees_with(&record), "the w");
+    let mut moved = record.clone();
+    moved.point.color[1] += 1;
+    assert!(!moved.agrees_with(&record), "the colour");
+    let mut moved = record.clone();
+    moved.patch_u_halfvec = Some([f32::from_bits(1.0f32.to_bits() + 1), 0.0, 0.0]);
+    assert!(!moved.agrees_with(&record), "the frame");
+    let mut moved = record.clone();
+    moved.patch_bitmap.as_mut().expect("the column")[[0, 0, 0]] ^= 1;
+    assert!(!moved.agrees_with(&record), "the bitmap");
+    let mut moved = record.clone();
+    moved.normal_confidence = Some(41);
+    assert!(!moved.agrees_with(&record), "the normal confidence");
+    let mut moved = record.clone();
+    moved.constraint = Some((POINT_CONSTRAINT_RANGED, 1.0, 0));
+    assert!(!moved.agrees_with(&record), "the constraint");
+    let mut moved = record.clone();
+    moved.observations[1].confidence = Some(202);
+    assert!(!moved.agrees_with(&record), "an observation's confidence");
+    let mut moved = record.clone();
+    moved.observations[1].keypoint_xy = Some([f32::from_bits(3.0f32.to_bits() + 1), 5.0]);
+    assert!(!moved.agrees_with(&record), "a keypoint");
+    let mut moved = record.clone();
+    moved.observations.remove(1);
+    assert!(!moved.agrees_with(&record), "an observation dropped");
+    let mut moved = record.clone();
+    moved.observations.swap(0, 1);
+    assert!(!moved.agrees_with(&record), "the stored order");
 }
 
 #[test]
@@ -197,7 +237,7 @@ fn indexes_are_stable_across_every_point_edit() {
 
     for i in [0u32, 2, 3, 5] {
         let view = edited.point(i).expect("untouched indexes still resolve");
-        assert!(records_agree(&view.to_record(), &before[i as usize]));
+        assert!(view.to_record().agrees_with(&before[i as usize]));
     }
     assert!(
         edited.point(1).is_none(),
@@ -222,10 +262,7 @@ fn a_replacement_goes_back_to_its_base_index() {
     assert_eq!(map.forward(2), None, "the base index it replaced is gone");
     assert_eq!(map.inverse(2), Some(moved));
     let mat = EditedReconstruction::new(Arc::new(mat));
-    assert!(records_agree(
-        &mat.point(2).unwrap().to_record(),
-        &replacement
-    ));
+    assert!(mat.point(2).unwrap().to_record().agrees_with(&replacement));
 }
 
 #[test]
@@ -358,7 +395,7 @@ fn overlay_reads_equal_materialised_reads_under_the_row_map() {
             assert_eq!(map.inverse(new), Some(i), "the map inverts");
             let a = edited.point(i).unwrap().to_record();
             let b = mat_view.point(new).unwrap().to_record();
-            assert!(records_agree(&a, &b), "index {i} -> {new} disagrees");
+            assert!(a.agrees_with(&b), "index {i} -> {new} disagrees");
         }
         // A bijection: every survivor lands somewhere, no two land together,
         // and every materialised row has a survivor behind it.

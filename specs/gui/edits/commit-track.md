@@ -38,6 +38,12 @@ position, no frame or no bitmap where the reconstruction stores one per point,
 an `in` observation has no keypoint, or one names an image past the image table
 -- plus the viewer's own refusal while a background task holds the node.
 
+The button is **not** greyed on a track that would write nothing. That reading
+is about what the point holds rather than about whether the step can run, the
+greying's cached call is made of the track as it sits rather than of the track
+seated at the cursor, and the answer a person wants is a row saying so: pressing
+Commit on a track already committed is how one asks where its point went.
+
 No keyboard shortcut: it is the end of a piece of work, not a step in a gesture.
 
 ---
@@ -47,10 +53,10 @@ No keyboard shortcut: it is the end of a piece of work, not a step in a gesture.
 Everything below the invocation is
 [`../../core/bench/editable-track.md`](../../core/bench/editable-track.md)
 § "The commit": a pure function from the value at the cursor and the track to
-the next value and a report carrying the index written, the index replaced and
-the `PointMap`. Nothing is triangulated here -- the track commits with the
-position it carries, so the record written is the one the numbers on screen
-describe.
+the next value and a report carrying the index written, the index replaced, the
+`PointMap` and whether anything was written at all. Nothing is triangulated here
+-- the track commits with the position it carries, so the record written is the
+one the numbers on screen describe.
 
 ### The origin, followed to the cursor
 
@@ -63,6 +69,21 @@ takes ([`../goto-point.md`](../goto-point.md)), defined across an undo, a redo
 and a discarded redo tail alike -- and hands core a track seated at the cursor.
 An origin that names nothing there, because the point was deleted under it,
 leaves the commit creating a point rather than refusing.
+
+### The commit that writes nothing
+
+A track whose origin already holds **exactly** the record the commit would write
+-- every column, compared exactly (core § "The commit") -- has nothing to write,
+and the step pushes no version, in the contract every bench step's nothing-to-do
+follows ([`../bench.md`](../bench.md) § "The wire"): the history is left alone,
+the bench is left alone, one Action Log row of kind `Bench` says so, and the
+reply carries `changed: false`. Without it each press of *Commit* would delete
+the point and re-add an identical one at a new index.
+
+The point is selected all the same, as any commit selects what it wrote: the
+gesture is a question about where the point is as much as an instruction, and
+the row names the index. The panels' caches are kept, there being no new version
+for them to be stale against.
 
 ### The version
 
@@ -134,6 +155,11 @@ Core's `CommitReport::label`, which needs the name the caller knows the node by:
 with `, absorbing M points` when `in` observations pulled from other points were
 committed with it. A commit with no origin says only the first clause.
 
+The commit that wrote nothing has the viewer's own sentence instead, which names
+the item the way every other no-effect row does:
+
+`Committed bull-nose: no effect, point 4211 already holds this track`
+
 ### The Action Log
 
 One entry, of kind `Edit` -- the only bench step whose row is not a `Bench` --
@@ -141,7 +167,9 @@ the label plus the version serials:
 
 `Committed track: 5 observations in bull, replacing point 1207 (v11 → v12)`
 
-A refusal is one failed entry carrying the core sentence.
+A commit that wrote nothing is one `Bench` row instead, carrying no serials,
+there being no transition to name. A refusal is one failed entry carrying the
+core sentence.
 
 ### What the viewer drops
 
@@ -165,7 +193,11 @@ bench; a commit made with the selection standing on some other point still
 selects what it wrote, and so does one that creates a point, whose undo clears
 the selection and whose redo invents none; a commit's row is an `Edit` where
 every other bench step's is a `Bench`, with the selection's row after it; and a
-commit is what makes a node dirty where a run of bench steps does not.
+commit is what makes a node dirty where a run of bench steps does not. The
+repeated press: four commits after the one that wrote the point push no version,
+mint no index, leave the bench item's own `Arc` where it is, keep the point
+selected and write one no-effect `Bench` row each; and the press after a sighting
+is turned out, or after an undo takes the point back, writes again.
 
 The frame's side of it is in
 [app/tests.rs](../../../crates/sfm-explorer/src/app/tests.rs) and
@@ -176,8 +208,10 @@ on ([`../architecture.md`](../architecture.md) § "Track Ray Visualization").
 
 Wire ([mcp/tests.rs](../../../crates/sfm-explorer/src/mcp/tests.rs), headless):
 the point a commit names resolves both ways -- `get_point` by the index gives
-the id the reply carried, and `get_point` by that id gives the index -- and a
-commit onto an origin reports the index it replaced.
+the id the reply carried, and `get_point` by that id gives the index -- a commit
+onto an origin reports the index it replaced, and a second commit of the same
+track answers `changed: false` with that same point named, at the cursor it was
+already at.
 
 ---
 

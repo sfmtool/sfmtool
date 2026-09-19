@@ -2097,10 +2097,13 @@ the viewer looking rather than what the call did.
 
 **A step that had no effect answers successfully, with `changed: false`.**
 Setting the verdict an observation already has, dragging the patch to the pixel
-it already sits under, painting the verdicts the track already carries: the
+it already sits under, painting the verdicts the track already carries,
+committing a track the point it wrote already holds: the
 history is not moved, `serial` and `cursor` are the version the node still stands
 at, and `report` is the step's **own** no-effect sentence rather than the
-previous step's label. `changed` is on every edit reply, not only the bench's.
+previous step's label. A commit that wrote nothing still names its point, as
+every commit names the one it wrote -- the point that already holds the track,
+with `replaced` null. `changed` is on every edit reply, not only the bench's.
 Whether a step had an effect is core's to decide, with a tolerance in the units
 of the value, because a pixel's round trip through a patch's plane does not
 return bit for bit; the contract is written once in [bench.md](bench.md)
@@ -3069,7 +3072,9 @@ where a test hands no host over.
   lists, active, at the track stage, seated on that point; a split answers with
   the label the half that came off took and that half is at the cluster stage; a
   thresholds call moves the bars it names and leaves the rest; a commit answers
-  with a version, writes one `Edit` row as `Mcp`, and `undo` takes it back; a
+  with a version, writes one `Edit` row as `Mcp`, and `undo` takes it back,
+  while a second commit of the same track answers `changed: false` at the cursor
+  it was already at, naming that same point and pushing no version; a
   rename answers with the new label and the old one then names nothing; each
   refusal is the bench's own sentence and pushes no version; and the two steps
   that read photographs defer to a worker, land their version, and are what

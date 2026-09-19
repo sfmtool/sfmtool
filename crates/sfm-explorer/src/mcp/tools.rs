@@ -1309,7 +1309,9 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
                           feature indexes rather than inline keypoints — each in the bench's own \
                           words. The track stays on the bench, seated on the point it wrote, and \
                           that point becomes the viewer's selection; the reply names it by index \
-                          and by id.",
+                          and by id. A commit onto a point that already holds exactly this track \
+                          writes nothing: it pushes no version and answers changed: false with \
+                          that point named as usual.",
             kind: Write,
             schema: object(
                 &[("track", bench_track_schema())],

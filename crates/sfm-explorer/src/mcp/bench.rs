@@ -512,6 +512,11 @@ pub(super) fn split_bench_track(
 /// is the reply's, not the sentence's: a commit that replaces takes the index
 /// it replaced and a commit that creates takes one past the end, and neither is
 /// derivable from what the Action Log row says.
+///
+/// **A commit onto a point that already holds exactly this track pushes no
+/// version**, and answers `changed: false` with that point named as usual --
+/// the same reading every other bench step's nothing-to-do gets, and what
+/// stops a repeated call minting a version and an index per press.
 pub(super) fn commit_bench_track(
     state: &mut AppState,
     label: &str,

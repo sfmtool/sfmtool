@@ -166,6 +166,96 @@ pub struct PointRecord {
     pub constraint: Option<(u8, f64, u32)>,
 }
 
+impl PointRecord {
+    /// Whether this record and `other` say the same thing in every column.
+    ///
+    /// **Exact on the stored representation**, column for column: the `f64`
+    /// coordinate as stored, the `f32` keypoints, the `u8` confidences, the
+    /// whole bitmap. Nothing here is approximate, because what this answers is
+    /// whether writing this record would leave the point exactly as it is, and
+    /// a position that moved by a stored amount is a point that moved.
+    ///
+    /// The one concession is `NaN`, which is not equal to itself: two `NaN`s in
+    /// one column agree here. A free point's constraint distance is `NaN` by
+    /// definition, so a structural comparison would report a record as
+    /// differing from a copy of itself for no reason other than that neither
+    /// constrains anything -- the same reading `constraints_agree` takes of the
+    /// column form, held to for every float so that no column can make a record
+    /// differ from itself forever.
+    pub fn agrees_with(&self, other: &Self) -> bool {
+        points_agree(&self.point, &other.point)
+            && self.observations.len() == other.observations.len()
+            && self
+                .observations
+                .iter()
+                .zip(&other.observations)
+                .all(|(a, b)| observations_agree(a, b))
+            && halfvecs_agree(self.patch_u_halfvec, other.patch_u_halfvec)
+            && halfvecs_agree(self.patch_v_halfvec, other.patch_v_halfvec)
+            && self.patch_bitmap == other.patch_bitmap
+            && self.normal_confidence == other.normal_confidence
+            && constraint_triples_agree(self.constraint, other.constraint)
+    }
+}
+
+/// Two floats that say the same thing: equal, or both `NaN`.
+///
+/// `f32` columns are widened to `f64` to be read, which is exact and carries a
+/// `NaN` across as one, so one rule covers every float a record holds.
+fn floats_agree(a: f64, b: f64) -> bool {
+    a == b || (a.is_nan() && b.is_nan())
+}
+
+/// Whether two geometries agree: position, `w`, colour, error and normal.
+fn points_agree(a: &Point3D, b: &Point3D) -> bool {
+    a.color == b.color
+        && floats_agree(a.w, b.w)
+        && floats_agree(f64::from(a.error), f64::from(b.error))
+        && a.position
+            .coords
+            .iter()
+            .zip(b.position.coords.iter())
+            .all(|(x, y)| floats_agree(*x, *y))
+        && a.normal
+            .iter()
+            .zip(b.normal.iter())
+            .all(|(x, y)| floats_agree(f64::from(*x), f64::from(*y)))
+}
+
+/// Whether two observations of a record agree: the image, whatever names the
+/// sighting, and its confidence.
+fn observations_agree(a: &RecordObservation, b: &RecordObservation) -> bool {
+    a.image_index == b.image_index
+        && a.feature_index == b.feature_index
+        && a.confidence == b.confidence
+        && match (a.keypoint_xy, b.keypoint_xy) {
+            (Some(x), Some(y)) => x
+                .iter()
+                .zip(&y)
+                .all(|(u, v)| floats_agree(f64::from(*u), f64::from(*v))),
+            (x, y) => x.is_none() && y.is_none(),
+        }
+}
+
+/// Whether two half-vector columns agree, both absent included.
+fn halfvecs_agree(a: Option<[f32; 3]>, b: Option<[f32; 3]>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x
+            .iter()
+            .zip(&y)
+            .all(|(u, v)| floats_agree(f64::from(*u), f64::from(*v))),
+        (x, y) => x.is_none() && y.is_none(),
+    }
+}
+
+/// Whether two constraint triples say the same thing, `NaN` distances included.
+fn constraint_triples_agree(a: Option<(u8, f64, u32)>, b: Option<(u8, f64, u32)>) -> bool {
+    match (a, b) {
+        (Some((ka, da, ra)), Some((kb, db, rb))) => ka == kb && ra == rb && floats_agree(da, db),
+        (x, y) => x.is_none() && y.is_none(),
+    }
+}
+
 /// A point read through the overlay: a borrow into whichever point set holds
 /// it, with the columns addressed by that set's own local index.
 ///
@@ -386,7 +476,7 @@ fn constraints_agree(
                 && a.constraint_distances
                     .iter()
                     .zip(&b.constraint_distances)
-                    .all(|(x, y)| x == y || (x.is_nan() && y.is_nan()))
+                    .all(|(x, y)| floats_agree(*x, *y))
         }
         _ => false,
     }

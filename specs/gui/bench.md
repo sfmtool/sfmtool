@@ -24,8 +24,8 @@ Detail panel, which carries the two steps that name a pixel and draws the active
 track as its bench layer), [`edits/commit-track.md`](edits/commit-track.md) (the one step that writes
 the reconstruction), [`document-model.md`](document-model.md) (the version the
 bench is a half of), [`edit-history.md`](edit-history.md) (the cursor that walks
-it), [`scene-graph.md`](scene-graph.md) (the tree the Bench group is a child
-of), [`background-tasks.md`](background-tasks.md) (where a reading and a fit
+it), [`scene-graph.md`](scene-graph.md) (the tree the two Bench groups are
+children of), [`background-tasks.md`](background-tasks.md) (where a reading and a fit
 run),
 [`action-log.md`](action-log.md) (the row each step writes),
 [`mcp-server.md`](mcp-server.md) (the surface § "The wire" is a family of), and
@@ -150,7 +150,8 @@ impl AppState {
     pub(crate) fn rename_bench_item(&mut self, id: ReconId, label: &str, to: &str)
         -> Result<(), String>;
     /// The point the commit wrote, which it also selects: the index it took,
-    /// and the index it replaced where it replaced one.
+    /// the index it replaced where it replaced one, and whether it wrote at
+    /// all -- a point that already holds the track is not written again.
     pub(crate) fn commit_bench_track(&mut self, id: ReconId, label: &str)
         -> Result<Committed, String>;
     /// Read the track where it sits, moving nothing. `search_px` is how far
@@ -430,23 +431,34 @@ the duration of its own task, so nothing can take the item off in the meantime
 
 ---
 
-## The Bench group in the Scene tree
+## The Bench groups in the Scene tree
 
-Each node gains a **Bench** child beside its Camera Intrinsics, Camera Images
-and Points groups ([`scene-graph.md`](scene-graph.md)), drawn only when
-something is on it. The header is `Bench (2)`; inside it is one row per item, by
+Each node gains two **Bench** children beside its Camera Intrinsics, Camera
+Images and Points groups ([`scene-graph.md`](scene-graph.md)), one per stage:
+`Bench Points (2)` for the track-stage items and `Bench Clusters (1)` for the
+cluster-stage ones. The tree says which of the two an item is because the two
+are different things -- a track stands at a position and a cluster is a set of
+image patches with no geometry behind them -- and an item taken up or down moves
+between the groups. A group with nothing in it is not drawn, so an empty bench
+adds no row and a bench of tracks alone shows one group; each remembers its own
+expansion.
+
+Inside each is one row per item of that stage, in the bench's own order, by
 label, with its `in` count, the active one marked as a selected row. There is no
-eye: nothing on the bench is drawn from this row, and an item is not part of the
-reconstruction.
+eye: nothing on the bench is drawn from these rows, and an item is not part of
+the reconstruction.
 
 Clicking a row makes that item the active one of its kind, which is a step like
-any other; a secondary click offers *Discard*. The bench is in the tree because
-the tree is where a node's parts are listed, and it is per node because an item
-names that node's images and poses.
+any other; a secondary click offers *Discard*. One item is active across both
+groups, the kind being the item rather than the stage. The bench is in the tree
+because the tree is where a node's parts are listed, and it is per node because
+an item names that node's images and poses.
 
 The row reports the item by its **position** on the bench rather than by its
 label, because `SceneGraphResponse` is a `Copy` value and a label is a `String`;
 the dock reads the label off the bench at that position before calling the step.
+The position is the item's place in the **whole** bench and not in the group it
+is drawn under, so the two groups' rows reach one list.
 
 ---
 
@@ -515,8 +527,12 @@ panel means when it names no item.
 ```
 
 **The two reads have no panel gesture behind them**, because a panel shows what
-they answer. `get_bench` is the Bench group as JSON: each item's label, kind,
-stage, origin and counts, and the active label per kind. `get_bench_track` is
+they answer. `get_bench` is the bench as JSON: each item's label, kind, stage,
+origin and counts, and the active label per kind. It is **one flat list** in the
+bench's own order, with the stage on each item, rather than the tree's two
+groups: a reader that wants them apart has the field to do it with, and a
+grouping on the wire would be the panel's layout rather than the bench's own
+state. `get_bench_track` is
 the Track Edit table: the stage and its data, the origin, the thresholds, and
 every observation with its provenance, verdict, `pixel` and both stages'
 measurements where they exist -- at the track stage, the two distances
@@ -576,7 +592,9 @@ they are, and the reply skips them. It skips `Selection` rows for the same
 reason: a commit selects the point it wrote, which is where the call left the
 viewer looking rather than what the call did. **A commit names the point it
 wrote** -- `{ "point": { "index": 4211, "id": "pt3d_95fe75db_0", "replaced":
-1207 } }` -- because one row of the reconstruction is the whole of what a commit
+1207 } }`, and a commit that wrote nothing names the point that already holds
+the track the same way, with `replaced` null -- because one row of the
+reconstruction is the whole of what a commit
 produces, and neither index is derivable from the sentence: a commit that
 replaces writes a **new** row and deletes the one it replaced, so `index` and
 `replaced` are two different numbers, and one that creates takes whatever index
@@ -646,6 +664,15 @@ nanoradian. The steps that compare something that is not a float -- a verdict, a
 stage, a label, which item is active -- compare it exactly, because there is
 nothing to round.
 
+**The commit is the one float comparison that is exact**, and for the same
+reason: what it asks is not whether a gesture moved anything but whether writing
+the record would leave the point's own columns as they stand, and a coordinate
+that differs by a stored amount is a point that moved. So it compares the record
+it would write against the one the origin holds, column for column, `NaN`
+agreeing with `NaN`
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
+§ "The commit"), and answers `changed: false` when the two say the same thing.
+
 **A pixel off the photograph is brought inside it rather than refused.** A
 pointer can be dragged past the edge of the picture and a call can carry any two
 finite numbers, and neither names a place on the photograph: `[-500, -500]` of a
@@ -695,7 +722,10 @@ point's exact projection and a photograph cached for every image:
   clears the selection;
 - a commit's row is an `Edit` and every other bench step's is a `Bench`, one row
   per step, with the selection's row after the commit's;
-- a step that changes nothing pushes no version;
+- a step that changes nothing pushes no version, the commit onto a point that
+  already holds the track included: repeated presses push no version, mint no
+  index, keep the point selected and write one no-effect row each, while the
+  press after a sighting is turned out or after an undo writes again;
 - a run of bench steps over a clean value is clean, a commit is dirty, and
   undoing the commit is clean again;
 - a report lands on the item it measured, and one for an item that is not there

@@ -351,6 +351,10 @@ impl TabContext<'_> {
         if response.commit {
             match self.state.commit_bench_track(id, &label) {
                 Err(why) => self.state.action_log.fail(Kind::Edit, why),
+                // A commit that found the point already holding this track
+                // pushed no version, so the caches still describe the value
+                // the node holds and there is nothing to forget.
+                Ok(written) if !written.changed => {}
                 Ok(_) => {
                     // The commit gave the node a new version, so what the
                     // panels cached about its points describes a value it no

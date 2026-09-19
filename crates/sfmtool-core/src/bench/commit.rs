@@ -21,17 +21,24 @@ use super::track::{EditableTrack, Provenance, StageKind, TrackPayload};
 /// What one commit wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitReport {
-    /// The index the written point took.
+    /// The index the written point took, or, for a commit that changed
+    /// nothing, the index of the point that already holds the track.
     pub point: u32,
+    /// Whether anything was written. A track whose origin already holds
+    /// exactly the record the commit would write is reported rather than
+    /// refused, and the caller pushes no version for it.
+    pub changed: bool,
     /// The index it replaced, which is now deleted, or `None` when the track
-    /// had no origin that resolves and its point was appended.
+    /// had no origin that resolves and its point was appended -- and `None`
+    /// for a commit that changed nothing, which deleted no index.
     pub replaced: Option<u32>,
     /// What the commit did to point indexes: the write, and the absorbed
     /// points' removal chained after it when there was one.
     ///
     /// A caller carrying a selection, a point id or an undo across the commit
     /// reads this rather than reassembling it from the fields above, and it is
-    /// the same vocabulary every other edit answers in.
+    /// the same vocabulary every other edit answers in. A commit that changed
+    /// nothing moved no index, which is the empty chain.
     pub map: PointMap,
     /// How many observations were written, which is how many were `in`.
     pub observation_count: usize,
@@ -57,6 +64,12 @@ impl CommitReport {
     /// reconstruction value does not know what it is called in a window or in a
     /// script's output.
     pub fn label(&self, node: &str) -> String {
+        if !self.changed {
+            return format!(
+                "Committed track: no effect, point {} of {node} already holds it",
+                self.point
+            );
+        }
         let mut text = format!(
             "Committed track: {} observations in {node}",
             self.observation_count
@@ -193,6 +206,14 @@ impl From<EditError> for CommitError {
 /// point's sighting now belongs to this track, and a reconstruction should not
 /// hold two points for one surface, so that point is deleted. A candidate or an
 /// `out` observation pulled from a point leaves that point alone.
+///
+/// **A commit that would change nothing writes nothing.** Where the origin
+/// resolves, holds exactly the record this would write -- every column, exactly
+/// ([`PointRecord::agrees_with`]) -- and there is nothing left to absorb, the
+/// value comes back as it stands with `changed: false` and `point` naming the
+/// point that already holds the track. Committing the same track twice
+/// otherwise deletes a point and re-adds an identical one at a new index for
+/// every press of the button.
 ///
 /// Nothing here triangulates. The track commits with the position it carries,
 /// and a track that carries none refuses naming the fit as the step that
@@ -340,19 +361,12 @@ pub fn commit(
         .origin
         .map(|o| o.point)
         .filter(|&p| edited.point(p).is_some());
-    let mut next = edited.clone();
-    let (point, written) = match origin {
-        Some(replaced) => {
-            let point = next.replace_point(replaced, record)?;
-            (point, PointMap::Replaced(vec![(replaced, point)]))
-        }
-        None => {
-            let point = next.add_point(record)?;
-            (point, PointMap::Created(vec![point]))
-        }
-    };
 
     // ---- The points the kept observations were pulled from ----
+    //
+    // Read before the write, because what is still live here is what the write
+    // would absorb -- and a commit with something left to absorb is a change
+    // whatever the origin's own record says.
     let mut absorbed: Vec<u32> = kept
         .iter()
         .filter_map(|&i| match track.observations[i].provenance {
@@ -365,7 +379,48 @@ pub fn commit(
     absorbed.dedup();
     // A point another version already deleted is nothing to absorb, and a
     // commit is not the place to complain about it.
-    absorbed.retain(|&point| next.delete_point(point).is_ok());
+    absorbed.retain(|&point| edited.point(point).is_some());
+
+    // ---- The commit that changes nothing ----
+    //
+    // The origin's own record, column for column, against the one above. A
+    // track with something to absorb has an edit to make whatever the two say.
+    if let Some(point) = origin.filter(|_| absorbed.is_empty()) {
+        let held = edited
+            .point(point)
+            .expect("the origin resolves")
+            .to_record();
+        if held.agrees_with(&record) {
+            return Ok((
+                edited.clone(),
+                CommitReport {
+                    point,
+                    changed: false,
+                    replaced: None,
+                    // No index moved, which is the chain of no steps.
+                    map: PointMap::Chain(Vec::new()),
+                    observation_count: rows.len(),
+                },
+            ));
+        }
+    }
+
+    let mut next = edited.clone();
+    let (point, written) = match origin {
+        Some(replaced) => {
+            let point = next.replace_point(replaced, record)?;
+            (point, PointMap::Replaced(vec![(replaced, point)]))
+        }
+        None => {
+            let point = next.add_point(record)?;
+            (point, PointMap::Created(vec![point]))
+        }
+    };
+
+    for &point in &absorbed {
+        next.delete_point(point)
+            .expect("live above, and a point edit leaves other indexes alone");
+    }
 
     // The write first, then what it absorbed: the absorbed indexes are the ones
     // this value held before the write, and a point edit leaves indexes where
@@ -380,6 +435,7 @@ pub fn commit(
         next,
         CommitReport {
             point,
+            changed: true,
             replaced: origin,
             map,
             observation_count: rows.len(),

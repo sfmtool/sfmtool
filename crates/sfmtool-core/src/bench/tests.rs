@@ -26,7 +26,8 @@ use crate::patch::cluster_refine::{sample_member_grid, ClusterRefineParams, Memb
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalization};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::progress::Progress;
-use crate::reconstruction::edited::{EditedReconstruction, PointMap};
+use crate::reconstruction::data::Point3D;
+use crate::reconstruction::edited::{EditedReconstruction, PointMap, PointRecord};
 use crate::reconstruction::SfmrReconstruction;
 
 use scene::{
@@ -692,11 +693,291 @@ fn a_commit_with_an_origin_replaces_the_point() {
     );
 
     // Re-seating the track on what was written makes a second commit a
-    // replacement of the first.
-    let settled = track.with_origin(1, report.point);
-    let (after, second) = commit(&next, &settled).expect("still two in");
+    // replacement of the first, once the track says something else.
+    let mut moved = track.with_origin(1, report.point);
+    if let Stage::Track(payload) = &mut moved.stage {
+        payload.position = Some(WORLD + Vector3::new(0.0, 0.0, 0.01));
+    }
+    let (after, second) = commit(&next, &moved).expect("still two in");
+    assert!(second.changed);
     assert_eq!(second.replaced, Some(report.point));
     assert_eq!(after.point_count(), edited.point_count());
+}
+
+/// The bug a repeated press of *Commit* is: a track already seated on the point
+/// it would write has nothing to write, and a commit that deleted the point and
+/// re-added an identical one would mint a version and an index per press.
+#[test]
+fn a_commit_onto_the_point_that_already_holds_the_track_writes_nothing() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (next, first) = commit(&edited, &track).expect("two observations in, with a position");
+    assert!(first.changed);
+    let settled = track.with_origin(1, first.point);
+
+    // Ten presses of the button after the one that wrote the point leave the
+    // value, the indexes and the point count exactly where the first left them.
+    let mut value = next.clone();
+    for _ in 0..10 {
+        let (after, report) = commit(&value, &settled).expect("still two in");
+        assert!(!report.changed, "a second commit wrote something");
+        assert_eq!(report.point, first.point, "it named another point");
+        assert_eq!(report.replaced, None, "nothing was replaced");
+        assert_eq!(report.map, PointMap::Chain(Vec::new()));
+        assert_eq!(report.map.forward(first.point), Some(first.point));
+        assert_eq!(report.observation_count, 2);
+        assert_eq!(
+            report.label("bull"),
+            "Committed track: no effect, point 1 of bull already holds it"
+        );
+        assert_eq!(after, value, "the version is not the one it was");
+        value = after;
+    }
+    assert_eq!(value.point_count(), edited.point_count());
+    assert_eq!(
+        value.index_bound(),
+        next.index_bound(),
+        "an index was minted"
+    );
+}
+
+/// What the **first** commit of an untouched point rewrites, which is why it is
+/// a change and the ones after it are not: the colour, which the commit reads
+/// from the consensus bitmap's centre rather than carrying the stored byte, and
+/// the error, which is the mean of what an evaluation measured and so zero for
+/// a track nothing has read. Every other column round-trips exactly, and after
+/// the first write the two agree as well.
+#[test]
+fn an_untouched_point_committed_back_rewrites_its_colour_and_its_error() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+
+    let (next, report) = commit(&edited, &track).expect("two observations in, with a position");
+    assert!(report.changed);
+    let was = edited.point(0).expect("a live point").to_record();
+    let now = next.point(report.point).expect("just written").to_record();
+    // The fixture's bitmap is blank and its colour is not, so the two differ
+    // here; a point whose stored colour came from its own bitmap agrees.
+    assert_eq!(was.point.color, [120, 130, 140]);
+    assert_eq!(now.point.color, [0, 0, 0]);
+    assert_eq!(was.point.error, 0.5);
+    assert_eq!(now.point.error, 0.0);
+    // Everything else, column for column.
+    let restated = PointRecord {
+        point: Point3D {
+            color: now.point.color,
+            error: now.point.error,
+            ..was.point.clone()
+        },
+        ..was
+    };
+    assert!(restated.agrees_with(&now));
+}
+
+/// The commit sorts its observations into image order, so a bench that holds
+/// them in another order is still the track the point already carries.
+#[test]
+fn observations_in_another_order_are_the_same_track() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (next, first) = commit(&edited, &track).expect("two observations in, with a position");
+
+    let mut shuffled = track.with_origin(1, first.point);
+    shuffled.observations.reverse();
+    let (_, report) = commit(&next, &shuffled).expect("still two in");
+    assert!(
+        !report.changed,
+        "the rows were the same two sightings in the other order"
+    );
+}
+
+/// A sighting turned out is a track the point no longer holds, so the commit
+/// has something to write again.
+#[test]
+fn a_sighting_turned_out_after_a_commit_is_a_change() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    // Three sightings, so that turning one out still leaves two in.
+    let (bench, _) = add_observation(
+        &track_of(&bench, &label),
+        &ObservationSeed::at_pixel(2, scene.project(2, WORLD)),
+    )
+    .map(|(track, report)| (install(&bench, &label, track), report))
+    .expect("a finite pixel");
+    let (mut track, _) = set_verdict(&track_of(&bench, &label), 2, Verdict::In)
+        .expect("a live observation in an image the track does not hold");
+    track.observations[2]
+        .track
+        .get_or_insert_with(Default::default)
+        .keypoint = Some([64.0, 64.0]);
+
+    let (next, first) = commit(&edited, &track).expect("three observations in");
+    assert!(first.changed);
+    let settled = track.with_origin(1, first.point);
+    let (_, unchanged) = commit(&next, &settled).expect("still three in");
+    assert!(!unchanged.changed, "nothing moved between the two");
+
+    let (fewer, _) = set_verdict(&settled, 2, Verdict::Out).expect("a live observation");
+    let (after, report) = commit(&next, &fewer).expect("still two in");
+    assert!(report.changed, "the track lost a sighting");
+    assert_eq!(report.replaced, Some(first.point));
+    assert_eq!(
+        after
+            .point(report.point)
+            .expect("just written")
+            .observations()
+            .len(),
+        2
+    );
+}
+
+/// A track with no origin creates whatever the value already holds: the same
+/// landmark duplicated onto the bench commits as a second point, because the
+/// question the commit asks is about *this* track's origin and not about
+/// whether some row somewhere says the same thing.
+#[test]
+fn a_track_with_no_origin_always_writes() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let mut copy = track_of(&bench, &label);
+    copy.origin = None;
+
+    let (next, report) = commit(&edited, &copy).expect("two observations in, with a position");
+    assert!(report.changed);
+    assert_eq!(next.point_count(), edited.point_count() + 1);
+    // And again: two presses of a track with no origin are two points.
+    let (after, second) = commit(&next, &copy).expect("still two in");
+    assert!(second.changed);
+    assert_eq!(after.point_count(), edited.point_count() + 2);
+}
+
+/// An origin whose point has gone -- deleted under the track, or taken back by
+/// an undo of the commit that wrote it -- names nothing, so the commit creates.
+#[test]
+fn a_commit_after_the_point_is_taken_back_writes_again() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (next, first) = commit(&edited, &track).expect("two observations in, with a position");
+    let settled = track.with_origin(1, first.point);
+
+    // The undo is the value before the commit, which no longer holds that
+    // point at all.
+    let (after, report) = commit(&edited, &settled).expect("still two in");
+    assert!(report.changed, "the point the track is seated on is gone");
+    assert_eq!(report.replaced, None, "there was nothing to replace");
+    assert_eq!(after.point_count(), edited.point_count() + 1);
+    // And a point deleted out from under a seated track is the same story.
+    let mut deleted = next.clone();
+    deleted.delete_point(first.point).expect("a live point");
+    let (_, report) = commit(&deleted, &settled).expect("still two in");
+    assert!(report.changed);
+    assert_eq!(report.replaced, None);
+}
+
+/// A sighting pulled from another point is an edit even where the record is the
+/// one the origin already holds: the point it was pulled from is still there to
+/// absorb.
+#[test]
+fn a_commit_with_something_left_to_absorb_is_a_change() {
+    let scene = Scene::new();
+    let mut edited = edited_with_columns(&scene, WORLD);
+    let other = edited
+        .add_point(edited.point(0).expect("a live point").to_record())
+        .expect("a well-formed record");
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (next, first) = commit(&edited, &track).expect("two observations in, with a position");
+
+    let mut pulled = track.with_origin(1, first.point);
+    pulled.observations[1].provenance = Provenance::Point { point: other };
+    let (after, report) = commit(&next, &pulled).expect("still two in");
+    assert!(report.changed, "the pulled-from point was still live");
+    assert_eq!(report.absorbed(), [other]);
+    assert!(after.point(other).is_none());
+
+    // Once it is absorbed there is nothing left to do, and the same track
+    // commits as the no-effect it now is.
+    let settled = pulled.with_origin(2, report.point);
+    let (_, again) = commit(&after, &settled).expect("still two in");
+    assert!(!again.changed);
+}
+
+/// Which columns the comparison reads: every one the commit writes. Each of
+/// these is a record the point does not hold, and each has to be written.
+#[test]
+fn a_column_the_commit_writes_is_a_column_it_compares() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let (next, first) = commit(&edited, &track).expect("two observations in, with a position");
+    let settled = track.with_origin(1, first.point);
+
+    let moved = |column: &str, change: &dyn Fn(&mut EditableTrack)| {
+        let mut track = settled.clone();
+        change(&mut track);
+        let (_, report) = commit(&next, &track).expect("still two in");
+        assert!(
+            report.changed,
+            "{column} moved and the commit wrote nothing"
+        );
+        assert_eq!(report.replaced, Some(first.point), "{column}");
+    };
+
+    moved("the position", &|t| {
+        payload_of(t).position = Some(WORLD + Vector3::new(0.0, 0.0, 1e-9));
+    });
+    moved("the bearing flag", &|t| payload_of(t).at_infinity = true);
+    moved("the bitmap centre, which is the colour", &|t| {
+        let mut bitmap = Array3::<u8>::zeros((BITMAP_R, BITMAP_R, 4));
+        bitmap[[BITMAP_R / 2, BITMAP_R / 2, 1]] = 9;
+        payload_of(t).bitmap = Some(bitmap);
+    });
+    moved("the normal confidence", &|t| {
+        payload_of(t).normal_confidence = Some(7)
+    });
+    moved("the frame", &|t| {
+        payload_of(t).frame.as_mut().expect("a surfel").half_extent[0] *= 2.0;
+    });
+    moved("the bitmap", &|t| {
+        let mut bitmap = Array3::<u8>::zeros((BITMAP_R, BITMAP_R, 4));
+        bitmap[[0, 0, 0]] = 1;
+        payload_of(t).bitmap = Some(bitmap);
+    });
+    moved("a keypoint", &|t| {
+        let measurement = t.observations[0].track.as_mut().expect("a track slot");
+        let keypoint = measurement.keypoint.expect("a stored keypoint");
+        measurement.keypoint = Some([keypoint[0] + 0.001, keypoint[1]]);
+    });
+    moved("an observation's confidence", &|t| {
+        t.observations[0].track.as_mut().expect("a track slot").zncc = Some(0.5);
+    });
+    moved("the error", &|t| {
+        t.observations[0]
+            .track
+            .as_mut()
+            .expect("a track slot")
+            .reprojection_error = Some(0.25);
+    });
+}
+
+/// The track payload of a track-stage track, for a test that moves one column.
+fn payload_of(track: &mut EditableTrack) -> &mut TrackPayload {
+    match &mut track.stage {
+        Stage::Track(payload) => payload,
+        Stage::Cluster(_) => panic!("the track stage"),
+    }
 }
 
 #[test]

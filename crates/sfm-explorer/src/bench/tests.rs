@@ -450,6 +450,93 @@ fn a_commit_that_creates_a_point_selects_the_point_it_created() {
     );
 }
 
+/// Pressing *Commit* again on a track the point already holds writes nothing:
+/// no version, no new index, and the no-effect row every bench step answers a
+/// nothing-to-do with.
+#[test]
+fn committing_a_track_the_point_already_holds_pushes_no_version() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let first = state.commit_bench_track(id, &label).expect("a track stage");
+    let after_first = versions(&state, id);
+    let points = state.scene[0].point_count();
+    let bench_address = item_address(&state, id, 0);
+    state.action_log.clear();
+
+    for _ in 0..4 {
+        let written = state.commit_bench_track(id, &label).expect("a track stage");
+        assert!(!written.changed, "a repeated commit wrote something");
+        assert_eq!(written.point, first.point, "it named another point");
+        assert_eq!(written.replaced, None, "nothing was replaced");
+    }
+
+    assert_eq!(
+        versions(&state, id),
+        after_first,
+        "a version per press of the button"
+    );
+    assert_eq!(
+        state.scene[0].point_count(),
+        points,
+        "a point per press of the button"
+    );
+    assert_eq!(
+        item_address(&state, id, 0),
+        bench_address,
+        "the bench item was rebuilt for nothing"
+    );
+    assert!(
+        state.scene[0].edited().point(first.point).is_some(),
+        "the point the track is seated on stopped resolving"
+    );
+    assert_eq!(
+        state.selected_point,
+        Some(PointRef::new(id, first.point as usize)),
+        "the point it named is not the selection"
+    );
+    let rows = rows(&state);
+    assert_eq!(rows.len(), 4, "one row per press: {rows:?}");
+    for (kind, text) in &rows {
+        assert_eq!(*kind, Kind::Bench, "a no-effect row is a Bench row");
+        assert_eq!(
+            text,
+            &format!(
+                "Committed {label}: no effect, point {} already holds this track",
+                first.point
+            )
+        );
+    }
+}
+
+/// And the press after something moved writes again: the no-effect reading is
+/// about what the point holds now, not about having committed once already.
+#[test]
+fn a_commit_after_a_sighting_is_turned_out_writes_again() {
+    let (mut state, id) = state();
+    let label = put_on_bench(&mut state, id);
+    let first = state.commit_bench_track(id, &label).expect("a track stage");
+    let before = versions(&state, id);
+
+    state
+        .set_bench_verdict(id, &label, 2, Verdict::Out)
+        .expect("observation 2 exists");
+    let written = state.commit_bench_track(id, &label).expect("a track stage");
+
+    assert!(written.changed, "the track lost a sighting");
+    assert_eq!(written.replaced, Some(first.point));
+    assert_eq!(
+        versions(&state, id) - before,
+        2,
+        "the verdict and the commit are a version each"
+    );
+
+    // And an undo of the commit takes the point back, so the next press writes
+    // it again rather than reading the value as already holding the track.
+    state.undo(id).expect("the commit");
+    let again = state.commit_bench_track(id, &label).expect("a track stage");
+    assert!(again.changed, "the point the commit wrote is gone");
+}
+
 #[test]
 fn a_commit_is_an_edit_row_and_every_other_bench_step_is_a_bench_row() {
     let (mut state, id) = state();
