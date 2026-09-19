@@ -3928,6 +3928,25 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
         prose.contains(&reads_sentence),
         "the spec never says {reads_sentence:?}"
     );
+    // § "The tool surface" gives the write count twice -- in the sentence that
+    // opens the section and again in the one about the annotations -- and the
+    // two had drifted apart, forty-seven against forty-four. Both sentences
+    // wrap, so they are looked for in a copy with the line breaks taken out;
+    // the assertions above match inside one line and use `prose` as it is.
+    let unwrapped = prose.split_whitespace().collect::<Vec<_>>().join(" ");
+    let writes = catalog
+        .iter()
+        .filter(|spec| spec.kind == ToolKind::Write)
+        .count();
+    for sentence in [
+        format!("{} write, and one writes a file", spelled(writes)),
+        format!("the {} writes `destructivehint: false`", spelled(writes)),
+    ] {
+        assert!(
+            unwrapped.contains(&sentence),
+            "the spec never says {sentence:?}: § \"The tool surface\" carries the count twice"
+        );
+    }
 
     // The bench family says its own size three times -- once in the heading
     // sentence and twice in the back-references that split it -- and the three
@@ -3960,6 +3979,61 @@ fn the_spec_s_counts_are_the_catalog_s_and_the_panels() {
             "{name} is a panel on the wire and is in no sentence of the spec"
         );
     }
+}
+
+/// § "The tool surface"'s table names every tool the catalog does, and no
+/// others.
+///
+/// That table is the first thing anyone writing a client reads, so a name in it
+/// that is not on the wire is worse than no table at all: `cancel_background`
+/// sat there while the wire had always said `cancel_background_task`, and
+/// nothing said so. The counts beside it are read back in the test above; this
+/// reads back the names, which is the part a client actually calls.
+///
+/// Only the names. What each row *says* a tool does is prose, and prose is what
+/// review is for.
+#[test]
+fn the_spec_s_tool_table_names_the_catalog() {
+    let spec = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/gui/mcp-server.md"),
+    )
+    .expect("specs/gui/mcp-server.md is in the repo beside the crate");
+
+    // The table runs from its header row to the first line that is not a row.
+    // One row can name two tools (`undo` / `redo` share a line), so every
+    // backticked word in the first cell counts.
+    let body = spec
+        .split_once("| Tool | Kind | What it does |")
+        .expect("§ \"The tool surface\" opens its table with that header")
+        .1;
+    let mut tabled: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let Some(first_cell) = line
+            .strip_prefix("| ")
+            .and_then(|row| row.split('|').next())
+        else {
+            // The rest of the header line and the `|---|` rule come first and
+            // name nothing; the blank line after the last row ends the table.
+            if tabled.is_empty() {
+                continue;
+            }
+            break;
+        };
+        tabled.extend(first_cell.split('`').skip(1).step_by(2));
+    }
+
+    tabled.sort_unstable();
+    tabled.dedup();
+    let mut advertised: Vec<&str> = tools::catalog().iter().map(|spec| spec.name).collect();
+    advertised.sort_unstable();
+
+    let missing: Vec<&&str> = advertised.iter().filter(|n| !tabled.contains(n)).collect();
+    let extra: Vec<&&str> = tabled.iter().filter(|n| !advertised.contains(n)).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "§ \"The tool surface\"'s table is not the catalog: missing {missing:?}, \
+         listing {extra:?} which no tool is called"
+    );
 }
 
 /// A small number as the spec's prose spells it: `54` is `fifty-four`.

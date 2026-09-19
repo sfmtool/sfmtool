@@ -142,7 +142,7 @@ write, and one writes a file.
 | `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
-| `cancel_background` | write | Stop the operation running on a worker, when it can be stopped |
+| `cancel_background_task` | write | Stop the operation running on a worker, when it can be stopped |
 | `get_bench` | read | One reconstruction's bench: every item on it, and which is active |
 | `get_bench_track` | read | One track on the bench: its stage, thresholds and every observation |
 | `create_bench_cluster` | write | Start a cluster-stage track from a place in one camera image |
@@ -170,7 +170,7 @@ write, and one writes a file.
 | `screenshot` | observe | PNG of the window, or of one panel |
 
 Every tool is annotated: the fourteen reads and `screenshot` carry
-`readOnlyHint: true`, the forty-four writes `destructiveHint: false` (none of
+`readOnlyHint: true`, the forty-seven writes `destructiveHint: false` (none of
 them touches a file on disk: `close_reconstruction` unloads, it does not
 delete; `set_window_layout` changes the window and the dock, not the layout file
 the menu saves; an **edit** makes a new version of a loaded value, which the
@@ -1174,7 +1174,7 @@ so this names none and takes no arguments.
   "operation_id": 2,                          // the id bundle_adjust's handle carried
   "elapsed_s": 42.7,                          // how long it has been going
   "fraction": 0.61,                           // of the whole, where anything reported one
-  "cancellable": true,                        // whether cancel_background would do anything
+  "cancellable": true,                        // whether cancel_background_task would do anything
   "progress": { "done": 2, "total": 3, "unit": "round" },   // the kernel's own count
   "status": "refining images/IMG_0042.jpg",   // what it says it is doing right now
   "phase": "damping ladder",                  // the stage it is inside
@@ -1955,7 +1955,7 @@ One still running at 200 ms replies with a handle instead:
   "running": true,                          // present and true only in this case
   "operation": "Bundle adjust",
   "reconstruction_label": "dino_dog_toy-embedded",
-  "operation_id": 2                         // names this run, for cancel_background
+  "operation_id": 2                         // names this run, for cancel_background_task
 }
 ```
 
@@ -1969,7 +1969,7 @@ An agent that took a handle asks `get_background_task` how the run is going
 and, once it is over, what it cost (§ "get_background_task"); the same answer
 reaches the Action Log, with the whole operation's cost and the stages it
 reported ([operation-progress.md](operation-progress.md)), whichever way the
-call answered. `cancel_background` stops it;
+call answered. `cancel_background_task` stops it;
 the adjustment polls between rounds and between iterations, and the bench's
 photometric steps poll on either side of their decode and inside their kernels,
 and a cancelled one
@@ -2574,7 +2574,7 @@ fn panel_crop(dock: &DockState<Tab>, panel: Tab, pixels_per_point: f32,
               surface: [u32; 2]) -> Option<[u32; 4]>;
 
 /// Apply one command. **Takes no `App` and no GPU handle** — which is what
-/// makes fifty-six of the fifty-seven tools testable in a headless
+/// makes every tool but `screenshot` testable in a headless
 /// `cargo test`.
 pub(crate) fn apply_with_window(state: &mut AppState, viewer: &mut Viewer3D,
                                 host: &mut dyn WindowHost, command: Command) -> Outcome;
@@ -2704,7 +2704,7 @@ tools are silently absent for that whole session.
 cannot change while a viewer runs, so a long TTL would be defensible — but it
 changes across a *rebuild*, which is the normal state of affairs for a tool
 whose purpose is being iterated on, and a client holding a cached list across a
-relaunch would call tools the new binary does not have. Fifty-four tools are
+relaunch would call tools the new binary does not have. Sixty-three tools are
 cheap to re-fetch; a stale list is not cheap to debug. `cache_scope` is
 `private`: there are no authorization contexts to share a result across.
 

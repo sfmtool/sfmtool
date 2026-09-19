@@ -391,6 +391,18 @@ surface**
 - Risk: low
 
 **The MCP tool count is written in prose twice, and both numbers are wrong, differently**
+
+> _Status (2026-09-19): Done — the code's copy lost its number, as recommended;
+> the spec's copies kept theirs because the spec's counts are now read back
+> against `catalog()` by `mcp::tests::the_spec_s_counts_are_the_catalog_s_and_the_panels`,
+> which arrived after this finding was written. That test grew the write count
+> (§ "The tool surface" said forty-seven in one sentence and forty-four in
+> another), and a companion,
+> `the_spec_s_tool_table_names_the_catalog`, now reads the table's names back
+> too — it caught `cancel_background`, a row for a tool the wire calls
+> `cancel_background_task`. The two untested "fifty-five of the fifty-six
+> tools" doc comments in `mcp/mod.rs`, which had drifted from each other as
+> well as from the catalog, say "every tool but `screenshot`" instead._
 - Location: `crates/sfm-explorer/src/mcp/server.rs:258` ("Twenty-three tools are cheap
   to re-fetch") and `specs/gui/mcp-server.md:2381` ("Thirty-six tools are cheap")
 - Problem: `catalog()` advertises **40**. The same sentence was copied from code into

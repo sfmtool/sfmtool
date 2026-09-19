@@ -27,8 +27,8 @@
 //!   `inputSchema`, and JSON arguments to [`Command`].
 //! - [`apply_with_window`] and [`render`] — the whole command vocabulary, applied to
 //!   `(&mut AppState, &mut Viewer3D)` and a [`crate::window::WindowHost`].
-//!   **No `App`, no GPU handle**, which is what keeps fifty-five of the
-//!   fifty-six tools under headless test.
+//!   **No `App`, no GPU handle**, which is what keeps every tool but
+//!   `screenshot` under headless test.
 //! - [`server`] — the `rmcp` handler and the `axum`/`tokio` plumbing that
 //!   carries a [`Request`] to the GUI thread and its [`Reply`] back.
 //!
@@ -818,8 +818,8 @@ pub(crate) fn apply(state: &mut AppState, viewer: &mut Viewer3D, command: Comman
 
 /// Apply one command to the viewer.
 ///
-/// Takes no `App` and no GPU handle, which is what makes fifty-five of the
-/// fifty-six tools testable in a headless `cargo test`: `App` owns a
+/// Takes no `App` and no GPU handle, which is what makes every tool but
+/// `screenshot` testable in a headless `cargo test`: `App` owns a
 /// `wgpu::Device`, a surface and a window, and constructing one needs a GPU and
 /// a display that this crate's lib tests deliberately do without. The one
 /// GPU-shaped command leaves through [`Outcome::Deferred`] instead, and the one
