@@ -8,7 +8,7 @@ import math
 import numpy as np
 import pytest
 
-from sfmtool.analyze.images import _compute_camera_centers
+from sfmtool._pose_math import camera_centers
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.xform import (
     BundleAdjustTransform,
@@ -22,7 +22,7 @@ from .conftest import apply_transforms_to_file, load_reconstruction_data
 def _max_triangulation_angles_deg(path) -> np.ndarray:
     """Per-point max pairwise viewing-ray angle (deg) over the kept images."""
     recon = SfmrReconstruction.load(path)
-    centers = _compute_camera_centers(
+    centers = camera_centers(
         np.asarray(recon.quaternions_wxyz), np.asarray(recon.translations)
     )
     positions = np.asarray(recon.positions)

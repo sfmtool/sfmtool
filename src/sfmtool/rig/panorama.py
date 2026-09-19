@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from sfmtool._filenames import number_from_filename
+from sfmtool._pose_math import camera_centers
 from sfmtool._sfmtool.reconstruction import RangeExpr
 from sfmtool._sfmtool.patches import render_consensus_atlas
 from sfmtool._sfmtool.geometry import RotQuaternion
@@ -51,18 +52,6 @@ def _patch_size_for_width(half_fov_rad: float, equirect_width: int) -> int:
     arc_per_pixel = 2.0 * np.pi / equirect_width
     raw = int(np.ceil(2.0 * half_fov_rad / arc_per_pixel))
     return _next_pow2(max(_MIN_PATCH_SIZE, raw))
-
-
-def _camera_centers(quaternions, translations) -> NDArray[np.float64]:
-    """World-space camera centers ``C = -R(q)^T t`` for each image."""
-    n = len(quaternions)
-    centers = np.zeros((n, 3), dtype=np.float64)
-    for i in range(n):
-        r_cam_from_world = RotQuaternion.from_wxyz_array(
-            quaternions[i]
-        ).to_rotation_matrix()
-        centers[i] = -r_cam_from_world.T @ translations[i]
-    return centers
 
 
 def _resolve_reference_index(image_names: list[str], near_image: str) -> int:
@@ -137,7 +126,7 @@ def select_source_indices(
                 f"--near-image {near_image!r} is excluded by --range; widen the "
                 "range or choose a reference image inside it."
             )
-        centers = _camera_centers(recon.quaternions_wxyz, recon.translations)
+        centers = camera_centers(recon.quaternions_wxyz, recon.translations)
         dist = np.linalg.norm(centers - centers[ref], axis=1)
         if near_radius is not None:
             mask &= dist <= near_radius

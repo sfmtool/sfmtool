@@ -22,9 +22,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import cv2
 import numpy as np
 
+from .._image_load import load_gray
 from .._sfmtool.spatial import KdTree2d
 from .._sfmtool.flow import (
     advect_points as _rust_advect_points,
@@ -150,14 +150,6 @@ def _flow_match_from_advected(
     )
 
 
-def _load_gray(path: Path) -> np.ndarray:
-    """Load an image as grayscale."""
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-
 def _load_features(
     sift_path: Path, max_feature_count: int | None
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -247,7 +239,7 @@ def flow_match_sequential(
     print(f"Flow matching {n_images} images (window={window_size})...", flush=True)
 
     # Stream images and features through the sliding window.
-    prev_gray = _load_gray(image_paths[0])
+    prev_gray = load_gray(image_paths[0])
     prev_pos, prev_desc = _load_features(sift_paths[0], max_feature_count)
 
     def _compute_flow_traced(gray_a, gray_b, a_idx, b_idx):
@@ -259,7 +251,7 @@ def flow_match_sequential(
 
     # Submit the first flow computation to the background thread.
     executor = ThreadPoolExecutor(max_workers=1)
-    next_gray = _load_gray(image_paths[1])
+    next_gray = load_gray(image_paths[1])
     next_flow_future = executor.submit(_compute_flow_traced, prev_gray, next_gray, 0, 1)
 
     for j in range(1, n_images):
@@ -272,7 +264,7 @@ def flow_match_sequential(
 
         # Submit the next flow computation while we do advect+match.
         if j + 1 < n_images:
-            next_gray = _load_gray(image_paths[j + 1])
+            next_gray = load_gray(image_paths[j + 1])
             next_flow_future = executor.submit(
                 _compute_flow_traced, curr_gray, next_gray, j, j + 1
             )

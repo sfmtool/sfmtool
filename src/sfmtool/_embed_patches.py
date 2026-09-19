@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 
 from sfmtool._patch_compaction import compact_to_embedded_patches
+from sfmtool._pose_math import recon_camera_centers
 from sfmtool._progress import _poll_progress, _timed_step
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool._sfmtool.patches import ImagePyramidSet, PatchCloud
@@ -235,25 +236,6 @@ def _mean_angle_deg(n0: np.ndarray, n1: np.ndarray) -> float:
         return 0.0
     dots = np.clip(np.sum(n0 * n1, axis=1), -1.0, 1.0)
     return float(np.degrees(np.arccos(dots)).mean())
-
-
-def _camera_centers(recon: SfmrReconstruction) -> np.ndarray:
-    """World-space camera centers ``(n_images, 3)`` — ``-Rᵀ t`` for the
-    ``x_cam = R x_world + t`` pose of each image."""
-    from sfmtool._sfmtool.geometry import RigidTransform
-
-    quats = np.asarray(recon.quaternions_wxyz, np.float64)
-    trans = np.asarray(recon.translations, np.float64)
-    centers = np.empty((len(quats), 3), np.float64)
-    for i in range(len(quats)):
-        rot = np.asarray(
-            RigidTransform.from_wxyz_translation(
-                quats[i].tolist(), trans[i].tolist()
-            ).to_rotation_matrix(),
-            np.float64,
-        )
-        centers[i] = -rot.T @ trans[i]
-    return centers
 
 
 def _drop_grazing_observations(
@@ -741,7 +723,7 @@ def embed_patches(
     localizations, n_dropped = _drop_grazing_observations(
         localizations,
         cloud,
-        _camera_centers(embedded),
+        recon_camera_centers(embedded),
         np.asarray(embedded.positions, np.float64),
         np.asarray(embedded.point_is_at_infinity),
         max_obliquity_deg,
@@ -800,7 +782,7 @@ def embed_patches(
         base_loc, n_dropped = _drop_grazing_observations(
             base_loc,
             cloud_r,
-            _camera_centers(emb_r),
+            recon_camera_centers(emb_r),
             np.asarray(emb_r.positions, np.float64),
             np.asarray(emb_r.point_is_at_infinity),
             max_obliquity_deg,

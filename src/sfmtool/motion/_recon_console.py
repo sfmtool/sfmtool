@@ -21,7 +21,8 @@ from .constants import (
     STEP_RATIO_THRESHOLD,
     STEP_RATIO_WINDOW,
 )
-from .recon_discontinuity import _flag_frame, _rotation_angle_deg
+from .._pose_math import rotation_angle_deg
+from .recon_discontinuity import _flag_frame
 
 
 def print_frame_table(seq_result: dict) -> None:
@@ -148,7 +149,7 @@ def _print_summary_edge_row(
     frame_b = seq_frm_numbers[b]
 
     dist = float(np.linalg.norm(seq_centers[b] - seq_centers[a]))
-    rot = _rotation_angle_deg(seq_quats[a], seq_quats[b])
+    rot = rotation_angle_deg(seq_quats[a], seq_quats[b])
 
     shared = pair_counts.get((img_a, img_b), 0)
     err_a = reproj_errors.get(img_a, float("nan"))

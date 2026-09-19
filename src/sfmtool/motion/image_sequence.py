@@ -12,8 +12,8 @@ from .flow_stats import (
     _compare_flow_representations,
     _compute_in_bounds_mask,
     _flow_magnitude,
-    _load_gray,
 )
+from .._image_load import load_gray
 from .._sfmtool.flow import (
     compute_optical_flow,
     compute_optical_flow_with_init,
@@ -77,7 +77,7 @@ def analyze_image_sequence(
 
     def get_gray(idx: int) -> np.ndarray:
         if idx not in gray_cache:
-            gray_cache[idx] = _load_gray(image_paths[idx])
+            gray_cache[idx] = load_gray(image_paths[idx])
         return gray_cache[idx]
 
     while i < n_images - 1:

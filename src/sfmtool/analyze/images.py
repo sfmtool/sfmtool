@@ -13,23 +13,8 @@ import numpy as np
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.geometry import RotQuaternion
 from .._image_pair_graph import compute_camera_directions
-
-
-def _compute_camera_centers(quaternions, translations):
-    """Compute world-space camera centers from quaternions and translations."""
-    num_images = len(quaternions)
-    camera_centers = np.zeros((num_images, 3), dtype=np.float64)
-    for i in range(num_images):
-        quat = RotQuaternion.from_wxyz_array(quaternions[i])
-        R_cam_from_world = quat.to_rotation_matrix()
-        R_world_from_cam = R_cam_from_world.T
-        camera_centers[i] = -R_world_from_cam @ translations[i]
-    return camera_centers
-
-
-def _compute_rotation_angle(quat_a, quat_b):
-    """Compute rotation angle in degrees between two RotQuaternion objects."""
-    return np.degrees((quat_b * quat_a.conjugate()).angle())
+from .._pose_math import camera_centers as compute_camera_centers
+from .._pose_math import rotation_angle_deg
 
 
 def _slerp_halfway(quat_prev, quat_next):
@@ -50,7 +35,7 @@ def _analyze_motion_path(recon, camera_centers, quaternions):
         )
         quat_i = RotQuaternion.from_wxyz_array(quaternions[i])
         quat_j = RotQuaternion.from_wxyz_array(quaternions[i + 1])
-        successive_rotations[i] = _compute_rotation_angle(quat_i, quat_j)
+        successive_rotations[i] = rotation_angle_deg(quat_i, quat_j)
 
     interpolation_trans_diffs = np.zeros(max(num_images - 2, 0))
     interpolation_rot_diffs = np.zeros(max(num_images - 2, 0))
@@ -70,9 +55,7 @@ def _analyze_motion_path(recon, camera_centers, quaternions):
         interpolation_trans_diffs[idx] = np.linalg.norm(
             center_curr - interpolated_center
         )
-        interpolation_rot_diffs[idx] = _compute_rotation_angle(
-            interpolated_quat, quat_curr
-        )
+        interpolation_rot_diffs[idx] = rotation_angle_deg(interpolated_quat, quat_curr)
 
     trans_mean = successive_translations.mean()
     trans_std = successive_translations.std()
@@ -275,7 +258,7 @@ def print_images_table(recon: SfmrReconstruction, recon_name: str | None = None)
 
     # Compute camera centers
     step_start = time.perf_counter()
-    camera_centers = _compute_camera_centers(quaternions, translations)
+    camera_centers = compute_camera_centers(quaternions, translations)
     click.echo(
         f"Step 2 (Compute camera centers): {time.perf_counter() - step_start:.2f}s"
     )

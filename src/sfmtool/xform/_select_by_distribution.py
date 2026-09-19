@@ -27,7 +27,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from ..analyze.images import _compute_camera_centers
+from .._pose_math import camera_centers as compute_camera_centers
 from .._sfmtool.reconstruction import SfmrReconstruction
 from .._sfmtool.spatial import KdTree3d
 from ._filter_by_image_range import _filter_images
@@ -150,7 +150,7 @@ def _select_images(
             unit_of_image[i] = u
 
     # Per-observation viewing rays toward the observed point.
-    centers = _compute_camera_centers(
+    centers = compute_camera_centers(
         np.asarray(recon.quaternions_wxyz), np.asarray(recon.translations)
     )
     positions = np.ascontiguousarray(np.asarray(recon.positions), dtype=np.float64)

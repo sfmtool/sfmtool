@@ -3,18 +3,7 @@
 
 """Optical flow primitives used by discontinuity analysis."""
 
-from pathlib import Path
-
-import cv2
 import numpy as np
-
-
-def _load_gray(path: Path) -> np.ndarray:
-    """Load an image as grayscale uint8."""
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-    if img is None:
-        raise FileNotFoundError(f"Failed to read image: {path}")
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 
 def _flow_magnitude(flow_u: np.ndarray, flow_v: np.ndarray) -> np.ndarray:

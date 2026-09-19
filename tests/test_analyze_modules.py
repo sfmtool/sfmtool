@@ -8,9 +8,8 @@ import pytest
 
 from sfmtool._histogram_utils import estimate_z_from_histogram
 from sfmtool._image_pair_graph import compute_camera_directions
+from sfmtool._pose_math import camera_centers, rotation_angle_deg
 from sfmtool.analyze.images import (
-    _compute_camera_centers,
-    _compute_rotation_angle,
     _slerp_halfway,
     _analyze_motion_path,
 )
@@ -74,13 +73,13 @@ class TestComputeCameraCenters:
     def test_identity_rotation(self):
         quaternions = np.array([[1.0, 0.0, 0.0, 0.0]])
         translations = np.array([[1.0, 2.0, 3.0]])
-        centers = _compute_camera_centers(quaternions, translations)
+        centers = camera_centers(quaternions, translations)
         np.testing.assert_allclose(centers[0], [-1.0, -2.0, -3.0])
 
     def test_zero_translation(self):
         quaternions = np.array([[1.0, 0.0, 0.0, 0.0]])
         translations = np.array([[0.0, 0.0, 0.0]])
-        centers = _compute_camera_centers(quaternions, translations)
+        centers = camera_centers(quaternions, translations)
         np.testing.assert_allclose(centers[0], [0.0, 0.0, 0.0])
 
 
@@ -123,20 +122,20 @@ class TestComputeCameraDirections:
 class TestComputeRotationAngle:
     def test_identity_rotation(self):
         q = RotQuaternion(1.0, 0.0, 0.0, 0.0)
-        assert _compute_rotation_angle(q, q) == pytest.approx(0.0, abs=1e-6)
+        assert rotation_angle_deg(q, q) == pytest.approx(0.0, abs=1e-6)
 
     def test_90_degree_rotation(self):
         q1 = RotQuaternion(1.0, 0.0, 0.0, 0.0)
         c = np.cos(np.pi / 4)
         s = np.sin(np.pi / 4)
         q2 = RotQuaternion(c, 0.0, 0.0, s)
-        angle = _compute_rotation_angle(q1, q2)
+        angle = rotation_angle_deg(q1, q2)
         assert angle == pytest.approx(90.0, abs=0.1)
 
     def test_180_degree_rotation(self):
         q1 = RotQuaternion(1.0, 0.0, 0.0, 0.0)
         q2 = RotQuaternion(0.0, 0.0, 0.0, 1.0)
-        angle = _compute_rotation_angle(q1, q2)
+        angle = rotation_angle_deg(q1, q2)
         assert angle == pytest.approx(180.0, abs=0.1)
 
 
@@ -153,8 +152,8 @@ class TestSlerpHalfway:
         q2 = RotQuaternion(c, 0.0, 0.0, s)
 
         mid = _slerp_halfway(q1, q2)
-        angle1 = _compute_rotation_angle(q1, mid)
-        angle2 = _compute_rotation_angle(mid, q2)
+        angle1 = rotation_angle_deg(q1, mid)
+        angle2 = rotation_angle_deg(mid, q2)
         assert angle1 == pytest.approx(angle2, abs=0.5)
 
 

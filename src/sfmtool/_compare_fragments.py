@@ -329,7 +329,7 @@ def decompose_fragments(
     return decomposition
 
 
-def _rotation_angle_deg(transform: Se3Transform) -> float:
+def _transform_rotation_angle_deg(transform: Se3Transform) -> float:
     """Rotation angle of a similarity transform, degrees."""
     w = abs(transform.rotation.w)
     return float(np.degrees(2.0 * np.arccos(np.clip(w, 0.0, 1.0))))
@@ -394,7 +394,7 @@ def print_fragment_decomposition(
             relative = component.transform @ reference.transform.inverse()
             print(
                 f"      Vs component 1: scale x{relative.scale:.4f}, "
-                f"rotation {_rotation_angle_deg(relative):.2f} deg, "
+                f"rotation {_transform_rotation_angle_deg(relative):.2f} deg, "
                 f"displacement {component.displacement_vs_first_pct:.2f}% "
                 "of scene scale"
             )
