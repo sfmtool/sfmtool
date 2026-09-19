@@ -49,6 +49,12 @@ sections instead), keyed on (spec → owning command or function → parameter).
 | `core/patch/sift-to-patch-reconstruction.md:192` | `sfm embed-patches --patch-size` | `patch_size` | `5.0` | `11.0` (`_commands/embed_patches.py:65`). Commit `d161988` (#243) raised it and updated `embed-patches-command.md:52` and `cluster-patches.md:215`, but missed this core spec's table. |
 | `core/geometry/rotation-locked-resection.md:16-18` | `resect_translation` (core) | `max_error_px`, `min_inliers` | core defaults `8.0`, `10` | the core function has no defaults; both are required (`resect_translation.rs:150-157`). The values exist only in the binding signature. See that spec's section. |
 
+> _Status (2026-09-18): **Done.** Both rows fixed. `sift-to-patch-reconstruction.md`'s
+> `patch_size` row now reads `11.0`, matching `embed_patches.py:94`; the
+> `rotation-locked-resection.md` defaults moved to the binding, with the core
+> function's required arguments and the one Rust caller's own constants named where
+> the spec used to attribute the values to core._
+
 Untied: `core/analysis/cluster-census.md:304` `flag_threshold` documents a knob of the
 not-yet-built `census_echo` caller (no such symbol anywhere), and the spec itself says
 the value is "not yet data-derived": forward-looking, correctly labelled.
@@ -226,6 +232,23 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** **The densification weight is dead.** `interp.rs:113` computes `weight = 1.0 / diff.max(1.0)` where `diff = |tgt − ref|` on images normalized to [0, 1] (`image.rs:50`), so `diff ≤ 1` always and the weight is exactly 1.0 for every pixel. The "photometric-error-weighted averaging (Eq. 3)" of spec 62, 166–167 is a uniform average; the DIS paper works on 0–255 intensities where the clamp bites, and the GPU shader replicates the formula. Either the weight should be `1/max(1, 255·diff)` or the spec should stop claiming error weighting. Also `pyramid.rs:20` documents a "6-tap binomial `[1, 5, 10, 10, 5, 1] / 32`" kernel while `GAUSS6_1D` (`:90`) is a σ = 1.0 Gaussian.
 
 ### specs/core/features/gpu-optical-flow.md
+> _Status (2026-09-18): **Partially done.** The four structural claims that described
+> absent code are fixed. "Persistent Buffer Pools" is now "Buffer Pools" and says what
+> is actually persistent (the context's pipelines and layouts) versus what is allocated
+> per run by `create_pool`, with no `Mutex`; the pyramid section drops the
+> shared-memory tile (no `var<workgroup>` exists in any shader) and says the entry
+> point, not a uniform field, picks the pass; the buffer-layout table lists
+> `patch_flow_u`/`patch_flow_v` as `array<f32>` and the packed `vec4` coefficients +
+> `b2`, so it no longer contradicts the spec's own §4. The 66-line WGSL listing is
+> **deleted** rather than corrected, per AGENTS.md — the section now links
+> `jacobi_step.wgsl` and carries only what the file cannot say for itself: the
+> 8-storage-buffer limit that forces the `vec4` packing, and the double-buffering
+> invariant. Untouched: the 8×8/64-pixel patch-loop claim, the `refine_flow_at_level`
+> routing bullet, the "Future Work" heading, the opening paragraph, and the stale
+> shader-header comments this run noticed on the way past — `blur_downsample.wgsl:4`
+> still claims workgroup shared memory and `:9` a `params.pass` field that `Params`
+> does not have._
+
 **Summary:** The wgpu compute-shader implementation of the same DIS pipeline: measured speedups, the CPU/GPU hybrid and its per-level `gpu_min_pixels` routing, transfer-minimizing decisions, buffer pools, the five shaders, buffer layout, GPU-vs-CPU agreement, a WGSL Jacobi listing, and timing profiles.
 **Implementing code:** `crates/sfmtool-core/src/features/optical_flow/gpu/` (`mod.rs`: `GpuFlowContext::{new, run_dis_and_variational, build_gpu_pyramid, run_gpu_levels_prebuilt}`; `context.rs`, `dis_pipeline.rs`, `variational.rs`, `pyramid_pipeline.rs`, `shaders/*.wgsl`); routing at `../dis.rs:69`, `../mod.rs:177-185`.
 **Inconsistencies:** (code is right in each)
@@ -249,6 +272,16 @@ Full surface table under **Code without specs**.
 > `K = min(max_described, N)` contract. The stale `benches/sift.rs` path, the
 > `extract_rust.py` name, the five-file module tree, the two prose-only `SiftParams`
 > fields, the "(DoG can be freed)" annotation and the opening paragraph are untouched._
+>
+> _Status (2026-09-18): **Done, except the opening paragraph.** The benchmark bullet
+> now names `pixi run bench-sift` → `scripts/benchmark_sift.py` and says why the
+> measurement sits at the Python layer (no `benches/sift.rs` exists, and the script
+> times all three backends end to end); `extract_rust.py` is `extract_sfmtool.py`,
+> present tense; the module tree lists `gray.rs` and `simd.rs` and notes the per-module
+> `tests.rs`; `blur_radius_factor` (2.25) and the image-to-gray formula have rows in
+> the parameter table; and the `Detection` comment reads "(no DoG: see Tier 1)", which
+> is what `mod.rs:256` says. The opening paragraph is left for the one-spec-per-PR
+> treatment priority #5 asks for._
 
 **Summary:** sfmtool's pure-Rust SIFT detector/descriptor: the five-stage algorithm and its parameter table, SIMD/rayon parallelism, the tiled DoG/detect fusion (Tier 1/1.5, Tier 2 rejected), the cap-aware coarse-to-fine octave walk, the Python extraction-orchestration pipelining, the detect/describe split API, and the PyO3 bindings.
 **Implementing code:** `crates/sfmtool-core/src/features/sift/mod.rs` (`SiftParams`, `detect_keypoints`, `compute_descriptors`, `compute_descriptor`, `extract_sift`, `extract_sift_partial`), `sift/{scale_space,detect,orientation,descriptor,gray,simd}.rs`, `crates/sfmtool-py/src/sift/extract.rs`, `src/sfmtool/sift/extract_sfmtool.py`.
@@ -271,6 +304,11 @@ Full surface table under **Code without specs**.
 **Inconsistencies:**
   - None in this spec. Checked: all six defaults (`--sequential-overlap` 10, `--flow-preset` default, `--flow-skip` 5, `--cluster-alpha` 0.8, `--cluster-d` 10, `--cluster-preset` accurate → `match.py:102-152`); the 11 `--camera-model` names; the rejection rules at 65–69 (`match.py:34-57, 270-278, 334-345`); "`--cluster` opens no database" (`_run.py:80-124`, early return before any `pycolmap` import); default output path and `-clusters` suffix; `tvg-matches/` naming and provenance fields (`_derive_pairs.py:107-128`); metadata keys (`_run.py:335-361`).
   - **`specs/formats/matches-file-format.md:419-421` is stale against 239ee24** (reported here per the brief): "the geometric-verification step materializes the expansion by writing a new pairwise `.matches` … (the write-once workflow, unchanged)". Verification is no longer a step of the match run; it is on-demand `sfm match --derive-pairs`. Lines 22–24 and 411–418 of the same spec are already right. Code is right; that paragraph should name `--derive-pairs` and link the command spec.
+
+    > _Status (2026-09-18): **Done.** That paragraph now names `sfm match
+    > --derive-pairs` as a separate on-demand run, links its command spec, and states
+    > the write-once property as its own sentence rather than implying verification is
+    > still a step of the match run._
 **Non-goals / deferrals checked:** 2, both hold: rig same-frame pair exclusion is not applied by `--derive-pairs` (`exclude_index_pairs` exists only on the in-solve path, `_run.py:557`); nothing on the `--cluster` path consults `pycolmap`.
 **Third copies:** the "two-view geometries exist for COLMAP's mapper alone, so verification is a boundary concern" rationale is stated four times: spec 130–134, `_derive_pairs.py:4-11`, `_run.py:44-52`, and the `--derive-pairs` help at `match.py:159-162`. Shrink the `_run.py` docstring — it argues the boundary in a function that no longer performs the derivation.
 **Shape:** no shape findings — purpose-first opening, options table as interface, a runnable example per mode (200–221).
@@ -293,6 +331,15 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** the CLI's `--json` payload (`estimate_intrinsics.py:472-490`) never surfaces `screening_vote`, and `_report_lines` does not print it, so the pinhole numbers spec 182–187 says a caller must read off `screening_vote` are unreachable from `sfm estimate-intrinsics --model auto` when escalation fires. Core spec and core code agree; the gap belongs to `estimate-intrinsics-command.md` (whose one defaults row, `--seed` 0, matches `:412`).
 
 ### specs/core/geometry/affine-factorization.md
+> _Status (2026-09-18): **Done** for the deleted-consumer pair. Verified first: no
+> `exp_pinhole_bootstrap.py` exists, and `factorize_affine` / `metric_upgrade` have no
+> caller outside `affine_factorization/tests.rs` and
+> `test_affine_factorization_rust_bindings.py`. The migration bullet is replaced by a
+> present-tense sentence saying the bindings have no in-repo consumer beyond those
+> tests, and open question 3 no longer rests on parity with a script that is gone — it
+> now records that `lstsq`'s SVD settles the shipped code and names what is still open.
+> The non-positive-`Q` failure mode and the `rounds == 0` note remain open._
+
 **Summary:** Alternating-least-squares Tomasi–Kanade factorization with missing data and residual trimming (affine camera per image, 3D point per cluster, per-observation keep mask), plus the metric upgrade solving the symmetric `Q = A·Aᵀ` and returning both reflection hypotheses with per-image rotations and scales.
 **Implementing code:** `crates/sfmtool-core/src/geometry/affine_factorization.rs` (`MAX_DENSE_ENTRIES`, `AffineFactorizationParams`, `AffineFactorization`, `MetricHypothesis`, `quantile_linear`, `lstsq`, `factorize_affine`, `metric_upgrade`); `crates/sfmtool-py/src/geometry/affine_factorization.rs`.
 **Inconsistencies:**
@@ -307,6 +354,16 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** with the bootstrap script gone the module is dead weight outside its tests; worth a deliberate keep-or-retire decision rather than silent drift. Spec 56 says "fixed count, default 25" but `rounds == 0` is legal and yields zero cameras and raw residuals (`:260-264`); unstated.
 
 ### specs/core/geometry/rotation-locked-resection.md
+> _Status (2026-09-18): **Done** for all three recommendations. The output paragraph
+> now says the mask *and* the residuals are per **input** observation, length `n`, with
+> `INVALID_RESIDUAL` (1e6) for an observation the camera cannot image, and warns
+> against zipping them against the inlier subset. § "Binding" became § "Interface" and
+> opens with the real Rust signature — `TranslationResection`'s three fields and
+> `resect_translation`'s six arguments — with the Python block after it, introduced as
+> where the 8.0/10 defaults live. § "Mechanism" no longer attributes those defaults to
+> core and names `rotation_init.rs`'s own constants. The two unstated contract
+> behaviours (early `None`, permanently-excluded bad rays) remain open._
+
 **Summary:** The linear translation-only resection used when a camera's world-to-camera rotation is already known: cross-product rows `[r_k]ₓ·t = −[r_k]ₓ·R·X_k` in ray space, three rounds of trimmed IRLS against a pixel-residual gate, and a model-dependent cheirality test (half-space for the perspective family, positive range along the ray for `needs_ray_path` models).
 **Implementing code:** `crates/sfmtool-core/src/geometry/resect_translation.rs` (`INVALID_RESIDUAL`, `TRIM_ROUNDS`, `RIDGE`, `TranslationResection`, `resect_translation`); `crates/sfmtool-py/src/geometry/resect_translation.rs`. In-repo caller: `geometry/rotation_init.rs:36,719` with its own `RESECT_MAX_ERROR_PX` / `RESECT_MIN_INLIERS`.
 **Inconsistencies:** (code is right in each)
@@ -321,6 +378,16 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** Spec 11–12 offers "a rig calibration, an external attitude" as motivating callers; the only in-repo caller is `rotation_init.rs`'s far-field skeleton, and the other two read as if they existed.
 
 ### specs/cli/colmap-interop/from-colmap-bin-command.md
+> _Status (2026-09-18): **Done** for all three recommendations. The Overview and the
+> Input Directory listing name `rigs.bin` / `frames.bin` as optional inputs, with what
+> survives the import (non-camera sensors dropped, IDs remapped to 0-based indexes,
+> rig/frame tables carried into the `.sfmr` — `read.rs:127-179`, `io.py:402`); the
+> Overview states the workspace requirement `from_colmap_bin.py:93-98` enforces; and
+> the convention paragraph drops "infinity directions" for the true sequence — COLMAP
+> stores every point finite, rig sensor poses are conjugated by `S`, and
+> `--detect-infinity` runs after the conversion. The undocumented non-`.sfmr` output
+> `UsageError` remains open._
+
 **Summary:** `sfm from-colmap-bin`: importing a COLMAP binary reconstruction (`cameras.bin`, `images.bin`, `points3D.bin`) into a `.sfmr`, the COLMAP→canonical convention conversion applied at that boundary, and four options.
 **Implementing code:** `src/sfmtool/_commands/from_colmap_bin.py:13-148`; `src/sfmtool/colmap/io.py` (`colmap_binary_to_rust_sfmr` 366–436, `_colmap_poses_points_to_canonical` 263–292, `_detect_infinity_points` 350–363); `colmap/convention.py`; `crates/sfmr-colmap/src/colmap_io/read.rs::read_colmap_binary` 43–170.
 **Inconsistencies:**
@@ -335,6 +402,18 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `from_colmap_bin.py:84` rejects a non-`.sfmr` output extension with a `UsageError` the spec does not mention; every failure is re-wrapped as `ClickException` (`:147`).
 
 ### specs/cli/reconstruction/motion-command.md
+> _Status (2026-09-18): **Partially done** — the four detection-rule drifts this run
+> called the most wrong section in the corpus are fixed, all verified against
+> `recon_discontinuity.py` and `constants.py`. Step 1 now describes the shipped
+> linear-plus-quadratic fit and says the **minimum** of the two errors is reported, and
+> why; the step-ratio paragraph says `STEP_RATIO_WINDOW − 1` edges each side (7 at the
+> default 8) and the ≥ 2-per-side requirement; the covisibility section gains the
+> `n < 3·w` guard as its own paragraph, stating outright that `Cov` never fires on any
+> checked-in dataset; and "graph distance", which nothing computes, is replaced by what
+> the context actually carries — per-endpoint mean reprojection error and the core
+> edge's shared-point count. The build-plan and test-plan sections, the settled
+> extrapolation-order open question and the KerryPark 831→832 citation are untouched._
+
 **Summary:** `sfm motion` in both modes: optical-flow adaptive-stride analysis of raw image sequences, and four-signal discontinuity detection (pose extrapolation, step-size ratio, covisibility drop, obs-count outlier) over a `.sfmr`, plus the v1 `--json` schema.
 **Implementing code:** `src/sfmtool/_commands/motion.py`; `motion/image_sequence.py::analyze_image_sequence`; `motion/recon_discontinuity.py` (`analyze_reconstruction` 565, `_compute_extrapolation_errors` 95, `_compute_step_ratios` 287, `_compute_overlap_drops` 322, `_compute_obs_z_scores` 386, `_flag_frame` 420); `motion/constants.py`; `motion/report.py`; `visualization/_discontinuity_display.py`.
 **Inconsistencies:** (code is right in each)
@@ -351,6 +430,15 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** Spec 320–323 cites "the KerryPark 831→832 case"; no such frame numbers exist in `test-data/images/kerry_park` (24 rig frames). Two divergent copies of the classification bands: `_discontinuity_display.py:209-219` uses the literal `1.33`, `report.py:245-257` uses `1/0.75`, so a ratio in (1.33, 1.3333] prints as "acceleration" but is not flagged. `shared_points` comes through `build_covisibility_pairs`' 90° angle filter (`_image_pair_graph.py:45-55`), so `0` can mean "angle-filtered", which the JSON field description (445) does not convey.
 
 ### specs/core/patch/candidate-track-spawning.md
+> _Status (2026-09-18): **Done** for the two-callers claim; **the report is wrong that
+> it appears in three copies.** Verified: `spawn_candidate_tracks` has no reference
+> outside the PyO3 wrapper and the two test modules, so the spec's Overview and
+> `spawn.rs:16-21` now say the primitive has no in-repo caller yet and name surfel-normal
+> expansion and densification as the intended ones. The binding docstring
+> (`py spawn.rs:17-28`) never carried the claim — it says only "callers pick the
+> offsets", which is true — so it is unchanged. The `starting_keypoints` re-tensing and
+> the "same shape" type correction remain open._
+
 **Summary:** The `spawn_candidate_tracks` primitive: place a synthetic patch at an in-plane offset from a parent patch, localize/refine/triangulate it through the existing batch kernels, and report per-candidate status through three ordered gates. Also specifies exposing `starting_keypoints` on the `localize_keypoints` binding.
 **Implementing code:** `crates/sfmtool-core/src/patch/spawn.rs` (`SpawnParams` 40–74, `SpawnStatus` 80–91, `SpawnedTracks` 96–120, `spawn_candidate_tracks` 170–384); `crates/sfmtool-py/src/patches/spawn.rs:65-208`; `patches/localize_keypoints.rs:131-138, 320-358`; tests in `patch/spawn/tests.rs` and `tests/rust_bindings/test_spawn_candidate_tracks_rust_bindings.py`.
 **Inconsistencies:**
@@ -418,6 +506,13 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** the doubled size in the screenshot text block can disagree for a panel (the caption's is the last laid-out size, the prefix's the actual encoded size), which is exactly the frame the spec says the caption is unreliable in. Drop one; the spec should say which.
 
 ### specs/gui/panel-layout.md
+> _Status (2026-09-18): **Done** for both recommendations. `layout.rs:127-128`'s
+> `LayoutError` doc now shows `layout.main.second.first: unknown key "fracton"` and
+> says the path is rooted at `"layout"` because `WindowLayout::from_value` passes that
+> in — matching its siblings at `:420` and `:618`, the spec at 429, and the tests. The
+> three future-tense MCP references are present tense: the `show_panel` tool at 113,
+> "what the MCP tools spell panels with" at 647, and "by menu or by tool call" at 181._
+
 **Summary:** The lifecycle of the dock arrangement and the window's placement as one document: closing/re-opening panels, the Panels menu, home positions, the versioned `sfm_explorer_layout` JSON file with its full validation vocabulary, monitor fitting, the startup default-layout file, and the `layout.rs` / `window.rs` Rust API.
 **Implementing code:** `crates/sfm-explorer/src/layout.rs` (`LAYOUT_VERSION`, `Layout`, `LayoutNode`, `LayoutWindow`, `LayoutError`, `Home`, `Tab::{ALL, wire_name, home}`, `WindowLayout`, `default_layout_path`, the eleven `AppState` methods, `panels_menu`), `layout/tests.rs::DEFAULT_JSON`, `src/window.rs` (`WindowState`, `MonitorInfo`, `NormalRect`, `fit_to_monitor`, `WindowHost`), `src/dock.rs`, `src/cli.rs`, `src/sfmtool/_commands/explorer.py`.
 **Inconsistencies:**
@@ -431,6 +526,20 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** the brief's premise that aed8048 split `dock.rs` into a `dock/` directory is wrong: it split `TabViewer::ui`'s 431-line match into per-tab methods inside `dock.rs`, which is still one file with `dock/tests.rs` beside it. Separately, `sfm_explorer_layout` present but not a number yields `Not a layout file` (`layout.rs:584`), which § "Validation" does not list among the version rules.
 
 ### specs/gui/point-track-detail.md
+> _Status (2026-09-18): **Partially done.** § "Panel State" is rebuilt against
+> `mod.rs:44-131`: both structs now carry the shipped field lists — `prepared_point:
+> Option<PointRef>`, `ImageRef`-keyed texture maps, `inverse_depth_z`,
+> `condition_number`, `point_id`, `scroll_offset_y`, and `TrackObservationData`'s
+> `feature_extents` / `image_full_name` — and the transcribed doc comments are gone,
+> replaced by the three things the struct cannot say for itself (why the ref, why the
+> caller mints the Point ID, what the extents measure). The section also opens with the
+> relative links the spec previously lacked, to `point_track_detail/` and `metrics/`,
+> which is what stops the block drifting again. `PointTrackDetailResponse` gains the
+> missing `remove_observation`. The stale Size sentence at 248, the `app.rs`
+> pre-population claim, the `full_res_cache` paragraph, the header example, the
+> paragraph pasted inside the Columns table and the `TODO (unbounded growth)` block are
+> untouched._
+
 **Summary:** The Point Track Detail dock tab: the point-summary header (Point ID, xyz, error, track length, max pair angle, depth-z, cond), the stored-patch tile, the per-observation table (thumbnail, patch tile, image, name, feat #, size, error, angle, xy), row interactions, cross-panel selection effects, and the panel's state and response types.
 **Implementing code:** `crates/sfm-explorer/src/point_track_detail/{mod,prepare,header,table,patch}.rs` (`PointTrackDetail`, `TrackObservationData`, `THUMB_SIZE`/`PATCH_TILE` = 48, `STORED_PATCH_SIZE` = 64, `ERROR_RAMP_MAX_PX` = 2.0, `format_feature_size`, `build_patch_frame`); numerics in `crates/sfm-explorer/src/metrics.rs`; plumbing `dock.rs:412-470`; cache `state.rs:531-535, 1156`.
 **Inconsistencies:** (code is right in each)
@@ -448,6 +557,26 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `mod.rs:11` says "the work lives in five children" and lists four; the fifth was `metrics`, moved out by 5ff41ed.
 
 ### specs/gui/camera-intrinsics.md
+> _Status (2026-09-18): **Done** for the worked example and `retain_recon`, and the
+> numbers did **not** need a viewer run — they were regenerated by calling
+> `field_of_view` / `equiv_focal_length_35mm` / `trustworthy_max_theta_deg` /
+> `distortion_extent` on the fixture's own `OPENCV_FISHEYE` parameters in a throwaway
+> `sfmtool-core` integration test (written, run, deleted). The parameter table now
+> lists `OPENCV_FISHEYE`'s eight parameters in `parameter_names()` order with the
+> `rig_config.json` values; the derived table reads `129.150, 129.257 px/rad`, aspect
+> `1.0008`, offset `(+0.000, +0.000) px · 0.00%`, and the measured spans `212.9° /
+> 212.8° / 301.0° / 150.5°`, which agree with § "The trustworthy domain" (212.9, 301.0,
+> 150.5) and with the distortion row's `13.0 px inside 84.1°` (computed: 13.0096 px,
+> 84.0905°, 104 of 252 nodes excluded). The 35 mm row is marked absent for this camera,
+> since `equiv_focal_length_35mm` returned `None`, and a sentence points at §
+> "The trustworthy domain" for why the spans read past 180°. `AppState::retain_recon`
+> is `forget_recon` / `select_recon`. The fabricated `f 240.1` is gone from the scene-graph
+> mock and from the two doc examples it had been copied into
+> (`scene_graph/cameras.rs:72, 132, 154`), all now `f 129.1/129.3`, and the
+> impossible 26/22 image split is 24/24 (kerry_park is 24 frames per fisheye). The
+> `DistortionSample` arrow-direction doc, the hover readout's fourth state and the
+> phase/draft residue remain open._
+
 **Summary:** Three coupled pieces: the Camera Intrinsics scene-graph group (and the Cameras→Camera Images rename), the independently toggled intrinsics overlay on Image Detail (principal point, angular axes, iso-rings, distortion field, hover readout), and the Camera Intrinsics dock panel (parameters, derived rows, projection plot, extrinsics/rig block), plus the `camera::report` core API and the "trustworthy domain" theory both rest on.
 **Implementing code:** `crates/sfmtool-core/src/camera/report.rs` (all nine documented functions; signatures match); `crates/sfm-explorer/src/scene.rs:114-125, 207`; `state.rs:135-175, 429, 775-795, 854-930`; `scene_graph/cameras.rs`; `image_detail/intrinsics/{mod,controls,axes,field,hover}.rs`; `intrinsics_detail/{mod,header,parameters,derived,extrinsics,format,projection_plot}.rs`.
 **Inconsistencies:**
@@ -465,6 +594,17 @@ Full surface table under **Code without specs**.
 **Unclear / incorrect / suspicious:** `derived.rs:18` says FIELD_COLS is "the same density the Image Detail overlay layer **will** default to", future tense for a shipped default. `cameras.rs:141` renders `1 image` singular, which the camera-row description (447–450) does not mention.
 
 ### specs/core/camera/epipolar-curves.md
+> _Status (2026-09-18): **Partially done** — the change-order residue is converted to
+> present tense. "New API goes in …" is "The API lives in …", now a relative link;
+> "the special case in the current display code disappears" states that there is no
+> in-frame-epipole special case on this path and that the half-line survives only on
+> the `--undistort` branch; "Why this is better everywhere" is "Why one path serves
+> every model"; and the `_median_scene_depth` paragraph — a function that exists
+> nowhere — is replaced by the property that outlived it, that anchoring is an O(1)
+> per-feature track-index lookup with no per-pair scan (`_curve_anchor_depths:71-88`).
+> The 1-vertex return, the missing constants, the Phase-1 step-3 wording, the
+> "Phase 2 step 2" cross-reference and the transcription trim remain open._
+
 **Summary:** Distortion-aware epipolar "lines": instead of `F p1`, back-project through camera 1's full model, bracket the depth interval whose reprojection stays inside camera 2's image (Phase 1, log-depth), then adaptively subdivide in `t = 1/λ` (Phase 2, worst-first) into a polyline. Covers the Rust API, the PyO3 binding, degeneracies, and the anchor-depth seeding in `sfm epipolar`.
 **Implementing code:** `crates/sfmtool-core/src/camera/epipolar.rs` (`EpipolarCurveOptions`, `plot_epipolar_curve`, `plot_epipolar_curves_batch`, `find_inimage_seed`, `bisect_boundary`, `subdivide_worst_first`); `crates/sfmtool-py/src/analysis/epipolar.rs`; `src/sfmtool/visualization/_epipolar_display.py` (`_curve_anchor_depths:55`, `_draw_polyline:93`).
 **Inconsistencies:** (code is right in each)
@@ -550,6 +690,13 @@ Entries worth arguing about:
 **Why it matters:** a tunable filter a user can invoke that the `xform` op table does not list.
 **Recommendation:** add a row plus threshold semantics to `xform-command.md`, cross-linking `patch-localizability.md`.
 
+> _Status (2026-09-18): **Done.** `xform-command.md` § "Filtering Operations" gains a
+> `--filter-by-keypoint-uncertainty <threshold>` entry between the reprojection-error
+> and patch-size filters, with the patch-grid-px unit and why it is used over
+> source-image px, the NaN-is-kept rule, the `embedded_patches`-plus-bitmaps
+> requirement and its error message, and a link to `patch-localizability.md`. The flag
+> is also added to the `filter_points_by_mask` row of the Rust-primitives table._
+
 ### `crates/sfmtool-core/src/analysis/point_inspect/`
 **What it does:** Re-derives a point's rays from workspace `.sift` files and reports per-observation residual/angle; drives `sfm inspect`'s point view.
 **Recommendation:** write `specs/core/analysis/point-inspect.md`, short; or a section in `inspect-command.md`.
@@ -564,7 +711,18 @@ Entries worth arguing about:
 
 Smaller notes, one line each: `camera/viewport` should be named in `viewport-navigation.md` as the state it manipulates; `sfm-explorer/metrics/` should be named in `point-track-detail.md` as the numbers' source (that spec links no code at all); `_global_sfm`/`_incremental_sfm` should be named in `solve-command.md` with the parameters passed through; `feature_match/_geometric_filter.py`'s model and thresholds belong in `match-command.md`.
 
-Specs whose implementing code could not be found: `specs/gui/blender-viewport-navigation-implementation-overview.md` is a study of Blender's gesture handling, not a spec of any sfmtool surface; it reads as background research and belongs in `specs/drafts/` or `docs/`. Two standing specs carry no repo links at all and were matched by name only: `core/reconstruction/point-estimation.md` (→ `reconstruction/point_estimation/`) and `formats/cluster-selection.md` (→ `matches-format/src/select.rs`); both should gain interface-section links.
+Specs whose implementing code could not be found: `specs/gui/blender-viewport-navigation-implementation-overview.md` is a study of Blender's gesture handling, not a spec of any sfmtool surface; it reads as background research and belongs in `specs/drafts/` or `docs/`.
+
+> _Status (2026-09-18): **Done**, in a third place rather than either suggested one:
+> `specs/research/`, new, since `drafts/` means "a proposal for this repo" and the
+> document proposes nothing. It carries a `README.md` saying these are background
+> studies of other software that describe no code here and are not authoritative for
+> sfmtool's behaviour, with a row per study naming the spec it informed. The row is
+> gone from `specs/gui/README.md` (whose now-empty "Reference" section went with it), a
+> `research/` row is added to `specs/README.md`'s directory table, and
+> `gui/viewport-navigation.md` § "Solution: DirectManipulation API" links the study
+> where it says the approach came from Blender. The file has no relative links of its
+> own, so the move needed none fixed._ Two standing specs carry no repo links at all and were matched by name only: `core/reconstruction/point-estimation.md` (→ `reconstruction/point_estimation/`) and `formats/cluster-selection.md` (→ `matches-format/src/select.rs`); both should gain interface-section links.
 
 ---
 
@@ -677,6 +835,16 @@ one below), so all but one of these are spec fixes.
    presents as live that never fires under 48 frames, a window one edge wider than the
    code, and a "graph distance" field nothing computes. Plus `sift-to-patch-
    reconstruction.md:192`'s `patch_size` 5.0 (ships 11.0), the run's one wrong default.
+
+   > _Status (2026-09-18): **Done.** All five are fixed; each spec's own section above
+   > says exactly what changed and what was left. Two findings here were not quite
+   > right as written. The `camera-intrinsics.md` example did not need a viewer run to
+   > regenerate — a throwaway `sfmtool-core` integration test against the fixture's
+   > parameters produced every number, and the ones it produced agree with the spec's
+   > own § "The trustworthy domain", so the example was wrong and the prose section was
+   > right all along. And the `gpu-optical-flow.md` WGSL listing was deleted rather
+   > than corrected: a spec does not transcribe a shader, so the section now links the
+   > file and keeps only the 8-storage-buffer limit that explains its packing._
 
 5. **Thirty-four opening paragraphs fail the cold-reader test.** The table under
    Mechanical findings §4 proposes a first sentence for the 15 worst. It is the fix
