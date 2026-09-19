@@ -17,7 +17,11 @@ gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 half = "2"
 nalgebra = "0.35"
 ndarray = "0.17"
-kiddo = "5"
+# Build-once / query-many KD-tree for the spatial index (`spatial.rs`). Default
+# features off: `fixed` adds fixed-point axis types this codebase has no use
+# for, and only `multi-threaded` (parallel bulk construction, via the rayon
+# already in this tree) is worth keeping.
+kiddo = { version = "6", default-features = false, features = ["multi-threaded"] }
 rayon = "1.12"
 rand = "0.10"
 rand_distr = "0.6"

@@ -17,4 +17,5 @@ under the module they drive.
 | [geometry/](geometry/) | `geometry/` | Pose estimation, epipolar geometry, and bundle adjustment. |
 | [patch/](patch/) | `patch/` | Everything about oriented patches: normals, keypoint localization, and cluster patches. |
 | [reconstruction/](reconstruction/) | `reconstruction/` | Operations on reconstruction data itself: triangulation, point correspondence. |
+| [spatial/](spatial/) | `spatial/` | The shared KD-tree index behind every proximity query: nearest, k-nearest and radius, in world units. |
 | [spherical/](spherical/) | `spherical/` | Spherical tiling and panorama compositing. |
