@@ -1170,6 +1170,17 @@ reason to discount them; several are actively divergent duplications.
 
 **A render-farm SDK is a hard dependency for two path-formatting functions, imported
 twelve ways**
+
+> _Status (2026-09-18): Done — `src/sfmtool/_path_summary.py` re-exports both
+> functions and is now the only module naming `deadline`; all 12 sites import from
+> it. Ten import it at module top level; the two behind a `try/except ImportError`
+> optional-dependency guard (`analyze/summary.py`, `_compare.py`) keep their deferred
+> form, since there the deferral is not about startup cost. Measured, as the finding
+> asked: `cli.py` imports every `_commands` module eagerly and two of those import at
+> top level, so `deadline.job_attachments.api` was already in `sys.modules` before
+> `--help` printed — the deferral bought nothing. `sfm --help` medians over 11 warm
+> runs: 0.727s before, 0.78s after, inside this machine's run-to-run spread._
+
 > _Carried forward. Re-verified exactly: still 12 sites, still a 6/6 split with no rule._
 - Location: `pyproject.toml:17`. **Top-level (6):** `sift/file.py:17`,
   `_commands/sift.py:11`, `_commands/solve.py:11`, `_global_sfm.py:10`,
@@ -1325,6 +1336,9 @@ sibling already shows the fix**
   same output before and after.
 
 **Duplicated helper pairs: all six re-verified, three actively divergent, two upgraded**
+
+> _Status (2026-09-18): Done — all six addressed. Per-pair notes below._
+
 > _Carried forward. Every pair re-checked at HEAD; the count went **up**, and the old
 > finding named the wrong rotation-angle pair._
 - Location and per-pair verdict:
@@ -1333,11 +1347,20 @@ sibling already shows the fix**
     (`print(` vs `click.echo(`). The shared surface is wider than the function: the two
     modules share **35** long lines, including the `--range` / `--filter-points` Click
     option declarations (26–35 / 51–60) and the validation guard (75–76 / 96–97).
+
+    > _Status (2026-09-18): Done — the filter, the `range_options` decorator carrying
+    > both Click options, and the `validate_range_options` guard live in
+    > `_commands/_range_options.py`. The filter takes an `echo` callable, so each
+    > command keeps its own sink; both commands' `--help` output was diffed against
+    > `origin/main` and is byte-identical._
   - **`_load_gray`** — `feature_match/_flow_matching.py:154–159` vs
     `motion/flow_stats.py:12–17`: an AST-level exact-duplicate scan over all 152 modules
     found this as **the only byte-identical cross-file function body in the package**.
     Docstrings differ. `motion/image_sequence.py:15` already imports the `flow_stats`
     copy, so one is redundant.
+
+    > _Status (2026-09-18): Done — one survivor, `_image_load.load_gray`, at the
+    > package root so neither subpackage imports the other's private surface._
   - **`_classify_ratio`** — `motion/report.py:245–258` vs
     `visualization/_discontinuity_display.py:209–219`: **still divergent, and worse than
     recorded.** Report uses `_RATIO_UPPER = 1.0/_RATIO_LOWER` = 1.3333…; the display
@@ -1345,22 +1368,49 @@ sibling already shows the fix**
     fact written **four ways across three modules** — add
     `_discontinuity_display.py:236` (`1.0 / 0.75` inline) and
     `motion/image_sequence.py:209` (a user-facing string `"outside [0.75, 1.33]"`).
+
+    > _Status (2026-09-18): Done — `motion/ratio_band.py` holds `RATIO_LOWER`,
+    > `RATIO_UPPER = 1/RATIO_LOWER`, `out_of_band`, `BAND_TEXT` and the one
+    > `classify_ratio`; all three modules read them. The empty case is `None`
+    > everywhere (the JSON schema needs `null`) and the console caller coerces to
+    > `""`. The band arithmetic makes the 0.0033 threshold move unobservable in
+    > practice: the summary only classifies frames its own flagging test already put
+    > outside the band, and that test used `1/0.75` already. No golden output moved.
+    > `specs/cli/reconstruction/motion-command.md` said `1.33` where it meant
+    > `1/0.75` and was corrected._
   - **Sequence-descriptor naming** — `_sfmr_naming.py:58–76` vs
     `feature_match/_run.py:391–410`: **still divergent.** `_sfmr_naming` falls back to
     `f"{first_name}-total-{total_count}-images"` when the paths are not one sequence;
     `_run.py` initializes `descriptor = ""` with no `else`, so a `.matches` file
     silently gets no descriptor where the `.sfmr` would get one.
+
+    > _Status (2026-09-18): Done — `_run.py` calls
+    > `_sfmr_naming._generate_image_descriptor`. `.matches` names change in the
+    > multi-sequence case, as intended; both cases are now covered by
+    > `tests/matching/test_match.py`, and
+    > `specs/cli/image-feature/match-command.md` documents the generated name._
   - **`_camera_centers`** — **upgraded from 2 copies to 3**: `analyze/images.py:18–27`,
     `rig/panorama.py:56–65`, `_embed_patches.py:240–256`. All compute `C = −Rᵀt`. Note
     the `analyze/` copy is a private name imported across a subpackage boundary at
     `xform/_select_by_distribution.py:30`.
-    > _Status (2026-09-18): Partially done — back to 2 copies. The `analyze/images.py` copy and the cross-package private import from `xform/_select_by_distribution.py` are gone; `rig/panorama.py:56` and `_embed_patches.py:240` remain._
+
+    > _Status (2026-09-18): Done — all three, not just the two named
+    > `_camera_centers`, now use `_pose_math.camera_centers`, with
+    > `recon_camera_centers` as the whole-reconstruction wrapper the patch embedder
+    > wants. Leaving the byte-identical `analyze/` copy behind would have defeated the
+    > point, and folding it in also retires the cross-subpackage private import from
+    > `xform/_select_by_distribution`._
   - **`_rotation_angle_deg`** — confirmed a **name collision, not a duplicate**
     (`_compare_fragments.py:332` takes an `Se3Transform`;
     `motion/recon_discontinuity.py:23` takes two quaternions). But the scan found the
     **real** duplicate the old finding missed: `analyze/images.py:30–32`
     `_compute_rotation_angle(quat_a, quat_b)` is the same expression as
     `recon_discontinuity.py:23–25` under a different name.
+
+    > _Status (2026-09-18): Done — the quaternion one survives as
+    > `_pose_math.rotation_angle_deg` (the `motion/` copy and the `analyze/` copy both
+    > point at it); `_compare_fragments`' transform version is renamed
+    > `_transform_rotation_angle_deg`, so the collision is gone._
 - Proposed fix: (a) `_apply_range_filter` plus its two Click options into a shared
   `_commands/_range_options.py` decorator taking an `echo` callable; (b) delete one
   `_load_gray`; (c) one `_classify_ratio` with one `_RATIO_LOWER`/`_RATIO_UPPER` pair,
@@ -1376,6 +1426,12 @@ sibling already shows the fix**
 
 **Flat modules whose only consumer is one sibling, and seven phase labels that
 contradict themselves**
+
+> _Status (2026-09-18): Partially done — all seven labels now read `[N/7]`, and
+> `_rectification.py` moved to `visualization/_rectification.py` beside its one
+> production importer. The `compare/` subpackage move for the 1,708-line trio is
+> **not** done and remains open._
+
 > _Carried forward. Sizes, the single-entry structure and the wrong labels all
 > re-verified unchanged._
 - Location: `_rectification.py` (212) — sole production importer is
@@ -1421,6 +1477,13 @@ validation**
 
 **`AlignToTransform` and `AlignToInputTransform` differ only in where the target comes
 from, and one of them uses a class-level mutable stash**
+
+> _Status (2026-09-18): Done — the shared `apply` lives once in
+> `xform/_align_points_base.py` as `AlignToPointsTransform`, with `_target_recon()`
+> and `_target_label()` hooks. Both public class names, the `set_original_input`
+> classmethod and every printed line are unchanged; the stash and its `RuntimeError`
+> guard now sit behind the hook rather than in the middle of the shared body._
+
 - Location: `src/sfmtool/xform/_align_to.py` (69) vs `_align_to_input.py` (72)
 - Problem: The two classes share their entire `apply` body from `source_name_to_idx = …`
   onward — `_align_to.py:28–66` vs `_align_to_input.py:31–69`, **39 lines identical
@@ -1519,6 +1582,17 @@ boundary rather than by subject**
 
 **The `viz_*.py` driver loop is a true three-way copy — and `_compose` is correctly
 *not*, so the #444 decision was right**
+
+> _Status (2026-09-18): Done — `scripts/_viz_common.py` gained `common_parser()` and
+> `run_over_recons()`; all three scripts use them and `_compose` stays put, three
+> ways. Each script's `--rows` / `--sample` / `--tile` defaults are preserved
+> (8/300/120, 10/300/96, 9/400/56) as required keywords on `common_parser`. Two
+> corrections to the finding: the drifted defaults are `--rows` 8/10/9 and `--tile`
+> 120/96/56 (not 8/9 and 120/56), and the 17-line loop is byte-identical across two
+> of the three, not all three — `viz_keypoint_localization_strips.py` inlines its
+> gather/sort/compose, which is now a `render_montage` function the shared driver
+> calls._
+
 > _Carried forward from #444's one deliberate non-fix, **independently re-examined and
 > upheld**, plus the duplicate it left behind._
 - Location: `scripts/viz_keypoint_localization.py:275–306`,
