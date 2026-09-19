@@ -155,7 +155,7 @@ tempfile = "3"
 # `scripts/a11y_env.sh` stands that up locally; `xa11y/setup-a11y` does it in
 # CI. Not target-gated: `ui_basic` is `cfg`'d to those three targets, so a
 # fourth compiles it away and never reaches this dependency.
-xa11y = "0.12"
+xa11y = "0.15"
 # `ui_basic`'s MCP screenshot tests speak the wire to a real viewer and decode
 # the PNG a real frame produced. An integration test sees only dev-dependencies,
 # so the three the crate already builds with are named again here.

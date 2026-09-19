@@ -3123,6 +3123,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -6783,10 +6784,11 @@ checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
 
 [[package]]
 name = "xa11y"
-version = "0.12.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fadc5fda5d9cb48a03ccd24b5fc9dfaa79742e97e877a5e1c18c73e30fc5528"
+checksum = "921aaff184e1ebeefd170c29ad36e9fe341f95b2e7b38532742ad28a6d498574"
 dependencies = [
+ "serde",
  "serde_json",
  "xa11y-core",
  "xa11y-linux",
@@ -6796,9 +6798,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-core"
-version = "0.12.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fa588519e92e18382d4c9d4c4e1c24cb19914d008a622f57d2a09cd596acafb"
+checksum = "9bcc07d4519308456865e58cda459bc30456d88d7c1d2444238d2d617ade4ac4"
 dependencies = [
  "png",
  "serde",
@@ -6809,11 +6811,12 @@ dependencies = [
 
 [[package]]
 name = "xa11y-linux"
-version = "0.12.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84aede1a5d71ee2460e18bd7a076001f556086da3a8f896ea71201d9c3a2954d"
+checksum = "a023e25dd0cdb4d303f388fa8192bbc836990788bc84c3d47ddb5c82ab4320cc"
 dependencies = [
  "evdev",
+ "nix",
  "png",
  "rayon",
  "serde_json",
@@ -6827,9 +6830,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-macos"
-version = "0.12.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0a06e0f3a757c2240141a4a0549514f15a0de3eb9c5d1201aa95ed4ee102b61"
+checksum = "e2bbec5b05237eb460b5cd7b719b32d9796773721866871df851a77960e8c401"
 dependencies = [
  "cc",
  "core-foundation 0.10.1",
@@ -6840,9 +6843,9 @@ dependencies = [
 
 [[package]]
 name = "xa11y-windows"
-version = "0.12.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a4dd2dae0c36b57f8990f42f31de3e10267088fba30a4a59983ba896493c953"
+checksum = "924a7801e66b2095baf928e5c816c1862fc692f1eb98564b84419fdec53b4916"
 dependencies = [
  "serde_json",
  "windows",
