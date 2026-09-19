@@ -495,6 +495,27 @@ event loop never reads, a HUD checkbox that never reaches the tree, a
 desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
 mutex, so a plain `cargo test` behaves like `--test-threads=1`).
 
+**One locator resolution is one full snapshot of the app's accessibility
+subtree**, and that is what the suite is written around. `wait_attached`,
+`press`, `toggle`, `elements` and `count` each walk the whole tree — on Windows
+a single `FindAllBuildCache(TreeScope_Subtree)` — so the cost is per
+*operation*, not per launch, and it is the platform's rather than the viewer's:
+roughly half a second on a developer's machine against roughly seventeen on a
+GitHub-hosted Windows runner, where a launch, attach and teardown together cost
+3.8s. (Only a `Locator` method resolves; a `press` on an `Element` a lookup has
+already handed back invokes what it holds and queries nothing.) Two habits
+follow. Setup goes through the **command line** rather than the accessibility
+API: `--demo` appends the node File > Load Demo Data… makes, at the dialog's
+default point count and with the same `None` path, after any files named on the
+line. And an assertion that something is *absent* is a single
+`Locator::count()` rather than a short-budget `wait_attached`, which polls a
+whole snapshot every 100ms until its budget runs out. A one-shot absence check
+is only sound after a positive lookup in the same test has established that the
+tree is published, so each such assertion names the lookup it depends on.
+Exactly one test drives each route a shortcut replaces —
+`the_scene_panel_lists_the_loaded_reconstruction` presses through the menu and
+the dialog, then asserts on what arrived — so the route stays covered.
+
 **Whatever a test puts outside its own process is the lock's business too.** The
 `Guard` that holds the mutex owns the viewer process *and* anything the test
 placed in the developer's home directory — the two tests that start the viewer
@@ -548,7 +569,12 @@ its full budget, and the failure reads like a product regression. So
 `ui_basic`'s `aim_at` raises the viewer's own window, moves the cursor, and
 checks that the window under it belongs to that process before a button is
 pressed, retrying the *aim* and never the assertion; `mouse_event` checks that
-`SendInput` actually inserted the event rather than being refused. The
+`SendInput` actually inserted the event rather than being refused. Raising
+takes two calls, because the obvious one does not carry: `SetForegroundWindow`
+is refused whenever the caller is not already the foreground process, which a
+test runner launched from a terminal is not, so `aim_at` follows it with a
+`SetWindowPos` to `HWND_TOPMOST` — no such restriction, and Z order is all
+`WindowFromPoint` reads — and lets the left click do the activating. The
 right-click test is the only one that injects input today, and a second one
 goes the same way: a click that lands somewhere else is not a failure anyone
 can read.

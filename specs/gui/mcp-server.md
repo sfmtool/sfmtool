@@ -51,9 +51,10 @@ sfm explorer --mcp 9000 scene.sfmr     # same, through the Python CLI
 
 `crates/sfm-explorer/src/cli.rs` recognizes `--mcp`, `--mcp=PORT`, `--mcp PORT`,
 `--no-default-layout` ([panel-layout.md](panel-layout.md) § "The default layout
-file"), `--help`, and treats everything else as a path. Hand-rolled rather than
-`clap`: two flags and a list of paths is a dozen lines, and it keeps the
-binary's dependency tree as it was. The following-argument form has to look at
+file"), `--demo` ([architecture.md](architecture.md) § "Testing"), `--help`, and
+treats everything else as a path. Hand-rolled rather than `clap`: three flags
+and a list of paths is a dozen lines, and it keeps the binary's dependency tree
+as it was. The following-argument form has to look at
 what comes next, because `--mcp scene.sfmr` is the common invocation and means
 the default port and a file — so a next argument that is not a port is left
 alone rather than consumed.

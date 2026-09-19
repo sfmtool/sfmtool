@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The command line:
-//! `sfm-explorer [--mcp [PORT]] [--no-default-layout] [path.sfmr ...]`.
+//! `sfm-explorer [--mcp [PORT]] [--no-default-layout] [--demo] [path.sfmr ...]`.
 //!
-//! Hand-rolled rather than `clap`, because there are two flags and a list of
+//! Hand-rolled rather than `clap`, because there are three flags and a list of
 //! paths. A dozen lines keeps the binary's dependency tree as it was; reach for
 //! an argument parser if this grows options that take values, not before.
 
@@ -28,6 +28,10 @@ pub(crate) struct Args {
     /// Skip the startup load of `~/.sfm-explorer-default-layout.json`, and come
     /// up with the stock grid whatever is saved there.
     pub(crate) no_default_layout: bool,
+    /// Append a node of generated demo data at startup, after any files — the
+    /// same node File > Load Demo Data… makes, at the dialog's default point
+    /// count.
+    pub(crate) demo: bool,
     /// `--help` was asked for; print [`USAGE`] and exit without opening a
     /// window.
     pub(crate) help: bool,
@@ -51,6 +55,9 @@ OPTIONS:
     --no-default-layout
                     Start with the stock panel grid, ignoring any layout saved
                     at ~/.sfm-explorer-default-layout.json.
+    --demo          Load a generated demo reconstruction, after any files. The
+                    same node File > Load Demo Data... makes at its default
+                    point count, without the two dialogs.
     -h, --help      Print this message and exit.
 ";
 
@@ -68,6 +75,7 @@ pub(crate) fn parse(argv: impl IntoIterator<Item = String>) -> Result<Args, Stri
         match arg.as_str() {
             "-h" | "--help" => args.help = true,
             "--no-default-layout" => args.no_default_layout = true,
+            "--demo" => args.demo = true,
             "--mcp" => {
                 let port = match argv.peek().and_then(|next| next.parse::<u16>().ok()) {
                     Some(port) => {

@@ -3,6 +3,28 @@
 
 #![cfg(any(windows, target_os = "macos", target_os = "linux"))]
 
+//! The viewer's windowed tests: what only a real window, on a real desktop,
+//! can be asked.
+//!
+//! **One locator resolution is one full snapshot of the app's accessibility
+//! subtree**, and that is what shapes this file. `wait_attached`, `press`,
+//! `toggle`, `elements` and `count` each walk the whole tree — on Windows a
+//! single `FindAllBuildCache(TreeScope_Subtree)` — so their cost is per
+//! *operation*, not per launch, and it is the platform's, not the viewer's:
+//! around 0.5s on a developer's machine and around 17s on a GitHub-hosted
+//! Windows runner, against 3.8s for a launch, attach and teardown there.
+//!
+//! Two habits follow. Setup goes through the **command line** rather than the
+//! accessibility API — `--demo` in place of driving File > Load Demo Data… and
+//! its dialog, which is three `Locator` calls and more snapshots than that,
+//! since the menu item and the dialog's button each appear a poll or two after
+//! the press that makes them. And an assertion that something is *absent* uses
+//! `Locator::count`, exactly one resolution, rather than a short-budget
+//! `wait_attached`, which polls a whole snapshot every 100ms for its budget.
+//! (Only a `Locator` method resolves; a `press` on an `Element` a lookup
+//! already handed back invokes what it holds.) Exactly one test still drives
+//! each route a shortcut replaces, and says so.
+
 use std::cell::RefCell;
 use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, Once};
@@ -109,6 +131,17 @@ impl Guard {
     /// Acquire the serialization lock, then launch the app under it.
     fn new() -> Self {
         Guard::with_args(&["--no-default-layout"])
+    }
+
+    /// The same, with the demo reconstruction already loaded.
+    ///
+    /// `--demo` makes the node the File menu's Load Demo Data… dialog makes,
+    /// at the same default point count, so a test that only wants a scene in
+    /// front of it gets one for no accessibility operations at all — see
+    /// [`load_demo_data`], which is what the one test that still drives the
+    /// menu path calls.
+    fn demo() -> Self {
+        Guard::with_args(&["--no-default-layout", "--demo"])
     }
 
     /// The same, with the viewer's command line spelled out.
@@ -330,10 +363,19 @@ fn the_menu_bar_holds_file_edit_go_and_panels() {
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("'{menu}' menu button not found"));
     }
-    assert!(
+    // `count`, not a short-budget `wait_attached`: one instantaneous resolution
+    // rather than a poll loop that snapshots the whole subtree every 100ms for
+    // its budget (see this file's module comment).
+    //
+    // **This depends on the loop above running first.** A single check for
+    // absence only means anything once the tree is known to be published, and
+    // the four menu buttons — painted in the same menu bar as a View menu would
+    // be — are what establishes that. Do not reorder these two.
+    assert_eq!(
         app.locator(r#"button[name="View"]"#)
-            .wait_attached(Duration::from_millis(500))
-            .is_err(),
+            .count()
+            .expect("the tree is queryable"),
+        0,
         "the View menu is still in the menu bar"
     );
 }
@@ -405,9 +447,11 @@ fn edit_menu_items() {
 /// than the menu -- the same reason `edit_menu_items` above names only the one
 /// item with no shortcut.
 ///
-/// Demo data came from no file, so there is nothing for Save to write over and
-/// Save As is the only way out. Both items are nonetheless present: an action
-/// that vanishes when it does not apply reads as unimplemented. Presence is
+/// Demo data came from no file — `--demo` appends a generated node, whose path
+/// is `None` exactly as the menu's is — so there is nothing for Save to write
+/// over and Save As is the only way out. Both items are nonetheless present:
+/// an action that vanishes when it does not apply reads as unimplemented.
+/// Presence is
 /// all this asserts: which of the two is enabled is not read here, because the
 /// accessibility tree does not report egui's disabled state the same way on
 /// every platform (Linux never matched an `enabled="false"` selector), and the
@@ -415,9 +459,8 @@ fn edit_menu_items() {
 /// `state/save/tests.rs`.
 #[test]
 fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
-    let _guard = Guard::new();
+    let _guard = Guard::demo();
     let app = attach(_guard.child());
-    load_demo_data(&app);
 
     app.locator(r#"button[name="File"]"#)
         .press()
@@ -456,8 +499,14 @@ fn quit_menu_item_exits_the_process() {
     );
 }
 
-/// Load demo data, so there is a reconstruction for the 3D viewer — and so the
-/// HUD, which the dock only builds once one is loaded, exists to be found.
+/// Drive File > Load Demo Data… and its dialog to completion.
+///
+/// Three `Locator` calls and a handful of whole-tree snapshots, so it is
+/// **not** how a test gets a scene in front of it — [`Guard::demo`] and
+/// [`McpViewer::launch_demo`] ask for the same node on the command line for
+/// none at all. This exists for
+/// [`the_scene_panel_lists_the_loaded_reconstruction`], the one test that
+/// asserts on what the menu route itself produces.
 fn load_demo_data(app: &App) {
     app.locator(r#"button[name="File"]"#)
         .press()
@@ -481,9 +530,8 @@ fn load_demo_data(app: &App) {
 /// `viewer_3d/hud/tests.rs`.
 #[test]
 fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
-    let _guard = Guard::new();
+    let _guard = Guard::demo();
     let app = attach(_guard.child());
-    load_demo_data(&app);
 
     for name in ["Points", "Camera Images", "Grid"] {
         let el = app
@@ -502,6 +550,15 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
 /// its reconstruction row and the Camera Images group beneath it are in the
 /// accessibility tree. Everything else about the tree is exercised headlessly
 /// in `scene_graph/tests.rs`.
+///
+/// **This is the one test that loads demo data through the File menu**, and it
+/// keeps [`load_demo_data`] rather than `--demo` on purpose: what it asserts —
+/// that the node the load made, and its rows, appear in the Scene panel — is
+/// precisely what that menu route is for, so driving it here is what keeps the
+/// route covered. Every other test asks for the node on the command line, for
+/// the reason this file's module comment gives. Do not "optimize" this one too;
+/// nothing else presses Load Demo Data… and then looks at what arrived.
+/// (`file_menu_items` asserts the item is *in* the menu, not that it works.)
 #[test]
 fn the_scene_panel_lists_the_loaded_reconstruction() {
     let _guard = Guard::new();
@@ -527,9 +584,8 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
 /// Toggling a HUD checkbox via accessibility updates its checked state.
 #[test]
 fn toggle_hud_layer_checkbox() {
-    let _guard = Guard::new();
+    let _guard = Guard::demo();
     let app = attach(_guard.child());
-    load_demo_data(&app);
 
     let el = app
         .locator(r#"check_box[name="Grid"]"#)
@@ -612,7 +668,8 @@ fn aim_at(pid: u32, x: i32, y: i32) {
     use windows::Win32::Foundation::POINT;
     use windows::Win32::UI::WindowsAndMessaging::{
         GetAncestor, GetCursorPos, GetWindowThreadProcessId, SetCursorPos, SetForegroundWindow,
-        WindowFromPoint, GA_ROOT,
+        SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE,
     };
 
     let mut last = "the viewer has no visible top-level window".to_string();
@@ -625,9 +682,26 @@ fn aim_at(pid: u32, x: i32, y: i32) {
         };
         // A window that is behind another is still at these screen coordinates
         // in the accessibility tree, so raising it is part of aiming rather
-        // than a courtesy. It can be refused — the foreground lock — which is
-        // why the check below is the thing that decides, not this call.
+        // than a courtesy. Two calls, because the obvious one is not reliable:
+        // `SetForegroundWindow` is refused whenever the caller is not already
+        // the foreground process — which a test runner launched from a terminal
+        // is not — and then the viewer stays behind it. `SetWindowPos` to
+        // `HWND_TOPMOST` carries no such restriction: it changes Z order
+        // without activating anything, which is all `WindowFromPoint` below
+        // reads, and the left click the caller sends does the activating. The
+        // check below is what decides, not either call.
         let _ = unsafe { SetForegroundWindow(hwnd) };
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        };
         if let Err(e) = unsafe { SetCursorPos(x, y) } {
             last = format!("SetCursorPos({x}, {y}) failed: {e}");
             continue;
@@ -705,10 +779,9 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
         );
     }
 
-    let _guard = Guard::new();
+    let _guard = Guard::demo();
     let pid = _guard.child().id();
     let app = attach(_guard.child());
-    load_demo_data(&app);
 
     // The demo node's row is labelled "demo"; its bounds are screen pixels.
     let row = app
@@ -825,10 +898,19 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     app.locator(r#"button[name="Latest"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("the Action Log toolbar did not appear, so the layout was not loaded");
-    assert!(
+    // `count`, not a short-budget `wait_attached`, for the reason
+    // `the_menu_bar_holds_file_edit_go_and_panels` gives: one resolution rather
+    // than a poll loop of whole-subtree snapshots.
+    //
+    // **This depends on the "Latest" lookup above running first.** That lookup
+    // is what establishes the dock has been built and its tree published; only
+    // then does finding no placeholder mean the 3D viewer is not docked, rather
+    // than that nothing is in the tree yet. Do not reorder these two.
+    assert_eq!(
         app.locator(r#"static_text[name="No reconstruction loaded."]"#)
-            .wait_attached(Duration::from_millis(500))
-            .is_err(),
+            .count()
+            .expect("the tree is queryable"),
+        0,
         "the 3D viewer is still docked, so the stock grid was used"
     );
 }
@@ -845,7 +927,8 @@ fn a_saved_default_layout_is_loaded_at_startup() {
 /// exercised headlessly in `edit_history_panel/tests.rs`.
 #[test]
 fn the_edit_history_panel_lists_the_loaded_version() {
-    // Launched *without* `--no-default-layout`, so the file above is read.
+    // Launched *without* `--no-default-layout`, so the file above is read, and
+    // with `--demo`, so the node is there before the first query.
     let guard = Guard::with_default_layout(
         r#"{
   "sfm_explorer_layout": 2,
@@ -858,10 +941,9 @@ fn the_edit_history_panel_lists_the_loaded_version() {
   }
 }
 "#,
-        &[],
+        &["--demo"],
     );
     let app = attach(guard.child());
-    load_demo_data(&app);
 
     // The demo node is labeled "demo" and has been through no edit, so both
     // strings are fixed by the fixture.
@@ -900,9 +982,21 @@ impl McpViewer {
     /// suite very likely has a viewer of their own on 8787 and a port
     /// collision is a fatal startup error by design.
     fn launch() -> McpViewer {
+        McpViewer::launched(&[])
+    }
+
+    /// The same, with the demo reconstruction already loaded — the command-line
+    /// form of [`load_demo_data`], for the reason this file's module comment
+    /// gives.
+    fn launch_demo() -> McpViewer {
+        McpViewer::launched(&["--demo"])
+    }
+
+    fn launched(extra: &[&str]) -> McpViewer {
         let _lock = ui_test_lock();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
         cmd.args(["--mcp", "0", "--no-default-layout"]);
+        cmd.args(extra);
         cmd.stdout(std::process::Stdio::piped());
         #[cfg(target_os = "macos")]
         cmd.env("SFMTOOL_EXPLORER_FORCE_REPAINT", "1");
@@ -1086,12 +1180,11 @@ fn a_screenshot_is_the_whole_window() {
 /// the crop and close to it, not that the two are identical.
 #[test]
 fn the_viewport_can_be_photographed_with_and_without_its_hud() {
-    let viewer = McpViewer::launch();
-    let app = viewer.wait_for_window();
-    viewer.initialize();
     // The render target only exists once the viewport has something to draw:
     // with nothing loaded the panel shows its empty state and never sizes one.
-    load_demo_data(&app);
+    let viewer = McpViewer::launch_demo();
+    viewer.wait_for_window();
+    viewer.initialize();
 
     let with_hud = viewer.screenshot(serde_json::json!({ "panel_name": "viewer_3d" }));
     let without_hud =
@@ -1159,12 +1252,11 @@ fn a_panel_that_is_not_drawn_is_refused_by_a_real_viewer() {
 /// is asserted headlessly, over the same `AppState` calls.
 #[test]
 fn a_point_can_be_deleted_over_the_wire_and_undone() {
-    let viewer = McpViewer::launch();
-    let app = viewer.wait_for_window();
+    let viewer = McpViewer::launch_demo();
+    viewer.wait_for_window();
     viewer.initialize();
-    load_demo_data(&app);
-    // The node arrives in a frame of its own, after the button press returns,
-    // so the first call waits for it rather than racing it.
+    // The node is appended before the window opens, but `get_scene` is answered
+    // inside a frame, so the first call waits for it rather than racing it.
     let deadline = std::time::Instant::now() + CONTENT_TIMEOUT;
     let label = loop {
         let scene = viewer.call("get_scene", serde_json::json!({}));
@@ -1275,10 +1367,9 @@ fn dump_tree() {
 #[cfg(windows)]
 #[test]
 fn taking_a_camera_in_hand_reaches_a_real_window() {
-    let viewer = McpViewer::launch();
+    let viewer = McpViewer::launch_demo();
     let app = viewer.wait_for_window();
     viewer.initialize();
-    load_demo_data(&app);
 
     // The 3D viewer alone in the dock, so nothing but the viewport is under
     // the menu the test drives.

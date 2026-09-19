@@ -200,6 +200,14 @@ pub fn run() {
         }
     }
 
+    // `--demo`, after the files, so the generated node sits where it would if
+    // the human had opened their files and then used the menu. It goes through
+    // the same call the dialog's Load button makes, at the point count the
+    // dialog offers, so the node is indistinguishable from the menu's.
+    if args.demo {
+        state.load_demo(state.demo_num_points);
+    }
+
     let mut app = App {
         proxy,
         egui_ctx: egui::Context::default(),
