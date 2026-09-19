@@ -11,7 +11,7 @@ cloud, so the 2D observations are inline and no ``.sift`` companion has to
 exist on disk. What this module pins is the binding's own share — the
 name-to-index lookup, the report dict and its per-image list, the
 refusal-is-not-an-exception contract, and that the input reconstruction
-survives the call untouched. See ``specs/gui/resect-image.md``.
+survives the call untouched. See ``specs/gui/edits/resect-image.md``.
 """
 
 import math
@@ -321,7 +321,7 @@ class TestRefusal:
         assert isinstance(report["refusal"], str) and report["refusal"]
         assert report["retriangulated"] == 0
         assert report["held_out_points"] > 100
-        # The stored pose is what the derived node keeps on a refusal.
+        # The stored pose is what the resected reconstruction keeps on a refusal.
         np.testing.assert_array_equal(
             np.asarray(derived.quaternions_wxyz)[0],
             np.asarray(corrupted.quaternions_wxyz)[0],

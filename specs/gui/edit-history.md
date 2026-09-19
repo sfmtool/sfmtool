@@ -129,7 +129,7 @@ content hash is computed from the value without writing a file and equals what a
 save of it writes, and a point edit that creates points is hashed over the base's
 hash plus the records it adds
 ([`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md)
-§ "Hashes"). Demo data and a resection therefore hash exactly like a loaded file.
+§ "Hashes"). Demo data therefore hashes exactly like a loaded file.
 Those hashes plus this graph are what a point id is minted against and resolved
 through ([goto-point.md](goto-point.md) § "The ID forms and the version graph").
 
@@ -203,11 +203,10 @@ The shortcuts are gated on egui's own keyboard arbitration, so a text field or a
 `DragValue` being typed into keeps `Delete` and `Ctrl+Z` for its own editing.
 
 `Delete Image` and `Move Camera` are also on the **image row's context menu** in
-the Scene Graph panel, beside the four `Resect Image` entries, which is where a
+the Scene Graph panel, beside the two `Resect Image` entries, which is where a
 specific image is addressed. It asks for no confirmation: it is an edit with a history behind it,
-and undo is the answer to a mis-click. Two of the resections beside it show their
-answer as a second node, which is not an edit and cannot be undone; the two
-in-place ones are edits like this one ([resect-image.md](resect-image.md)).
+and undo is the answer to a mis-click. The resections beside it are edits like
+this one ([edits/resect-image.md](edits/resect-image.md)).
 
 ## The Edit History panel
 

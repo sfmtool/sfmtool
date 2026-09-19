@@ -9,15 +9,15 @@
 //! [`mod@sfmtool_core::geometry::resect_images`], which holds a whole set of
 //! images out together; the panel's action is that primitive on a one-element
 //! set, so the GUI and any offline caller resect an image exactly the same way.
-//! See `specs/gui/resect-image.md`.
+//! See `specs/gui/edits/resect-image.md`.
 //!
 //! What stays here is the viewer's own share: which correspondence source the
-//! menu asked for, and the status-line text the outcome is reported in. Making
-//! the derived node — name, inherited frame, selection, the marker on the
-//! resected row — is [`crate::state::AppState::resect_image`]'s job.
+//! menu asked for, and the status-line text the outcome is reported in. Landing
+//! the answer (materialising the current value, pushing the version, following
+//! the selection) is [`crate::state::AppState::resect_image`]'s job.
 
 pub use sfmtool_core::geometry::{
-    resect_image_in_place, resect_images, ResectImageOptions, ResectImageReport, ResectSource,
+    resect_image_in_place, ResectImageOptions, ResectImageReport, ResectSource,
 };
 
 /// Which of the two menu entries was chosen.
@@ -34,23 +34,9 @@ pub enum ResectFrom {
     Matches,
 }
 
-/// `Resected IMG_0007.jpg in run_a: 214 pts, inliers 198/214 (0.93), rotation
-/// 12.40°, translation 0.081 (scene-scale), 190 re-triangulated`.
-///
-/// The translation is reported in scene-scale units when the reconstruction has
-/// a camera-to-structure distance to divide by, and in its own units when it
-/// does not (a rotation-only reconstruction has no such distance).
-pub fn success_message(image: &str, node: &str, report: &ResectImageReport) -> String {
-    format!("Resected {image} in {node}: {}", outcome_summary(report))
-}
-
 /// What the estimate did, with nothing about where the answer went: `214 pts,
 /// inliers 198/214 (0.93), rotation 12.40°, translation 0.081 (scene-scale), 190
 /// re-triangulated`.
-///
-/// Its own function because the two resections put the same quantities behind
-/// different openings -- one names a node it made, the other a version it
-/// pushed -- and the numbers should not be spelled twice.
 ///
 /// The translation is reported in scene-scale units when the reconstruction has
 /// a camera-to-structure distance to divide by, and in its own units when it
@@ -74,15 +60,14 @@ pub fn outcome_summary(report: &ResectImageReport) -> String {
 
 /// `Resect IMG_0007.jpg in run_a refused: <reason>`.
 ///
-/// Covers both refusals: an estimate that missed its acceptance gate (which
-/// still produces a node, showing the held-out re-triangulation on its own) and
-/// one that could not be attempted at all (which does not).
+/// Covers both refusals: an estimate that missed its acceptance gate, and one
+/// that could not be attempted at all. Neither pushes a version.
 pub fn failure_message(image: &str, node: &str, reason: &str) -> String {
     format!("Resect {image} in {node} refused: {reason}")
 }
 
-/// The last component of a workspace-relative image name — what the derived
-/// node is named after and what the status line says.
+/// The last component of a workspace-relative image name — what the version's
+/// label is written with and what the status line says.
 pub fn basename(name: &str) -> &str {
     name.rsplit(['/', '\\']).next().unwrap_or(name)
 }

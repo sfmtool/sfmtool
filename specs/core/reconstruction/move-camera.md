@@ -220,7 +220,7 @@ whole value, where the other cameras' agreement would drown it.
 their own: a solve is up to a similarity. `translation_scene` divides it by the
 median over images of that image's median camera-to-structure distance, which is
 the same unit the resection reports its displacements in
-([`../../gui/resect-image.md`](../../gui/resect-image.md)), so "a tenth of
+([`../../gui/edits/resect-image.md`](../../gui/edits/resect-image.md)), so "a tenth of
 the scene" means the same thing in both. It is `None` for a reconstruction with
 no finite structure to measure against, where every displacement is unitless.
 
@@ -294,7 +294,7 @@ the two refusals.
 ## Non-goals
 
 - **Estimating the pose.** That is
-  [`../../gui/resect-image.md`](../../gui/resect-image.md), which computes
+  [`../../gui/edits/resect-image.md`](../../gui/edits/resect-image.md), which computes
   a pose from correspondences; this one is told the pose.
 - **Refining anything else.** No other pose, no lens, and no point this image
   does not observe moves. Running the adjustment afterwards is

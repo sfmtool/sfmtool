@@ -479,7 +479,7 @@ impl PyEditedReconstruction {
     /// back the answer as this version's successor.
     ///
     /// The estimate is ``geometry.resect_images`` on the one-element target set
-    /// (see ``specs/gui/resect-image.md``): the points the image observes are
+    /// (see ``specs/gui/edits/resect-image.md``): the points the image observes are
     /// re-triangulated without it, its pose is fit to what is left, and the
     /// points it observes are re-triangulated again at the new pose. A **bulk**
     /// edit, so the value that comes back is a whole new base with an empty

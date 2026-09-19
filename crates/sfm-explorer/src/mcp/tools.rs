@@ -877,12 +877,12 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "resect_camera_image_in_place",
+            name: "resect_camera_image",
             description: "Re-estimate one camera image's pose against structure held out from \
-                          it, and install the answer as the reconstruction's next version rather \
-                          than as a derived node beside it. A bulk edit: the points the image \
-                          observes are re-triangulated and the surviving ones are renumbered, \
-                          while the image table stays put. A refused estimate pushes no version.",
+                          it, and install the answer as the reconstruction's next version. A \
+                          bulk edit: the points the image observes are re-triangulated and the \
+                          surviving ones are renumbered, while the image table stays put. A \
+                          refused estimate pushes no version.",
             kind: Write,
             schema: object(
                 &[(
@@ -2238,9 +2238,9 @@ pub(crate) fn parse(
                 translation: inner.required_vec3("translation")?,
             }
         }
-        "resect_camera_image_in_place" => {
+        "resect_camera_image" => {
             args.reject_unknown(&["reconstruction_label", "camera_image", "from_matches"])?;
-            Command::ResectCameraImageInPlace {
+            Command::ResectCameraImage {
                 reconstruction_label: args.required_string("reconstruction_label")?,
                 camera_image: args.camera_image("camera_image")?,
                 from_matches: args.optional_bool("from_matches")?.unwrap_or(false),

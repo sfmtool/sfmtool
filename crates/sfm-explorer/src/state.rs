@@ -821,7 +821,7 @@ impl AppState {
 
     /// Append `node` to the scene and select it.
     ///
-    /// The single node-arrival path: file loads, resections, the CLI and demo
+    /// The single node-arrival path: file loads, the CLI and demo
     /// data all come through here, so none of them can forget that arriving is also
     /// a selection change. Selecting the new node clears the image and point
     /// selection per the finer-selection invariant — you opened this file to
@@ -831,7 +831,7 @@ impl AppState {
         let id = node.id;
         self.scene.push(node);
         // Muted: arriving *is* a selection change, but the caller's own entry
-        // ("Opened x from …", "Loaded demo data", "Resected …") is the action,
+        // ("Opened x from …", "Loaded demo data") is the action,
         // and a `Selected reconstruction x` beneath it would say nothing more.
         self.action_log.mute();
         self.select_recon(id);
@@ -926,8 +926,8 @@ impl AppState {
     /// Drop every cache entry and every selection/hover ref belonging to `id`.
     ///
     /// Does *not* touch `scene` or `selected_recon` — the callers differ on
-    /// what should happen to those (close falls back, a resection that replaces
-    /// a derived node re-points).
+    /// what should happen to those (a close falls back, an edit that renumbers
+    /// leaves them where they are).
     fn forget_recon(&mut self, id: ReconId) {
         self.sift_cache.retain(|image, _| image.recon != id);
         self.forget_descriptor_index(id);

@@ -46,7 +46,7 @@ pub(super) fn save_as_with_dialog(
 /// the close may go ahead.
 ///
 /// A node with no file goes through the Save As dialog, so *Save* on demo data
-/// or a resection is a real offer rather than a refusal. A write that fails, or
+/// is a real offer rather than a refusal. A write that fails, or
 /// a dialog that is dismissed, stops the close: the point of the prompt is that
 /// nothing is lost without an answer, and neither of those is one.
 pub(super) fn save_dirty_before_closing(

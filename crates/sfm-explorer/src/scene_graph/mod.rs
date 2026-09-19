@@ -176,13 +176,9 @@ pub struct SceneGraphResponse {
     /// `Resect Image` / `Resect Image from Matches…` chosen on an image row:
     /// the image to resect and which correspondence source was asked for. The
     /// `.matches` file itself is chosen a layer up, where the file dialog and
-    /// the per-node memory of the last path live — see [`crate::resect`].
+    /// the per-node memory of the last path live — see [`crate::resect`]. A bulk
+    /// edit, carried out by `AppState::resect_image` after the frame.
     pub resect_image: Option<(ImageRef, ResectFrom)>,
-    /// `Resect Image in Place` / `Resect Image in Place from Matches…` chosen on
-    /// an image row: the same estimate as `resect_image`, landed as a version of
-    /// the node rather than as a node beside it. A bulk edit, carried out by
-    /// `AppState::resect_image_in_place` after the frame.
-    pub resect_image_in_place: Option<(ImageRef, ResectFrom)>,
     /// `Delete Image` chosen on an image row. A bulk edit on the node it
     /// belongs to, carried out by `AppState::delete_image` after the frame.
     pub delete_image: Option<ImageRef>,

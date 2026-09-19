@@ -156,10 +156,7 @@ pub struct SceneNode {
 The renderer does not read `SceneNode` directly: each frame `app.rs` mirrors the
 five display flags plus `interactive` and `tint` onto the node's GPU bundle as a
 `NodeDisplay`, and the `transform` alongside them; the draw loop and per-recon
-uniform write consult only the bundle. `transform` and `tint` are also carried
-onto a node that replaces another, alongside the display flags: a repeated
-resection should come back where the user put its answer, in the color they were
-telling it apart by.
+uniform write consult only the bundle.
 
 `AppState` replaces its single slot with:
 
@@ -362,10 +359,8 @@ fixed-height for virtualization.
   elsewhere, e.g. from the 3D viewport pick).
 - Context menu: `Resect Image` and `Resect Image from Matches…`, which
   re-estimate this one image's pose against the rest of its reconstruction and
-  show the answer as a derived node beside the original, and `Resect Image in
-  Place` and `Resect Image in Place from Matches…`, which keep the same answer
-  as a version of this reconstruction -- see
-  [resect-image.md](resect-image.md), which owns all four; `Move Camera`, which
+  keep the answer as a version of it -- see
+  [edits/resect-image.md](edits/resect-image.md), which owns both; `Move Camera`, which
   looks through this image and hands its camera to the reviewer, so that every
   navigation input moves it -- see
   [edits/move-camera.md](edits/move-camera.md), which owns that one; and
@@ -1015,8 +1010,7 @@ reused, a missed purge can go stale but can never alias.
 The purge runs in three places, which is what the split of ownership costs:
 `AppState` drops its own caches and selection, `dock.rs` asks each panel to drop
 its private texture caches (`forget_recon`), and the renderer releases the GPU
-bundle from `retain_nodes` on the next frame. A resection that replaces an
-earlier derived node runs the same three against the *old* id.
+bundle from `retain_nodes` on the next frame.
 
 ---
 

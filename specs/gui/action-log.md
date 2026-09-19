@@ -192,14 +192,12 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Scene | — | User | `Reset transform of {label}` |
 | Scene | — | User | `Aligned {src} → {tgt}: {i}/{n} {cameras|points}, RMS {rms:.3}` — existing text |
 | Scene | — | User | `Align {src} → {tgt} failed: {reason}` — existing text, **failed** |
-| Scene | — | User | `Resected {image} in {label}: …` — existing text |
-| Scene | — | User | `Resect {image} in {label} refused: {reason}` — existing text, **failed** |
 | Edit | — | User / MCP | `Deleted point {index} in {label} ({from} → {to})` |
 | Edit | — | User / MCP | `Deleted image {name} from {label} ({from} → {to})` |
 | Edit | — | User / MCP | `Added observation of point {index} in {image} ({label}): ZNCC {z}, {d} px from the click ({from} → {to})` |
 | Edit | — | User / MCP | `Created point in {image} ({label}), radius {r} px ({from} → {to})` |
 | Edit | — | User / MCP | `Removed observation of point {index} in {image} ({label}): {n} observations left ({from} → {to})` — or `one observation left, so the point is a bearing at infinity`, or `the point had no other observation and is deleted` |
-| Edit | — | User / MCP | `Resected {image} in place ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})` |
+| Edit | — | User / MCP | `Resected {image} ({label}): {n} pts, inliers {k}/{n} ({f}), rotation {deg}°, translation {d} (scene-scale), {m} re-triangulated ({from} → {to})`, or `Resect {image} in {label} refused: {reason}` — **failed** |
 | Edit | — | User / MCP | `Bundle adjusted {label}: {i} images, {p} points, {o} observations, median residual {before} → {after} px ({from} → {to})`, with `, focal {f0} → {f1}` when the focal was released and `, {n} points deleted` when the solve left points unsupported |
 | Edit | — | User / MCP | `Moved camera {image} ({label}): {deg} deg, {translation}`, the translation in scene units where the value has a scale for them, with `, {n} points re-solved` when any were and `, residual {before} → {after} px` when the value carries keypoints, then ` ({from} → {to})` |
 | Edit | — | User / MCP | `Undo: {what the version was labelled} ({from} → {to})` |
@@ -235,7 +233,7 @@ Texts are the exact strings, with `{…}` for the values that vary.
 | Window | — | MCP | The window portion of a `set_window_layout`, from the pieces it carried in application order joined with `; `: `Moved window to ({x}, {y})` / `Resized window to {w}×{h}` / `Maximized window` / `Minimized window` / `Restored window` / `Made window fullscreen` / `Focused window`, with `, fitted from a {w}×{h} monitor` on the rectangle when the viewer fitted it |
 | Query | the tool's name | MCP | `get_scene` / `list_camera_images {label} {offset}..{end}` / `get_camera_image {label} {name}` / `get_camera_intrinsics {label} #{k}` / `get_point {pt3d_id}` / `get_action_log since {n}` / `get_window_layout` / `get_image_detail_display` / `get_history {label}` |
 | Query | — | MCP | `screenshot {target} {w}×{h}`, with ` without HUD` where the picture is the 3D render target — every picture taken is its own line |
-| any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses, except where the `AppState` method it called worded its own refusal (the in-place resection and the adjustment): the drain stands down there rather than writing a second row saying the same thing |
+| any | — | MCP | `{tool} failed: {reason}` — **failed**, for any MCP tool the viewer refuses, except where the `AppState` method it called worded its own refusal (the resection and the adjustment): the drain stands down there rather than writing a second row saying the same thing |
 
 Rules that the table implies:
 
@@ -245,8 +243,8 @@ Rules that the table implies:
   logs.
 - **Composite actions log once.** `Closed all (3)` is one entry, not three;
   `Cleared selection` is one entry even though it deselects the image, the
-  point and the intrinsics; a resection logs its result, not the internal node
-  append it ends with. Inner calls are muted while the outer method runs
+  point and the intrinsics; a load logs the file it opened, not the selection
+  change the arrival ends with. Inner calls are muted while the outer method runs
   (§ "Rust API"). The one exception is deliberate: a
   `set_reconstruction_display` naming several fields records **one entry per
   field it changed**, because each of those fields has its own row above and is
@@ -643,7 +641,7 @@ undo. A `debug_assert!` that the actor is `User` at the top of the batch catches
 an unbalanced set.
 
 **Mute as a depth counter, not a flag.** Composite actions nest — `close_all`
-over `close_node`, `resect_image` over `append_node`, `clear_selection` over
+over `close_node`, `append_node` over `select_recon`, `clear_selection` over
 three deselects — and each layer only knows about itself.
 
 **One text per action, whoever took it.** The MCP `write` and `view` modules
@@ -728,8 +726,10 @@ field it changed):
   in the vocabulary of whoever asked. This also removes the MCP writer's
   scrape of the status field to recover a load error. The catalogue's
   `Failed to load` row is the GUI caller's text;
-  the `Align … failed` and `Resect … refused` rows are logged by the methods
-  themselves because no MCP tool calls them.
+  the `Align … failed` row is logged by the method itself because no MCP tool
+  calls it, and the `Resect … refused` row because the resection owns the
+  vocabulary of what it refused, which is why the drain writes no second row
+  over it.
 
 `get_scene` reports `status_message` from `AppState::status_message()`. Its
 value is the newest entry that is not a successful query, so an agent reading it
@@ -778,10 +778,8 @@ same buffer the panel draws, on the same thread.
   Both inner calls are muted and one entry is recorded for the click:
   `Cleared selection` when it dropped both, `Deselected image` or
   `Deselected point` when it dropped one.
-- **Ordering with `append_node`.** `resect_image` writes its status last
-  because `append_node` used to clear the field. With the log, `append_node`
-  writes nothing and the clear is gone; `resect_image` records once at the end
-  with `append_node` muted. `load_file` records after `append_node` returns
+- **Ordering with `append_node`.** `append_node` writes nothing of its own and
+  mutes the selection change it makes. `load_file` records after it returns
   the label, since the text needs the deduplicated label (`global (2)`), not
   the file stem.
 - **The status field is removed, not shadowed.** Every reader goes through
@@ -929,7 +927,7 @@ Layout, in `dock/tests.rs`:
 - `Layout::default()` has a bottom node holding `[ImageBrowser, ActionLog]`
   with `ImageBrowser` active.
 
-Scene-graph and resection tests that read `state.status_message` moved to
+Scene-graph tests that read `state.status_message` moved to
 `status_message()` with no change in the strings they assert.
 
 ## Non-goals

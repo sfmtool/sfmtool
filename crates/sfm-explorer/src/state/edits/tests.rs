@@ -658,7 +658,7 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     recon
 }
 
-// ── Resect in place: the bulk edit that re-poses one image ──────────────
+// ── Resect Image: the bulk edit that re-poses one image ─────────────────
 
 /// A state holding one node a resection can run on, with image 1's stored pose
 /// pushed off the truth its own keypoints were computed at.
@@ -684,7 +684,7 @@ fn centre_offset(state: &AppState, index: usize, centre: nalgebra::Point3<f64>) 
 }
 
 #[test]
-fn resecting_in_place_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
+fn resecting_pushes_a_version_whose_base_is_new_and_whose_images_stay_put() {
     let (mut state, id) = resectable_state();
     let before = Arc::clone(&state.scene[0].edited().base);
     let images = state.scene[0].image_count();
@@ -696,7 +696,7 @@ fn resecting_in_place_pushes_a_version_whose_base_is_new_and_whose_images_stay_p
     let moved = centre_offset(&state, 1, truth);
 
     state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect("the ring corroborates image 1");
 
     let node = &state.scene[0];
@@ -722,13 +722,13 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
     let (mut state, id) = resectable_state();
     let entries = texts(&state).len();
     state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect("the ring corroborates image 1");
     let logged = texts(&state);
     assert_eq!(logged.len(), entries + 1, "{logged:?}");
     let last = logged.last().expect("one entry");
     assert!(
-        last.starts_with("Resected image_001.jpg in place (run_a): 120 pts, inliers "),
+        last.starts_with("Resected image_001.jpg (run_a): 120 pts, inliers "),
         "{last}"
     );
     let serials = state.scene[0].history.versions();
@@ -741,7 +741,7 @@ fn the_action_log_carries_one_entry_naming_the_image_and_the_version() {
     );
     assert_eq!(
         state.scene[0].history.current_version().label,
-        "Resected image_001.jpg in place (run_a)"
+        "Resected image_001.jpg (run_a)"
     );
 }
 
@@ -752,7 +752,7 @@ fn an_undo_puts_the_stored_pose_and_the_selection_back() {
     state.selected_point = Some(PointRef::new(id, 9));
 
     state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect("the ring corroborates image 1");
     let selected = state.selected_point.expect("the point survived the edit");
     assert_eq!(selected.recon, id);
@@ -776,7 +776,7 @@ fn a_resection_that_cannot_be_attempted_pushes_no_version_and_logs_a_failure() {
         nalgebra::Vector3::new(f64::NAN, 0.0, 0.0);
 
     let why = state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect_err("an unposed target has no pose to re-estimate");
 
     assert!(why.contains("refused"), "{why}");
@@ -791,7 +791,7 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
     let (mut state, id) = resectable_state();
     // Image 1's keypoints now agree with nothing: the estimate finds
     // correspondences and no consensus among them, which is the refusal that
-    // still produces a derived node and must not produce a version.
+    // must not produce a version.
     {
         let recon = state.scene[0].recon_mut();
         let rows: Vec<usize> = recon
@@ -814,7 +814,7 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
     }
 
     let why = state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect_err("nothing corroborates that pose");
 
     assert!(why.contains("refused"), "{why}");
@@ -823,6 +823,18 @@ fn a_refused_estimate_pushes_no_version_and_logs_a_failure() {
         state.action_log.entries().last().expect("one entry").failed,
         "the refusal was logged as a success"
     );
+}
+
+#[test]
+fn the_matches_source_without_a_chosen_file_reports_itself() {
+    let (mut state, id) = resectable_state();
+
+    let why = state
+        .resect_image(id, 1, crate::resect::ResectFrom::Matches)
+        .expect_err("no .matches file was chosen for this node");
+
+    assert!(why.contains(".matches"), "{why}");
+    assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
 // ── Bundle adjust: the bulk edit that moves everything ──────────────────
@@ -1099,7 +1111,7 @@ fn a_bulk_edit_names_the_fold_the_kernel_the_map_and_the_push() {
         .expect("a live point");
 
     state
-        .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+        .resect_image(id, 1, crate::resect::ResectFrom::Observations)
         .expect("the fixture's image 1 resects from its own observations");
 
     let entry = newest(&state);

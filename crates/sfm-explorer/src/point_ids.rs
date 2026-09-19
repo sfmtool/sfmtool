@@ -27,8 +27,7 @@
 //!   forward, when the minting version is not an ancestor of the cursor's.
 //!
 //! Every hash here is computed from a value rather than read off a file, so a
-//! node that was never saved -- demo data, a resection -- has ids exactly like
-//! one that was.
+//! node that was never saved -- demo data -- has ids exactly like one that was.
 
 use sfmtool_core::EditedReconstruction;
 

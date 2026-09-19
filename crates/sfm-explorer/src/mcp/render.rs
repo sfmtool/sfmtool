@@ -60,8 +60,7 @@ pub(super) fn scene(state: &AppState, viewer: &Viewer3D) -> Value {
 /// One scene entry: what a reconstruction is, how much of it there is, and how
 /// it is being drawn.
 ///
-/// `path` is `null` for the two node kinds that came from no file: demo data
-/// and a derived node such as a resection.
+/// `path` is `null` for a node that came from no file, which is demo data.
 pub(super) fn reconstruction(node: &SceneNode, solo: Option<ReconId>) -> Value {
     let recon = node.recon();
     json!({

@@ -30,7 +30,7 @@ The phases it draws come from the one `Progress` parameter every long
 
 One operation dominates. A bundle adjustment of `dino_dog_toy-embedded` (85
 images, 21 009 points, 392 489 observations) is **95 seconds** of solving, and
-that is a small real reconstruction; a resection in place is 838 ms. Run inside
+that is a small real reconstruction; a resection is 838 ms. Run inside
 the frame that asks for it, an operation of that length means a window that for
 its whole duration does not redraw, does not orbit, does not answer a keystroke
 and does not answer an agent's call. The person at the window cannot tell a
@@ -318,9 +318,9 @@ neither today, in exchange for nothing. So:
   takes it, being the operation that froze the window for minutes. The
   `sift_files` -> `embedded_patches` conversion takes it too: it reads a `.sift`
   file per image, twice over under the default sizing policy, so its cost grows
-  with the image count rather than with anything the frame can absorb. Resect in
-  place, at 838 ms, is the other bulk edit over the threshold that matters; it
-  runs on the GUI thread, and the mechanism here is what it would use.
+  with the image count rather than with anything the frame can absorb. The
+  resection, at 838 ms, is the other bulk edit over the threshold that matters;
+  it runs on the GUI thread, and the mechanism here is what it would use.
 
 **Opening a file is not a candidate**, though it looks like the other thing that
 freezes a fresh session. Measured, an open of the 45 MB dino set is 1.45 s of

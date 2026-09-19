@@ -187,14 +187,13 @@ pub(super) fn move_camera_image(
     edited(state, id, |state| state.move_camera(image, &pose))
 }
 
-/// `resect_camera_image_in_place`: the resection landed as the node's next
-/// version rather than as a derived node beside it.
+/// `resect_camera_image`: the resection landed as the node's next version.
 ///
 /// `from_matches` chooses the correspondence source. The matches one reads the
 /// `.matches` file remembered for this node, which the Scene panel's own
 /// chooser puts there; with none remembered the state refuses in its own words,
 /// and this surface does not open a file dialog on an agent's behalf.
-pub(super) fn resect_camera_image_in_place(
+pub(super) fn resect_camera_image(
     state: &mut AppState,
     label: &str,
     selector: &CameraImageSel,
@@ -208,7 +207,7 @@ pub(super) fn resect_camera_image_in_place(
         crate::resect::ResectFrom::Observations
     };
     edited(state, id, |state| {
-        state.resect_image_in_place(id, image.index(), from)
+        state.resect_image(id, image.index(), from)
     })
 }
 

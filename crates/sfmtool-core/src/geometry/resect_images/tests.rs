@@ -926,7 +926,7 @@ fn in_place_hands_back_the_accepted_value_and_its_report() {
     assert!(report.refusal.is_none());
     assert!(report.accepted);
     assert_eq!(report.image_index, target);
-    // The value is the derived node's, so the pose it carries is the estimate's
+    // The value is the set call's, so the pose it carries is the estimate's
     // and the image table is the source's.
     assert_eq!(next.image_count(), source.image_count());
     let fitted = &next.image_table.images[target];
@@ -943,7 +943,7 @@ fn in_place_hands_back_the_accepted_value_and_its_report() {
 fn in_place_refuses_a_refused_estimate_rather_than_installing_it() {
     let mut source = perturbed(orbit(), 0, 0.35);
     // Nothing the target says is usable, so the estimate is refused: the
-    // outcome the derived node keeps and this one must not.
+    // outcome the set call keeps and this one must not.
     corrupt_observations(&mut source, 0);
 
     let error = in_place_error(&source, 0);

@@ -378,7 +378,7 @@ impl AppState {
     }
 
     /// Re-estimate `image`'s pose against the rest of `source` and install the
-    /// answer as `source`'s next version, rather than as a node beside it.
+    /// answer as `source`'s next version.
     ///
     /// A bulk edit: the resection re-poses one image and re-triangulates the
     /// points it observes, so the next version is a whole new base and the map
@@ -387,16 +387,13 @@ impl AppState {
     /// remove one -- so image indexes, the image and camera selections, and the
     /// decoded pixels keyed by them all still mean what they meant.
     ///
-    /// A refused *estimate* pushes no version. The derived-node variant keeps
-    /// such an answer, because a held-out re-triangulation beside the original
-    /// is worth looking at; installed as the original it would be a version that
-    /// moved the points and left the pose alone. See
-    /// [`AppState::resect_image`] for that variant and
-    /// `specs/gui/resect-image.md` for both.
+    /// A refused *estimate* pushes no version: installed as the original it
+    /// would be a version that moved the points and left the pose alone. See
+    /// `specs/gui/edits/resect-image.md`.
     ///
-    /// Records its own outcome, success or refusal, as one Action Log entry, in
-    /// the vocabulary the derived-node variant reports in; the `Err` is for the
-    /// caller to know the node's caches are still good, not to be logged again.
+    /// Records its own outcome, success or refusal, as one Action Log entry;
+    /// the `Err` is for the caller to know the node's caches are still good, not
+    /// to be logged again.
     ///
     /// The entry carries the four stages a bulk edit has -- the overlay fold,
     /// the resection itself, the row map read off its two values, and the
@@ -404,7 +401,7 @@ impl AppState {
     /// [`crate::action_log::ActionLog::record_done`] from the instant below, so
     /// the row says what the resection cost rather than what writing the row
     /// cost.
-    pub fn resect_image_in_place(
+    pub fn resect_image(
         &mut self,
         source: ReconId,
         image: usize,
@@ -417,7 +414,7 @@ impl AppState {
         if let Some(why) = self.busy_refusal(source) {
             return Err(why);
         }
-        match self.resect_in_place_inner(source, image, from, &collector) {
+        match self.resect_image_inner(source, image, from, &collector) {
             Ok(message) => {
                 self.action_log
                     .record_done(Kind::Edit, started, message, collector.take());
@@ -432,7 +429,7 @@ impl AppState {
 
     /// The edit itself: `Ok` carries the Action Log's sentence, `Err` the
     /// refusal's.
-    fn resect_in_place_inner(
+    fn resect_image_inner(
         &mut self,
         source: ReconId,
         image: usize,
@@ -506,7 +503,7 @@ impl AppState {
         steps.push(PointMap::Rows(scan));
         let map = PointMap::Chain(steps);
 
-        let text = format!("Resected {basename} in place ({label})");
+        let text = format!("Resected {basename} ({label})");
         let node = &mut self.scene[index];
         let serial = {
             let _phase = collector.phase("push version");

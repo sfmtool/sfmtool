@@ -465,7 +465,7 @@ The Action Log row gains a leading column one glyph wide, before the time:
 
 ```
   14:09:19  User      6.2 ms  Deleted point 29429 in guard (v2 → v3)
-+ 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
++ 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg (v3 → v2)
   14:09:24  MCP      <1 ms    get_history guard
 ```
 
@@ -474,7 +474,7 @@ one that carries none. Clicking the toggle, or the row's time, expands it in
 place:
 
 ```
-- 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg in place (v3 → v2)
+- 14:09:22  MCP        2.4 s  Undo: Resected dino_dog_toy_09.jpg (v3 → v2)
                       4.1 ms  undo
                       0.3 ms    history step
                       3.8 ms    selection follow
@@ -746,7 +746,7 @@ The operations:
 | `save`, with `materialise` over `lineage` and `push version`, then `write` | `state::save` | |
 | `undo` / `redo` / `go to`, with `history step`, `selection follow` and `forget images` | `state::edits` | 447 ms to 2.36 s across a bulk edit |
 | `materialise` | wherever an edit folds an overlay before a kernel call | |
-| the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection in place |
+| the kernel a bulk edit runs, by its own name | one row, or the call's own stages where it takes a `Progress` | 838 ms for a resection |
 | `patch frames`, `read keypoints` and `assemble` | `SfmrReconstruction::to_embedded_patches`, one count per image under the read | |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |

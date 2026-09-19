@@ -28,8 +28,8 @@ in [app.rs](../../crates/sfm-explorer/src/app.rs), and the close prompt is
 | `File > Save` | `Ctrl/Cmd+S` | Writes the selected node's value over the node's own path. |
 | `File > Save As...` | `Ctrl/Cmd+Shift+S` | Asks for a path, writes there, and re-points the node at it. |
 
-**Save is disabled for a node with no path** -- demo data, or a node a resection
-produced -- with the hover text `The selected reconstruction came from no file
+**Save is disabled for a node with no path** -- demo data -- with the hover
+text `The selected reconstruction came from no file
 -- use Save As`. There is nothing to write over, and the alternative is one menu
 item away, so the item says which one rather than opening a dialog the user did
 not ask for.

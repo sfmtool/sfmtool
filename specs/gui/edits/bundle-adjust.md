@@ -19,7 +19,7 @@ per-step maps the selection follows),
 [`../../core/reconstruction/bundle-adjust.md`](../../core/reconstruction/bundle-adjust.md)
 (the core function this wraps),
 [`../../core/geometry/bundle-adjustment.md`](../../core/geometry/bundle-adjustment.md)
-(the kernel under that), [`../resect-image.md`](../resect-image.md) (the edit
+(the kernel under that), [`resect-image.md`](resect-image.md) (the edit
 that re-poses one image rather than all of them), and
 [`../saving.md`](../saving.md).
 

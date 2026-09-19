@@ -1181,19 +1181,6 @@ fn working_the_tint_menu_leaves_the_selection_where_it_was() {
 }
 
 #[test]
-fn a_replaced_node_carries_the_tint_like_the_rest_of_the_display_state() {
-    let mut state = shared_shoot(1);
-    state.scene[0].tint = NodeTint::Tint(&TINT_PALETTE[2]);
-
-    let mut replacement = file_node("/runs/run_0.sfmr", 8, "IMG");
-    replacement.copy_display_from(&state.scene[0]);
-
-    // The tint is how the user was telling this node apart from the one beside
-    // it; a replacement that dropped it would undo that silently.
-    assert_eq!(replacement.tint, NodeTint::Tint(&TINT_PALETTE[2]));
-}
-
-#[test]
 fn an_untinted_node_writes_the_original_colors_convention() {
     // `a == 0` is what every scene shader reads as "leave my colors alone".
     assert_eq!(NodeTint::Original.to_uniform(), [0.0; 4]);
@@ -1561,29 +1548,6 @@ fn resetting_a_transform_returns_the_node_to_its_own_frame() {
 
     assert!(!state.scene[1].has_transform());
     assert_eq!(state.scene[1].transform.scale, 1.0);
-}
-
-#[test]
-fn a_replaced_node_carries_the_transform_like_the_rest_of_its_display_state() {
-    let mut state = misaligned_pair();
-    let (a, b) = (state.scene[0].id, state.scene[1].id);
-    state.align_node(b, a, AlignOptions::default());
-    state.scene[1].show_points = false;
-
-    // What a repeated resection does with the node it replaces: the same
-    // question asked again comes back displayed the way it was left.
-    let mut replacement = posed_node("/runs/run_b.sfmr");
-    replacement.copy_display_from(&state.scene[1]);
-
-    assert!(
-        replacement.has_transform(),
-        "the replacement reset the alignment"
-    );
-    assert_eq!(
-        replacement.transform.scale, state.scene[1].transform.scale,
-        "the replacement changed the alignment"
-    );
-    assert!(!replacement.show_points);
 }
 
 // ── Node lifecycle (no frame needed) ────────────────────────────────────
@@ -2567,80 +2531,6 @@ fn resect_is_greyed_on_an_image_that_is_not_posed() {
 }
 
 #[test]
-fn the_in_place_entries_sit_beside_the_derived_ones_and_report_their_own_source() {
-    let mut state = shared_shoot(1);
-    let (mut panel, ctx, id) = with_image_list(&mut state);
-
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
-    assert!(
-        panel.hit_rect(row_id(id, "resect_in_place_2")).is_some(),
-        "the image row's menu offered no in-place resection"
-    );
-    let response = click(
-        &mut panel,
-        &ctx,
-        &mut state,
-        row_id(id, "resect_in_place_2"),
-    );
-    assert_eq!(
-        response.resect_image_in_place,
-        Some((ImageRef::new(id, 2), ResectFrom::Observations))
-    );
-    assert_eq!(
-        response.resect_image, None,
-        "the in-place entry also asked for a derived node"
-    );
-
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_2"));
-    let response = click(
-        &mut panel,
-        &ctx,
-        &mut state,
-        row_id(id, "resect_in_place_matches_2"),
-    );
-    assert_eq!(
-        response.resect_image_in_place,
-        Some((ImageRef::new(id, 2), ResectFrom::Matches))
-    );
-}
-
-#[test]
-fn the_in_place_entries_grey_on_the_same_reasons_the_derived_ones_do() {
-    let mut state = shared_shoot(1);
-    state.scene[0].recon_mut().image_table.images[1].translation_xyz =
-        Vector3::new(f64::NAN, 0.0, 0.0);
-    let (mut panel, ctx, id) = with_image_list(&mut state);
-
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_1"));
-    let response = click(
-        &mut panel,
-        &ctx,
-        &mut state,
-        row_id(id, "resect_in_place_1"),
-    );
-    assert_eq!(
-        response.resect_image_in_place, None,
-        "an unposed image was resectable in place"
-    );
-
-    // The matches variant greys on a node with no feature indexes to join a
-    // match row through, exactly as the derived one does.
-    let mut state = resectable_scene();
-    let (mut panel, ctx, id) = with_image_list(&mut state);
-    open_context_menu(&mut panel, &ctx, &mut state, row_id(id, "image_0"));
-    let response = click(
-        &mut panel,
-        &ctx,
-        &mut state,
-        row_id(id, "resect_in_place_matches_0"),
-    );
-    assert_eq!(
-        response.resect_image_in_place, None,
-        "the in-place matches variant was live on an embedded-patches node"
-    );
-}
-
-#[test]
 fn the_matches_variant_is_greyed_without_feature_indexes() {
     // A resectable node carries embedded patches, which is exactly the case a
     // match row cannot be joined to.
@@ -2658,91 +2548,6 @@ fn the_matches_variant_is_greyed_without_feature_indexes() {
         response.resect_image,
         Some((ImageRef::new(id, 0), ResectFrom::Observations))
     );
-}
-
-#[test]
-fn resecting_an_image_adds_a_derived_node_in_the_source_frame() {
-    let mut state = resectable_scene();
-    let source = state.scene[0].id;
-    state.scene[0].transform = known_similarity();
-    let image = state.scene[0].recon().image_table.images[3].name.clone();
-
-    state.resect_image(source, 3, ResectFrom::Observations);
-
-    assert_eq!(state.scene.len(), 2, "no derived node was added");
-    let derived = &state.scene[1];
-    assert_eq!(derived.label, format!("run_a (resected {image})"));
-    let inherited = known_similarity();
-    assert_eq!(derived.transform.scale, inherited.scale);
-    assert_eq!(derived.transform.translation, inherited.translation);
-    assert_eq!(derived.transform.rotation, inherited.rotation);
-    assert!(derived.path.is_none(), "the derived node claims a file");
-    // Selection lands on the derived node with the resected image selected in
-    // it, so the point track detail opens on it.
-    assert_eq!(state.selected_recon, Some(derived.id));
-    assert_eq!(state.selected_image, Some(ImageRef::new(derived.id, 3)));
-    assert!(state
-        .status_message()
-        .as_ref()
-        .is_some_and(|m| m.contains("Resected") && m.contains(&image)));
-
-    // The source is untouched.
-    assert_eq!(state.scene[0].id, source);
-    assert_eq!(
-        state.scene[0].recon().image_table.images[3].quaternion_wxyz,
-        resectable_node("/runs/run_a.sfmr")
-            .recon()
-            .image_table
-            .images[3]
-            .quaternion_wxyz
-    );
-}
-
-#[test]
-fn a_repeat_resection_replaces_the_earlier_derived_node() {
-    let mut state = resectable_scene();
-    let source = state.scene[0].id;
-    state.resect_image(source, 3, ResectFrom::Observations);
-    let first = state.scene[1].id;
-    let label = state.scene[1].label.clone();
-
-    state.resect_image(source, 3, ResectFrom::Observations);
-    assert_eq!(state.scene.len(), 2, "a repeat added a third node");
-    let second = state.scene[1].id;
-    assert_ne!(second, first, "the replacement reused the old id");
-    assert_eq!(state.scene[1].label, label, "the replacement was renamed");
-    assert_eq!(state.selected_recon, Some(second));
-
-    // A *different* image of the same source is a different question, and gets
-    // its own node.
-    state.resect_image(source, 4, ResectFrom::Observations);
-    assert_eq!(state.scene.len(), 3);
-}
-
-#[test]
-fn a_resection_that_cannot_be_attempted_reports_itself_and_adds_nothing() {
-    let mut state = AppState::new();
-    state.append_node(file_node("/runs/thin.sfmr", 3, "IMG"));
-    let source = state.scene[0].id;
-
-    state.resect_image(source, 0, ResectFrom::Observations);
-    assert_eq!(state.scene.len(), 1, "a refused resection made a node");
-    assert!(state
-        .status_message()
-        .as_ref()
-        .is_some_and(|m| m.starts_with("Resect ") && m.contains("refused")));
-}
-
-#[test]
-fn the_matches_variant_without_a_chosen_file_reports_itself() {
-    let mut state = resectable_scene();
-    let source = state.scene[0].id;
-    state.resect_image(source, 0, ResectFrom::Matches);
-    assert_eq!(state.scene.len(), 1);
-    assert!(state
-        .status_message()
-        .as_ref()
-        .is_some_and(|m| m.contains(".matches")));
 }
 
 #[test]

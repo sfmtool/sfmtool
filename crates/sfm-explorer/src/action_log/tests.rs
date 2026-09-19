@@ -1318,10 +1318,10 @@ fn every_operation_names_at_least_one_stage() {
                 .expect("a demo value has more than one image");
             state
         }),
-        ("resect in place", |_| {
+        ("resect image", |_| {
             let (mut state, id) = adjustable_scene();
             state
-                .resect_image_in_place(id, 1, crate::resect::ResectFrom::Observations)
+                .resect_image(id, 1, crate::resect::ResectFrom::Observations)
                 .expect("the fixture's image 1 resects from its own observations");
             state
         }),

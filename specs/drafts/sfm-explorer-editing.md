@@ -3,10 +3,7 @@
 **Status:** Draft
 
 The viewer today is read-only. Every operation that changes a reconstruction
-runs offline (`sfm xform`, the seed scripts, the Python bindings), and the one
-in-viewer operation that produces a different reconstruction, `Resect Image`,
-shows its answer as a second node beside the original rather than changing the
-original ([`../gui/resect-image.md`](../gui/resect-image.md)). This draft
+runs offline (`sfm xform`, the seed scripts, the Python bindings). This draft
 proposes that a loaded reconstruction becomes editable in place, with a full
 edit history the user can walk in both directions and see in a panel, and a way
 to write the result back to disk.
@@ -236,7 +233,7 @@ materialisation policy.
 ## Part 5: edits
 
 Each edit family is a small standing spec in the shape of
-[`../gui/resect-image.md`](../gui/resect-image.md): invocation, mechanism
+[`../gui/edits/resect-image.md`](../gui/edits/resect-image.md): invocation, mechanism
 pointing at the core function it wraps, what the version's label says, testing,
 non-goals. The core function is always a pure function of a reconstruction
 value plus named inputs, bound through `sfmtool-py` so the same edit is
@@ -255,10 +252,9 @@ Families, in the proposed order:
 - **Bake transform**: apply the node's `Align to…` transform to the value and
   reset the transform to identity. This is the edit that breaks the scene-graph
   invariant, on purpose and only when asked.
-- **Resect in place**: the existing resection applied to the node as a version
-  rather than landing a derived node is built and standing,
-  [`../gui/resect-image.md`](../gui/resect-image.md) § "In place". The
-  derived-node variant stays as the comparison affordance.
+- **Resect image**: re-estimating one image's pose and landing the answer as a
+  version of the node is built and standing,
+  [`../gui/edits/resect-image.md`](../gui/edits/resect-image.md).
 - **Move camera**: placing one image's pose by hand, by locking the camera to
   the viewport in camera view, is built and standing,
   [`../gui/edits/move-camera.md`](../gui/edits/move-camera.md), over the core
@@ -280,8 +276,7 @@ Families, in the proposed order:
   [`../core/reconstruction/bundle-adjust.md`](../core/reconstruction/bundle-adjust.md).
 
 Files into: `specs/gui/edits/<family>.md`, one each, in the
-[`../gui/edits/`](../gui/edits/README.md) directory the first family opened;
-`resect-image.md` gains its in-place variant.
+[`../gui/edits/`](../gui/edits/README.md) directory the first family opened.
 
 ---
 
@@ -323,9 +318,9 @@ steps after it.
    put the additions on the GPU. A commit that creates rather than replaces
    exercises the rest of that machinery: a point in no base, `push_creating`,
    the point-edit hash an id is minted against, and an addition the GPU draws
-   that replaces nothing. Resect in place and bundle adjust are done as
-   well, the two **bulk** edits of the family: the first lands the existing
-   resection as a version of the node it questioned, and the second is the
+   that replaces nothing. Resect image and bundle adjust are done as
+   well, the two **bulk** edits of the family: the first lands a resection as a
+   version of the node it questioned, and the second is the
    node's own solver run over the value on screen, which is what the edits
    before it change the input to. Remaining: point constraints, bake transform,
    and merging two tracks.

@@ -224,7 +224,7 @@ pub(crate) enum Command {
         quaternion_wxyz: [f64; 4],
         translation: [f64; 3],
     },
-    ResectCameraImageInPlace {
+    ResectCameraImage {
         reconstruction_label: String,
         camera_image: CameraImageSel,
         from_matches: bool,
@@ -973,11 +973,11 @@ pub(crate) fn apply_with_window(
             quaternion_wxyz,
             translation,
         )),
-        Command::ResectCameraImageInPlace {
+        Command::ResectCameraImage {
             reconstruction_label,
             camera_image,
             from_matches,
-        } => done(edit::resect_camera_image_in_place(
+        } => done(edit::resect_camera_image(
             state,
             &reconstruction_label,
             &camera_image,
@@ -1536,7 +1536,7 @@ fn loaded_list(state: &AppState) -> String {
 /// A mutating tool that succeeds writes nothing here: the `AppState` and
 /// `Viewer3D` methods it called already did, in the same words the GUI's own
 /// path produces. Three of them word their own **refusal** as well -- the
-/// in-place resection, the adjustment and the camera move own the vocabulary of
+/// resection, the adjustment and the camera move own the vocabulary of
 /// the operation they refused -- so a failed entry is written here only when the
 /// batch's application recorded none, which is what keeps one failure to one
 /// entry.
@@ -1689,7 +1689,7 @@ impl Command {
             Command::DeletePoint { .. } => "delete_point",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
             Command::MoveCameraImage { .. } => "move_camera_image",
-            Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
+            Command::ResectCameraImage { .. } => "resect_camera_image",
             Command::BundleAdjust { .. } => "bundle_adjust",
             Command::ConvertToEmbeddedPatches { .. } => "convert_to_embedded_patches",
             Command::GetBench { .. } => "get_bench",
@@ -1744,7 +1744,7 @@ impl Command {
                 reconstruction_label,
                 ..
             }
-            | Command::ResectCameraImageInPlace {
+            | Command::ResectCameraImage {
                 reconstruction_label,
                 ..
             }
@@ -1795,7 +1795,7 @@ impl Command {
                 reconstruction_label,
                 ..
             }
-            | Command::ResectCameraImageInPlace {
+            | Command::ResectCameraImage {
                 reconstruction_label,
                 ..
             }
@@ -1868,7 +1868,7 @@ impl Command {
             | Command::DeletePoint { .. }
             | Command::DeleteCameraImage { .. }
             | Command::MoveCameraImage { .. }
-            | Command::ResectCameraImageInPlace { .. }
+            | Command::ResectCameraImage { .. }
             | Command::BundleAdjust { .. }
             | Command::ConvertToEmbeddedPatches { .. }
             // The one bench step whose row is an `Edit`, because it is one

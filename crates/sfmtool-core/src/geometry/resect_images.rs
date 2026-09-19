@@ -4,7 +4,7 @@
 //! Re-estimate a set of images' poses against structure that did not depend on
 //! any of them.
 //!
-//! [`resect_images`] is the whole mechanism of `specs/gui/resect-image.md`:
+//! [`resect_images`] is the whole mechanism of `specs/gui/edits/resect-image.md`:
 //! the target set's contribution to structure is removed (every finite point
 //! any target observes is re-triangulated from the *non-target* observations
 //! alone, and every direction a target observes is re-derived from the
@@ -294,7 +294,7 @@ impl From<ReconstructionError> for ResectImageError {
 /// Re-estimate the poses of `image_indexes` against structure held out from all
 /// of them, and return the result as a new reconstruction.
 ///
-/// The whole mechanism of `specs/gui/resect-image.md`:
+/// The whole mechanism of `specs/gui/edits/resect-image.md`:
 ///
 /// 1. **Held-out structure.** Every finite point any target observes that keeps
 ///    at least two *non-target* observations is re-triangulated from those
@@ -677,12 +677,12 @@ impl From<ResectImageError> for ResectInPlaceError {
 /// than as a reconstruction to stand beside it.
 ///
 /// The estimate is [`resect_images`] on the one-element target set, so the pose
-/// and the structure that come back are exactly the derived node's; what this
-/// adds is the rule an in-place caller needs and a comparison caller does not.
-/// **A refused estimate yields no value.** The derived node shows a refusal as a
-/// held-out re-triangulation the reviewer can look at beside the original; the
-/// same reconstruction installed *as* the original would be a version that moved
-/// the points and left the pose alone.
+/// and the structure that come back are exactly that call's; what this adds is
+/// the rule an in-place caller needs and a comparison caller does not.
+/// **A refused estimate yields no value.** [`resect_images`] hands a refusal
+/// back as a held-out re-triangulation that can be looked at beside the
+/// original; the same reconstruction installed *as* the original would be a
+/// version that moved the points and left the pose alone.
 ///
 /// The returned report is the target's own, and carries no refusal.
 ///

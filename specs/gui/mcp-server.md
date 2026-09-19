@@ -139,7 +139,7 @@ write, and one writes a file.
 | `delete_point` | write | Delete one 3D point and its track |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
-| `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
+| `resect_camera_image` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
 | `convert_to_embedded_patches` | write | Change one reconstruction's observations from `.sift` feature indexes to inline keypoints against a patch frame, on a worker thread |
 | `cancel_background` | write | Stop the operation running on a worker, when it can be stopped |
@@ -1107,7 +1107,7 @@ transcript.
       "kind": "edit",
       "failed": false,
       "took_ms": 412.6,
-      "text": "Resected IMG_0007.jpg in place (seoul_bull): 3011 pts, ..."
+      "text": "Resected IMG_0007.jpg (seoul_bull): 3011 pts, ..."
     },
     {
       "revision": 522,
@@ -1673,7 +1673,7 @@ that lists them and the one that writes a file. What the ten share is worth
 stating once rather than ten times.
 
 **Each one is a single `AppState` call**: `delete_point`, `delete_image`,
-`resect_image_in_place`, `bundle_adjust`, `undo`, `save_node_as`. It is the
+`resect_image`, `bundle_adjust`, `undo`, `save_node_as`. It is the
 same call the menu, the panel or the keyboard makes. So an agent's edit is a
 version in the same history, with the same label, drawn on the same Edit History
 rows, undone by the same Undo; the actor column is the only thing that differs,
@@ -1704,7 +1704,7 @@ is that sentence without the `(v6 → v7)` the entry appends.
 **A refusal pushes no version**, answers as a domain error in the state's own
 words, and leaves the Action Log one failed row. Which of the two writes that
 row depends on who worded the refusal: most `AppState` edits return theirs, and
-the drain records `{tool} failed: {message}`; the in-place resection, the
+the drain records `{tool} failed: {message}`; the resection, the
 adjustment and the camera move record their own (`Resect IMG_0042 in seoul_bull
 refused: …`, `Bundle adjust of seoul_bull refused: …`, `Cannot move IMG_0004
 (seoul_bull): …`), because the vocabulary of that refusal belongs to the
@@ -1770,7 +1770,7 @@ to the entries around it, and the two timestamps should be comparable without
 arithmetic.
 
 **`disk_serial` is `null` for a node that came from no file**, along with
-`is_on_disk: false` on every row: demo data and a derived node have no file
+`is_on_disk: false` on every row: demo data has no file
 holding any of their versions, and `path` beside it says so. Such a node is not
 `dirty` until something is done to it ([saving.md](saving.md)), and a
 `save_reconstruction` on it needs a path.
@@ -1911,21 +1911,20 @@ The refusals are the tool's own (no such reconstruction, no such camera image)
 and the core function's (the image carries no pose, the pose is not finite),
 the latter worded by the state and recorded once.
 
-### `resect_camera_image_in_place` / `bundle_adjust`
+### `resect_camera_image` / `bundle_adjust`
 
 The two bulk edits.
 
 ```jsonc
-// resect_camera_image_in_place { "reconstruction_label": "seoul_bull",
+// resect_camera_image { "reconstruction_label": "seoul_bull",
 //                                "camera_image": "images/IMG_0042.jpg" }
-// resect_camera_image_in_place { "reconstruction_label": "seoul_bull",
+// resect_camera_image { "reconstruction_label": "seoul_bull",
 //                                "camera_image": 3, "from_matches": true }
 // bundle_adjust { "reconstruction_label": "seoul_bull", "release_focal": true }
 ```
 
-`resect_camera_image_in_place` is the resection landed as the node's next
-version rather than as the derived node beside it that `Resect Image…` also
-offers ([resect-image.md](resect-image.md) § "In place"). The image table does
+`resect_camera_image` is the resection landed as the node's next
+version ([edits/resect-image.md](edits/resect-image.md)). The image table does
 not move, so image indexes and the selections keyed by them still mean what they
 meant; the points the image observes are re-triangulated, so point indexes do
 not. A refused *estimate* pushes no version.
@@ -2185,7 +2184,7 @@ something in the GUI in between.
 **Reconstructions are addressed by label.** `scene::unique_label` guarantees
 labels are unique across the scene — that is why it exists — and a label
 survives every edit of the node it names, and a node replaced under a fresh
-`ReconId` -- which a repeated resection does -- keeps it. An agent holding
+`ReconId` keeps it. An agent holding
 `"global"` still holds `"global"` afterwards; an agent holding `ReconId(4)`
 holds nothing.
 
@@ -2358,7 +2357,7 @@ command (a `Query` entry, which never reaches the status line — an agent polli
 same words the agent receives.
 
 **A refusal the state already recorded is not recorded twice.** Three `AppState`
-methods word their own: `resect_image_in_place`, `bundle_adjust` and
+methods word their own: `resect_image`, `bundle_adjust` and
 `move_camera`, whose refusals belong to the operation's vocabulary rather than
 to the tool that asked
 for it. So the drain writes its row only where the application of that command
@@ -2483,7 +2482,7 @@ pub(crate) enum Command {
     /// carries: a rotation quaternion and a camera centre.
     MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
                       quaternion_wxyz: [f64; 4], translation: [f64; 3] },
-    ResectCameraImageInPlace { reconstruction_label: String,
+    ResectCameraImage { reconstruction_label: String,
                                camera_image: CameraImageSel, from_matches: bool },
     BundleAdjust { reconstruction_label: String, release_focal: bool },
     /// `hud: false` is only reachable with `panel: Some(Tab::Viewer3D)`; the
@@ -2934,7 +2933,7 @@ where a test hands no host over.
   five near-copies of it. What is asserted is the boundary and not the edit:
   `delete_point` pushes a version whose serial, label and `report` the reply
   names, and leaves that one sentence in the log as `Mcp`; `delete_camera_image`
-  shrinks the image table; the in-place resection and the adjustment push a
+  shrinks the image table; the resection and the adjustment push a
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
   `AppState` calls these make.
@@ -3168,7 +3167,6 @@ Nothing here implements it. What this surface does is **not spend the names**:
 | `list_images` | The loose set — no pose, no reconstruction, no track |
 | `get_image` | One loose image: path, dimensions, EXIF, any `.sift` beside it |
 | `select_image` | Select one for the Image Detail panel |
-| `resect_image` | Estimate a pose against a named reconstruction, producing a derived reconstruction the way `set_camera_intrinsics` would |
 
 Each of those is the short name of an entity that genuinely has no
 reconstruction behind it, sitting beside the `camera_*` tool that names the
@@ -3200,7 +3198,7 @@ Other candidates, in rough order of value:
 - **No headless mode.** The window is the point. An MCP server with no window
   behind it would be a worse `sfm inspect`.
 - **No dialogs on an agent's behalf.** `save_reconstruction` takes a path and
-  `resect_camera_image_in_place` takes the `.matches` file the viewer already
+  `resect_camera_image` takes the `.matches` file the viewer already
   has; neither opens a chooser when it has none. A modal `rfd` dialog stops the
   GUI thread pumping, so every queued tool call would time out behind a window
   only the human can answer.
@@ -3238,7 +3236,7 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
-| `resect_camera_image_in_place` `from_matches` | `false`, the reconstruction's own observations | The other source is the `.matches` file already chosen for the node in the viewer. |
+| `resect_camera_image` `from_matches` | `false`, the reconstruction's own observations | The other source is the `.matches` file already chosen for the node in the viewer. |
 | `bundle_adjust` `release_focal` | `false`, the shared focal is held | The one decision the Bundle Adjust dialog collects. |
 
 ## Open questions

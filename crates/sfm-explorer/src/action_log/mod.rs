@@ -16,7 +16,7 @@
 //!   caller that is not the user. Instead the MCP drain sets [`Actor::Mcp`]
 //!   before applying a frame's commands and restores [`Actor::User`] after.
 //! - **Muting is a depth counter.** Composite actions nest — `close_all` over
-//!   `close_node`, `resect_image` over `append_node` — and each layer only
+//!   `close_node`, `append_node` over `select_recon` — and each layer only
 //!   knows about itself.
 //! - **Coalescing happens at record time and is not reversible.** Successive
 //!   values of one [`Run`] — a control, a selection slot, a polled query tool —
@@ -115,7 +115,7 @@ pub(crate) enum Kind {
     File,
     /// Which reconstruction, image, camera or point is selected.
     Selection,
-    /// The scene graph: visibility, tint, solo, alignment, resection.
+    /// The scene graph: visibility, tint, solo, alignment.
     Scene,
     /// An edit to a reconstruction, and the undo or redo of one. See
     /// [`crate::document`].

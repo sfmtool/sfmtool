@@ -334,14 +334,6 @@ impl SceneNode {
         }
     }
 
-    /// A node derived in-session from another node (a resection, for one),
-    /// carrying `recon` under `label`. It came from no file, and everything
-    /// there is to know about where it came from is in its label and its
-    /// reconstruction's metadata.
-    pub fn derived(label: String, recon: SfmrReconstruction) -> Self {
-        Self::new(label, None, recon)
-    }
-
     /// A node for a reconstruction read from `path`, labeled with its file stem.
     pub fn from_path(path: &Path, recon: SfmrReconstruction) -> Self {
         Self::new(label_for_path(path), Some(path.to_path_buf()), recon)
@@ -469,24 +461,6 @@ impl SceneNode {
         t.scale != 1.0
             || t.translation != nalgebra::Vector3::zeros()
             || t.rotation != sfmtool_core::RotQuaternion::identity()
-    }
-
-    /// Copy the per-node display state (eyes, interaction cursor, tint,
-    /// transform) from `other`.
-    ///
-    /// Used by a resection that replaces an earlier derived node: the same
-    /// question asked again should come back displayed the way the reviewer had
-    /// it, the alignment they fitted included, and the tint that is how they
-    /// were telling it apart from the node beside it.
-    pub fn copy_display_from(&mut self, other: &SceneNode) {
-        self.visible = other.visible;
-        self.interactive = other.interactive;
-        self.show_points = other.show_points;
-        self.show_camera_images = other.show_camera_images;
-        self.show_patches = other.show_patches;
-        self.show_points_at_infinity = other.show_points_at_infinity;
-        self.tint = other.tint;
-        self.transform = other.transform.clone();
     }
 }
 

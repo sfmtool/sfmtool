@@ -20,7 +20,7 @@ and which navigation keeps it), [`../viewport-navigation.md`](../viewport-naviga
 (the version, the two kinds of edit, and what a bulk edit owes the caches),
 [`../edit-history.md`](../edit-history.md) (the cursor and the Edit menu),
 [`../../core/reconstruction/move-camera.md`](../../core/reconstruction/move-camera.md)
-(the core function this wraps), [`../resect-image.md`](../resect-image.md) (the
+(the core function this wraps), [`resect-image.md`](resect-image.md) (the
 edit that re-*estimates* one image's pose rather than handing it over), and
 [`../saving.md`](../saving.md).
 

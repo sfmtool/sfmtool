@@ -1500,15 +1500,14 @@ fn an_unknown_camera_image_name_says_what_a_name_looks_like() {
     assert!(error.0.contains("relative path"), "{error}");
 }
 
-/// A label survives a node being replaced under a fresh `ReconId`, which a
-/// repeated resection does — the whole reason the label rather than the id is
-/// the wire handle.
+/// A label survives a node being replaced under a fresh `ReconId` — the whole
+/// reason the label rather than the id is the wire handle.
 #[test]
 fn a_label_still_resolves_after_a_node_is_replaced() {
     let (mut state, mut viewer) = two_reconstructions();
     let before = state.scene[0].id;
-    // The scene edit a repeated resection makes: replace the node in place,
-    // keeping its label.
+    // A node swapped out under its label, which is what the handle has to
+    // survive.
     let mut replacement =
         SceneNode::from_path(std::path::Path::new("/runs/alpha.sfmr"), recon(8, "A"));
     replacement.label = "alpha".to_string();
@@ -3551,7 +3550,7 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             }),
         ),
         (
-            "resect_camera_image_in_place",
+            "resect_camera_image",
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
         ("bundle_adjust", json!({ "reconstruction_label": "alpha" })),
@@ -4465,21 +4464,21 @@ fn delete_camera_image_renumbers_and_reports_the_version() {
     );
 }
 
-/// The in-place resection lands as the node's next version, and its report is
-/// the resection's own summary.
+/// The resection lands as the node's next version, and its report is the
+/// resection's own summary.
 #[test]
-fn resecting_in_place_pushes_a_version_and_reports_the_estimate() {
+fn resecting_pushes_a_version_and_reports_the_estimate() {
     let (mut state, mut viewer) = editable();
     perturb(&mut state, 0.30);
     let reply = call(
         &mut state,
         &mut viewer,
-        "resect_camera_image_in_place",
+        "resect_camera_image",
         json!({ "reconstruction_label": "run_a", "camera_image": 1 }),
     );
     assert_eq!(version_count(&state), 2);
     let report = reply["report"].as_str().expect("a report");
-    assert!(report.contains("in place"), "{report}");
+    assert!(report.starts_with("Resected "), "{report}");
     assert!(report.contains("inliers"), "{report}");
 }
 
@@ -4493,7 +4492,7 @@ fn resecting_from_matches_without_a_chosen_file_is_refused_in_the_states_words()
     let error = refused_call(
         &mut state,
         &mut viewer,
-        "resect_camera_image_in_place",
+        "resect_camera_image",
         json!({ "reconstruction_label": "run_a", "camera_image": 1, "from_matches": true }),
     );
     assert!(error.0.contains(".matches"), "{error}");
@@ -4503,9 +4502,7 @@ fn resecting_from_matches_without_a_chosen_file_is_refused_in_the_states_words()
     assert_eq!(failed.len(), 1, "one refusal is one entry");
     // The state's own sentence, not the drain's `{tool} failed: …` wrapper.
     assert!(
-        !failed[0]
-            .2
-            .starts_with("resect_camera_image_in_place failed"),
+        !failed[0].2.starts_with("resect_camera_image failed"),
         "{:?}",
         failed[0]
     );
@@ -5314,7 +5311,7 @@ fn every_editing_tool_requires_its_reconstruction_label() {
             json!({ "camera_image": 1, "world_from_camera": {
                 "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
         ),
-        ("resect_camera_image_in_place", json!({ "camera_image": 1 })),
+        ("resect_camera_image", json!({ "camera_image": 1 })),
         ("bundle_adjust", json!({})),
         ("convert_to_embedded_patches", json!({})),
     ] {
@@ -5411,10 +5408,10 @@ fn the_editing_defaults_are_what_the_schemas_say() {
     };
     assert_eq!(
         parse(
-            "resect_camera_image_in_place",
+            "resect_camera_image",
             json!({ "reconstruction_label": "a", "camera_image": "images/x.jpg" })
         ),
-        Command::ResectCameraImageInPlace {
+        Command::ResectCameraImage {
             reconstruction_label: "a".to_string(),
             camera_image: super::CameraImageSel::Name("images/x.jpg".to_string()),
             from_matches: false,
