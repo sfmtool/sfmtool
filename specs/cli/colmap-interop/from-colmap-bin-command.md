@@ -3,7 +3,10 @@
 ## Overview
 
 Imports a COLMAP binary reconstruction into `.sfmr` format. Reads COLMAP's `cameras.bin`,
-`images.bin`, and `points3D.bin` files and converts them to a single `.sfmr` file.
+`images.bin`, and `points3D.bin` files — plus `rigs.bin` and `frames.bin` when the solve
+wrote them — and converts them to a single `.sfmr` file. `--image-dir` must sit inside an
+initialized workspace (`sfm ws init`); the command fails up front otherwise, because the
+workspace is what resolves image names and their `.sift` files.
 
 ## Coordinate Convention
 
@@ -11,8 +14,12 @@ This command is a convention boundary: COLMAP binary files use COLMAP's
 +Z-forward, Y-down convention, while `.sfmr` data is stored in the
 canonical Z-up / −Z-forward convention. On import the COLMAP→canonical
 conversion is applied — the camera-frame flip `S` on every pose and the
-world canonicalization `W` on world-space data (points, infinity
-directions) — so poses and points are never copied verbatim. `sfm
+world canonicalization `W` on world-space world points — so poses and
+points are never copied verbatim. Rig sensor poses, being camera-frame
+relative poses, are conjugated by `S` instead. COLMAP stores every point
+as a finite `(x, y, z)`, so there are no infinity directions to rotate
+at this boundary; `--detect-infinity` runs after the conversion and
+reclassifies from the converted geometry. `sfm
 to-colmap-bin` applies the inverse, so an import/export round trip is
 stable. See the "Coordinate System Conventions" section of
 [`sfmr-file-format.md`](../../formats/sfmr-file-format.md) for the transform
@@ -43,7 +50,14 @@ colmap_output/0/
   cameras.bin
   images.bin
   points3D.bin
+  rigs.bin        # optional
+  frames.bin      # optional
 ```
+
+`rigs.bin` and `frames.bin` are read when present, so a rig solve keeps its rig
+structure through the import: non-camera sensors are dropped, camera and image IDs are
+remapped to the `.sfmr`'s 0-based indexes, and the rig/frame tables are carried into the
+output file.
 
 ## Usage Examples
 

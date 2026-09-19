@@ -100,22 +100,28 @@ Several architectural decisions minimize data movement:
 - **Zero-copy resize.** `resize_flow_to` takes `FlowField` by value and returns it
   directly when dimensions already match (the common case after GPU final upsample).
 
-### Persistent Buffer Pools
+### Buffer Pools
 
-`GpuVariationalRefiner`, `GpuDisPipeline`, and `GpuPyramidPipeline` each maintain
-persistent buffer pools using `Mutex<Option<Pool>>`. Buffers and bind groups are
-allocated lazily on first use and grown as needed (never shrunk). After the first
-frame pair, no further GPU allocations occur. Uniform parameter buffers use
-`COPY_DST` usage for in-place updates via `queue.write_buffer()`.
+What persists between frame pairs is the `GpuFlowContext`: the device, the queue, and
+every compute pipeline and bind-group layout, compiled once. The buffers do not.
+`GpuDisPipeline`, `GpuVariationalRefiner` and `GpuPyramidPipeline` each expose a
+`create_pool(device, …)` that allocates one pool per run, sized upfront for the
+*largest* level that run will touch, and every level and every outer iteration then
+works out of that one pool — so no allocation happens inside the per-level loop, which
+is where it would cost, and nothing needs interior mutability to be shared across
+frames. Storage buffers carry `COPY_SRC | COPY_DST` so a level's output can feed the
+next level's input without a round trip through the CPU; uniform parameter buffers
+carry `COPY_DST` and are updated in place with `queue.write_buffer()`.
 
 ## Compute Shaders
 
 ### 1. Gaussian Pyramid (`blur_downsample.wgsl`)
 
-One compute dispatch per pass (horizontal, then vertical). Workgroups use shared
-memory to load a tile + 3-pixel halo, then each thread writes one output pixel.
+One compute dispatch per pass (horizontal, then vertical), 16×16 workgroups, one
+thread per output pixel reading its six taps straight from the input storage buffer.
 The 2x downsample is free — stride the output coordinates by 2. Two entry points
-(`horiz` and `vert`) share the same shader module.
+(`horiz` and `vert`) share the same shader module, and it is the entry point, not a
+uniform field, that selects the pass.
 
 Kernel: 6-tap separable Gaussian `[0.017560, 0.129748, 0.352692, 0.352692, 0.129748, 0.017560]`
 with between-pixel centering at offsets -2.5, -1.5, -0.5, +0.5, +1.5, +2.5.
@@ -196,8 +202,8 @@ than hardware texture samplers.
 | img_ref, img_tgt | `storage<f32>` | W×H per level | DIS input images |
 | grad_x, grad_y | `storage<f32>` | W×H | Reference image gradients |
 | flow_u, flow_v | `storage<f32>` | W×H | Current flow estimate |
-| patch_results | `storage<vec3<f32>>` | N_patches | (flow_x, flow_y) per patch |
-| a11, a12, a22, b1, b2 | `storage<f32>` | W×H each | Variational coefficients |
+| patch_flow_u, patch_flow_v | `storage<f32>` | N_patches each | Inverse search's per-patch flow |
+| coefficients, b2 | `storage<vec4<f32>>`, `storage<f32>` | W×H each | Variational coefficients, packed `vec4(a11, a12, a22, b1)` plus `b2` |
 | du_0, dv_0, du_1, dv_1 | `storage<f32>` | W×H each | Jacobi ping-pong |
 | warped + gradient images | `storage<f32>` | W×H each | Warped target + derivatives |
 
@@ -217,77 +223,32 @@ between GPU and CPU. These differences can cause DIS patches in later levels to
 converge to different local minima in occluded regions, amplifying the error for
 large frame gaps. In well-conditioned regions the error is negligible.
 
-## Jacobi Kernel — WGSL Reference
+## Jacobi Kernel — the binding contract
 
-Transliteration of `jacobi_pixel_scalar_to_row` from `variational.rs`:
+The kernel itself is
+[`jacobi_step.wgsl`](../../../crates/sfmtool-core/src/features/optical_flow/gpu/shaders/jacobi_step.wgsl),
+a transliteration of `jacobi_pixel_scalar_to_row` from `variational.rs`; read the two
+side by side, since they must agree pixel for pixel or the parity tests in
+`gpu/tests.rs` fail.
 
-```wgsl
-@group(0) @binding(0) var<storage, read> du_old: array<f32>;
-@group(0) @binding(1) var<storage, read> dv_old: array<f32>;
-@group(0) @binding(2) var<storage, read_write> du_new: array<f32>;
-@group(0) @binding(3) var<storage, read_write> dv_new: array<f32>;
-@group(0) @binding(4) var<storage, read> flow_u: array<f32>;
-@group(0) @binding(5) var<storage, read> flow_v: array<f32>;
-@group(0) @binding(6) var<storage, read> a11: array<f32>;
-@group(0) @binding(7) var<storage, read> a12: array<f32>;
-@group(0) @binding(8) var<storage, read> a22: array<f32>;
-@group(0) @binding(9) var<storage, read> b1: array<f32>;
-@group(0) @binding(10) var<storage, read> b2: array<f32>;
+What the shader file cannot say for itself is why its bindings are shaped the way they
+are. The entry point is `main`, at `@workgroup_size(16, 16)`, one thread per pixel, and
+its single data bind group carries eight storage buffers — which is the *limit*, not a
+coincidence. wgpu's default `max_storage_buffers_per_shader_stage` is 8, while the
+natural layout wants eleven: the `du`/`dv` ping-pong pairs (4), the current flow (2),
+and five scalar coefficient fields. So the coefficients are packed into one
+`array<vec4<f32>>` of `(a11, a12, a22, b1)` plus a separate `b2` array, which lands
+exactly on 8, and that packing is why `precompute_coefficients.wgsl` writes a `vec4`
+rather than five planes. Anything added to this kernel's inputs has to find room inside
+those eight or raise the device limit, which would narrow the set of GPUs the viewer
+runs on.
 
-struct Params { width: u32, height: u32, alpha: f32 }
-@group(1) @binding(0) var<uniform> params: Params;
-
-@compute @workgroup_size(16, 16)
-fn jacobi_step(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let col = gid.x;
-    let row = gid.y;
-    if col >= params.width || row >= params.height { return; }
-    let idx = row * params.width + col;
-    let cu = flow_u[idx];
-    let cv = flow_v[idx];
-
-    // 4-neighbor Laplacian with boundary handling
-    var lap_u = 0.0; var lap_v = 0.0; var nn = 0.0;
-    if col > 0u {
-        let n = idx - 1u;
-        lap_u += flow_u[n] + du_old[n] - cu;
-        lap_v += flow_v[n] + dv_old[n] - cv;
-        nn += 1.0;
-    }
-    if col + 1u < params.width {
-        let n = idx + 1u;
-        lap_u += flow_u[n] + du_old[n] - cu;
-        lap_v += flow_v[n] + dv_old[n] - cv;
-        nn += 1.0;
-    }
-    if row > 0u {
-        let n = idx - params.width;
-        lap_u += flow_u[n] + du_old[n] - cu;
-        lap_v += flow_v[n] + dv_old[n] - cv;
-        nn += 1.0;
-    }
-    if row + 1u < params.height {
-        let n = idx + params.width;
-        lap_u += flow_u[n] + du_old[n] - cu;
-        lap_v += flow_v[n] + dv_old[n] - cv;
-        nn += 1.0;
-    }
-
-    let diag_u = a11[idx] + params.alpha * nn;
-    let diag_v = a22[idx] + params.alpha * nn;
-
-    du_new[idx] = select(
-        du_old[idx],
-        (b1[idx] + params.alpha * lap_u - a12[idx] * dv_old[idx]) / diag_u,
-        abs(diag_u) > 1e-10
-    );
-    dv_new[idx] = select(
-        dv_old[idx],
-        (b2[idx] + params.alpha * lap_v - a12[idx] * du_old[idx]) / diag_v,
-        abs(diag_v) > 1e-10
-    );
-}
-```
+Double buffering is the other invariant: the pass reads `du_old`/`dv_old` and writes
+`du_new`/`dv_new`, and the caller swaps the two pairs between inner iterations, so a
+sweep never reads a value that same sweep wrote — that is what makes it Jacobi rather
+than Gauss–Seidel, and it is the property the CPU SOR path deliberately does not have.
+The uniforms (`width`, `height`, `alpha`) sit in a second bind group so the data group
+can be rebuilt without touching them.
 
 ## Timing Profiles
 

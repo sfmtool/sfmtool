@@ -110,8 +110,8 @@ as nearly as the current arrangement allows. Three rules, tried in order:
 1. **Already open:** raise it — make it the active tab of the node it is in,
    and focus that node. Nothing moves. (The menu never shows this case as a
    click target, since the entry is ticked, but the same operation serves
-   `Go ▸ Go to Point`'s raise of the Point Track panel and, later, an MCP
-   `show_panel`.)
+   `Go ▸ Go to Point`'s raise of the Point Track panel and the MCP
+   `show_panel` tool.)
 2. **A default group-mate is open:** push it into that node, behind the
    current tabs, then make it active. There are three groups. Two of them are
    the multi-tab nodes of the default layout (Image Detail / Point Track /
@@ -178,7 +178,7 @@ Drag rearrangements the user makes with the mouse — moving a tab, resizing a
 split, floating a node — are **not** logged. `egui_dock` reports none of them as
 events, and diffing the tree every frame to synthesize entries would log a
 split drag as hundreds of resizes. The Action Log records what was *asked for*,
-by menu or, later, by tool call; the arrangement itself is what
+by menu or by tool call; the arrangement itself is what
 `Layout::from_dock` reads back at any moment.
 
 ## The window layout file
@@ -644,7 +644,7 @@ pub(crate) enum Home { Root, Edge { edge: egui_dock::Split, share: f32 } }
 
 /// `Tab`'s wire spelling, both ways, and its home. Hand-written rather than
 /// `serde`-derived: the file never passes through a `Deserialize`, and these
-/// two functions are also what the MCP tools will spell panels with.
+/// two functions are also what the MCP tools spell panels with.
 impl Tab {
     pub(crate) const ALL: [Tab; 8];           // default-layout order, the menu's order
     pub(crate) fn wire_name(self) -> &'static str;

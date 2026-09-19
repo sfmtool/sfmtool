@@ -15,7 +15,12 @@ attitude — resect position only.
 
 Inputs: `CameraIntrinsics`, world-to-camera rotation `R`, world points
 `X_k` (`f64 [n, 3]`), observed pixels `uv_k` (`f64 [n, 2]`),
-`max_error_px` (trim gate, default `8.0`), `min_inliers` (default `10`).
+`max_error_px` (trim gate), `min_inliers`. The core function takes the
+last two as required arguments and carries no defaults: `8.0` and `10`
+are the Python binding's signature defaults (see
+[Interface](#interface)), and the one in-repo Rust caller, the far-field
+rotation skeleton, passes its own `RESECT_MAX_ERROR_PX` /
+`RESECT_MIN_INLIERS`.
 
 Each observation's ray `r_k = pixel_to_ray(uv_k)` (unit, camera frame)
 must be parallel to `R·X_k + t`:
@@ -54,15 +59,39 @@ chirality, and it is therefore model-dependent:
   reflection, which is the one thing the sign-blind rows need the gate
   for.
 
-Output: `t`, the surviving-observation mask, and the survivors' pixel
-residual norms.
+Output: `t`, the surviving-observation mask, and pixel residual norms.
+All three outputs are per **input** observation and length `n`: a
+non-survivor keeps the residual it scored at the final translation, and
+an observation the camera cannot image — behind it, outside the model's
+domain, or with a non-finite ray — reports `INVALID_RESIDUAL` (`1e6`)
+rather than a real number. Zipping `residual_norms` against the inlier
+subset instead of the inputs misaligns it.
 
-## Binding
+## Interface
 
 The kernel lives in
-[resect_translation.rs](../../../crates/sfmtool-core/src/geometry/resect_translation.rs),
-bound as `sfmtool._sfmtool.geometry.resect_translation` by
-[resect_translation.rs](../../../crates/sfmtool-py/src/geometry/resect_translation.rs).
+[resect_translation.rs](../../../crates/sfmtool-core/src/geometry/resect_translation.rs):
+
+```rust
+pub struct TranslationResection {
+    pub translation: Vector3<f64>,   // world-to-camera t
+    pub inliers: Vec<bool>,          // per input observation
+    pub residual_norms: Vec<f64>,    // per input observation
+}
+
+pub fn resect_translation(
+    cam: &CameraIntrinsics,
+    rotation: &UnitQuaternion<f64>,
+    points: &[[f64; 3]],
+    uv: &[[f64; 2]],
+    max_error_px: f64,
+    min_inliers: usize,
+) -> Option<TranslationResection>;
+```
+
+It is bound as `sfmtool._sfmtool.geometry.resect_translation` by
+[resect_translation.rs](../../../crates/sfmtool-py/src/geometry/resect_translation.rs),
+which is where the two trim defaults live:
 
 ```python
 resect_translation(camera, rotation_wxyz, points, uv,

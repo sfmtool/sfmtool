@@ -252,11 +252,15 @@ reconstruction's image names. Each detected sequence is analyzed independently.
 Within each detected sequence, evaluate each frame i by extrapolating to it from both
 sides:
 
-1. **Left extrapolation**: Use frames i-3, i-2, i-1 to extrapolate a predicted pose at
-   frame i. Fit a quadratic (or cubic) through the camera centers and use corresponding
-   higher-order interpolation for the rotations.
+1. **Left extrapolation**: Two fits are made and the **smaller** error of the two is
+   reported — a linear fit through frames i-2, i-1 and a quadratic through i-3, i-2,
+   i-1, each through the camera centers with corresponding-order interpolation for the
+   rotations. Taking the minimum keeps a discontinuity at the far end of the 3-frame
+   window from inflating the error for the near side: the 2-frame fit still sees a
+   smooth run. Where fewer than three frames precede i, only the linear fit is made.
 
-2. **Right extrapolation**: Use frames i+1, i+2, i+3 to extrapolate backward to frame i.
+2. **Right extrapolation**: The same pair of fits mirrored — linear from i+2, i+1 and
+   quadratic from i+3, i+2, i+1 — extrapolating backward to frame i.
 
 3. **Extrapolation error**: Measure the translation distance and rotation angle between
    each extrapolated pose and the actual pose at frame i.
@@ -279,9 +283,11 @@ extrapolators silently absorb smooth scale or slope changes — a sequence that 
 covisible across the break. Three complementary signals catch these cases without
 depending on pose smoothness:
 
-**Step-size ratio (per edge).** For edge i → (i+1), take a window of `STEP_RATIO_WINDOW`
-edges on each side (default 8, excluding the edge itself). Let `m_pre` and `m_post` be
-the median step length `‖C_{k+1} − C_k‖` in the two windows. Flag the edge when
+**Step-size ratio (per edge).** For edge i → (i+1), take the `STEP_RATIO_WINDOW − 1`
+edges on each side (default window 8, so 7 edges each way, the edge itself excluded);
+an edge with fewer than 2 edges of context on either side reports no ratio. Let `m_pre`
+and `m_post` be the median step length `‖C_{k+1} − C_k‖` in the two windows. Flag the
+edge when
 `max(m_pre / m_post, m_post / m_pre) > STEP_RATIO_THRESHOLD` (default 1.5). Catches
 scale shifts where the camera's translational velocity changes abruptly. The test is
 two-tailed — it fires whether motion speeds up or slows down — unlike the pose-residual
@@ -293,10 +299,15 @@ with `w = OVERLAP_WINDOW` (default 16). Compute the per-edge overlap ratio
 `cross = |P_pre ∩ P_post| / min(|P_pre|, |P_post|)`, then define the drop factor as
 `median(neighbor cross values) / cross`. Flag when the drop factor exceeds
 `OVERLAP_DROP_THRESHOLD` (default 1.8). Baseline neighbors are collected from a
-`OVERLAP_BASELINE_WINDOW` of ±24 edges around the candidate. A `cross` of 0 (no tracks
-survive the edge) yields an infinite drop factor and always flags. Robust to loop
-closure — revisits that inflate cross only suppress detection, never cause false
-positives.
+`OVERLAP_BASELINE_WINDOW` of ±24 edges around the candidate, and an edge with fewer
+than 3 such neighbours reports no drop. A `cross` of 0 (no tracks survive the edge)
+yields an infinite drop factor and always flags. Robust to loop closure — revisits that
+inflate cross only suppress detection, never cause false positives.
+
+The whole signal is off on short sequences: a sequence of fewer than `3 · w` frames (48
+at the default window) reports no drop for any edge, because typical track lifetimes
+there exceed the window and the test cannot tell a real break from natural track aging.
+All four checked-in datasets are shorter than that, so `Cov` never fires on them.
 
 **Observation-count outlier (per frame).** Image i may be a "bridge frame" — motion
 blur, occlusion, brief tracking slip — if its track count drops well below the local
@@ -327,9 +338,10 @@ hits.
 For each flagged discontinuity, also report:
 
 - Mean reprojection error for the images involved (from existing
-  `compute_observation_reprojection_errors`).
-- Number of shared 3D points between adjacent frames (from covisibility).
-- Whether the images are connected in the covisibility graph (graph distance).
+  `compute_observation_reprojection_errors`), one value per endpoint of each core edge.
+- Number of shared 3D points between the core edge's two frames (from covisibility).
+  That count is the whole connectivity answer the report carries: `0` says the two
+  images share no surviving track, and no graph distance is computed.
 
 High reprojection error and low covisibility strengthen the case that a pose
 discontinuity is an SfM error.

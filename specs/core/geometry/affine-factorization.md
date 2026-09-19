@@ -194,9 +194,9 @@ f64 positions).
 - Bindings test (`tests/rust_bindings/`): numpy round-trips and parity of
   the full pipeline (factorize + metric upgrade) against a numpy reference
   implementation on a synthetic fixture.
-- First consumer: `exp_pinhole_bootstrap.py` swaps its `als_factorize()`,
-  `metric_upgrade()`, and `weak_perspective_poses()` for the bindings —
-  campaign parity on seoul is the acceptance test.
+- The bindings have no in-repo consumer beyond those tests: the kernel is
+  a library primitive, and the binding test on the synthetic fixture is
+  what holds it to its contract.
 
 ## Open questions
 
@@ -206,5 +206,7 @@ f64 positions).
 - Rank-3 initialization alternatives to the mean-filled SVD for very
   sparse observation patterns.
 - Whether the camera/point sub-solves should use normal equations or an
-  orthogonal decomposition; parity with the first consumer constrains the
-  results, not the method.
+  orthogonal decomposition. `lstsq` uses an SVD today, which settles the
+  question for the shipped code; what stays open is whether the contract
+  should name a decomposition at all, or keep constraining only the
+  results.

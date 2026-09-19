@@ -233,6 +233,7 @@ Together with the Tier 1.5 blur fusion this takes `sfm sift --extract` over thos
 |--------|------|-------------|---------|
 | s | Octave layers | Intervals per octave (Gaussian levels = s+3) | 3 |
 | σ | Base sigma | Blur of the first level of octave 0 | 1.6 |
+| — | Blur radius factor | Blur kernel half-width in units of σ (`radius = ceil(factor · σ)`, `2·radius + 1` taps) | 2.25 |
 | σ_in | Input blur | Assumed blur of the source image | 0.5 |
 | — | Upsample | Double input before octave 0 | true |
 | C | Contrast threshold | Discard if \|D(x̂)\| < C (matches COLMAP `peak_threshold`) | 0.0067 |
@@ -244,6 +245,7 @@ Together with the Tier 1.5 blur fusion this takes `sfm sift --extract` over thos
 | b | Descriptor bins | Orientation bins per histogram | 8 |
 | m_descr | Descriptor magnification | Sample spacing in units of σ_kp | 3 |
 | — | Clamp | Descriptor component cap before renorm | 0.2 |
+| — | Image-to-gray | Colour-to-gray formula; sets the value domain the contrast threshold and clamp are read against | BT.709 luma (COLMAP's) |
 
 ## Parallelism & SIMD strategy
 
@@ -526,7 +528,7 @@ pub fn detect_keypoints(image: &GrayImage, params: &SiftParams) -> Detection;
 
 pub struct Detection {
     pub keypoints: Vec<SiftKeypoint>, // already oriented; sortable by size / response
-    pub scale_space: ScaleSpace,      // retained Gaussian pyramid (DoG can be freed)
+    pub scale_space: ScaleSpace,      // retained Gaussian pyramid (no DoG: see Tier 1)
 }
 
 // Stage 2: describe an arbitrary *subset*, on demand. A descriptor is a pure
@@ -701,11 +703,15 @@ described by later ones, is proposed in
 ```
 sfmtool-core/src/features/sift/
 ├── mod.rs          # Public API: SiftParams, SiftKeypoint, extract_sift, detect_keypoints, compute_descriptors
-├── scale_space.rs  # ScaleSpace: Gaussian pyramid + DoG (separable blur, octave downsample)
-├── detect.rs       # 26-neighbor extrema + subpixel localization + contrast/edge rejection
+├── scale_space.rs  # ScaleSpace: Gaussian pyramid (separable blur, octave downsample, lazy octave extension)
+├── detect.rs       # 26-neighbor extrema + subpixel localization + contrast/edge rejection, DoG fused per stripe
 ├── orientation.rs  # gradient precompute + 36-bin histogram + multi-peak assignment
-└── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
+├── descriptor.rs   # 4x4x8 trilinear-interpolated descriptor + normalize/clamp/quantize
+├── gray.rs         # GrayFormula: the colour-to-gray conversion and its value domain
+└── simd.rs         # runtime-dispatched AVX2+FMA / SSE2 kernels the stages above share
 ```
+
+Each of those modules carries a `tests.rs` beside it, in a directory of its own name.
 
 ### Python bindings
 
@@ -718,8 +724,8 @@ sfmtool-core/src/features/sift/
 - `describe_keypoints(image, positions (N,2) f32, affine_shapes (N,2,2) f32, params=None) -> descriptors (N,128) u8` -- the binding for `describe_keypoints`, taking exactly the arrays `extract_sift` returns and raising `ValueError` on a refused keypoint or a shape mismatch
 - `affine_shapes_from_similarity(scales (N,) f32, orientations (N,) f32) -> affine_shapes (N,2,2) f32` -- the similarity-to-shape conversion, so a caller holding a size and an angle does not restate it
 
-This output is exactly what `src/sfmtool/sift/` already consumes, so a new
-`extract_rust.py` backend slots in alongside `extract_opencv.py` /
+This output is exactly what `src/sfmtool/sift/` consumes, so the
+`extract_sfmtool.py` backend sits alongside `extract_opencv.py` /
 `extract_colmap.py` and writes via the existing `sfmtool-sift-format` path. The
 affine shapes pass straight through — no conversion needed, unlike the OpenCV
 backend, which derives them from its `KeyPoint`s via
@@ -744,8 +750,11 @@ backend, which derives them from its `KeyPoint`s via
   describing every detected keypoint at its own position, shape and size returns
   the extractor's descriptors byte for byte, by both query forms; a keypoint
   outside the image or with no size is refused by name.
-- **Criterion benchmarks** (`crates/sfmtool-core/benches/sift.rs`): pyramid build,
-  detection, descriptor, end-to-end — same structure as `benches/optical_flow.rs`.
+- **Benchmark** (`pixi run bench-sift` → `scripts/benchmark_sift.py`): end-to-end
+  extraction throughput on the checked-in datasets, compared against the COLMAP and
+  OpenCV backends. It sits at the Python layer rather than in Criterion deliberately,
+  so a run measures decode, detect and describe together — what `sfm sift --extract`
+  actually pays — and so the three backends are timed through the same harness.
 
 ## Non-goals
 

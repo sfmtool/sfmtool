@@ -125,8 +125,10 @@ pub(crate) struct LayoutRect {
 
 /// One violation, with the path to the node it was found at.
 ///
-/// `Display` is the message the Action Log records: `main.second.first: unknown
-/// key "fracton"`, or just the message for a violation of the document itself.
+/// `Display` is the message the Action Log records: `layout.main.second.first:
+/// unknown key "fracton"`, or just the message for a violation of the document
+/// itself. The path is rooted at `"layout"` because that is what
+/// `WindowLayout::from_value` passes in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LayoutError {
     pub path: String,

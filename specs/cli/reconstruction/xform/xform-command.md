@@ -176,6 +176,34 @@ well-defined and a high-error point at infinity is removed like any other.
 --filter-by-reprojection-error 2.0
 ```
 
+#### `--filter-by-keypoint-uncertainty <threshold>`
+
+Removes 3D points whose predicted keypoint position uncertainty `σ_pos` exceeds the
+threshold. `σ_pos` is the noise-normalized weak-axis structure-tensor uncertainty of
+the point's cross-view consensus patch — see
+[patch-localizability.md](../../../core/patch/patch-localizability.md) — and it grades
+how well *conditioned* a keypoint's localization is (corner vs. edge vs. flat),
+independently of whether the views agree. That is the aperture blind spot the
+reprojection and agreement gates cannot see: an edge-like patch slides freely along
+the edge while every view keeps agreeing.
+
+The threshold is in **patch-grid px**, the intrinsic resolution-independent unit, not
+source-image px. Grid px transfers across datasets of different resolution; the
+source-px form folds in a per-point focal/depth scale, so one fixed threshold would
+cull wildly different fractions of two clouds. A point that cannot be scored at all
+(empty consensus, `σ_pos` = NaN) is **kept** — the filter only removes points it has
+positive evidence about. `threshold` must be positive.
+
+This requires an `embedded_patches` reconstruction *with* per-point patch bitmaps: the
+consensus is what gets scored, and it is computed on demand from the stored consensus
+and geometry, reading no source images. A reconstruction missing either the bitmaps or
+the patch frames is rejected with a message naming `sfm embed-patches` or
+`sfm xform --refine-keypoints bitmaps=true`.
+
+```bash
+--filter-by-keypoint-uncertainty 0.35
+```
+
 #### `--filter-by-patch-size <multiplier>`
 
 Removes 3D points whose world-space patch size exceeds `multiplier` times the
@@ -491,7 +519,7 @@ which returns a new reconstruction:
 |-----------|---------|-----------|
 | `apply_se3_transform` | `--rotate`, `--translate`, `--scale`, `--scale-by-measurements`, `--align-to`, `--align-to-input` (invoked as `Se3Transform @ recon` from Python) | Applies a similarity to points and camera poses. Finite points get the full rotation+translation+scale; points at infinity and per-point normals are directions, so only the rotation acts (renormalized). Rig sensor translations are scaled; per-point patch `(u, v)` half-vectors rotate and scale with their point (rotation-only at infinity); patch bitmaps are pose-invariant and pass through unchanged. |
 | `subset_by_image_indices` | `--include-range`, `--exclude-range`, `--include-glob`, `--exclude-glob`, `--include-by-distribution` (via `xform/_filter_by_image_range.py`); also `sfm to-colmap-bin --range`, `sfm to-nerfstudio --range`, and `sfm panorama` source subsetting | Keeps the listed images (in order), drops observations of removed images, and prunes rig frames with no surviving image (remapping frame indices). With `drop_orphaned_points=true` (the xform filters' mode), points with zero remaining observations are removed and point IDs remapped contiguously. `sift_files` reconstructions only. |
-| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
+| `filter_points_by_mask` | `--remove-isolated`, `--remove-short-tracks`, `--remove-narrow-tracks`, `--remove-large-features` (`xform/_point_filters.py`), `--filter-by-reprojection-error`, `--filter-by-keypoint-uncertainty`, `--filter-by-patch-size` | Keeps points where the boolean mask is true, filters their observations, and remaps point IDs contiguously. Images, cameras, and rig data are unchanged. Works for both `sift_files` and `embedded_patches` (inline keypoints are filtered in lockstep); per-point patch rows follow their point. |
 
 A fourth, standalone primitive `reconstruction/filter.rs::filter_tracks_by_point_mask`
 performs the same mask-filter-and-remap on bare track columns (no

@@ -6,13 +6,16 @@ Given reconstructed points with patch frames, spawn **candidate tracks** at
 chosen in-plane offsets from those parents: place a synthetic patch, find
 it photometrically in the parent's views, and triangulate what was found —
 exactly the way a real track is congealed, with the same acceptance gates.
-Two callers: surfel-normal expansion places candidates along uncovered
-directions and uses the surviving *positions* as extra fit neighbours;
-densification places candidates over unclaimed image regions
-([observation coverage](../analysis/observation-coverage.md)) and assembles the
-survivors into new reconstruction tracks. The primitive itself neither
-picks offsets nor assembles tracks — it turns (parent, offset) requests
-into vetted `(position, views, keypoints)` results, batch.
+The primitive itself neither picks offsets nor assembles tracks — it
+turns (parent, offset) requests into vetted `(position, views,
+keypoints)` results, batch — and nothing in the repo calls it yet: it is
+reachable from Rust and through its PyO3 binding, and the two test
+modules are what exercise it. Two callers are intended. Surfel-normal
+expansion would place candidates along uncovered directions and use the
+surviving *positions* as extra fit neighbours; densification would place
+candidates over unclaimed image regions ([observation
+coverage](../analysis/observation-coverage.md)) and assemble the
+survivors into new reconstruction tracks.
 
 A candidate that fails any gate is reported with the stage that killed it,
 not silently dropped: callers budget and diagnose on those counts.

@@ -416,48 +416,50 @@ The thumbnail column shows the existing 128x128 thumbnail from
 
 ### Panel State
 
+The panel and its state live in
+[point_track_detail/](../../crates/sfm-explorer/src/point_track_detail), split into
+`prepare` (builds the per-observation data when the selection changes), `header`,
+`table` and `patch`; the numbers they display come from
+[metrics/](../../crates/sfm-explorer/src/metrics), at the crate root, because the
+Image Detail overlay and the MCP surface read the same ones. Field-by-field
+documentation is on the structs themselves; what matters at this level:
+
 ```rust
-/// Point Track Detail panel state.
 pub struct PointTrackDetail {
-    /// The point index we've prepared data for, or None.
-    prepared_point: Option<usize>,
-    /// Precomputed observation data for the current point.
+    prepared_point: Option<PointRef>,
     observations: Vec<TrackObservationData>,
-    /// Maximum angle (degrees) between any pair of observation rays in the track.
     max_angle_deg: f32,
-    /// Cached thumbnail textures keyed by image index.
-    thumbnail_textures: HashMap<usize, egui::TextureHandle>,
-    /// The selected point's oriented patch frame (from the stored patch
-    /// half-vectors), or None when the reconstruction carries no frame or the
-    /// point has no patch. Gates the per-observation "Patch" column.
+    inverse_depth_z: f32,
+    condition_number: f32,
+    thumbnail_textures: HashMap<ImageRef, egui::TextureHandle>,
     patch_frame: Option<OrientedPatch>,
-    /// Stored patch bitmap texture for the selected point (header tile), if any.
     stored_patch_texture: Option<egui::TextureHandle>,
-    /// Per-observation patch tiles rendered from full-res images, keyed by
-    /// image index. Rebuilt on point-selection change. Tiles where the patch is
-    /// not visible in the view warp to all-black and are drawn as such (a future
-    /// N/A flag may distinguish "not visible" from a genuinely dark surface).
-    rendered_patch_textures: HashMap<usize, egui::TextureHandle>,
-    /// The content_xxh128 hash prefix (first 8 hex chars) for Point IDs.
-    hash_prefix: String,
+    rendered_patch_textures: HashMap<ImageRef, egui::TextureHandle>,
+    point_id: String,
+    scroll_offset_y: Option<f32>,
 }
 
-/// Precomputed data for one observation in the track.
 struct TrackObservationData {
-    /// Index into `recon.images`.
     image_index: usize,
-    /// Feature index within the image's SIFT file.
     feature_index: usize,
-    /// Feature position in image pixel coordinates.
     feature_xy: [f32; 2],
-    /// Per-observation reprojection error in pixels.
     reproj_error: f32,
-    /// Angular discrepancy between observation ray and point direction, in degrees.
     ray_angle_deg: f32,
-    /// Truncated display name.
+    feature_extents: [f32; 2],
     image_name: String,
+    image_full_name: String,
 }
 ```
+
+`prepared_point` is a `PointRef` rather than a bare index on purpose: a newly opened
+reconstruction can reuse the same point index for a different point, and comparing refs
+is what forces a re-prepare — which is in turn what makes the texture caches, keyed by
+`ImageRef` for the same reason, safe to rebuild wholesale. `point_id` is handed in by
+the caller rather than derived here, because a Point ID is minted over a node's whole
+version graph and this panel only ever sees one reconstruction value. Each observation
+carries both a truncated `image_name` for the column and the `image_full_name` its
+tooltip shows, plus `feature_extents` — the *full* widths of the affine feature shape
+along its two axes, the same diameter convention the rendered patch quad spans.
 
 **Preparation**: When `selected_point` changes and differs from
 `prepared_point`, recompute `observations` from
@@ -484,8 +486,15 @@ pub struct PointTrackDetailResponse {
     /// The user asked for the Go to Point dialog — from the header button, or
     /// from the empty state's button when no point is selected at all.
     pub request_goto_point: bool,
+    /// If Some, a row's context menu asked for that image's observation to be
+    /// taken out of the selected point's track.
+    pub remove_observation: Option<usize>,
 }
 ```
+
+The image indices are local to the reconstruction the panel was shown with; `dock.rs`
+pairs them back into `ImageRef`s. A track never spans reconstructions, so every row
+belongs to the selected point's own recon.
 
 ## Performance Considerations
 

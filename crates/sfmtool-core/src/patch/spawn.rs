@@ -14,11 +14,12 @@
 //! `(position, views, keypoints)` per request.
 //!
 //! Callers pick the offsets and assemble the survivors; the primitive does
-//! neither. Surfel-normal expansion places candidates along directions its
-//! adjacency graph left empty and feeds the surviving *positions* back in as
-//! extra fit neighbours; densification places them over image regions no
-//! observation claims and assembles the survivors into new reconstruction
-//! tracks.
+//! neither. Nothing in the repo calls it yet — the binding and the tests are
+//! its only users. The intended callers are surfel-normal expansion, which
+//! would place candidates along directions its adjacency graph left empty and
+//! feed the surviving *positions* back in as extra fit neighbours, and
+//! densification, which would place them over image regions no observation
+//! claims and assemble the survivors into new reconstruction tracks.
 //!
 //! A candidate that fails a gate is reported with the stage that killed it
 //! rather than dropped, so a caller can budget and diagnose on the counts.

@@ -69,7 +69,7 @@ pub(super) fn show_camera_intrinsics_group(
     header.body(|ui| show_camera_rows(ui, node, ctx, out));
 }
 
-/// The per-camera rows: `#0  OPENCV_FISHEYE  480×480  f 240.1  26 images`.
+/// The per-camera rows: `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images`.
 ///
 /// Laid out plainly rather than virtualized — the count is bounded by the
 /// number of *distinct* intrinsics, which is small even in the pathological
@@ -129,8 +129,9 @@ fn show_camera_rows(ui: &mut egui::Ui, node: &SceneNode, ctx: &NodeContext, out:
         });
 }
 
-/// `#0  OPENCV_FISHEYE  480×480  f 240.1  26 images` — one intrinsics record on
-/// one line, with a `β` on a model whose parameterization is not yet frozen.
+/// `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images` — one intrinsics
+/// record on one line, with a `β` on a model whose parameterization is not yet
+/// frozen.
 fn camera_row_text(index: usize, camera: &CameraIntrinsics, uses: usize) -> String {
     let beta = if camera.model.beta_note().is_some() {
         " β"
@@ -151,7 +152,7 @@ fn camera_row_text(index: usize, camera: &CameraIntrinsics, uses: usize) -> Stri
     )
 }
 
-/// `f 240.1`, or `f 240.1/239.7` when the model carries two focal lengths and
+/// `f 129.1`, or `f 129.1/129.3` when the model carries two focal lengths and
 /// they differ.
 ///
 /// One decimal, because the row is a summary — the exact values are in the

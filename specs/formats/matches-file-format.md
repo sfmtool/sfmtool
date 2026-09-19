@@ -417,9 +417,11 @@ arrays, which name each member's image and feature index and state its geometry.
 **Pairs are a derived view.** The canonical expansion is `clusters_to_pair_matches`
 (every within-cluster cross-image member pair, grouped and sorted per the
 `image_pairs/` ordering rules). Because `two_view_geometries/` arrays are keyed per
-stored pair, a cluster file cannot carry TVGs directly; the geometric-verification
-step materializes the expansion by writing a new pairwise `.matches` file with
-`image_pairs/` + `two_view_geometries/` (the write-once workflow, unchanged). Pair
+stored pair, a cluster file cannot carry TVGs directly; materializing the expansion is
+a separate on-demand run,
+[`sfm match --derive-pairs`](../cli/image-feature/match-command.md), which reads a
+clusters-bearing file and writes a new pairwise `.matches` with `image_pairs/` +
+`two_view_geometries/`. Each file is still written once. Pair
 descriptor distances, which the stored pairwise form carries, are recomputed from the
 referenced `.sift` files when a consumer needs them. See
 [`specs/core/patch/cluster-patches.md`](../core/patch/cluster-patches.md) for the design

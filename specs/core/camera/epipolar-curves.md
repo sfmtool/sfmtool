@@ -28,7 +28,8 @@ This is a `sfmtool-core` concern: it needs `CameraIntrinsics`'s full forward and
 inverse projection (`pixel_to_ray` / `ray_to_pixel`, which already invert the
 distortion model including fisheye), the image rectangle (`width` / `height` on
 `CameraIntrinsics`), `RigidTransform` for the poses, and `is_fisheye()` for the
-rectification guard. New API goes in `crates/sfmtool-core/src/camera/epipolar.rs`; a
+rectification guard. The API lives in
+[`crates/sfmtool-core/src/camera/epipolar.rs`](../../../crates/sfmtool-core/src/camera/epipolar.rs); a
 thin PyO3 wrapper exposes it to the `sfm epipolar` visualization
 (`src/sfmtool/visualization/_epipolar_display.py`), which just hands the
 returned vertices to `cv2.polylines`.
@@ -41,9 +42,9 @@ generated. The Python display layer therefore does no clipping of its own.
 `compute_fundamental_matrix` / `compute_epipole*` stay as they are — they are
 still used by stereo rectification and sweep matching. The curve API does **not**
 route through `F`; it goes ray → world → reproject, which is what makes it
-model-agnostic. The in-frame-epipole half-line special case in the current
-display code disappears (a polyline through the epipole needs no special
-handling).
+model-agnostic. There is no in-frame-epipole special case on this path: a polyline
+that passes through the epipole needs no special handling, and the half-line form
+survives only on the `--undistort` branch.
 
 ## Rust API
 
@@ -211,13 +212,13 @@ across the gap with a straight chord through the unsampled region.
 The reverse direction (curve in image 1 for a feature in image 2) is the same
 call with `(cam1, pose1)` and `(cam2, pose2)` swapped.
 
-### Why this is better everywhere
+### Why one path serves every model
 
-It drops the pinhole assumption entirely, so the same path is exact for pinhole,
-radial, and fisheye models — the "standard vs. undistort vs. rectify" split in
-the display code is no longer needed for *correctness*. `--undistort` /
-`--rectify` remain purely as *display* options (warp to a rectified frame, draw
-straight scanlines there); they are not a workaround.
+The sampling drops the pinhole assumption entirely, so it is exact for pinhole,
+radial and fisheye models alike, and the "standard vs. undistort vs. rectify" split in
+the display code carries no correctness weight. `--undistort` / `--rectify` are purely
+*display* options (warp to a rectified frame, draw straight scanlines there), not
+workarounds for a model the curve cannot handle.
 
 ### Degeneracies
 
@@ -287,10 +288,10 @@ fallback:
    of the truth — well inside Phase-1's ±24-octave seed-search range. One
    subtraction and one `norm`, computed once per image pair.
 
-This replaces the previous scene-median computation
-(`_median_scene_depth(recon, R1, t1)`), which iterated all 3D points per
-image pair. The new path does no per-pair O(N_points) work, only per-feature
-O(1) lookups against the track-index.
+Neither tier costs anything per image pair beyond one subtraction and one `norm`:
+the anchor is a per-feature O(1) lookup against the track index, never a scan over
+the reconstruction's points. That is what keeps anchoring cheap enough to do
+per feature rather than once per pair from a scene-wide statistic.
 
 ## Out of Scope
 

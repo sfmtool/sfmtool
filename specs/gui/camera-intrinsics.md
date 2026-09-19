@@ -168,8 +168,9 @@ user's request implies:
   the user dismissed an image would be a surprise. `Esc` pressed twice clears
   both — the second press, seeing no image, clears the camera.
 
-`AppState::retain_recon` / `close_node` and the edits filter `selected_camera`
-by `ReconId` exactly as they already filter the other three.
+`AppState::forget_recon` (which `close_node` and the edits go through) and
+`select_recon` filter `selected_camera` by `ReconId` exactly as they already filter
+the other three.
 
 ### `CameraModel::parameter_names`
 
@@ -424,8 +425,8 @@ The node body gains a group above the images group, so its two rows read:
 ```
 ▾ 👁 S 🖱 ▪ kerry_park                      412K pts · 48 imgs · 2 cams
   ▾   Camera Intrinsics (2)
-        #0  OPENCV_FISHEYE  480×480   f 240.1   26 images
-        #1  OPENCV_FISHEYE  480×480   f 239.7   22 images
+        #0  OPENCV_FISHEYE  480×480   f 129.1/129.3   24 images
+        #1  OPENCV_FISHEYE  480×480   f 129.1/129.3   24 images
   ▸ 👁 Camera Images (48)
   ▸ 👁 Points (412,551 · 12 at ∞) [∞]
     👁 Patches
@@ -443,7 +444,7 @@ The node body gains a group above the images group, so its two rows read:
   behaves like the images list and stays out of the way.
 - Row id `row_id(node.id, "intrinsics")`, per the panel's explicit-id rule.
 
-**Camera row** — `#0  OPENCV_FISHEYE  480×480  f 240.1  26 images`
+**Camera row** — `#0  OPENCV_FISHEYE  480×480  f 129.1/129.3  24 images`
 
 - Fields: index, model name, `width×height`, focal length (`f` when
   `fx == fy`, `fx/fy` otherwise, one decimal), and the number of images using
@@ -871,7 +872,7 @@ in it.
 ### 1. Header
 
 ```
-kerry_park · Camera #0 · OPENCV_FISHEYE · 480×480 · 26 images        [Copy ▾]
+kerry_park · Camera #0 · OPENCV_FISHEYE · 480×480 · 24 images        [Copy ▾]
 ```
 
 The reconstruction name is included because several nodes can be loaded at once
@@ -894,10 +895,14 @@ same order `sfm inspect` prints:
 
 | Parameter | Value |
 |-----------|-------|
-| `focal_length` | 240.104 |
-| `principal_point_x` | 239.500 |
-| `principal_point_y` | 240.112 |
-| `radial_distortion_k1` | −0.021 |
+| `focal_length_x` | 129.149994 |
+| `focal_length_y` | 129.257363 |
+| `principal_point_x` | 240.000000 |
+| `principal_point_y` | 240.000000 |
+| `radial_distortion_k1` | 0.038113 |
+| `radial_distortion_k2` | −0.008009 |
+| `radial_distortion_k3` | 0.008330 |
+| `radial_distortion_k4` | −0.002690 |
 
 Six decimals, right-aligned, monospaced, matching the CLI. The spline models'
 `bspline_c{i}` rows are listed after the named parameters in index order (which
@@ -909,15 +914,20 @@ A second table, visually separated, holding what the parameters *mean*:
 
 | Row | Value | Notes |
 |-----|-------|-------|
-| `fx, fy` | `240.104, 240.104 px/rad` | unit is `px` for perspective models, `px/rad` for equidistant/equirectangular — mislabelling this is the single easiest way to make a fisheye's focal length look absurd |
-| aspect `fy/fx` | `1.0000` | hidden when the model has one focal length |
-| principal point offset | `(−0.500, +0.112) px · 0.15% of half-diagonal` | from the image centre |
-| horizontal FOV | `176.4°` | mid-left pixel to mid-right pixel |
-| vertical FOV | `176.5°` | |
-| diagonal FOV | `197.2°` | corner to opposite corner |
-| max off-axis angle | `98.6°` | largest θ over the four corners; the number that answers "is this really 180°?" |
-| 35 mm equivalent | `19.1 mm` | perspective models only; `f_px · 43.267 / diagonal_px`, sensor-independent by construction |
+| `fx, fy` | `129.150, 129.257 px/rad` | unit is `px` for perspective models, `px/rad` for equidistant/equirectangular — mislabelling this is the single easiest way to make a fisheye's focal length look absurd |
+| aspect `fy/fx` | `1.0008` | hidden when the model has one focal length |
+| principal point offset | `(+0.000, +0.000) px · 0.00% of half-diagonal` | from the image centre |
+| horizontal FOV | `212.9°` | mid-left pixel to mid-right pixel |
+| vertical FOV | `212.8°` | |
+| diagonal FOV | `301.0°` | corner to opposite corner |
+| max off-axis angle | `150.5°` | largest θ over the four corners; the number that answers "is this really 180°?" |
+| 35 mm equivalent | — | absent here: the row is shown for perspective models only (`f_px · 43.267 / diagonal_px`, sensor-independent by construction), and is undefined for a focal length in pixels per radian |
 | distortion | `yes — max 13.0 px inside 84.1°` / `yes — max 12.4 px over the image` / `none` | from `has_distortion()` plus the field's maximum, bounded by § "The trustworthy domain" |
+
+The spans past 180° are not a bug in the example: this camera's image rectangle has
+corners outside the lens's image circle, where the `k1..k4` polynomial has folded, and
+the corner-derived rows say so honestly. § "The trustworthy domain" works through what
+each of these readings is about for exactly this camera.
 
 **The distortion row bounds its own domain.** The maximum is
 `distortion_extent(cam, 16)`'s — a 16-column grid, with the row count chosen to
