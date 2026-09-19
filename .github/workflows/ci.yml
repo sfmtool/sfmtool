@@ -69,7 +69,7 @@ jobs:
           # test-os job for the one environment that pays.
           cache: false
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -83,7 +83,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -124,7 +124,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
@@ -154,7 +154,7 @@ jobs:
         with:
           run-install: false
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -205,7 +205,7 @@ jobs:
       # `maturin develop --release`. Restore the cache first so that build is
       # incremental instead of a cold ~6 min compile.
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -219,7 +219,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -290,7 +290,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
@@ -318,7 +318,7 @@ jobs:
       # build is incremental instead of a cold compile. The key is namespaced by
       # runner.os, so each matrix OS keeps its own cache.
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -332,7 +332,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -405,7 +405,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
@@ -425,7 +425,7 @@ jobs:
           # See the lint job.
           cache: false
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -439,7 +439,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -464,7 +464,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
@@ -491,7 +491,7 @@ jobs:
           # See the lint job.
           cache: false
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -505,7 +505,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -551,7 +551,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
@@ -587,7 +587,7 @@ jobs:
           # See the lint job.
           cache: false
       - name: Cache cargo home
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -601,7 +601,7 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-home-
       - name: Restore Rust target
         id: target-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             target
@@ -635,7 +635,7 @@ jobs:
         # 10 GB per-repo budget, and the LRU eviction that followed is why a PR
         # could find nothing and compile from scratch for 17 minutes.
         if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             target
