@@ -4,6 +4,13 @@
 [project]
 site_name = "SfM Tool"
 site_description = "Fun with Structure from Motion"
+# Where `.github/workflows/docs.yml` deploys the built site: the project Pages
+# site of this repository, with no custom domain. Every absolute URL the build
+# emits is derived from it, so without it `sitemap.xml` comes out with no
+# entries at all and `objects.inv` zero bytes — neither a search engine nor an
+# intersphinx client has anything to read. It is the deployed URL rather than a
+# local one because both files are consumed from the deployed site.
+site_url = "https://sfmtool.github.io/sfmtool/"
 repo_url = "https://github.com/sfmtool/sfmtool"
 repo_name = "sfmtool/sfmtool"
 
