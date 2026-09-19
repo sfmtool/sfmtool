@@ -516,6 +516,34 @@ Exactly one test drives each route a shortcut replaces —
 `the_scene_panel_lists_the_loaded_reconstruction` presses through the menu and
 the dialog, then asserts on what arrived — so the route stays covered.
 
+**The suite reports what it costs, in every log.** As each test's `Guard`
+drops — so a panicking test reports too — it prints a line, and after it the
+running total; the last `UIPROBE TOTAL` is the run's:
+
+```text
+UIPROBE test=file_menu_items launch_ms=886 ops=5 op_ms=3732 total_ms=4733
+UIPROBE TOTAL tests=19 launch_ms=19559 ops=45 op_ms=29234 total_ms=53012 mean_launch_ms=1029 mean_op_ms=649
+```
+
+`launch_ms` is the process spawn, GPU init and window registration up to the
+first successful attach; `ops` is how many locator resolutions ran under that
+guard, counted by a thin wrapper over the five `Locator` methods the suite
+calls (`Element` actions resolve nothing and are not counted); `op_ms` is the
+time inside them; `total_ms` is the guard's whole life, teardown included. The
+split is the point, because the two costs have different causes and different
+fixes. `launch_ms` is work no change to the tests can make cheaper, so
+`mean_launch_ms` moving between two runs means the *machine* moved; `ops` moves
+only when the tests ask for more or fewer snapshots, and `mean_op_ms` is what
+the platform charges for one. A cheaper suite shows as `ops` falling with
+`mean_launch_ms` steady; a faster runner shows as `mean_launch_ms` and
+`mean_op_ms` falling together with `ops` unchanged. `total_ms` alone
+distinguishes neither, which is why one log now carries all of them — no
+historical baseline required. The counters are process-wide statics reset per
+guard, which is sound only because `UI_TEST_LOCK` keeps exactly one guard
+alive at a time. All three invocations of the suite pass `--nocapture`, since
+libtest discards a passing test's stdout and these lines are wanted on green
+runs above all.
+
 **Whatever a test puts outside its own process is the lock's business too.** The
 `Guard` that holds the mutex owns the viewer process *and* anything the test
 placed in the developer's home directory — the two tests that start the viewer

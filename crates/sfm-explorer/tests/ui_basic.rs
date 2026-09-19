@@ -24,13 +24,19 @@
 //! (Only a `Locator` method resolves; a `press` on an `Element` a lookup
 //! already handed back invokes what it holds.) Exactly one test still drives
 //! each route a shortcut replaces, and says so.
+//!
+//! Because that is where the cost is, **the suite reports its own**: every
+//! test prints a `UIPROBE` line as its [`Guard`] drops, which is how a reader
+//! of one CI log tells a slow runner apart from an expensive suite. See
+//! [`Guard::report`] for the fields and [`Probed::probe`] for what is counted.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, Once};
 use std::time::{Duration, Instant};
 
-use xa11y::{App, AppExt, Toggled};
+use xa11y::{App, AppExt, Element, ElementData, Locator, Toggled};
 
 /// Serializes the UI tests so at most one `sfm-explorer` window is alive at a
 /// time. `cargo test` runs tests on multiple threads by default, and several
@@ -50,6 +56,111 @@ fn ui_test_lock() -> MutexGuard<'static, ()> {
     UI_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+// --- What the suite costs, as the suite sees it ---
+//
+// Two costs with nothing in common are added together in a job's wall clock:
+// launching a viewer (process spawn, GPU init, the OS registering the window)
+// and resolving a locator (a cross-process snapshot of the whole accessibility
+// subtree). They have different causes and different fixes, and a log that
+// reports only the total cannot tell them apart — nor tell a change that made
+// the *suite* cheaper from a run that happened to land on a faster machine.
+// So each is counted and printed separately; see `Guard::report`.
+
+/// Locator resolutions run since the current [`Guard`] was made.
+static OPS: AtomicU64 = AtomicU64::new(0);
+/// Nanoseconds spent inside those resolutions.
+static OP_NANOS: AtomicU64 = AtomicU64::new(0);
+/// The same two, plus launch time and wall time, accumulated over every test
+/// this process has run, for the `UIPROBE TOTAL` line.
+static TOTAL_TESTS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_LAUNCH_NANOS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_OP_NANOS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Zero the per-test counters and start the clock a `UIPROBE` line is measured
+/// from. Every path that makes a [`Guard`] calls this immediately before
+/// spawning the viewer, and nothing else does.
+///
+/// **Process-wide counters are sound here only because of [`UI_TEST_LOCK`].**
+/// The instrumented calls go through [`App`], which knows nothing about the
+/// guard, so the counters cannot hang off one — but every test holds that lock
+/// for its whole body, so exactly one guard is ever alive and "the operations
+/// since the last reset" and "this test's operations" are the same set.
+fn begin_accounting() -> Instant {
+    OPS.store(0, Ordering::Relaxed);
+    OP_NANOS.store(0, Ordering::Relaxed);
+    Instant::now()
+}
+
+/// Run one locator resolution, counting it and timing it.
+fn measured<T>(op: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let out = op();
+    OPS.fetch_add(1, Ordering::Relaxed);
+    OP_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    out
+}
+
+/// A [`Locator`] that reports what it costs, wrapping only the methods this
+/// suite calls.
+///
+/// One method call here is one resolution — one whole-subtree snapshot, per
+/// this file's module comment — so this is the single place the suite's
+/// dominant cost can be counted without deriving it by reading the test
+/// bodies, loops and all. Each method forwards its arguments unchanged and
+/// returns what the inner call returned: nothing a test waits for or asserts
+/// passes through this differently.
+///
+/// `Element` methods are deliberately *not* wrapped. A `press` on an element a
+/// lookup already handed back invokes what it holds and queries nothing, so
+/// counting one would overstate the tree traffic — which is exactly the
+/// miscount hand-derived figures used to make.
+struct Probe(Locator);
+
+impl Probe {
+    fn wait_attached(&self, timeout: Duration) -> xa11y::Result<Element> {
+        measured(|| self.0.wait_attached(timeout))
+    }
+
+    fn wait_until(
+        &self,
+        predicate: impl Fn(Option<&ElementData>) -> bool,
+        timeout: Duration,
+    ) -> xa11y::Result<Option<Element>> {
+        measured(|| self.0.wait_until(predicate, timeout))
+    }
+
+    fn press(&self) -> xa11y::Result<()> {
+        measured(|| self.0.press())
+    }
+
+    fn toggle(&self) -> xa11y::Result<()> {
+        measured(|| self.0.toggle())
+    }
+
+    fn count(&self) -> xa11y::Result<usize> {
+        measured(|| self.0.count())
+    }
+}
+
+/// `app.probe(selector)` in place of `app.locator(selector)`: the same lookup,
+/// counted and timed.
+///
+/// The method is named `probe` rather than `locator` because `App::locator` is
+/// an *inherent* method, and an inherent method wins over a trait one of the
+/// same name — a `locator` here would compile and silently never be called, so
+/// the suite would report zero operations while running the usual number.
+trait Probed {
+    fn probe(&self, selector: &str) -> Probe;
+}
+
+impl Probed for App {
+    fn probe(&self, selector: &str) -> Probe {
+        Probe(self.locator(selector))
+    }
 }
 
 /// xa11y (since 0.9) no longer hardcodes a 5s default; an unset default means
@@ -111,6 +222,12 @@ fn launch_with(args: &[&str]) -> Child {
 /// that never becomes discoverable is retried once, in place, so the guard
 /// still owns (and on drop still kills) whichever process is current.
 struct Guard {
+    /// When the viewer was spawned, and how long it took to become
+    /// attachable — the two halves of the `UIPROBE` line's `launch_ms`, filled
+    /// in by [`ChildHandle::attached`]. Neither owns anything, so neither
+    /// takes part in the drop order described above.
+    started: Instant,
+    launch: Cell<Option<Duration>>,
     child: RefCell<Child>,
     /// The viewer's command line, kept so a stuck launch can be respawned the
     /// same way. `None` marks a guard whose process cannot simply be
@@ -167,12 +284,92 @@ impl Guard {
         layout_file: Option<DefaultLayoutFile>,
         args: &[&str],
     ) -> Self {
+        let started = begin_accounting();
         Guard {
+            started,
+            launch: Cell::new(None),
             child: RefCell::new(launch_with(args)),
             args: Some(args.iter().map(|a| (*a).to_string()).collect()),
             _layout_file: layout_file,
             _lock: lock,
         }
+    }
+
+    /// Print this test's `UIPROBE` line, and the running `UIPROBE TOTAL`.
+    ///
+    /// ```text
+    /// UIPROBE test=file_menu_items launch_ms=886 ops=5 op_ms=3732 total_ms=4733
+    /// UIPROBE TOTAL tests=19 launch_ms=19559 ops=45 op_ms=29234 total_ms=53012 mean_launch_ms=1029 mean_op_ms=649
+    /// ```
+    ///
+    /// `launch_ms` is the runner-speed yardstick: spawning a process, waiting
+    /// for the GPU and for the OS to register the window is work the suite
+    /// cannot make cheaper, so `mean_launch_ms` moving between two runs means
+    /// the *machine* moved. `ops` and `mean_op_ms` are the suite's own cost:
+    /// `ops` is how many whole-subtree snapshots the tests asked for, which
+    /// only a change to the tests moves, and `mean_op_ms` is what the platform
+    /// charges for one. Comparing two logs, then: `ops` down is a cheaper
+    /// suite, `mean_launch_ms` and `mean_op_ms` down together is a faster
+    /// machine, and `total_ms` alone says nothing about which happened.
+    ///
+    /// libtest offers no end-of-suite hook, so the `TOTAL` line is cumulative
+    /// and re-printed after every test; the last one is the run's. That also
+    /// means a run that aborts halfway still reports what it spent.
+    ///
+    /// Emitted from `Drop`, so a **panicking** test — every assertion failure
+    /// here panics — reports too, which is when the numbers are most wanted.
+    /// The test's name comes from its thread, which libtest names after it
+    /// even under `--test-threads=1` (it still spawns a thread per test and
+    /// joins it at once). A guard whose test never attaches reports
+    /// `launch_ms=0`; the only one is the `#[ignore]`d [`dump_tree`], which
+    /// resolves the app itself rather than through [`attach`].
+    ///
+    /// None of this reaches a green CI log without `--nocapture`: libtest
+    /// captures a passing test's stdout and discards it. All three invocations
+    /// of this suite pass the flag — the `ui-test` task in `pixi.toml`, its
+    /// Linux override, and the `ui-test-macos` job, which runs the built
+    /// binary directly.
+    fn report(&self) {
+        let total = self.started.elapsed();
+        let launch = self.launch.get().unwrap_or_default();
+        let ops = OPS.load(Ordering::Relaxed);
+        let op_nanos = OP_NANOS.load(Ordering::Relaxed);
+
+        let tests = TOTAL_TESTS.fetch_add(1, Ordering::Relaxed) + 1;
+        let launch_total = TOTAL_LAUNCH_NANOS
+            .fetch_add(launch.as_nanos() as u64, Ordering::Relaxed)
+            + launch.as_nanos() as u64;
+        let ops_total = TOTAL_OPS.fetch_add(ops, Ordering::Relaxed) + ops;
+        let op_nanos_total = TOTAL_OP_NANOS.fetch_add(op_nanos, Ordering::Relaxed) + op_nanos;
+        let nanos_total = TOTAL_NANOS.fetch_add(total.as_nanos() as u64, Ordering::Relaxed)
+            + total.as_nanos() as u64;
+
+        let ms = |nanos: u64| nanos / 1_000_000;
+        let name = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        // Leading newline: under `--nocapture` libtest has already written
+        // `test <name> ... ` and is waiting to finish that line with the
+        // verdict, so without it both lines below start mid-line and `^UIPROBE`
+        // matches only the `TOTAL` one.
+        println!(
+            "\nUIPROBE test={name} launch_ms={} ops={ops} op_ms={} total_ms={}",
+            launch.as_millis(),
+            ms(op_nanos),
+            total.as_millis(),
+        );
+        println!(
+            "UIPROBE TOTAL tests={tests} launch_ms={} ops={ops_total} op_ms={} total_ms={} \
+             mean_launch_ms={} mean_op_ms={}",
+            ms(launch_total),
+            ms(op_nanos_total),
+            ms(nanos_total),
+            ms(launch_total) / tests,
+            // `checked_div`: a suite filtered down to tests that resolve
+            // nothing reports no mean rather than dividing by zero.
+            ms(op_nanos_total).checked_div(ops_total).unwrap_or(0),
+        );
     }
 
     fn child(&self) -> ChildHandle<'_> {
@@ -202,6 +399,8 @@ impl Drop for Guard {
         let child = self.child.get_mut();
         child.kill().ok();
         child.wait().ok();
+        // Last, so `total_ms` covers the teardown the test also pays for.
+        self.report();
     }
 }
 
@@ -216,6 +415,18 @@ impl ChildHandle<'_> {
     /// The pid of the process the guard owns *now* — re-read after a relaunch.
     fn id(&self) -> u32 {
         self.guard.child.borrow().id()
+    }
+
+    /// Stop the launch clock: the app is discoverable, so everything from the
+    /// spawn to here is launch cost and everything after it is the test's.
+    ///
+    /// Only the first attach counts. A relaunch happens *inside* that first
+    /// one and is honestly part of what the launch cost; a second `attach`
+    /// later in the same test is not a launch at all.
+    fn attached(&self) {
+        if self.guard.launch.get().is_none() {
+            self.guard.launch.set(Some(self.guard.started.elapsed()));
+        }
     }
 
     /// Kill and reap the current process, then spawn a replacement with the
@@ -284,7 +495,10 @@ const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 fn attach(child: ChildHandle<'_>) -> App {
     init();
     let first = match try_attach_app(child) {
-        Ok(app) => return app,
+        Ok(app) => {
+            child.attached();
+            return app;
+        }
         Err(e) => e,
     };
     assert!(
@@ -292,7 +506,10 @@ fn attach(child: ChildHandle<'_>) -> App {
         "sfm-explorer window did not appear: {first}"
     );
     match try_attach_app(child) {
-        Ok(app) => app,
+        Ok(app) => {
+            child.attached();
+            app
+        }
         Err(second) => panic!(
             "sfm-explorer window did not appear, on the original launch or on \
              one relaunch: {first}; after relaunching: {second}"
@@ -336,7 +553,7 @@ fn window_min_size() {
     // of the three platforms — a process is not a rectangle. The window under it
     // is what carries bounds.
     let b = app
-        .locator(r#"window"#)
+        .probe(r#"window"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("the viewer's window did not appear")
         .data()
@@ -359,7 +576,7 @@ fn the_menu_bar_holds_file_edit_go_and_panels() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
     for menu in ["File", "Edit", "Go", "Panels"] {
-        app.locator(&format!(r#"button[name="{menu}"]"#))
+        app.probe(&format!(r#"button[name="{menu}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("'{menu}' menu button not found"));
     }
@@ -372,7 +589,7 @@ fn the_menu_bar_holds_file_edit_go_and_panels() {
     // the four menu buttons — painted in the same menu bar as a View menu would
     // be — are what establishes that. Do not reorder these two.
     assert_eq!(
-        app.locator(r#"button[name="View"]"#)
+        app.probe(r#"button[name="View"]"#)
             .count()
             .expect("the tree is queryable"),
         0,
@@ -385,7 +602,7 @@ fn the_menu_bar_holds_file_edit_go_and_panels() {
 fn empty_state_placeholder_text() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-    app.locator(r#"static_text[name="No reconstruction loaded."]"#)
+    app.probe(r#"static_text[name="No reconstruction loaded."]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("placeholder text 'No reconstruction loaded.' not found");
 }
@@ -396,12 +613,12 @@ fn file_menu_items() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
 
-    app.locator(r#"button[name="File"]"#)
+    app.probe(r#"button[name="File"]"#)
         .press()
         .expect("press File menu button");
 
     for item in ["Open...", "Close All", "Load Demo Data...", "Quit"] {
-        app.locator(&format!(r#"button[name="{item}"]"#))
+        app.probe(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("File menu item '{item}' did not appear"));
     }
@@ -426,14 +643,14 @@ fn edit_menu_items() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
 
-    app.locator(r#"button[name="Edit"]"#)
+    app.probe(r#"button[name="Edit"]"#)
         .press()
         .expect("press Edit menu button");
 
     // Named without their shortcuts, for the reason `file_menu_items` gives:
     // the shortcut is in the button's text and is spelled by the platform.
     for item in ["Delete Image", "Cancel Camera Move", "Bundle Adjust..."] {
-        app.locator(&format!(r#"button[name="{item}"]"#))
+        app.probe(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"));
     }
@@ -462,14 +679,14 @@ fn file_menu_save_items_apply_to_a_node_that_came_from_no_file() {
     let _guard = Guard::demo();
     let app = attach(_guard.child());
 
-    app.locator(r#"button[name="File"]"#)
+    app.probe(r#"button[name="File"]"#)
         .press()
         .expect("press File menu button");
 
-    app.locator(r#"button[name^="Save As..."]"#)
+    app.probe(r#"button[name^="Save As..."]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("File menu item 'Save As...' did not appear");
-    app.locator(r#"button[name^="Save "]"#)
+    app.probe(r#"button[name^="Save "]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("File menu item 'Save' did not appear");
 }
@@ -484,10 +701,10 @@ fn quit_menu_item_exits_the_process() {
     let mut guard = Guard::new();
     let app = attach(guard.child());
 
-    app.locator(r#"button[name="File"]"#)
+    app.probe(r#"button[name="File"]"#)
         .press()
         .expect("press File menu button");
-    app.locator(r#"button[name="Quit"]"#)
+    app.probe(r#"button[name="Quit"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("Quit item did not appear")
         .press()
@@ -508,15 +725,15 @@ fn quit_menu_item_exits_the_process() {
 /// [`the_scene_panel_lists_the_loaded_reconstruction`], the one test that
 /// asserts on what the menu route itself produces.
 fn load_demo_data(app: &App) {
-    app.locator(r#"button[name="File"]"#)
+    app.probe(r#"button[name="File"]"#)
         .press()
         .expect("press File menu button");
-    app.locator(r#"button[name="Load Demo Data..."]"#)
+    app.probe(r#"button[name="Load Demo Data..."]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("Load Demo Data item did not appear")
         .press()
         .expect("press Load Demo Data");
-    app.locator(r#"button[name="Load"]"#)
+    app.probe(r#"button[name="Load"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("demo dialog's Load button did not appear")
         .press()
@@ -535,7 +752,7 @@ fn hud_layer_toggles_are_present_and_checked_once_a_scene_is_loaded() {
 
     for name in ["Points", "Camera Images", "Grid"] {
         let el = app
-            .locator(&format!(r#"check_box[name="{name}"]"#))
+            .probe(&format!(r#"check_box[name="{name}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("HUD checkbox '{name}' did not appear"));
         assert!(
@@ -568,7 +785,7 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
     // The demo reconstruction is labeled "demo" and rings the scene with 8
     // images, so both strings are fixed by the fixture.
     for text in ["demo", "Camera Images (8)"] {
-        app.locator(&format!(r#"static_text[name="{text}"]"#))
+        app.probe(&format!(r#"static_text[name="{text}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Scene panel row '{text}' did not appear"));
     }
@@ -576,7 +793,7 @@ fn the_scene_panel_lists_the_loaded_reconstruction() {
     // The row's solo toggle. Its own behaviour is headless (`scene_graph`
     // tests); what only a real window can show is that a *third* glyph button
     // squeezed onto the row is still laid out and still reachable.
-    app.locator(r#"button[name="S"]"#)
+    app.probe(r#"button[name="S"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("the reconstruction row's solo toggle did not appear");
 }
@@ -588,7 +805,7 @@ fn toggle_hud_layer_checkbox() {
     let app = attach(_guard.child());
 
     let el = app
-        .locator(r#"check_box[name="Grid"]"#)
+        .probe(r#"check_box[name="Grid"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("Grid checkbox not found");
     assert!(
@@ -596,12 +813,12 @@ fn toggle_hud_layer_checkbox() {
         "Grid should start checked",
     );
 
-    app.locator(r#"check_box[name="Grid"]"#)
+    app.probe(r#"check_box[name="Grid"]"#)
         .toggle()
         .expect("toggle Grid");
 
     // Wait for egui to process the action and update the tree
-    app.locator(r#"check_box[name="Grid"]"#)
+    app.probe(r#"check_box[name="Grid"]"#)
         .wait_until(
             |data| data.is_some_and(|d| matches!(d.states.checked, Some(Toggled::Off))),
             CONTENT_TIMEOUT,
@@ -785,7 +1002,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
 
     // The demo node's row is labelled "demo"; its bounds are screen pixels.
     let row = app
-        .locator(r#"static_text[name="demo"]"#)
+        .probe(r#"static_text[name="demo"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("the demo reconstruction row did not appear");
     let bounds = row.data().bounds.expect("the row has no bounds");
@@ -819,7 +1036,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     // does not surface under the `button` role here, and their contents only
     // exist once the submenu is opened — both are covered headlessly instead.
     for item in ["Select", "Zoom to Fit"] {
-        app.locator(&format!(r#"button[name="{item}"]"#))
+        app.probe(&format!(r#"button[name="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| {
                 panic!("context menu item '{item}' did not appear after a right-click")
@@ -895,7 +1112,7 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     );
     let app = attach(guard.child());
 
-    app.locator(r#"button[name="Latest"]"#)
+    app.probe(r#"button[name="Latest"]"#)
         .wait_attached(CONTENT_TIMEOUT)
         .expect("the Action Log toolbar did not appear, so the layout was not loaded");
     // `count`, not a short-budget `wait_attached`, for the reason
@@ -907,7 +1124,7 @@ fn a_saved_default_layout_is_loaded_at_startup() {
     // then does finding no placeholder mean the 3D viewer is not docked, rather
     // than that nothing is in the tree yet. Do not reorder these two.
     assert_eq!(
-        app.locator(r#"static_text[name="No reconstruction loaded."]"#)
+        app.probe(r#"static_text[name="No reconstruction loaded."]"#)
             .count()
             .expect("the tree is queryable"),
         0,
@@ -951,7 +1168,7 @@ fn the_edit_history_panel_lists_the_loaded_version() {
         "1 version",
         "demo has not been edited; its one version is the file as it was opened.",
     ] {
-        app.locator(&format!(r#"static_text[name="{text}"]"#))
+        app.probe(&format!(r#"static_text[name="{text}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Edit History panel text '{text}' did not appear"));
     }
@@ -994,6 +1211,11 @@ impl McpViewer {
 
     fn launched(extra: &[&str]) -> McpViewer {
         let _lock = ui_test_lock();
+        // This path spawns the viewer itself rather than going through
+        // `Guard::launched`, so it starts the same accounting by hand — and
+        // before the spawn, so the wait for the endpoint line below is
+        // charged to the launch, which is what it is.
+        let started = begin_accounting();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sfm-explorer"));
         cmd.args(["--mcp", "0", "--no-default-layout"]);
         cmd.args(extra);
@@ -1025,6 +1247,8 @@ impl McpViewer {
             // the stdout of *this* process, so a respawn would be a viewer on
             // a different port that nothing is listening to.
             guard: Guard {
+                started,
+                launch: Cell::new(None),
                 child: RefCell::new(child),
                 args: None,
                 _layout_file: None,
@@ -1387,7 +1611,7 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
     // The menu button toggles, so one opening is one place to look: reopening
     // it to find a second item would close it instead.
     let open_edit_menu = || {
-        app.locator(r#"button[name="Edit"]"#)
+        app.probe(r#"button[name="Edit"]"#)
             .press()
             .expect("press Edit menu button");
     };
@@ -1395,7 +1619,7 @@ fn taking_a_camera_in_hand_reaches_a_real_window() {
     // spellings of the Move Camera item carry the `M` shortcut in the button's
     // text, and the shortcut is spelled by the platform.
     let edit_item = |item: &str| {
-        app.locator(&format!(r#"button[name^="{item}"]"#))
+        app.probe(&format!(r#"button[name^="{item}"]"#))
             .wait_attached(CONTENT_TIMEOUT)
             .unwrap_or_else(|_| panic!("Edit menu item '{item}' did not appear"))
     };

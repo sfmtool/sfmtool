@@ -636,8 +636,11 @@ jobs:
         with:
           macos-tcc-client: ${{ steps.build.outputs.bin }}
 
+      # `--nocapture` for the same reason the `ui-test` task in pixi.toml
+      # passes it: libtest discards a passing test's stdout, and the suite's
+      # own `UIPROBE` cost lines are wanted on green runs above all.
       - name: UI tests
-        run: "${{ steps.build.outputs.bin }} --test-threads=1"
+        run: "${{ steps.build.outputs.bin }} --test-threads=1 --nocapture"
 
       - name: Save Rust target
         # Main only, and only a new generation (the cache-hit guard): a PR's
