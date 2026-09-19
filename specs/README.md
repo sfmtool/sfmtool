@@ -29,3 +29,4 @@ section, with repo paths written as relative Markdown links.
 | [gui/](gui/README.md) | The SfM Explorer viewer (`sfm-explorer`) | flat |
 | [workspace/](workspace/README.md) | Workspace layout and its config files | flat |
 | [drafts/](drafts/README.md) | Proposals, and the specified-but-unbuilt parts of standing specs | flat; an amendment draft names the spec it amends |
+| [research/](research/README.md) | Background studies of how other software solves a problem sfmtool also has — not specs, and describing no code here | flat; each study names the spec it informed |

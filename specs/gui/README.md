@@ -34,9 +34,3 @@ an interactive GUI for exploring Structure-from-Motion reconstructions.
 | [adaptive-clip-and-grid.md](adaptive-clip-and-grid.md) | Reversed-Z infinite far projection, adaptive near plane, and adaptive ground grid scaling. |
 | [image-animation.md](image-animation.md) | Image animation playback: play through image sequence with keyboard/UI controls, camera view fly-through. |
 | [architecture.md](architecture.md) | Technology stack (Rust, wgpu, egui, egui_dock, winit, PyO3), crate structure, multi-pass rendering pipeline, build system, and performance design. |
-
-## Reference
-
-| Document | Description |
-|----------|-------------|
-| [blender-viewport-navigation-implementation-overview.md](blender-viewport-navigation-implementation-overview.md) | Reference analysis of how Blender implements precision touchpad navigation on Windows via DirectManipulation. Used during development of our own touchpad support. |

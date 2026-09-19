@@ -659,7 +659,9 @@ library does not properly expose precision touchpad gestures to applications.
 ### Solution: DirectManipulation API
 
 Microsoft's DirectManipulation API provides hardware-accelerated gesture recognition for
-precision touchpads. This is the same approach used by Blender and Firefox.
+precision touchpads. This is the same approach used by Blender and Firefox. How Blender
+wires it up, which is what this design was drawn from, is written up in
+[research/blender-viewport-navigation-implementation-overview.md](../research/blender-viewport-navigation-implementation-overview.md).
 
 **Key benefits:**
 - Automatic pan vs. pinch gesture detection
