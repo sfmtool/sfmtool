@@ -30,7 +30,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -54,8 +54,8 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: lint
           # No env cache: restoring one costs more than building it. Measured
@@ -146,11 +146,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Only the pixi binary is needed; `pixi exec` builds the throwaway MSRV
       # environment. Installing a project environment would just pull the 1.98
       # toolchain this job exists to avoid.
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           run-install: false
       - name: Cache cargo home
@@ -199,7 +199,7 @@ jobs:
       # pull_request events, so push-to-main coverage was failing to upload.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
       # editable sfmtool); coverage.sh compiles the extension once via
       # `maturin develop --release`. Restore the cache first so that build is
@@ -232,7 +232,7 @@ jobs:
           # so the main-written entry is the one every PR restores.
           key: ${{ runner.os }}-cargo-coverage-target-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-coverage-target-
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: test-ci
           # No env cache: installing test-ci here takes 19s and restoring it 21s,
@@ -268,7 +268,7 @@ jobs:
 
       - name: Upload memory samples
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-coverage-mem-samples
           path: mem-samples.tsv
@@ -311,7 +311,7 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # The `test-ci` env install does no Rust build (unlike `test`, it omits the
       # editable sfmtool); the extension is compiled once by the explicit
       # `maturin develop --release` step below. Restore the cache first so that
@@ -345,7 +345,7 @@ jobs:
           # so the main-written entry is the one every PR restores.
           key: ${{ runner.os }}-cargo-test-target-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-test-target-
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: test-ci
           # No env cache, on either platform. Windows `test-ci` is the one
@@ -417,8 +417,8 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: ui
           # No env cache: the ui env installs in 5s and restores in 4s.
@@ -483,8 +483,8 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: ui
           # No env cache: the ui env installs in 3s and restores in 4s.
@@ -579,8 +579,8 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: prefix-dev/setup-pixi@v0.9.6
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: ui
           # No env cache: the ui env installs in 4s and restores in 8s.
@@ -680,7 +680,7 @@ jobs:
     steps:
       # `hashFiles` reads the workspace, so the lockfile has to be on disk. It is
       # the only thing this job reads, hence the sparse checkout.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: Cargo.lock
           sparse-checkout-cone-mode: false
