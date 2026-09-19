@@ -147,8 +147,14 @@ bench-sift = "python scripts/benchmark_sift.py"
 [feature.dev.tasks]
 ipython = "ipython"
 
+# Zensical is pre-1.0 in the 0.0.x series, where the patch component is the
+# only thing that moves and every release is allowed to break. So the pin is a
+# single patch rather than a semver range: the docs build is only ever exercised
+# against the one version we checked it against, and moving it forward is a
+# deliberate commit that rebuilds the site and diffs the output. Bump the whole
+# window (`>=0.0.N, <0.0.N+1`) rather than widening it.
 [feature.docs.pypi-dependencies]
-zensical = ">=0.0.59, <0.0.60"
+zensical = ">=0.0.62, <0.0.63"
 
 [feature.docs.tasks]
 docs-serve = "zensical serve"
