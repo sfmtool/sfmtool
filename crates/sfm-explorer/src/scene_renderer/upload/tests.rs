@@ -1917,6 +1917,201 @@ fn the_pick_range_covers_the_additions() {
     );
 }
 
+/// An addition's dot and its surfel write the **same** pick id, and it decodes
+/// to the addition.
+///
+/// The two pipelines reach that id by different routes, and nothing in either
+/// one mentions the other:
+///
+/// - the dot takes its number from the uniform block, whose pick base the frame
+///   shifts past the base's instances, plus the `instance_index` of a draw that
+///   starts at zero;
+/// - the surfel takes the node's **unshifted** block -- the atlas's bind group
+///   binds that one -- plus a number baked into the instance at upload, which
+///   `build_patch_resources` offsets by the base's point count.
+///
+/// So they agree only while `index_offset` equals the base instance count, and
+/// a drift would leave the dot pickable and the patch naming a different point
+/// or nothing at all. `slot_of_point` is keyed on exactly the number baked into
+/// each instance, which is what makes the baked half readable from the CPU.
+#[test]
+fn an_additions_dot_and_its_surfel_write_the_same_pick_id() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    // Two, because the user's case is two commits and the second addition is
+    // the one whose row is not zero.
+    let mut edited = loaded.clone();
+    let first = edited
+        .replace_point(3, moved_record(&edited, 3))
+        .expect("a live point");
+    let second = edited
+        .replace_point(7, moved_record(&edited, 7))
+        .expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+
+    let bundle = bundle(&renderer);
+    let additions = bundle.additions.as_ref().expect("the additions uploaded");
+    let patch = additions.patch.as_ref().expect("they carry bitmaps");
+    assert_eq!(patch.count, 2, "one surfel per addition");
+
+    for (row, added) in [first, second].into_iter().enumerate() {
+        // The dot: the additions' own block, shifted, plus the draw's row.
+        let dot = bundle.point_pick_base + bundle.point_count + row as u32;
+        // The surfel: the node's own block, unshifted, plus the baked index.
+        let baked = patch
+            .slot_of_point
+            .iter()
+            .find(|(_, &slot)| slot == row as u32)
+            .map(|(&index, _)| index)
+            .expect("a slot per addition");
+        let surfel = bundle.point_pick_base + baked;
+        assert_eq!(dot, surfel, "the dot and the surfel name different points");
+
+        // And that one id is the addition, both ways round.
+        assert_eq!(
+            renderer.global_point_index_for_test(point(added as usize)),
+            Some(surfel),
+        );
+        assert_eq!(
+            renderer.resolve_pick_for_test(surfel),
+            Some(point(added as usize)),
+        );
+    }
+}
+
+/// A rebuilt atlas starts from the version's deleted set, because the frame's
+/// mask write is a difference and has nothing to say on the frame that rebuilds
+/// it.
+///
+/// This is the bug it is here for. The additions' buffers are rebuilt whenever
+/// the addition *set* moves, and an edit that creates a point moves it without
+/// moving the deleted set: the mask write then finds no changed index, and an
+/// atlas built all-alive goes on drawing the surfel of an addition an earlier
+/// edit replaced. It is visible, it sits at the position that point used to
+/// have, and clicking it does nothing -- the click path drops a ref the version
+/// has deleted.
+#[test]
+fn a_rebuilt_addition_atlas_starts_from_the_deleted_set() {
+    let (device, queue) = device();
+    let mut renderer = SceneRenderer::new();
+    let base = Arc::new(with_patches(demo(40), 8, &[true; 40], None, None));
+    let loaded = sfmtool_core::EditedReconstruction::new(Arc::clone(&base));
+    sync(&mut renderer, &device, &queue, RECON, &loaded);
+
+    // An addition, then an edit that replaces *it*: the first keeps its row so
+    // the indexes after it do not move, and the version deletes it.
+    let mut edited = loaded.clone();
+    let first = edited
+        .replace_point(3, moved_record(&edited, 3))
+        .expect("a live point");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    let second = edited
+        .replace_point(first, moved_record(&edited, first))
+        .expect("a live addition");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    assert!(
+        edited.is_deleted(first),
+        "the replacement deleted the first"
+    );
+
+    // Now an edit that grows the addition set without touching the deleted
+    // set, which is what a commit that creates a point does. The buffers are
+    // rebuilt, and the mask write that follows has nothing to correct them
+    // with.
+    let created = edited
+        .add_point(moved_record(&edited, 0))
+        .expect("a valid record");
+    sync(&mut renderer, &device, &queue, RECON, &edited);
+    let written = renderer.update_point_mask(
+        &queue,
+        RECON,
+        &edited.deleted_points,
+        &std::collections::HashSet::new(),
+    );
+    assert_eq!(
+        written, 0,
+        "the deleted set moved, so the mask write could have papered over it",
+    );
+
+    let patch = additions(&renderer)
+        .expect("the additions uploaded")
+        .patch
+        .as_ref()
+        .expect("they carry bitmaps");
+    assert_eq!(
+        patch.count, 3,
+        "one slot per addition, deleted ones included"
+    );
+
+    // What reached the GPU: the replaced addition's slot is dead, the other two
+    // alive. Before the fix the whole buffer was born alive and the mask write
+    // above had nothing to correct it with, so the first addition's surfel came
+    // back on screen -- visible, at the position that point used to have, and
+    // answering no pick.
+    let slot = |index: u32| *patch.slot_of_point.get(&index).expect("a slot");
+    assert_eq!(
+        patch.built_liveness[slot(first) as usize],
+        super::overlay::MASK_DELETED,
+        "the replaced addition's surfel was born alive",
+    );
+    assert_eq!(
+        patch.built_liveness[slot(second) as usize],
+        super::overlay::MASK_ALIVE,
+    );
+    assert_eq!(
+        patch.built_liveness[slot(created) as usize],
+        super::overlay::MASK_ALIVE,
+    );
+}
+
+/// The rule that buffer is built from, over the two indexes that matter: a slot
+/// whose point the version deleted is born dead, and every other slot alive.
+#[test]
+fn patch_liveness_marks_the_slots_of_deleted_points() {
+    let instance = |point_index: u32| super::super::gpu_types::PatchInstance {
+        center: [0.0; 3],
+        w: 1.0,
+        u_halfvec: [0.1, 0.0, 0.0],
+        _pad0: 0.0,
+        v_halfvec: [0.0, 0.1, 0.0],
+        atlas_layer: 0,
+        point_index,
+    };
+    let instances = [instance(40), instance(41), instance(42)];
+    let deleted: std::collections::HashSet<u32> = [3, 40].into_iter().collect();
+    let none = std::collections::HashSet::new();
+
+    assert_eq!(
+        super::patches::patch_liveness(&instances, &deleted, &none),
+        vec![
+            super::overlay::MASK_DELETED,
+            super::overlay::MASK_ALIVE,
+            super::overlay::MASK_ALIVE,
+        ],
+    );
+    // The highlight survives a rebuild too: it is a viewport statement the
+    // frame's write would likewise have nothing to say about.
+    let lit: std::collections::HashSet<u32> = [40, 41].into_iter().collect();
+    assert_eq!(
+        super::patches::patch_liveness(&instances, &deleted, &lit),
+        vec![
+            super::overlay::MASK_DELETED,
+            super::overlay::MASK_HIGHLIGHTED,
+            super::overlay::MASK_ALIVE,
+        ],
+        "deleted wins over highlighted, as it does in the mask write",
+    );
+    // An empty atlas still needs a bindable buffer.
+    assert_eq!(
+        super::patches::patch_liveness(&[], &deleted, &none),
+        vec![super::overlay::MASK_ALIVE],
+    );
+}
+
 #[test]
 fn undoing_an_addition_drops_its_buffers_without_touching_the_base() {
     let (device, queue) = device();

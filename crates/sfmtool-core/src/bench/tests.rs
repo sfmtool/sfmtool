@@ -1237,6 +1237,15 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         let det = seed.seed_shape[0][0] * seed.seed_shape[1][1]
             - seed.seed_shape[0][1] * seed.seed_shape[1][0];
         assert!(det.abs() > 0.0, "the projected shape spans an area");
+        // And it is the right way round: a cluster seed is a keypoint-frame
+        // shape, whose determinant is positive, where the patch-frame shape it
+        // came from is negative. Sizes cannot tell the two apart, which is how
+        // a mirrored seed went unnoticed.
+        assert!(
+            det > 0.0,
+            "the seed is the surfel mirrored: {:?}",
+            seed.seed_shape,
+        );
         // And it spans what the surfel really covers there: the format's rule
         // states the patch's half-axes in pixels, and the seed states the same
         // footprint per keypoint-frame unit over the cluster's own radius.
@@ -1275,6 +1284,80 @@ fn a_downgrade_then_an_upgrade_triangulates_back() {
         (position - WORLD).norm() < 0.05,
         "the round trip landed at {position}"
     );
+}
+
+/// The two stages hold a shape in two chiralities, and the conversion between
+/// them is one negation applied in each direction -- so a patch that goes down
+/// to the cluster stage and back up is the patch it started as, the way round
+/// it started.
+///
+/// A patch-frame shape has a **negative** determinant where it faces the
+/// camera, because `v` points image-up and pixel rows count down; a
+/// keypoint-frame shape, which is what a descriptor search seeds and what the
+/// cluster stage rasters its template with, has a **positive** one. Seeding the
+/// cluster straight from the projection handed it the surfel mirrored.
+#[test]
+fn a_stage_round_trip_keeps_the_patch_the_same_way_round() {
+    let scene = Scene::new();
+    let edited = edited_with_columns(&scene, WORLD);
+    let (bench, label) = bench_with_point(&edited, 0);
+    let track = track_of(&bench, &label);
+    let before = track
+        .track()
+        .expect("a track")
+        .frame
+        .clone()
+        .expect("a frame");
+
+    let (cluster, _) =
+        stage_over(&scene, &edited, &track, StageKind::Cluster).expect("a downgrade");
+    let (again, _) =
+        stage_over(&scene, &edited, &cluster, StageKind::Track).expect("two observations in");
+    let after = again
+        .track()
+        .expect("a track")
+        .frame
+        .clone()
+        .expect("a frame");
+
+    assert!(
+        before.u_axis.dot(&after.u_axis) > 0.0,
+        "the u axis came back reversed: {:?} then {:?}",
+        before.u_axis,
+        after.u_axis,
+    );
+    assert!(
+        before.v_axis.dot(&after.v_axis) > 0.0,
+        "the v axis came back reversed, which is the patch upside down: {:?} then {:?}",
+        before.v_axis,
+        after.v_axis,
+    );
+
+    // And the other direction closes too: the cluster the round trip passed
+    // through is the one a second downgrade produces, sign included.
+    let (down_again, _) =
+        stage_over(&scene, &edited, &again, StageKind::Cluster).expect("a downgrade");
+    for (k, observation) in down_again.observations.iter().enumerate() {
+        let (Some(first), Some(second)) = (
+            cluster.observations[k].cluster.as_ref(),
+            observation.cluster.as_ref(),
+        ) else {
+            continue;
+        };
+        for r in 0..2 {
+            for c in 0..2 {
+                // Loose, because the upgrade re-triangulates and re-centres
+                // before it reframes: what is under test is that the shape
+                // comes back as itself rather than as its mirror, and a
+                // percent of drift in the geometry is not that.
+                let (a, b) = (first.seed_shape[r][c], second.seed_shape[r][c]);
+                assert!(
+                    (a - b).abs() < 0.02 * a.abs().max(1.0),
+                    "observation {k} shape[{r}][{c}]: {a} then {b}",
+                );
+            }
+        }
+    }
 }
 
 /// A stage change's sentence states the stage once, whether it is read whole

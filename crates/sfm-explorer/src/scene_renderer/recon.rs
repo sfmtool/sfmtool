@@ -67,6 +67,14 @@ pub(super) struct PatchResources {
     pub atlas_cols: u32,
     pub atlas_rows: u32,
     pub patches_per_page: u32,
+    /// The liveness vector `alive_buffer` was created from, in slot order.
+    ///
+    /// What reached the GPU before any mask write, which is the half a headless
+    /// test cannot read back: the buffer is `VERTEX | COPY_DST` and never a
+    /// copy source. Kept only under `cfg(test)`, so the shipped bundle carries
+    /// nothing it does not draw from.
+    #[cfg(test)]
+    pub built_liveness: Vec<u32>,
 }
 
 /// The overlay's **additions** as GPU state: a second set of instance buffers

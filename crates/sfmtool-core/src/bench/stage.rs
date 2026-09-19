@@ -440,6 +440,33 @@ fn scaled(shape: [[f64; 2]; 2], by: f64) -> [[f64; 2]; 2] {
     ]
 }
 
+/// One affine shape read in the *other* chirality: the `v` column negated.
+///
+/// The two stages hold a shape in two conventions, and this is the whole of the
+/// difference between them.
+///
+/// - A **patch-frame** shape is what `patch_affine_shape` returns: the columns
+///   are the projections of the frame's `u` and `v` half-vectors. `v` points
+///   image-*up* while pixel rows count *down*, so a patch that faces the camera
+///   projects to a **negative** determinant.
+/// - A **keypoint-frame** shape is what a cluster observation carries: the
+///   `.sift` convention, a scaled rotation of **positive** determinant, which is
+///   what a descriptor search seeds and what the cluster stage rasters its
+///   template with.
+///
+/// `OrientedPatch::from_affine_shape_at_depth` already states this relationship
+/// from the other side: handed a positive-determinant shape it negates the
+/// second column so the patch it builds faces the camera. So the two directions
+/// are one negation, applied here on the way down and there on the way up, and
+/// a shape that went round both comes back as itself.
+///
+/// Sign, not magnitude: `det.abs().sqrt()` -- which is how both stages measure
+/// how big a patch is in a view -- is the same number either way round, so
+/// nothing that only sizes a shape can tell the two conventions apart.
+fn flipped_chirality(shape: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
+    [[shape[0][0], -shape[0][1]], [shape[1][0], -shape[1][1]]]
+}
+
 /// Track to cluster: re-seed every observation from its keypoint and the shape
 /// the frame projects to there, and drop the 3D with the measurements made
 /// against it.
@@ -473,6 +500,12 @@ fn downgrade(
     // each column is divided by the radius the new cluster takes. Without that
     // the patch would arrive at the cluster stage `radius` times the size the
     // surfel really has, and the next evaluation would register that square.
+    //
+    // And it is read in the cluster stage's **chirality**
+    // ([`flipped_chirality`]): a patch-frame shape is negative-determinant
+    // where a keypoint-frame shape is positive, so a seed taken straight from
+    // the projection is the surfel mirrored, and the cluster stage rasters it
+    // that way round.
     let cluster = ClusterPayload::default();
     let mut next = track.clone();
     // Per observation: its index, the scale the patch has in it, and whether it
@@ -502,13 +535,13 @@ fn downgrade(
             seeded.push(None);
             continue;
         };
-        let shape = scaled(
+        let shape = flipped_chirality(scaled(
             [
                 [f64::from(shape[0][0]), f64::from(shape[0][1])],
                 [f64::from(shape[1][0]), f64::from(shape[1][1])],
             ],
             1.0 / cluster.radius,
-        );
+        ));
         let det = shape[0][0] * shape[1][1] - shape[0][1] * shape[1][0];
         if !det.is_finite() || det == 0.0 {
             seeded.push(None);
