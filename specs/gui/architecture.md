@@ -489,6 +489,15 @@ event loop never reads, a HUD checkbox that never reaches the tree, a
 desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
 mutex, so a plain `cargo test` behaves like `--test-threads=1`).
 
+**Whatever a test puts outside its own process is the lock's business too.** The
+`Guard` that holds the mutex owns the viewer process *and* anything the test
+placed in the developer's home directory — the two tests that start the viewer
+on a saved default layout write one path there — and it drops them in that
+order, so the file is back before the next test can take the lock. It was not
+always so: the file used to be restored after the lock was released, which under
+a plain multi-threaded `cargo test` raced the next test's own `rename` of it and
+failed that test with "Access is denied".
+
 The suite attaches the same way everywhere — `App::by_pid` on the viewer it
 launched, which is what keeps it off a viewer the developer already has open.
 What differs per platform is the accessibility API that answers, what the node
@@ -522,6 +531,21 @@ frame produced, which needs a working GPU surface — on Linux that means a
 Vulkan ICD, per "Linux" above. And the right-click test is Windows-only by
 construction: it drives synthetic mouse input to catch a `WM_POINTER` routing
 defect that exists only there.
+
+**A test that synthesizes OS input aims first.** `SendInput` presses a button
+wherever the cursor happens to be, on whatever window is under it, and neither
+of those belongs to the test process: the viewer has just launched, another
+application can be in front of it, the point can be off-screen, and
+`SetCursorPos` can be clamped or refused outright. Every one of those looks
+identical from inside the test — the menu never opens, a widget lookup burns
+its full budget, and the failure reads like a product regression. So
+`ui_basic`'s `aim_at` raises the viewer's own window, moves the cursor, and
+checks that the window under it belongs to that process before a button is
+pressed, retrying the *aim* and never the assertion; `mouse_event` checks that
+`SendInput` actually inserted the event rather than being refused. The
+right-click test is the only one that injects input today, and a second one
+goes the same way: a click that lands somewhere else is not a failure anyone
+can read.
 
 In CI the three suites are three jobs — `ui-test-windows`, `ui-test-macos`,
 `ui-test-linux` — separate from the coverage job, which excludes `sfm-explorer`

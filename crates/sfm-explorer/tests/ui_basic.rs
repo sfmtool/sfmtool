@@ -73,10 +73,17 @@ fn launch_with(args: &[&str]) -> Child {
     cmd.spawn().expect("failed to spawn sfm-explorer")
 }
 
-/// Owns a launched `sfm-explorer` process and the serialization lock for the
-/// test that spawned it. Fields drop in declaration order, so `child` is killed
-/// (its window torn down) *before* `_lock` is released and the next test may
-/// launch — keeping windows strictly non-overlapping.
+/// Owns a launched `sfm-explorer` process, anything the test put on disk
+/// outside its own directory, and the serialization lock for the test that
+/// spawned it.
+///
+/// Fields drop in declaration order, and the order is the point: `child` is
+/// killed (its window torn down), then `_layout_file` is put back, and only
+/// then is `_lock` released and the next test free to launch. Both of the
+/// things before the lock are shared with every other test — one desktop, and
+/// one path in the developer's home directory — so releasing the lock while
+/// either is still in flight hands the next test a machine that is not yet the
+/// one it asked for.
 ///
 /// `child` sits behind a `RefCell` because [`attach`] replaces it: a launch
 /// that never becomes discoverable is retried once, in place, so the guard
@@ -88,6 +95,13 @@ struct Guard {
     /// re-spawned — the MCP viewer, whose endpoint line has already been read
     /// off its stdout — and [`ChildHandle::relaunch`] declines to retry it.
     args: Option<Vec<String>>,
+    /// The default layout file this test wrote, for the two tests that start
+    /// the viewer on one. Held here rather than as a local of the test so that
+    /// it is restored *under* the lock: it used to be a local declared before
+    /// the guard, so it dropped last, after the lock was released — and under a
+    /// plain multi-threaded `cargo test` the next test's own `rename` of that
+    /// one path raced this restore and failed with "Access is denied".
+    _layout_file: Option<DefaultLayoutFile>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -99,21 +113,31 @@ impl Guard {
 
     /// The same, with the viewer's command line spelled out.
     fn with_args(args: &[&str]) -> Self {
-        Guard::with_args_under(ui_test_lock(), args)
+        Guard::launched(ui_test_lock(), None, args)
     }
 
-    /// The same again, under a lock the caller already holds.
+    /// Put `contents` at `~/.sfm-explorer-default-layout.json` and launch the
+    /// viewer on it, giving the file back when the test ends.
     ///
-    /// A test that has to put something in place *before* the viewer starts,
-    /// such as a default layout file in the home directory, has to do that
-    /// under the serialization lock too: two tests writing that one file would
-    /// otherwise each read the other's. So the lock is taken first, the file is
-    /// written, and the lock is handed on to the guard that owns it for the
-    /// rest of the test.
-    fn with_args_under(lock: MutexGuard<'static, ()>, args: &[&str]) -> Self {
+    /// Writing that file has to happen under the serialization lock — it is one
+    /// file, and two tests writing it would each launch a viewer on the other's
+    /// layout — and so does giving it back, which is why the guard owns it.
+    fn with_default_layout(contents: &str, args: &[&str]) -> Self {
+        let lock = ui_test_lock();
+        let file = DefaultLayoutFile::written(contents);
+        Guard::launched(lock, Some(file), args)
+    }
+
+    /// Launch the viewer under a lock the caller has already taken.
+    fn launched(
+        lock: MutexGuard<'static, ()>,
+        layout_file: Option<DefaultLayoutFile>,
+        args: &[&str],
+    ) -> Self {
         Guard {
             child: RefCell::new(launch_with(args)),
             args: Some(args.iter().map(|a| (*a).to_string()).collect()),
+            _layout_file: layout_file,
             _lock: lock,
         }
     }
@@ -529,6 +553,109 @@ fn toggle_hud_layer_checkbox() {
         .expect("Grid should be unchecked after toggle");
 }
 
+/// Every visible, titled top-level window belonging to `pid`.
+///
+/// winit keeps helper windows of its own beside the UI — invisible and
+/// untitled — so the filter is what picks out the window the human sees.
+#[cfg(windows)]
+fn top_level_windows(pid: u32) -> Vec<windows::Win32::Foundation::HWND> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, TRUE};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    struct Wanted {
+        pid: u32,
+        found: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // Safe: `EnumWindows` below passes a pointer to a live `Wanted`, and
+        // the enumeration finishes before that borrow ends.
+        let wanted = unsafe { &mut *(lparam.0 as *mut Wanted) };
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
+        if owner == wanted.pid
+            && unsafe { IsWindowVisible(hwnd) }.as_bool()
+            && unsafe { GetWindowTextLengthW(hwnd) } > 0
+        {
+            wanted.found.push(hwnd);
+        }
+        TRUE
+    }
+
+    let mut wanted = Wanted {
+        pid,
+        found: Vec::new(),
+    };
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&raw mut wanted as isize)) };
+    wanted.found
+}
+
+/// Put the cursor on `(x, y)` and establish that a button pressed there will
+/// reach the viewer, or panic saying what is in the way.
+///
+/// `SendInput` presses wherever the cursor is, on whatever window is under it,
+/// and neither of those belongs to this process. The viewer has just launched,
+/// something else on the desktop can be in front of it, the point can be
+/// off-screen, and `SetCursorPos` can be clamped or refused outright — and from
+/// inside the test all of those look the same as a broken context menu: the
+/// widget lookup afterwards burns its full [`CONTENT_TIMEOUT`] and fails as if
+/// the product had regressed.
+///
+/// So the aim is established before anything is pressed, and it is the *aim*
+/// that is retried, never the assertion: a click that lands on the row and
+/// opens no menu still fails, immediately and for the right reason.
+#[cfg(windows)]
+fn aim_at(pid: u32, x: i32, y: i32) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetCursorPos, GetWindowThreadProcessId, SetCursorPos, SetForegroundWindow,
+        WindowFromPoint, GA_ROOT,
+    };
+
+    let mut last = "the viewer has no visible top-level window".to_string();
+    for attempt in 0..20 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+        let Some(&hwnd) = top_level_windows(pid).first() else {
+            continue;
+        };
+        // A window that is behind another is still at these screen coordinates
+        // in the accessibility tree, so raising it is part of aiming rather
+        // than a courtesy. It can be refused — the foreground lock — which is
+        // why the check below is the thing that decides, not this call.
+        let _ = unsafe { SetForegroundWindow(hwnd) };
+        if let Err(e) = unsafe { SetCursorPos(x, y) } {
+            last = format!("SetCursorPos({x}, {y}) failed: {e}");
+            continue;
+        }
+        let mut at = POINT::default();
+        if let Err(e) = unsafe { GetCursorPos(&mut at) } {
+            last = format!("GetCursorPos failed: {e}");
+            continue;
+        }
+        if (at.x, at.y) != (x, y) {
+            last = format!(
+                "the cursor went to ({}, {}) rather than ({x}, {y}); the point may be off-screen",
+                at.x, at.y
+            );
+            continue;
+        }
+        let under = unsafe { GetAncestor(WindowFromPoint(POINT { x, y }), GA_ROOT) };
+        let mut owner = 0u32;
+        unsafe { GetWindowThreadProcessId(under, Some(&mut owner)) };
+        if owner != pid {
+            last = format!("({x}, {y}) is over process {owner}, not the viewer ({pid})");
+            continue;
+        }
+        return;
+    }
+    panic!("could not aim at the viewer's own window: {last}");
+}
+
 /// A real right-click on the Scene panel's reconstruction row opens its context
 /// menu.
 ///
@@ -549,8 +676,12 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
         SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
         MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, MOUSE_EVENT_FLAGS,
     };
-    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
+    // The return value is checked because `SendInput` is refused silently: UIPI
+    // blocks injection into the session whenever the foreground window belongs
+    // to a more privileged process, and the call then inserts nothing and
+    // returns 0. Ignoring that turned a machine-state problem into a
+    // thirty-second wait for a menu that was never asked for.
     fn mouse_event(flags: MOUSE_EVENT_FLAGS) {
         let input = INPUT {
             r#type: INPUT_MOUSE,
@@ -565,10 +696,17 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
                 },
             },
         };
-        unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+        let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+        assert_eq!(
+            sent,
+            1,
+            "SendInput inserted nothing: {}",
+            windows::core::Error::from_thread()
+        );
     }
 
     let _guard = Guard::new();
+    let pid = _guard.child().id();
     let app = attach(_guard.child());
     load_demo_data(&app);
 
@@ -584,7 +722,7 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     // Two moves with a pause: the app repaints on demand, and egui resolves a
     // click against the widget rects of the frame before it.
     for _ in 0..2 {
-        unsafe { SetCursorPos(x, y).ok() };
+        aim_at(pid, x, y);
         std::thread::sleep(Duration::from_millis(250));
     }
     // A left click first, which both activates the window (a right-press on an
@@ -595,6 +733,9 @@ fn a_real_right_click_opens_the_reconstruction_rows_context_menu() {
     mouse_event(MOUSEEVENTF_LEFTUP);
     std::thread::sleep(Duration::from_millis(400));
 
+    // Aimed again: the pause above is long enough for the desktop to have
+    // moved on, and the right-click is the one the assertion rests on.
+    aim_at(pid, x, y);
     mouse_event(MOUSEEVENTF_RIGHTDOWN);
     std::thread::sleep(Duration::from_millis(120));
     mouse_event(MOUSEEVENTF_RIGHTUP);
@@ -625,16 +766,15 @@ struct DefaultLayoutFile {
 }
 
 impl DefaultLayoutFile {
-    /// Take the serialization lock, put `contents` at
-    /// `~/.sfm-explorer-default-layout.json` preserving whatever was there, and
-    /// hand the lock back for [`Guard::with_args_under`].
+    /// Put `contents` at `~/.sfm-explorer-default-layout.json`, preserving
+    /// whatever was there.
     ///
-    /// The lock comes first because the file is one file: two tests writing it
-    /// at once would each launch a viewer on the other's layout. Nothing here
-    /// launches anything, so the caller passes the lock straight on to the
-    /// guard that owns the viewer.
-    fn written(contents: &str) -> (Self, MutexGuard<'static, ()>) {
-        let lock = ui_test_lock();
+    /// **The caller must already hold [`UI_TEST_LOCK`]**, and must keep holding
+    /// it until this value is dropped — that is [`Guard::with_default_layout`],
+    /// which is the only caller. The file is one file: two tests writing it at
+    /// once would each launch a viewer on the other's layout, and a restore
+    /// outside the lock races the next test's own `rename` of it.
+    fn written(contents: &str) -> Self {
         #[allow(deprecated)] // Un-deprecated in 1.85, below the workspace MSRV.
         let home = std::env::home_dir().expect("a home directory");
         let path = home.join(".sfm-explorer-default-layout.json");
@@ -644,7 +784,7 @@ impl DefaultLayoutFile {
             saved
         });
         std::fs::write(&path, contents).expect("write a default layout file");
-        (DefaultLayoutFile { path, saved }, lock)
+        DefaultLayoutFile { path, saved }
     }
 }
 
@@ -666,7 +806,8 @@ impl Drop for DefaultLayoutFile {
 /// that the file was read.
 #[test]
 fn a_saved_default_layout_is_loaded_at_startup() {
-    let (_file, lock) = DefaultLayoutFile::written(
+    // Launched *without* `--no-default-layout`, unlike every other test here.
+    let guard = Guard::with_default_layout(
         r#"{
   "sfm_explorer_layout": 2,
   "layout": {
@@ -678,9 +819,8 @@ fn a_saved_default_layout_is_loaded_at_startup() {
   }
 }
 "#,
+        &[],
     );
-    // Launched *without* `--no-default-layout`, unlike every other test here.
-    let guard = Guard::with_args_under(lock, &[]);
     let app = attach(guard.child());
 
     app.locator(r#"button[name="Latest"]"#)
@@ -706,7 +846,8 @@ fn a_saved_default_layout_is_loaded_at_startup() {
 /// exercised headlessly in `edit_history_panel/tests.rs`.
 #[test]
 fn the_edit_history_panel_lists_the_loaded_version() {
-    let (_file, lock) = DefaultLayoutFile::written(
+    // Launched *without* `--no-default-layout`, so the file above is read.
+    let guard = Guard::with_default_layout(
         r#"{
   "sfm_explorer_layout": 2,
   "layout": {
@@ -718,9 +859,8 @@ fn the_edit_history_panel_lists_the_loaded_version() {
   }
 }
 "#,
+        &[],
     );
-    // Launched *without* `--no-default-layout`, so the file above is read.
-    let guard = Guard::with_args_under(lock, &[]);
     let app = attach(guard.child());
     load_demo_data(&app);
 
@@ -794,6 +934,7 @@ impl McpViewer {
             guard: Guard {
                 child: RefCell::new(child),
                 args: None,
+                _layout_file: None,
                 _lock,
             },
             address,
