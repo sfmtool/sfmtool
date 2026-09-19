@@ -862,10 +862,11 @@ impl AppState {
     /// did them here would hold the frame -- and the wire's reply window --
     /// for the whole of it before the task it defers to had begun. What
     /// crosses to the worker is [`crate::state::edits::ViewSources`] -- a
-    /// shared clone of each photograph the node's own cache already holds, and
-    /// a path for each one it does not -- with a clone of the value at the
-    /// cursor and a clone of the track, so the worker holds no reference into
-    /// the scene.
+    /// shared clone of the pyramid the node's own cache already holds for each
+    /// photograph, and a path for each one it does not -- with a clone of the
+    /// value at the cursor and a clone of the track, so the worker holds no
+    /// reference into the scene. A photograph the cache has costs neither side
+    /// anything: the pyramid was built when it was decoded.
     ///
     /// **What the track alone decides is decided here**, through
     /// [`sfmtool_core::bench::evaluate_preconditions`], which is the half of

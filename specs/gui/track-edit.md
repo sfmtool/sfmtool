@@ -333,9 +333,11 @@ track stage, cut around wherever the bare projection of the point happens to
 land in a photograph nothing has yet tied it to. Nothing has to be evaluated for
 a fresh row to show its patch.
 
-The photographs are the node's own full-resolution cache, decoded once for the
-whole viewer, and the dock fills it for the active track's images before the
-panel draws, as it does for the selected point's track. A tile is a warp of a
+The photographs are the node's own full-resolution cache, decoded and pyramided
+once for the whole viewer, and the dock fills it for the active track's images
+before the panel draws, as it does for the selected point's track. A cluster
+tile is the kernel's own sampler run over that cached pyramid, so the panel
+builds no pyramid of its own. A tile is a warp of a
 full-resolution photograph, so the rendered tiles are kept against the track's
 `Arc` and rebuilt when a step moves it: every step that moves a tile gives the
 track a new `Arc`.

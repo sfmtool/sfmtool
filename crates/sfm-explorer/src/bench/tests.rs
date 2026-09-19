@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use sfmtool_core::bench::{BenchItem, StageKind, Verdict};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 
 use crate::action_log::Kind;
 use crate::background::{Finished, Operation};
@@ -57,7 +57,10 @@ pub(crate) fn state() -> (AppState, ReconId) {
             .collect();
         state.full_res_cache.insert(
             ImageRef::new(id, image),
-            Some(Arc::new(ImageU8::new(w, h, 3, data))),
+            Some(Arc::new(ImageU8Pyramid::from_image(
+                ImageU8::new(w, h, 3, data),
+                crate::state::PYRAMID_LEVELS,
+            ))),
         );
     }
     (state, id)

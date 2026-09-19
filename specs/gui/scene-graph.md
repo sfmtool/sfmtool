@@ -1020,7 +1020,7 @@ reconstruction row and the camera row in the Scene panel.
 Every image/point-keyed cache re-keys by ref:
 
 - `AppState::sift_cache: HashMap<ImageRef, CachedSiftFeatures>`
-- `AppState::full_res_cache: HashMap<ImageRef, Option<ImageU8>>`
+- `AppState::full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>`
 - panel-local texture caches as listed above
 - `SceneRenderer` bg image: `Option<ImageRef>`
 

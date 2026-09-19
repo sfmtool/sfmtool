@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::patch::cloud::OrientedPatch;
 use sfmtool_core::EditedReconstruction;
 
@@ -164,7 +164,7 @@ impl PointTrackDetail {
         selected_point: Option<usize>,
         hovered_image: Option<usize>,
         sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
-        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
         gesture_events: &[GestureEvent],
         scroll_input: &platform::ScrollInput,
     ) -> PointTrackDetailResponse {

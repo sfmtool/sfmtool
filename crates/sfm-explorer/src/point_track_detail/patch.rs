@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use nalgebra::Vector3;
-use sfmtool_core::camera::remap::{remap_bilinear, ImageU8};
+use sfmtool_core::camera::remap::{remap_bilinear, ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::{CameraIntrinsics, WarpMap};
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
@@ -48,7 +48,7 @@ impl PointTrackDetail {
         ctx: &egui::Context,
         recon: &SfmrReconstruction,
         image_ref: ImageRef,
-        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8>>>,
+        full_res_cache: &HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
     ) {
         if self.rendered_patch_textures.contains_key(&image_ref) {
             return;
@@ -58,7 +58,13 @@ impl PointTrackDetail {
         let Some(frame) = self.patch_frame.as_ref() else {
             return;
         };
-        let Some(src) = full_res_cache.get(&image_ref).and_then(|o| o.as_deref()) else {
+        // Level 0 of the cached pyramid, which is the decoded photograph: the
+        // warp reads the full resolution and picks its own footprint.
+        let Some(src) = full_res_cache
+            .get(&image_ref)
+            .and_then(|o| o.as_ref())
+            .map(|pyramid| pyramid.level(0))
+        else {
             return;
         };
         let image = &recon.image_table.images[img_idx];

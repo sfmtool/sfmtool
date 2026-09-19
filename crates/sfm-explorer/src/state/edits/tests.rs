@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::SfmrReconstruction;
 
 use crate::action_log::Entry;
@@ -1641,6 +1642,87 @@ fn a_reconstruction_with_no_pixels_is_refused_in_the_menu_s_own_words() {
         .expect_err("with no pixels there is nothing to solve from");
     assert!(refused.contains(&why), "{refused}");
     assert_eq!(state.scene[0].history.versions().len(), 1);
+}
+
+// ── Where a step's photographs come from ────────────────────────────────
+
+/// A cached photograph is already a pyramid, so a step over nothing but cached
+/// photographs reads no file and builds no pyramid: what reaches the kernels is
+/// the very `Arc` the cache holds.
+///
+/// Pointer equality rather than pixel equality, because a rebuilt pyramid would
+/// hold the same pixels and cost the seconds this cache exists to remove.
+#[test]
+fn a_step_over_cached_photographs_takes_their_pyramids_as_they_are() {
+    let mut state = state();
+    let id = node(&state);
+    let images = state.scene[0].image_count();
+    assert!(images > 1, "the demo node has images to read");
+
+    let cached: Vec<Arc<ImageU8Pyramid>> = (0..images)
+        .map(|index| {
+            let pyramid = Arc::new(ImageU8Pyramid::from_image(
+                ImageU8::new(8, 8, 3, vec![index as u8; 8 * 8 * 3]),
+                crate::state::PYRAMID_LEVELS,
+            ));
+            state
+                .full_res_cache
+                .insert(ImageRef::new(id, index), Some(Arc::clone(&pyramid)));
+            pyramid
+        })
+        .collect();
+
+    let needed: Vec<usize> = (0..images).collect();
+    let sources = state.view_sources_for(id, &needed).expect("a loaded node");
+    let collector = crate::progress::Collector::new(false);
+    let decoded = sources
+        .decode(&collector.progress())
+        .expect("every photograph was cached, so nothing was read");
+
+    for (index, pyramid) in cached.iter().enumerate() {
+        assert!(
+            Arc::ptr_eq(&decoded.pyramids[index], pyramid),
+            "image {index} was pyramided again rather than taken from the cache",
+        );
+    }
+    assert_eq!(
+        crate::test_support::phase_note(&collector.take(), "decode images"),
+        Some(format!("0 read from disk, {images} reused from the cache")),
+    );
+}
+
+/// The images a step does not read share one placeholder, so a node of a
+/// hundred images costs a step over two of them two pyramids and not a hundred.
+#[test]
+fn the_images_a_step_does_not_read_share_one_placeholder() {
+    let mut state = state();
+    let id = node(&state);
+    let images = state.scene[0].image_count();
+    assert!(images > 2, "the demo node has images to leave unused");
+    state.full_res_cache.insert(
+        ImageRef::new(id, 0),
+        Some(Arc::new(ImageU8Pyramid::from_image(
+            ImageU8::new(8, 8, 3, vec![7u8; 8 * 8 * 3]),
+            crate::state::PYRAMID_LEVELS,
+        ))),
+    );
+
+    let sources = state.view_sources_for(id, &[0]).expect("a loaded node");
+    let collector = crate::progress::Collector::new(false);
+    let decoded = sources
+        .decode(&collector.progress())
+        .expect("the one image the step reads was cached");
+
+    for index in 2..images {
+        assert!(
+            Arc::ptr_eq(&decoded.pyramids[1], &decoded.pyramids[index]),
+            "unused image {index} carries a placeholder of its own",
+        );
+    }
+    assert_eq!(
+        crate::test_support::phase_note(&collector.take(), "decode images"),
+        Some("0 read from disk, 1 reused from the cache".to_string()),
+    );
 }
 
 // ── The point gestures ──────────────────────────────────────────────────

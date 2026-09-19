@@ -246,3 +246,38 @@ fn only_a_real_sift_read_records_a_stage() {
         "a failed read left a row in every frame's entry"
     );
 }
+
+// ── The full-resolution cache ───────────────────────────────────────────
+
+/// What the cache holds is the pyramid, and the photograph the panels draw is
+/// its level 0 -- the same pixels, not a copy of them.
+///
+/// Pointer equality, because two accessors over one entry that handed back two
+/// buffers would be the duplicate this cache is shaped to avoid.
+#[test]
+fn the_photograph_the_cache_hands_back_is_its_pyramids_level_zero() {
+    let recon = SfmrReconstruction::demo(8);
+    let image = ImageRef::new(ReconId::next(), 0);
+    let pyramid = Arc::new(ImageU8Pyramid::from_image(
+        ImageU8::new(8, 8, 3, vec![42u8; 8 * 8 * 3]),
+        PYRAMID_LEVELS,
+    ));
+
+    let mut cache = HashMap::new();
+    cache.insert(image, Some(Arc::clone(&pyramid)));
+
+    assert!(
+        Arc::ptr_eq(
+            ensure_full_res_pyramid(&mut cache, &recon, image).expect("the entry just inserted"),
+            &pyramid,
+        ),
+        "the pyramid accessor answered with something other than the cached entry",
+    );
+    assert!(
+        std::ptr::eq(
+            ensure_full_res_cached(&mut cache, &recon, image).expect("the entry just inserted"),
+            pyramid.level(0),
+        ),
+        "the photograph accessor copied the pixels rather than pointing at level 0",
+    );
+}

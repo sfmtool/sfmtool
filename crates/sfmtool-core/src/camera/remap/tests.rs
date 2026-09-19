@@ -185,6 +185,26 @@ fn test_pyramid_single_level() {
 }
 
 #[test]
+fn test_pyramid_from_image_matches_build() {
+    // Non-uniform content, so that a level which came out of a different loop
+    // would differ rather than agree by being flat everywhere.
+    let (w, h) = (48u32, 32u32);
+    let data: Vec<u8> = (0..(w * h * 3))
+        .map(|i| ((i * 37 + (i / 7) * 11) % 251) as u8)
+        .collect();
+    let img = ImageU8::new(w, h, 3, data.clone());
+    let built = ImageU8Pyramid::build(&img, 5);
+    let owned = ImageU8Pyramid::from_image(ImageU8::new(w, h, 3, data), 5);
+    assert_eq!(built.num_levels(), owned.num_levels());
+    for i in 0..built.num_levels() {
+        assert_eq!(built.level(i).width(), owned.level(i).width());
+        assert_eq!(built.level(i).height(), owned.level(i).height());
+        assert_eq!(built.level(i).channels(), owned.level(i).channels());
+        assert_eq!(built.level(i).data(), owned.level(i).data(), "level {i}");
+    }
+}
+
+#[test]
 fn test_pyramid_stops_at_small_dimension() {
     // 4x4 → 2x2 → 1x1. Requesting 10 levels should stop after 3
     // because 1x1 has width < 2 so no further downsample.

@@ -10,7 +10,7 @@
 //! sliders paint, and what it reports back to the dock -- rather than pixels.
 
 use sfmtool_core::bench::{StageKind, Thresholds, Verdict};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 
 use super::{TrackEdit, TrackEditResponse};
 use crate::scene::{ImageRef, PointRef, ReconId, SceneNode};
@@ -52,7 +52,10 @@ fn cache_photographs(state: &mut AppState, id: ReconId) {
             .collect();
         state.full_res_cache.insert(
             ImageRef::new(id, image),
-            Some(std::sync::Arc::new(ImageU8::new(w, h, 3, data))),
+            Some(std::sync::Arc::new(ImageU8Pyramid::from_image(
+                ImageU8::new(w, h, 3, data),
+                crate::state::PYRAMID_LEVELS,
+            ))),
         );
     }
 }
@@ -342,12 +345,17 @@ fn a_search_candidate_draws_its_tile_where_the_seed_put_it() {
         camera,
         &cam_from_world,
         Some(seed),
-        &src,
+        src.level(0),
     );
     assert_eq!(drawn, at_the_seed, "the tile is not cut around the seed");
 
-    let at_the_projection =
-        crate::point_track_detail::patch_color_image(&frame, camera, &cam_from_world, None, &src);
+    let at_the_projection = crate::point_track_detail::patch_color_image(
+        &frame,
+        camera,
+        &cam_from_world,
+        None,
+        src.level(0),
+    );
     assert_ne!(
         drawn, at_the_projection,
         "the tile is the point's own projection rather than the sighting's place"

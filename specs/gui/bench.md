@@ -406,12 +406,15 @@ own right, and a step that did them on the GUI thread would freeze the frame --
 and hold the wire's reply window shut -- for all of it before the task it defers
 to had begun. So what the gesture does here is clone a handful of
 handles: `ViewSources` carries the node's cameras and poses, a **shared** clone
-of each photograph the node's own full-resolution cache already holds, and a
-path for each one it does not, and `ViewSources::decode` turns that into the
-pyramids on the worker, under a `decode images` phase. A photograph the viewer
-had is therefore not decoded a second time and not copied; one the worker reads
-itself is dropped with the task, because the cache is the GUI thread's and the
-panels fill it for what they draw. A photograph that cannot be read is the
+of the pyramid the node's own full-resolution cache already holds for each
+photograph, and a path for each one it does not, and `ViewSources::decode` turns
+that into one pyramid per view on the worker, under a `decode images` phase
+whose note says how many it read from disk and how many it reused from the
+cache. The cache holds pyramids rather than bare photographs, so a photograph
+the viewer had is neither decoded, nor copied, nor pyramided a second time; one
+the worker reads itself is decoded and pyramided there and dropped with the
+task, because the cache is the GUI thread's and the panels fill it for what they
+draw. A photograph that cannot be read is the
 worker's refusal, arriving as the task's failed row rather than as a refusal of
 the gesture -- which is honest: whether a file is readable is not a question the
 gesture can answer without doing the read. Beside those views the worker gets a

@@ -15,7 +15,7 @@ use crate::scene_renderer::{
     DEFAULT_FRUSTUM_SIZE_MULTIPLIER, DEFAULT_LENGTH_SCALE_MULTIPLIER,
     DEFAULT_TARGET_FOG_MULTIPLIER, DEFAULT_TARGET_SIZE_MULTIPLIER,
 };
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::progress::Progress;
 use sfmtool_core::progress_note;
 use sfmtool_core::SfmrReconstruction;
@@ -596,17 +596,26 @@ pub struct AppState {
     pub(crate) descriptor_indexes:
         HashMap<ReconId, Option<crate::descriptor_index::DescriptorIndex>>,
 
-    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`).
-    /// `None` = decode failed (don't retry). Shared by ImageDetail (builds its
-    /// GPU texture from this) and PointTrackDetail (CPU-samples it to render
-    /// per-observation patch tiles). Cleared when the scene changes.
+    /// Full-resolution source images decoded to CPU pixels (RGB `ImageU8`) and
+    /// pyramided at the decode. `None` = decode failed (don't retry). Shared by
+    /// ImageDetail (builds its GPU texture from level 0) and PointTrackDetail
+    /// (CPU-samples it to render per-observation patch tiles). Cleared when the
+    /// scene changes.
+    ///
+    /// A [`ImageU8Pyramid`] rather than the bare photograph because the
+    /// photometric readers all want one, and building it costs a copy of the
+    /// full-resolution buffer plus five downsamples per image -- per *step*, if
+    /// what is kept is the photograph alone. Level 0 **is** the decoded image,
+    /// so a pyramid holds one copy of the pixels and about a third as much
+    /// again for the levels under it, and every consumer that wants the plain
+    /// photograph reads [`ImageU8Pyramid::level`] 0.
     ///
     /// Behind an [`Arc`] because a photograph is megabytes and one of them is
     /// wanted on a **worker**: a background step that reads pixels
     /// ([`crate::bench`]) takes a clone of what is already decoded here rather
     /// than a copy of it, so the viewer holds one copy of each photograph
     /// however many tasks are looking at it.
-    pub full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8>>>,
+    pub full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
 
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
@@ -1435,6 +1444,14 @@ pub fn ensure_sift_cached<'a>(
     cache.get(&image)
 }
 
+/// How many pyramid levels a decoded photograph is kept at: what the
+/// photometric fit's sampler needs, and what the kernels' own callers build.
+///
+/// One constant, because the cluster sampler mip-selects by the grid's
+/// footprint and the Track Edit panel draws the tile the kernel measured: two
+/// depths would be two pictures of one surface.
+pub(crate) const PYRAMID_LEVELS: usize = 6;
+
 /// Get the cached full-resolution image for an image index, decoding from disk
 /// if needed.
 ///
@@ -1442,13 +1459,31 @@ pub fn ensure_sift_cached<'a>(
 /// `full_res_cache` mutably while simultaneously borrowing other `AppState`
 /// fields (like `reconstruction`) immutably.
 ///
-/// Images are decoded to 3-channel RGB [`ImageU8`]. A failed decode is memoized
-/// as `None` so missing files aren't re-opened every frame.
+/// Images are decoded to 3-channel RGB [`ImageU8`], and what the cache holds is
+/// the pyramid over that image ([`ensure_full_res_pyramid`]); this is its level
+/// 0, which is the decoded photograph itself. A failed decode is memoized as
+/// `None` so missing files aren't re-opened every frame.
 pub fn ensure_full_res_cached<'a>(
-    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8>>>,
+    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
     recon: &SfmrReconstruction,
     image: ImageRef,
 ) -> Option<&'a ImageU8> {
+    ensure_full_res_pyramid(cache, recon, image).map(|pyramid| pyramid.level(0))
+}
+
+/// The cached pyramid for an image index, decoding and pyramiding from disk if
+/// needed.
+///
+/// The half of [`ensure_full_res_cached`] the photometric readers want: the
+/// pyramid is built once, at the decode, so a step that samples a dozen
+/// photographs pays an `Arc` clone each rather than a copy and five
+/// downsamples. The `Arc` is what crosses to a worker
+/// ([`crate::state::edits::ViewSources`]).
+pub fn ensure_full_res_pyramid<'a>(
+    cache: &'a mut HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>>,
+    recon: &SfmrReconstruction,
+    image: ImageRef,
+) -> Option<&'a Arc<ImageU8Pyramid>> {
     cache
         .entry(image)
         .or_insert_with(|| {
@@ -1456,9 +1491,10 @@ pub fn ensure_full_res_cached<'a>(
                 .image_table
                 .images
                 .get(image.index())
-                .and_then(|im| decode_full_res(&recon.workspace_dir.join(&im.name)).map(Arc::new))
+                .and_then(|im| decode_full_res(&recon.workspace_dir.join(&im.name)))
+                .map(|image| Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS)))
         })
-        .as_deref()
+        .as_ref()
 }
 
 /// One photograph read off disk as 3-channel RGB, or `None` with the reason

@@ -180,15 +180,29 @@ impl ImageU8Pyramid {
     /// Level 0 is a copy of the input. Each subsequent level is 2x downsampled
     /// using a box filter. The pyramid has `num_levels` entries total.
     pub fn build(image: &ImageU8, num_levels: usize) -> Self {
+        Self::from_image(
+            ImageU8::new(
+                image.width,
+                image.height,
+                image.channels,
+                image.data.clone(),
+            ),
+            num_levels,
+        )
+    }
+
+    /// Build a Gaussian pyramid from an image it takes over, so that level 0 is
+    /// that image itself.
+    ///
+    /// The same pyramid [`Self::build`] produces, without the full-resolution
+    /// copy: a caller that already owns the pixels and has no other use for
+    /// them hands them over, and the megabytes of a photograph are moved rather
+    /// than duplicated. `build` is this call after its own copy, so the two
+    /// share one downsample loop and cannot disagree about a level.
+    pub fn from_image(image: ImageU8, num_levels: usize) -> Self {
         assert!(num_levels >= 1, "Pyramid must have at least 1 level");
         let mut levels = Vec::with_capacity(num_levels);
-        // Level 0 is a copy of the original.
-        levels.push(ImageU8::new(
-            image.width,
-            image.height,
-            image.channels,
-            image.data.clone(),
-        ));
+        levels.push(image);
 
         for _ in 1..num_levels {
             let prev = levels.last().unwrap();

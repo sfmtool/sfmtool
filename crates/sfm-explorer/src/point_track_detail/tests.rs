@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array4};
-use sfmtool_core::camera::remap::ImageU8;
+use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
 use sfmtool_core::camera::CameraIntrinsics;
 use sfmtool_core::geometry::RigidTransform;
 use sfmtool_core::patch::cloud::OrientedPatch;
@@ -212,7 +212,7 @@ fn project_center(
 fn full_res_images(
     recon: &SfmrReconstruction,
     indices: &[usize],
-) -> HashMap<ImageRef, Option<std::sync::Arc<ImageU8>>> {
+) -> HashMap<ImageRef, Option<std::sync::Arc<ImageU8Pyramid>>> {
     let camera = &recon.image_table.cameras[0];
     let (w, h) = (camera.width, camera.height);
     indices
@@ -220,11 +220,9 @@ fn full_res_images(
         .map(|&i| {
             (
                 image(i),
-                Some(std::sync::Arc::new(ImageU8::new(
-                    w,
-                    h,
-                    3,
-                    vec![180u8; (w * h * 3) as usize],
+                Some(std::sync::Arc::new(ImageU8Pyramid::from_image(
+                    ImageU8::new(w, h, 3, vec![180u8; (w * h * 3) as usize]),
+                    crate::state::PYRAMID_LEVELS,
                 ))),
             )
         })
@@ -253,7 +251,7 @@ fn run_frame(
     recon: &SfmrReconstruction,
     selected_point: Option<usize>,
     sift_cache: &HashMap<ImageRef, CachedSiftFeatures>,
-    full_res_cache: &HashMap<ImageRef, Option<std::sync::Arc<ImageU8>>>,
+    full_res_cache: &HashMap<ImageRef, Option<std::sync::Arc<ImageU8Pyramid>>>,
     events: Vec<egui::Event>,
 ) -> PointTrackDetailResponse {
     let input = egui::RawInput {
@@ -1167,7 +1165,7 @@ fn the_column_headings_are_drawn_outside_the_scrolling_rows() {
     show_once(&mut panel, &ctx, &recon, Some(3), &cache);
 
     let edited = edited_of(&recon);
-    let full_res: HashMap<ImageRef, Option<Arc<ImageU8>>> = HashMap::new();
+    let full_res: HashMap<ImageRef, Option<Arc<ImageU8Pyramid>>> = HashMap::new();
     let painted = crate::test_support::painted_text_rects(
         &ctx,
         egui::RawInput {

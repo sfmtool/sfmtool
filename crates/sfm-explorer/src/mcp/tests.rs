@@ -4456,7 +4456,10 @@ fn editable() -> (AppState, Viewer3D) {
         state.full_res_cache.insert(
             crate::scene::ImageRef::new(id, index),
             Some(std::sync::Arc::new(
-                sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
+                sfmtool_core::camera::remap::ImageU8Pyramid::from_image(
+                    sfmtool_core::camera::remap::ImageU8::new(width, height, 3, data),
+                    crate::state::PYRAMID_LEVELS,
+                ),
             )),
         );
     }
@@ -5984,7 +5987,10 @@ fn benchable_with(recon: sfmtool_core::SfmrReconstruction) -> (AppState, Viewer3
         state.full_res_cache.insert(
             crate::scene::ImageRef::new(id, image),
             Some(std::sync::Arc::new(
-                sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
+                sfmtool_core::camera::remap::ImageU8Pyramid::from_image(
+                    sfmtool_core::camera::remap::ImageU8::new(w, h, 3, data),
+                    crate::state::PYRAMID_LEVELS,
+                ),
             )),
         );
     }

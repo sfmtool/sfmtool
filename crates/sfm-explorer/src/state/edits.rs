@@ -46,11 +46,7 @@ use crate::progress::Collector;
 use crate::resect::ResectFrom;
 use crate::scene::{ImageRef, PointRef, ReconId};
 
-use super::AppState;
-
-/// How many pyramid levels the photometric fit's sampler needs. The kernels'
-/// own callers build the same number.
-const PYRAMID_LEVELS: usize = 6;
+use super::{AppState, PYRAMID_LEVELS};
 
 /// The patch-frame normal the viewer's `sift_files` → `embedded_patches`
 /// conversion seeds each point with: the mean of its point-to-camera
@@ -171,19 +167,19 @@ fn retriangulate_summary(report: &RetriangulateReport) -> String {
 pub(crate) struct DecodedViews {
     cameras: Vec<CameraIntrinsics>,
     poses: Vec<RigidTransform>,
-    pyramids: Vec<ImageU8Pyramid>,
+    pyramids: Vec<Arc<ImageU8Pyramid>>,
 }
 
 /// Where one photometric step's photographs are to come from, before any of
 /// them has been decoded.
 ///
 /// What crosses to a **worker**: the poses and the cameras, which are cheap,
-/// and per image either the decoded pixels the viewer already holds -- shared
-/// rather than copied, which is what the cache's `Arc` is for -- or the path to
-/// read them from. So the GUI thread starts a photometric step in the time it
-/// takes to clone a handful of `Arc`s, and the file reads and the pyramid
-/// builds, which are the seconds in it, happen where every other second of that
-/// step already happens.
+/// and per image either the pyramid the viewer already holds -- shared rather
+/// than copied, which is what the cache's `Arc` is for -- or the path to read
+/// the photograph from. So a step over photographs the cache has costs the GUI
+/// thread a handful of `Arc` clones and the worker nothing at all, and the file
+/// reads and the pyramid builds the rest of them need happen where every other
+/// second of that step already happens.
 ///
 /// A photograph the worker reads is dropped with the task rather than put in
 /// the cache: the cache is `AppState`'s and the worker cannot reach it, and the
@@ -196,8 +192,8 @@ pub(crate) struct ViewSources {
 
 /// Where one image's pixels come from.
 enum ViewSource {
-    /// Already decoded, shared with whatever else holds it.
-    Decoded(Arc<ImageU8>),
+    /// Already decoded and pyramided, shared with whatever else holds it.
+    Decoded(Arc<ImageU8Pyramid>),
     /// To be read from this path, with the image's name for the refusal.
     Read(std::path::PathBuf, String),
     /// An image the step does not read: a one-pixel placeholder, which no
@@ -206,8 +202,13 @@ enum ViewSource {
 }
 
 impl ViewSources {
-    /// Decode what has not been decoded and build the pyramids, reporting
-    /// through `progress`.
+    /// Decode what has not been decoded and build the pyramids it needs,
+    /// reporting through `progress`.
+    ///
+    /// A photograph the cache had arrives here already pyramided, so all this
+    /// does with it is keep the `Arc`; what is built is one pyramid per
+    /// photograph read from disk, and the one-pixel placeholder, which every
+    /// unused slot shares.
     ///
     /// The refusal a file that cannot be read produces is the caller's own
     /// sentence, arriving from the worker rather than from the gesture: the
@@ -219,27 +220,32 @@ impl ViewSources {
         progress: &sfmtool_core::progress::Progress<'_>,
     ) -> Result<DecodedViews, String> {
         let mut phase = progress.phase("decode images");
-        let placeholder = ImageU8::new(1, 1, 3, vec![0u8; 3]);
+        let placeholder = Arc::new(ImageU8Pyramid::from_image(
+            ImageU8::new(1, 1, 3, vec![0u8; 3]),
+            PYRAMID_LEVELS,
+        ));
         let mut pyramids = Vec::with_capacity(self.sources.len());
         let mut read = 0usize;
+        let mut reused = 0usize;
         for source in self.sources {
-            let decoded = match source {
-                ViewSource::Decoded(image) => Some(image),
+            pyramids.push(match source {
+                ViewSource::Decoded(pyramid) => {
+                    reused += 1;
+                    pyramid
+                }
                 ViewSource::Read(path, name) => {
                     read += 1;
-                    Some(Arc::new(
-                        crate::state::decode_full_res(&path)
-                            .ok_or(format!("Cannot read {name}."))?,
-                    ))
+                    let image = crate::state::decode_full_res(&path)
+                        .ok_or(format!("Cannot read {name}."))?;
+                    Arc::new(ImageU8Pyramid::from_image(image, PYRAMID_LEVELS))
                 }
-                ViewSource::Unused => None,
-            };
-            pyramids.push(ImageU8Pyramid::build(
-                decoded.as_deref().unwrap_or(&placeholder),
-                PYRAMID_LEVELS,
-            ));
+                ViewSource::Unused => Arc::clone(&placeholder),
+            });
         }
-        progress_note!(phase, "{read} read from disk");
+        progress_note!(
+            phase,
+            "{read} read from disk, {reused} reused from the cache"
+        );
         Ok(DecodedViews {
             cameras: self.cameras,
             poses: self.poses,
@@ -258,7 +264,7 @@ impl DecodedViews {
             .map(|((camera, cam_from_world), pyramid)| ProjectedImage {
                 camera,
                 cam_from_world,
-                pyramid,
+                pyramid: pyramid.as_ref(),
             })
             .collect()
     }
@@ -1483,7 +1489,7 @@ impl AppState {
                     .get(&ImageRef::new(id, i))
                     .and_then(|slot| slot.as_ref())
                 {
-                    Some(image) => ViewSource::Decoded(Arc::clone(image)),
+                    Some(pyramid) => ViewSource::Decoded(Arc::clone(pyramid)),
                     None => ViewSource::Read(recon.workspace_dir.join(&im.name), im.name.clone()),
                 }
             });

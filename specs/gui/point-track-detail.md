@@ -264,13 +264,18 @@ editable copy of it cannot show the same surface two ways.
 `AppState::full_res_cache`, a CPU-side cache of decoded full-res images (RGB
 `ImageU8`, keyed by image index) shared with the Image Detail panel — which
 builds its display texture from the same cache — so no image is decoded from
-disk more than once. Decode failures are memoized (`None`) so missing files
-aren't re-opened every frame. The dock pre-caches every observing image of the
+disk more than once. What an entry holds is the `ImageU8Pyramid` built when the
+image was decoded, whose level 0 *is* that image: the photometric readers
+(`ViewSources`, the Track Edit panel's cluster tiles) sample the lower levels,
+and everything that wants the plain photograph reads level 0, so the pyramid is
+built once per image rather than once per step. Decode failures are memoized
+(`None`) so missing files aren't re-opened every frame. The dock pre-caches every observing image of the
 selected point before the panel draws (only when the reconstruction carries
 patch frames); the cache is cleared when the reconstruction changes.
 
 > **TODO (unbounded growth):** `full_res_cache` currently retains a CPU RGB
-> copy of every image ever selected or observed for the whole session, with no
+> copy of every image ever selected or observed for the whole session, plus the
+> pyramid levels under it (about a third as much again), with no
 > eviction — only cleared on reconstruction load. On large datasets this can
 > retain hundreds of MB (e.g. ~85 images @ 2040×1536×3 ≈ 800 MB). It should
 > become an **LRU cache bounded by total memory usage** (evict the

@@ -33,14 +33,9 @@
 //! around wherever the bare projection of the point happens to land.
 
 use sfmtool_core::bench::{EditableTrack, Stage};
-use sfmtool_core::camera::remap::{ImageU8, ImageU8Pyramid};
+use sfmtool_core::camera::remap::ImageU8Pyramid;
 use sfmtool_core::patch::cluster_refine::{sample_member_grid, ClusterRefineParams};
 use sfmtool_core::SfmrReconstruction;
-
-/// Pyramid depth for the cluster sampler, which mip-selects by the grid's own
-/// footprint. The same depth the bench's evaluation decodes with, so the panel
-/// and the kernel read one level.
-const PYRAMID_LEVELS: usize = 6;
 
 /// The tile for one observation, uploaded, or `None` when [`image()`] had
 /// nothing to render.
@@ -49,7 +44,7 @@ pub(super) fn render(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8,
+    src: &ImageU8Pyramid,
     name: String,
 ) -> Option<egui::TextureHandle> {
     let tile = image(recon, track, observation, src)?;
@@ -61,13 +56,15 @@ pub(super) fn render(
 /// a degenerate shape at the cluster stage.
 ///
 /// Pure, so a headless test can ask what a row shows rather than only whether
-/// it showed something. `src` is the observation's own photograph, which the
-/// caller reads out of the node's full-resolution cache.
+/// it showed something. `src` is the observation's own photograph as the node's
+/// full-resolution cache holds it: the pyramid built at the decode, whose level
+/// 0 is the photograph and whose lower levels are what the cluster sampler
+/// mip-selects over.
 pub(super) fn image(
     recon: &SfmrReconstruction,
     track: &EditableTrack,
     observation: usize,
-    src: &ImageU8,
+    src: &ImageU8Pyramid,
 ) -> Option<egui::ColorImage> {
     let row = track.observations.get(observation)?;
     let site = crate::bench::observation_site(row)?;
@@ -82,7 +79,7 @@ pub(super) fn image(
                 camera,
                 &crate::scene::cam_from_world(image),
                 Some(site.pixel),
-                src,
+                src.level(0),
             ))
         }
         Stage::Cluster(payload) => {
@@ -99,8 +96,7 @@ pub(super) fn image(
             if let Some(template) = payload.template.as_ref() {
                 params.resolution = template.samples.shape()[0] as u32;
             }
-            let pyramid = ImageU8Pyramid::build(src, PYRAMID_LEVELS);
-            let grid = sample_member_grid(&pyramid, site.pixel, site.shape?, &params)?;
+            let grid = sample_member_grid(src, site.pixel, site.shape?, &params)?;
             let resolution = params.resolution.max(2) as usize;
             let channels = grid.len() / (resolution * resolution);
             Some(color_image(&grid, resolution, channels))
