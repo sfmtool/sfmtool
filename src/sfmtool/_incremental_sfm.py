@@ -8,8 +8,8 @@ import textwrap
 from pathlib import Path
 
 import pycolmap
-from deadline.job_attachments.api import summarize_path_list
 
+from ._path_summary import summarize_path_list
 from .camera.config import CameraConfigResolver
 from .colmap.db_setup import _setup_for_sfm, _setup_for_sfm_from_matches
 from .colmap.io import (

@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .._path_summary import summarize_paths_by_sequence
+
 # A lone sensor sits at the identity `sensor_from_rig` pose.
 _IDENTITY_QUATS = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float64)
 _IDENTITY_TRANS = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
@@ -45,8 +47,6 @@ def _infer_pattern(image_names: list[str], *, require_frame_field: bool) -> str 
     pattern — or, with `require_frame_field`, a single *numbered* sequence, as
     a multi-sensor rig needs a frame field in every pattern.
     """
-    from deadline.job_attachments.api import summarize_paths_by_sequence
-
     from .._sfmtool.io import validate_camrig_pattern
 
     if not image_names:

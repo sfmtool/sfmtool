@@ -426,7 +426,7 @@ def print_reconstruction_summary(
 
     # Image path summarization (optional dependency)
     try:
-        from deadline.job_attachments.api import summarize_path_list
+        from .._path_summary import summarize_path_list
 
         click.echo("  Image paths:")
         click.echo(

@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import xxhash
-from deadline.job_attachments.api import summarize_path_list
 
+from sfmtool._path_summary import summarize_path_list
 from sfmtool._sfmtool import THUMBNAIL_SIZE
 from sfmtool._sfmtool.io import (
     SiftWriteQueue as _SiftWriteQueue,

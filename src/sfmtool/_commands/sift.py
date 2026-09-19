@@ -8,9 +8,9 @@ import textwrap
 from pathlib import Path
 
 import click
-from deadline.job_attachments.api import summarize_path_list
 
 from .._cli_utils import timed_command
+from .._path_summary import summarize_path_list
 from .._filenames import expand_paths
 from .._sfmtool.reconstruction import RangeExpr
 from .._workspace import find_workspace_for_path, load_workspace_config

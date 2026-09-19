@@ -19,6 +19,7 @@ from pathlib import Path
 import click
 import numpy as np
 
+from .._path_summary import summarize_paths_by_sequence
 from ._db_populate import (
     _compute_descriptor_distances,
     _fill_sift_hashes,
@@ -388,8 +389,6 @@ def _generate_output_path(
     so a method whose artifact is not the pairwise one can label it (the
     cluster matcher passes ``"-clusters"``).
     """
-    from deadline.job_attachments.api import summarize_paths_by_sequence
-
     from .._sfmtool.reconstruction import RangeExpr
 
     base_dir.mkdir(parents=True, exist_ok=True)

@@ -17,12 +17,9 @@ from .constants import (
     STEP_RATIO_THRESHOLD,
     STEP_RATIO_WINDOW,
 )
+from .._path_summary import summarize_paths_by_sequence
+from .._pose_math import rotation_angle_deg
 from .._sfmtool.geometry import RotQuaternion
-
-
-def _rotation_angle_deg(qa: RotQuaternion, qb: RotQuaternion) -> float:
-    """Rotation angle in degrees between two quaternions."""
-    return float(np.degrees((qb * qa.conjugate()).angle()))
 
 
 def _extrapolate_pose(
@@ -88,7 +85,7 @@ def _extrapolation_error(
     """Compute translation and rotation extrapolation errors for one prediction."""
     pred_center, pred_quat = _extrapolate_pose(centers, quats, ts, t_target, degree)
     trans_err = float(np.linalg.norm(pred_center - actual_center))
-    rot_err = _rotation_angle_deg(pred_quat, actual_quat)
+    rot_err = rotation_angle_deg(pred_quat, actual_quat)
     return trans_err, rot_err
 
 
@@ -581,12 +578,10 @@ def analyze_reconstruction(
     Returns:
         List of per-sequence result dicts.
     """
-    from deadline.job_attachments.api import summarize_paths_by_sequence
-
     from .._filenames import number_from_filename
 
     # Imported lazily to avoid a module-level import cycle: _recon_console
-    # imports the pure helpers (`_flag_frame`, `_rotation_angle_deg`) from here.
+    # imports the pure helper `_flag_frame` from here.
     from ._recon_console import print_frame_table, print_summary
 
     image_names = recon.image_names
@@ -671,7 +666,7 @@ def analyze_reconstruction(
             [np.linalg.norm(seq_centers[i + 1] - seq_centers[i]) for i in range(n - 1)]
         )
         successive_rots = np.array(
-            [_rotation_angle_deg(seq_quats[i], seq_quats[i + 1]) for i in range(n - 1)]
+            [rotation_angle_deg(seq_quats[i], seq_quats[i + 1]) for i in range(n - 1)]
         )
 
         # Compute median successive motion as scale reference

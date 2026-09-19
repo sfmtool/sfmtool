@@ -8,11 +8,7 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 
-from deadline.job_attachments.api import (
-    summarize_path_list,
-    summarize_paths_by_sequence,
-)
-
+from ._path_summary import summarize_path_list, summarize_paths_by_sequence
 from ._sfmtool.reconstruction import RangeExpr
 
 
