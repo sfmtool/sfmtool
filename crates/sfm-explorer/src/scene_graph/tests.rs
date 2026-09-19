@@ -502,6 +502,232 @@ fn the_panel_glyphs_are_available_in_the_bundled_fonts() {
     }
 }
 
+// ── The bench groups ────────────────────────────────────────────────────
+
+/// A node with a bench holding one track-stage item -- a point put on it -- and
+/// one cluster-stage item started from a pixel, with the labels of the two.
+///
+/// The fixture is the bench module's own, photographs and all, because a stage
+/// change reads them.
+fn benched() -> (AppState, crate::scene::ReconId, String, String) {
+    let (mut state, id) = crate::bench::tests::state();
+    let point = crate::bench::tests::put_on_bench(&mut state, id);
+    let cluster = state
+        .start_bench_cluster(
+            ImageRef::new(id, 0),
+            &crate::bench::Seed::Pixel {
+                pixel: [120.0, 90.0],
+                radius_px: Some(6.0),
+            },
+        )
+        .expect("a pixel on the sensor")
+        .label;
+    (state, id, point, cluster)
+}
+
+/// The label of the group a bench row is drawn under, read off what the panel
+/// painted: the rows are laid out under their group's body, so which group an
+/// item is in is the count beside each title.
+fn bench_titles(
+    panel: &mut SceneGraphPanel,
+    ctx: &egui::Context,
+    state: &mut AppState,
+) -> Vec<String> {
+    painted_at_width(panel, ctx, state, VIEWPORT.x)
+        .into_iter()
+        .filter(|text| text.starts_with("Bench "))
+        .collect()
+}
+
+#[test]
+fn the_bench_is_two_groups_one_per_stage() {
+    let (mut state, id, point, cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+
+    assert!(drawn(&ctx, row_id(id, "bench_points")), "no Bench Points");
+    assert!(
+        drawn(&ctx, row_id(id, "bench_clusters")),
+        "no Bench Clusters"
+    );
+    assert_eq!(
+        bench_titles(&mut panel, &ctx, &mut state),
+        ["Bench Points (1)", "Bench Clusters (1)"],
+        "the two groups and their counts"
+    );
+    // Each item is drawn under the group its stage belongs to, which is what
+    // the rows' own rects say.
+    assert!(panel
+        .hit_rect(row_id(id, &format!("bench_item_{point}")))
+        .is_some());
+    assert!(panel
+        .hit_rect(row_id(id, &format!("bench_item_{cluster}")))
+        .is_some());
+}
+
+/// The point of the split: an item taken down to the cluster stage leaves the
+/// points group for the clusters group.
+#[test]
+fn an_item_changes_group_when_its_stage_changes() {
+    let (mut state, id, point, _cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+    assert_eq!(
+        bench_titles(&mut panel, &ctx, &mut state),
+        ["Bench Points (1)", "Bench Clusters (1)"]
+    );
+
+    state
+        .start_bench_stage(id, &point, sfmtool_core::bench::StageKind::Cluster)
+        .expect("a track with a frame downgrades");
+    state.finish_background_task();
+
+    assert_eq!(
+        bench_titles(&mut panel, &ctx, &mut state),
+        ["Bench Clusters (2)"],
+        "the item did not move, or the emptied group was still drawn"
+    );
+    assert!(
+        panel
+            .hit_rect(row_id(id, &format!("bench_item_{point}")))
+            .is_some(),
+        "the item it moved is drawn under the group it moved to"
+    );
+}
+
+/// An empty group is not drawn at all, which is what the one bench group did
+/// with an empty bench -- and the other group is drawn all the same.
+#[test]
+fn a_group_with_nothing_in_it_is_not_drawn() {
+    let (mut state, id) = crate::bench::tests::state();
+    let (mut panel, ctx) = settled(&mut state);
+    assert!(
+        bench_titles(&mut panel, &ctx, &mut state).is_empty(),
+        "an empty bench drew a group"
+    );
+
+    crate::bench::tests::put_on_bench(&mut state, id);
+    assert_eq!(
+        bench_titles(&mut panel, &ctx, &mut state),
+        ["Bench Points (1)"],
+        "a bench of one track drew a clusters group"
+    );
+    assert!(!drawn(&ctx, row_id(id, "bench_clusters")));
+}
+
+/// Clicking a row activates that item from either group, and the active item is
+/// one across the two: the bench's kinds are items, not stages.
+#[test]
+fn a_row_in_either_group_activates_its_item() {
+    let (mut state, id, point, cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, &format!("bench_item_{point}")),
+    );
+    let (node, position) = response
+        .activate_bench_item
+        .expect("a Bench Points row reported nothing");
+    assert_eq!(node, id);
+    assert_eq!(
+        state.bench(id).expect("a bench").entries()[position].label,
+        point,
+        "the position names the item in the whole bench"
+    );
+    state
+        .activate_bench_item(id, &point)
+        .expect("on the bench, as the dock would");
+    assert_eq!(
+        crate::bench::active_track_label(state.bench(id).expect("a bench")),
+        Some(point.as_str())
+    );
+
+    let response = click(
+        &mut panel,
+        &ctx,
+        &mut state,
+        row_id(id, &format!("bench_item_{cluster}")),
+    );
+    let (_, position) = response
+        .activate_bench_item
+        .expect("a Bench Clusters row reported nothing");
+    assert_eq!(
+        state.bench(id).expect("a bench").entries()[position].label,
+        cluster
+    );
+    state
+        .activate_bench_item(id, &cluster)
+        .expect("on the bench");
+    assert_eq!(
+        crate::bench::active_track_label(state.bench(id).expect("a bench")),
+        Some(cluster.as_str()),
+        "the active item is one across both groups"
+    );
+}
+
+/// *Discard* is on a row of either group, and names the item the row is about.
+#[test]
+fn discard_works_from_either_group() {
+    let (mut state, id, point, cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+
+    for label in [&cluster, &point] {
+        open_context_menu(
+            &mut panel,
+            &ctx,
+            &mut state,
+            row_id(id, &format!("bench_item_{label}")),
+        );
+        let response = click(
+            &mut panel,
+            &ctx,
+            &mut state,
+            row_id(id, &format!("bench_discard_{label}")),
+        );
+        let (_, position) = response
+            .discard_bench_item
+            .unwrap_or_else(|| panic!("Discard on {label} reported nothing"));
+        assert_eq!(
+            &state.bench(id).expect("a bench").entries()[position].label,
+            label
+        );
+        state
+            .discard_bench_item(id, label)
+            .expect("on the bench, as the dock would");
+        run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    }
+    assert!(state.bench(id).expect("a bench").is_empty());
+}
+
+/// Each group remembers its own expansion: collapsing the points group leaves
+/// the clusters group's rows drawn.
+#[test]
+fn each_group_collapses_on_its_own() {
+    let (mut state, id, point, cluster) = benched();
+    let (mut panel, ctx) = settled(&mut state);
+
+    set_open(&ctx, row_id(id, "bench_points"), false);
+    // Several frames: a collapsing header animates shut and keeps drawing its
+    // body while it does.
+    for _ in 0..30 {
+        run_frame(&mut panel, &ctx, &mut state, Vec::new());
+    }
+
+    assert!(
+        panel
+            .hit_rect(row_id(id, &format!("bench_item_{point}")))
+            .is_none(),
+        "a collapsed group still drew its rows"
+    );
+    assert!(
+        panel
+            .hit_rect(row_id(id, &format!("bench_item_{cluster}")))
+            .is_some(),
+        "collapsing one group closed the other"
+    );
+}
+
 // ── Clicks and toggles ──────────────────────────────────────────────────
 
 #[test]

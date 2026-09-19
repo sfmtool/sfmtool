@@ -53,6 +53,7 @@
 //! such a list would misbehave mechanically as well as ergonomically.
 
 use eframe::egui;
+use sfmtool_core::bench::{BenchEntry, StageKind};
 
 use crate::action_log::{interactive_text, visibility_text, ActionLog, Kind, Layer};
 use crate::align::AlignOptions;
@@ -460,7 +461,7 @@ fn show_node(ui: &mut egui::Ui, node: &mut SceneNode, ctx: &NodeContext, out: &m
         show_camera_intrinsics_group(ui, node, ctx, out);
         show_camera_images_group(ui, node, ctx, out);
         show_points_group(ui, node, ctx, out);
-        show_bench_group(ui, node, out);
+        show_bench_groups(ui, node, out);
         if node.has_patch_data() {
             ui.horizontal(|ui| {
                 ui.set_height(ROW_HEIGHT);
@@ -633,37 +634,77 @@ fn show_node_header(
     });
 }
 
-/// `[▸] Bench (2)`, expanding to one row per item, the active one marked.
+/// The bench, as two groups: `[▸] Bench Points (2)` and
+/// `[▸] Bench Clusters (1)`.
+///
+/// Split by stage because the stages are two different things -- a track-stage
+/// item stands at a position and a cluster-stage one is a set of image patches
+/// with no geometry behind them (`specs/gui/bench.md`) -- and one mixed list
+/// said which only in a row's hover text. An item that is taken up or down
+/// moves between the groups, which is the whole of what the split is for.
+///
+/// A group with nothing in it is not drawn, which is what the one bench group
+/// did when the bench was empty. The two are one bench all the same: there is
+/// one active item across both, because the bench's kinds are items rather than
+/// stages.
+fn show_bench_groups(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+    show_bench_stage_group(ui, node, out, StageKind::Track, "bench_points");
+    show_bench_stage_group(ui, node, out, StageKind::Cluster, "bench_clusters");
+}
+
+/// One of the two bench groups: the items at `stage`, in the bench's own order,
+/// the active one marked.
 ///
 /// No eye: nothing on the bench is drawn from this row, and an item is not part
-/// of the reconstruction. The group is here because the tree is where a node's
-/// parts are listed, and it is per node because an item names that node's
-/// images and poses (`specs/gui/bench.md`).
+/// of the reconstruction. The groups are here because the tree is where a
+/// node's parts are listed, and they are per node because an item names that
+/// node's images and poses (`specs/gui/bench.md`).
 ///
 /// Clicking a row makes that item active, which is a step like any other; the
 /// panel that edits the item is [`crate::track_edit`], and a secondary click
-/// offers *Discard*.
-fn show_bench_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
+/// offers *Discard*. An item is named to the dock by its **position on the
+/// bench**, which is the position it holds in the whole list rather than in the
+/// group it is drawn under, so both groups' rows reach the same item.
+fn show_bench_stage_group(
+    ui: &mut egui::Ui,
+    node: &SceneNode,
+    out: &mut TreeOutput,
+    stage: StageKind,
+    key: &str,
+) {
     let bench = node.history.current_bench();
-    if bench.is_empty() {
+    let items: Vec<(usize, &BenchEntry)> = bench
+        .entries()
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry
+                .item
+                .as_track()
+                .is_some_and(|track| track.stage_kind() == stage)
+        })
+        .collect();
+    if items.is_empty() {
         return;
     }
     let id = node.id;
     let active = crate::bench::active_track_label(bench).map(str::to_string);
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
-        row_id(id, "bench"),
+        row_id(id, key),
         true,
     );
+    let title = match stage {
+        StageKind::Track => "Bench Points",
+        StageKind::Cluster => "Bench Clusters",
+    };
     let header = state.show_header(ui, |ui| {
         ui.set_height(ROW_HEIGHT);
-        ui.label(format!("Bench ({})", bench.len()));
+        ui.label(format!("{title} ({})", items.len()));
     });
     header.body(|ui| {
-        for (position, entry) in bench.entries().iter().enumerate() {
-            let Some(track) = entry.item.as_track() else {
-                continue;
-            };
+        for (position, entry) in items {
+            let track = entry.item.as_track().expect("filtered to tracks above");
             let selected = active.as_deref() == Some(entry.label.as_str());
             let (kept, candidates, out_count) = track.verdict_counts();
             let text = format!("{}  {kept} in", entry.label);
@@ -682,7 +723,9 @@ fn show_bench_group(ui: &mut egui::Ui, node: &SceneNode, out: &mut TreeOutput) {
                 out.response.activate_bench_item = Some((id, position));
             }
             egui::Popup::context_menu(&row).show(|ui| {
-                if ui.button("Discard").clicked() {
+                let discard = ui.button("Discard");
+                let key = format!("bench_discard_{}", entry.label);
+                if out.hit(row_id(id, &key), discard).clicked() {
                     out.response.discard_bench_item = Some((id, position));
                     ui.close();
                 }

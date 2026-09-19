@@ -63,8 +63,10 @@ Scene (root, implicit)
 │   ├── Points (1,204,551 · 12 at ∞)  ← fixed group node
 │   │   ├── ▸ selected: pt3d_a1b2c3_88231   ← selection/hover rows only
 │   │   └── ▸ hovered:  pt3d_a1b2c3_10442
-│   ├── Bench (2)                  ← present when something is on the bench
+│   ├── Bench Points (2)           ← the bench's track-stage items, when it has any
 │   │   └── pt3d_a1b2c3_88231  5 in   ← one row per item, the active one marked
+│   ├── Bench Clusters (1)         ← its cluster-stage items, likewise
+│   │   └── IMG_0004@120,90  3 in
 │   └── Patches                   ← toggle-only row, present when the recon
 │                                    carries patch data; not expandable
 ├── Reconstruction "run_b"
@@ -403,14 +405,25 @@ fixed-height for virtualization.
   it should arrive as a filtered/query view (e.g. "worst reprojection error",
   "longest tracks"), not a raw list.
 
-**Bench group row** — `[▸] Bench (2)` — no eye, shown only when something is on
-the node's bench ([bench.md](bench.md)). Expands to one row per item, by label,
-with its `in` count; the active item of its kind is drawn as the selected row. A
-click makes an item active, which is a step of the node's history like any
-other, and a secondary click offers *Discard*. Nothing here is drawn in the 3D
-viewport, which is why the row has no eye, and the group is per node because an
-item names that node's images and poses. The panel that edits a track on it is
-[track-edit.md](track-edit.md).
+**Bench group rows** — `[▸] Bench Points (2)` and `[▸] Bench Clusters (1)` — no
+eye, one per **stage** of the node's bench ([bench.md](bench.md)): the
+track-stage items, which stand at a position, and the cluster-stage ones, which
+are image patches with no geometry behind them. The split is the tree saying
+which of the two an item is, rather than leaving it to a row's hover text, and
+an item taken up or down moves between the groups. A group with nothing in it is
+not drawn, which is what the single bench group did with an empty bench, so a
+node whose bench holds only tracks shows only *Bench Points*; each remembers its
+own expansion, and both open by default.
+
+Each expands to one row per item of its stage, in the bench's own order, by
+label and with its `in` count; the active item is drawn as the selected row.
+There is **one** active item across both groups, the bench's kinds being items
+rather than stages. A click makes an item active, which is a step of the node's
+history like any other, and a secondary click offers *Discard*; an item is named
+to the dock by its position in the whole bench, so both groups' rows reach the
+same list. Nothing here is drawn in the 3D viewport, which is why the rows have
+no eye, and the groups are per node because an item names that node's images and
+poses. The panel that edits a track on it is [track-edit.md](track-edit.md).
 
 **Patches row** — `[👁] Patches` — eye only, shown when the node carries patch
 data (mirrors the HUD's greyed-when-absent convention).
