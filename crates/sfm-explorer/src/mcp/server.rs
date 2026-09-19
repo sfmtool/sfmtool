@@ -41,8 +41,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use rmcp::model::{
     CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
-    ToolAnnotations,
+    Implementation, ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig,
+    Tool, ToolAnnotations,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -229,15 +229,28 @@ impl Viewer {
 
 impl ServerHandler for Viewer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Drives a running SfM Explorer window: the scene graph of loaded .sfmr \
+        // `ServerConfig::new` fills `server_info` from `Implementation::
+        // from_build_env()`, which reads `rmcp`'s **own** `CARGO_CRATE_NAME` and
+        // `CARGO_PKG_VERSION` — the macros expand where the SDK is compiled, not
+        // where it is called. A viewer that left it alone introduced itself as
+        // `rmcp 3.4.0`, so an agent's client listed the server under the name of
+        // the library and reported a version that says nothing about which
+        // viewer answered. Both are what a human reads when a tool call goes
+        // wrong, so both are set here.
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(
+                Implementation::new("sfm-explorer", env!("CARGO_PKG_VERSION"))
+                    .with_title("SfM Explorer"),
+            )
+            .with_instructions(
+                "Drives a running SfM Explorer window: the scene graph of loaded .sfmr \
                  reconstructions, the selection, the 3D viewport camera, and a screenshot of \
                  what is on screen. Start with get_scene — the reconstruction labels it reports \
                  are the handles every other tool takes. This is a state surface, not a data \
                  one: no tool returns point clouds or track tables in bulk, so read the .sfmr \
                  file for data. A human is watching this window; every change made here is \
                  visible to them and noted in the viewer's status line.",
-        )
+            )
     }
 
     async fn list_tools(

@@ -2683,6 +2683,15 @@ that reads it as data, and as a text block for one that reads it as text. Both,
 because which of the two a client surfaces to its model is the client's
 decision.
 
+**`initialize` answers with the viewer's own identity**, not the SDK's:
+`serverInfo` is `{"name": "sfm-explorer", "title": "SfM Explorer", "version":
+<the crate's version>}`. It has to be set explicitly, because `rmcp`'s
+`ServerConfig::new` defaults it to `Implementation::from_build_env()` — and
+those `env!` macros expand where the SDK is compiled, so the default is
+`rmcp`'s crate name and `rmcp`'s version. That is the name a client lists the
+server under and the version a human quotes when a call goes wrong, and neither
+is any use if it names the library.
+
 **`tools/list` must carry its cache hints.** SEP-2549 added `ttlMs` and
 `cacheScope` to list results and made them mandatory in the current revisions;
 `rmcp` models both as `Option` so one type can also serve the older ones, which
@@ -3080,7 +3089,8 @@ an ordinary thread standing in for the GUI — one owner of the state, applying
 one command at a time, which is exactly the discipline the real frame keeps.
 Requests go out as hand-written HTTP/1.1 rather than through an HTTP client
 dev-dependency: a POST with a JSON body is a dozen lines, and the bytes on the
-wire are the point. That covers the `initialize` handshake, `tools/list`
+wire are the point. That covers the `initialize` handshake and the `serverInfo`
+it answers with, `tools/list`
 matching the catalog, a `tools/call` reaching the stand-in GUI and returning
 `structuredContent`, a viewer refusal arriving as `isError: true`, a malformed
 argument arriving as a JSON-RPC error instead, and a foreign `Origin` getting

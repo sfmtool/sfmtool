@@ -4147,6 +4147,25 @@ fn the_endpoint_completes_a_handshake_and_advertises_its_tools() {
         result["capabilities"]["tools"].is_object(),
         "the server declares the tools capability: {result}"
     );
+    // The viewer introduces itself, not the SDK. `ServerConfig::new` fills
+    // `serverInfo` from `rmcp`'s own build environment, so a handler that does
+    // not set it announces `{"name":"rmcp","version":"3.4.0"}` — which is what
+    // a client lists the server as and what a human reads in a failure report.
+    assert_eq!(
+        result["serverInfo"]["name"],
+        json!("sfm-explorer"),
+        "{result}"
+    );
+    assert_eq!(
+        result["serverInfo"]["version"],
+        json!(env!("CARGO_PKG_VERSION")),
+        "{result}"
+    );
+    assert_eq!(
+        result["serverInfo"]["title"],
+        json!("SfM Explorer"),
+        "{result}"
+    );
     assert!(
         result["instructions"]
             .as_str()
