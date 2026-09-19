@@ -128,7 +128,7 @@ Unlike `sfm xform --refine-normals` and `sfm render-patches`, which require an
 dual-source diagnostic: given a solve that carries no stored patch frame it
 builds one on the fly through the low-level `PatchCloud.from_reconstruction`,
 which stays dual-mode
-([`_solve_strips.py`](../../../src/sfmtool/_solve_strips.py)). The montage is
+([`strips/_solve.py`](../../../src/sfmtool/strips/_solve.py)). The montage is
 deeply `.sift`-tied — its frame sizing and its ranking metrics read feature
 scales — and as a comparison tool it earns its keep directly on solves, with no
 conversion step in the way.

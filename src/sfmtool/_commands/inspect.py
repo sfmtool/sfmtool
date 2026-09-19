@@ -174,7 +174,7 @@ def inspect(target, rest, strips, output, strips_views, context, verbose):
 
 def _inspect_strips_cmd(target, specs, output, strips_views, context):
     """Render the listed points of a .sfmr as a patch-strip montage."""
-    from .._inspect_strips import parse_point_specs, render_inspect_strips
+    from ..strips import parse_point_specs, render_inspect_strips
     from .._sfmtool.reconstruction import SfmrReconstruction
 
     path = Path(target)

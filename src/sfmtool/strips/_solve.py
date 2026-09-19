@@ -7,7 +7,7 @@
 oriented-surfel patch strip (one tile per observing view), and exposes the
 per-point quantities the montage ranks on (triangulation angle, image radius,
 keypoint feature size, world footprint). The ranking, row selection, and montage
-assembly live in ``_compare_strips``.
+assembly live in ``_compare``.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from ._patch_ncc import gauss_window, render_track_strip
-from ._sfmtool.reconstruction import SfmrReconstruction
-from ._sfmtool.patches import OrientedPatch, PatchCloud
-from ._sfmtool.geometry import RigidTransform
-from ._sfmtool.flow import WarpMap
-from ._workspace_image import read_workspace_image
+from ._ncc import gauss_window, render_track_strip
+from .._sfmtool.reconstruction import SfmrReconstruction
+from .._sfmtool.patches import OrientedPatch, PatchCloud
+from .._sfmtool.geometry import RigidTransform
+from .._sfmtool.flow import WarpMap
+from .._workspace_image import read_workspace_image
 
 # One rendered strip: (strip image, mean pairwise NCC, number of views shown).
 Strip = tuple[np.ndarray, float, int]

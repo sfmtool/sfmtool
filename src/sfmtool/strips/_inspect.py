@@ -9,7 +9,7 @@ out as one montage row: ``labels | reference patch | per-view observation
 strip``, for visually evaluating point quality.
 
 The surfel rendering and NCC scoring reuse the ``compare --strips`` engine
-(``_SolveStrips``); the montage layout lives in ``_strip_montage``. A
+(``_SolveStrips``); the montage layout lives in ``_montage``. A
 ``sift_files`` reconstruction is first given the minimal ``embedded_patches``
 conversion plus a light normal refinement over only the listed points (the
 default keypoint-preserving conversion makes these good); an ``embedded_patches``
@@ -24,9 +24,9 @@ from pathlib import Path
 import click
 import numpy as np
 
-from ._sfmtool.reconstruction import SfmrReconstruction
-from ._solve_strips import _SolveStrips
-from ._strip_montage import PointRow, assemble_point_strips
+from .._sfmtool.reconstruction import SfmrReconstruction
+from ._solve import _SolveStrips
+from ._montage import PointRow, assemble_point_strips
 
 # Render constants shared with the comparison montage (not user-facing knobs).
 _PATCH = 32  # surfel patch render resolution (px)
@@ -45,7 +45,7 @@ def parse_point_specs(recon: SfmrReconstruction, specs: list[str]) -> list[int]:
     ``5``, ``5-12``, ``1,4,7``). Indexes are kept in the order the specs list
     them; out-of-range indexes and id/hash mismatches raise ``click.UsageError``.
     """
-    from ._sfmtool.reconstruction import RangeExpr
+    from .._sfmtool.reconstruction import RangeExpr
 
     hash8 = recon.content_xxh128[:8].lower()
     n = recon.point_count
@@ -96,8 +96,8 @@ def _prepare_from_sift(
     """Convert a ``sift_files`` recon to ``embedded_patches`` and refine the listed
     finite points' normals (rendering their patch bitmaps). Returns the prepared
     recon and the loaded workspace images (so the renderer can reuse them)."""
-    from ._workspace_image import read_workspace_image
-    from .xform._to_embedded_patches import ToEmbeddedPatchesTransform
+    from .._workspace_image import read_workspace_image
+    from ..xform._to_embedded_patches import ToEmbeddedPatchesTransform
 
     emb = ToEmbeddedPatchesTransform().apply(recon)
     images = [read_workspace_image(emb.workspace_dir, name) for name in emb.image_names]

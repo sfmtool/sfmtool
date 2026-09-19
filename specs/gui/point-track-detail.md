@@ -523,7 +523,7 @@ and rendering.
   patch frame to define the crop.)*
 - **Stored-patch alpha tile**: Show the stored bitmap's alpha channel
   (per-texel cross-view confidence) as a grayscale tile beside the RGB header
-  tile, like `_solve_strips.py`'s `_bitmap_ref_tile`.
+  tile, like `strips/_solve.py`'s `_bitmap_ref_tile`.
 - **Enhanced interactions**: Highlight the corresponding track ray in the 3D
   viewer when hovering a row (requires per-ray hover state in the track ray
   shader). Show the reprojected point position as a second dot on each

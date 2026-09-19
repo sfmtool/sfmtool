@@ -6,7 +6,7 @@
 Given fully-rendered rows (each a left/right strip plus its text labels), this
 handles only pixels: per-row label panels, group dividers, the title/legend/
 column header bars, and writing the stacked PNG. All the ranking and scoring
-decisions live in ``_compare_strips``.
+decisions live in ``_compare``.
 """
 
 from __future__ import annotations

@@ -1281,6 +1281,13 @@ that reduce to one**
 
 **Strip modules form one closed pipeline that should be a `strips/` subpackage**
 > _Carried forward. Sizes and the edge count both re-verified exactly._
+> _Status (2026-09-18): Done — the five modules moved (`git mv`, history preserved) to
+> `src/sfmtool/strips/` as `_solve.py`, `_compare.py`, `_inspect.py`, `_montage.py`,
+> `_ncc.py`, with an `__init__.py` re-exporting `render_comparison_strips`,
+> `parse_point_specs` and `render_inspect_strips`. The two inbound imports
+> (`_compare.py:239`, `_commands/inspect.py:177`) and `tests/test_cli_inspect_strips.py`
+> now go through the package; a pure move, no body changes. The `_patch_ncc` misnaming
+> is resolved by the rename to `strips/_ncc.py`._
 - Location: `_solve_strips.py` (486), `_compare_strips.py` (479), `_inspect_strips.py`
   (241), `_strip_montage.py` (210), `_patch_ncc.py` (178) — **1,594 lines across 5 flat
   top-level siblings**

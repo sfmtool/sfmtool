@@ -68,6 +68,8 @@ deleting the lines.
   - `rig/` — multi-sensor rig ingestion/rendering: `rig_config.json`, frame grouping, insv2rig/pano2rig, equirect render
   - `sift/` — SIFT feature file I/O and extraction (COLMAP, OpenCV, and
     `sfmtool` Rust backends)
+  - `strips/` — patch-strip montages behind `compare --strips` and
+    `inspect --strips` (surfel strip rendering, NCC scoring, montage layout)
   - `xform/` — reconstruction transforms (align, filter, rotate, scale, translate, bundle-adjust, …)
   - `visualization/` — colormap, heatmap, discontinuity display
 - `crates/` — Cargo workspace, 10 crates:

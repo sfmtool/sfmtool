@@ -115,7 +115,7 @@ Consequences of the contract:
   `to_embedded_patches`, the step that builds the frame (see
   `specs/cli/reconstruction/xform/refine-normals-command.md`).
 - **The low-level builder stays dual-mode.** `PatchCloud::from_reconstruction`
-  (and the diagnostic `_solve_strips` engine and `scripts/exp_*`/`cmp_*`) may
+  (and the diagnostic `strips/_solve` engine and `scripts/exp_*`/`cmp_*`) may
   still build a cloud from either source by projecting; the precondition is
   enforced at the command / `xform` transform layer, not in the kernel.
 

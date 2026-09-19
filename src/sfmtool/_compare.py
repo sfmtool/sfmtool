@@ -236,7 +236,7 @@ def compare_reconstructions(
         if alignment_result is None:
             print("  --strips: skipped (alignment unavailable)")
         else:
-            from ._compare_strips import render_comparison_strips
+            from .strips import render_comparison_strips
 
             render_comparison_strips(
                 recon1,

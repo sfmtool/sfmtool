@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from sfmtool._inspect_strips import parse_point_specs
+from sfmtool.strips import parse_point_specs
 from sfmtool._sfmtool.reconstruction import SfmrReconstruction
 from sfmtool.cli import main
 
@@ -155,7 +155,7 @@ def test_normal_offsets_obliquity_geometry(seoul_bull_workspace):
 
     import numpy as np
 
-    from sfmtool._solve_strips import _SolveStrips
+    from sfmtool.strips._solve import _SolveStrips
     from sfmtool._sfmtool.patches import OrientedPatch
 
     recon = SfmrReconstruction.load(str(seoul_bull_workspace))

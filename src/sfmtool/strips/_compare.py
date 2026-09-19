@@ -15,8 +15,7 @@ there.
 
 Images and ``.sift`` files are resolved from each reconstruction's
 ``workspace_dir`` (as with the photometric ``xform`` filters). The NCC scoring
-and strip rendering live in ``_patch_ncc``; the montage layout in
-``_strip_montage``.
+and strip rendering live in ``_ncc``; the montage layout in ``_montage``.
 """
 
 from __future__ import annotations
@@ -25,11 +24,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ._point_correspondence import find_point_correspondences_by_coordinate
-from ._sfmtool.reconstruction import SfmrReconstruction
-from ._sfmtool.geometry import Se3Transform
-from ._solve_strips import _SolveStrips
-from ._strip_montage import MontageRow, assemble_montage
+from .._point_correspondence import find_point_correspondences_by_coordinate
+from .._sfmtool.reconstruction import SfmrReconstruction
+from .._sfmtool.geometry import Se3Transform
+from ._solve import _SolveStrips
+from ._montage import MontageRow, assemble_montage
 
 # Render/selection constants. These are not user-facing knobs; they are tuned
 # defaults shared by every invocation.
