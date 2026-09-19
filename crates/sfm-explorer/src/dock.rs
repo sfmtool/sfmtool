@@ -217,9 +217,6 @@ impl TabContext<'_> {
             if selection != self.state.selected_image {
                 self.state.select_image(selection);
             }
-            if let Some(request) = self.viewer_3d.point_menu.take() {
-                self.state.apply_point_menu(request);
-            }
         } else {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {

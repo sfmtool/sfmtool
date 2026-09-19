@@ -895,6 +895,14 @@ impl App {
                 };
                 DockArea::new(&mut dock).show_inside(ui, &mut tab_context);
                 app_state.dock = dock;
+                // The viewport's point menu is the one tab response that ends
+                // in a layout operation (Edit on Bench raises Track Edit), so it
+                // is applied here, with the dock back in the state. Applied
+                // inside the tab body the raise would land on the placeholder
+                // dock and be overwritten by the line above.
+                if let Some(request) = viewer_3d.point_menu.take() {
+                    app_state.apply_point_menu(request);
+                }
             });
         });
 
