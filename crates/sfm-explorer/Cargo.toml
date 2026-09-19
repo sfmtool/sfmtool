@@ -32,9 +32,32 @@ name = "winit_wgpu_directmanipulation"
 path = "examples/winit_wgpu_directmanipulation.rs"
 required-features = ["directmanipulation"]
 
+# The windowed accessibility suite. Declared explicitly rather than left to
+# autodiscovery because `required-features` only applies to a target the
+# manifest names, and the point of the gate is that a plain
+# `cargo test --workspace` builds and runs everything *but* this: it needs a
+# real window, a live accessibility stack and `--test-threads=1`, so it has its
+# own CI jobs (`ui-test-{windows,macos,linux}`) and the `ui-test` pixi task,
+# which pass `--features ui-tests`.
+#
+# Gating it also keeps the CI Rust step down to one `cargo test` invocation.
+# The two it replaced -- `--workspace --exclude sfm-explorer` and
+# `-p sfm-explorer --lib` -- resolve features differently over the
+# wgpu/winit/accesskit subtree, so each dirtied the other's artifacts and the
+# cached target dir accumulated both fingerprint variants. That thrash, not the
+# code, was most of the second invocation's compile time.
+[[test]]
+name = "ui_basic"
+path = "tests/ui_basic.rs"
+required-features = ["ui-tests"]
+
 [features]
 default = ["mcp"]
 directmanipulation = []
+# Opt-in gate for the `ui_basic` target above. Carries no dependencies of its
+# own: the suite's deps are unconditional dev-dependencies, and the feature
+# exists purely so the target is off by default.
+ui-tests = []
 
 # The MCP control surface, and everything hosting an HTTP server in-process
 # drags in: an async runtime, an HTTP stack, and the protocol SDK. Default-on so

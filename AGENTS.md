@@ -138,12 +138,17 @@ deleting the lines.
   `implement-random-idea`, `suggest-next-steps`), checked in here and symlinked
   into `.claude/skills/`.
 - `.github/workflows/` — `ci.yml` (Linux runs `coverage-all` + codecov upload;
-  Windows and macOS run the same suites without instrumentation; the windowed
-  `ui_basic` suite gets a job per platform — `ui-test-windows`,
-  `ui-test-macos`, `ui-test-linux`; the Rust build is cached, one generation
-  per `Cargo.lock`, saved and pruned by `main` only — the "Rust caches" comment
-  above `prune-caches` says why; pixi envs are not cached), `docs.yml`,
-  `publish_to_pypi.yml`.
+  Windows and macOS run the same suites without instrumentation, split across
+  two matrix jobs that share nothing and so run in parallel — `test-os-rust`
+  (`cargo test --workspace`) and `test-os-python` (`maturin develop --release`
+  then `pytest`); the windowed `ui_basic` suite gets a job per platform —
+  `ui-test-windows`, `ui-test-macos`, `ui-test-linux`; the Rust build is
+  cached, one generation per `Cargo.lock`, saved and pruned by `main` only —
+  the "Rust caches" comment above `prune-caches` says why, and note that
+  `test-os-rust` and `test-os-python` must keep *separate* target-cache
+  prefixes because they build disjoint trees (`target/debug` vs
+  `target/release`); pixi envs are not cached anywhere, in either workflow),
+  `docs.yml`, `publish_to_pypi.yml`.
 
 ## CLI
 
@@ -201,15 +206,23 @@ backlog and keep them honest as findings get addressed:
 - `pixi run test-rust` excludes `sfmtool-py` and `sfm-explorer` (llvm-cov
   limitations). Use `pixi run cargo test --workspace` to cover those.
   `sfm-explorer` splits in two: its `ui_basic` integration tests need a real
-  window (`pixi run ui-test`, on all three desktop platforms), while its **lib**
-  tests are headless — `scene_renderer/upload/tests.rs` drives real `wgpu`
-  uploads on the `noop` backend and `point_track_detail/tests.rs` runs whole
-  egui frames through `Context::run_ui`, so `cargo test -p sfm-explorer --lib`
-  needs neither a GPU nor a window and runs anywhere. In CI those lib tests
-  execute in the `test-os` (Windows/macOS) jobs only; Linux compiles but does
-  not run them, to keep uninstrumented artifacts out of the coverage job's
-  target dir. `ui_basic` has a job per platform instead
-  (`ui-test-{windows,macos,linux}`).
+  window, while its **lib** tests are headless —
+  `scene_renderer/upload/tests.rs` drives real `wgpu` uploads on the `noop`
+  backend and `point_track_detail/tests.rs` runs whole egui frames through
+  `Context::run_ui`, so they need neither a GPU nor a window and run anywhere.
+  **That split is a Cargo feature, not a convention**: `ui_basic` is declared as
+  an explicit `[[test]]` target with `required-features = ["ui-tests"]`, so a
+  plain `cargo test --workspace` builds and runs everything *except* it, and
+  `pixi run ui-test` (all three desktop platforms) passes `--features ui-tests`
+  to get it. The trap in that arrangement is that cargo **silently skips** a
+  `required-features` target rather than erroring, so anything meant to check
+  `ui_basic` has to name the feature — which is why the `lint` job's clippy
+  invocation carries `--features sfm-explorer/ui-tests` (not `--all-features`,
+  which would drag in the Windows-only `directmanipulation` examples). In CI the
+  lib tests execute in the `test-os-rust` (Windows/macOS) jobs; Linux compiles
+  them, and `ui_basic` with them, in `lint`, but does not run them, to keep
+  uninstrumented artifacts out of the coverage job's target dir. `ui_basic` has
+  a job per platform instead (`ui-test-{windows,macos,linux}`).
 - **`pixi run ui-test` on Linux needs an accessibility stack, and says nothing
   when it is missing.** xa11y reads the viewer's tree over AT-SPI2, which is a
   pair of D-Bus services rather than part of the OS, so a headless box needs a

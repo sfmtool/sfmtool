@@ -70,7 +70,7 @@ jobs:
           # seven env caches also held 5.5 GB of the repo's 10 GB budget to save
           # ~35s a run at best, and the LRU eviction that caused was evicting
           # the Rust target caches, which are worth ~15 min a run. See the
-          # test-os job for the one environment that pays.
+          # test-os-rust job for the one environment that pays.
           cache: false
       - name: Restore cargo home
         id: home-cache
@@ -111,8 +111,18 @@ jobs:
       - name: Cargo fmt
         run: pixi run -e lint cargo fmt --all -- --check
 
+      # `--features sfm-explorer/ui-tests` is load-bearing, not tidiness.
+      # `ui_basic` is a `required-features` target (see sfm-explorer's
+      # Cargo.toml), and cargo *silently skips* such a target when the feature
+      # is off -- so without this flag `--all-targets` would quietly stop
+      # checking 1300+ lines of test code and report success. This job is the
+      # only place `ui_basic` is compiled on Linux, which is what lets a broken
+      # ui test fail fast here rather than only in the windowed ui-test jobs.
+      #
+      # Not `--all-features`: that would also turn on `directmanipulation`,
+      # whose examples are Windows-only and do not compile here.
       - name: Cargo clippy
-        run: pixi run -e lint cargo clippy --workspace --all-targets -- -D warnings
+        run: pixi run -e lint cargo clippy --workspace --all-targets --features sfm-explorer/ui-tests -- -D warnings
 
       # Rustdoc warnings are denied by `[workspace.lints.rustdoc]` in Cargo.toml,
       # so this fails on a broken doc link with no extra flags here. The `lint`
@@ -221,7 +231,7 @@ jobs:
   # Full instrumented build + combined Rust/Python coverage, uploaded to
   # codecov. Coverage line numbers are platform-independent, so we only pay
   # the slower instrumented build once, on Linux. Windows and macOS still run
-  # the same tests (see test-os) without instrumentation.
+  # the same tests (see test-os-rust and test-os-python) without instrumentation.
   test-linux:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -349,7 +359,22 @@ jobs:
   # build) since coverage line numbers are platform-independent and Linux
   # already produces them. macos-latest runners are Apple Silicon (arm64),
   # matching the osx-arm64 pixi platform.
-  test-os:
+  #
+  # Split in two because the halves need nothing from each other: the Rust
+  # suite never loads the Python extension, and pytest never runs a Rust test
+  # binary. Back to back they were the joint-slowest job in CI (~24 min on
+  # Windows); side by side each half is about half that. They also build
+  # disjoint trees -- `cargo test` fills target/debug, `maturin develop
+  # --release` fills target/release -- so they cache under *different* prefixes
+  # and neither clobbers the other.
+  #
+  # That reads like two extra cache entries but is close to none: the single
+  # `<OS>-cargo-test-target` entry it replaces already held both trees (1322 MB
+  # on Windows, 1156 MB on macOS), so the split mostly *divides* that between
+  # two keys rather than adding a second copy. Dropping docs.yml's 1828 MB pixi
+  # env cache in the same change leaves the budget clearly better off either
+  # way. See "Rust caches" above prune-caches for the budget rules.
+  test-os-rust:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     strategy:
@@ -363,11 +388,11 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      # The `test-ci` env install does no Rust build (unlike `test`, it omits the
-      # editable sfmtool); the extension is compiled once by the explicit
-      # `maturin develop --release` step below. Restore the cache first so that
-      # build is incremental instead of a cold compile. The key is namespaced by
-      # runner.os, so each matrix OS keeps its own cache.
+      # `test-ci` is used rather than `test` because the latter's editable
+      # sfmtool install would compile the PyO3 extension this job has no use
+      # for. Restore the cache first so the test build is incremental instead
+      # of cold. The key is namespaced by runner.os, so each matrix OS keeps
+      # its own cache.
       - name: Restore cargo home
         id: home-cache
         uses: actions/cache/restore@v6
@@ -410,6 +435,138 @@ jobs:
           # `false` (24s to install, 20s to restore). See the lint job.
           cache: false
 
+      # One invocation, covering every crate including sfm-explorer. It used to
+      # be two -- `--workspace --exclude sfm-explorer` then `-p sfm-explorer
+      # --lib` -- because sfm-explorer's `ui_basic` integration tests need a
+      # window and `--test-threads=1`. That split cost far more than it looked
+      # like it should: measured by touching sfmtool-core and running both in
+      # sequence, the second invocation rebuilt wgpu, wgpu-hal, wgpu-core,
+      # windows, accesskit_windows, accesskit_winit, gpu-allocator and the egui
+      # integration crates -- none of which depend on sfmtool-core, and all of
+      # which the first invocation had just left fresh. The two resolve features
+      # differently over that subtree, so each dirtied the other's artifacts and
+      # the cached target dir carried both fingerprint variants. `ui_basic` now
+      # sits behind sfm-explorer's non-default `ui-tests` feature (see its
+      # Cargo.toml), so a plain `cargo test --workspace` builds and runs
+      # everything except it, once.
+      #
+      # The Linux coverage job still excludes sfm-explorer, for an unrelated
+      # reason: adding an uninstrumented `cargo test` beside the instrumented
+      # one would write non-instrumented artifacts into the same target dir
+      # (cargo does not fingerprint llvm-cov's RUSTC_WRAPPER), silently
+      # degrading the next run's coverage via the shared cache. So these jobs
+      # are the only ones that *execute* sfm-explorer's lib tests. Linux still
+      # *compiles* them, and `ui_basic` with them, through `clippy --workspace
+      # --all-targets --features sfm-explorer/ui-tests -D warnings` in the lint
+      # job, so a broken test still fails fast there.
+      - name: Rust tests
+        run: pixi run -e test-ci cargo test --workspace
+
+      - name: Save Rust target
+        # Main only, and only a new generation (the cache-hit guard): a PR's
+        # entry is scoped to its merge ref, where nothing else can restore it.
+        # The key is the one the restore step computed, not a fresh
+        # hashFiles, so what is saved is always what was asked for.
+        if: ${{ always() && github.ref == 'refs/heads/main' && steps.target-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          key: ${{ steps.target-cache.outputs.cache-primary-key }}
+
+      - name: Save cargo home
+        # `cargo test --workspace` fetches every crate the workspace needs on
+        # this OS, so this half of the split is the one that saves the shared
+        # cargo home -- test-os-python builds only what the extension needs.
+        # Success only, as the old combined actions/cache did: a half-fetched
+        # registry saved under the exact key would be restored as-is for the
+        # whole generation.
+        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.home-cache.outputs.cache-primary-key }}
+
+      - name: Prune superseded Rust caches
+        # Delete the previous generation of what this job just saved, now,
+        # rather than when the slowest job finishes. See "Rust caches".
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
+
+  # The Python half of the non-Linux check: build the extension, run pytest.
+  # See test-os-rust above for why the two are separate jobs.
+  test-os-python:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      # `gh cache delete` in the prune step, which runs on main only.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      # The `test-ci` env install does no Rust build (unlike `test`, it omits the
+      # editable sfmtool); the extension is compiled once by the explicit
+      # `maturin develop --release` step below. Restore the cache first so that
+      # build is incremental instead of a cold compile. The key is namespaced by
+      # runner.os, so each matrix OS keeps its own cache.
+      - name: Restore cargo home
+        id: home-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          # Registry index + downloads and git checkouts are fully determined by
+          # Cargo.lock, so key on it alone. Restore-only: the one job per OS that
+          # fetches every crate saves it -- test-os-rust on this OS, not this
+          # job, which fetches only what the extension needs. The prefix fallback
+          # is for pull requests only. See "Rust caches" above prune-caches.
+          key: ${{ runner.os }}-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-home-', runner.os) || '' }}
+      - name: Restore Rust target
+        id: target-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            target
+            !target/**/incremental/**
+          # A prefix of its own, not test-os-rust's: that job fills target/debug
+          # and this one target/release, so a shared key would have whichever
+          # finished last overwrite the other's tree with a disjoint one, and
+          # every run would start cold. Same `<prefix>-<lockfile hash>` shape as
+          # the rest, which is what ci_prune_caches.sh parses. See "Rust caches"
+          # above prune-caches.
+          key: ${{ runner.os }}-cargo-pyext-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ github.event_name == 'pull_request' && format('{0}-cargo-pyext-target-', runner.os) || '' }}
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: test-ci
+          # No env cache, on either platform. Windows `test-ci` is the one
+          # environment that is genuinely slower to install than to restore (70s
+          # against 32s, measured over the 11 runs in #382), so it kept its cache
+          # when the other five were dropped -- but 39s for 1.41 GB is 28 s/GB,
+          # against the ~165 s/GB a Rust target cache returns. It was the least
+          # valuable gigabyte still in the budget, and at 14% of the repo's 10 GB
+          # it was displacing entries worth six times as much. macOS was already
+          # `false` (24s to install, 20s to restore). See the lint job.
+          cache: false
+
       - name: Build Python extension
         # --release: the debug-built PyO3 extension runs the Rust SIFT/flow
         # kernels ~10-15x slower, which both inflates test time and makes any
@@ -421,25 +578,6 @@ jobs:
         # -x, Pixi finds the name defined in another environment and refuses
         # rather than falling back to the binary that is right there on PATH.
         run: pixi run -x -e test-ci maturin develop --release
-
-      - name: Rust tests
-        run: pixi run -e test-ci cargo test --workspace --exclude sfm-explorer
-
-      # sfm-explorer is excluded above only because of its `ui_basic`
-      # integration tests (serialized, and run by the dedicated ui-test jobs).
-      # Its lib tests are headless — the upload tests use wgpu's noop backend —
-      # and thread-safe, so `--lib` runs them here rather than nowhere.
-      #
-      # This is the only job that *executes* them. The Linux coverage job
-      # deliberately doesn't: it excludes sfm-explorer from the instrumented
-      # run, and adding an uninstrumented `cargo test` beside it would write
-      # non-instrumented artifacts into the same target dir (cargo does not
-      # fingerprint llvm-cov's RUSTC_WRAPPER), silently degrading the next
-      # run's coverage via the shared cache. Linux still *compiles* these
-      # tests every PR through `clippy --workspace --all-targets -D warnings`
-      # in the lint job, so a broken test still fails fast there.
-      - name: SfM Explorer lib tests
-        run: pixi run -e test-ci cargo test -p sfm-explorer --lib
 
       - name: Python tests
         shell: bash
@@ -462,19 +600,10 @@ jobs:
             !target/**/incremental/**
           key: ${{ steps.target-cache.outputs.cache-primary-key }}
 
-      - name: Save cargo home
-        # This job fetches every crate the workspace needs on this OS, so it
-        # is the one that saves the shared cargo home. Success only, as the
-        # old combined actions/cache did: a half-fetched registry saved under
-        # the exact key would be restored as-is for the whole generation.
-        if: ${{ github.ref == 'refs/heads/main' && steps.home-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ steps.home-cache.outputs.cache-primary-key }}
+      # No "Save cargo home" step here on purpose: this job compiles only the
+      # extension's dependency subtree, so the registry it ends up with is a
+      # subset of the workspace's. test-os-rust saves the shared cargo home for
+      # this OS. See "Rust caches" above prune-caches.
 
       - name: Prune superseded Rust caches
         # Delete the previous generation of what this job just saved, now,
@@ -486,7 +615,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           KEY: ${{ steps.target-cache.outputs.cache-primary-key }}
-        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}" "${{ runner.os }}-cargo-home"
+        run: bash scripts/ci_prune_caches.sh "${KEY##*-}" "${KEY%-*}"
 
   ui-test-windows:
     needs: changes
@@ -618,11 +747,13 @@ jobs:
       # Compile the test binary (and the sfm-explorer bin it launches) without
       # running, then resolve the test binary's hashed path from cargo's JSON
       # stream. `fromjson?` skips any non-JSON lines pixi may interleave.
+      # `--features ui-tests` because `ui_basic` is gated behind it; without the
+      # flag cargo would build no such target and `jq` would resolve nothing.
       - name: Build UI test binary
         id: build
         run: |
           set -euo pipefail
-          bin=$(pixi run -e ui cargo test -p sfm-explorer --test ui_basic --no-run --message-format=json \
+          bin=$(pixi run -e ui cargo test -p sfm-explorer --features ui-tests --test ui_basic --no-run --message-format=json \
             | jq -rR 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "ui_basic") | .executable // empty' \
             | tail -n1)
           test -x "$bin"
@@ -772,7 +903,7 @@ jobs:
   # saves, and only when its exact key missed, so a generation is written once
   # and PRs restore main's copy (a PR's own entry would be scoped to its merge
   # ref, where nothing else can read it). The cargo home is saved by the one job
-  # per OS that fetches every crate: lint on Linux, test-os elsewhere.
+  # per OS that fetches every crate: lint on Linux, test-os-rust elsewhere.
   #
   # GitHub's 10 GB per-repo budget is the constraint, and the LRU eviction it
   # triggers picks victims by last access, not by whether anything still wants
@@ -799,7 +930,15 @@ jobs:
   # never when it is newer than that replacement.
   prune-caches:
     needs:
-      [lint, test-linux, test-os, ui-test-windows, ui-test-macos, ui-test-linux]
+      [
+        lint,
+        test-linux,
+        test-os-rust,
+        test-os-python,
+        ui-test-windows,
+        ui-test-macos,
+        ui-test-linux,
+      ]
     if: ${{ always() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
@@ -829,7 +968,8 @@ jobs:
         lint,
         msrv,
         test-linux,
-        test-os,
+        test-os-rust,
+        test-os-python,
         ui-test-windows,
         ui-test-macos,
         ui-test-linux,

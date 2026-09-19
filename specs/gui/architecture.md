@@ -495,6 +495,17 @@ event loop never reads, a HUD checkbox that never reaches the tree, a
 desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
 mutex, so a plain `cargo test` behaves like `--test-threads=1`).
 
+Because they need a window, they are **off by default**. `ui_basic` is declared
+in [`crates/sfm-explorer/Cargo.toml`](../../crates/sfm-explorer/Cargo.toml) as an
+explicit `[[test]]` target with `required-features = ["ui-tests"]`, so
+`cargo test --workspace` builds and runs the lib tests and nothing windowed,
+while `pixi run ui-test` expands to
+`cargo test -p sfm-explorer --features ui-tests --test ui_basic --
+--test-threads=1 --nocapture`. Cargo *silently skips* a target whose required
+features are off rather than reporting anything, so every invocation that is
+supposed to see this file — including the clippy gate that type-checks it on
+Linux — names the feature explicitly.
+
 **One locator resolution is one full snapshot of the app's accessibility
 subtree**, and that is what the suite is written around. `wait_attached`,
 `press`, `toggle`, `elements` and `count` each walk the whole tree — on Windows
@@ -608,5 +619,12 @@ goes the same way: a click that lands somewhere else is not a failure anyone
 can read.
 
 In CI the three suites are three jobs — `ui-test-windows`, `ui-test-macos`,
-`ui-test-linux` — separate from the coverage job, which excludes `sfm-explorer`
-entirely so that uninstrumented artifacts never land in its target directory.
+`ui-test-linux` — each passing `--features ui-tests`, and separate from the
+coverage job, which excludes `sfm-explorer` entirely so that uninstrumented
+artifacts never land in its target directory. The lib tests run instead in
+`test-os-rust`, whose single `cargo test --workspace` reaches them precisely
+because `ui_basic` is gated out of it. `ui-test-macos` is the one job that
+cannot just run the pixi task: macOS gates the accessibility API behind a TCC
+grant that targets an exact on-disk path, so it builds the test binary with
+`--no-run`, resolves its content-hashed path, grants TCC to that, and executes
+it directly — and that `--no-run` build needs the feature like any other.
