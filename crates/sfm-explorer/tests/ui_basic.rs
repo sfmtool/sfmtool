@@ -12,9 +12,11 @@ use xa11y::{App, AppExt, Toggled};
 
 /// Serializes the UI tests so at most one `sfm-explorer` window is alive at a
 /// time. `cargo test` runs tests on multiple threads by default, and several
-/// identically-titled "SfM Explorer" windows (plus concurrent accessibility
-/// tree walks) make the Windows UI Automation backend fail with
-/// `E_UNEXPECTED` (0x8000FFFF, "Catastrophic failure"). Each test holds this
+/// viewers plus concurrent accessibility tree walks make the Windows UI
+/// Automation backend fail with `E_UNEXPECTED` (0x8000FFFF, "Catastrophic
+/// failure"). Two tests also share one on-disk file, the default layout (see
+/// [`DefaultLayoutFile`]), and the Windows-only input tests drive the real
+/// cursor, which belongs to whichever window is in front. Each test holds this
 /// lock for its whole body, so a plain `cargo test` behaves the same as
 /// `--test-threads=1` without the caller having to remember the flag.
 static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -215,6 +217,13 @@ const CONTENT_TIMEOUT: Duration = Duration::from_secs(30);
 /// re-run of the same commit passed. A second process is the cheapest way past a launch
 /// the runner lost; one retry only, so a real regression still fails fast and
 /// reports what it saw both times.
+///
+/// Those three predate [`try_attach_app`]'s move to pid addressing, and the
+/// first of the two shapes is the one xa11y 0.15 says pid attachment closes:
+/// enumerating applications skips a window that has not named itself yet, which
+/// is exactly a viewer mid-launch. The second comes out of the automation
+/// client rather than out of discovery, so it is not addressed, and the retry
+/// stays until a few hundred more runs say it can go.
 fn attach(child: ChildHandle<'_>) -> App {
     init();
     let first = match try_attach_app(child) {
@@ -234,27 +243,20 @@ fn attach(child: ChildHandle<'_>) -> App {
     }
 }
 
-/// On Windows, xa11y's `by_pid` roots at the first top-level window for the
-/// pid (still true in 0.12: on Windows an "app" *is* a top-level window, so one
-/// process can own several), which is one of winit's helper windows (a
-/// 16px-wide "group") rather than our UI, so locator queries and bounds resolve
-/// against the wrong element. Select our window by its title instead.
-#[cfg(windows)]
-fn try_attach_app(_child: ChildHandle<'_>) -> Result<App, String> {
-    App::find(ATTACH_TIMEOUT, |d| {
-        d.name.as_deref() == Some("SfM Explorer")
-    })
-    .map_err(|e| format!("{e:?}"))
-}
-
-/// Everywhere else a process has exactly one accessibility root and the pid
-/// resolves it directly, so `by_pid` is both correct and cheap — a title-based
-/// `find` would just burn the full timeout before any fallback. On macOS that
-/// root is the AXApplication, named after the executable rather than the
-/// window; on Linux it is the AT-SPI `application` the AccessKit adapter
-/// registers for the process. Being pid-addressed also makes the MCP tests'
-/// `[MCP :port]` title suffix a non-issue on both.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+/// A process has one accessibility root on all three platforms, and the pid
+/// resolves it directly: the AXApplication on macOS, the `application` node
+/// AccessKit's Unix adapter registers on Linux, and — since xa11y 0.15 — a
+/// synthesized per-process `application` node on Windows, whose children are
+/// the process's top-level windows. Before that, a Windows "app" *was* a
+/// top-level window and `by_pid` landed on whichever came first, which for this
+/// viewer is one of winit's helper windows rather than the UI; the suite
+/// matched the window by title to get around it. That is no longer merely
+/// unnecessary but wrong — the synthesized node is named after the executable
+/// (`sfm-explorer`), not the window (`SfM Explorer`).
+///
+/// Addressing by pid rather than title also makes the MCP tests' `[MCP :port]`
+/// title suffix a non-issue, and picks out *this* viewer when the developer
+/// running the suite has one of their own open.
 fn try_attach_app(child: ChildHandle<'_>) -> Result<App, String> {
     App::by_pid(child.id(), ATTACH_TIMEOUT).map_err(|e| format!("{e:?}"))
 }
@@ -273,18 +275,15 @@ fn window_appears() {
 fn window_min_size() {
     let _guard = Guard::new();
     let app = attach(_guard.child());
-    // The attached root is the window itself on Windows but the AXApplication on
-    // macOS, whose own bounds are unset — fall back to the window element there.
+    // The attached root is the process, which has no geometry of its own on any
+    // of the three platforms — a process is not a rectangle. The window under it
+    // is what carries bounds.
     let b = app
-        .as_element()
+        .locator(r#"window"#)
+        .wait_attached(CONTENT_TIMEOUT)
+        .expect("the viewer's window did not appear")
         .data()
         .bounds
-        .or_else(|| {
-            app.locator(r#"window"#)
-                .wait_attached(Duration::from_secs(5))
-                .ok()
-                .and_then(|w| w.data().bounds)
-        })
         .expect("window has no bounds");
     assert!(b.width >= 800, "width {} < 800", b.width);
     assert!(b.height >= 600, "height {} < 600", b.height);
@@ -804,34 +803,15 @@ impl McpViewer {
     /// Wait for the window to exist, since MCP commands are applied inside a
     /// frame and a viewer with no window yet renders none.
     ///
-    /// Not [`attach`]: while the endpoint is live the title carries an
-    /// `[MCP :port]` suffix, which an exact-name match does not find.
-    ///
-    /// **The pid is part of the match on every platform.** A developer running
-    /// this suite very likely has a viewer of their own open, which is the
-    /// whole point of the surface being tested; matching on the title alone
-    /// would drive theirs while the assertions read this one, and every
-    /// interaction would silently land in the wrong window. On Windows the
-    /// title still has to come into it, since `by_pid` roots at the first
-    /// top-level window for the process and that is one of winit's helper
-    /// windows rather than the UI (see [`try_attach_app`]).
+    /// The same pid-addressed attach every other test makes, which is what
+    /// keeps the assertions on *this* viewer: a developer running this suite
+    /// very likely has one of their own open, that being the whole point of the
+    /// surface under test, and every interaction would otherwise land silently
+    /// in the wrong window. [`attach`]'s relaunch declines here — this viewer's
+    /// [`Guard::args`] is `None`, a respawn being a viewer on a port nothing is
+    /// listening to — so a stuck launch fails with the original diagnosis.
     fn wait_for_window(&self) -> App {
-        init();
-        let pid = self.guard.child().id();
-        #[cfg(windows)]
-        {
-            App::find(ATTACH_TIMEOUT, |d| {
-                d.pid == Some(pid)
-                    && d.name
-                        .as_deref()
-                        .is_some_and(|name| name.starts_with("SfM Explorer"))
-            })
-            .expect("sfm-explorer window did not appear")
-        }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            App::by_pid(pid, ATTACH_TIMEOUT).expect("sfm-explorer did not appear")
-        }
+        attach(self.guard.child())
     }
 
     /// POST one JSON-RPC body and return the `result` object.

@@ -489,14 +489,22 @@ event loop never reads, a HUD checkbox that never reaches the tree, a
 desktop platforms via `pixi run ui-test`, one window at a time (a process-wide
 mutex, so a plain `cargo test` behaves like `--test-threads=1`).
 
-What differs per platform is how the suite reaches the tree, and what has to
-exist before there is one to reach:
+The suite attaches the same way everywhere — `App::by_pid` on the viewer it
+launched, which is what keeps it off a viewer the developer already has open.
+What differs per platform is the accessibility API that answers, what the node
+it hands back is, and what has to exist before there is a tree to reach:
 
-| | Accessibility API | Root the suite attaches to | What the environment must provide |
+| | Accessibility API | Root `by_pid` resolves | What the environment must provide |
 |---|---|---|---|
-| Windows | UI Automation | the window, found **by title** — a process owns several top-level windows and `by_pid` lands on a winit helper | nothing; UIA is always live |
-| macOS | AXUIElement | the AXApplication, found **by pid** | the Accessibility (TCC) grant, on the exact test binary |
-| Linux | AT-SPI2 (D-Bus) | the `application` node, found **by pid** | a display, a session bus, and the AT-SPI daemons on it |
+| Windows | UI Automation | a per-process `application` node xa11y synthesizes (UIA has none), named after the executable, its windows beneath it | nothing; UIA is always live |
+| macOS | AXUIElement | the AXApplication | the Accessibility (TCC) grant, on the exact test binary |
+| Linux | AT-SPI2 (D-Bus) | the `application` node AccessKit's Unix adapter registers | a display, a session bus, and the AT-SPI daemons on it |
+
+The root is a *process* on all three, so it carries no bounds of its own; a test
+that wants window geometry locates the `window` under it. Windows only grew that
+shape in xa11y 0.15 — before it, an "app" there was a top-level window, `by_pid`
+landed on one of winit's helper windows rather than the UI, and the suite had to
+match this viewer's window by its title instead.
 
 Linux is the platform where the API has to be stood up rather than merely used,
 and the failure is silent — a query against a missing bus returns an empty tree
