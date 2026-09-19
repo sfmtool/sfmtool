@@ -728,7 +728,6 @@ pub(crate) struct AppliedWindow {
 /// The name is fixed and the directory is the one place the viewer can rely on
 /// without knowing a workspace.
 pub(crate) fn default_layout_path() -> Option<PathBuf> {
-    #[allow(deprecated)] // Un-deprecated in 1.85, below the workspace MSRV.
     std::env::home_dir().map(|home| home.join(DEFAULT_LAYOUT_FILE_NAME))
 }
 

@@ -775,7 +775,6 @@ impl DefaultLayoutFile {
     /// once would each launch a viewer on the other's layout, and a restore
     /// outside the lock races the next test's own `rename` of it.
     fn written(contents: &str) -> Self {
-        #[allow(deprecated)] // Un-deprecated in 1.85, below the workspace MSRV.
         let home = std::env::home_dir().expect("a home directory");
         let path = home.join(".sfm-explorer-default-layout.json");
         let saved = path.exists().then(|| {
