@@ -36,6 +36,33 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: docs
+          # No env cache, for the reason the ci.yml lint job spells out: the
+          # 10 GB per-repo budget, and the LRU eviction that overrunning it
+          # causes. This entry was the single largest in the repo -- 1828 MB,
+          # 18% of the whole budget -- and it was displacing the cargo target
+          # caches, which are worth ~15 min a run.
+          #
+          # Unlike ci.yml's envs, this one *is* faster to restore than to
+          # install, just not by enough to matter. Measured over 12 docs runs
+          # (3 hits, 9 misses), the setup-pixi step averaged 427s on a hit
+          # (25s restore + 402s install) against 499s on a miss (481s install
+          # + 17s save): the cache is worth ~72s, or 25 s/GB -- under the
+          # 28 s/GB at which the Windows `test-ci` env cache was already judged
+          # the least valuable gigabyte in the budget and dropped.
+          #
+          # And ~72s is the best case, which almost never happens: 3 of those
+          # 61 runs hit, every one of them a second run on the same PR branch
+          # (a PR-scoped entry only that PR can read), because an entry saved
+          # on main at this size is evicted before the next run wants it. The
+          # realized value is a few seconds a run.
+          #
+          # What the cache never touches is where the time actually goes. The
+          # `docs` environment carries the editable `sfmtool`, so `pixi install`
+          # compiles the Rust extension: conda link finishes ~16s in and the
+          # remaining ~6.7 min is that build, on hit and miss alike. Making this
+          # job fast means not building an extension Zensical never imports --
+          # a separate change from this one.
+          cache: false
       - run: pixi run -e docs docs-build
       - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/main'
