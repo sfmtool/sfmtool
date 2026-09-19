@@ -47,6 +47,17 @@ ignored.
 Every method writes exactly one `.matches` file, at `-o` or at a generated
 default.
 
+### The generated default name
+
+`<YYYYMMDD>-<NN>-<method>-<descriptor>.matches`, where `NN` is the next unused
+two-digit counter for that date in the output directory, and `descriptor`
+describes the input images. The descriptor comes from
+[`_generate_image_descriptor`](../../../src/sfmtool/_sfmr_naming.py), the same
+function a generated `.sfmr` name uses, so both artifacts of one run describe
+their inputs identically: `<prefix>_<range>` when the images form a single
+numbered sequence (`frame_1-50`), and `<first stem>-total-<n>-images`
+otherwise. The cluster matcher appends `-clusters` to the stem.
+
 ## Options
 
 | Option | Type | Default | Description |

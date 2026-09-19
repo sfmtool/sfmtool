@@ -196,6 +196,36 @@ def test_match_with_output_path(isolated_seoul_bull_17_images: list[Path]):
     assert output_path.exists()
 
 
+def test_generated_matches_name_for_one_sequence(tmp_path: Path):
+    """One numbered sequence names the `.matches` file by prefix and range."""
+    from sfmtool.feature_match._run import _generate_output_path
+
+    images = [tmp_path / f"frame_{i:04d}.jpg" for i in range(1, 5)]
+    out = _generate_output_path(tmp_path / "matches", images, "exhaustive")
+    assert out.suffix == ".matches"
+    assert out.stem.endswith("-exhaustive-frame_1-4")
+
+
+def test_generated_matches_name_for_multiple_sequences(tmp_path: Path):
+    """Paths that are not one sequence still get a descriptor.
+
+    `.matches` names go through the same `_generate_image_descriptor` as
+    generated `.sfmr` names, so the multi-sequence fallback applies to both
+    rather than leaving the `.matches` stem with no descriptor at all.
+    """
+    from sfmtool.feature_match._run import _generate_output_path
+
+    images = [
+        tmp_path / "cam_a_0001.jpg",
+        tmp_path / "cam_a_0002.jpg",
+        tmp_path / "cam_b_0001.jpg",
+        tmp_path / "cam_b_0002.jpg",
+    ]
+    out = _generate_output_path(tmp_path / "matches", images, "exhaustive")
+    assert out.suffix == ".matches"
+    assert out.stem.endswith("-exhaustive-cam_a_0001-total-4-images")
+
+
 def test_match_flow(isolated_seoul_bull_17_images: list[Path]):
     """Test flow-based matching on a small set of images."""
     workspace_dir = isolated_seoul_bull_17_images[0].parent
