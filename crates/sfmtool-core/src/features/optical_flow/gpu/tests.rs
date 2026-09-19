@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::super::{FlowField, GrayImage};
 use super::*;
 

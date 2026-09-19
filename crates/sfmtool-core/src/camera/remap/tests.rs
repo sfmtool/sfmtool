@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 
 /// Helper: create a simple identity warp map (each pixel maps to itself).

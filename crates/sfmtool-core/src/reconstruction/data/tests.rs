@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use sfmtool_sfmr_format::{
     RigFrameData, SfmrData, FEATURE_SOURCE_EMBEDDED_PATCHES, FEATURE_SOURCE_SIFT_FILES,
 };

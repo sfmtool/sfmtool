@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use crate::*;
 use ndarray::Array2;
 use std::collections::BTreeMap;

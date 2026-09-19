@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
 """Compare exhaustive vs plus_descent keypoint-localization on two
 already-written embed-patches outputs.
 

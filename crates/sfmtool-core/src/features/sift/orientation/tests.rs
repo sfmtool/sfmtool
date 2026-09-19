@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::super::detect_keypoints;
 use super::*;
 use crate::features::optical_flow::GrayImage;

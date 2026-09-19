@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::{CameraModel, RotQuaternion};
 use approx::assert_relative_eq;

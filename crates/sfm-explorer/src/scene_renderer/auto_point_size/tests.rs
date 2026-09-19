@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use nalgebra::{Point3 as NPoint3, UnitQuaternion, Vector3};
 use sfmtool_core::{Point3D, SfmrImage};

@@ -228,6 +228,11 @@ backlog and keep them honest as findings get addressed:
   is an error (`private_intra_doc_links`) — write those as a plain code span
   (`` `foo` ``) rather than widening visibility. Method refs inside an inherent
   impl need `Self::`; sibling private modules need `super::`.
+- Every `.rs` under `crates/` and every `.py` under `src/`, `tests/` and
+  `scripts/` opens with the two-line `Copyright The SfM Tool Authors` /
+  `SPDX-License-Identifier: Apache-2.0` header (after the shebang, where there
+  is one), and a new file without it fails
+  `crates/sfmtool-core/tests/license_headers.rs`.
 - The Python package is editable-installed, but the native extension
   `sfmtool._sfmtool` is not auto-rebuilt — remember `maturin develop` after
   Rust changes.

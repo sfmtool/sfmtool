@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use crate::spherical::sphere_points::RelaxConfig;
 use crate::spherical::tile_rig::SphericalTileRigParams;

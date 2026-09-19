@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# Copyright The SfM Tool Authors
+# SPDX-License-Identifier: Apache-2.0
 """Benchmark photometric patch-normal refinement: wall time vs quality.
 
 Loads a reconstruction, samples a reproducible subset of points, runs

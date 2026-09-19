@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use sfmtool_sfmr_format::SfmrCamera;
 
 use super::*;

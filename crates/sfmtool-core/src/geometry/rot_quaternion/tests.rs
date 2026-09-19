@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use super::*;
 use approx::assert_relative_eq;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_3, PI};

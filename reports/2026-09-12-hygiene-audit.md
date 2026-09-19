@@ -1517,6 +1517,13 @@ boundary rather than by subject**
 - Effort: low
 - Risk: low
 
+> _Status (2026-09-18): Done — the two-line header was added to the 54 `tests.rs` files
+> and the two scripts (re-measured at the same counts), and it is now enforced by
+> `crates/sfmtool-core/tests/license_headers.rs::every_source_file_opens_with_the_license_header`,
+> which walks `crates/**/*.rs` plus `src/`, `tests/` and `scripts/` `**/*.py` and fails
+> with the offending paths. Shaders are left alone: no `.wgsl` file carries the header,
+> so there is no convention there to enforce._
+
 **The `viz_*.py` driver loop is a true three-way copy — and `_compose` is correctly
 *not*, so the #444 decision was right**
 > _Carried forward from #444's one deliberate non-fix, **independently re-examined and

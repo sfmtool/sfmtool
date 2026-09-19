@@ -1,3 +1,6 @@
+// Copyright The SfM Tool Authors
+// SPDX-License-Identifier: Apache-2.0
+
 use approx::assert_relative_eq;
 use nalgebra::{Point3, Vector3};
 
