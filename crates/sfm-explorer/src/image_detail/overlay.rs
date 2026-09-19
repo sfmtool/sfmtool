@@ -12,131 +12,18 @@ use kiddo::SquaredEuclidean;
 use sfmtool_core::bench::EditableTrack;
 use sfmtool_core::EditedReconstruction;
 
-/// The context-menu entry's label, and what the Point Track Detail panel's hint
-/// quotes so the two cannot drift.
-pub(crate) const ADD_OBSERVATION_LABEL: &str = "Add observation to track here";
-
-/// The create-a-point entry's label. The trailing ellipsis is the promise the
-/// entry keeps: it opens a prompt for the one thing a click cannot say, the
-/// patch's radius, rather than running the edit on the spot.
-pub(crate) const CREATE_POINT_LABEL: &str = "Create 3D Point here...";
-
-/// The remove-an-observation entry's label. "From track" rather than "here":
-/// the entry names a row of the selected point's track, and the pixel the menu
-/// was opened at says nothing about which.
-pub(crate) const REMOVE_OBSERVATION_LABEL: &str = "Remove observation from track";
-
 /// The start-a-cluster entry's label, and what the Track Edit panel's empty
 /// state quotes so the two cannot drift.
 ///
 /// "On the bench" rather than the bare verb: nothing this entry does reaches
-/// the reconstruction, and the two entries above it do.
+/// the reconstruction, and the commit in the Track Edit panel is what crosses
+/// back.
 pub(crate) const START_CLUSTER_LABEL: &str = "Start cluster on the bench here";
 
 /// The add-a-bench-observation entry's label. "Bench track" rather than
 /// "track": the row joins the bench's **active** track, which is not the
-/// selected point's, and the entry two above it is the one that grows that.
+/// selected point's.
 pub(crate) const ADD_BENCH_OBSERVATION_LABEL: &str = "Add observation to bench track here";
-
-/// What a `sift_files` node's context menu says in place of the two entries
-/// that need a patch. Removing an observation is offered there as well: taking
-/// a row out invents no feature, so it is defined whatever backs an
-/// observation.
-pub(crate) const NOT_EMBEDDED_PATCHES: &str =
-    "Creating a point and adding an observation need an embedded_patches reconstruction.";
-
-/// The open Create 3D Point prompt: where the user pointed, and the radius
-/// typed into it.
-///
-/// The text rather than the number is what is held, so a half-typed value is
-/// the user's own and neither snaps nor is rounded under them while they type.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CreatePointPrompt {
-    /// The clicked pixel, in source-image coordinates.
-    pub pixel: [f32; 2],
-    /// What is in the radius field.
-    pub radius_text: String,
-}
-
-impl CreatePointPrompt {
-    /// A prompt at `pixel` offering `radius`.
-    pub fn new(pixel: [f32; 2], radius: f32) -> Self {
-        Self {
-            pixel,
-            radius_text: format!("{radius:.1}"),
-        }
-    }
-
-    /// The radius the field holds, when it holds a usable one.
-    pub fn radius(&self) -> Option<f32> {
-        self.radius_text
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .filter(|r| r.is_finite() && *r > 0.0)
-    }
-}
-
-/// Whether the Image Detail context menu offers the add-observation entry for
-/// this node, image and selection, and why not when it is greyed.
-///
-/// `None` for a node the edit is not defined on at all (a `sift_files`
-/// reconstruction, where an observation is a `.sift` feature and a clicked
-/// pixel is not one); `Some(Err(reason))` when it is defined but cannot run on
-/// what is selected.
-pub(crate) fn add_observation_entry(
-    edited: &EditedReconstruction,
-    image_index: usize,
-    selected_point: Option<usize>,
-) -> Option<Result<(), &'static str>> {
-    if edited.has_feature_indexes() {
-        return None;
-    }
-    let Some(point) = selected_point else {
-        return Some(Err(
-            "Select a point first: the observation is added to that point's track.",
-        ));
-    };
-    let Some(view) = edited.point(point as u32) else {
-        return Some(Err("The selected point is not in this version."));
-    };
-    if view
-        .observations()
-        .iter()
-        .any(|o| o.image_index as usize == image_index)
-    {
-        return Some(Err("This image already observes the selected point."));
-    }
-    Some(Ok(()))
-}
-
-/// Whether the Image Detail context menu's remove-observation entry can run for
-/// this node, image and selection, and why not when it is greyed.
-///
-/// There is no `None` arm: removing a row invents no feature, so the edit is
-/// defined on a `sift_files` node exactly as it is on an `embedded_patches`
-/// one. What it needs is a selected point this image is a member of the track
-/// of.
-pub(crate) fn remove_observation_entry(
-    edited: &EditedReconstruction,
-    image_index: usize,
-    selected_point: Option<usize>,
-) -> Result<(), &'static str> {
-    let Some(point) = selected_point else {
-        return Err("Select a point first: the observation is removed from that point's track.");
-    };
-    let Some(view) = edited.point(point as u32) else {
-        return Err("The selected point is not in this version.");
-    };
-    if !view
-        .observations()
-        .iter()
-        .any(|o| o.image_index as usize == image_index)
-    {
-        return Err("This image does not observe the selected point.");
-    }
-    Ok(())
-}
 
 /// What the panel is told about the node's bench.
 ///
@@ -208,7 +95,6 @@ impl ImageDetail {
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
         bench: BenchMenu<'_>,
-        create_point_prompt: &mut Option<CreatePointPrompt>,
         image_rect: egui::Rect,
         panel_rect: egui::Rect,
         effective_scale: f32,
@@ -218,8 +104,6 @@ impl ImageDetail {
         let Some(ref overlay) = self.feature_overlay else {
             return;
         };
-        let context_menu_entry =
-            add_observation_entry(edited, overlay.image.index(), selected_point);
         let features = &overlay.features;
         let feature_tree = &overlay.tree;
         let image_to_panel = |px: f32, py: f32| -> egui::Pos2 {
@@ -412,68 +296,17 @@ impl ImageDetail {
             }
         }
         egui::Popup::context_menu(interact_response).show(|ui| {
-            match context_menu_entry {
-                Some(entry) => {
-                    // Creating a point needs nothing but a pixel on the sensor,
-                    // so it is never greyed on a node the edit is defined for.
-                    if ui.add(egui::Button::new(CREATE_POINT_LABEL)).clicked() {
-                        response.open_create_point = true;
-                        ui.close();
-                    }
-                    let button = egui::Button::new(ADD_OBSERVATION_LABEL);
-                    let clicked = match entry {
-                        // Enabled: the reason it can run is the point and the
-                        // image the user has already chosen.
-                        Ok(()) => ui.add(button).clicked(),
-                        // Greyed, with the sentence saying which of the two
-                        // conditions does not hold.
-                        Err(why) => {
-                            ui.add_enabled(false, button).on_disabled_hover_text(why);
-                            false
-                        }
-                    };
-                    if clicked {
-                        response.add_observation = true;
-                        ui.close();
-                    }
-                }
-                // Not an `embedded_patches` node: the two entries above are
-                // absent rather than greyed, because neither edit is defined
-                // here at all.
-                None => {
-                    ui.label(egui::RichText::new(NOT_EMBEDDED_PATCHES).weak());
-                }
-            }
-            // Offered whatever backs an observation, because taking a row out
-            // invents nothing: it needs a selected point and an image that is
-            // in its track, and says which of the two is missing when it is
-            // greyed.
-            let button = egui::Button::new(REMOVE_OBSERVATION_LABEL);
-            let clicked =
-                match remove_observation_entry(edited, overlay.image.index(), selected_point) {
-                    Ok(()) => ui.add(button).clicked(),
-                    Err(why) => {
-                        ui.add_enabled(false, button).on_disabled_hover_text(why);
-                        false
-                    }
-                };
-            if clicked {
-                response.remove_observation = true;
-                ui.close();
-            }
             // ── The bench's two entries ──
             //
-            // Under a separator, because nothing below it reaches the
-            // reconstruction: each is a step on the node's bench
-            // (`crate::bench`), and the commit in the Track Edit panel is what
-            // crosses back. They are offered whatever backs an observation, for
-            // the reason the remove entry is: a bench track is seeds in one
+            // Nothing either of them does reaches the reconstruction: each is a
+            // step on the node's bench (`crate::bench`), and the commit in the
+            // Track Edit panel is what crosses back. They are offered whatever
+            // backs an observation, because a bench track is seeds in one
             // image's pixels until it is committed.
             //
             // The pixel is the one the menu was opened at, carried out in the
             // response rather than read back off the app state, so a bench
             // gesture is the click that made it.
-            ui.separator();
             let pixel = response.context_menu_pixel.or(self.menu_pixel);
             let button = egui::Button::new(START_CLUSTER_LABEL);
             let clicked = match start_cluster_entry(bench) {
@@ -500,70 +333,6 @@ impl ImageDetail {
                 ui.close();
             }
         });
-
-        // ── The Create 3D Point prompt, and the patch it is describing ──
-        //
-        // The circle is drawn under the prompt rather than in it: the radius is
-        // a size in this image, and the only place it means anything is on the
-        // image, at the pixel the user named.
-        if let Some(prompt) = create_point_prompt.as_mut() {
-            let center = image_to_panel(prompt.pixel[0], prompt.pixel[1]);
-            if let Some(radius) = prompt.radius() {
-                painter.circle_stroke(
-                    center,
-                    radius * effective_scale,
-                    egui::Stroke::new(2.0, egui::Color32::LIGHT_GREEN),
-                );
-            }
-            painter.circle_filled(center, 3.0, egui::Color32::LIGHT_GREEN);
-
-            let mut commit = false;
-            let mut cancel = false;
-            let area = egui::Area::new(ui.id().with("create_point_prompt"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(center + egui::vec2(12.0, 12.0));
-            let inner = area.show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(CREATE_POINT_LABEL);
-                    ui.horizontal(|ui| {
-                        ui.label("Radius (px)");
-                        let field = ui.add(
-                            egui::TextEdit::singleline(&mut prompt.radius_text).desired_width(64.0),
-                        );
-                        field.request_focus();
-                        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            commit = true;
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        let ready = prompt.radius().is_some();
-                        if ui.add_enabled(ready, egui::Button::new("Create")).clicked() {
-                            commit = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            cancel = true;
-                        }
-                    });
-                });
-            });
-            // Escape, or a click anywhere else, is a cancel: the prompt is a
-            // step in a gesture rather than a window to leave lying open.
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            }
-            let clicked_away = ui.input(|i| i.pointer.any_click())
-                && !ui
-                    .input(|i| i.pointer.interact_pos())
-                    .is_some_and(|pos| inner.response.rect.contains(pos));
-            if clicked_away {
-                cancel = true;
-            }
-            match (commit.then(|| prompt.radius()).flatten(), cancel) {
-                (Some(radius), _) => response.create_point = Some((prompt.pixel, radius)),
-                (None, true) => response.cancel_create_point = true,
-                _ => {}
-            }
-        }
 
         // Hit testing for feature clicks (only tracked features)
         if interact_response.clicked() {

@@ -20,9 +20,7 @@ refuses a placement the caller already made over a point that was never the
 question.
 
 Related specs:
-[`remove-observation.md`](remove-observation.md) (the other edit that re-solves
-a track from the rays that remain, and the ray and triangulation helpers this
-shares with it), [`bundle-adjust.md`](bundle-adjust.md) (the patch-frame rescale
+[`bundle-adjust.md`](bundle-adjust.md) (the patch-frame rescale
 and the stored-error rewrite this shares with it, and the adjustment that moves
 *every* pose), [`edited-reconstruction.md`](edited-reconstruction.md) (the value,
 and the row map a caller follows an index through), and
@@ -154,8 +152,7 @@ projection is repeated.
 
    - a **finite point with two or more observations that all carry a pixel** is
      re-triangulated from the value's own poses and lenses, the moved one
-     included, by the same solve a shortened track goes through in
-     [`remove-observation.md`](remove-observation.md). Its patch frame is
+     included, by this module's own batch solve. Its patch frame is
      rescaled by the ratio of its placement distances, so the patch keeps the
      angular size it had, and its stored `error` becomes the RMS of its own
      residuals at the new geometry, because the column would otherwise describe
@@ -305,5 +302,5 @@ the two refusals.
   to answer.
 - **Moving several cameras at once**, or a rig as a unit. One call, one image.
 - **Re-solving a multi-view bearing.** Its direction is kept; converting a
-  bearing back to a finite point is what a second observation does, in
-  [`add-observation.md`](add-observation.md).
+  bearing back to a finite point is what a second sighting does, on the bench
+  ([`../bench/editable-track.md`](../bench/editable-track.md)).

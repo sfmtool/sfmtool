@@ -117,9 +117,7 @@ pub struct ReprojectionSample {
 ///
 /// - a **finite point with two or more observations that all carry a pixel** is
 ///   re-triangulated from the value's own poses and lenses, the moved one
-///   included, by [`triangulate_track`] -- the same solve
-///   [`remove_observation`](super::remove_observation::remove_observation) runs
-///   over a shortened track. Its patch frame is rescaled by its
+///   included, by [`triangulate_track`]. Its patch frame is rescaled by its
 ///   placement-distance ratio so the patch keeps its angular size, and its
 ///   stored `error` becomes the RMS of its own residuals at the new geometry;
 /// - a **bearing whose only observation is this image** rotates with the

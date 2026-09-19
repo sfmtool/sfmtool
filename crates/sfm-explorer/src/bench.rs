@@ -313,11 +313,10 @@ impl AppState {
     /// Start a cluster-stage track on `image`'s node from `seed`, and make it
     /// the active track.
     ///
-    /// The gesture behind it is the one Create 3D Point uses: the pixel is
-    /// where the Image Detail panel's context menu was last opened, and a seed
-    /// that names no shape takes the radius that panel offers for a created
-    /// point, so a cluster and a created point are started at the same place at
-    /// the same size.
+    /// The pixel is where the Image Detail panel's context menu was last
+    /// opened, and a seed that names no shape takes the node's own default
+    /// patch radius for that image, so a cluster starts at the scale the
+    /// reconstruction already works at there.
     pub(crate) fn start_bench_cluster(
         &mut self,
         image: ImageRef,
@@ -329,9 +328,7 @@ impl AppState {
         let seeded = self.seeded_at(image, seed)?;
         let shape = match seeded.shape {
             Some(shape) => shape,
-            None => ClusterSeed::shape_from_radius_px(f64::from(
-                self.create_point_default_radius(image),
-            )),
+            None => ClusterSeed::shape_from_radius_px(f64::from(self.default_patch_radius(image))),
         };
         let index = self.node_index(image.recon)?;
         let node = &self.scene[index];
@@ -1509,8 +1506,8 @@ fn install(bench: &Bench, label: &str, track: EditableTrack) -> Result<Bench, St
 ///
 /// A committed track that replaces a point takes an index the value already
 /// held, so it is named by the base's hash like any other row; one that creates
-/// a point is a row no base has, and is named the way
-/// [`AppState::create_point`] names what it makes.
+/// a point is a row no base has, and there is nothing but the edit itself for
+/// its identity to reach back to.
 fn created_points(
     next: &EditedReconstruction,
     report: &bench::CommitReport,

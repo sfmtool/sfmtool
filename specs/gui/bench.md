@@ -208,7 +208,7 @@ resolves it with.
 holding one of three things -- a pixel, a pixel with a size or a shape read at
 it, or a `.sift` feature, which carries both -- and the step should not care
 which. `Seed::Pixel` with no radius means "I have no shape to give you, use the
-one you have": the radius the Create 3D Point prompt would offer when a cluster
+one you have": the node's own default patch radius when a cluster
 is being started, and the track's reference shape when an observation is being
 added to one, which is what a right-click means. A `Seed::Feature` is read
 through `AppState::sift_cache`, the cache the Image Detail overlay draws its

@@ -817,37 +817,18 @@ puts a menu up. The menu is opened on egui's own `clicked_by(Secondary)` rather
 than on the raw platform button state the pan/zoom handler reads, which is what
 makes that distinction available at all.
 
-Its entries are `Create 3D Point here...`, which creates a point at the
-clicked pixel ([`edits/create-point.md`](edits/create-point.md)), `Add
-observation to track here`, which adds an observation of the selected 3D point
-to this image at that pixel
-([`edits/add-observation.md`](edits/add-observation.md)), and `Remove observation
-from track`, which takes the selected point's observation in this image out of
-its track ([`edits/remove-observation.md`](edits/remove-observation.md)).
-
-Under a separator come the two entries that act on the node's **bench**
+Its two entries act on the node's **bench**
 ([`bench.md`](bench.md)) rather than on the reconstruction: `Start cluster on
 the bench here`, which puts a cluster-stage track on the bench seeded at the
-clicked pixel with the radius the Create 3D Point prompt would offer, and `Add
+clicked pixel with the node's own default patch radius, and `Add
 observation to bench track here`, which adds a candidate sighting at that pixel
 to the bench's active track. Both are edited afterwards in the Track Edit panel
 ([`track-edit.md`](track-edit.md)), and the commit there is what reaches the
 reconstruction. This is the viewer's only way to name a pixel, so it is where
 every gesture that needs one lives.
 
-Creating a point needs nothing but a pixel on the sensor, so its entry is never
-greyed; its trailing ellipsis is the promise it keeps, opening a small prompt at
-the click for the patch radius, with a preview circle of that radius drawn on
-the image while it is up. Adding an observation is greyed with a hover
-explanation when no point is selected or when this image already observes the
-selected point. Those two are replaced by one line saying why on a `sift_files`
-reconstruction, where an observation is a `.sift` feature and a clicked pixel is
-not one. Removing an observation is offered there as well, under that line, and
-names no pixel: it is greyed when no point is selected or when this image does
-not observe it.
-
-The two bench entries are offered whatever backs the node's observations, for
-the same reason: a bench track is seeds in one image's pixels until it is
+Both entries are offered whatever backs the node's observations, because a bench
+track is seeds in one image's pixels until it is
 committed. Starting a cluster needs nothing but a pixel and a node no background
 task is holding; adding to the bench track is greyed, saying so, until a track
 is on the bench. An image the active track already holds a sighting in is not a

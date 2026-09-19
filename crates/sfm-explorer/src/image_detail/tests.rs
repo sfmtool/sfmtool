@@ -94,7 +94,6 @@ fn look_frame(
             None,
             None,
             super::BenchMenu::default(),
-            &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
             None,
@@ -528,7 +527,6 @@ fn overlay_frame(
             None,
             None,
             super::BenchMenu::default(),
-            &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
             Some(sift),
@@ -599,11 +597,10 @@ fn adding_to_the_bench_track_is_greyed_until_a_track_is_on_the_bench() {
 }
 
 /// The two bench entries are in the menu, and are in it on a `sift_files`
-/// node, where neither point edit is defined: a bench track is seeds in one
-/// image's pixels until it is committed, so what backs the node's own
-/// observations does not decide it.
+/// node: a bench track is seeds in one image's pixels until it is committed, so
+/// what backs the node's own observations does not decide it.
 #[test]
-fn the_context_menu_offers_the_two_bench_entries_beside_the_point_edits() {
+fn the_context_menu_offers_the_two_bench_entries() {
     let track = a_track();
     let texts = context_menu_texts(BenchMenu {
         busy: None,
@@ -615,12 +612,6 @@ fn the_context_menu_offers_the_two_bench_entries_beside_the_point_edits() {
             "{label} is not in the menu: {texts:?}",
         );
     }
-    assert!(
-        texts
-            .iter()
-            .any(|t| t == super::overlay::NOT_EMBEDDED_PATCHES),
-        "the fixture is meant to be a node the two point edits are absent on: {texts:?}",
-    );
 
     // Greyed rather than absent: an entry with nothing on the bench still
     // names itself, and says why it cannot run on hover.
@@ -683,7 +674,6 @@ fn context_menu_texts(bench: BenchMenu<'_>) -> Vec<String> {
                 None,
                 None,
                 bench,
-                &mut None,
                 &[],
                 &crate::platform::ScrollInput::default(),
                 Some(&sift),
@@ -782,7 +772,6 @@ fn bench_frame(
                 None,
                 None,
                 bench,
-                &mut None,
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,
@@ -1121,7 +1110,6 @@ fn published_frame(
             None,
             None,
             super::BenchMenu::default(),
-            &mut None,
             &[],
             &crate::platform::ScrollInput::default(),
             None,
@@ -1373,7 +1361,6 @@ fn gesture(
                     busy: None,
                     active_track: Some(track),
                 },
-                &mut None,
                 &[],
                 &crate::platform::ScrollInput::default(),
                 None,

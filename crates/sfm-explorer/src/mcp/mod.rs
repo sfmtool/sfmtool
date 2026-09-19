@@ -214,26 +214,6 @@ pub(crate) enum Command {
         reconstruction_label: String,
         camera_image: CameraImageSel,
     },
-    AddObservation {
-        reconstruction_label: String,
-        point: crate::goto_point::PointQuery,
-        camera_image: CameraImageSel,
-        pixel: [f32; 2],
-    },
-    CreatePoint {
-        reconstruction_label: String,
-        camera_image: CameraImageSel,
-        pixel: [f32; 2],
-        /// `None` takes the radius the Create 3D Point prompt would offer for
-        /// this image, which is the median radius its own observations project
-        /// to.
-        radius_px: Option<f32>,
-    },
-    RemoveObservation {
-        reconstruction_label: String,
-        point: crate::goto_point::PointQuery,
-        camera_image: CameraImageSel,
-    },
     /// Put one camera image at a pose, as one version of its reconstruction.
     ///
     /// The pose is world-from-camera in the reconstruction's own frame, in the
@@ -981,40 +961,6 @@ pub(crate) fn apply_with_window(
             &reconstruction_label,
             &camera_image,
         )),
-        Command::AddObservation {
-            reconstruction_label,
-            point,
-            camera_image,
-            pixel,
-        } => done(edit::add_observation(
-            state,
-            &reconstruction_label,
-            &point,
-            &camera_image,
-            pixel,
-        )),
-        Command::CreatePoint {
-            reconstruction_label,
-            camera_image,
-            pixel,
-            radius_px,
-        } => done(edit::create_point(
-            state,
-            &reconstruction_label,
-            &camera_image,
-            pixel,
-            radius_px,
-        )),
-        Command::RemoveObservation {
-            reconstruction_label,
-            point,
-            camera_image,
-        } => done(edit::remove_observation(
-            state,
-            &reconstruction_label,
-            &point,
-            &camera_image,
-        )),
         Command::MoveCameraImage {
             reconstruction_label,
             camera_image,
@@ -1742,9 +1688,6 @@ impl Command {
             Command::SaveReconstruction { .. } => "save_reconstruction",
             Command::DeletePoint { .. } => "delete_point",
             Command::DeleteCameraImage { .. } => "delete_camera_image",
-            Command::AddObservation { .. } => "add_observation",
-            Command::CreatePoint { .. } => "create_point",
-            Command::RemoveObservation { .. } => "remove_observation",
             Command::MoveCameraImage { .. } => "move_camera_image",
             Command::ResectCameraImageInPlace { .. } => "resect_camera_image_in_place",
             Command::BundleAdjust { .. } => "bundle_adjust",
@@ -1794,18 +1737,6 @@ impl Command {
                 ..
             }
             | Command::DeleteCameraImage {
-                reconstruction_label,
-                ..
-            }
-            | Command::AddObservation {
-                reconstruction_label,
-                ..
-            }
-            | Command::CreatePoint {
-                reconstruction_label,
-                ..
-            }
-            | Command::RemoveObservation {
                 reconstruction_label,
                 ..
             }
@@ -1936,9 +1867,6 @@ impl Command {
             | Command::JumpToVersion { .. }
             | Command::DeletePoint { .. }
             | Command::DeleteCameraImage { .. }
-            | Command::AddObservation { .. }
-            | Command::CreatePoint { .. }
-            | Command::RemoveObservation { .. }
             | Command::MoveCameraImage { .. }
             | Command::ResectCameraImageInPlace { .. }
             | Command::BundleAdjust { .. }

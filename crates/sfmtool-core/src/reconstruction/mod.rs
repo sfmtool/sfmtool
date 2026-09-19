@@ -4,9 +4,7 @@
 //! SfM reconstruction: the [`SfmrReconstruction`] data type plus per-point
 //! operations (triangulation, filtering, correspondence).
 
-pub mod add_observation;
 pub mod bundle_adjust;
-pub mod create_point;
 pub(crate) mod data;
 mod edit;
 pub mod edited;
@@ -15,22 +13,13 @@ pub mod filter;
 pub mod move_camera;
 pub mod point_correspondence;
 pub mod point_estimation;
-pub mod remove_observation;
 pub mod triangulation;
-
-pub use add_observation::{
-    add_observation, AddObservationError, AddObservationOptions, AddObservationReport,
-};
 
 pub use bundle_adjust::{
     bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport,
 };
 
-pub use create_point::{create_point, CreatePointError, CreatePointOptions, CreatePointReport};
-
 pub use move_camera::{move_camera, MoveCameraError, MoveCameraReport, ReprojectionSample};
-
-pub use remove_observation::{remove_observation, RemoveObservationError, RemoveObservationReport};
 
 pub use edited::{
     EditError, EditedReconstruction, PointMap, PointRecord, PointView, RecordObservation, RowMap,

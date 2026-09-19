@@ -608,29 +608,6 @@ pub struct AppState {
     /// however many tasks are looking at it.
     pub full_res_cache: HashMap<ImageRef, Option<Arc<ImageU8>>>,
 
-    /// The pixel the Image Detail context menu was opened at, in source-image
-    /// coordinates, held between the right-click that opens the menu and the
-    /// entry that consumes it.
-    ///
-    /// The menu is drawn a frame after the click that opened it and egui's
-    /// pointer has moved on by then, so the pixel the user actually named has
-    /// to be remembered rather than re-read. Cleared by the edit and whenever
-    /// the menu closes without one.
-    pub pending_observation_pixel: Option<[f32; 2]>,
-
-    /// The open "Create 3D Point" prompt: which pixel it was opened at and what
-    /// radius is typed into it. `None` when no prompt is up.
-    ///
-    /// The radius is a value the click cannot carry, so the entry opens a
-    /// prompt rather than running the edit; see
-    /// `specs/gui/edits/create-point.md`.
-    pub create_point_prompt: Option<crate::image_detail::CreatePointPrompt>,
-
-    /// The radius the last created point in this session was given, offered as
-    /// the prompt's value in place of the data-derived default. A user sizing
-    /// one patch by hand is usually about to size the next one the same way.
-    pub create_point_radius: Option<f32>,
-
     /// Whether the "Load Demo Data" dialog is currently open.
     pub show_demo_dialog: bool,
 
@@ -822,9 +799,6 @@ impl AppState {
             sift_cache: HashMap::new(),
             descriptor_indexes: HashMap::new(),
             full_res_cache: HashMap::new(),
-            pending_observation_pixel: None,
-            create_point_prompt: None,
-            create_point_radius: None,
             show_demo_dialog: false,
             demo_num_points: 1000,
             goto_point: GotoPointDialog::default(),

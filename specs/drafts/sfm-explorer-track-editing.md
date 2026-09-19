@@ -3,9 +3,8 @@
 **Status:** Draft
 
 A track is the record of which photographs saw one point on a surface and where
-in each photograph it appears. The viewer can already grow a track by one
-observation, remove one, or create a point from a pixel, and each of those is a
-single decisive step that lands in the reconstruction's edit history. What it
+in each photograph it appears. The viewer can already delete a point, and that is
+a single decisive step that lands in the reconstruction's edit history. What it
 cannot do is *work on* a track: take one out of the reconstruction, or start one
 that is not in it yet, try images against it, see what each would contribute,
 take some and leave others, compare it with another, and only then put it back.
@@ -43,10 +42,9 @@ half that is built: the two values, the steps, the evaluation at both stages and
 the transitions between them, whose non-goals are what this draft proposes),
 [`../gui/point-track-detail.md`](../gui/point-track-detail.md)
 (the view-only panel the editable track is the editing counterpart of),
-[`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
-[`../gui/edits/create-point.md`](../gui/edits/create-point.md) and
-[`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md) (the
-one-step track edits, which stay), [`../gui/document-model.md`](../gui/document-model.md)
+[`../gui/edits/commit-track.md`](../gui/edits/commit-track.md) (the one step
+that reaches the reconstruction),
+[`../gui/document-model.md`](../gui/document-model.md)
 (the version the bench joins and the commit makes),
 [`../gui/edit-history.md`](../gui/edit-history.md) (the cursor the bench is
 walked by), [`../gui/background-tasks.md`](../gui/background-tasks.md)
@@ -300,7 +298,7 @@ of every camera and not degenerate. It runs the spawn pipeline's own steps
    near-grazing to that plane is reported as such rather than placed.
 3. **Localize and refine** every `in` observation's keypoint against that surfel,
    seeded at its refined cluster position, with the same two kernel stages the
-   embed pass and `add_observation` chain, and re-triangulate from the result.
+   embed pass chains, and re-triangulate from the result.
 4. **Fuse** the consensus bitmap over the surviving observations.
 
 The cluster-stage measurements are dropped with the stage: each is a registration
@@ -369,7 +367,7 @@ What is measured, per stage:
 **Keypoint search is a switch.** At the track stage a candidate can be scored
 where the surfel projects, which is view selection's affine candidate score and
 costs one small render, or the localizer can be allowed to search for it within
-`max_shift_px` first, which is what `add_observation` does and costs a
+`max_shift_px` first, which costs a
 localization per candidate. The panel has the switch and the radius, because the
 two answer different questions: the first asks whether the image shows the
 patch where the geometry says it is, the second whether it shows it nearby. A
@@ -394,8 +392,8 @@ nothing else; the verdict is the user's.
 
 Right-click in the Image Detail panel: **Add to editable track here**, which
 adds to the active track. With no track on the bench, the same entry reads
-**Start editable track here...** and opens the radius prompt the Create 3D Point
-entry opens, offering the same radius, so the first observation's seed has a scale; it
+**Start editable track here...** and opens a radius prompt offering the node's
+own default patch radius, so the first observation's seed has a scale; it
 puts a new track on the bench and makes it active. A subsequent pixel observation
 takes the reference's scale carried by the affine seed the cluster kernel
 derives, and needs no prompt. The observation is a `candidate` scored on the next
@@ -538,7 +536,7 @@ thing to remember.
 `, replacing point <index>` when there was an origin and `, absorbing M points`
 when there were pulled-in observations. **The Action Log entry** is the label plus
 the fit's numbers, LOO ZNCC over the observations and the triangulation's condition
-number, the way add-observation's entry carries its ZNCC and shift.
+number, the way every edit's entry carries the numbers of its own family.
 
 **After the commit the track stays on the bench**, with its origin set to the
 point just written, its observations' provenance unchanged, and its measurements
@@ -791,8 +789,8 @@ specs list as non-goals is what this draft still proposes.
   template, or position, frame and consensus bitmap), the origin, the
   thresholds. A plain value: `Clone`, no interior mutability, no handle to any
   device, cache or window. The decoded images an evaluation needs are a named
-  input, one `ProjectedImage` per image of the node, exactly as
-  `add_observation` takes them, so decoding and caching stay the caller's.
+  input, one `ProjectedImage` per image of the node, exactly as every
+  photometric kernel takes them, so decoding and caching stay the caller's.
 - **`Bench`**, *built*: the list of items, their labels, the active label per
   kind, the label minting and the collision suffix, and the rename. Also a plain
   value. It is in core rather than the viewer because a script holding several
@@ -804,7 +802,7 @@ specs list as non-goals is what this draft still proposes.
   `add_observation`, `set_verdict`, `apply_thresholds` (the painting, as
   proposed verdicts), `split`, **`commit`**, which is a function from an
   `EditedReconstruction` and a track to the next `EditedReconstruction` and a
-  report, the same shape as `add_observation` and `create_point`, and the two
+  report, the same shape as every other step, and the two
   that register pixels, `evaluate` and `set_stage`, which take the decoded views
   and a `Progress`. *Proposed here*: `search_descriptors` over a
   `LazyKdForest`, `sweep_views`, and `pull_in`, which reads another track. Every
@@ -941,12 +939,12 @@ Two core pieces were built ahead of the bench, and one more is needed:
    `OrientedPatch.from_affine_shape_at_depth`. See
    [`../core/patch/patch-cloud.md`](../core/patch/patch-cloud.md).
 
-Neither `to_embedded_patches` nor `create_point` calls the new constructor: both
+Neither `to_embedded_patches` nor a cluster seed calls the new constructor: both
 frame a patch from inputs it does not take. `to_embedded_patches` frames per
 *point*, from a position that is already triangulated, with a normal averaged
 over every observing view, an in-plane rotation from the first observing
-camera's up axis and one isotropic half-size reduced across the views;
-`create_point` frames a point at infinity (`w = 0`) from a radius, where there
+camera's up axis and one isotropic half-size reduced across the views; a cluster
+seed frames from a radius in one image's pixels, where there
 is no depth at all. The new constructor frames per *observation*: one view, one
 shape, one depth, anisotropic, normal along that view's bearing.
 
@@ -962,8 +960,7 @@ to that shape.
 **The bench and the track**, in core (`crates/sfmtool-core/src/bench/tests.rs`)
 for everything that is a value or a pure function, and in the viewer
 (`bench/tests.rs` beside `document/tests.rs`) for the history, over the
-synthetic textured-plane scene the localization and add-observation tests
-already build:
+synthetic textured-plane scene the localization tests already build:
 
 - A track put on the bench from a committed point is at the track stage with
   every observation `in` and reports the numbers Point Track Detail reports for that

@@ -31,7 +31,8 @@ use std::collections::HashMap;
 use nalgebra::{Point3, Vector3};
 use ndarray::{Array2, Array3};
 
-use crate::camera::remap::ImageU8Pyramid;
+use crate::camera::remap::{remap_bilinear_mip, ImageU8Pyramid};
+use crate::camera::WarpMap;
 use crate::patch::cloud::OrientedPatch;
 use crate::patch::cluster_refine::{
     refine_cluster_patches_borrowed, sample_member_grid, ClusterRefineParams, FeatureGeometry,
@@ -45,7 +46,6 @@ use crate::patch::localizability::{score_localizability_stack, SIGMA_NOISE};
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
-use crate::reconstruction::create_point::render_bitmap;
 use crate::reconstruction::edited::EditedReconstruction;
 
 use super::track::{
@@ -347,9 +347,8 @@ impl std::fmt::Display for EvaluateReport {
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
 /// index -- the decoded pixels the kernels need, which a reconstruction value
-/// does not carry, exactly as
-/// [`add_observation`](crate::reconstruction::add_observation::add_observation)
-/// takes them.
+/// does not carry, exactly as every other photometric step of the bench takes
+/// them.
 ///
 /// **At the cluster stage** every observation's seed is a member of an
 /// in-memory `.matches` cluster, and
@@ -726,7 +725,7 @@ fn tile_localizability(
 /// registers a *point's* sighting in a view and two sightings in one view are
 /// two hypotheses about that view. So the first round is the `in` observations
 /// plus every other observation in an image none of them holds, which is the
-/// shape [`add_observation`](mod@crate::reconstruction::add_observation) runs; an
+/// shape the localizer is meant to run over; an
 /// observation in an image that is already spoken for gets a round of its own,
 /// against the `in` observations minus the one whose image it wants, which is
 /// the same leave-one-out question asked about the other hypothesis.
@@ -1211,6 +1210,39 @@ pub(super) fn surfel_tile_localizability(
     let samples: Vec<f32> = tile.iter().map(|&v| f32::from(v)).collect();
     let scored = score_localizability_stack(&samples, 1, resolution, channels, window, SIGMA_NOISE);
     finite(scored[0].sigma_pos_grid)
+}
+
+/// The `(R, R, C)` patch bitmap: `view` resampled through `patch`'s frame, the
+/// way every stored patch bitmap is rendered.
+///
+/// A pixel the warp cannot sample is left black, and the alpha channel -- the
+/// fourth, when the caller asks for one -- is opaque everywhere, because the
+/// whole tile is content this one image saw.
+fn render_bitmap(
+    patch: &OrientedPatch,
+    view: &ProjectedImage<'_>,
+    resolution: usize,
+    channels: usize,
+) -> Array3<u8> {
+    let mut map = WarpMap::from_patch(patch, view.camera, view.cam_from_world, resolution as u32);
+    map.compute_svd();
+    let tile = remap_bilinear_mip(view.pyramid, &map);
+    let src_channels = tile.channels();
+    let mut out = Array3::<u8>::zeros((resolution, resolution, channels));
+    for row in 0..resolution {
+        for col in 0..resolution {
+            for c in 0..channels {
+                out[[row, col, c]] = if c >= 3 {
+                    u8::MAX
+                } else if src_channels >= 3 {
+                    tile.get_pixel(col as u32, row as u32, c as u32)
+                } else {
+                    tile.get_pixel(col as u32, row as u32, 0)
+                };
+            }
+        }
+    }
+    out
 }
 
 /// `Some(value)` when it is a number, `None` when the kernel reported nothing.

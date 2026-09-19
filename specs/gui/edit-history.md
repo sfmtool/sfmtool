@@ -134,18 +134,12 @@ Those hashes plus this graph are what a point id is minted against and resolved
 through ([goto-point.md](goto-point.md) § "The ID forms and the version graph").
 
 The edit that records a `CreatedPoints` is
-[`edits/create-point.md`](edits/create-point.md): it puts a point in the value
-that no base holds a row for, so the id it is shown under is the edit's own hash
-and its place among that edit's creations, and the record of that has to outlive
-the cursor moving away from the version. Every other edit so far modifies or
-removes points a base already has, and pushes with no created list.
-
-The edit that records a `CreatedPoints` is
-[`edits/create-point.md`](edits/create-point.md): it puts a point in the value
-that no base holds a row for, so the id it is shown under is the edit's own hash
-and its place among that edit's creations, and the record of that has to outlive
-the cursor moving away from the version. Every other edit so far modifies or
-removes points a base already has, and pushes with no created list.
+[`edits/commit-track.md`](edits/commit-track.md), where the committed track came
+off no point: it puts a point in the value that no base holds a row for, so the
+id it is shown under is the edit's own hash and its place among that edit's
+creations, and the record of that has to outlive the cursor moving away from the
+version. Every other edit modifies or removes points a base already has, and
+pushes with no created list.
 
 ## What follows a map
 

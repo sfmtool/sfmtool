@@ -217,11 +217,11 @@ version 9), and the point ids it keeps resolving are
 
 ## Part 4: row-level edits under value semantics
 
-Built and standing. The edit this part posed -- select a point, select an image
-that is not in its track, right-click there and add a keypoint to the track -- is
-[`../gui/edits/add-observation.md`](../gui/edits/add-observation.md), over the
-core function in
-[`../core/reconstruction/add-observation.md`](../core/reconstruction/add-observation.md).
+Built and standing. The edit this part posed -- assemble a track's sightings and
+write the result back -- is
+[`../gui/edits/commit-track.md`](../gui/edits/commit-track.md), over the core
+functions in
+[`../core/bench/editable-track.md`](../core/bench/editable-track.md).
 The representation that makes it cost the size of one track rather than the size
 of the reconstruction is
 [`../core/reconstruction/edited-reconstruction.md`](../core/reconstruction/edited-reconstruction.md),
@@ -246,9 +246,7 @@ Families, in the proposed order:
 
 - **Delete**: selected points and an image (with its observations and any track
   left under two views) are built and standing with the document model,
-  [`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit";
-  removing an observation from a track is standing as
-  [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md).
+  [`../gui/document-model.md`](../gui/document-model.md) § "Two kinds of edit".
   The first structural edits, and the ones the selection-remapping rule is
   tested against.
 - **Point constraints**: set a selected point free, ranged, or held, with the
@@ -268,17 +266,13 @@ Families, in the proposed order:
   [`../core/reconstruction/move-camera.md`](../core/reconstruction/move-camera.md).
   The answer to a wrong pose whose correspondences are what is wrong, and the
   first edit whose input is a gesture rather than a click.
-- **Track edits**: add an observation to a track from a pixel is built and
-  standing, [`../gui/edits/add-observation.md`](../gui/edits/add-observation.md),
-  and so is creating a point from a pixel,
-  [`../gui/edits/create-point.md`](../gui/edits/create-point.md), which is the
-  edit an added observation then places, and so is removing an observation,
-  [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
-  which inverts the first. Split a track and merge two remain, and both fall
-  out of the bench proposed in
-  [sfm-explorer-track-editing.md](sfm-explorer-track-editing.md): a track
-  taken out of the reconstruction and worked on beside it, with members turned
-  in or out and other tracks pulled in, and committed as one version.
+- **Track edits**: a track is worked on the **bench** and written back by one
+  commit, which is built and standing,
+  [`../gui/edits/commit-track.md`](../gui/edits/commit-track.md) over
+  [`../core/bench/editable-track.md`](../core/bench/editable-track.md): a track
+  taken out of the reconstruction and worked on beside it, with sightings turned
+  in or out and others pulled in, and committed as one version. Merging two
+  tracks remains.
 - **Bundle adjust**: running the adjustment on the node's value with the
   constraints it carries, as one version, is built and standing,
   [`../gui/edits/bundle-adjust.md`](../gui/edits/bundle-adjust.md), over the core
@@ -322,25 +316,22 @@ steps after it.
    Part 1), the script is
    [`scripts/measure_edit_costs.py`](../../scripts/measure_edit_costs.py),
    and the numbers and what they decided are in Part 1.
-7. **Edit families**, one PR each in Part 5's order, `gui/edits/`. The
-   add-observation track edit, on `embedded_patches` files, is done: it was
-   first because it is what the overlay is for, and it is what routed every
-   per-point read through the overlay accessor and put the additions on the
-   GPU. Create a point from a pixel is done beside it, and is what exercises the
-   rest of that machinery: a point in no base, `push_creating`, the point-edit
-   hash an id is minted against, and an addition the GPU draws that replaces
-   nothing. Removing an observation is done as well,
-   [`../gui/edits/remove-observation.md`](../gui/edits/remove-observation.md),
-   and is the edit that inverts add-observation, including the patch frame's
-   crossing to and from infinity. Resect in place and bundle adjust are done as
+7. **Edit families**, one PR each in Part 5's order, `gui/edits/`. The track
+   edits, on `embedded_patches` files, are done: the bench holds a track beside
+   the reconstruction and the commit writes it back, which is what the overlay
+   is for and what routed every per-point read through the overlay accessor and
+   put the additions on the GPU. A commit that creates rather than replaces
+   exercises the rest of that machinery: a point in no base, `push_creating`,
+   the point-edit hash an id is minted against, and an addition the GPU draws
+   that replaces nothing. Resect in place and bundle adjust are done as
    well, the two **bulk** edits of the family: the first lands the existing
    resection as a version of the node it questioned, and the second is the
    node's own solver run over the value on screen, which is what the edits
    before it change the input to. Remaining: point constraints, bake transform,
-   and the other track edits (split, merge).
-8. **Wire surface.** Done: the thirteen tools are in
+   and merging two tracks.
+8. **Wire surface.** Done: the editing tools are in
    [`../gui/mcp-server.md`](../gui/mcp-server.md), and a family built after this
-   gains a tool there the way the seven already there did.
+   gains a tool there the way the ones already there did.
 
 ## Non-goals
 

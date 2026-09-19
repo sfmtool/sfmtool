@@ -27,9 +27,9 @@ Related specs:
 kernel, its schedule, its point constraints and its points at infinity),
 [`edited-reconstruction.md`](edited-reconstruction.md) (the value, and the row
 map a caller follows an index through),
-[`add-observation.md`](add-observation.md) and
-[`remove-observation.md`](remove-observation.md) (the two edits whose patch-frame
-rescale this one uses), and
+[`../bench/editable-track.md`](../bench/editable-track.md) (the bench fit, which
+rescales a patch frame the same way when a track crosses between a place and a
+bearing), and
 [`../../gui/edits/bundle-adjust.md`](../../gui/edits/bundle-adjust.md) (the
 viewer's edit over it).
 
@@ -249,10 +249,10 @@ A point's patch frame is two half-vectors: world-space extents on a finite point
 and angular extents tangent to the direction sphere on a bearing. The distance
 that converts between them is the **placement distance**, the distance from the
 camera-cloud centroid, which is where
-`SfmrReconstruction::materialize_points_at_infinity` places a bearing and what
-[`add-observation.md`](add-observation.md) multiplies by and
-[`remove-observation.md`](remove-observation.md) divides by when a point crosses.
-It is `ImageTable::placement_scale`, one function for all three, so their
+`SfmrReconstruction::materialize_points_at_infinity` places a bearing and what a
+bench fit multiplies by and divides by when a track crosses
+([`../bench/editable-track.md`](../bench/editable-track.md)). Here it is
+`ImageTable::placement_scale`, measured from the same reference so the
 conversions cancel exactly.
 
 An adjustment moves points in depth without changing what they look like, so a

@@ -313,8 +313,7 @@ The rule is cost, not kind. A point edit is microseconds of work; sending it to
 a worker would add a thread hop and a frame of latency to an operation that has
 neither today, in exchange for nothing. So:
 
-- **Point edits stay synchronous.** Delete point, add observation, remove
-  observation, create point, move camera.
+- **Point edits stay synchronous.** Delete point and move camera.
 - **Bulk edits go to the background.** The bundle adjustment is the one that
   takes it, being the operation that froze the window for minutes. The
   `sift_files` -> `embedded_patches` conversion takes it too: it reads a `.sift`

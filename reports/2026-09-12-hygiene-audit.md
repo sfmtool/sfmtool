@@ -703,6 +703,14 @@ them**
 
 **Four edit error enums repeat the same variants, docs and `Display` strings — with a
 `u32`/`usize` fork**
+
+> _Status (2026-09-18): Mostly moot — three of the four enums are gone with their
+> modules. `add_observation`, `create_point` and `remove_observation` were removed
+> from `sfmtool-core` along with the GUI, MCP and binding surfaces that called them,
+> the bench being the one place tracks are now created and edited. Only
+> `MoveCameraError` and `EditError` remain, so what is left of the finding is the
+> `image: usize` / `image_index: u32` fork between those two._
+
 - Location: `crates/sfmtool-core/src/reconstruction/add_observation.rs:25–115`,
   `create_point.rs:24–100`, `remove_observation.rs:20–65`, `move_camera.rs:23–57`,
   against `edited.rs:33–118`

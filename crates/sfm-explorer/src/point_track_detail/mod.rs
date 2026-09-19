@@ -125,9 +125,6 @@ pub struct PointTrackDetailResponse {
     /// The user asked for the Go to Point dialog — from the header button, or
     /// from the empty state's button when no point is selected at all.
     pub request_goto_point: bool,
-    /// If Some, a row's context menu asked for that image's observation to be
-    /// taken out of the selected point's track.
-    pub remove_observation: Option<usize>,
 }
 
 /// Height of each thumbnail in the observation table.
@@ -178,7 +175,6 @@ impl PointTrackDetail {
             hovered_image: None,
             has_pointer: false,
             request_goto_point: false,
-            remove_observation: None,
         };
 
         // Check if pointer is in this panel
@@ -232,36 +228,10 @@ impl PointTrackDetail {
         // --- Stored-patch header tile (embedded-patches reconstructions) ---
         self.show_stored_patch_tile(ui);
 
-        // The way to grow this track, said where the track is being read. The
-        // edit itself belongs to the image, so this is a hint and not a button:
-        // it names the gesture and the panel it happens in.
+        // The way onto the bench, said where the track is being read. This
+        // panel stays view-only: the line names the button and the panel it
+        // is in, quoting the label from the one constant that spells it.
         if !edited.has_feature_indexes() {
-            ui.label(
-                egui::RichText::new(format!(
-                    "To add an observation: select an image this point is not seen in, \
-                     then right-click it in Image Detail and choose \u{201c}{}\u{201d}.",
-                    crate::image_detail::ADD_OBSERVATION_LABEL
-                ))
-                .weak()
-                .small(),
-            );
-            // Said in the same place, because the gesture is the same one and
-            // the point it makes is the point this panel then reads: a created
-            // point is a bearing with one observation until a second is added
-            // to it here.
-            ui.label(
-                egui::RichText::new(format!(
-                    "To create a point: right-click where it is in Image Detail and choose \
-                     \u{201c}{}\u{201d}. It is created at infinity, and a second observation \
-                     places it.",
-                    crate::image_detail::CREATE_POINT_LABEL
-                ))
-                .weak()
-                .small(),
-            );
-            // The way onto the bench, said where the track is being read. This
-            // panel stays view-only: the line names the button and the panel it
-            // is in, quoting the label from the one constant that spells it.
             ui.label(
                 egui::RichText::new(format!(
                     "To work on this track: press \u{201c}{}\u{201d} in the Track Edit panel. \

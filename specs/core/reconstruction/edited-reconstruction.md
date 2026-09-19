@@ -496,10 +496,10 @@ impl PointMap {
 It is in [edited.rs](../../../crates/sfmtool-core/src/reconstruction/edited.rs)
 beside `RowMap`, and reachable as `sfmtool_core::PointMap`.
 
-**Every edit that can move an index reports one.** `add_observation` hands back a
-`Replaced` of its one pair, `remove_observation` a `Replaced` or, for a track's
-last sighting, a `Removed`, `create_point` a `Created`, and a bench commit the
-write chained with a `Removed` of the points it absorbed. A caller that assembles
+**Every edit that can move an index reports one.** A bench commit hands back the
+write -- a `Replaced` of its one pair for a track seated on a point, a `Created`
+for one that is not -- chained with a `Removed` of the points it absorbed, and a
+point deletion a `Removed`. A caller that assembles
 versions therefore stores what the edit said it did rather than a translation of
 it, and every such caller says the same thing the same way.
 

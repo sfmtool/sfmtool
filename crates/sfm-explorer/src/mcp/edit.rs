@@ -16,7 +16,7 @@
 //! - [`edited`] wraps every edit. It reads the Action Log's revision before the
 //!   call and the node's cursor after it, so the reply carries the version's
 //!   serial and label and the **sentence the edit recorded** -- which is where
-//!   each family's own numbers already are (add-observation's ZNCC, the
+//!   each family's own numbers already are (the commit's counts, the
 //!   adjustment's residuals), in the words the human is reading off the panel.
 //!   One text, not a second rendering of the same report. It also carries
 //!   `changed`, which is whether the cursor moved: a step that had no effect
@@ -155,55 +155,6 @@ pub(super) fn delete_camera_image(
     let id = resolve_reconstruction(state, Some(label))?;
     let image = resolve_camera_image(state, id, selector)?;
     edited(state, id, |state| state.delete_image(image))
-}
-
-/// `add_observation`: the explicit-pixel form, since an agent has no pointer to
-/// right-click with.
-///
-/// `AppState::add_observation` reads the pixel a click left on the state;
-/// `add_observation_at` takes one, which is the same edit with the click
-/// supplied rather than remembered.
-pub(super) fn add_observation(
-    state: &mut AppState,
-    label: &str,
-    query: &PointQuery,
-    selector: &CameraImageSel,
-    pixel: [f32; 2],
-) -> JsonReply {
-    let id = resolve_reconstruction(state, Some(label))?;
-    let point = resolve_point_in(state, id, query)?;
-    let image = resolve_camera_image(state, id, selector)?;
-    edited(state, id, |state| {
-        state.add_observation_at(point, image, pixel)
-    })
-}
-
-pub(super) fn create_point(
-    state: &mut AppState,
-    label: &str,
-    selector: &CameraImageSel,
-    pixel: [f32; 2],
-    radius_px: Option<f32>,
-) -> JsonReply {
-    let id = resolve_reconstruction(state, Some(label))?;
-    let image = resolve_camera_image(state, id, selector)?;
-    // The prompt's own default, so a call that names no radius makes the point
-    // the prompt would have made: the median radius this image's observations
-    // already project to.
-    let radius = radius_px.unwrap_or_else(|| state.create_point_default_radius(image));
-    edited(state, id, |state| state.create_point(image, pixel, radius))
-}
-
-pub(super) fn remove_observation(
-    state: &mut AppState,
-    label: &str,
-    query: &PointQuery,
-    selector: &CameraImageSel,
-) -> JsonReply {
-    let id = resolve_reconstruction(state, Some(label))?;
-    let point = resolve_point_in(state, id, query)?;
-    let image = resolve_camera_image(state, id, selector)?;
-    edited(state, id, |state| state.remove_observation(point, image))
 }
 
 /// `move_camera_image`: one camera image put at a pose, by a caller with no

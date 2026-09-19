@@ -658,7 +658,6 @@ impl TabContext<'_> {
                     busy: bench_busy.as_deref(),
                     active_track: bench_track.as_deref(),
                 },
-                &mut self.state.create_point_prompt,
                 self.gesture_events,
                 self.scroll_input,
                 sift,
@@ -686,53 +685,16 @@ impl TabContext<'_> {
                 // also what records the selection.
                 self.state.select_point(PointRef::new(id, point_idx));
             }
-            // The pixel the context menu was opened at, held until the entry
-            // that consumes it is clicked (the menu is drawn on later frames).
-            if let Some(pixel) = detail_response.context_menu_pixel {
-                self.state.pending_observation_pixel = Some(pixel);
-            }
-            if detail_response.open_create_point {
-                // The prompt opens at the pixel the menu was opened at,
-                // offering the radius the last created point took or, failing
-                // that, the size the reconstruction's own patches project to
-                // in this image.
-                if let (Some(pixel), Some(image)) = (
-                    self.state.pending_observation_pixel,
-                    self.state.selected_image,
-                ) {
-                    let radius = self
-                        .state
-                        .create_point_radius
-                        .unwrap_or_else(|| self.state.create_point_default_radius(image));
-                    self.state.create_point_prompt =
-                        Some(crate::image_detail::CreatePointPrompt::new(pixel, radius));
-                }
-            }
-            if detail_response.cancel_create_point {
-                self.state.create_point_prompt = None;
-            }
-            if let Some((pixel, radius)) = detail_response.create_point {
-                if let Some(image) = self.state.selected_image {
-                    if let Err(why) = self.state.create_point(image, pixel, radius) {
-                        self.state
-                            .action_log
-                            .fail(crate::action_log::Kind::Edit, why);
-                    }
-                    self.state.create_point_prompt = None;
-                }
-            }
             // The two bench gestures, at the pixel the menu carried out. Each
             // is one step on the node's bench, which the Track Edit panel then
             // shows; a refusal is one failed row, in the words the step's own
             // gate uses.
             if let Some(pixel) = detail_response.start_bench_cluster {
                 if let Some(image) = self.state.selected_image {
-                    // The radius the Create 3D Point prompt would offer, so a
-                    // cluster and a created point start at the same size.
-                    let radius = self
-                        .state
-                        .create_point_radius
-                        .unwrap_or_else(|| self.state.create_point_default_radius(image));
+                    // The size the reconstruction's own patches project to in
+                    // this image, so a cluster starts at the scale the node
+                    // already works at there.
+                    let radius = self.state.default_patch_radius(image);
                     let seed = crate::bench::Seed::Pixel {
                         pixel: [f64::from(pixel[0]), f64::from(pixel[1])],
                         radius_px: Some(f64::from(radius)),
@@ -778,28 +740,6 @@ impl TabContext<'_> {
             if let Some(observation) = detail_response.select_bench_row {
                 if let Some(label) = &bench_label {
                     self.track_edit.select_row(id, label, observation);
-                }
-            }
-            if detail_response.add_observation {
-                if let (Some(point), Some(image)) =
-                    (self.state.selected_point, self.state.selected_image)
-                {
-                    if let Err(why) = self.state.add_observation(point, image) {
-                        self.state
-                            .action_log
-                            .fail(crate::action_log::Kind::Edit, why);
-                    }
-                }
-            }
-            if detail_response.remove_observation {
-                if let (Some(point), Some(image)) =
-                    (self.state.selected_point, self.state.selected_image)
-                {
-                    if let Err(why) = self.state.remove_observation(point, image) {
-                        self.state
-                            .action_log
-                            .fail(crate::action_log::Kind::Edit, why);
-                    }
                 }
             }
             if detail_response.has_pointer {
@@ -891,20 +831,6 @@ impl TabContext<'_> {
             }
             if track_response.request_goto_point {
                 self.state.open_goto_point();
-            }
-            // The row named an image of the selected point's track, which is
-            // the pair the edit takes.
-            if let (Some(img_idx), Some(point)) =
-                (track_response.remove_observation, selected_point)
-            {
-                if let Err(why) = self
-                    .state
-                    .remove_observation(PointRef::new(id, point), ImageRef::new(id, img_idx))
-                {
-                    self.state
-                        .action_log
-                        .fail(crate::action_log::Kind::Edit, why);
-                }
             }
             // The row names an observation, so the selection carries the
             // feature's pixel with it and the Image Detail panel brings it into

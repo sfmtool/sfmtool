@@ -100,9 +100,9 @@ place.
 
 ## The tool surface
 
-Sixty-six tools. Fifteen read -- fourteen that answer with JSON, and
-`screenshot`, which closes the loop by handing back a picture -- fifty write,
-and one writes a file.
+Sixty-three tools. Fifteen read -- fourteen that answer with JSON, and
+`screenshot`, which closes the loop by handing back a picture -- forty-seven
+write, and one writes a file.
 
 | Tool | Kind | What it does |
 |------|------|--------------|
@@ -138,9 +138,6 @@ and one writes a file.
 | `jump_to_version` | write | Move its cursor straight to a version |
 | `delete_point` | write | Delete one 3D point and its track |
 | `delete_camera_image` | write | Delete one camera image, its observations, and any track left with none |
-| `add_observation` | write | Add one observation of a point to an image, at a pixel |
-| `create_point` | write | Create a 3D point at a pixel, at infinity along its ray |
-| `remove_observation` | write | Take one observation out of a track and re-triangulate it |
 | `move_camera_image` | write | Put one camera image at a pose, as one version of its reconstruction |
 | `resect_camera_image_in_place` | write | Re-estimate one image's pose as the node's next version |
 | `bundle_adjust` | write | Refine every pose and point of one reconstruction, on a worker thread |
@@ -1671,11 +1668,11 @@ different number for a maximized window and the same one for a normal window
 
 ### The editing family
 
-Eleven tools that give a node a new version or move its cursor, plus the read
-that lists them and the one that writes a file. What the thirteen share is worth
-stating once rather than thirteen times.
+Eight tools that give a node a new version or move its cursor, plus the read
+that lists them and the one that writes a file. What the ten share is worth
+stating once rather than ten times.
 
-**Each one is a single `AppState` call**: `delete_point`, `add_observation_at`,
+**Each one is a single `AppState` call**: `delete_point`, `delete_image`,
 `resect_image_in_place`, `bundle_adjust`, `undo`, `save_node_as`. It is the
 same call the menu, the panel or the keyboard makes. So an agent's edit is a
 version in the same history, with the same label, drawn on the same Edit History
@@ -1696,8 +1693,7 @@ human's. Neither is special-cased anywhere.
 ```
 
 **`report` is the sentence the edit recorded**, and it is where each family's own
-numbers are: add-observation's ZNCC and how far the keypoint moved from the
-named pixel, remove-observation's account of what became of the point, the
+numbers are: the commit's account of the track it wrote, the
 resection's inlier count and rotation, the adjustment's residual before and
 after. Those numbers exist in exactly one place, the Action Log entry the
 `AppState` method wrote, in the words the human is reading off the panel, and
@@ -1864,55 +1860,6 @@ is a coordinate in the reconstruction the call named, not in the selected one; a
 qualified `pt3d_<hash>_<index>` id that resolves to a different node is refused
 naming both. The resolution is `goto_point`'s, the same one `get_point` and the
 Go to Point dialog use, so an id means the same thing wherever it is sent.
-
-### `add_observation` / `create_point` / `remove_observation`
-
-The three track edits. The two that put structure in need an
-`embedded_patches` reconstruction, whose observations carry inline keypoints and
-patch frames, and refuse a `sift_files` one in the state's words: that is the
-gate the Image Detail menu entry reads, so the tool and the entry cannot
-disagree about when the edit can run. `remove_observation` reads no photograph
-and works on either.
-
-```jsonc
-// create_point     { "reconstruction_label": "seoul_bull", "camera_image": 3,
-//                    "pixel": [131.4, 208.9], "radius_px": 7.5 }
-// add_observation  { "reconstruction_label": "seoul_bull", "point": 1207,
-//                    "camera_image": 4, "pixel": [142.0, 197.5] }
-// remove_observation { "reconstruction_label": "seoul_bull", "point": 1207,
-//                      "camera_image": 4 }
-```
-
-`pixel` is `[x, y]` in that camera image's own pixels, the same numbers a track
-observation's `xy` reports, which is where an agent gets one.
-
-**`add_observation` is the explicit-pixel form**, `AppState::add_observation_at`.
-The GUI's own entry reads the pixel a right-click left on the state; an agent has
-no pointer, so it names the pixel. The pixel is a **starting point** and not the
-answer: the embed pass's photometric kernel places the keypoint from there and
-the track is re-triangulated, and the `report` says how well it matched and how
-far it moved: *"ZNCC 0.984, 0.31 px from the click"*. An image that already
-observes the point is refused.
-
-**`create_point` makes a bearing.** One sighting fixes a direction and no
-distance, so the point is created at infinity along the pixel's ray with a
-one-observation track; `add_observation` in a second image is what brings it to
-a finite depth. `radius_px` omitted takes the radius the viewer's own Create 3D
-Point prompt would offer, the median radius that image's existing patches
-project to, then the node's, then a named constant
-([edits/create-point.md](edits/create-point.md)), so a call that names none
-makes the point the human would have made. Zero and negative are refused: a
-patch with no extent is not a smaller patch.
-
-**`remove_observation` reports what became of the point.** The shorter track is
-re-triangulated, and the `report` is the state's own account: *"3 observations
-left"*, *"one observation left, so the point is a bearing at infinity"*, or
-*"the point had no other observation and is deleted"*.
-
-Both edits that read pixels decode the photographs they need on demand, through
-the node's full-resolution cache, a handful of images per edit, and nothing
-pre-decodes the table. An image the viewer's process cannot read is a refusal
-naming it.
 
 ### `move_camera_image`
 
@@ -2532,13 +2479,6 @@ pub(crate) enum Command {
     SaveReconstruction { reconstruction_label: String, path: Option<PathBuf> },
     DeletePoint { reconstruction_label: String, point: goto_point::PointQuery },
     DeleteCameraImage { reconstruction_label: String, camera_image: CameraImageSel },
-    AddObservation { reconstruction_label: String, point: goto_point::PointQuery,
-                     camera_image: CameraImageSel, pixel: [f32; 2] },
-    /// `radius_px: None` takes `AppState::create_point_default_radius`.
-    CreatePoint { reconstruction_label: String, camera_image: CameraImageSel,
-                  pixel: [f32; 2], radius_px: Option<f32> },
-    RemoveObservation { reconstruction_label: String, point: goto_point::PointQuery,
-                        camera_image: CameraImageSel },
     /// World-from-camera in the node's own frame, in the pieces the wire
     /// carries: a rotation quaternion and a camera centre.
     MoveCameraImage { reconstruction_label: String, camera_image: CameraImageSel,
@@ -2994,9 +2934,7 @@ where a test hands no host over.
   five near-copies of it. What is asserted is the boundary and not the edit:
   `delete_point` pushes a version whose serial, label and `report` the reply
   names, and leaves that one sentence in the log as `Mcp`; `delete_camera_image`
-  shrinks the image table; `create_point` takes the prompt's own default radius
-  when the call names none and says which it used; `remove_observation` reports
-  what became of the point; the in-place resection and the adjustment push a
+  shrinks the image table; the in-place resection and the adjustment push a
   version and report the estimate and the residuals. What each family *does* to
   a reconstruction is asserted in `state::edits::tests`, over the same
   `AppState` calls these make.
@@ -3115,7 +3053,7 @@ where a test hands no host over.
   and the panel list in the prose above are asserted against `catalog()` and
   `Tab::ALL`, because a number written out in words is the first thing to go
   stale.
-- **The catalog is sixty-six tools**, fifteen of them reads and one of them
+- **The catalog is sixty-three tools**, fifteen of them reads and one of them
   the `Save` kind that carries `destructiveHint: true`;
   `set_window_layout`'s schema advertises `sfm_explorer_layout`, `window` and
   `layout`, with the `window` section's five keys under it, and `screenshot`'s
@@ -3300,7 +3238,6 @@ Other candidates, in rough order of value:
 | `set_image_detail_display` `intrinsics.distortion_scale` | `1, 2, 3, 5, 10, 20, 50` (`IntrinsicsDisplaySettings::SCALE_LADDER`), or `null` for auto | The only exaggerations accepted, being the ones the gear popup offers. |
 | `set_image_detail_display` `intrinsics.grid_cols` | `8, 12, 16, 24, 32` (`IntrinsicsDisplaySettings::GRID_LADDER`) | The only densities accepted, for the same reason. |
 | `set_image_detail_display` `max_features` | `≥ 1`, or `null` for all | `0` is refused: "no features" is `overlay_mode: "none"`. |
-| `create_point` `radius_px` | the Create 3D Point prompt's own default (`AppState::create_point_default_radius`) | The patch's radius in the image's pixels. Must be greater than zero. |
 | `resect_camera_image_in_place` `from_matches` | `false`, the reconstruction's own observations | The other source is the `.matches` file already chosen for the node in the viewer. |
 | `bundle_adjust` `release_focal` | `false`, the shared focal is held | The one decision the Bundle Adjust dialog collects. |
 

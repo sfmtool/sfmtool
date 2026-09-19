@@ -834,70 +834,6 @@ pub(crate) fn catalog() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
-            name: "add_observation",
-            description: "Add one observation of a 3D point to a camera image that does not \
-                          already see it, at a named pixel. The pixel is a starting point: the \
-                          embed pass's photometric kernel places the keypoint from there and the \
-                          track is re-triangulated, and the reply's report says how far it moved \
-                          and how well it matched. Needs an embedded_patches reconstruction, one \
-                          whose observations carry inline keypoints, and the photographs, which \
-                          are decoded on demand.",
-            kind: Write,
-            schema: object(
-                &[],
-                &[
-                    ("reconstruction_label", edited_label_schema()),
-                    ("point", point_schema()),
-                    ("camera_image", camera_image_schema()),
-                    ("pixel", pixel_schema()),
-                ],
-            ),
-        },
-        ToolSpec {
-            name: "create_point",
-            description: "Create a 3D point at a pixel of one camera image. The point is made at \
-                          infinity along that pixel's ray, since one sighting fixes a bearing and no \
-                          distance, with a one-observation track, its colour read from the \
-                          photograph and a patch of the named radius; add_observation in a second \
-                          image is what brings it to a finite depth. Needs an embedded_patches \
-                          reconstruction.",
-            kind: Write,
-            schema: object(
-                &[(
-                    "radius_px",
-                    json!({
-                        "type": "number",
-                        "exclusiveMinimum": 0,
-                        "description":
-                            "The patch's radius in this image's pixels. Omit for the radius the \
-                             viewer's own prompt would offer: the median radius the image's \
-                             existing patches project to.",
-                    }),
-                )],
-                &[
-                    ("reconstruction_label", edited_label_schema()),
-                    ("camera_image", camera_image_schema()),
-                    ("pixel", pixel_schema()),
-                ],
-            ),
-        },
-        ToolSpec {
-            name: "remove_observation",
-            description: "Remove one camera image's observation from a point's track, and \
-                          re-triangulate what is left. The reply's report says what became of the \
-                          point: fewer observations, a bearing at infinity where one sighting is \
-                          left, or deleted where none is.",
-            kind: Write,
-            schema: object(
-                &[],
-                &[
-                    ("reconstruction_label", edited_label_schema()),
-                    ("point", point_schema()),
-                    ("camera_image", camera_image_schema()),
-                ],
-            ),
-        },
-        ToolSpec {
             name: "move_camera_image",
             description: "Put one camera image at a pose, as one version of its reconstruction. \
                           The pose is world-from-camera in the reconstruction's own frame: \
@@ -1756,8 +1692,8 @@ fn seed_properties() -> Vec<(&'static str, Value)> {
                 "exclusiveMinimum": 0,
                 "description":
                     "The patch's half-width at that pixel, in this image's own pixels. With \
-                     create_bench_cluster, omit for the radius the viewer's own Create 3D Point \
-                     prompt would offer; with add_bench_track_observation, omit for the scale \
+                     create_bench_cluster, omit for the median radius the image's existing \
+                     patches project to; with add_bench_track_observation, omit for the scale \
                      the track already works at.",
             }),
         ),
@@ -2275,32 +2211,6 @@ pub(crate) fn parse(
             args.reject_unknown(&["reconstruction_label", "camera_image"])?;
             Command::DeleteCameraImage {
                 reconstruction_label: args.required_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-            }
-        }
-        "add_observation" => {
-            args.reject_unknown(&["reconstruction_label", "point", "camera_image", "pixel"])?;
-            Command::AddObservation {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                point: args.point("point")?,
-                camera_image: args.camera_image("camera_image")?,
-                pixel: args.pixel("pixel")?,
-            }
-        }
-        "create_point" => {
-            args.reject_unknown(&["reconstruction_label", "camera_image", "pixel", "radius_px"])?;
-            Command::CreatePoint {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                camera_image: args.camera_image("camera_image")?,
-                pixel: args.pixel("pixel")?,
-                radius_px: args.radius("radius_px")?,
-            }
-        }
-        "remove_observation" => {
-            args.reject_unknown(&["reconstruction_label", "point", "camera_image"])?;
-            Command::RemoveObservation {
-                reconstruction_label: args.required_string("reconstruction_label")?,
-                point: args.point("point")?,
                 camera_image: args.camera_image("camera_image")?,
             }
         }

@@ -20,9 +20,6 @@ Related specs: [bench.md](bench.md) (the place it sits and where its label comes
 from),
 [`../reconstruction/edited-reconstruction.md`](../reconstruction/edited-reconstruction.md)
 (the reconstruction value a commit writes into, and `PointRecord`),
-[`../reconstruction/add-observation.md`](../reconstruction/add-observation.md)
-and [`../reconstruction/create-point.md`](../reconstruction/create-point.md)
-(the one-step track edits this is the worked-on counterpart of),
 [`../patch/cluster-patches.md`](../patch/cluster-patches.md) and
 [`../patch/cluster-patch-refinement.md`](../patch/cluster-patch-refinement.md)
 (the cluster stage's representation and the kernel that measures it),
@@ -553,8 +550,7 @@ origin is decide whether a commit replaces a point or creates one.
 **The decoded views are a named input.** `evaluate`, `fit` and `set_stage` take one
 [`ProjectedImage`](../../../crates/sfmtool-core/src/patch/normal_refine/params.rs)
 per image of the reconstruction -- a camera, a pose and a pyramid -- indexed by
-image index, exactly as
-[`add_observation`](../reconstruction/add-observation.md) takes them. A
+image index, exactly as every other photometric kernel takes them. A
 reconstruction carries poses and lenses rather than photographs, so decoding and
 caching stay the caller's, and the same call serves a viewer with a warm cache
 and a script that just read the files.
@@ -782,7 +778,7 @@ the fit is the classification's, applied to the frame the fit ran against:
 | Was | Is | The frame |
 |-----|----|-----------|
 | bearing | bearing | the refined direction, the tangent frame re-pinned on it, at the angular half-extents it had |
-| bearing | place | the angular half-extents become world ones at the placement distance from the camera-cloud centroid, the rescale [`add-observation`](../reconstruction/add-observation.md) applies when a second sighting gives a bearing its depth |
+| bearing | place | the angular half-extents become world ones at the placement distance from the camera-cloud centroid, which is what keeps the patch the apparent size it had when a second sighting gives a bearing its depth |
 | place | bearing | the world half-extents become angular by the distance the frame stood at, the rescale `classify_points_at_infinity` applies to a demoted point, and the frame is re-expressed as the tangent one |
 | place | place | the centre moves and nothing else does |
 
@@ -1264,7 +1260,7 @@ question about the *other* hypothesis.
 
 `fit` is the step that moves the track, and it runs the same rounds. At the
 **track stage** the surfel is localized into every view by the two kernels the
-embed pass and `add_observation` chain --
+embed pass chains --
 [`localize_patch_keypoints`](../patch/patch-keypoint-localization.md) then
 `refine_patch_keypoints` -- against the frame the track carries, bearing and
 all; the `in` results are re-triangulated, the frame is placed at what they
@@ -1581,7 +1577,9 @@ print(report["label"])
 ## Testing
 
 [bench/tests.rs](../../../crates/sfmtool-core/src/bench/tests.rs) runs over the
-synthetic textured-plane scene the add-observation tests build, wrapped as an
+synthetic textured-plane scene
+[bench/tests/scene.rs](../../../crates/sfmtool-core/src/bench/tests/scene.rs)
+builds, wrapped as an
 `embedded_patches` reconstruction whose stored keypoints are the exact
 projections, so what a commit should have written is known to the pixel. It
 covers: a point put on the bench being at the track stage with every observation

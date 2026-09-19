@@ -33,7 +33,6 @@ use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointSubpixelPa
 use crate::patch::normal_refine::ProjectedImage;
 use crate::progress::{Cancelled, Progress};
 use crate::progress_note;
-use crate::reconstruction::add_observation::placement_scale;
 use crate::reconstruction::edited::EditedReconstruction;
 use crate::reconstruction::triangulation::{triangulate_batch, Triangulation};
 
@@ -266,12 +265,10 @@ impl std::fmt::Display for FitReport {
 /// at the track stage, and read the result back.
 ///
 /// `images` is one [`ProjectedImage`] per image of `edited`, indexed by image
-/// index, exactly as
-/// [`add_observation`](crate::reconstruction::add_observation::add_observation)
-/// takes them.
+/// index, exactly as every other photometric step of the bench takes them.
 ///
 /// **At the track stage** the surfel is registered into every view of every
-/// round by the two kernels the embed pass and `add_observation` chain -- as the
+/// round by the two kernels the embed pass chains -- as the
 /// track carries it, bearing and all -- the `in` results are re-triangulated,
 /// the frame is placed at what they resolve to and the consensus bitmap is fused
 /// over them. An observation the kernels did not place keeps the pixel it had,
@@ -401,6 +398,21 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
     Ok(())
 }
 
+/// The distance an angular patch extent is multiplied by to become a world one
+/// at `position`: the distance from the camera-cloud centroid, which is the
+/// reference `SfmrReconstruction::materialize_points_at_infinity` measures its
+/// own placement from.
+fn placement_scale(position: &Point3<f64>, images: &[ProjectedImage<'_>]) -> f64 {
+    let mut centroid = Vector3::zeros();
+    for view in images {
+        centroid += view.cam_from_world.inverse_translation_origin().coords;
+    }
+    if !images.is_empty() {
+        centroid /= images.len() as f64;
+    }
+    (position.coords - centroid).norm()
+}
+
 /// The surfel `classification` says the track now stands on, built from the one
 /// it was fitted against.
 ///
@@ -410,10 +422,10 @@ pub fn fit_preconditions(track: &EditableTrack) -> Result<(), FitError> {
 ///   tangent frame is re-pinned on it, at the half-extents it already had, which
 ///   are angular.
 /// - **Bearing to point.** The angular half-extents become world ones at the
-///   placement distance, the same rescale
-///   [`add_observation`](mod@crate::reconstruction::add_observation) applies when
-///   a second sighting gives a bearing its depth, measured from the same
-///   reference: the camera-cloud centroid.
+///   placement distance, which is what keeps the patch the apparent size it had
+///   when a second sighting gives a bearing its depth, measured from the
+///   reference `SfmrReconstruction::materialize_points_at_infinity` measures its
+///   own placement from: the camera-cloud centroid ([`placement_scale`]).
 /// - **Point to bearing.** The world half-extents become angular by dividing by
 ///   the distance the frame stood at, which is the rescale
 ///   `classify_points_at_infinity` applies to a demoted point, and the frame is

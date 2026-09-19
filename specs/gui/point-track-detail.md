@@ -104,43 +104,17 @@ RGB channels are shown — the alpha channel (per-texel cross-view confidence)
 is forced opaque. The row is hidden entirely when the reconstruction has no
 bitmaps or the point's bitmap is all-zero.
 
-#### Growing the track
+#### Working on the track
 
 On an **embedded-patches** reconstruction a line under the stored-patch tile
-names the way to add an image to this track: select an image the point is not
-seen in, then right-click it in the Image Detail panel and choose *Add
-observation to track here*
-([`edits/add-observation.md`](edits/add-observation.md)). The hint lives here
-because the track is what a reader is looking at when they notice the gap, and it
-is a hint rather than a button because the action names a pixel, which only the
-other panel can supply. It quotes the menu entry's own label from one constant,
-so the two cannot drift.
-
-A second line beside it names the way to make a point that is in no track yet:
-right-click where it is in Image Detail and choose *Create 3D Point here...*
-([`edits/create-point.md`](edits/create-point.md)). It says what such a point is
-until a second sighting is added to it -- a bearing at infinity -- because that
-is what this panel then shows: one observation, and a position the reconstruction
-does not yet claim. It quotes its menu entry's label from one constant too.
-
-A third line names the way to **work on** this track rather than grow it by one:
-press *Put selected point on bench* in the Track Edit panel
-([`track-edit.md`](track-edit.md)), which takes a copy of the track out to the
-bench ([`bench.md`](bench.md)) where sightings can be tried, measured and
-refused before any of it reaches the file. This panel stays view-only: the line
-is a pointer at the panel that edits, and quotes that button's label from one
-constant like the two above it.
-
-#### Removing an observation
-
-A secondary click on an observation row opens a context menu with one entry,
-*Remove this observation*, which takes that row out of the track
-([`edits/remove-observation.md`](edits/remove-observation.md)). The menu is on
-the row because the row **is** the observation: no further selection is needed,
-and the panel reports the row's own image index back to the dock, which pairs it
-with the selected point. The entry is offered on every row whatever backs an
-observation, since removing one invents no feature; on a track's only row it
-carries a hover text saying that removing it deletes the point.
+names the way to **work on** this track: press *Put selected point on bench* in
+the Track Edit panel ([`track-edit.md`](track-edit.md)), which takes a copy of
+the track out to the bench ([`bench.md`](bench.md)) where sightings can be
+tried, measured and refused before any of it reaches the file. The hint lives
+here because the track is what a reader is looking at when they notice the gap,
+and it is a hint rather than a button because this panel stays view-only: it is
+a pointer at the panel that edits, quoting that button's label from one
+constant so the two cannot drift.
 
 #### What the panel reads
 

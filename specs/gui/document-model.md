@@ -163,8 +163,6 @@ value.
 impl AppState {
     pub fn delete_selected_point(&mut self) -> Result<(), String>;
     pub fn delete_point(&mut self, point: PointRef) -> Result<(), String>;
-    pub fn add_observation(&mut self, point: PointRef, image: ImageRef)
-        -> Result<(), String>;
     pub fn delete_image(&mut self, image: ImageRef) -> Result<(), String>;
     pub fn undo(&mut self, id: ReconId) -> Result<(), String>;
     pub fn redo(&mut self, id: ReconId) -> Result<(), String>;
@@ -179,11 +177,13 @@ the overlay and shares the base pointer -- calls
 `Arc`, every other index still means what it meant, and the version's unshared
 cost is one `u32`.
 
-**Add observation is the point edit that creates.** It reads the point's whole
-record, extends its track with the sighting the photometric fit placed, and calls
+**A point edit that creates is the same shape.** A commit of a bench track reads
+the point's whole record, rewrites its track, and calls
 `EditedReconstruction::replace_point`, so the point takes a new index while
 remaining the same point and the version's map is the pair saying which index
-became which. Its own spec is [`edits/add-observation.md`](edits/add-observation.md).
+became which; a commit with no point behind it calls
+`EditedReconstruction::add_point` and the map names the created index. Its own
+spec is [`edits/commit-track.md`](edits/commit-track.md).
 
 **Delete image is the bulk edit.** It materialises the current value when the
 overlay is not empty, runs `SfmrReconstruction::subset_by_image_indices` over the

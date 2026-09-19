@@ -410,8 +410,8 @@ fn the_window_title_marks_the_first_node_while_it_is_dirty() {
 
 #[test]
 fn a_created_point_survives_the_save_and_keeps_its_id() {
-    // The one edit whose points are in no base: the file has to carry both the
-    // point and, in its lineage, the hash the point's id is minted against.
+    // A point of no base: the file has to carry both the point and, in its
+    // lineage, the hash the point's id is minted against.
     let dir = temp_dir("created_point");
     let path = dir.join("recon.sfmr");
     let mut state = AppState::new();
@@ -419,23 +419,35 @@ fn a_created_point_survives_the_save_and_keeps_its_id() {
         &path,
         crate::state::edits::tests::embedded_demo(16),
     ));
-    let camera = &state.scene[0].recon().image_table.cameras[0];
-    let (w, h) = (camera.width, camera.height);
-    state.full_res_cache.insert(
-        crate::scene::ImageRef::new(id, 0),
-        Some(std::sync::Arc::new(
-            sfmtool_core::camera::remap::ImageU8::new(
-                w,
-                h,
-                3,
-                (0..(w * h * 3)).map(|i| (i % 251) as u8).collect(),
-            ),
-        )),
+
+    // The shape a point-creating edit pushes: the same base, an overlay one
+    // point bigger, and the created index named on the version under the hash
+    // of the record it wrote.
+    let mut record = state.scene[0]
+        .edited()
+        .point(5)
+        .expect("a live point")
+        .to_record();
+    // A bearing, which is what a point made from one sighting is, so the save
+    // is asserted over a `w = 0` row as well as over an added one.
+    record.point.w = 0.0;
+    record.observations.truncate(1);
+    let node = &mut state.scene[0];
+    let mut next = node.history.current().clone();
+    let edit_hash = next
+        .point_edit_hash(std::slice::from_ref(&record))
+        .expect("a hashable base");
+    let created = next.add_point(record).expect("a well-formed record");
+    node.history.push_creating(
+        next,
+        crate::document::PointMap::Removed(Vec::new()),
+        "Created a point",
+        Some(crate::document::CreatedPoints {
+            hash: edit_hash.clone(),
+            indexes: vec![created],
+        }),
     );
-    state
-        .create_point(crate::scene::ImageRef::new(id, 0), [10.0, 12.0], 6.0)
-        .expect("a pixel on the sensor of a decodable image");
-    let created = state.selected_point.expect("selected").point;
+    state.select_point(crate::scene::PointRef::new(id, created as usize));
     let minted = crate::point_ids::mint(&state.scene[0], created).expect("an id");
 
     state.save_node(id).expect("a writable path");

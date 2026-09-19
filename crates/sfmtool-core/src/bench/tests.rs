@@ -5,11 +5,13 @@
 //! what a commit writes.
 //!
 //! The reconstruction under the commit tests is the synthetic textured-plane
-//! scene the add-observation tests build -- pinhole cameras looking down world
+//! scene [`mod@scene`] builds -- pinhole cameras looking down world
 //! `+z` at a plane, wrapped in an `embedded_patches` value whose stored
 //! keypoints are the exact projections -- so what a commit should have written
 //! is known to the pixel. Nothing here decodes a photograph: every step in this
 //! slice is decided by what the reconstruction and the person already say.
+
+mod scene;
 
 use std::sync::Arc;
 
@@ -24,12 +26,13 @@ use crate::patch::cluster_refine::{sample_member_grid, ClusterRefineParams, Memb
 use crate::patch::keypoint_localize::{localize_patch_keypoints, KeypointLocalization};
 use crate::patch::keypoint_subpixel::{refine_patch_keypoints, KeypointRefinement};
 use crate::progress::Progress;
-use crate::reconstruction::add_observation::tests::{
+use crate::reconstruction::edited::{EditedReconstruction, PointMap};
+use crate::reconstruction::SfmrReconstruction;
+
+use scene::{
     edited as edited_fixture, fixture_of, fixture_with_columns, with_columns, Scene, IMG_H, IMG_W,
     WORLD,
 };
-use crate::reconstruction::edited::{EditedReconstruction, PointMap};
-use crate::reconstruction::SfmrReconstruction;
 
 use super::*;
 

@@ -3540,27 +3540,6 @@ fn representative_tool_calls() -> Vec<(&'static str, Value)> {
             json!({ "reconstruction_label": "alpha", "camera_image": 0 }),
         ),
         (
-            "add_observation",
-            json!({
-                "reconstruction_label": "alpha",
-                "point": 0,
-                "camera_image": 0,
-                "pixel": [10.0, 20.0],
-            }),
-        ),
-        (
-            "create_point",
-            json!({
-                "reconstruction_label": "alpha",
-                "camera_image": 0,
-                "pixel": [10.0, 20.0],
-            }),
-        ),
-        (
-            "remove_observation",
-            json!({ "reconstruction_label": "alpha", "point": 0, "camera_image": 0 }),
-        ),
-        (
             "move_camera_image",
             json!({
                 "reconstruction_label": "alpha",
@@ -3902,15 +3881,15 @@ fn only_the_reads_are_annotated_read_only() {
             "screenshot",
         ]
     );
-    // Fifteen reads, fifty writes, the one that writes a file, and the one
-    // that hands back a picture.
-    assert_eq!(catalog.len(), 66, "the catalog has grown or shrunk");
+    // Fifteen reads, forty-seven writes, the one that writes a file, and the
+    // one that hands back a picture.
+    assert_eq!(catalog.len(), 63, "the catalog has grown or shrunk");
     assert_eq!(
         catalog
             .iter()
             .filter(|spec| spec.kind == ToolKind::Write)
             .count(),
-        50
+        47
     );
     // One tool can overwrite something the human cannot undo, and it is the
     // only one annotated destructive.
@@ -4484,73 +4463,6 @@ fn delete_camera_image_renumbers_and_reports_the_version() {
             .starts_with("Deleted image "),
         "{reply}"
     );
-}
-
-/// Creating a point takes the prompt's own radius when the call names none, and
-/// the reply's report says which radius it used.
-#[test]
-fn create_point_takes_the_prompts_radius_when_the_call_names_none() {
-    let (mut state, mut viewer) = editable();
-    let points = state.scene[0].point_count();
-    let named = call(
-        &mut state,
-        &mut viewer,
-        "create_point",
-        json!({ "reconstruction_label": "run_a", "camera_image": 0,
-                "pixel": [12.0, 14.0], "radius_px": 6.0 }),
-    );
-    assert_eq!(state.scene[0].point_count(), points + 1);
-    let report = named["report"].as_str().expect("a report");
-    assert!(report.contains("radius 6.0 px"), "{report}");
-
-    // Omitted, it is the radius the Create 3D Point prompt would have offered,
-    // which is a number the tool did not invent.
-    let default =
-        state.create_point_default_radius(crate::scene::ImageRef::new(state.scene[0].id, 0));
-    let unnamed = call(
-        &mut state,
-        &mut viewer,
-        "create_point",
-        json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [20.0, 22.0] }),
-    );
-    let report = unnamed["report"].as_str().expect("a report");
-    assert!(
-        report.contains(&format!("radius {default:.1} px")),
-        "{report}"
-    );
-}
-
-/// The track edits reach the same gates the panel's menu entries read.
-#[test]
-fn add_observation_is_refused_for_an_image_that_already_sees_the_point() {
-    let (mut state, mut viewer) = editable();
-    let seen = state.scene[0].edited().track_image_indices(3)[0];
-    let error = refused_call(
-        &mut state,
-        &mut viewer,
-        "add_observation",
-        json!({ "reconstruction_label": "run_a", "point": 3,
-                "camera_image": seen, "pixel": [10.0, 10.0] }),
-    );
-    assert!(error.0.contains("already observes"), "{error}");
-    assert_eq!(version_count(&state), 1);
-}
-
-/// Removing an observation reports what became of the point, which is the
-/// family's own report and is in the sentence it recorded.
-#[test]
-fn remove_observation_reports_what_became_of_the_point() {
-    let (mut state, mut viewer) = editable();
-    let image = state.scene[0].edited().track_image_indices(3)[0];
-    let reply = call(
-        &mut state,
-        &mut viewer,
-        "remove_observation",
-        json!({ "reconstruction_label": "run_a", "point": 3, "camera_image": image }),
-    );
-    let report = reply["report"].as_str().expect("a report");
-    assert!(report.contains("observations left"), "{report}");
-    assert_eq!(version_count(&state), 2);
 }
 
 /// The in-place resection lands as the node's next version, and its report is
@@ -5398,18 +5310,6 @@ fn every_editing_tool_requires_its_reconstruction_label() {
         ("delete_point", json!({ "point": 3 })),
         ("delete_camera_image", json!({ "camera_image": 1 })),
         (
-            "add_observation",
-            json!({ "point": 3, "camera_image": 1, "pixel": [1.0, 1.0] }),
-        ),
-        (
-            "create_point",
-            json!({ "camera_image": 0, "pixel": [1.0, 1.0] }),
-        ),
-        (
-            "remove_observation",
-            json!({ "point": 3, "camera_image": 1 }),
-        ),
-        (
             "move_camera_image",
             json!({ "camera_image": 1, "world_from_camera": {
                 "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0], "translation": [0.0, 0.0, 0.0] } }),
@@ -5458,22 +5358,6 @@ fn a_point_from_another_reconstruction_is_refused() {
 #[test]
 fn the_editing_arguments_are_parsed_by_shape() {
     for (name, arguments, expected) in [
-        (
-            "create_point",
-            json!({ "reconstruction_label": "run_a", "camera_image": 0, "pixel": [1.0] }),
-            "pixel",
-        ),
-        (
-            "create_point",
-            json!({ "reconstruction_label": "run_a", "camera_image": 0,
-                    "pixel": [1.0, 2.0], "radius_px": 0.0 }),
-            "greater than zero",
-        ),
-        (
-            "add_observation",
-            json!({ "reconstruction_label": "run_a", "point": 1, "camera_image": 0 }),
-            "needs pixel",
-        ),
         (
             "jump_to_version",
             json!({ "reconstruction_label": "run_a", "serial": 4 }),
@@ -5525,18 +5409,6 @@ fn the_editing_defaults_are_what_the_schemas_say() {
         let map = arguments.as_object().cloned().expect("an object");
         tools::parse(name, Some(&map)).expect("a well-formed call")
     };
-    assert_eq!(
-        parse(
-            "create_point",
-            json!({ "reconstruction_label": "a", "camera_image": 0, "pixel": [1.5, 2.5] })
-        ),
-        Command::CreatePoint {
-            reconstruction_label: "a".to_string(),
-            camera_image: super::CameraImageSel::Index(0),
-            pixel: [1.5, 2.5],
-            radius_px: None,
-        }
-    );
     assert_eq!(
         parse(
             "resect_camera_image_in_place",
@@ -8145,18 +8017,31 @@ fn the_scene_s_content_hash_is_the_hash_its_point_ids_carry() {
     assert_eq!(before.len(), 8, "a content hash is the id's eight digits");
 
     // A point the reconstruction had no row for: it is named by the hash of
-    // the edit that made it, and that is what the node now reports.
-    call(
-        &mut state,
-        &mut viewer,
-        "create_point",
-        json!({
-            "reconstruction_label": "run_a",
-            "camera_image": 0,
-            "pixel": [120.0, 90.0],
-            "radius_px": 6.0,
+    // the edit that made it, and that is what the node now reports. Pushed
+    // directly, because what is under test is the field rather than any one
+    // step, and every step that creates a point pushes this shape.
+    let record = state.scene[0]
+        .edited()
+        .point(BENCH_POINT)
+        .expect("a live point")
+        .to_record();
+    let node = &mut state.scene[0];
+    let mut next = node.history.current().clone();
+    let hash = next
+        .point_edit_hash(std::slice::from_ref(&record))
+        .expect("a hashable base");
+    let created = next.add_point(record).expect("a well-formed record");
+    node.history.push_creating(
+        next,
+        crate::document::PointMap::Removed(Vec::new()),
+        "Created a point",
+        Some(crate::document::CreatedPoints {
+            hash,
+            indexes: vec![created],
         }),
     );
+    let id = state.scene[0].id;
+    state.select_point(crate::scene::PointRef::new(id, created as usize));
     let after = hash_of(&mut state, &mut viewer);
     assert_ne!(
         after, before,

@@ -188,7 +188,7 @@ with this codebase:
   giving up per-call attribution. A `Sync` parameter captured by the closure
   does not have the problem at all.
 - **Per-call attribution.** A process-global counter cannot say what *one*
-  `add_observation` cost. A parameter is per call by construction, and the
+  one photometric step cost. A parameter is per call by construction, and the
   question the Action Log asks is always about one call.
 - **Worker threads.** Long operations move off the GUI thread
   ([background-tasks.md](background-tasks.md)). An ambient
@@ -750,7 +750,7 @@ The operations:
 | `patch frames`, `read keypoints` and `assemble` | `SfmrReconstruction::to_embedded_patches`, one count per image under the read | |
 | `row map` | `RowMap::by_scan` | |
 | `push version` | `History::push`, where the budget accounting runs | |
-| `localize` and `refine` | the two calls `add_observation` makes | |
+| `localize` and `refine` | the two calls a bench fit makes | |
 | `decode views` | the full-resolution decode an edit needs | |
 
 The five under `uploads` open in `App::prepare_uploads` rather than inside the
@@ -776,7 +776,7 @@ hash-checks inside itself. `convert convention` is the upgrade a file below the
 canonical-convention version gets, and its guard is cancelled when the file is
 already canonical, so a current file records no row for it.
 
-`localize` and `refine` are the two calls `add_observation` makes, not stages
+`localize` and `refine` are the two calls a bench fit makes, not stages
 inside the kernels: each call registers one patch over a handful of views and
 has no overview stage within it, and every other caller runs them once per point
 inside a rayon loop, where a phase per call would be the per-item timing

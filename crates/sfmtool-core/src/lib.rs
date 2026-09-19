@@ -45,20 +45,17 @@ pub mod spherical;
 pub use camera::{Camera, CameraIntrinsics, CameraModel};
 pub use geometry::{RigidTransform, RotQuaternion, Se3Transform};
 pub use progress::Progress;
-pub use reconstruction::{
-    add_observation, create_point, move_camera, remove_observation, AddObservationError,
-    AddObservationOptions, AddObservationReport, CreatePointError, CreatePointOptions,
-    CreatePointReport, EditError, EditedReconstruction, ImageTable, MoveCameraError,
-    MoveCameraReport, ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord,
-    PointSet, PointView, ReconstructionError, RecordObservation, RemoveObservationError,
-    RemoveObservationReport, ReprojectionSample, RowMap, SfmrImage, SfmrReconstruction,
-    TrackObservation,
-};
 /// The reconstruction-level bundle adjustment, which is a different function
 /// from the array kernel [`geometry::bundle_adjust()`] it runs: it takes a
 /// reconstruction value and hands back another one.
 pub use reconstruction::{
     bundle_adjust, BundleAdjustError, BundleAdjustOptions, BundleAdjustReport,
+};
+pub use reconstruction::{
+    move_camera, EditError, EditedReconstruction, ImageTable, MoveCameraError, MoveCameraReport,
+    ObservationSource, Point3D, PointConstraintColumns, PointMap, PointRecord, PointSet, PointView,
+    ReconstructionError, RecordObservation, ReprojectionSample, RowMap, SfmrImage,
+    SfmrReconstruction, TrackObservation,
 };
 /// Re-exported so consumers of [`ImageTable::thumbnails_y_x_rgb`] can
 /// size buffers from the same constant the format pins, without depending on

@@ -25,10 +25,7 @@ mod tests;
 mod view;
 
 pub(crate) use intrinsics::{show_intrinsics_controls, CameraLayer};
-pub(crate) use overlay::{
-    add_observation_entry, remove_observation_entry, BenchMenu, CreatePointPrompt,
-    ADD_OBSERVATION_LABEL, CREATE_POINT_LABEL, START_CLUSTER_LABEL,
-};
+pub(crate) use overlay::{BenchMenu, START_CLUSTER_LABEL};
 pub(crate) use view::{look_at, Look, ViewGeometry};
 
 use crate::document::VersionSerial;
@@ -93,10 +90,8 @@ pub struct ImageDetail {
     ///
     /// The menu's entries are laid out on later frames, by which time the
     /// pointer has moved off the place the user named, so what an entry reads
-    /// is what the opening frame recorded. The two bench entries carry it back
-    /// out in their own response fields; the two point edits go through
-    /// `AppState::pending_observation_pixel`, which the Create 3D Point prompt
-    /// holds across the frames it is up for.
+    /// is what the opening frame recorded. The bench entries carry it back out
+    /// in their own response fields.
     menu_pixel: Option<[f32; 2]>,
     /// Offset of image center from panel center, in panel pixels.
     pan: egui::Vec2,
@@ -177,23 +172,10 @@ pub struct ImageDetailResponse {
     /// Whether the pointer is currently inside the detail panel.
     pub has_pointer: bool,
     /// The pixel a right-click just opened the context menu at, in
-    /// source-image coordinates. Set on the frame the menu opens and read by
-    /// the dock into `AppState::pending_observation_pixel`, because the menu's
-    /// entries are drawn a frame later, by which time the pointer has moved.
+    /// source-image coordinates. Set on the frame the menu opens and kept by
+    /// the panel, because the menu's entries are drawn a frame later, by which
+    /// time the pointer has moved.
     pub context_menu_pixel: Option<[f32; 2]>,
-    /// Set when the context menu's `Add observation to track here` was clicked.
-    pub add_observation: bool,
-    /// Set when the context menu's `Remove observation from track` was clicked:
-    /// the row taken out is the selected point's observation in this image.
-    pub remove_observation: bool,
-    /// Set when the context menu's `Create 3D Point here...` was clicked: the
-    /// caller opens the prompt, because the radius it offers is data the panel
-    /// does not hold.
-    pub open_create_point: bool,
-    /// The pixel and the radius the Create 3D Point prompt was committed with.
-    pub create_point: Option<([f32; 2], f32)>,
-    /// Set when that prompt was dismissed without creating anything.
-    pub cancel_create_point: bool,
     /// The pixel the context menu's `Start cluster on the bench here` was
     /// clicked for: a cluster-stage track starts there, on the node's bench.
     pub start_bench_cluster: Option<[f32; 2]>,
@@ -481,7 +463,6 @@ impl ImageDetail {
         selected_point: Option<usize>,
         hovered_point: Option<usize>,
         bench: BenchMenu<'_>,
-        create_point_prompt: &mut Option<CreatePointPrompt>,
         gesture_events: &[GestureEvent],
         scroll_input: &ScrollInput,
         sift_features: Option<&CachedSiftFeatures>,
@@ -494,11 +475,6 @@ impl ImageDetail {
             hovered_point: None,
             has_pointer: false,
             context_menu_pixel: None,
-            add_observation: false,
-            remove_observation: false,
-            open_create_point: false,
-            create_point: None,
-            cancel_create_point: false,
             start_bench_cluster: None,
             add_bench_observation: None,
             select_bench_row: None,
@@ -709,7 +685,6 @@ impl ImageDetail {
             selected_point,
             hovered_point,
             bench,
-            create_point_prompt,
             image_rect,
             panel_rect,
             effective_scale,

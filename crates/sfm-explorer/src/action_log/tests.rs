@@ -18,7 +18,6 @@ use sfmtool_core::SfmrReconstruction;
 
 use crate::dock::Tab;
 use crate::scene::{ImageRef, PointRef, ReconId};
-use crate::state::edits::tests::{creatable_state, CREATE_IMAGE, CREATE_PIXEL};
 use crate::state::AppState;
 
 use super::{show, ActionLog, Actor, Entry, Kind, Run, Work};
@@ -1259,20 +1258,13 @@ fn opened_and_edited(dir: &Path) -> (AppState, ReconId) {
 /// next operation gets covered: one that forgets to name its stages fails
 /// this, instead of being found much later by somebody expanding its row and
 /// seeing nothing but `elsewhere`.
-///
-/// One operation of the design's table is missing, and deliberately: adding an
-/// observation cannot be driven to a *success* headless, because its
-/// photometric fit refuses to register a patch in the synthetic pixels a demo
-/// node stands behind, and this test reads an entry that did not fail. Its
-/// stages are held in `sfmtool-core` instead, where the textured-plane fixture
-/// the fit needs already lives.
 #[test]
 fn every_operation_names_at_least_one_stage() {
     /// Drive one operation once, in a directory of its own, and hand back the
     /// state it left.
     type Drive = fn(&Path) -> AppState;
 
-    let operations: [(&str, Drive); 11] = [
+    let operations: [(&str, Drive); 10] = [
         ("open", |dir| {
             let mut state = AppState::new();
             state
@@ -1342,16 +1334,6 @@ fn every_operation_names_at_least_one_stage() {
             state
                 .move_camera(ImageRef::new(id, 1), &pose)
                 .expect("the fixture's image 1 can be posed");
-            state
-        }),
-        ("create point", |_| {
-            // The one fixture here that is not a file: creating a point reads
-            // the photograph, and a demo node's pixels are cached rather than
-            // on disk.
-            let (mut state, id) = creatable_state();
-            state
-                .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
-                .expect("a pixel on the sensor of a decodable image");
             state
         }),
     ];

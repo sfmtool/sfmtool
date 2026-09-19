@@ -511,11 +511,11 @@ fn a_jump_to_where_the_cursor_already_is_or_to_no_version_is_refused() {
     assert!(state.jump_to_version(id, other).is_err());
 }
 
-// ── Add observation: the point edit that creates structure ──────────────
+// ── The embedded_patches fixtures ────────────────────────────────────────
 
-/// A demo node whose value is `embedded_patches`, which is the only mode this
-/// edit is defined on. No images behind it, so the fit itself is exercised in
-/// `sfmtool-core` and through the Python binding rather than here.
+/// A demo node whose value is `embedded_patches`. No images behind it, so a
+/// photometric kernel is exercised in `sfmtool-core` and through the Python
+/// binding rather than here.
 fn embedded_state() -> AppState {
     let mut state = AppState::new();
     state.append_node(SceneNode::demo(embedded_demo(64)));
@@ -559,194 +559,17 @@ pub(crate) fn embedded_demo(points: usize) -> SfmrReconstruction {
     recon
 }
 
-#[test]
-fn a_sift_files_node_refuses_the_edit() {
-    let mut state = state();
-    let id = node(&state);
-    let why = state
-        .add_observation_at(PointRef::new(id, 3), ImageRef::new(id, 5), [10.0, 10.0])
-        .expect_err("a sift_files node has no room for a featureless observation");
-    assert!(why.contains("embedded_patches"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
-}
+// ── The default patch radius ───────────────────────────
 
 #[test]
-fn an_image_already_in_the_track_refuses_the_edit() {
-    let mut state = embedded_state();
-    let id = node(&state);
-    let seen = state.scene[0].edited().track_image_indices(3)[0];
-    let why = state
-        .add_observation_at(PointRef::new(id, 3), ImageRef::new(id, seen), [1.0, 1.0])
-        .expect_err("that image already observes the point");
-    assert!(why.contains("already observes"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
-}
-
-#[test]
-fn the_edit_refuses_without_a_selected_point() {
+fn the_default_radius_is_the_median_the_reconstruction_already_uses() {
     let state = embedded_state();
-    let edited = state.scene[0].edited();
-    let entry = crate::image_detail::add_observation_entry(edited, 0, None)
-        .expect("an embedded_patches node offers the entry");
-    assert!(entry.is_err(), "the entry should be greyed with no point");
-}
-
-#[test]
-fn the_entry_is_absent_on_a_sift_files_node() {
-    let state = state();
-    let edited = state.scene[0].edited();
-    assert!(
-        crate::image_detail::add_observation_entry(edited, 0, Some(3)).is_none(),
-        "the entry has no meaning on a sift_files node"
-    );
-}
-
-#[test]
-fn the_entry_is_offered_for_an_image_outside_the_track() {
-    let state = embedded_state();
-    let edited = state.scene[0].edited();
-    let seen: Vec<usize> = edited.track_image_indices(3);
-    let unseen = (0..edited.image_count())
-        .find(|i| !seen.contains(i))
-        .expect("the demo track does not span every image");
-    assert_eq!(
-        crate::image_detail::add_observation_entry(edited, unseen, Some(3)),
-        Some(Ok(())),
-    );
-}
-
-// ── Create point: the point edit that creates a point ───────────────────
-
-/// The image every create-point test points into, and the pixel it points at.
-///
-/// `pub(crate)` for the Action Log's coverage table, which drives this edit
-/// among the rest rather than restating the fixture.
-pub(crate) const CREATE_IMAGE: usize = 0;
-pub(crate) const CREATE_PIXEL: [f32; 2] = [10.0, 12.0];
-
-/// [`embedded_state`] with a synthetic photograph cached for `CREATE_IMAGE`, so
-/// the edit's decode finds pixels without a file on disk.
-pub(crate) fn creatable_state() -> (AppState, ReconId) {
-    let mut state = embedded_state();
     let id = node(&state);
-    let camera = &state.scene[0].recon().image_table.cameras[0];
-    let (w, h) = (camera.width, camera.height);
-    let data = (0..(w * h * 3))
-        .map(|i| (i % 251) as u8)
-        .collect::<Vec<u8>>();
-    state.full_res_cache.insert(
-        ImageRef::new(id, CREATE_IMAGE),
-        Some(Arc::new(sfmtool_core::camera::remap::ImageU8::new(
-            w, h, 3, data,
-        ))),
-    );
-    (state, id)
-}
-
-#[test]
-fn creating_a_point_appends_a_bearing_and_selects_it() {
-    let (mut state, id) = creatable_state();
-    let before = Arc::clone(&state.scene[0].edited().base);
-    let count = state.scene[0].point_count();
-
-    state
-        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
-        .expect("a pixel on the sensor of a decodable image");
-
-    let node = &state.scene[0];
-    assert!(
-        Arc::ptr_eq(&before, &node.edited().base),
-        "a point edit wrote through the base"
-    );
-    assert_eq!(node.point_count(), count + 1);
-    assert_eq!(node.history.versions().len(), 2);
-
-    let selected = state.selected_point.expect("the created point is selected");
-    assert_eq!(selected.recon, id);
-    let view = state.scene[0]
-        .edited()
-        .point(selected.point)
-        .expect("the created point");
-    assert_eq!(view.point().w, 0.0, "one sighting fixes no distance");
-    assert_eq!(view.observations().len(), 1);
-    assert_eq!(view.observations()[0].image_index, CREATE_IMAGE as u32);
-
-    let log = texts(&state);
-    let last = log.last().expect("one entry per edit");
-    assert!(last.contains("Created point"), "{last}");
-    assert!(last.contains("radius 6.0 px"), "{last}");
-}
-
-#[test]
-fn a_sift_files_node_refuses_creating_a_point() {
-    let mut state = state();
-    let id = node(&state);
-    let why = state
-        .create_point(ImageRef::new(id, 0), CREATE_PIXEL, 6.0)
-        .expect_err("a sift_files node has no room for a featureless observation");
-    assert!(why.contains("embedded_patches"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
-}
-
-#[test]
-fn the_created_points_id_is_minted_against_the_point_edit() {
-    let (mut state, id) = creatable_state();
-    let base_prefix =
-        crate::point_ids::base_hash_prefix(state.scene[0].edited()).expect("a hashable base");
-    state
-        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
-        .expect("a pixel on the sensor of a decodable image");
-
-    let index = state.selected_point.expect("selected").point;
-    let node = &state.scene[0];
-    let minted = crate::point_ids::mint(node, index).expect("the created point has an id");
-    let rest = minted.strip_prefix("pt3d_").expect("the id's one form");
-    let (hash, k) = rest.split_once('_').expect("hash and index");
-    assert_ne!(
-        hash, base_prefix,
-        "a point no base holds cannot be named by a base's hash"
-    );
-    assert_eq!(k, "0", "it is the edit's first creation");
-    assert_eq!(
-        crate::point_ids::resolve(node, hash, 0),
-        Ok(index),
-        "the id resolves back to the point it names"
-    );
-}
-
-#[test]
-fn an_undo_drops_the_created_point_and_the_selection() {
-    let (mut state, id) = creatable_state();
-    let count = state.scene[0].point_count();
-    state
-        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
-        .expect("a pixel on the sensor of a decodable image");
-
-    state.undo(id).expect("one edit to undo");
-    assert_eq!(state.scene[0].point_count(), count);
-    assert_eq!(
-        state.selected_point, None,
-        "the selection sat on a point this version does not hold"
-    );
-}
-
-#[test]
-fn the_prompts_radius_is_the_median_the_reconstruction_already_uses() {
-    let (mut state, id) = creatable_state();
-    let image = ImageRef::new(id, CREATE_IMAGE);
-    let derived = state.create_point_default_radius(image);
+    let derived = state.default_patch_radius(ImageRef::new(id, 0));
     assert!(
         derived > 0.0 && derived != super::FALLBACK_PATCH_RADIUS_PX,
         "a node with patch frames derives its own radius, got {derived}"
     );
-
-    // Once a point has been created by hand, the radius that made it is what
-    // the next prompt offers.
-    state
-        .create_point(image, CREATE_PIXEL, 3.5)
-        .expect("a pixel on the sensor of a decodable image");
-    assert_eq!(state.create_point_radius, Some(3.5));
-    assert!(state.create_point_prompt.is_none(), "the prompt is closed");
 }
 
 #[test]
@@ -755,12 +578,12 @@ fn a_node_with_no_patch_frames_falls_back_to_the_named_radius() {
     state.append_node(SceneNode::demo(SfmrReconstruction::demo(8)));
     let id = node(&state);
     assert_eq!(
-        state.create_point_default_radius(ImageRef::new(id, 0)),
+        state.default_patch_radius(ImageRef::new(id, 0)),
         super::FALLBACK_PATCH_RADIUS_PX
     );
 }
 
-// ── Remove observation: the point edit that shortens a track ────────────
+// ── The projected embedded_patches fixture ─────────────────────
 
 /// [`embedded_demo`] with every keypoint the exact projection of its point, and
 /// track lengths of one, two and three cycling by point index.
@@ -833,159 +656,6 @@ pub(crate) fn projected_embedded_demo(points: usize) -> SfmrReconstruction {
     };
     recon.rebuild_derived_fields();
     recon
-}
-
-/// A state holding one node of [`projected_embedded_demo`], selected.
-fn removable_state() -> (AppState, ReconId) {
-    let mut state = AppState::new();
-    state.append_node(SceneNode::demo(projected_embedded_demo(12)));
-    let id = state.selected_recon.expect("a selected reconstruction");
-    (state, id)
-}
-
-#[test]
-fn removing_from_a_longer_track_moves_the_selection_with_the_point() {
-    let (mut state, id) = removable_state();
-    let before = Arc::clone(&state.scene[0].edited().base);
-    state.selected_point = Some(PointRef::new(id, 2));
-    state.action_log.clear();
-
-    state
-        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, 1))
-        .expect("image 1 observes point 2");
-
-    let node = &state.scene[0];
-    assert!(
-        Arc::ptr_eq(&before, &node.edited().base),
-        "a point edit wrote through the base"
-    );
-    assert_eq!(node.history.versions().len(), 2);
-    let moved = state.selected_point.expect("the point is still selected");
-    assert_ne!(moved.point, 2, "a modification takes a new index");
-    let view = node.edited().point(moved.point).expect("the moved point");
-    assert_eq!(view.observations().len(), 2);
-    assert_eq!(view.point().w, 1.0, "two rays still state a depth");
-
-    let label = &node.history.current_version().label;
-    assert!(
-        label.starts_with("Removed observation of point 2 in image_001.jpg"),
-        "{label}"
-    );
-    let texts = texts(&state);
-    assert_eq!(texts.len(), 1, "{texts:?}");
-    assert!(texts[0].contains("2 observations left"), "{}", texts[0]);
-}
-
-#[test]
-fn removing_down_to_one_view_leaves_a_bearing_under_the_selection() {
-    let (mut state, id) = removable_state();
-    state.selected_point = Some(PointRef::new(id, 1));
-    state.action_log.clear();
-
-    state
-        .remove_observation(PointRef::new(id, 1), ImageRef::new(id, 1))
-        .expect("image 1 observes point 1");
-
-    let moved = state.selected_point.expect("the point is still selected");
-    let view = state.scene[0]
-        .edited()
-        .point(moved.point)
-        .expect("the moved point");
-    assert_eq!(view.observations().len(), 1);
-    assert_eq!(view.point().w, 0.0, "one sighting fixes a bearing");
-    assert!(
-        texts(&state)[0].contains("bearing at infinity"),
-        "{:?}",
-        texts(&state)
-    );
-}
-
-#[test]
-fn removing_the_last_observation_deletes_the_point_and_clears_the_selection() {
-    let (mut state, id) = removable_state();
-    let count = state.scene[0].point_count();
-    state.selected_point = Some(PointRef::new(id, 0));
-    state.action_log.clear();
-
-    state
-        .remove_observation(PointRef::new(id, 0), ImageRef::new(id, 0))
-        .expect("image 0 is point 0's only observation");
-
-    assert_eq!(
-        state.selected_point, None,
-        "a deleted point stayed selected"
-    );
-    let node = &state.scene[0];
-    assert!(node.is_point_deleted(0));
-    assert_eq!(node.point_count(), count - 1);
-    assert!(
-        texts(&state)[0].contains("is deleted"),
-        "{:?}",
-        texts(&state)
-    );
-}
-
-#[test]
-fn an_undo_puts_the_observation_back() {
-    let (mut state, id) = removable_state();
-    let before = state.scene[0]
-        .edited()
-        .point(2)
-        .expect("a live point")
-        .point()
-        .position;
-
-    state
-        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, 1))
-        .expect("image 1 observes point 2");
-    state.undo(id).expect("one edit to undo");
-
-    let view = state.scene[0].edited().point(2).expect("the point is back");
-    assert_eq!(view.observations().len(), 3);
-    assert_eq!(view.point().position, before);
-    assert_eq!(state.scene[0].history.cursor(), 0);
-}
-
-#[test]
-fn a_sift_files_node_allows_the_edit() {
-    let mut state = state();
-    let id = node(&state);
-    let seen = state.scene[0].edited().track_image_indices(3)[0];
-    state.selected_point = Some(PointRef::new(id, 3));
-
-    state
-        .remove_observation(PointRef::new(id, 3), ImageRef::new(id, seen))
-        .expect("taking a row out invents no feature");
-    assert_eq!(state.scene[0].history.versions().len(), 2);
-}
-
-#[test]
-fn the_entry_is_greyed_without_a_point_and_for_an_image_outside_the_track() {
-    let (state, _) = removable_state();
-    let edited = state.scene[0].edited();
-    assert!(crate::image_detail::remove_observation_entry(edited, 0, None).is_err());
-    let outside = (0..edited.image_count())
-        .find(|i| !edited.track_image_indices(2).contains(i))
-        .expect("the track does not span every image");
-    assert!(crate::image_detail::remove_observation_entry(edited, outside, Some(2)).is_err());
-    assert_eq!(
-        crate::image_detail::remove_observation_entry(edited, 1, Some(2)),
-        Ok(()),
-        "image 1 observes point 2"
-    );
-}
-
-#[test]
-fn removing_an_observation_that_is_not_there_is_refused_and_leaves_the_history_alone() {
-    let (mut state, id) = removable_state();
-    let outside = (0..state.scene[0].edited().image_count())
-        .find(|i| !state.scene[0].edited().track_image_indices(2).contains(i))
-        .expect("the track does not span every image");
-    let why = state
-        .remove_observation(PointRef::new(id, 2), ImageRef::new(id, outside))
-        .expect_err("that image does not observe the point");
-    assert!(why.contains("does not observe"), "{why}");
-    assert_eq!(state.scene[0].history.versions().len(), 1);
 }
 
 // ── Resect in place: the bulk edit that re-poses one image ──────────────
@@ -1465,31 +1135,6 @@ fn a_bulk_edit_with_nothing_to_fold_names_no_materialise() {
         "{:?}",
         entry.detail,
     );
-}
-
-/// Creating a point is the decode, the spawn and the push, and the decode is
-/// where a slow one spends its time.
-#[test]
-fn creating_a_point_names_the_decode_the_spawn_and_the_push() {
-    let (mut state, id) = creatable_state();
-
-    state
-        .create_point(ImageRef::new(id, CREATE_IMAGE), CREATE_PIXEL, 6.0)
-        .expect("a pixel on the sensor of a decodable image");
-
-    let entry = newest(&state);
-    assert!(!entry.failed, "{}", entry.text);
-    assert_eq!(
-        phase_rows(&entry.detail),
-        [
-            ("decode views", 0, 1),
-            ("create point", 0, 1),
-            ("push version", 0, 1)
-        ],
-        "{:?}",
-        entry.detail,
-    );
-    assert_timed_from_the_work(&mut state.action_log);
 }
 
 // ── What a cursor move does to the image selection ──────────────────────

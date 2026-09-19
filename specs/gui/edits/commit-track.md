@@ -5,11 +5,9 @@ track into the reconstruction as a point. It is the one step of the bench that
 touches the file, and it is one ordinary point edit: one version, one label, one
 Action Log entry of kind `Edit`, undoable like any other.
 
-What makes it different from the one-step track edits next door is what precedes
-it. Add-observation grows a track the reconstruction already holds and
-create-point puts a bearing where a person pointed; a commit writes down the
-result of an argument -- a set of sightings assembled, measured, some taken and
-some refused -- that was held on the bench until it was settled
+What makes it different from every other edit is what precedes it. A commit
+writes down the result of an argument -- a set of sightings assembled, measured,
+some taken and some refused -- that was held on the bench until it was settled
 ([`../bench.md`](../bench.md)).
 
 Related specs: [`../bench.md`](../bench.md) (the bench and its versions),
@@ -18,9 +16,7 @@ Related specs: [`../bench.md`](../bench.md) (the bench and its versions),
 § "The commit" (the core function this wraps, and every refusal),
 [`../document-model.md`](../document-model.md) (the version),
 [`../goto-point.md`](../goto-point.md) (the id a created point is named by),
-[`add-observation.md`](add-observation.md) and
-[`create-point.md`](create-point.md) (the one-step edits), and
-[`../saving.md`](../saving.md).
+and [`../saving.md`](../saving.md).
 
 ---
 
@@ -78,13 +74,13 @@ It is the one step pushed with **both halves stated**
 committed track seated on what it just wrote. The map is the one core reported,
 pushed as it stands -- a `Replaced` of one pair for a replacement, a `Created`
 for a creation -- so the selection follows a replaced point exactly as it
-follows an added observation, and an undo restores the pair: the point gone from
+follows any other point edit, and an undo restores the pair: the point gone from
 the value, and the track back to the half it had before.
 
 A commit that creates rather than replaces is pushed with a `CreatedPoints`
 carrying the point edit's own content hash and the index it took, because a
-point no base has a row for cannot be named by a base's hash. That is the
-machinery create-point uses, for the same reason.
+point no base has a row for cannot be named by a base's hash
+([`../edit-history.md`](../edit-history.md) § "The version graph").
 
 **The track stays on the bench afterwards**, seated on the point just written,
 so the person can keep working on it and a second commit replaces what the first

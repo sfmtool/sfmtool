@@ -18,11 +18,11 @@ instance buffers and their second patch atlas, and the pick range that spans
 both;
 [`../gui/point-cloud-rendering.md`](../gui/point-cloud-rendering.md) and
 [`../gui/patch-rendering.md`](../gui/patch-rendering.md) carry the same answer
-at the two passes. So is the file side: an added observation has a keypoint and
-a patch and no feature index, so the track edits are built on
-`embedded_patches` reconstructions and refuse on `sift_files`, which is
-[`../gui/edits/add-observation.md`](../gui/edits/add-observation.md)'s first
-refusal. The point-id version graph, with its minting and resolution rules, is
+at the two passes. So is the file side: a sighting placed at a pixel has a
+keypoint and a patch and no feature index, so the track edits are built on
+`embedded_patches` reconstructions and refuse on `sift_files`
+([`../core/bench/editable-track.md`](../core/bench/editable-track.md)).
+The point-id version graph, with its minting and resolution rules, is
 [`../gui/goto-point.md`](../gui/goto-point.md) § "The ID forms and the version
 graph", [`../gui/edit-history.md`](../gui/edit-history.md) § "The version graph",
 and

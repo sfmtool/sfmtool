@@ -283,10 +283,9 @@ impl OrientedPatch {
     ///   unchanged for a fisheye.
     ///
     /// The normal is the viewing direction (the patch faces the camera squarely),
-    /// which is what a single observation can say about orientation and how
-    /// `create_point` frames a patch from a radius. A frame from one observation
-    /// is a starting point for a normal that refinement or several views will
-    /// fix, not a measurement of the surface's tilt.
+    /// which is what a single observation can say about orientation. A frame from
+    /// one observation is a starting point for a normal that refinement or
+    /// several views will fix, not a measurement of the surface's tilt.
     ///
     /// **Chirality.** A patch frame's `v` points *up* in the image while pixel
     /// rows count *down*, so a front-facing patch projects to a shape of negative

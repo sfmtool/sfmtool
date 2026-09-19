@@ -81,9 +81,9 @@ fn item_address(state: &AppState, id: ReconId, position: usize) -> usize {
     }
 }
 
-/// The seed the Image Detail context menu makes: a pixel, with the radius the
-/// Create 3D Point prompt would offer where the gesture starts a cluster and
-/// none where it adds to one.
+/// The seed the Image Detail context menu makes: a pixel, with the node's own
+/// default patch radius where the gesture starts a cluster and none where it
+/// adds to one.
 fn pixel_seed(pixel: [f64; 2], radius_px: Option<f64>) -> crate::bench::Seed {
     crate::bench::Seed::Pixel { pixel, radius_px }
 }

@@ -422,19 +422,18 @@ unchanged.
 Starting a cluster and adding a candidate sighting both act at a pixel, and the
 viewer's one way to name a pixel is a right-click in the **Image Detail** panel.
 So both are entries in that panel's context menu -- *Start cluster on the bench
-here* and *Add observation to bench track here* -- beside the two point edits
-that name a pixel the same way
+here* and *Add observation to bench track here*
 ([`multi-panel-image-browser.md`](multi-panel-image-browser.md) § "Image Detail:
 the context menu"). They are not in this panel's toolbar: there is no selected
 pixel in the viewer, so a button here would act on something the person cannot
 see they have chosen.
 
 Each is one bench step and lands in the Track Edit panel's own track the moment
-it is taken. The radius a new cluster's patch takes is the one the Create 3D
-Point prompt would offer ([`edits/create-point.md`](edits/create-point.md)): the
-radius the last created point was given, or the size the node's own patches
-project to in that image, so a cluster and a created point are started at the
-same place at the same size. It is a half-width in that image's pixels, and the
+it is taken. The radius a new cluster's patch takes is the node's own default
+(`AppState::default_patch_radius`): the median size the node's patches project
+to in that image, then the median over the whole node, then a named constant, so
+a cluster starts at the scale the reconstruction already works at
+there. It is a half-width in that image's pixels, and the
 cluster stage's own units are keypoint-frame ones, so the step converts it
 ([`../core/bench/editable-track.md`](../core/bench/editable-track.md)
 § "The cluster stage's units").

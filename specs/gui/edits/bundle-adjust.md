@@ -67,8 +67,8 @@ there is one decision to take:
   is the default. It is **disabled**, with a hover explanation naming the camera
   model, where the adjustment's focal column is not exact for that model.
 - **Run** and **Cancel**. `Enter` runs, `Escape` cancels, and clicking the
-  window's close button cancels: the vocabulary of the Create 3D Point prompt,
-  because this is a step in a gesture rather than a window to leave lying open.
+  window's close button cancels, because this is a step in a gesture rather than
+  a window to leave lying open.
 
 Asking twice while it is up does not stack a second dialog; the question already
 on screen is the one that gets answered.
