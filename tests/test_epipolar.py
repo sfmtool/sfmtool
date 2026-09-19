@@ -320,7 +320,7 @@ class TestIntrinsicMatrix:
 class TestStereoRectification:
     def test_compute_rectification(self):
         import pycolmap
-        from sfmtool._rectification import compute_stereo_rectification
+        from sfmtool.visualization._rectification import compute_stereo_rectification
 
         cam1 = pycolmap.Camera(
             model="PINHOLE", width=640, height=480, params=[500, 500, 320, 240]
@@ -344,7 +344,7 @@ class TestStereoRectification:
 
     def test_rectify_points(self):
         import pycolmap
-        from sfmtool._rectification import compute_stereo_rectification
+        from sfmtool.visualization._rectification import compute_stereo_rectification
 
         cam = pycolmap.Camera(
             model="PINHOLE", width=640, height=480, params=[500, 500, 320, 240]

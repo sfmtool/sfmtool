@@ -104,17 +104,17 @@ def compare_reconstructions(
     print(f"  Target:    {recon2_name}")
     print("=" * 70)
 
-    print("\n[1/6] Analyzing reconstructions...")
+    print("\n[1/7] Analyzing reconstructions...")
 
     _print_reconstruction_summary(recon1, "Reference")
     _print_reconstruction_summary(recon2, "Target")
 
     # Compare camera intrinsics
-    print("\n[2/6] Comparing camera intrinsics...")
+    print("\n[2/7] Comparing camera intrinsics...")
     _compare_cameras(recon1, recon2)
 
     # Find matching images
-    print("\n[3/6] Finding matching images...")
+    print("\n[3/7] Finding matching images...")
     matches = _find_matching_images(recon1, recon2)
     print(f"  Matching images: {len(matches)}")
     print(f"  Only in reference: {recon1.image_count - len(matches)}")
@@ -125,7 +125,7 @@ def compare_reconstructions(
         return
 
     # Perform alignment
-    print("\n[4/6] Performing alignment...")
+    print("\n[4/7] Performing alignment...")
     image_matches = []
     for idx1, idx2 in matches:
         quat1_wxyz = recon1.quaternions_wxyz[idx1]
@@ -168,7 +168,7 @@ def compare_reconstructions(
     # Compare image extrinsics. Residuals are reported relative to the reference
     # reconstruction's scale so the comparison is gauge/scale-independent.
     scene_scale = _characteristic_scene_scale(recon1)
-    print("\n[5/6] Comparing image extrinsics...")
+    print("\n[5/7] Comparing image extrinsics...")
     print(f"  Reference scene scale: {scene_scale:.4g} (RMS point radius)")
     _compare_image_extrinsics(
         recon1, recon2, matches, alignment_result, scene_scale=scene_scale
@@ -370,7 +370,7 @@ def _print_reconstruction_summary(recon: SfmrReconstruction, label: str) -> None
     print(f"    Images: {recon.image_count}")
 
     try:
-        from deadline.job_attachments.api import summarize_path_list
+        from ._path_summary import summarize_path_list
 
         print("    Image paths:")
         print(
